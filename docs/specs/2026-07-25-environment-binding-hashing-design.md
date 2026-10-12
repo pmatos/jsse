@@ -56,3 +56,13 @@ No custom conformance test is added: the hasher choice is a Rust representation
 and threat-model property, not ECMAScript-observable behavior. A test comparing
 private random seeds would be probabilistic and would rely on implementation
 details that `HashMap` does not promise.
+
+## Status note (#898)
+
+`Environment::bindings` is no longer a `HashMap<String, Binding>`. Names are
+interned to atoms by a randomised interner and stored in an insertion-ordered
+`BindingMap` (scan for small scopes, identity-hashed atom index for large
+ones), so the decision above — script-controlled names are never hashed by a
+predictable function — still holds, with the interner as the single hashing
+site. `indirect_bindings` is unchanged. See
+`docs/adr/2026-10-12-0900-atom-keyed-function-environments.md`.

@@ -22,7 +22,7 @@ pub(super) fn create_plain_year_month_result(
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.PlainYearMonth".to_string();
+        .class_name = "Temporal.PlainYearMonth".into();
     if let Some(proto_id) = interp.realm().temporal_plain_year_month_prototype {
         interp
             .get_object_cell_expect(obj_id)
@@ -387,7 +387,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.PlainYearMonth".to_string();
+            .class_name = "Temporal.PlainYearMonth".into();
         self.define_to_string_tag(proto_id, "Temporal.PlainYearMonth");
 
         // Getters: calendarId, year, month, monthCode

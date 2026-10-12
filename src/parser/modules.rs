@@ -414,6 +414,7 @@ impl<'a> Parser<'a> {
             is_generator,
             source_text,
             body_is_strict,
+            info: Default::default(),
         })
     }
 
@@ -442,6 +443,7 @@ impl<'a> Parser<'a> {
             is_generator,
             source_text,
             body_is_strict,
+            info: Default::default(),
         })
     }
 

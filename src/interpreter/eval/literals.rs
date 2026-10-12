@@ -30,7 +30,7 @@ fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
 
 fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
     let mut code_units: Vec<u16> = prefix.encode_utf16().collect();
-    code_units.extend_from_slice(&key.to_js_string().code_units);
+    code_units.extend_from_slice(key.to_js_string().as_units());
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units))
 }
 
@@ -88,7 +88,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -114,27 +114,16 @@ impl Interpreter {
             Literal::Boolean(b) => JsValue::boolean(*b),
             Literal::Number(n) => JsValue::number(*n),
             Literal::String(s) => JsValue::string(JsString::from_vec(s.clone())),
-            Literal::BigInt(s) => {
-                use num_bigint::BigInt;
-                let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
-                {
-                    BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
-                } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
-                    BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
-                } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-                    BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
-                } else {
-                    s.parse::<BigInt>().unwrap_or_default()
-                };
-                JsValue::bigint(JsBigInt::new(value))
-            }
+            Literal::BigInt(s) => JsValue::bigint(JsBigInt::new(
+                crate::interpreter::helpers::parse_bigint_literal(s),
+            )),
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
                 obj.prototype_id = self
                     .realm()
                     .regexp_prototype
                     .or(self.realm().object_prototype);
-                obj.class_name = "RegExp".to_string();
+                obj.class_name = "RegExp".into();
                 let source_js = if pattern.is_empty() {
                     JsString::from_str("(?:)")
                 } else {
@@ -203,7 +192,7 @@ impl Interpreter {
             .realm()
             .regexp_prototype
             .or(self.realm().object_prototype);
-        obj.class_name = "RegExp".to_string();
+        obj.class_name = "RegExp".into();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
         obj.kind =
             crate::interpreter::types::ObjectKind::RegExp(crate::interpreter::types::RegExpData {
@@ -375,11 +364,12 @@ impl Interpreter {
         // Create constructor function (classes are always strict mode)
         let (ctor_params, ctor_body, uses_arguments, has_simple_params) =
             if let Some(cm) = ctor_method {
+                let info = cm.value.info();
                 (
-                    Rc::new(cm.value.params.clone()),
+                    info.params.clone(),
                     cm.value.body.clone(),
-                    func_uses_arguments(&cm.value.params, &cm.value.body),
-                    crate::ast::params_are_simple(&cm.value.params),
+                    info.uses_arguments,
+                    info.has_simple_params,
                 )
             } else if super_val.is_some() {
                 // default derived constructor takes `...args` (rest) — not simple
@@ -406,9 +396,9 @@ impl Interpreter {
             has_simple_params,
         };
 
-        let ctor_val = self.create_function(ctor_func);
+        let ctor_val = self.create_function_with(ctor_func, FunctionInit::ClassConstructor);
 
-        // Mark derived class constructors and make .prototype writable:false
+        // Mark derived class constructors
         if let Some(o) = (ctor_val)
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
@@ -423,13 +413,6 @@ impl Interpreter {
             } else {
                 crate::interpreter::types::ConstructorKind::Class
             };
-            // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
-            let func_obj_id = func_obj.borrow().id.unwrap();
-            let proto_val_for_desc = self.get_property_on_id(func_obj_id, "prototype");
-            func_obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val_for_desc, false, false, false),
-            );
         }
 
         // Store constructor func for dynamic GetSuperConstructor (§13.3.7.2)
@@ -525,21 +508,13 @@ impl Interpreter {
         let static_field_env = Environment::new_function_scope(Some(class_env.clone()));
         {
             let mut sfe = static_field_env.borrow_mut();
-            sfe.bindings.insert(
-                "this".to_string(),
-                Binding {
-                    value: ctor_val.clone(),
-                    kind: BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
+            sfe.set_this(ctor_val.clone());
             sfe.is_field_initializer = true;
             sfe.class_private_names = self.class_private_names.last().cloned();
             // Set __home_object__ for super property access in static field initializers.
             // Static field HomeObject = constructor.
             sfe.bindings.insert(
-                "__home_object__".to_string(),
+                "__home_object__",
                 Binding {
                     value: ctor_val.clone(),
                     kind: BindingKind::Const,
@@ -623,9 +598,10 @@ impl Interpreter {
                             method_closure
                                 .borrow_mut()
                                 .initialize_binding("__home_object__", priv_home_target);
+                            let info = m.value.info();
                             let method_func = JsFunction::User {
                                 name: Some(format!("#{name}")),
-                                params: Rc::new(m.value.params.clone()),
+                                params: info.params.clone(),
                                 body: m.value.body.clone(),
                                 closure: method_closure,
                                 is_arrow: false,
@@ -635,8 +611,8 @@ impl Interpreter {
                                 is_method: true,
                                 source_text: m.value.source_text.clone(),
                                 captured_new_target: None,
-                                uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
-                                has_simple_params: crate::ast::params_are_simple(&m.value.params),
+                                uses_arguments: info.uses_arguments,
+                                has_simple_params: info.has_simple_params,
                             };
                             let method_val = self.create_function(method_func);
 
@@ -802,11 +778,12 @@ impl Interpreter {
                     method_closure
                         .borrow_mut()
                         .initialize_binding("__home_object__", home_target);
+                    let info = m.value.info();
                     let method_func = JsFunction::User {
                         // create_function installs an empty configurable name, then
                         // SetFunctionName below replaces it without a lossy Rust String seam.
                         name: Some(String::new()),
-                        params: Rc::new(m.value.params.clone()),
+                        params: info.params.clone(),
                         body: m.value.body.clone(),
                         closure: method_closure,
                         is_arrow: false,
@@ -816,8 +793,8 @@ impl Interpreter {
                         is_method: true,
                         source_text: m.value.source_text.clone(),
                         captured_new_target: None,
-                        uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
-                        has_simple_params: crate::ast::params_are_simple(&m.value.params),
+                        uses_arguments: info.uses_arguments,
+                        has_simple_params: info.has_simple_params,
                     };
                     let method_val = self.create_function(method_func);
                     self.set_function_name(&method_val, &method_display_name);
@@ -1196,17 +1173,9 @@ impl Interpreter {
                     {
                         let mut be = block_env.borrow_mut();
                         be.strict = true; // class bodies are always strict
+                        be.set_this(ctor_val.clone());
                         be.bindings.insert(
-                            "this".to_string(),
-                            Binding {
-                                value: ctor_val.clone(),
-                                kind: BindingKind::Const,
-                                initialized: true,
-                                deletable: false,
-                            },
-                        );
-                        be.bindings.insert(
-                            "__home_object__".to_string(),
+                            "__home_object__",
                             Binding {
                                 value: ctor_val.clone(),
                                 kind: BindingKind::Const,
@@ -1500,9 +1469,6 @@ impl Interpreter {
                                     *closure = wrapper;
                                 }
                             }
-                            // Methods must not have own caller/arguments (spec §15.4)
-                            func_obj.borrow_mut().remove_property("caller");
-                            func_obj.borrow_mut().remove_property("arguments");
                         }
                     }
                 }

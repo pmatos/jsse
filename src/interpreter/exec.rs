@@ -130,9 +130,7 @@ impl Interpreter {
                 Err(_e) => {
                     #[cfg(feature = "perf-counters")]
                     {
-                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
-                            reason,
-                        ) = _e;
+                        let reason = _e.reason();
                         let name = self.perf.name_script_body.clone();
                         self.perf.record_bail(
                             reason,
@@ -218,7 +216,7 @@ impl Interpreter {
     /// Perform the declaration-instantiation half of Body execution. Keeping
     /// this separate lets eligible Script Bodies establish global bindings
     /// before entering the VM, exactly as the tree-walker does.
-    fn instantiate_body_declarations(
+    pub(super) fn instantiate_body_declarations(
         &mut self,
         stmts: &[Statement],
         env: &EnvRef,
@@ -588,9 +586,10 @@ impl Interpreter {
 
     fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
         let enclosing_strict = env.borrow().strict;
+        let info = f.info();
         let func = JsFunction::User {
             name: Some(f.name.clone()),
-            params: Rc::new(f.params.clone()),
+            params: info.params.clone(),
             body: f.body.clone(),
             closure: env.clone(),
             is_arrow: false,
@@ -600,8 +599,8 @@ impl Interpreter {
             is_method: false,
             source_text: f.source_text.clone(),
             captured_new_target: None,
-            uses_arguments: func_uses_arguments(&f.params, &f.body),
-            has_simple_params: crate::ast::params_are_simple(&f.params),
+            uses_arguments: info.uses_arguments,
+            has_simple_params: info.has_simple_params,
         };
         let val = self.create_function(func);
         if is_global {
@@ -1455,7 +1454,7 @@ impl Interpreter {
                         };
                         if !target.borrow().bindings.contains_key(name) {
                             target.borrow_mut().bindings.insert(
-                                name.to_string(),
+                                name,
                                 Binding {
                                     value: JsValue::UNDEFINED,
                                     kind,
@@ -2381,7 +2380,7 @@ impl Interpreter {
             let tdz_env = Environment::new(Some(env.clone()));
             for name in &tdz_names {
                 tdz_env.borrow_mut().bindings.insert(
-                    name.clone(),
+                    name,
                     Binding {
                         value: JsValue::UNDEFINED,
                         kind: BindingKind::Let,
@@ -2704,9 +2703,10 @@ impl Interpreter {
                 {
                     switch_env.borrow_mut().declare(&f.name, BindingKind::Var);
                     let enclosing_strict = switch_env.borrow().strict;
+                    let info = f.info();
                     let func = JsFunction::User {
                         name: Some(f.name.clone()),
-                        params: Rc::new(f.params.clone()),
+                        params: info.params.clone(),
                         body: f.body.clone(),
                         closure: switch_env.clone(),
                         is_arrow: false,
@@ -2716,8 +2716,8 @@ impl Interpreter {
                         is_method: false,
                         source_text: f.source_text.clone(),
                         captured_new_target: None,
-                        uses_arguments: func_uses_arguments(&f.params, &f.body),
-                        has_simple_params: crate::ast::params_are_simple(&f.params),
+                        uses_arguments: info.uses_arguments,
+                        has_simple_params: info.has_simple_params,
                     };
                     let val = self.create_function(func);
                     let _ = self.env_set(&switch_env, &f.name, val);

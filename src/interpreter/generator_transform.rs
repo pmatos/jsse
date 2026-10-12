@@ -4284,6 +4284,7 @@ mod tests {
             is_generator: false,
             source_text: None,
             body_is_strict: false,
+            info: Default::default(),
         }
     }
 

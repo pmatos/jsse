@@ -216,7 +216,7 @@ impl Interpreter {
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.Collator".to_string();
+            .class_name = "Intl.Collator".into();
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.Collator");
@@ -655,7 +655,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.Collator".to_string();
+                    .class_name = "Intl.Collator".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Collator {
                         locale,

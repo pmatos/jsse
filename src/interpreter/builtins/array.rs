@@ -392,7 +392,7 @@ fn sort_values(
         }
         // Code-unit slice comparison is a total order, so `sort_by` cannot
         // hit its ordering-violation panic here.
-        keyed.sort_by(|(a, _), (b, _)| a.code_units.as_slice().cmp(b.code_units.as_slice()));
+        keyed.sort_by(|(a, _), (b, _)| a.as_units().cmp(b.as_units()));
         items.extend(keyed.into_iter().map(|(_, v)| v));
     }
     items.extend(std::iter::repeat_n(JsValue::UNDEFINED, undefined_count));
@@ -1079,7 +1079,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Array".to_string();
+            .class_name = "Array".into();
         self.get_object_cell_expect(proto_id).borrow_mut().kind =
             crate::interpreter::types::ObjectKind::Array(
                 crate::interpreter::types::ArrayData::default(),
@@ -1488,7 +1488,7 @@ impl Interpreter {
                 let mut units: Vec<u16> = Vec::new();
                 for i in 0..len {
                     if i > 0 {
-                        units.extend_from_slice(&sep.code_units);
+                        units.extend_from_slice(sep.as_units());
                     }
                     let elem = match obj_get(interp, &o, &i.to_string()) {
                         Ok(v) => v,
@@ -3227,6 +3227,8 @@ impl Interpreter {
             Completion::Throw(interp.create_type_error("values called on non-object"))
         });
 
+        self.realm_mut().array_prototype_values = Some(values_fn.clone());
+
         // Array.prototype[@@iterator] is the same function as Array.prototype.values (spec §23.1.3.35)
         if let Some(key) = self.get_symbol_iterator_key() {
             self.get_object_cell_expect(proto_id)
@@ -3540,7 +3542,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -3563,7 +3565,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -3595,7 +3597,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );

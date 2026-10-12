@@ -48,6 +48,38 @@ _Avoid_: boundary, layer.
 How the `differential` fuzz target (`fuzz/fuzz_targets/differential.rs`) classifies a jsse-vs-node run. Tier 1: jsse crashed (signal or the interpreter-panic exit code) while node didn't — an engine bug by definition. Tier 2: exactly one side rejects the source as a syntax error — a real coverage gap. Tier 3: both sides threw (possibly a different error class) or both timed out — expected noise (usually an unimplemented feature), recorded but not a fuzzer finding. See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`.
 _Avoid_: divergence class, mismatch level.
 
+**Atom**:
+A canonical interned identifier (`src/interpreter/atom.rs`): two atoms with the same text are pointer-equal, and each carries a hash computed once by the interner's randomised hasher. `Environment.bindings` (`BindingMap`) and bytecode `Chunk.names` hold atoms, so the call path compares identifiers by pointer and never rehashes script text. See ADR-2026-10-12-0900.
+_Avoid_: symbol, interned string, name key.
+
+**Local Slot Hint**:
+The slot operand of the `LoadLocal`/`StoreLocal`/`UpdateLocal` bytecode ops: the expected position of a frame-local name in the call's `BindingMap`. It is verified by atom identity on every execution and falls back to by-name resolution on a miss, so it can be wrong without being unsound. See ADR-2026-10-12-0900.
+_Avoid_: register, frame offset, resolved slot.
+
+**Global Data Fast Path**:
+The read/write shortcut for a bare name that resolves to an *ordinary, own, data* property of the global object (`src/interpreter/global_access.rs`). A clone-free scope walk establishes that no scope binds the name, then one re-validated own-property probe reads or writes the value; a Proxy or exotic global object, a missing or inherited property, an accessor and a non-writable property are refused and run the generic Object Environment Record path. It caches nothing across accesses except a **Global Hint** — the property-map slot a name site last found its property in, verified by key on every use — so no invalidation protocol exists. See ADR-2026-10-12-1500.
+_Avoid_: global IC, property cell, global cache.
+
+**Effect Context**:
+A position in compiled bytecode where an expression's value is discarded: a function-goal expression statement, a `for` initialiser or update, a `var` initialiser, a non-final comma element, a `void` operand. `Compiler::compile_effect` lowers it, fusing the discard into the producing op (`StoreLocalPop`, `StoreResolvedNamePop`, the discard bit of `UpdateLocal`/`UpdateName`) instead of a trailing `Pop`. A Script-goal expression statement is *not* effect context: its value is the completion value. See ADR-2026-10-12-1200.
+_Avoid_: statement context, void context, dead value.
+
+**Fused Op**:
+A bytecode op that is exactly the concatenation of two or three ordinary ops and nothing more (`BinConst`, `LocalBinConst`, `CmpJumpIfFalse`, `StoreLocalPop`): same operand roots, same evaluation order, same errors, one dispatch. A fused op never reorders reference resolution before the right-hand side. See ADR-2026-10-12-1200.
+_Avoid_: superinstruction, macro op, peephole op.
+
+**Bail Reason**:
+The static label a compile attempt carries when it does not produce a whole-body chunk: `CompileError::Unsupported` (this node has no lowering; in Function goal it becomes an AST Fallback) or `CompileError::Ineligible` (the whole body stays on the tree-walker). The counters build's `BAIL` table counts Ineligible bodies and `FALLBACK` counts hand-off nodes, per label. See ADR-2026-10-12-2214.
+_Avoid_: bail code, unsupported flag.
+
+**Eligibility Membrane**:
+The boundary the bytecode compiler draws around what the VM can run natively. Since #902 it is per node, not per function: a node outside the membrane is handed to the tree-walker (AST Fallback) and only constructs that need the whole frame tree-walked (direct `eval`, `with`, `super`, `new.target`, `yield`/`await`) keep a body wholly outside it.
+_Avoid_: eligibility cliff, compile gate.
+
+**AST Fallback**:
+A syntax node a compiled body hands back to the tree-walker: `Op::EvalAst` for an expression (result pushed) or `Op::ExecAst` for a statement (break/continue routed through an escape table). The node is a clone stored in `Chunk.ast`; semantics are the tree-walker's by construction. See ADR-2026-10-12-2214.
+_Avoid_: deopt, interpreter escape, slow path.
+
 ## Parsing
 
 **Lookahead Cursor**:

@@ -989,6 +989,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier("yield".to_string()))
@@ -1018,6 +1019,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier("await".to_string()))
@@ -1045,6 +1047,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier("let".to_string()))
@@ -1072,6 +1075,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier("static".to_string()))
@@ -1216,6 +1220,7 @@ impl<'a> Parser<'a> {
                         is_async: true,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier("async".to_string()))
@@ -1250,6 +1255,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier(name))
@@ -1292,6 +1298,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 Ok(Expression::Identifier(name))
@@ -1395,6 +1402,7 @@ impl<'a> Parser<'a> {
                             is_async: false,
                             source_text,
                             body_is_strict,
+                            info: Default::default(),
                         }));
                     }
                     return Err(self.error("Unexpected token )"));
@@ -1425,6 +1433,7 @@ impl<'a> Parser<'a> {
                         is_async: false,
                         source_text,
                         body_is_strict,
+                        info: Default::default(),
                     }));
                 }
                 let expr = self.parse_assignment_expression()?;
@@ -1487,6 +1496,7 @@ impl<'a> Parser<'a> {
                             is_async: false,
                             source_text,
                             body_is_strict,
+                            info: Default::default(),
                         }));
                     }
                     // Just a parenthesized expression
@@ -1744,6 +1754,7 @@ impl<'a> Parser<'a> {
                     is_generator,
                     source_text,
                     body_is_strict: body_strict,
+                    info: Default::default(),
                 }),
                 kind: PropertyKind::Init,
                 computed,
@@ -1803,6 +1814,7 @@ impl<'a> Parser<'a> {
                     is_generator: true,
                     source_text,
                     body_is_strict: body_strict,
+                    info: Default::default(),
                 }),
                 kind: PropertyKind::Init,
                 computed,
@@ -1878,6 +1890,7 @@ impl<'a> Parser<'a> {
                         is_generator: false,
                         source_text: self.source_since(method_source_start),
                         body_is_strict: body_strict,
+                        info: Default::default(),
                     }),
                     kind: saved_kind,
                     computed,
@@ -2040,6 +2053,7 @@ impl<'a> Parser<'a> {
                     is_generator: false,
                     source_text: self.source_since(method_source_start),
                     body_is_strict: body_strict,
+                    info: Default::default(),
                 }),
                 kind: PropertyKind::Init,
                 computed,
@@ -2113,6 +2127,7 @@ impl<'a> Parser<'a> {
             is_generator,
             source_text,
             body_is_strict: body_strict,
+            info: Default::default(),
         }))
     }
 
@@ -2164,6 +2179,7 @@ impl<'a> Parser<'a> {
             is_generator,
             source_text,
             body_is_strict: body_strict,
+            info: Default::default(),
         }))
     }
 
@@ -2195,6 +2211,7 @@ impl<'a> Parser<'a> {
                     is_async: true,
                     source_text,
                     body_is_strict,
+                    info: Default::default(),
                 }));
             }
             // async() — function call on 'async' identifier
@@ -2235,6 +2252,7 @@ impl<'a> Parser<'a> {
                 is_async: true,
                 source_text,
                 body_is_strict,
+                info: Default::default(),
             }));
         }
         let expr = self.parse_assignment_expression()?;
@@ -2294,6 +2312,7 @@ impl<'a> Parser<'a> {
                     is_async: true,
                     source_text,
                     body_is_strict,
+                    info: Default::default(),
                 }));
             }
             // Not an arrow — it's async(args) function call

@@ -243,11 +243,8 @@ impl Interpreter {
                         if b.class_name == "String"
                             && let Some(s) = b.primitive_value.as_ref().and_then(JsValue::as_string)
                             && (key.as_str() == Some("length")
-                                || crate::interpreter::types::string_exotic_index(
-                                    &key,
-                                    s.code_units.len(),
-                                )
-                                .is_some())
+                                || crate::interpreter::types::string_exotic_index(&key, s.len())
+                                    .is_some())
                         {
                             return Completion::Normal(JsValue::boolean(false));
                         }

@@ -26,7 +26,7 @@ impl Interpreter {
             Expression::Member(obj_expr, member_prop, _) => {
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     // §13.3.7.1: super property in optional chain — use HomeObject.__proto__
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let key = match member_prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
@@ -428,8 +428,7 @@ impl Interpreter {
                     && obj_b.class_name == "String"
                 {
                     let is_exotic = key.eq_str("length")
-                        || crate::interpreter::types::string_exotic_index(&key, s.code_units.len())
-                            .is_some();
+                        || crate::interpreter::types::string_exotic_index(&key, s.len()).is_some();
                     if is_exotic {
                         drop(obj_b);
                         if is_strict {
@@ -648,7 +647,7 @@ impl Interpreter {
                     "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                 ));
             }
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
             // Steps 3-4: Evaluate key expression (without ToPropertyKey yet)
             let raw_key = match prop {
@@ -782,10 +781,9 @@ impl Interpreter {
         } else if let Some(s) = obj_val.as_string() {
             if key.eq_str("length") {
                 Completion::Normal(JsValue::number(s.len() as f64))
-            } else if let Some(idx) =
-                crate::interpreter::types::string_exotic_index(&key, s.code_units.len())
+            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(&key, s.len())
             {
-                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else {
                 let wrapper = match self.to_object(&obj_val) {
                     Completion::Normal(v) => v,

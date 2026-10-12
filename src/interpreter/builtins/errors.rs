@@ -54,7 +54,7 @@ impl Interpreter {
 
                     macro_rules! init_error {
                         ($o:expr) => {
-                            $o.class_name = "Error".to_string();
+                            $o.class_name = "Error".into();
                             if let Some(p) = proto {
                                 $o.prototype_id = Some(p);
                             }
@@ -334,7 +334,7 @@ impl Interpreter {
                         {
                             if let Some(obj) = interp.get_object(this_id) {
                                 let mut o = obj.borrow_mut();
-                                o.class_name = "Test262Error".to_string();
+                                o.class_name = "Test262Error".into();
                                 if let Some(ref ep) = error_proto_clone {
                                     o.prototype_id = Some(ep.borrow().id.unwrap());
                                 }
@@ -351,7 +351,7 @@ impl Interpreter {
                         let obj_id = interp.create_object_id();
                         {
                             let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                            o.class_name = "Test262Error".to_string();
+                            o.class_name = "Test262Error".into();
                             if let Some(ref ep) = error_proto_clone {
                                 o.prototype_id = Some(ep.borrow().id.unwrap());
                             }
@@ -467,7 +467,7 @@ impl Interpreter {
 
                     macro_rules! init_native_error {
                         ($o:expr) => {
-                            $o.class_name = error_name_clone.clone();
+                            $o.class_name = error_name_clone.clone().into();
                             $o.prototype_id = Some(proto);
                             if let Some(ref ms) = msg_str {
                                 $o.insert_builtin("message".to_string(), ms.clone());
@@ -575,7 +575,7 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        o.class_name = "SuppressedError".to_string();
+                        o.class_name = "SuppressedError".into();
                         if let Some(p) = proto {
                             o.prototype_id = Some(p);
                         }
@@ -690,7 +690,7 @@ impl Interpreter {
 
                         macro_rules! init_agg_error {
                             ($o:expr) => {
-                                $o.class_name = "AggregateError".to_string();
+                                $o.class_name = "AggregateError".into();
                                 $o.prototype_id = Some(proto);
                                 $o.insert_builtin("errors".to_string(), errors_arr.clone());
                                 if let Some(ref ms) = msg_str {

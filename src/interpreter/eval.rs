@@ -34,6 +34,26 @@ pub(super) enum IdentifierRef {
     SpecificEnv(EnvRef),
 }
 
+/// The fields of a callable the `[[Call]]` path reads, copied out of the
+/// function object under one short borrow so the call neither clones the
+/// whole `JsFunction` nor allocates for its `name`/`source_text`.
+enum CallTarget {
+    Native(Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>),
+    User {
+        params: Rc<Vec<Pattern>>,
+        body: Body,
+        closure: EnvRef,
+        is_arrow: bool,
+        is_strict: bool,
+        is_generator: bool,
+        is_async: bool,
+        uses_arguments: bool,
+        has_simple_params: bool,
+        /// Only populated for arrow functions, which inherit it.
+        captured_new_target: Option<JsValue>,
+    },
+}
+
 /// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
 /// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
 /// discarded its reason by the time a message is needed, so the assignment
@@ -161,8 +181,8 @@ impl Interpreter {
     /// Walks up the environment chain to find the `this` binding.
     fn this_is_in_tdz(env: &EnvRef) -> bool {
         let e = env.borrow();
-        if e.bindings.contains_key("this") {
-            return e.is_in_tdz("this");
+        if let Some(this) = &e.this_binding {
+            return !this.initialized;
         }
         if let Some(ref parent) = e.parent {
             return Self::this_is_in_tdz(parent);
@@ -178,7 +198,7 @@ impl Interpreter {
     /// the bytecode `Op::LoadThis` handler so both observe identical
     /// semantics, including the derived-constructor TDZ throw.
     pub(super) fn resolve_this_binding(&mut self, env: &EnvRef) -> Completion {
-        match env.borrow().get("this") {
+        match env.borrow().get_this() {
             Some(v) => Completion::Normal(v),
             None => {
                 if Self::this_is_in_tdz(env) {
@@ -196,16 +216,8 @@ impl Interpreter {
     /// Walks up to find the function scope's `this` binding and marks it initialized.
     fn initialize_this_binding(env: &EnvRef, value: JsValue) {
         let mut e = env.borrow_mut();
-        if e.bindings.contains_key("this") {
-            e.bindings.insert(
-                "this".to_string(),
-                crate::interpreter::types::Binding {
-                    value,
-                    kind: crate::interpreter::types::BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
+        if e.this_binding.is_some() {
+            e.set_this(value);
             return;
         }
         if let Some(ref parent) = e.parent {
@@ -263,15 +275,7 @@ impl Interpreter {
         };
         let init_parent = ctor_closure.unwrap_or_else(|| env.clone());
         let init_env = Environment::new(Some(init_parent));
-        init_env.borrow_mut().bindings.insert(
-            "this".to_string(),
-            crate::interpreter::types::Binding {
-                value: this_val.clone(),
-                kind: crate::interpreter::types::BindingKind::Const,
-                initialized: true,
-                deletable: false,
-            },
-        );
+        init_env.borrow_mut().set_this(this_val.clone());
         init_env.borrow_mut().class_private_names = class_pn;
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
@@ -283,7 +287,7 @@ impl Interpreter {
             let proto_val = self.get_property_on_id(o.id, "prototype");
             if proto_val.is_object() {
                 init_env.borrow_mut().bindings.insert(
-                    "__home_object__".to_string(),
+                    "__home_object__",
                     crate::interpreter::types::Binding {
                         value: proto_val,
                         kind: crate::interpreter::types::BindingKind::Const,
@@ -536,28 +540,17 @@ impl Interpreter {
                     }
                 };
                 self.gc_root_value(&rval);
-                // The fast string-concat arm below moves lval/rval, so snapshot
-                // the object operands now for a targeted unroot afterwards. Only
-                // objects are ever rooted, and that arm runs only for primitives,
-                // so these are cheap handle copies or None.
-                let lroot = lval.is_object().then(|| lval.clone());
-                let rroot = rval.is_object().then(|| rval.clone());
                 let result = if *op == BinaryOp::Instanceof {
                     self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
                 // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
                 } else if *op == BinaryOp::Add && is_primitive_string_concat(&lval, &rval) {
-                    self.concat_owned_primitives(lval, rval)
+                    self.concat_primitives(&lval, &rval)
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
-                // Unroot only the operands rooted for this expression.
-                if let Some(ref r) = rroot {
-                    self.gc_unroot_value(r);
-                }
-                if let Some(ref l) = lroot {
-                    self.gc_unroot_value(l);
-                }
+                self.gc_unroot_value(&rval);
+                self.gc_unroot_value(&lval);
                 result
             }
             Expression::Logical(op, left, right) => {
@@ -590,6 +583,7 @@ impl Interpreter {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
                         bindings: Default::default(),
+                        this_binding: None,
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -617,9 +611,10 @@ impl Interpreter {
                 };
                 let enclosing_strict = env.borrow().strict;
                 let force_method = self.next_function_is_method;
+                let info = f.info();
                 let func = JsFunction::User {
                     name: f.name.clone(),
-                    params: Rc::new(f.params.clone()),
+                    params: info.params.clone(),
                     body: f.body.clone(),
                     closure: closure_env.clone(),
                     is_arrow: false,
@@ -629,8 +624,8 @@ impl Interpreter {
                     is_method: force_method,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&f.params, &f.body),
-                    has_simple_params: crate::ast::params_are_simple(&f.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let func_val = self.create_function(func);
                 if let Some(name) = &f.name {
@@ -640,9 +635,10 @@ impl Interpreter {
             }
             Expression::ArrowFunction(af) => {
                 let enclosing_strict = env.borrow().strict;
+                let info = af.info();
                 let func = JsFunction::User {
                     name: None,
-                    params: Rc::new(af.params.clone()),
+                    params: info.params.clone(),
                     body: af.body.body().clone(),
                     closure: env.clone(),
                     is_arrow: true,
@@ -653,7 +649,7 @@ impl Interpreter {
                     source_text: af.source_text.clone(),
                     captured_new_target: self.new_target.clone(),
                     uses_arguments: false, // arrows never have own arguments
-                    has_simple_params: crate::ast::params_are_simple(&af.params),
+                    has_simple_params: info.has_simple_params,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -670,56 +666,14 @@ impl Interpreter {
             }
             Expression::Typeof(operand) => {
                 if let Expression::Identifier(name) = operand.as_ref() {
-                    let strict = env.borrow().strict;
-                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
-                        match self.resolve_with_has_binding(name, env) {
-                            Ok(Some(obj_id)) => {
-                                return match self.with_get_binding_value(obj_id, name, strict) {
-                                    Completion::Normal(val) => Completion::Normal(JsValue::string(
-                                        JsString::from_str(typeof_val(&val, &self.objects)),
-                                    )),
-                                    other => other,
-                                };
-                            }
-                            Ok(None) => {}
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    if let Some(result) = self.resolve_global_getter(name, env) {
-                        return match result {
-                            Completion::Normal(val) => Completion::Normal(JsValue::string(
-                                JsString::from_str(typeof_val(&val, &self.objects)),
-                            )),
-                            other => other,
-                        };
-                    }
-                    match self.env_get(env, name) {
-                        Some(val) => {
-                            return Completion::Normal(JsValue::string(JsString::from_str(
-                                typeof_val(&val, &self.objects),
-                            )));
-                        }
-                        None => {
-                            if self.env_has(env, name) {
-                                return Completion::Throw(self.create_reference_error(&format!(
-                                    "Cannot access '{name}' before initialization"
-                                )));
-                            }
-                            return Completion::Normal(JsValue::string(JsString::from_str(
-                                "undefined",
-                            )));
-                        }
-                    }
+                    return self.eval_typeof_identifier(name, env);
                 }
                 let val =
                     match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                Completion::Normal(JsValue::string(JsString::from_str(typeof_val(
-                    &val,
-                    &self.objects,
-                ))))
+                Completion::Normal(self.typeof_value(&val))
             }
             Expression::Void(operand) => {
                 match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
@@ -1136,6 +1090,9 @@ impl Interpreter {
             }
             Expression::Template(tmpl) => {
                 let mut code_units: Vec<u16> = Vec::new();
+                // `${s}...` with an empty leading quasi extends `s` in place,
+                // keeping `s = `${s}${x}`` loops linear.
+                let mut base: Option<JsString> = None;
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
                     if let Some(q) = quasi {
                         code_units.extend_from_slice(q);
@@ -1145,12 +1102,21 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let Err(e) = self.append_js_string(&mut code_units, &val) {
+                        if base.is_none()
+                            && code_units.is_empty()
+                            && let Some(s) = val.as_string()
+                        {
+                            base = Some(s);
+                        } else if let Err(e) = self.append_js_string(&mut code_units, &val) {
                             return Completion::Throw(e);
                         }
                     }
                 }
-                Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+                let joined = match base {
+                    Some(base) => base.concat_units(&code_units),
+                    None => JsString::from_vec(code_units),
+                };
+                Completion::Normal(JsValue::string(joined))
             }
             Expression::OptionalChain(base, prop) => {
                 let (base_val, base_this) = match self.eval_oc_base(base, env) {
@@ -1257,10 +1223,9 @@ impl Interpreter {
         } else if let Some(s) = base_val.as_string() {
             if name.eq_str("length") {
                 Completion::Normal(JsValue::number(s.len() as f64))
-            } else if let Some(idx) =
-                crate::interpreter::types::string_exotic_index(&name, s.code_units.len())
+            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(&name, s.len())
             {
-                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else if let Some(sp_id) = self.realm().string_prototype {
                 self.get_object_property(sp_id, &name, base_val)
             } else {
@@ -1380,19 +1345,19 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.primitive_value = Some(val.clone());
         if val.is_string() {
-            obj_data.class_name = "String".to_string();
+            obj_data.class_name = "String".into();
             obj_data.prototype_id = self.realm().string_prototype;
         } else if val.is_number() {
-            obj_data.class_name = "Number".to_string();
+            obj_data.class_name = "Number".into();
             obj_data.prototype_id = self.realm().number_prototype;
         } else if val.is_boolean() {
-            obj_data.class_name = "Boolean".to_string();
+            obj_data.class_name = "Boolean".into();
             obj_data.prototype_id = self.realm().boolean_prototype;
         } else if val.is_symbol() {
-            obj_data.class_name = "Symbol".to_string();
+            obj_data.class_name = "Symbol".into();
             obj_data.prototype_id = self.realm().symbol_prototype;
         } else if val.is_bigint() {
-            obj_data.class_name = "BigInt".to_string();
+            obj_data.class_name = "BigInt".into();
             obj_data.prototype_id = self.realm().bigint_prototype;
         } else {
             unreachable!();
@@ -1552,10 +1517,10 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<(), JsValue> {
         if let Some(s) = val.as_string() {
-            out.extend_from_slice(&s.code_units);
+            out.extend_from_slice(s.as_units());
         } else if val.is_object() {
             let s = self.to_js_string(val)?;
-            out.extend_from_slice(&s.code_units);
+            out.extend_from_slice(s.as_units());
         } else {
             out.extend(self.to_string_value(val)?.encode_utf16());
         }
@@ -1737,8 +1702,8 @@ impl Interpreter {
         if is_string(&lprim) && is_string(&rprim) {
             // §7.2.13 step 3: Compare by UTF-16 code units, not UTF-8 bytes
             return Ok(Some(
-                lprim.as_string().expect("kind checked").code_units
-                    < rprim.as_string().expect("kind checked").code_units,
+                lprim.as_string().expect("kind checked").as_units()
+                    < rprim.as_string().expect("kind checked").as_units(),
             ));
         }
         // BigInt comparisons
@@ -1868,15 +1833,43 @@ impl Interpreter {
                 state
             }
             None => {
-                let state = match compiler::compile_body(body.as_slice()) {
+                let shape = self
+                    .get_object(func_obj_id)
+                    .and_then(|o| match &o.borrow().callable {
+                        Some(JsFunction::User {
+                            params,
+                            is_arrow,
+                            uses_arguments,
+                            has_simple_params,
+                            ..
+                        }) if *has_simple_params => Some((
+                            !*is_arrow && *uses_arguments,
+                            params
+                                .iter()
+                                .filter_map(|p| match p {
+                                    Pattern::Identifier(name) => Some(name.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<String>>(),
+                        )),
+                        _ => None,
+                    });
+                let (arguments_slot, simple_params) = shape.unwrap_or((false, Vec::new()));
+                let frame_shape = compiler::FrameShape {
+                    arguments_slot,
+                    simple_params: &simple_params,
+                };
+                let state = match compiler::compile_function_body(body.as_slice(), &frame_shape) {
                     Ok(c) => {
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.compile_ok += 1;
+                            self.perf.record_fallbacks(&c.fallback_reasons);
                         }
                         BytecodeCacheState::Compiled(Rc::new(c))
                     }
-                    Err(compiler::CompileError::Unsupported(reason)) => {
+                    Err(e) => {
+                        let reason = e.reason();
                         #[cfg(feature = "perf-counters")]
                         {
                             let (name, seq) = self.perf_body_name(func_obj_id);
@@ -1893,6 +1886,45 @@ impl Interpreter {
             o.borrow_mut().bytecode_cache = state.clone();
         }
         state
+    }
+
+    /// The `typeof` result string for an evaluated value (HTMLDDA aware).
+    pub(super) fn typeof_value(&self, value: &JsValue) -> JsValue {
+        JsValue::string(JsString::from_str(typeof_val(value, &self.objects)))
+    }
+
+    /// `typeof <identifier>`: an unresolvable reference yields `"undefined"`,
+    /// an uninitialised binding throws (sec-typeof-operator-runtime-semantics-
+    /// evaluation, sec-getvalue).
+    pub(super) fn eval_typeof_identifier(&mut self, name: &str, env: &EnvRef) -> Completion {
+        let strict = env.borrow().strict;
+        if self.with_scope_depth > 0 || self.has_ever_entered_with {
+            match self.resolve_with_has_binding(name, env) {
+                Ok(Some(obj_id)) => {
+                    return match self.with_get_binding_value(obj_id, name, strict) {
+                        Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
+                        other => other,
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => return Completion::Throw(e),
+            }
+        }
+        if let Some(result) = self.resolve_global_getter(name, env, None) {
+            return match result {
+                Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
+                other => other,
+            };
+        }
+        match self.env_get(env, name) {
+            Some(val) => Completion::Normal(self.typeof_value(&val)),
+            None if self.env_has(env, name) => {
+                Completion::Throw(self.create_reference_error(&format!(
+                    "Cannot access '{name}' before initialization"
+                )))
+            }
+            None => Completion::Normal(JsValue::string(JsString::from_str("undefined"))),
+        }
     }
 
     pub(super) fn dispatch_body(
@@ -1918,9 +1950,38 @@ impl Interpreter {
                 {
                     self.perf.body_compiled += 1;
                 }
-                return self.with_ic_body(body, |interp| {
+                // Function and lexical declarations are instantiated before
+                // the chunk runs, exactly as the tree-walker does, so the
+                // nodes handed back to it find their bindings in place.
+                let analysis = chunk
+                    .needs_instantiation
+                    .then(|| self.hoist_cache.analysis_for(body));
+                #[cfg(feature = "perf-counters")]
+                let has_fallback = !chunk.ast.is_empty();
+                #[cfg(feature = "perf-counters")]
+                if has_fallback {
+                    let (name, seq) = self.perf_body_name(func_obj_id);
+                    self.perf.enter_ast_body(name, seq, false);
+                }
+                let result = self.with_ic_body(body, |interp| {
+                    if let Some(analysis) = &analysis {
+                        vm::declare_var_prologue(&chunk, exec_env);
+                        if let Some(err) = interp.instantiate_body_declarations(
+                            body.as_slice(),
+                            exec_env,
+                            Some(analysis),
+                        ) {
+                            return err;
+                        }
+                    }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });
+                #[cfg(feature = "perf-counters")]
+                if has_fallback {
+                    let exclusive = self.perf.leave_ast_body();
+                    self.perf.ast_units_in_fallbacks += exclusive;
+                }
+                return result;
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -1964,28 +2025,16 @@ impl Interpreter {
         (interned, seq)
     }
 
-    /// `+` on two primitives where at least one is a String, taking the
-    /// operands by value so a uniquely owned left string (an intermediate such
-    /// as `t + "ab"` in `t + "ab" + j`) is extended in place instead of copied.
+    /// `+` on two primitives where at least one is a String. A left string
+    /// that owns its buffer's tail is extended in place instead of copied.
     /// Callers check [`is_primitive_string_concat`] first.
-    pub(super) fn concat_owned_primitives(&mut self, lval: JsValue, rval: JsValue) -> Completion {
+    pub(super) fn concat_primitives(&mut self, lval: &JsValue, rval: &JsValue) -> Completion {
         if lval.is_symbol() || rval.is_symbol() {
             return Completion::Throw(
                 self.create_type_error("Cannot convert a Symbol value to a string"),
             );
         }
-        let mut code_units = if lval.is_string() {
-            lval.into_string().expect("kind checked").into_vec()
-        } else {
-            js_value_to_code_units(&lval)
-        };
-        if rval
-            .with_string(|s| code_units.extend_from_slice(s))
-            .is_none()
-        {
-            code_units.extend(js_value_to_code_units(&rval));
-        }
-        Completion::Normal(JsValue::string(JsString::from_vec(code_units)))
+        Completion::Normal(concat_string_values(lval, rval))
     }
 
     pub(super) fn eval_binary(
@@ -2065,7 +2114,7 @@ impl Interpreter {
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    self.concat_owned_primitives(lprim, rprim)
+                    self.concat_primitives(&lprim, &rprim)
                 } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
                     Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
                         &a.value, &b.value,
@@ -2322,7 +2371,7 @@ impl Interpreter {
         }
     }
 
-    fn apply_update_numeric(
+    pub(super) fn apply_update_numeric(
         &mut self,
         raw_val: &JsValue,
         op: UpdateOp,
@@ -2355,12 +2404,14 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn get_identifier_value_by_ref(
+    pub(super) fn get_identifier_value_by_ref_hinted<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         id_ref: &IdentifierRef,
         env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Completion {
+        let name = key.as_name();
         let strict = env.borrow().strict;
         match id_ref {
             IdentifierRef::WithObject(obj_id) => self.with_get_binding_value(*obj_id, name, strict),
@@ -2368,28 +2419,24 @@ impl Interpreter {
                 Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                let (indirect, has_binding) = {
+                let local = {
                     let specific = specific_env.borrow();
-                    (
-                        specific.resolve_indirect_binding(name),
-                        specific.bindings.contains_key(name),
-                    )
+                    match specific.resolve_indirect_binding(name) {
+                        Some(resolved) => Some(resolved),
+                        None => specific
+                            .bindings
+                            .get(key)
+                            .map(|b| b.initialized.then(|| b.value.clone())),
+                    }
                 };
-                if let Some(resolved) = indirect {
+                if let Some(resolved) = local {
                     match resolved {
                         Some(value) => Completion::Normal(value),
                         None => Completion::Throw(self.create_reference_error(&format!(
                             "Cannot access '{name}' before initialization"
                         ))),
                     }
-                } else if has_binding {
-                    match self.env_get(specific_env, name) {
-                        Some(value) => Completion::Normal(value),
-                        None => Completion::Throw(self.create_reference_error(&format!(
-                            "Cannot access '{name}' before initialization"
-                        ))),
-                    }
-                } else if let Some(result) = self.resolve_global_getter(name, specific_env) {
+                } else if let Some(result) = self.resolve_global_getter(key, specific_env, hint) {
                     result
                 } else {
                     Completion::Throw(
@@ -2400,18 +2447,30 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn eval_identifier_update(
+    #[inline]
+    pub(super) fn eval_identifier_update<N: BindingName + ?Sized>(
         &mut self,
         op: UpdateOp,
         prefix: bool,
-        name: &str,
+        key: &N,
         env: &EnvRef,
+    ) -> Completion {
+        self.eval_identifier_update_hinted(op, prefix, key, env, None)
+    }
+
+    pub(super) fn eval_identifier_update_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        op: UpdateOp,
+        prefix: bool,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Completion {
         // Fast path: identifier is a Number in the local scope chain (no with/module)
         {
             let env_borrow = env.borrow();
             if env_borrow.with_object.is_none()
-                && let Some(binding) = env_borrow.bindings.get(name)
+                && let Some(binding) = env_borrow.bindings.get(key)
                 && binding.initialized
                 && binding.kind != BindingKind::Const
                 && binding.kind != BindingKind::FunctionName
@@ -2425,18 +2484,18 @@ impl Interpreter {
                 };
                 let new_val = JsValue::number(new_num);
                 drop(env_borrow);
-                if let Err(e) = self.env_set(env, name, new_val) {
+                if let Err(e) = self.env_set(env, key, new_val) {
                     return Completion::Throw(e);
                 }
                 return Completion::Normal(JsValue::number(if prefix { new_num } else { old_num }));
             }
         }
 
-        let id_ref = match self.resolve_identifier_ref(name, env) {
+        let id_ref = match self.resolve_identifier_ref_hinted(key, env, hint) {
             Ok(r) => r,
             Err(e) => return Completion::Throw(e),
         };
-        let raw_val = match self.get_identifier_value_by_ref(name, &id_ref, env) {
+        let raw_val = match self.get_identifier_value_by_ref_hinted(key, &id_ref, env, hint) {
             Completion::Normal(v) => v,
             other => return other,
         };
@@ -2444,7 +2503,7 @@ impl Interpreter {
             Ok(pair) => pair,
             Err(e) => return Completion::Throw(e),
         };
-        match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+        match self.put_value_by_ref_hinted(key, new_val.clone(), &id_ref, env, hint) {
             Completion::Normal(_) => {}
             other => return other,
         }
@@ -2471,7 +2530,7 @@ impl Interpreter {
                         "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                     ));
                 }
-                let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
                 // Evaluate key expression (raw)
                 let raw_key = match prop {
@@ -2576,30 +2635,13 @@ impl Interpreter {
                 }
                 MemberProperty::Private(_) => unreachable!(),
             };
-            // Get current value
-            let cur_val = match obj_val.as_object_id() {
-                Some(id) => match self.get_object_property(id, &key, &obj_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                },
-                None => {
-                    // Primitive member access — use eval_member logic indirectly
-                    match self.eval_expr(arg, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                }
-            };
-            let (old_val, new_val) = match self.apply_update_numeric(&cur_val, op) {
-                Ok(pair) => pair,
-                Err(e) => return Completion::Throw(e),
-            };
-            // Set value back (uses set_object_with_key to handle accessor setters, proxies, etc.)
-            let strict = env.borrow().strict;
-            if let Err(e) = self.set_object_with_key(obj_val, &key, new_val.clone(), strict) {
-                return Completion::Throw(e);
+            if obj_val.is_nullish() {
+                return Completion::Throw(self.create_type_error(&format!(
+                    "Cannot read properties of {obj_val} (reading '{key}')"
+                )));
             }
-            Completion::Normal(if prefix { new_val } else { old_val })
+            let strict = env.borrow().strict;
+            self.update_member_value(&obj_val, &key, op, prefix, strict)
         } else if let Expression::Call(_, _, _) = arg {
             match self.eval_expr(arg, env) {
                 Completion::Normal(_) => {}
@@ -2612,6 +2654,45 @@ impl Interpreter {
             )
         } else {
             Completion::Normal(JsValue::number(f64::NAN))
+        }
+    }
+
+    /// The GetValue → ToNumeric → ±1 → PutValue tail of `++`/`--` on a member
+    /// reference whose base is already known non-nullish and whose key is
+    /// already a property key (sec-postfix-increment-operator-runtime-
+    /// semantics-evaluation, sec-prefix-increment-operator-runtime-semantics-
+    /// evaluation). A primitive base is read through its wrapper with the
+    /// primitive as receiver. The postfix result is the numeric old value.
+    pub(super) fn update_member_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base: &JsValue,
+        key: &K,
+        op: UpdateOp,
+        prefix: bool,
+        strict: bool,
+    ) -> Completion {
+        let current = match base.as_object_id() {
+            Some(id) => self.get_object_property(id, key, base),
+            None => match self.to_object(base) {
+                Completion::Normal(wrapper) => match wrapper.as_object_id() {
+                    Some(id) => self.get_object_property(id, key, base),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                },
+                abrupt => abrupt,
+            },
+        };
+        let current = match current {
+            Completion::Normal(v) => v,
+            abrupt => return abrupt,
+        };
+        let (old_val, new_val) = match self.apply_update_numeric(&current, op) {
+            Ok(pair) => pair,
+            Err(e) => return Completion::Throw(e),
+        };
+        // set_object_with_key handles accessor setters, proxies, etc.
+        match self.set_object_with_key(base.clone(), key, new_val.clone(), strict) {
+            Ok(()) => Completion::Normal(if prefix { new_val } else { old_val }),
+            Err(e) => Completion::Throw(e),
         }
     }
 
@@ -2642,7 +2723,7 @@ impl Interpreter {
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let strict = env.borrow().strict;
                     return match super_base_id {
                         Some(base_id) => {
@@ -2825,7 +2906,7 @@ impl Interpreter {
                         );
                     }
                     IdentifierRef::SpecificEnv(_) => {
-                        if let Some(result) = self.resolve_global_getter(name, env) {
+                        if let Some(result) = self.resolve_global_getter(name, env, None) {
                             match result {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -2863,7 +2944,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
 
                     // Evaluate key expression (raw, no ToPropertyKey yet)
                     let raw_key = match prop {
@@ -3295,7 +3376,7 @@ impl Interpreter {
                         );
                     }
                     IdentifierRef::SpecificEnv(_) => {
-                        if let Some(result) = self.resolve_global_getter(name, env) {
+                        if let Some(result) = self.resolve_global_getter(name, env, None) {
                             match result {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -3378,7 +3459,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let raw_key = match prop {
                         MemberProperty::Dot(name) => {
                             JsValue::string(crate::types::JsString::from_str(name))
@@ -3543,7 +3624,7 @@ impl Interpreter {
                             );
                         }
                         IdentifierRef::SpecificEnv(_) => {
-                            if let Some(result) = self.resolve_global_getter(name, env) {
+                            if let Some(result) = self.resolve_global_getter(name, env, None) {
                                 match result {
                                     Completion::Normal(v) => v,
                                     other => return other,
@@ -3608,7 +3689,7 @@ impl Interpreter {
                 // Fast path: both primitives and at least one is a string — avoid
                 // to_primitive/js_value_to_code_units clones in eval_binary.
                 if is_primitive_string_concat(&lval, &rval) {
-                    return self.concat_owned_primitives(lval, rval);
+                    return self.concat_primitives(&lval, &rval);
                 }
                 self.eval_binary(BinaryOp::Add, &lval, &rval)
             }
@@ -3822,7 +3903,7 @@ impl Interpreter {
                 }
             };
             let super_base_id = self.get_super_base_id(env);
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return match super_base_id {
                 Some(base_id) => {
@@ -4189,7 +4270,7 @@ impl Interpreter {
             let super_base_id = self
                 .get_super_base_id(env)
                 .ok_or_else(|| self.create_type_error("No super class"))?;
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+            let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
             let strict = env.borrow().strict;
             return Ok(MemberLhsRef::Ref(Some(DestructLRef::Super(
                 super_base_id,
@@ -4721,7 +4802,7 @@ impl Interpreter {
                             "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                         ));
                     }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
+                    let this_val = env.borrow().get_this().unwrap_or(JsValue::UNDEFINED);
                     let home = env.borrow().get("__home_object__");
                     if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id) {
                         let proto_id = self
@@ -5003,6 +5084,56 @@ impl Interpreter {
         })
     }
 
+    /// Simple-parameter binding for the hot call path: the parameter atoms
+    /// are interned once per Body, so a call hashes no names (#898).
+    fn bind_simple_parameters(
+        &mut self,
+        body: &Body,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+    ) {
+        let atoms = match self.frame_layout_memo.get(body) {
+            Some(atoms)
+                if atoms.len() == params.len()
+                    && atoms.iter().zip(params).all(|(atom, param)| {
+                        matches!(param, Pattern::Identifier(name) if name == atom.as_str())
+                    }) =>
+            {
+                atoms
+            }
+            _ => {
+                let atoms = Rc::new(
+                    params
+                        .iter()
+                        .map(|param| {
+                            let Pattern::Identifier(name) = param else {
+                                unreachable!(
+                                    "simple parameter metadata must match the parameter list"
+                                );
+                            };
+                            Atom::intern(name)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                self.frame_layout_memo.insert(body, atoms.clone());
+                atoms
+            }
+        };
+        let mut env = func_env.borrow_mut();
+        for (index, atom) in atoms.iter().enumerate() {
+            env.bindings.insert_atom(
+                atom,
+                Binding {
+                    value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+                    kind: BindingKind::Var,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
+        }
+    }
+
     fn bind_function_parameters(
         &mut self,
         params: &[Pattern],
@@ -5017,7 +5148,7 @@ impl Interpreter {
                     unreachable!("simple parameter metadata must match the parameter list");
                 };
                 env.bindings.insert(
-                    name.clone(),
+                    name,
                     Binding {
                         value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
                         kind: BindingKind::Var,
@@ -5104,6 +5235,29 @@ impl Interpreter {
                 }
                 other => return other,
             }
+        }
+    }
+
+    /// §10.2.1.2 OrdinaryCallBindThis: sloppy callees see the realm's global
+    /// object for a nullish `this` and the wrapper object for a primitive one.
+    fn ordinary_call_bind_this(
+        &mut self,
+        this_val: &JsValue,
+        is_strict: bool,
+        closure_strict: bool,
+    ) -> JsValue {
+        if is_strict || closure_strict || this_val.is_object() {
+            return this_val.clone();
+        }
+        if this_val.is_nullish() {
+            return match self.realm().global_object {
+                Some(id) => JsValue::object(id),
+                None => this_val.clone(),
+            };
+        }
+        match self.to_object(this_val) {
+            Completion::Normal(v) => v,
+            _ => this_val.clone(),
         }
     }
 
@@ -5236,9 +5390,10 @@ impl Interpreter {
             if has_wrapped_target {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
+            let function_realm = obj.borrow().function_realm;
             if is_class_ctor && self.new_target.is_none() {
                 let caller_realm = self.current_realm_id;
-                if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                if let Some(fn_realm) = function_realm {
                     self.current_realm_id = fn_realm;
                 }
                 let err =
@@ -5246,13 +5401,40 @@ impl Interpreter {
                 self.current_realm_id = caller_realm;
                 return Completion::Throw(err);
             }
-            let callable = obj.borrow().callable.clone();
+            let callable = match &obj.borrow().callable {
+                Some(JsFunction::User {
+                    params,
+                    body,
+                    closure,
+                    is_arrow,
+                    is_strict,
+                    is_generator,
+                    is_async,
+                    uses_arguments,
+                    has_simple_params,
+                    captured_new_target,
+                    ..
+                }) => Some(CallTarget::User {
+                    params: params.clone(),
+                    body: body.clone(),
+                    closure: closure.clone(),
+                    is_arrow: *is_arrow,
+                    is_strict: *is_strict,
+                    is_generator: *is_generator,
+                    is_async: *is_async,
+                    uses_arguments: *uses_arguments,
+                    has_simple_params: *has_simple_params,
+                    captured_new_target: captured_new_target.clone(),
+                }),
+                Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
+                None => None,
+            };
             if let Some(func) = callable {
                 // [[Call]] vs [[Construct]] new.target semantics:
                 // - [[Call]]: new.target = undefined (clear for non-arrow functions)
                 // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
                 // - Arrow functions: inherit new.target from enclosing scope (don't clear)
-                let is_arrow_func = matches!(func, JsFunction::User { is_arrow, .. } if is_arrow);
+                let is_arrow_func = matches!(func, CallTarget::User { is_arrow, .. } if is_arrow);
                 let was_construct = std::mem::replace(&mut self.calling_as_construct, false);
                 let outer_new_target = if !is_arrow_func {
                     let nt = self.new_target.take();
@@ -5263,7 +5445,7 @@ impl Interpreter {
                 } else {
                     // Arrow functions inherit new.target from creation context
                     let saved = self.new_target.take();
-                    if let JsFunction::User {
+                    if let CallTarget::User {
                         captured_new_target: Some(ref cnt),
                         ..
                     } = func
@@ -5273,13 +5455,13 @@ impl Interpreter {
                     Some(saved)
                 };
                 let result = match func {
-                    JsFunction::Native(_, _, f, _) => {
+                    CallTarget::Native(f) => {
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.calls_to_native += 1;
                         }
                         let caller_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
                         let operands_base = self.gc_root_frame();
@@ -5302,7 +5484,7 @@ impl Interpreter {
                         self.current_realm_id = caller_realm;
                         result
                     }
-                    JsFunction::User {
+                    CallTarget::User {
                         params,
                         body,
                         closure,
@@ -5320,7 +5502,7 @@ impl Interpreter {
                         }
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
                         let caller_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
 
@@ -5348,33 +5530,11 @@ impl Interpreter {
                                 params.len().saturating_add(2),
                             );
                             func_env.borrow_mut().strict = is_strict;
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: _this_val.clone(),
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
+                            func_env.borrow_mut().set_this(_this_val.clone());
                             let is_simple_ag = has_simple_params;
                             if uses_arguments {
                                 let env_strict_ag = func_env.borrow().strict;
                                 let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
-                                let param_names_ag: Vec<String> = if use_mapped_ag {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env_ag =
                                     if use_mapped_ag { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
@@ -5382,15 +5542,13 @@ impl Interpreter {
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env_ag,
-                                    &param_names_ag,
+                                    &params,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple_ag {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_ag {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -5432,22 +5590,19 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "AsyncGenerator".to_string();
+                                .class_name = "AsyncGenerator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                                let mut param_names_set = HashSet::new();
-                                for p in params.iter() {
-                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
-                                }
-                                for name in &var_names {
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) || name == "arguments" {
+                                    if name == "arguments"
+                                        || params.iter().any(|p| p.binds_name(name))
+                                    {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -5522,51 +5677,13 @@ impl Interpreter {
                             let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
-                            let effective_this = if !is_strict && !closure_strict {
-                                if (_this_val).is_nullish() {
-                                    self.realm()
-                                        .global_env
-                                        .borrow()
-                                        .get("this")
-                                        .unwrap_or(_this_val.clone())
-                                } else if !(_this_val).is_object() {
-                                    match self.to_object(_this_val) {
-                                        Completion::Normal(v) => v,
-                                        _ => _this_val.clone(),
-                                    }
-                                } else {
-                                    _this_val.clone()
-                                }
-                            } else {
-                                _this_val.clone()
-                            };
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: effective_this,
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
+                            let effective_this =
+                                self.ordinary_call_bind_this(_this_val, is_strict, closure_strict);
+                            func_env.borrow_mut().set_this(effective_this);
                             let is_simple_g = has_simple_params;
                             if uses_arguments {
                                 let env_strict_g = func_env.borrow().strict;
                                 let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
-                                let param_names_g: Vec<String> = if use_mapped_g {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env_g =
                                     if use_mapped_g { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
@@ -5574,15 +5691,13 @@ impl Interpreter {
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env_g,
-                                    &param_names_g,
+                                    &params,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple_g {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_g {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -5621,22 +5736,19 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "Generator".to_string();
+                                .class_name = "Generator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                                let mut param_names_set = HashSet::new();
-                                for p in params.iter() {
-                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
-                                }
-                                for name in &var_names {
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) || name == "arguments" {
+                                    if name == "arguments"
+                                        || params.iter().any(|p| p.binds_name(name))
+                                    {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -5713,70 +5825,27 @@ impl Interpreter {
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
-                                func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
-                                    Binding {
-                                        value: JsValue::UNDEFINED,
-                                        kind: BindingKind::Const,
-                                        initialized: false,
-                                        deletable: false,
-                                    },
-                                );
+                                func_env.borrow_mut().declare_this_uninit();
                                 func_env.borrow_mut().is_derived_constructor_scope = true;
                                 self.constructing_derived = false;
                             } else {
-                                let effective_this = if !is_strict && !closure_strict {
-                                    if (_this_val).is_nullish() {
-                                        self.realm()
-                                            .global_env
-                                            .borrow()
-                                            .get("this")
-                                            .unwrap_or(_this_val.clone())
-                                    } else if !(_this_val).is_object() {
-                                        match self.to_object(_this_val) {
-                                            Completion::Normal(v) => v,
-                                            _ => _this_val.clone(),
-                                        }
-                                    } else {
-                                        _this_val.clone()
-                                    }
-                                } else {
-                                    _this_val.clone()
-                                };
-                                func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
-                                    Binding {
-                                        value: effective_this,
-                                        kind: BindingKind::Const,
-                                        initialized: true,
-                                        deletable: false,
-                                    },
+                                let effective_this = self.ordinary_call_bind_this(
+                                    _this_val,
+                                    is_strict,
+                                    closure_strict,
                                 );
+                                func_env.borrow_mut().set_this(effective_this);
                             }
                             let env_strict = func_env.borrow().strict;
                             if uses_arguments {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
-                                let param_names: Vec<String> = if use_mapped {
-                                    params
-                                        .iter()
-                                        .filter_map(|p| {
-                                            if let Pattern::Identifier(name) = p {
-                                                Some(name.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
                                 let mapped_env = if use_mapped { Some(&func_env) } else { None };
                                 let arguments_obj = self.create_arguments_object(
                                     args,
                                     func_val.clone(),
                                     is_strict,
                                     mapped_env,
-                                    &param_names,
+                                    &params,
                                 );
                                 call_frame_arguments =
                                     CallFrameArguments::Materialized(arguments_obj.clone());
@@ -5785,15 +5854,16 @@ impl Interpreter {
                                 if is_strict || !is_simple {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
-                            } else {
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                if !is_strict && !env_strict {
-                                    call_frame_arguments = CallFrameArguments::Deferred {
-                                        args: DeferredCallArguments::new(args),
-                                        func_env: func_env.clone(),
-                                        mapped: is_simple,
-                                    };
-                                }
+                            } else if !is_strict && !env_strict {
+                                // `arguments` is unobservable by name here (no
+                                // reference, declaration or direct eval), so no
+                                // binding is created; sloppy frames keep the args
+                                // for the legacy `fn.arguments` accessor.
+                                call_frame_arguments = CallFrameArguments::Deferred {
+                                    args: DeferredCallArguments::new(args),
+                                    func_env: func_env.clone(),
+                                    mapped: is_simple,
+                                };
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -5810,9 +5880,13 @@ impl Interpreter {
                             func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
-                        if let Err(error) =
+                        let bound = if is_simple {
+                            self.bind_simple_parameters(&body, &params, args, &func_env);
+                            Ok(())
+                        } else {
                             self.bind_function_parameters(&params, args, &func_env, is_simple)
-                        {
+                        };
+                        if let Err(error) = bound {
                             self.current_realm_id = caller_realm;
                             self.recycle_function_environment(func_env);
                             return Completion::Throw(error);
@@ -5821,15 +5895,11 @@ impl Interpreter {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
                             body_env.borrow_mut().strict = func_env.borrow().strict;
                             body_env.borrow_mut().has_simple_params = false;
-                            let mut var_names = HashSet::new();
-                            Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
-                            let mut param_names = HashSet::new();
-                            for p in params.iter() {
-                                Self::collect_var_names_from_pattern(p, &mut param_names);
-                            }
-                            for name in &var_names {
+                            let analysis = self.hoist_cache.analysis_for(&body);
+                            for name in &analysis.var_names {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
-                                if param_names.contains(name) || name == "arguments" {
+                                if name == "arguments" || params.iter().any(|p| p.binds_name(name))
+                                {
                                     let val =
                                         self.env_get(&func_env, name).unwrap_or(JsValue::UNDEFINED);
                                     let _ = self.env_set(&body_env, name, val);
@@ -5856,7 +5926,9 @@ impl Interpreter {
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
-                        self.last_call_this_value = func_env.borrow().get("this");
+                        if was_construct {
+                            self.last_call_this_value = func_env.borrow().get_this();
+                        }
                         self.current_realm_id = caller_realm;
                         drop(exec_env);
                         self.recycle_function_environment(func_env);
@@ -5894,7 +5966,7 @@ impl Interpreter {
     /// engine-internal object state.
     fn describe_non_callable(&self, val: &JsValue) -> String {
         if let Some(s) = val.as_string() {
-            let preview: String = char::decode_utf16(s.code_units.iter().copied())
+            let preview: String = char::decode_utf16(s.as_units().iter().copied())
                 .take(30)
                 .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
                 .collect();
@@ -5963,7 +6035,7 @@ impl Interpreter {
         }
         // Use PUA mapping to preserve lone surrogates through the UTF-8 parser
         let code = if let Some(s) = (arg).as_string() {
-            crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+            crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
         } else {
             to_js_string(&arg)
         };
@@ -6297,9 +6369,10 @@ impl Interpreter {
         // Hoist function declarations to var_env
         for f in &functions_to_init {
             let enclosing_strict = lex_env.borrow().strict;
+            let info = f.info();
             let func = JsFunction::User {
                 name: Some(f.name.clone()),
-                params: Rc::new(f.params.clone()),
+                params: info.params.clone(),
                 body: f.body.clone(),
                 closure: lex_env.clone(),
                 is_arrow: false,
@@ -6309,8 +6382,8 @@ impl Interpreter {
                 is_method: false,
                 source_text: f.source_text.clone(),
                 captured_new_target: None,
-                uses_arguments: func_uses_arguments(&f.params, &f.body),
-                has_simple_params: crate::ast::params_are_simple(&f.params),
+                uses_arguments: info.uses_arguments,
+                has_simple_params: info.has_simple_params,
             };
             let val = self.create_function(func);
             if is_global {
@@ -6340,7 +6413,7 @@ impl Interpreter {
                         d.pattern.bound_names(&mut names);
                         for name in names {
                             lex_env.borrow_mut().bindings.insert(
-                                name,
+                                &name,
                                 Binding {
                                     value: JsValue::UNDEFINED,
                                     kind,
@@ -6353,7 +6426,7 @@ impl Interpreter {
                 }
                 Statement::ClassDeclaration(cls) => {
                     lex_env.borrow_mut().bindings.insert(
-                        cls.name.clone(),
+                        &cls.name,
                         Binding {
                             value: JsValue::UNDEFINED,
                             kind: BindingKind::Let,
@@ -6736,10 +6809,7 @@ impl Interpreter {
                     env.clone()
                 };
                 let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().declare("this", BindingKind::Const);
-                init_env
-                    .borrow_mut()
-                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().set_this(this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 if let Some(o) = callee_val
                     .as_object_id()
@@ -6757,7 +6827,7 @@ impl Interpreter {
                     let proto_val = interp.get_property_on_id(func_obj_id, "prototype");
                     if proto_val.is_object() {
                         init_env.borrow_mut().bindings.insert(
-                            "__home_object__".to_string(),
+                            "__home_object__",
                             Binding {
                                 value: proto_val,
                                 kind: BindingKind::Const,
@@ -7113,15 +7183,12 @@ impl Interpreter {
                 let init_parent =
                     outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
                 let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().declare("this", BindingKind::Const);
-                init_env
-                    .borrow_mut()
-                    .initialize_binding("this", this_val.clone());
+                init_env.borrow_mut().set_this(this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 init_env.borrow_mut().class_private_names = class_pn;
                 if proto_val.is_object() {
                     init_env.borrow_mut().bindings.insert(
-                        "__home_object__".to_string(),
+                        "__home_object__",
                         Binding {
                             value: proto_val,
                             kind: BindingKind::Const,
@@ -7448,7 +7515,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
+    pub(super) fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
         if !(right).is_object() {
             return Completion::Throw(
                 self.create_type_error("Right-hand side of instanceof is not an object"),
@@ -7558,26 +7625,46 @@ impl Interpreter {
     }
 
     /// Resolve an identifier to a reference (for capturing before RHS evaluation).
-    pub(super) fn resolve_identifier_ref(
+    #[inline]
+    pub(super) fn resolve_identifier_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         env: &EnvRef,
     ) -> Result<IdentifierRef, JsValue> {
+        self.resolve_identifier_ref_hinted(key, env, None)
+    }
+
+    pub(super) fn resolve_identifier_ref_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Result<IdentifierRef, JsValue> {
+        let name = key.as_name();
         if (self.with_scope_depth > 0 || self.has_ever_entered_with)
             && let Some(obj_id) = self.resolve_with_has_binding(name, env)?
         {
             return Ok(IdentifierRef::WithObject(obj_id));
         }
-        if let Some(specific_env) = Environment::find_binding_env(env, name) {
+        match global_access::walk_scope_chain(env, key, true, 0) {
+            global_access::NameWalk::Bound(bound_env) => {
+                return Ok(IdentifierRef::SpecificEnv(bound_env));
+            }
+            global_access::NameWalk::Global(gid, Some(global_env))
+                if self.global_object_has_own_entry(gid, name, hint) =>
+            {
+                return Ok(IdentifierRef::SpecificEnv(global_env));
+            }
+            _ => {}
+        }
+        if let Some(specific_env) = Environment::find_binding_env(env, key) {
             let (has_binding, global_obj_id) = {
                 let e = specific_env.borrow();
-                let in_bindings = e.bindings.contains_key(name) || e.is_indirect_binding(name);
+                let in_bindings = e.bindings.contains_key(key) || e.is_indirect_binding(name);
                 if in_bindings {
                     (true, None)
                 } else if let Some(gid) = e.global_object_id {
-                    let own = self
-                        .get_object_cell(gid)
-                        .is_some_and(|g| g.borrow().properties.contains_key(name));
+                    let own = self.global_object_has_own_entry(gid, name, hint);
                     (own, if !own { Some(gid) } else { None })
                 } else {
                     (false, None)
@@ -7637,13 +7724,26 @@ impl Interpreter {
     }
 
     /// Write a value through a captured identifier reference.
-    pub(super) fn put_value_by_ref(
+    #[inline]
+    pub(super) fn put_value_by_ref<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         value: JsValue,
         id_ref: &IdentifierRef,
         env: &EnvRef,
     ) -> Completion {
+        self.put_value_by_ref_hinted(key, value, id_ref, env, None)
+    }
+
+    pub(super) fn put_value_by_ref_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        value: JsValue,
+        id_ref: &IdentifierRef,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Completion {
+        let name = key.as_name();
         match id_ref {
             IdentifierRef::WithObject(obj_id) => {
                 let strict = env.borrow().strict;
@@ -7653,7 +7753,28 @@ impl Interpreter {
                 }
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                match self.env_check_set_binding(specific_env, name) {
+                // Global data fast path: an own, writable data property of the
+                // global object that no declarative binding shadows is written
+                // exactly as [[Set]] would, without the has/set/sync round trip.
+                let fast_gid = {
+                    let e = specific_env.borrow();
+                    e.global_object_id
+                        .filter(|_| !e.bindings.contains_key(key) && !e.is_indirect_binding(name))
+                };
+                if let Some(gid) = fast_gid {
+                    if self.global_object_store_own_data(gid, name, &value, hint) {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.global_prop_fast_hits += 1;
+                        }
+                        return Completion::Normal(value);
+                    }
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.global_prop_fast_misses += 1;
+                    }
+                }
+                match self.env_check_set_binding(specific_env, key) {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
                     )),
@@ -7686,7 +7807,11 @@ impl Interpreter {
                             }
                             let receiver = JsValue::object(gid);
                             match self.proxy_set(gid, name, value.clone(), &receiver) {
-                                Ok(_) => Completion::Normal(value),
+                                Ok(true) => Completion::Normal(value),
+                                Ok(false) if !env.borrow().strict => Completion::Normal(value),
+                                Ok(false) => Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot assign to read only property '{name}' of object"
+                                ))),
                                 Err(e) => Completion::Throw(e),
                             }
                         } else if strict {
@@ -7700,7 +7825,7 @@ impl Interpreter {
                     SetBindingCheck::Ok => {
                         // If binding is not in env.bindings but found via global object's
                         // has_property (prototype chain), use [[Set]] to respect setters/proxies
-                        let in_bindings = specific_env.borrow().bindings.contains_key(name);
+                        let in_bindings = specific_env.borrow().bindings.contains_key(key);
                         if !in_bindings {
                             let global_obj_id = specific_env.borrow().global_object_id;
                             if let Some(gid) = global_obj_id {
@@ -7721,7 +7846,14 @@ impl Interpreter {
                                 }
                                 let receiver = JsValue::object(gid);
                                 match self.proxy_set(gid, name, value.clone(), &receiver) {
-                                    Ok(_) => {
+                                    Ok(succeeded) => {
+                                        if !succeeded && env.borrow().strict {
+                                            return Completion::Throw(self.create_type_error(
+                                                &format!(
+                                                    "Cannot assign to read only property '{name}' of object"
+                                                ),
+                                            ));
+                                        }
                                         self.sync_global_object_binding(gid, name, &value);
                                         return Completion::Normal(value);
                                     }
@@ -7729,7 +7861,7 @@ impl Interpreter {
                                 }
                             }
                         }
-                        match self.env_set(specific_env, name, value.clone()) {
+                        match self.env_set(specific_env, key, value.clone()) {
                             Ok(()) => Completion::Normal(value),
                             Err(_) => Completion::Throw(
                                 self.create_type_error("Assignment to constant variable."),
@@ -7751,14 +7883,83 @@ impl Interpreter {
         }
     }
 
+    /// The clone-free read path shared by identifier resolution: a plain
+    /// initialised declarative binding, or an own data property of the global
+    /// object when no scope on the way binds the name. `None` means "not
+    /// modelled here" and the caller runs the generic resolution.
+    #[inline]
+    fn resolve_name_fast<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Option<JsValue> {
+        match global_access::walk_scope_chain(env, key, false, 0) {
+            global_access::NameWalk::Value(value) => Some(value),
+            global_access::NameWalk::Global(gid, _) => {
+                let value = self.global_object_own_data(gid, key.as_name(), hint)?;
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.global_prop_fast_hits += 1;
+                }
+                Some(value)
+            }
+            global_access::NameWalk::Bound(_) | global_access::NameWalk::Slow => None,
+        }
+    }
+
+    /// `resolve_identifier_hinted` for callers that only know the strictness
+    /// of `env` lazily: the fast path never needs it.
+    #[inline]
+    pub(super) fn resolve_name_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Completion {
+        if let Some(value) = self.resolve_name_fast(key, env, hint) {
+            return Completion::Normal(value);
+        }
+        let strict = env.borrow().strict;
+        self.resolve_identifier_generic(key, env, strict)
+    }
+
     /// Single-pass identifier resolution: combines with-scope check, binding lookup,
     /// and global getter resolution into one scope chain walk.
-    pub(super) fn resolve_identifier(
+    #[inline]
+    pub(super) fn resolve_identifier<N: BindingName + ?Sized>(
         &mut self,
-        name: &str,
+        key: &N,
         env: &EnvRef,
         strict: bool,
     ) -> Completion {
+        self.resolve_identifier_hinted(key, env, strict, None)
+    }
+
+    /// `resolve_identifier` with a remembered global-object property slot for
+    /// the name site (`GlobalHint`); `None` probes the property map by key.
+    pub(super) fn resolve_identifier_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        strict: bool,
+        hint: Option<&GlobalHint>,
+    ) -> Completion {
+        if let Some(value) = self.resolve_name_fast(key, env, hint) {
+            return Completion::Normal(value);
+        }
+        self.resolve_identifier_generic(key, env, strict)
+    }
+
+    /// Full identifier resolution: `with` scopes, import bindings, TDZ and
+    /// the prototype chain of the global object.
+    fn resolve_identifier_generic<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        strict: bool,
+    ) -> Completion {
+        let name = key.as_name();
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
@@ -7802,7 +8003,7 @@ impl Interpreter {
             }
 
             // 3. Check local bindings
-            if let Some(binding) = env_borrow.bindings.get(name) {
+            if let Some(binding) = env_borrow.bindings.get(key) {
                 if !binding.initialized {
                     drop(env_borrow);
                     return Completion::Throw(self.create_reference_error(&format!(
@@ -7815,6 +8016,17 @@ impl Interpreter {
             // 4. Check global object (at the bottom of the scope chain)
             if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
+                if let Some(value) = self.global_object_own_data(gid, name, None) {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.global_prop_fast_hits += 1;
+                    }
+                    return Completion::Normal(value);
+                }
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.global_prop_fast_misses += 1;
+                }
                 {
                     // Check own property first
                     let own_prop = self
@@ -7854,7 +8066,13 @@ impl Interpreter {
     /// Returns Some(Completion) if the name resolves to a property on the global object
     /// or its prototype chain (including through Proxy has/get traps).
     /// Returns None if no property found — caller should use env.get().
-    fn resolve_global_getter(&mut self, name: &str, env: &EnvRef) -> Option<Completion> {
+    fn resolve_global_getter<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Option<Completion> {
+        let name = key.as_name();
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
@@ -7863,11 +8081,18 @@ impl Interpreter {
                 current = env_ref.borrow().parent.clone();
                 continue;
             }
-            if env_borrow.bindings.contains_key(name) {
+            if env_borrow.bindings.contains_key(key) {
                 return None;
             }
             if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
+                if let Some(value) = self.global_object_own_data(gid, name, hint) {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.global_prop_fast_hits += 1;
+                    }
+                    return Some(Completion::Normal(value));
+                }
                 // Check own property first (fast path)
                 let own_prop = self
                     .get_object_cell(gid)
@@ -7980,67 +8205,26 @@ impl Interpreter {
             // Set up `this` and `arguments` before binding parameters so that
             // default parameter expressions can reference `arguments`.
             if !is_arrow {
-                let effective_this = if !is_strict && !closure_strict {
-                    if (this_val).is_nullish() {
-                        interp
-                            .realm()
-                            .global_env
-                            .borrow()
-                            .get("this")
-                            .unwrap_or(this_val.clone())
-                    } else if !(this_val).is_object() {
-                        match interp.to_object(this_val) {
-                            Completion::Normal(v) => v,
-                            _ => this_val.clone(),
-                        }
-                    } else {
-                        this_val.clone()
-                    }
-                } else {
-                    this_val.clone()
-                };
-                func_env.borrow_mut().bindings.insert(
-                    "this".to_string(),
-                    Binding {
-                        value: effective_this,
-                        kind: BindingKind::Const,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
+                let effective_this =
+                    interp.ordinary_call_bind_this(this_val, is_strict, closure_strict);
+                func_env.borrow_mut().set_this(effective_this);
                 if uses_arguments {
                     let is_simple = has_simple_params;
                     let env_strict = func_env.borrow().strict;
                     let use_mapped = is_simple && !is_strict && !env_strict;
-                    let param_names: Vec<String> = if use_mapped {
-                        params
-                            .iter()
-                            .filter_map(|p| {
-                                if let Pattern::Identifier(name) = p {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
                     let mapped_env = if use_mapped { Some(&func_env) } else { None };
                     let arguments_obj = interp.create_arguments_object(
                         args,
                         func_val.clone(),
                         is_strict,
                         mapped_env,
-                        &param_names,
+                        params,
                     );
                     func_env.borrow_mut().declare("arguments", BindingKind::Var);
                     let _ = interp.env_set(&func_env, "arguments", arguments_obj);
                     if is_strict || !is_simple {
                         func_env.borrow_mut().arguments_immutable = true;
                     }
-                } else {
-                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
                 }
             }
             {

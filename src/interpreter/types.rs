@@ -1,5 +1,7 @@
 use crate::ast::*;
+use crate::interpreter::Atom;
 use crate::interpreter::PropertyMap;
+use crate::interpreter::binding_map::{BindingMap, BindingName};
 use crate::interpreter::generator_transform::{
     GeneratorStateMachine, LoopControlTarget, SentValueBinding,
 };
@@ -7,6 +9,7 @@ use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -500,6 +503,9 @@ pub(crate) struct Realm {
     math_random_state: u64,
     pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
+    /// %Array.prototype.values%, captured when the realm's Array prototype is
+    /// built; the `@@iterator` value of every arguments object.
+    pub(crate) array_prototype_values: Option<JsValue>,
     pub(crate) template_cache: FxHashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
     pub(crate) object_prototype: Option<u64>,
@@ -605,6 +611,7 @@ impl Realm {
             math_random_state: new_math_random_state(),
             global_object: None,
             throw_type_error: None,
+            array_prototype_values: None,
             template_cache: FxHashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
@@ -815,6 +822,13 @@ impl Realm {
             worklist.push(id);
         }
         if let Some(id) = self
+            .array_prototype_values
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
+        }
+        if let Some(id) = self
             .object_prototype_tostring
             .as_ref()
             .and_then(JsValue::as_object_id)
@@ -844,7 +858,11 @@ impl Realm {
 pub(crate) struct Environment {
     // Binding names come from script source. Keep randomized hashing here so
     // deterministic collision sets cannot flood declaration and lookup paths.
-    pub(crate) bindings: HashMap<String, Binding>,
+    pub(crate) bindings: BindingMap,
+    /// §9.1.1.3 [[ThisValue]]/[[ThisBindingStatus]] of a function (or the
+    /// global/module) scope. Kept out of `bindings` so a call binds `this`
+    /// without hashing or allocating a name.
+    pub(crate) this_binding: Option<ThisBinding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
@@ -905,6 +923,11 @@ impl std::fmt::Debug for Environment {
     }
 }
 
+pub(crate) struct ThisBinding {
+    pub(crate) value: JsValue,
+    pub(crate) initialized: bool,
+}
+
 pub(crate) struct WithObject {
     pub(crate) obj_id: u64,
 }
@@ -952,7 +975,8 @@ impl Environment {
     pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: BindingMap::new(),
+            this_binding: None,
             parent,
             strict,
             is_function_scope: false,
@@ -978,7 +1002,8 @@ impl Environment {
     pub(crate) fn new_with_object(parent: EnvRef, obj_id: u64) -> EnvRef {
         let strict = parent.borrow().strict;
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: BindingMap::new(),
+            this_binding: None,
             parent: Some(parent),
             strict,
             is_function_scope: false,
@@ -1009,7 +1034,8 @@ impl Environment {
     ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::with_capacity(binding_capacity),
+            bindings: BindingMap::with_capacity(binding_capacity),
+            this_binding: None,
             parent,
             strict,
             is_function_scope: true,
@@ -1034,6 +1060,7 @@ impl Environment {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         self.bindings.clear();
         self.bindings.reserve(binding_capacity);
+        self.this_binding = None;
         self.parent = parent;
         self.strict = strict;
         self.is_function_scope = true;
@@ -1075,9 +1102,48 @@ impl Environment {
         env.clone()
     }
 
+    /// Binds `this` to an initialized value (§9.1.1.3.1 BindThisValue).
+    pub(crate) fn set_this(&mut self, value: JsValue) {
+        self.this_binding = Some(ThisBinding {
+            value,
+            initialized: true,
+        });
+    }
+
+    /// Creates the `this` binding uninitialized: a derived constructor's TDZ
+    /// until `super()` returns.
+    pub(crate) fn declare_this_uninit(&mut self) {
+        self.this_binding = Some(ThisBinding {
+            value: JsValue::UNDEFINED,
+            initialized: false,
+        });
+    }
+
+    /// The value of the nearest `this` binding up the chain, or `None` when
+    /// that binding is uninitialized (or absent).
+    pub(crate) fn get_this(&self) -> Option<JsValue> {
+        if let Some(this) = &self.this_binding {
+            return this.initialized.then(|| this.value.clone());
+        }
+        self.parent.as_ref().and_then(|p| p.borrow().get_this())
+    }
+
+    /// `declare` for an already-interned name: no hashing, no allocation.
+    pub(crate) fn declare_atom(&mut self, name: &Atom, kind: BindingKind) {
+        self.bindings.insert_atom(
+            name,
+            Binding {
+                value: JsValue::UNDEFINED,
+                kind,
+                initialized: kind == BindingKind::Var,
+                deletable: false,
+            },
+        );
+    }
+
     pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
-            name.to_string(),
+            name,
             Binding {
                 value: JsValue::UNDEFINED,
                 kind,
@@ -1145,7 +1211,7 @@ impl Environment {
 
     pub(crate) fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
-            name.to_string(),
+            name,
             Binding {
                 value: JsValue::UNDEFINED,
                 kind,
@@ -1221,10 +1287,8 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow_mut().set(name, value)
         } else {
-            self.bindings.insert(
-                name.to_string(),
-                Binding::new(value, BindingKind::Var, true),
-            );
+            self.bindings
+                .insert(name, Binding::new(value, BindingKind::Var, true));
             Ok(())
         }
     }
@@ -1275,9 +1339,12 @@ impl Environment {
         }
     }
 
-    pub(crate) fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
+    pub(crate) fn find_binding_env<N: BindingName + ?Sized>(
+        env: &EnvRef,
+        name: &N,
+    ) -> Option<EnvRef> {
         let e = env.borrow();
-        if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
+        if e.is_indirect_binding(name.as_name()) || e.bindings.contains_key(name) {
             return Some(env.clone());
         }
         if e.global_object_id.is_some() {
@@ -1992,7 +2059,10 @@ pub(crate) struct JsObjectData {
     pub property_order: Vec<JsPropertyKey>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
-    pub class_name: String,
+    pub class_name: Cow<'static, str>,
+    /// Realm the function object was created in; `None` when it was not
+    /// built by `create_function` (the call path then keeps the caller's realm).
+    pub function_realm: Option<usize>,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
@@ -2358,7 +2428,8 @@ impl JsObjectData {
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,
-            class_name: "Object".to_string(),
+            class_name: Cow::Borrowed("Object"),
+            function_realm: None,
             extensible: true,
             primitive_value: None,
             private_fields: HashMap::new(),
@@ -2607,7 +2678,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let units = &s.code_units;
+            let units = s.as_units();
             if key == "length" {
                 return Some(JsValue::number(units.len() as f64));
             }
@@ -2675,7 +2746,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let units = &s.code_units;
+            let units = s.as_units();
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
@@ -2790,15 +2861,15 @@ impl JsObjectData {
         {
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor::data(
-                    JsValue::number(s.code_units.len() as f64),
+                    JsValue::number(s.len() as f64),
                     false,
                     false,
                     false,
                 ));
             }
-            if let Some(idx) = string_exotic_index(key, s.code_units.len()) {
+            if let Some(idx) = string_exotic_index(key, s.len()) {
                 return Some(PropertyDescriptor::data(
-                    JsValue::string(JsString::from_vec(vec![s.code_units[idx]])),
+                    JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])),
                     false,
                     true,
                     false,
@@ -2837,7 +2908,7 @@ impl JsObjectData {
             if key.as_property_key_str() == Some("length") {
                 return true;
             }
-            return string_exotic_index(key, s.code_units.len()).is_some();
+            return string_exotic_index(key, s.len()).is_some();
         }
         false
     }
@@ -2856,7 +2927,7 @@ impl JsObjectData {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
-            && let Some(idx) = string_exotic_index(&key, s.code_units.len())
+            && let Some(idx) = string_exotic_index(&key, s.len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
             // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
@@ -2874,7 +2945,7 @@ impl JsObjectData {
             }
             if let Some(ref v) = desc.value {
                 let char_val =
-                    JsValue::string(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
+                    JsValue::string(crate::types::JsString::from_vec(vec![s.as_units()[idx]]));
                 if !same_value(v, &char_val) {
                     return false;
                 }
@@ -3403,7 +3474,7 @@ impl JsObjectData {
             if self.class_name == "String"
                 && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
                 && (key.as_property_key_str() == Some("length")
-                    || string_exotic_index(key, s.code_units.len()).is_some())
+                    || string_exotic_index(key, s.len()).is_some())
             {
                 return false;
             }
@@ -3438,6 +3509,16 @@ impl JsObjectData {
         }
         self.properties
             .insert(key, PropertyDescriptor::data(value, true, false, true));
+    }
+
+    /// Append an own property whose key the caller knows is absent and
+    /// already interned (a pre-built key from `FunctionKeys`). Skips the key
+    /// interning and duplicate scan of [`insert_property`]; only valid on
+    /// objects with no array exotic key tracking.
+    pub(crate) fn push_fresh_property(&mut self, key: &JsPropertyKey, desc: PropertyDescriptor) {
+        debug_assert!(self.array_data().is_none());
+        self.property_order.push(key.clone());
+        self.properties.push_fresh(key.clone(), desc);
     }
 
     pub(crate) fn insert_property<K: Into<JsPropertyKey>>(
@@ -3596,7 +3677,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let units = &s.code_units;
+            let units = s.as_units();
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
@@ -3655,7 +3736,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            let utf16_len = s.code_units.len();
+            let utf16_len = s.len();
             for i in 0..utf16_len {
                 let k = JsPropertyKey::from(i.to_string());
                 if seen.insert(k.clone()) {

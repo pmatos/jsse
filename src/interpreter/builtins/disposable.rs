@@ -338,7 +338,7 @@ impl Interpreter {
                 }
                 {
                     let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
-                    b.class_name = "DisposableStack".to_string();
+                    b.class_name = "DisposableStack".into();
                     b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
                         DisposableStackData {
                             stack,
@@ -378,7 +378,7 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        b.class_name = "DisposableStack".to_string();
+                        b.class_name = "DisposableStack".into();
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
                         }
@@ -844,7 +844,7 @@ impl Interpreter {
                 }
                 {
                     let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
-                    b.class_name = "AsyncDisposableStack".to_string();
+                    b.class_name = "AsyncDisposableStack".into();
                     b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
                         DisposableStackData {
                             stack,
@@ -886,7 +886,7 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        b.class_name = "AsyncDisposableStack".to_string();
+                        b.class_name = "AsyncDisposableStack".into();
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
                         }
