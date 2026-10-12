@@ -1554,6 +1554,27 @@ impl Interpreter {
         } else if val.is_object() {
             let s = self.to_js_string(val)?;
             self.append_code_units(out, s.as_units())
+        } else if let Some(n) = val.as_number()
+            && n == n.trunc()
+            && n.abs() < 1e15
+        {
+            // Integral Number::toString is plain decimal digits (-0 prints "0").
+            let mut buf = [0u16; 16];
+            let mut i = buf.len();
+            let mut m = n.abs() as u64;
+            loop {
+                i -= 1;
+                buf[i] = b'0' as u16 + (m % 10) as u16;
+                m /= 10;
+                if m == 0 {
+                    break;
+                }
+            }
+            if n < 0.0 {
+                i -= 1;
+                buf[i] = b'-' as u16;
+            }
+            self.append_code_units(out, &buf[i..])
         } else {
             out.extend(self.to_string_value(val)?.encode_utf16());
             if out.len() > MAX_STRING_LENGTH {
