@@ -6343,3 +6343,173 @@ fn function_literal_cache_does_not_grow_ast_nodes() {
     assert!(std::mem::size_of::<crate::ast::Expression>() <= 112);
     assert!(std::mem::size_of::<crate::ast::Statement>() <= 344);
 }
+
+// -- Global data fast path (#905) ---------------------------------------------
+// `global_access.rs` decides whether a bare name that resolved to the global
+// object may be read or written with one own-property probe. It must answer
+// `None` / `false`, leaving the object untouched, for everything the generic
+// Object Environment Record path treats observably differently.
+
+fn realm_global_object(interp: &Interpreter) -> u64 {
+    interp.realm().global_object.expect("global object")
+}
+
+#[test]
+fn global_object_own_data_reads_data_properties_only() {
+    let interp = run_script(
+        r#"
+        var plain = 41;
+        Object.defineProperty(globalThis, "getterOnly", { get() { return 1; }, configurable: true });
+        Object.defineProperty(globalThis, "setterOnly", { set(v) {}, configurable: true });
+        Object.prototype.inherited = 7;
+        "#,
+    );
+    let gid = realm_global_object(&interp);
+    let hints: Vec<GlobalHint> = ["plain", "getterOnly", "setterOnly", "inherited", "missing"]
+        .into_iter()
+        .map(GlobalHint::new)
+        .collect();
+    for _ in 0..3 {
+        for with_hints in [false, true] {
+            let hint = |i: usize| if with_hints { Some(&hints[i]) } else { None };
+            let value = interp.global_object_own_data(gid, "plain", hint(0));
+            assert_eq!(value.and_then(|v| v.as_number()), Some(41.0));
+            assert!(
+                interp
+                    .global_object_own_data(gid, "getterOnly", hint(1))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "setterOnly", hint(2))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "inherited", hint(3))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "missing", hint(4))
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn global_object_own_data_hint_survives_property_churn() {
+    let interp = run_script("var keep = 1; var churn = 2;");
+    let gid = realm_global_object(&interp);
+    let hint = GlobalHint::new("churn");
+    assert!(
+        interp
+            .global_object_own_data(gid, "churn", Some(&hint))
+            .is_some()
+    );
+    {
+        let cell = interp.get_object_cell(gid).expect("global").clone();
+        let mut g = cell.borrow_mut();
+        g.remove_property("keep");
+        g.remove_property("churn");
+        g.insert_property(
+            "churn",
+            PropertyDescriptor::data(JsValue::number(9.0), true, true, true),
+        );
+    }
+    let value = interp.global_object_own_data(gid, "churn", Some(&hint));
+    assert_eq!(value.and_then(|v| v.as_number()), Some(9.0));
+    interp
+        .get_object_cell(gid)
+        .expect("global")
+        .borrow_mut()
+        .remove_property("churn");
+    assert!(
+        interp
+            .global_object_own_data(gid, "churn", Some(&hint))
+            .is_none()
+    );
+}
+
+#[test]
+fn global_object_store_own_data_refuses_everything_but_writable_data() {
+    let interp = run_script(
+        r#"
+        var writable = 1;
+        Object.defineProperty(globalThis, "frozen", { value: 1, writable: false, configurable: true });
+        Object.defineProperty(globalThis, "accessor", { get() { return 1; }, set(v) {}, configurable: true });
+        "#,
+    );
+    let gid = realm_global_object(&interp);
+    let hint = GlobalHint::new("writable");
+    let (frozen_hint, accessor_hint, absent_hint) = (
+        GlobalHint::new("frozen"),
+        GlobalHint::new("accessor"),
+        GlobalHint::new("absent"),
+    );
+    let new_value = JsValue::number(99.0);
+    for with_hints in [false, true] {
+        fn pick(on: bool, h: &GlobalHint) -> Option<&GlobalHint> {
+            on.then_some(h)
+        }
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "frozen",
+            &new_value,
+            pick(with_hints, &frozen_hint)
+        ));
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "accessor",
+            &new_value,
+            pick(with_hints, &accessor_hint)
+        ));
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "absent",
+            &new_value,
+            pick(with_hints, &absent_hint)
+        ));
+    }
+    assert_eq!(
+        interp
+            .global_object_own_data(gid, "frozen", None)
+            .and_then(|v| v.as_number()),
+        Some(1.0)
+    );
+    assert!(
+        interp
+            .get_object_cell(gid)
+            .expect("global")
+            .borrow()
+            .properties
+            .get("absent")
+            .is_none(),
+        "the helper must never create a property"
+    );
+    assert!(interp.global_object_store_own_data(gid, "writable", &new_value, Some(&hint)));
+    assert_eq!(
+        interp
+            .global_object_own_data(gid, "writable", None)
+            .and_then(|v| v.as_number()),
+        Some(99.0)
+    );
+}
+
+#[test]
+fn global_object_helpers_refuse_a_proxy_receiver() {
+    let interp = run_script("var target = { x: 1 }; var p = new Proxy(target, {});");
+    let proxy_id = global_object_id(&interp, "p");
+    let value = JsValue::number(2.0);
+    assert!(interp.global_object_own_data(proxy_id, "x", None).is_none());
+    assert!(!interp.global_object_store_own_data(proxy_id, "x", &value, None));
+    let target_id = global_object_id(&interp, "target");
+    let target_x = interp
+        .get_object_cell(target_id)
+        .expect("target")
+        .borrow()
+        .get_property_value("x")
+        .and_then(|v| v.as_number());
+    assert_eq!(target_x, Some(1.0));
+}

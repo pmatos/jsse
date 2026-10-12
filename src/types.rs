@@ -247,6 +247,15 @@ pub(crate) struct JsPropertyKey {
 
 const SYMBOL_PROPERTY_KEY_SIGIL: u8 = 0xFF;
 
+impl JsPropertyKey {
+    /// Whether both keys share one backing allocation (interned keys of equal
+    /// text do). A `true` answer implies equality; `false` implies nothing.
+    #[inline]
+    pub(crate) fn same_allocation(&self, other: &JsPropertyKey) -> bool {
+        Arc::ptr_eq(&self.bytes, &other.bytes)
+    }
+}
+
 /// Well-known symbol names in the index order of
 /// [`JsPropertyKey::cached_well_known_symbol`].
 const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [

@@ -56,6 +56,10 @@ _Avoid_: symbol, interned string, name key.
 The slot operand of the `LoadLocal`/`StoreLocal`/`UpdateLocal` bytecode ops: the expected position of a frame-local name in the call's `BindingMap`. It is verified by atom identity on every execution and falls back to by-name resolution on a miss, so it can be wrong without being unsound. See ADR-2026-10-12-0900.
 _Avoid_: register, frame offset, resolved slot.
 
+**Global Data Fast Path**:
+The read/write shortcut for a bare name that resolves to an *ordinary, own, data* property of the global object (`src/interpreter/global_access.rs`). A clone-free scope walk establishes that no scope binds the name, then one re-validated own-property probe reads or writes the value; a Proxy or exotic global object, a missing or inherited property, an accessor and a non-writable property are refused and run the generic Object Environment Record path. It caches nothing across accesses except a **Global Hint** — the property-map slot a name site last found its property in, verified by key on every use — so no invalidation protocol exists. See ADR-2026-10-12-1500.
+_Avoid_: global IC, property cell, global cache.
+
 **Effect Context**:
 A position in compiled bytecode where an expression's value is discarded: a function-goal expression statement, a `for` initialiser or update, a `var` initialiser, a non-final comma element, a `void` operand. `Compiler::compile_effect` lowers it, fusing the discard into the producing op (`StoreLocalPop`, `StoreResolvedNamePop`, the discard bit of `UpdateLocal`/`UpdateName`) instead of a trailing `Pop`. A Script-goal expression statement is *not* effect context: its value is the completion value. See ADR-2026-10-12-1200.
 _Avoid_: statement context, void context, dead value.

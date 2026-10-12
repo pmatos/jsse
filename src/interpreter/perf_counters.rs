@@ -75,6 +75,11 @@ pub(crate) struct PerfCounters {
     /// by-name resolution (#898).
     pub(crate) local_slot_hits: u64,
     pub(crate) local_slot_misses: u64,
+    /// Bare-name reads/writes served by the global data fast path
+    /// (`global_access.rs`) and those that fell back to the generic
+    /// Object Environment Record path (#905).
+    pub(crate) global_prop_fast_hits: u64,
+    pub(crate) global_prop_fast_misses: u64,
     /// Dynamic `EvalAst`/`ExecAst` executions: nodes a compiled body handed
     /// back to the tree-walker, and the tree-walker work units they spent
     /// exclusive of nested bodies. A compiled body is "free" of bail rows yet
@@ -123,6 +128,8 @@ impl Default for PerfCounters {
             gc_nanos: 0,
             local_slot_hits: 0,
             local_slot_misses: 0,
+            global_prop_fast_hits: 0,
+            global_prop_fast_misses: 0,
             ast_fallback_execs: 0,
             ast_units_in_fallbacks: 0,
             fallback_by_reason: FxHashMap::default(),
@@ -252,6 +259,16 @@ impl PerfCounters {
             out,
             "PERF\tast_units_in_fallbacks\t{}",
             self.ast_units_in_fallbacks
+        );
+        let _ = writeln!(
+            out,
+            "PERF\tglobal_prop_fast_hits\t{}",
+            self.global_prop_fast_hits
+        );
+        let _ = writeln!(
+            out,
+            "PERF\tglobal_prop_fast_misses\t{}",
+            self.global_prop_fast_misses
         );
         let _ = writeln!(
             out,

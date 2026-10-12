@@ -1,5 +1,5 @@
 use crate::ast::{Expression, Statement};
-use crate::interpreter::Atom;
+use crate::interpreter::{Atom, GlobalHint};
 use crate::types::{JsBigInt, JsString, JsValue};
 
 #[derive(Debug, Clone)]
@@ -45,6 +45,11 @@ pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
     pub(crate) constants: Vec<Constant>,
     pub(crate) names: Vec<Atom>,
+    /// One remembered global-object property slot per `names` entry, consulted
+    /// by the name ops (`LoadName`, `ResolveName`, ...). Verified by key on
+    /// every use, so it is never an invalidation concern. May be shorter than
+    /// `names` (hand-built chunks): a missing entry means no hint.
+    pub(crate) global_hints: Vec<GlobalHint>,
     pub(crate) var_names: Vec<u16>,
     pub(crate) max_stack: u16,
     pub(crate) max_refs: u16,
@@ -57,4 +62,11 @@ pub(crate) struct Chunk {
     /// Why each fallback node could not compile natively, one entry per node.
     #[cfg_attr(not(feature = "perf-counters"), allow(dead_code))]
     pub(crate) fallback_reasons: Vec<&'static str>,
+}
+
+impl Chunk {
+    #[inline]
+    pub(crate) fn global_hint(&self, name_idx: u16) -> Option<&GlobalHint> {
+        self.global_hints.get(usize::from(name_idx))
+    }
 }

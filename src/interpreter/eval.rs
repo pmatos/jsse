@@ -1910,7 +1910,7 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             }
         }
-        if let Some(result) = self.resolve_global_getter(name, env) {
+        if let Some(result) = self.resolve_global_getter(name, env, None) {
             return match result {
                 Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
                 other => other,
@@ -2404,11 +2404,12 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn get_identifier_value_by_ref<N: BindingName + ?Sized>(
+    pub(super) fn get_identifier_value_by_ref_hinted<N: BindingName + ?Sized>(
         &mut self,
         key: &N,
         id_ref: &IdentifierRef,
         env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Completion {
         let name = key.as_name();
         let strict = env.borrow().strict;
@@ -2435,7 +2436,7 @@ impl Interpreter {
                             "Cannot access '{name}' before initialization"
                         ))),
                     }
-                } else if let Some(result) = self.resolve_global_getter(key, specific_env) {
+                } else if let Some(result) = self.resolve_global_getter(key, specific_env, hint) {
                     result
                 } else {
                     Completion::Throw(
@@ -2446,12 +2447,24 @@ impl Interpreter {
         }
     }
 
+    #[inline]
     pub(super) fn eval_identifier_update<N: BindingName + ?Sized>(
         &mut self,
         op: UpdateOp,
         prefix: bool,
         key: &N,
         env: &EnvRef,
+    ) -> Completion {
+        self.eval_identifier_update_hinted(op, prefix, key, env, None)
+    }
+
+    pub(super) fn eval_identifier_update_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        op: UpdateOp,
+        prefix: bool,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Completion {
         // Fast path: identifier is a Number in the local scope chain (no with/module)
         {
@@ -2478,11 +2491,11 @@ impl Interpreter {
             }
         }
 
-        let id_ref = match self.resolve_identifier_ref(key, env) {
+        let id_ref = match self.resolve_identifier_ref_hinted(key, env, hint) {
             Ok(r) => r,
             Err(e) => return Completion::Throw(e),
         };
-        let raw_val = match self.get_identifier_value_by_ref(key, &id_ref, env) {
+        let raw_val = match self.get_identifier_value_by_ref_hinted(key, &id_ref, env, hint) {
             Completion::Normal(v) => v,
             other => return other,
         };
@@ -2490,7 +2503,7 @@ impl Interpreter {
             Ok(pair) => pair,
             Err(e) => return Completion::Throw(e),
         };
-        match self.put_value_by_ref(key, new_val.clone(), &id_ref, env) {
+        match self.put_value_by_ref_hinted(key, new_val.clone(), &id_ref, env, hint) {
             Completion::Normal(_) => {}
             other => return other,
         }
@@ -2893,7 +2906,7 @@ impl Interpreter {
                         );
                     }
                     IdentifierRef::SpecificEnv(_) => {
-                        if let Some(result) = self.resolve_global_getter(name, env) {
+                        if let Some(result) = self.resolve_global_getter(name, env, None) {
                             match result {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -3363,7 +3376,7 @@ impl Interpreter {
                         );
                     }
                     IdentifierRef::SpecificEnv(_) => {
-                        if let Some(result) = self.resolve_global_getter(name, env) {
+                        if let Some(result) = self.resolve_global_getter(name, env, None) {
                             match result {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -3611,7 +3624,7 @@ impl Interpreter {
                             );
                         }
                         IdentifierRef::SpecificEnv(_) => {
-                            if let Some(result) = self.resolve_global_getter(name, env) {
+                            if let Some(result) = self.resolve_global_getter(name, env, None) {
                                 match result {
                                     Completion::Normal(v) => v,
                                     other => return other,
@@ -7612,16 +7625,37 @@ impl Interpreter {
     }
 
     /// Resolve an identifier to a reference (for capturing before RHS evaluation).
+    #[inline]
     pub(super) fn resolve_identifier_ref<N: BindingName + ?Sized>(
         &mut self,
         key: &N,
         env: &EnvRef,
+    ) -> Result<IdentifierRef, JsValue> {
+        self.resolve_identifier_ref_hinted(key, env, None)
+    }
+
+    pub(super) fn resolve_identifier_ref_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Result<IdentifierRef, JsValue> {
         let name = key.as_name();
         if (self.with_scope_depth > 0 || self.has_ever_entered_with)
             && let Some(obj_id) = self.resolve_with_has_binding(name, env)?
         {
             return Ok(IdentifierRef::WithObject(obj_id));
+        }
+        match global_access::walk_scope_chain(env, key, true, 0) {
+            global_access::NameWalk::Bound(bound_env) => {
+                return Ok(IdentifierRef::SpecificEnv(bound_env));
+            }
+            global_access::NameWalk::Global(gid, Some(global_env))
+                if self.global_object_has_own_entry(gid, name, hint) =>
+            {
+                return Ok(IdentifierRef::SpecificEnv(global_env));
+            }
+            _ => {}
         }
         if let Some(specific_env) = Environment::find_binding_env(env, key) {
             let (has_binding, global_obj_id) = {
@@ -7630,9 +7664,7 @@ impl Interpreter {
                 if in_bindings {
                     (true, None)
                 } else if let Some(gid) = e.global_object_id {
-                    let own = self
-                        .get_object_cell(gid)
-                        .is_some_and(|g| g.borrow().properties.contains_key(name));
+                    let own = self.global_object_has_own_entry(gid, name, hint);
                     (own, if !own { Some(gid) } else { None })
                 } else {
                     (false, None)
@@ -7692,12 +7724,24 @@ impl Interpreter {
     }
 
     /// Write a value through a captured identifier reference.
+    #[inline]
     pub(super) fn put_value_by_ref<N: BindingName + ?Sized>(
         &mut self,
         key: &N,
         value: JsValue,
         id_ref: &IdentifierRef,
         env: &EnvRef,
+    ) -> Completion {
+        self.put_value_by_ref_hinted(key, value, id_ref, env, None)
+    }
+
+    pub(super) fn put_value_by_ref_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        value: JsValue,
+        id_ref: &IdentifierRef,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Completion {
         let name = key.as_name();
         match id_ref {
@@ -7709,6 +7753,27 @@ impl Interpreter {
                 }
             }
             IdentifierRef::SpecificEnv(specific_env) => {
+                // Global data fast path: an own, writable data property of the
+                // global object that no declarative binding shadows is written
+                // exactly as [[Set]] would, without the has/set/sync round trip.
+                let fast_gid = {
+                    let e = specific_env.borrow();
+                    e.global_object_id
+                        .filter(|_| !e.bindings.contains_key(key) && !e.is_indirect_binding(name))
+                };
+                if let Some(gid) = fast_gid {
+                    if self.global_object_store_own_data(gid, name, &value, hint) {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            self.perf.global_prop_fast_hits += 1;
+                        }
+                        return Completion::Normal(value);
+                    }
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.global_prop_fast_misses += 1;
+                    }
+                }
                 match self.env_check_set_binding(specific_env, key) {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
@@ -7742,7 +7807,11 @@ impl Interpreter {
                             }
                             let receiver = JsValue::object(gid);
                             match self.proxy_set(gid, name, value.clone(), &receiver) {
-                                Ok(_) => Completion::Normal(value),
+                                Ok(true) => Completion::Normal(value),
+                                Ok(false) if !env.borrow().strict => Completion::Normal(value),
+                                Ok(false) => Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot assign to read only property '{name}' of object"
+                                ))),
                                 Err(e) => Completion::Throw(e),
                             }
                         } else if strict {
@@ -7777,7 +7846,14 @@ impl Interpreter {
                                 }
                                 let receiver = JsValue::object(gid);
                                 match self.proxy_set(gid, name, value.clone(), &receiver) {
-                                    Ok(_) => {
+                                    Ok(succeeded) => {
+                                        if !succeeded && env.borrow().strict {
+                                            return Completion::Throw(self.create_type_error(
+                                                &format!(
+                                                    "Cannot assign to read only property '{name}' of object"
+                                                ),
+                                            ));
+                                        }
                                         self.sync_global_object_binding(gid, name, &value);
                                         return Completion::Normal(value);
                                     }
@@ -7807,9 +7883,77 @@ impl Interpreter {
         }
     }
 
+    /// The clone-free read path shared by identifier resolution: a plain
+    /// initialised declarative binding, or an own data property of the global
+    /// object when no scope on the way binds the name. `None` means "not
+    /// modelled here" and the caller runs the generic resolution.
+    #[inline]
+    fn resolve_name_fast<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Option<JsValue> {
+        match global_access::walk_scope_chain(env, key, false, 0) {
+            global_access::NameWalk::Value(value) => Some(value),
+            global_access::NameWalk::Global(gid, _) => {
+                let value = self.global_object_own_data(gid, key.as_name(), hint)?;
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.global_prop_fast_hits += 1;
+                }
+                Some(value)
+            }
+            global_access::NameWalk::Bound(_) | global_access::NameWalk::Slow => None,
+        }
+    }
+
+    /// `resolve_identifier_hinted` for callers that only know the strictness
+    /// of `env` lazily: the fast path never needs it.
+    #[inline]
+    pub(super) fn resolve_name_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Completion {
+        if let Some(value) = self.resolve_name_fast(key, env, hint) {
+            return Completion::Normal(value);
+        }
+        let strict = env.borrow().strict;
+        self.resolve_identifier_generic(key, env, strict)
+    }
+
     /// Single-pass identifier resolution: combines with-scope check, binding lookup,
     /// and global getter resolution into one scope chain walk.
+    #[inline]
     pub(super) fn resolve_identifier<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        strict: bool,
+    ) -> Completion {
+        self.resolve_identifier_hinted(key, env, strict, None)
+    }
+
+    /// `resolve_identifier` with a remembered global-object property slot for
+    /// the name site (`GlobalHint`); `None` probes the property map by key.
+    pub(super) fn resolve_identifier_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        strict: bool,
+        hint: Option<&GlobalHint>,
+    ) -> Completion {
+        if let Some(value) = self.resolve_name_fast(key, env, hint) {
+            return Completion::Normal(value);
+        }
+        self.resolve_identifier_generic(key, env, strict)
+    }
+
+    /// Full identifier resolution: `with` scopes, import bindings, TDZ and
+    /// the prototype chain of the global object.
+    fn resolve_identifier_generic<N: BindingName + ?Sized>(
         &mut self,
         key: &N,
         env: &EnvRef,
@@ -7872,6 +8016,17 @@ impl Interpreter {
             // 4. Check global object (at the bottom of the scope chain)
             if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
+                if let Some(value) = self.global_object_own_data(gid, name, None) {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.global_prop_fast_hits += 1;
+                    }
+                    return Completion::Normal(value);
+                }
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.global_prop_fast_misses += 1;
+                }
                 {
                     // Check own property first
                     let own_prop = self
@@ -7915,6 +8070,7 @@ impl Interpreter {
         &mut self,
         key: &N,
         env: &EnvRef,
+        hint: Option<&GlobalHint>,
     ) -> Option<Completion> {
         let name = key.as_name();
         let mut current = Some(env.clone());
@@ -7930,6 +8086,13 @@ impl Interpreter {
             }
             if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
+                if let Some(value) = self.global_object_own_data(gid, name, hint) {
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        self.perf.global_prop_fast_hits += 1;
+                    }
+                    return Some(Completion::Normal(value));
+                }
                 // Check own property first (fast path)
                 let own_prop = self
                     .get_object_cell(gid)

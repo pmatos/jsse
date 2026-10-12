@@ -4,7 +4,7 @@ use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
-use crate::interpreter::{Atom, EnvRef, Interpreter};
+use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
 
 #[inline(always)]
@@ -122,6 +122,7 @@ fn store_local(
     slot: u16,
     env: &EnvRef,
     value: &JsValue,
+    hint: Option<&GlobalHint>,
 ) -> Result<(), JsValue> {
     let stored = {
         let mut scope = env.borrow_mut();
@@ -152,8 +153,8 @@ fn store_local(
     {
         interp.perf.local_slot_misses += 1;
     }
-    let id_ref = interp.resolve_identifier_ref(name, env)?;
-    match interp.put_value_by_ref(name, value.clone(), &id_ref, env) {
+    let id_ref = interp.resolve_identifier_ref_hinted(name, env, hint)?;
+    match interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint) {
         Completion::Throw(e) => Err(e),
         _ => Ok(()),
     }
@@ -167,6 +168,7 @@ fn store_resolved_name(
     id_ref: &IdentifierRef,
     env: &EnvRef,
     value: &JsValue,
+    hint: Option<&GlobalHint>,
 ) -> Result<(), JsValue> {
     let local_store = if let IdentifierRef::SpecificEnv(local_env) = id_ref {
         let mut scope = local_env.borrow_mut();
@@ -185,7 +187,8 @@ fn store_resolved_name(
         false
     };
     if !local_store
-        && let Completion::Throw(e) = interp.put_value_by_ref(name, value.clone(), id_ref, env)
+        && let Completion::Throw(e) =
+            interp.put_value_by_ref_hinted(name, value.clone(), id_ref, env, hint)
     {
         return Err(e);
     }
@@ -212,28 +215,6 @@ fn with_local_hit<R>(
             Some(f(&binding.value))
         }
         _ => None,
-    }
-}
-
-/// `LoadName` and the miss path of `LoadLocal`: the frame's own binding when
-/// the current scope is a plain declarative one, else full identifier
-/// resolution.
-fn load_name_value(interp: &mut Interpreter, name: &Atom, env: &EnvRef) -> Completion {
-    let (local_value, strict) = {
-        let scope = env.borrow();
-        let value = if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
-            scope
-                .bindings
-                .get(name)
-                .and_then(|binding| binding.initialized.then(|| binding.value.clone()))
-        } else {
-            None
-        };
-        (value, scope.strict)
-    };
-    match local_value {
-        Some(value) => Completion::Normal(value),
-        None => interp.resolve_identifier(name, env, strict),
     }
 }
 
@@ -620,7 +601,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                match load_name_value(interp, name, env) {
+                match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
                     Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
@@ -643,7 +624,7 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_misses += 1;
                         }
-                        match load_name_value(interp, name, env) {
+                        match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
                             Completion::Normal(v) => push_value(interp, stack, v),
                             abrupt => return abrupt,
                         }
@@ -656,7 +637,8 @@ fn run_chunk_inner(
                 pc += 4;
                 let name = &chunk.names[idx as usize];
                 let value = stack.last().expect("stack underflow on StoreLocal");
-                if let Err(e) = store_local(interp, name, slot, env, value) {
+                if let Err(e) = store_local(interp, name, slot, env, value, chunk.global_hint(idx))
+                {
                     return Completion::Throw(e);
                 }
                 if op == Op::StoreLocalPop {
@@ -709,7 +691,13 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_misses += 1;
                         }
-                        match interp.eval_identifier_update(op, prefix, name, env) {
+                        match interp.eval_identifier_update_hinted(
+                            op,
+                            prefix,
+                            name,
+                            env,
+                            chunk.global_hint(idx),
+                        ) {
                             Completion::Normal(value) => {
                                 if !discard {
                                     push_value(interp, stack, value);
@@ -730,7 +718,8 @@ fn run_chunk_inner(
                 let name = &chunk.names[idx as usize];
                 let strict = env.borrow().strict;
                 interp.last_identifier_with_base = None;
-                let callee_result = interp.resolve_identifier(name, env, strict);
+                let callee_result =
+                    interp.resolve_identifier_hinted(name, env, strict, chunk.global_hint(idx));
                 let this_value = match interp.last_identifier_with_base.take() {
                     Some(id) => JsValue::object(id),
                     None => JsValue::UNDEFINED,
@@ -755,7 +744,7 @@ fn run_chunk_inner(
                 if local_ref {
                     refs.push(IdentifierRef::SpecificEnv(env.clone()));
                 } else {
-                    match interp.resolve_identifier_ref(name, env) {
+                    match interp.resolve_identifier_ref_hinted(name, env, chunk.global_hint(idx)) {
                         Ok(id_ref) => refs.push(id_ref),
                         Err(e) => return Completion::Throw(e),
                     }
@@ -768,7 +757,12 @@ fn run_chunk_inner(
                 let id_ref = refs
                     .last()
                     .expect("reference stack underflow on LoadResolvedName");
-                match interp.get_identifier_value_by_ref(name, id_ref, env) {
+                match interp.get_identifier_value_by_ref_hinted(
+                    name,
+                    id_ref,
+                    env,
+                    chunk.global_hint(idx),
+                ) {
                     Completion::Normal(value) => push_value(interp, stack, value),
                     abrupt => return abrupt,
                 }
@@ -781,7 +775,9 @@ fn run_chunk_inner(
                     .pop()
                     .expect("reference stack underflow on StoreResolvedName");
                 let value = stack.last().expect("stack underflow on StoreResolvedName");
-                if let Err(e) = store_resolved_name(interp, name, &id_ref, env, value) {
+                if let Err(e) =
+                    store_resolved_name(interp, name, &id_ref, env, value, chunk.global_hint(idx))
+                {
                     return Completion::Throw(e);
                 }
                 if op == Op::StoreResolvedNamePop {
@@ -794,7 +790,13 @@ fn run_chunk_inner(
                 pc += 3;
                 let (op, prefix, discard) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
-                match interp.eval_identifier_update(op, prefix, name, env) {
+                match interp.eval_identifier_update_hinted(
+                    op,
+                    prefix,
+                    name,
+                    env,
+                    chunk.global_hint(idx),
+                ) {
                     Completion::Normal(value) => {
                         if !discard {
                             push_value(interp, stack, value);
@@ -1166,7 +1168,7 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_misses += 1;
                         }
-                        match load_name_value(interp, name, env) {
+                        match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
                             Completion::Normal(v) => Some(v),
                             abrupt => return abrupt,
                         }
