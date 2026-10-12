@@ -24,7 +24,7 @@ const MAX_FAST_FILL: usize = 1 << 24;
 /// present data element": the caller must take the generic path.
 #[inline]
 pub(super) fn dense_element(interp: &Interpreter, o: &JsValue, idx: usize) -> Option<JsValue> {
-    let cell = interp.get_object_cell(o.as_object_id()?)?;
+    let cell = array_cell(interp, o)?;
     let b = cell.borrow();
     let v = b.array_elements()?.get(idx)?;
     if v.is_undefined() || b.properties.len() != 1 {
@@ -70,9 +70,19 @@ fn has_hole(elements: &[JsValue]) -> bool {
     elements.iter().any(JsValue::is_undefined)
 }
 
-/// Array.prototype.pop on a plain dense Array whose last element is present.
+fn array_cell<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a ObjectHandle> {
+    interp.get_object_cell(o.as_object_id()?)
+}
+
+// Moving elements across holes lands present elements on holes (creating
+// properties, so the receiver must be extensible) and must keep holes absent
+// (so nothing inherited may supply an index).
+fn holes_movable(interp: &Interpreter, b: &JsObjectData, holes: bool) -> bool {
+    !holes || (b.extensible && proto_chain_index_free(interp, b.prototype_id))
+}
+
 pub(super) fn try_pop(interp: &Interpreter, o: &JsValue, len: usize) -> Option<JsValue> {
-    let cell = interp.get_object_cell(o.as_object_id()?)?;
+    let cell = array_cell(interp, o)?;
     {
         let b = cell.borrow();
         if len == 0 || !b.is_plain_dense_array(len) || b.array_elements()?[len - 1].is_undefined() {
@@ -85,24 +95,17 @@ pub(super) fn try_pop(interp: &Interpreter, o: &JsValue, len: usize) -> Option<J
     Some(v)
 }
 
-/// Array.prototype.shift on a plain dense Array. Returns the removed first
-/// element (`undefined` when it was a hole).
+/// Returns the removed first element (`undefined` when it was a hole).
 pub(super) fn try_shift(interp: &Interpreter, o: &JsValue, len: usize) -> Option<JsValue> {
-    let cell = interp.get_object_cell(o.as_object_id()?)?;
-    let (holes, proto) = {
+    let cell = array_cell(interp, o)?;
+    {
         let b = cell.borrow();
-        if len == 0 || !b.is_plain_dense_array(len) {
+        if len == 0
+            || !b.is_plain_dense_array(len)
+            || !holes_movable(interp, &b, has_hole(b.array_elements()?))
+        {
             return None;
         }
-        let holes = has_hole(b.array_elements()?);
-        // Moving a present element onto a hole creates a property.
-        if holes && !b.extensible {
-            return None;
-        }
-        (holes, b.prototype_id)
-    };
-    if holes && !proto_chain_index_free(interp, proto) {
-        return None;
     }
     let mut b = cell.borrow_mut();
     let first = b.array_elements_mut()?.remove(0);
@@ -110,7 +113,6 @@ pub(super) fn try_shift(interp: &Interpreter, o: &JsValue, len: usize) -> Option
     Some(first)
 }
 
-/// Array.prototype.unshift with at least one argument on a plain dense Array.
 /// Returns the new length.
 pub(super) fn try_unshift(
     interp: &Interpreter,
@@ -127,7 +129,7 @@ pub(super) fn try_unshift(
     if new_len > 0xFFFF_FFFE {
         return None;
     }
-    let cell = interp.get_object_cell(o.as_object_id()?)?;
+    let cell = array_cell(interp, o)?;
     let proto = {
         let b = cell.borrow();
         if !b.extensible || !b.is_plain_dense_array(len) {
@@ -337,26 +339,21 @@ pub(super) fn try_concat_item(
     true
 }
 
-/// Array.prototype.reverse on a plain dense Array.
 pub(super) fn try_reverse(interp: &Interpreter, o: &JsValue, len: usize) -> bool {
-    let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) else {
+    let Some(cell) = array_cell(interp, o) else {
         return false;
     };
-    let (holes, proto) = {
+    let holes = {
         let b = cell.borrow();
         if !b.is_plain_dense_array(len) {
             return false;
         }
         let holes = has_hole(b.array_elements().unwrap());
-        // Swapping a present element with a hole creates a property.
-        if holes && !b.extensible {
+        if !holes_movable(interp, &b, holes) {
             return false;
         }
-        (holes, b.prototype_id)
+        holes
     };
-    if holes && !proto_chain_index_free(interp, proto) {
-        return false;
-    }
     let mut b = cell.borrow_mut();
     b.array_elements_mut().unwrap().reverse();
     // Holes move with the elements, so the set of own indices changes.
@@ -380,7 +377,7 @@ pub(super) fn try_fill(
     if value.is_undefined() || k >= fin || fin > len || fin > MAX_FAST_FILL {
         return false;
     }
-    let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) else {
+    let Some(cell) = array_cell(interp, o) else {
         return false;
     };
     let (needs_chain, proto) = {
@@ -431,19 +428,20 @@ pub(super) fn try_store_sorted(
     if sorted.len() != len || has_hole(sorted) {
         return false;
     }
-    let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) else {
+    let Some(cell) = array_cell(interp, o) else {
         return false;
     };
-    let (holes, proto) = {
+    let holes = {
         let b = cell.borrow();
-        if !b.extensible || !b.is_plain_dense_array(len) {
+        if !b.is_plain_dense_array(len) {
             return false;
         }
-        (has_hole(b.array_elements().unwrap()), b.prototype_id)
+        let holes = has_hole(b.array_elements().unwrap());
+        if !holes_movable(interp, &b, holes) {
+            return false;
+        }
+        holes
     };
-    if holes && !proto_chain_index_free(interp, proto) {
-        return false;
-    }
     let mut b = cell.borrow_mut();
     b.array_elements_mut().unwrap().clone_from_slice(sorted);
     if holes {
@@ -463,7 +461,7 @@ pub(super) fn scan_forward(
     to: usize,
     eq: impl Fn(&JsValue) -> bool,
 ) -> (Option<usize>, usize) {
-    let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) else {
+    let Some(cell) = array_cell(interp, o) else {
         return (None, from);
     };
     let b = cell.borrow();
@@ -496,7 +494,7 @@ pub(super) fn scan_backward(
     from: usize,
     eq: impl Fn(&JsValue) -> bool,
 ) -> (Option<usize>, usize) {
-    let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) else {
+    let Some(cell) = array_cell(interp, o) else {
         return (None, from + 1);
     };
     let b = cell.borrow();
