@@ -41,6 +41,10 @@ impl Interpreter {
         is_same_object(self.realm().promise_then.as_ref(), value)
     }
 
+    fn callable_or_none(&self, value: &JsValue) -> Option<JsValue> {
+        self.is_callable(value).then(|| value.clone())
+    }
+
     /// True while `Promise[@@species]` is still the original getter, which
     /// returns its `this` value and has no other effect.
     fn promise_species_getter_is_original(&self, ctor_id: u64) -> bool {
@@ -1036,13 +1040,12 @@ impl Interpreter {
                     target,
                     reaction_type,
                 } = reaction;
-                let arg = argument;
                 let handler_result = match handler {
                     Some(ref handler) if interp.is_callable(handler) => {
                         match interp.call_function(
                             handler,
                             &JsValue::UNDEFINED,
-                            std::slice::from_ref(&arg),
+                            std::slice::from_ref(&argument),
                         ) {
                             Completion::Throw(e) => Err(e),
                             Completion::Normal(v) => Ok(v),
@@ -1055,8 +1058,8 @@ impl Interpreter {
                         }
                     }
                     _ => match reaction_type {
-                        PromiseReactionType::Fulfill => Ok(arg),
-                        PromiseReactionType::Reject => Err(arg),
+                        PromiseReactionType::Fulfill => Ok(argument),
+                        PromiseReactionType::Reject => Err(argument),
                     },
                 };
 
@@ -1191,8 +1194,8 @@ impl Interpreter {
             };
             (cap.promise, target)
         };
-        let fulfill_handler = self.is_callable(on_fulfilled).then(|| on_fulfilled.clone());
-        let reject_handler = self.is_callable(on_rejected).then(|| on_rejected.clone());
+        let fulfill_handler = self.callable_or_none(on_fulfilled);
+        let reject_handler = self.callable_or_none(on_rejected);
         self.perform_promise_then_internal(promise_id, fulfill_handler, reject_handler, target);
         Ok(derived)
     }
@@ -1222,8 +1225,8 @@ impl Interpreter {
             },
             None => ReactionTarget::None,
         };
-        let fulfill_handler = self.is_callable(on_fulfilled).then(|| on_fulfilled.clone());
-        let reject_handler = self.is_callable(on_rejected).then(|| on_rejected.clone());
+        let fulfill_handler = self.callable_or_none(on_fulfilled);
+        let reject_handler = self.callable_or_none(on_rejected);
         self.perform_promise_then_internal(promise_id, fulfill_handler, reject_handler, target);
         Completion::Normal(result_promise)
     }
@@ -1237,7 +1240,7 @@ impl Interpreter {
         reject_handler: Option<JsValue>,
         target: ReactionTarget,
     ) {
-        let settled = {
+        let (reaction_type, argument) = {
             let Some(cell) = self.get_object_cell(promise_id) else {
                 return;
             };
@@ -1264,7 +1267,6 @@ impl Interpreter {
                 PromiseState::Rejected(r) => (PromiseReactionType::Reject, r.clone()),
             }
         };
-        let (reaction_type, argument) = settled;
         let handler = match reaction_type {
             PromiseReactionType::Fulfill => fulfill_handler,
             PromiseReactionType::Reject => reject_handler,
