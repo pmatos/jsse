@@ -170,7 +170,6 @@ fn table_capacity_for(slots: usize) -> usize {
 }
 
 impl<T> KeyedEntries<T> {
-    /// The number of live (non-deleted) entries.
     pub(crate) fn live_len(&self) -> usize {
         self.live
     }
@@ -233,6 +232,20 @@ impl<T> KeyedEntries<T> {
         self.after_removal();
     }
 
+    /// `clear` for a collection that just lost its last entry: a small slot
+    /// buffer is kept so an add/delete cycle on a tiny set does not allocate
+    /// every time.
+    fn empty_in_place(&mut self) {
+        if self.slots.capacity() > COMPACT_MIN_EMPTY {
+            self.clear();
+            return;
+        }
+        self.slots.clear();
+        self.table = Vec::new();
+        self.live = 0;
+        self.first_live = 0;
+    }
+
     fn advance_first_live(&mut self) {
         while self
             .slots
@@ -245,7 +258,7 @@ impl<T> KeyedEntries<T> {
 
     fn after_removal(&mut self) {
         if self.live == 0 {
-            self.clear();
+            self.empty_in_place();
             return;
         }
         self.advance_first_live();
@@ -367,13 +380,6 @@ impl<T: KeyedEntry> KeyedEntries<T> {
         }
         self.append(entry, hash);
         true
-    }
-
-    /// Append `entry`; the caller has established that no equal key is live.
-    pub(crate) fn push_new(&mut self, entry: T) {
-        let hash = (!self.table.is_empty()).then(|| key_hash(entry.key()));
-        debug_assert!(self.find_slot(entry.key(), hash).is_none());
-        self.append(entry, hash);
     }
 
     fn append(&mut self, entry: T, hash: Option<u32>) {
@@ -573,6 +579,24 @@ mod tests {
         entries.retain(|_| false);
         assert_eq!(entries.live_len(), 0);
         assert!(drain(&entries).is_empty());
+    }
+
+    #[test]
+    fn deleting_the_last_entry_keeps_spec_indices_moving_forward() {
+        let mut entries = set_of([num(1.0)]);
+        let mut cursor = 0;
+        assert_eq!(visit(&entries, &mut cursor), Some(1.0));
+        assert!(entries.remove(&num(1.0)));
+        assert_eq!(entries.live_len(), 0);
+        entries.upsert(num(2.0), |_, _| {});
+        assert_eq!(visit(&entries, &mut cursor), Some(2.0));
+        let mut fresh = 0;
+        assert_eq!(visit(&entries, &mut fresh), Some(2.0));
+        for round in 0..50 {
+            assert!(entries.remove(&num(2.0 + f64::from(round))));
+            entries.upsert(num(3.0 + f64::from(round)), |_, _| {});
+        }
+        assert_eq!(drain(&entries), vec![52.0]);
     }
 
     #[test]

@@ -352,17 +352,14 @@ impl Interpreter {
             {
                 key = JsValue::number(0.0);
             }
-            // Search existing entries
-            if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
-                return Completion::Normal(entry.1.clone());
-            }
-            // Key not found - append new entry
             interp.gc_write_barrier_value(&obj, &key);
             interp.gc_write_barrier_value(&obj, &value);
-            let mut borrowed = obj.borrow_mut_untracked();
-            let entries = borrowed.map_data_mut().unwrap();
-            entries.push_new((key, value.clone()));
-            Completion::Normal(value)
+            let mut result = value.clone();
+            obj.borrow_mut_untracked()
+                .map_data_mut()
+                .unwrap()
+                .upsert((key, value), |existing, _| result = existing.1.clone());
+            Completion::Normal(result)
         });
 
         // Map.prototype.getOrInsertComputed
@@ -701,7 +698,7 @@ impl Interpreter {
                                     if let Some(map_obj) = interp.get_object_cell(result_id) {
                                         let mut borrowed = map_obj.borrow_mut();
                                         let entries = borrowed.map_data_mut().unwrap();
-                                        entries.push_new((key_val, new_arr));
+                                        entries.upsert((key_val, new_arr), |_, _| {});
                                     }
                                 }
                             }
@@ -1690,15 +1687,14 @@ impl Interpreter {
                         let err = interp.create_type_error("Invalid value used as weak map key");
                         return Completion::Throw(err);
                     }
-                    if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
-                        return Completion::Normal(entry.1.clone());
-                    }
                     interp.gc_write_barrier_value(obj, &key);
                     interp.gc_write_barrier_value(obj, &value);
-                    let mut borrowed = obj.borrow_mut_untracked();
-                    let entries = borrowed.map_data_mut().unwrap();
-                    entries.push_new((key, value.clone()));
-                    return Completion::Normal(value);
+                    let mut result = value.clone();
+                    obj.borrow_mut_untracked()
+                        .map_data_mut()
+                        .unwrap()
+                        .upsert((key, value), |existing, _| result = existing.1.clone());
+                    return Completion::Normal(result);
                 }
             }
             let err = interp.create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");

@@ -56,7 +56,7 @@ keys = null;
 $262.gc();
 for (var i = 0; i < survivors.length; i++) {
   var idx = 1 + i * 10;
-  assert.sameValue(wm.get(survivors[i]), idx === 7 ? "seven" : idx, "survivor " + idx + " keeps its value");
+  assert.sameValue(wm.get(survivors[i]), idx, "survivor " + idx + " keeps its value");
   assert.sameValue(ws.has(survivors[i]), true, "survivor " + idx + " stays in the WeakSet");
 }
 

@@ -100,23 +100,23 @@ assert.sameValue(visited[99], 99, "values are visited in insertion order");
 assert.sameValue(bigSet.size, 0, "the set ends up empty");
 
 // A rolling window: size stays bounded and lookups stay correct.
-var window = new Map();
+var rolling = new Map();
 var windowSet = new Set();
 var W = 50;
 for (var i = 0; i < 2000; i++) {
-  window.set(i, i);
+  rolling.set(i, i);
   windowSet.add("s" + i);
   if (i >= W) {
-    assert.sameValue(window.delete(i - W), true, "window delete " + (i - W));
+    assert.sameValue(rolling.delete(i - W), true, "window delete " + (i - W));
     assert.sameValue(windowSet.delete("s" + (i - W)), true, "window set delete " + (i - W));
   }
 }
-assert.sameValue(window.size, W, "window size");
+assert.sameValue(rolling.size, W, "window size");
 assert.sameValue(windowSet.size, W, "window set size");
-assert.sameValue(window.has(1999 - W), false, "evicted key");
-assert.sameValue(window.has(1999 - W + 1), true, "oldest retained key");
+assert.sameValue(rolling.has(1999 - W), false, "evicted key");
+assert.sameValue(rolling.has(1999 - W + 1), true, "oldest retained key");
 assert.sameValue(windowSet.has("s1999"), true, "newest set value");
-assert.sameValue(keysOf(window)[0], 1999 - W + 1, "oldest retained key is first");
+assert.sameValue(keysOf(rolling)[0], 1999 - W + 1, "oldest retained key is first");
 
 // SameValueZero over a collection large enough to be hash-indexed.
 var o1 = {};
@@ -180,3 +180,38 @@ assert.sameValue(left.isSupersetOf(right), true, "isSupersetOf");
 assert.sameValue(left.difference(right).isDisjointFrom(right), true, "isDisjointFrom");
 assert.compareArray(Array.from(left.difference(right)).slice(0, 3), [1, 3, 5], "difference keeps order");
 assert.compareArray(Array.from(left.union(new Set([1000, 5, 999]))).slice(-2), [1000, 999], "union appends new values in order");
+
+// Set methods whose callbacks delete and re-add entries of the receiver while
+// it is large enough to be hash-indexed and compacted.
+var receiver = new Set();
+for (var i = 0; i < 40; i++) receiver.add(i);
+var mutating = {
+  size: 1000,
+  has: function (v) {
+    receiver.delete(v);
+    for (var j = 0; j < 30; j++) receiver.delete(j);
+    receiver.add(v + 1000);
+    return v % 2 === 0;
+  },
+  keys: function () { return [][Symbol.iterator](); }
+};
+assert.compareArray(Array.from(receiver.difference(mutating)).filter(function (v) { return v < 1000; }),
+  [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39],
+  "difference works on a copy of the receiver that its callback mutates");
+
+var computed = new Map();
+for (var i = 0; i < 100; i++) computed.set(i, i);
+var inserted = computed.getOrInsertComputed(500, function (key) {
+  computed.set(key, "inner");
+  for (var j = 0; j < 90; j++) computed.delete(j);
+  return "outer";
+});
+assert.sameValue(inserted, "outer", "getOrInsertComputed returns the callback result");
+assert.sameValue(computed.get(500), "outer", "the callback result replaces the entry it inserted");
+assert.sameValue(computed.size, 11, "no duplicate entry for the callback's key");
+assert.compareArray(keysOf(computed).slice(-3), [98, 99, 500], "the inserted entry keeps its position");
+
+var groups = Map.groupBy(Array.from({ length: 300 }, function (_, n) { return n; }), function (n) { return n % 100; });
+assert.sameValue(groups.size, 100, "groupBy creates one group per key");
+assert.sameValue(groups.get(42).length, 3, "groupBy collects every member of a group");
+assert.compareArray(groups.get(42), [42, 142, 242], "groupBy keeps members in order");

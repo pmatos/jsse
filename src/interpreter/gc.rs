@@ -1867,7 +1867,7 @@ mod tests {
             .borrow_mut()
             .map_data_mut()
             .unwrap()
-            .push_new((obj(key), obj(value)));
+            .upsert((obj(key), obj(value)), |_, _| {});
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1910,7 +1910,7 @@ mod tests {
             .borrow_mut()
             .set_data_mut()
             .unwrap()
-            .push_new(obj(member));
+            .upsert(obj(member), |_, _| {});
 
         interp.gc.request_minor();
         interp.gc_safepoint();

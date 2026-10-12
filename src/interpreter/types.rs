@@ -4340,7 +4340,7 @@ mod kind_accessor_tests {
     #[test]
     fn set_data_some_for_set_kind() {
         let mut entries = KeyedEntries::default();
-        entries.push_new(JsValue::number(1.0));
+        entries.upsert(JsValue::number(1.0), |_, _| {});
         let obj = obj_with_kind(ObjectKind::Set(entries));
         assert!(obj.set_data().is_some());
         assert_eq!(obj.set_data().unwrap().live_len(), 1);
@@ -4355,7 +4355,9 @@ mod kind_accessor_tests {
     #[test]
     fn set_data_mut_allows_push() {
         let mut obj = obj_with_kind(ObjectKind::Set(KeyedEntries::default()));
-        obj.set_data_mut().unwrap().push_new(JsValue::number(1.0));
+        obj.set_data_mut()
+            .unwrap()
+            .upsert(JsValue::number(1.0), |_, _| {});
         assert_eq!(obj.set_data().unwrap().live_len(), 1);
     }
 
@@ -4364,7 +4366,7 @@ mod kind_accessor_tests {
     #[test]
     fn map_data_some_for_map_kind() {
         let mut entries = KeyedEntries::default();
-        entries.push_new((JsValue::number(1.0), JsValue::FALSE));
+        entries.upsert((JsValue::number(1.0), JsValue::FALSE), |_, _| {});
         let obj = obj_with_kind(ObjectKind::Map(entries));
         assert!(obj.map_data().is_some());
         assert_eq!(obj.map_data().unwrap().live_len(), 1);
@@ -4381,7 +4383,7 @@ mod kind_accessor_tests {
         let mut obj = obj_with_kind(ObjectKind::Map(KeyedEntries::default()));
         obj.map_data_mut()
             .unwrap()
-            .push_new((JsValue::number(0.0), JsValue::UNDEFINED));
+            .upsert((JsValue::number(0.0), JsValue::UNDEFINED), |_, _| {});
         assert_eq!(obj.map_data().unwrap().live_len(), 1);
     }
 
