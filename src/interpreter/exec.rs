@@ -2138,7 +2138,7 @@ impl Interpreter {
                 // push).
                 let replacing = scope_stack.len() == target_depth;
                 let source = innermost(scope_stack, for_of_env);
-                let values: Vec<JsValue> = bindings
+                let values: smallvec::SmallVec<[JsValue; 4]> = bindings
                     .iter()
                     .map(|(name, _)| {
                         self.env_get(&source, name.as_str())

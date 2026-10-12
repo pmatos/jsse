@@ -245,8 +245,9 @@ impl std::fmt::Display for ModuleKey {
     }
 }
 
-/// Property keys written on every function object, interned once so
-/// `create_function` appends them without re-hashing (issue #901).
+/// Property keys written on every function object (and the two on every
+/// iterator result), interned once so object construction appends them without
+/// re-hashing (issue #901).
 struct FunctionKeys {
     length: JsPropertyKey,
     name: JsPropertyKey,
@@ -254,6 +255,8 @@ struct FunctionKeys {
     arguments: JsPropertyKey,
     prototype: JsPropertyKey,
     constructor: JsPropertyKey,
+    value: JsPropertyKey,
+    done: JsPropertyKey,
     /// Shared `name` value of anonymous functions.
     empty_name: JsString,
 }
@@ -268,6 +271,8 @@ impl FunctionKeys {
             arguments: intern_key("arguments"),
             prototype: intern_key("prototype"),
             constructor: intern_key("constructor"),
+            value: intern_key("value"),
+            done: intern_key("done"),
             empty_name: JsString::from_str(""),
         }
     }

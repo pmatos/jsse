@@ -4460,15 +4460,18 @@ impl Interpreter {
     }
 
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
-        let obj_id = self.create_object_id();
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .insert_value("value".to_string(), value);
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .insert_value("done".to_string(), JsValue::boolean(done));
-        let id = obj_id;
-        JsValue::object(id)
+        let mut data = JsObjectData::new();
+        data.prototype_id = self.realm().object_prototype;
+        data.property_order.reserve_exact(2);
+        data.push_fresh_property(
+            &self.function_keys.value,
+            PropertyDescriptor::data_default(value),
+        );
+        data.push_fresh_property(
+            &self.function_keys.done,
+            PropertyDescriptor::data_default(JsValue::boolean(done)),
+        );
+        JsValue::object(self.alloc_object(data))
     }
 
     pub(crate) fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {

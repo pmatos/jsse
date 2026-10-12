@@ -810,19 +810,26 @@ impl Interpreter {
             StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
         };
 
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::StateMachineGenerator {
-                state_machine: state_machine.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: StateMachineExecutionState::Executing,
-                _sent_value: sent_value.clone(),
-                try_stack: try_stack.clone(),
-                pending_binding: None,
-                delegated_iterator: None,
-                pending_exception: None,
-                pending_return: None,
-            });
+        // The one-shot resume inputs now live in the locals above; the object
+        // keeps its machine, environment and try stack and just flips to
+        // `Executing`.
+        if let Some(IteratorState::StateMachineGenerator {
+            execution_state,
+            _sent_value,
+            pending_binding,
+            delegated_iterator,
+            pending_exception,
+            pending_return,
+            ..
+        }) = obj_rc.borrow_mut().iterator_state_mut()
+        {
+            *execution_state = StateMachineExecutionState::Executing;
+            *_sent_value = sent_value.clone();
+            *pending_binding = None;
+            *delegated_iterator = None;
+            *pending_exception = None;
+            *pending_return = None;
+        }
 
         use crate::interpreter::generator_transform::SentValueBindingKind;
         let mut initial_inline_yield_target: Option<usize> = None;
