@@ -7704,6 +7704,21 @@ fn regex_captures_at(
     Some(caps)
 }
 
+/// [`regex_captures_at`] over the representation of `input` the matcher
+/// expects: WTF-8 bytes for the byte matcher, else the text view for `unicode`.
+fn subject_captures_at(
+    compiled: &CompiledRegex,
+    input: &RegexInput,
+    unicode: bool,
+    pos: usize,
+    anchored: bool,
+) -> Option<RegexCaptures> {
+    match compiled {
+        CompiledRegex::Bytes(re) => meta_captures_at(re, input.wtf8(), pos, anchored),
+        _ => regex_captures_at(compiled, input.as_str(unicode), pos, anchored),
+    }
+}
+
 fn search_captures_at(
     re: &CompiledRegex,
     text: &str,
@@ -8271,39 +8286,19 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
     let view = RegexView::select(is_bytes_mode, unicode);
     let last_index_byte = regex_input.utf16_to_byte_offset(view, last_index_utf16);
 
-    let mut caps = if is_bytes_mode {
-        if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-            match meta_captures_at(bytes_re, regex_input.wtf8(), last_index_byte, sticky) {
-                Some(c) => c,
-                None => {
-                    if (global || sticky)
-                        && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
-                    {
-                        return Completion::Throw(e);
-                    }
-                    return Completion::Normal(JsValue::NULL);
-                }
-            }
-        } else {
-            unreachable!()
+    let Some(mut caps) = subject_captures_at(
+        &cached.compiled,
+        regex_input,
+        unicode,
+        last_index_byte,
+        sticky,
+    ) else {
+        if (global || sticky)
+            && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
+        {
+            return Completion::Throw(e);
         }
-    } else {
-        match regex_captures_at(
-            &cached.compiled,
-            regex_input.as_str(unicode),
-            last_index_byte,
-            sticky,
-        ) {
-            Some(c) => c,
-            None => {
-                if (global || sticky)
-                    && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
-                {
-                    return Completion::Throw(e);
-                }
-                return Completion::Normal(JsValue::NULL);
-            }
-        }
+        return Completion::Normal(JsValue::NULL);
     };
 
     clear_stale_dup_captures(&mut caps, &cached.dup_map);
@@ -8841,26 +8836,15 @@ impl Interpreter {
                         }
                         let last_index_byte =
                             regex_input.utf16_to_byte_offset(view, last_index_utf16);
-                        let caps = if is_bytes_mode {
-                            if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                meta_captures_at(
-                                    bytes_re,
-                                    regex_input.wtf8(),
-                                    last_index_byte,
-                                    sticky,
-                                )
-                            } else {
-                                unreachable!()
-                            }
-                        } else {
-                            regex_captures_at(
-                                &cached.compiled,
-                                regex_input.as_str(unicode),
-                                last_index_byte,
-                                sticky,
-                            )
+                        let Some(caps) = subject_captures_at(
+                            &cached.compiled,
+                            &regex_input,
+                            unicode,
+                            last_index_byte,
+                            sticky,
+                        ) else {
+                            break;
                         };
-                        let Some(caps) = caps else { break };
                         let full_match = caps.get(0).unwrap();
                         let match_end_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.end);
@@ -9143,30 +9127,14 @@ impl Interpreter {
                         }
                         let last_index_byte =
                             regex_input.utf16_to_byte_offset(view, last_index_utf16);
-                        let mut caps = if is_bytes_mode {
-                            if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-                                match meta_captures_at(
-                                    bytes_re,
-                                    regex_input.wtf8(),
-                                    last_index_byte,
-                                    sticky,
-                                ) {
-                                    Some(c) => c,
-                                    None => break,
-                                }
-                            } else {
-                                unreachable!()
-                            }
-                        } else {
-                            match regex_captures_at(
-                                &cached.compiled,
-                                regex_input.as_str(unicode),
-                                last_index_byte,
-                                sticky,
-                            ) {
-                                Some(c) => c,
-                                None => break,
-                            }
+                        let Some(mut caps) = subject_captures_at(
+                            &cached.compiled,
+                            &regex_input,
+                            unicode,
+                            last_index_byte,
+                            sticky,
+                        ) else {
+                            break;
                         };
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
