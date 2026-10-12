@@ -8339,6 +8339,18 @@ fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<JsPropertyKey> {
 }
 
 impl Interpreter {
+    // RegExp.prototype[@@replace] steps: accumulatedResult + the unmatched span
+    // before the match + the replacement, within MAX_STRING_LENGTH.
+    fn append_span_and_replacement(
+        &mut self,
+        accumulated: &mut Vec<u16>,
+        span: &[u16],
+        replacement: &[u16],
+    ) -> Result<(), JsValue> {
+        self.append_code_units(accumulated, span)?;
+        self.append_code_units(accumulated, replacement)
+    }
+
     pub(crate) fn setup_regexp(&mut self) {
         let regexp_proto_id = self.create_object_id();
 
@@ -9149,16 +9161,12 @@ impl Interpreter {
                         };
 
                         if position_utf16 >= next_source_position {
-                            if let Err(e) = interp
-                                .append_code_units(
-                                    &mut accumulated_result,
-                                    &regex_input.subject.as_units()
-                                        [next_source_position..position_utf16],
-                                )
-                                .and_then(|()| {
-                                    interp.append_code_units(&mut accumulated_result, &replacement)
-                                })
-                            {
+                            if let Err(e) = interp.append_span_and_replacement(
+                                &mut accumulated_result,
+                                &regex_input.subject.as_units()
+                                    [next_source_position..position_utf16],
+                                &replacement,
+                            ) {
                                 return Completion::Throw(e);
                             }
                             next_source_position = tail_pos;
@@ -9445,16 +9453,12 @@ impl Interpreter {
                         // p. If position >= nextSourcePosition, then
                         let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         if position_utf16 >= next_source_position {
-                            if let Err(e) = interp
-                                .append_code_units(
-                                    &mut accumulated_result,
-                                    &regex_input.subject.as_units()
-                                        [next_source_position..position_utf16],
-                                )
-                                .and_then(|()| {
-                                    interp.append_code_units(&mut accumulated_result, &replacement)
-                                })
-                            {
+                            if let Err(e) = interp.append_span_and_replacement(
+                                &mut accumulated_result,
+                                &regex_input.subject.as_units()
+                                    [next_source_position..position_utf16],
+                                &replacement,
+                            ) {
                                 return Completion::Throw(e);
                             }
                             next_source_position = tail_pos_final;

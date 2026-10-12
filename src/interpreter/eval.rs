@@ -1124,7 +1124,7 @@ impl Interpreter {
                 }
                 let joined = match base {
                     Some(base) => {
-                        if base.len().saturating_add(code_units.len()) > MAX_STRING_LENGTH {
+                        if !concat_fits(base.len(), code_units.len()) {
                             return Completion::Throw(self.invalid_string_length_error());
                         }
                         base.concat_units(&code_units)
@@ -1534,7 +1534,7 @@ impl Interpreter {
         out: &mut Vec<u16>,
         units: &[u16],
     ) -> Result<(), JsValue> {
-        if out.len().saturating_add(units.len()) > MAX_STRING_LENGTH {
+        if !concat_fits(out.len(), units.len()) {
             return Err(self.invalid_string_length_error());
         }
         out.extend_from_slice(units);

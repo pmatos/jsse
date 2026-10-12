@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::parser;
 use crate::types::{
     JsBigInt, JsPropertyKey, JsString, JsValue, MAX_STRING_LENGTH, PropertyKeyLike, bigint_ops,
-    number_ops,
+    concat_fits, number_ops,
 };
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;

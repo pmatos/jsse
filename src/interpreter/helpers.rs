@@ -326,15 +326,12 @@ pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> Option<JsV
                 return Some(rval.clone());
             }
             let joined = rval
-                .with_string(|r| {
-                    (left.len().saturating_add(r.len()) <= MAX_STRING_LENGTH)
-                        .then(|| left.concat_units(r))
-                })
+                .with_string(|r| concat_fits(left.len(), r.len()).then(|| left.concat_units(r)))
                 .expect("kind checked")?;
             return Some(JsValue::string(joined));
         }
         let units = js_value_to_code_units(rval);
-        if left.len().saturating_add(units.len()) > MAX_STRING_LENGTH {
+        if !concat_fits(left.len(), units.len()) {
             return None;
         }
         return Some(JsValue::string(if left.is_empty() {
@@ -346,7 +343,7 @@ pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> Option<JsV
     debug_assert!(rval.is_string());
     let mut units = js_value_to_code_units(lval);
     let right_len = rval.with_string(|r| r.len()).expect("kind checked");
-    if units.len().saturating_add(right_len) > MAX_STRING_LENGTH {
+    if !concat_fits(units.len(), right_len) {
         return None;
     }
     rval.with_string(|r| units.extend_from_slice(r));

@@ -611,7 +611,7 @@ impl Interpreter {
                     for arg in args {
                         propagate!(interp.append_js_string(&mut tail, arg));
                     }
-                    if s.len().saturating_add(tail.len()) > MAX_STRING_LENGTH {
+                    if !concat_fits(s.len(), tail.len()) {
                         return Completion::Throw(interp.invalid_string_length_error());
                     }
                     Completion::Normal(JsValue::string(s.concat_units(&tail)))

@@ -119,6 +119,12 @@ impl StrView {
 /// `RangeError: Invalid string length` instead of attempting the allocation.
 pub(crate) const MAX_STRING_LENGTH: usize = (1 << 29) - 24;
 
+/// Whether joining strings of `a` and `b` code units stays within
+/// [`MAX_STRING_LENGTH`].
+pub(crate) fn concat_fits(a: usize, b: usize) -> bool {
+    a.saturating_add(b) <= MAX_STRING_LENGTH
+}
+
 /// Strings shorter than this are always copied exact-fit; longer ones in a
 /// growth chain get geometric slack so a following append can claim the tail.
 const STR_SLACK_THRESHOLD: usize = 64;
