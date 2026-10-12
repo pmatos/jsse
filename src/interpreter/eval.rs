@@ -611,9 +611,10 @@ impl Interpreter {
                 };
                 let enclosing_strict = env.borrow().strict;
                 let force_method = self.next_function_is_method;
+                let info = f.info();
                 let func = JsFunction::User {
                     name: f.name.clone(),
-                    params: Rc::new(f.params.clone()),
+                    params: info.params.clone(),
                     body: f.body.clone(),
                     closure: closure_env.clone(),
                     is_arrow: false,
@@ -623,8 +624,8 @@ impl Interpreter {
                     is_method: force_method,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
-                    uses_arguments: func_uses_arguments(&f.params, &f.body),
-                    has_simple_params: crate::ast::params_are_simple(&f.params),
+                    uses_arguments: info.uses_arguments,
+                    has_simple_params: info.has_simple_params,
                 };
                 let func_val = self.create_function(func);
                 if let Some(name) = &f.name {
@@ -634,9 +635,10 @@ impl Interpreter {
             }
             Expression::ArrowFunction(af) => {
                 let enclosing_strict = env.borrow().strict;
+                let info = af.info();
                 let func = JsFunction::User {
                     name: None,
-                    params: Rc::new(af.params.clone()),
+                    params: info.params.clone(),
                     body: af.body.body().clone(),
                     closure: env.clone(),
                     is_arrow: true,
@@ -647,7 +649,7 @@ impl Interpreter {
                     source_text: af.source_text.clone(),
                     captured_new_target: self.new_target.clone(),
                     uses_arguments: false, // arrows never have own arguments
-                    has_simple_params: crate::ast::params_are_simple(&af.params),
+                    has_simple_params: info.has_simple_params,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -6303,9 +6305,10 @@ impl Interpreter {
         // Hoist function declarations to var_env
         for f in &functions_to_init {
             let enclosing_strict = lex_env.borrow().strict;
+            let info = f.info();
             let func = JsFunction::User {
                 name: Some(f.name.clone()),
-                params: Rc::new(f.params.clone()),
+                params: info.params.clone(),
                 body: f.body.clone(),
                 closure: lex_env.clone(),
                 is_arrow: false,
@@ -6315,8 +6318,8 @@ impl Interpreter {
                 is_method: false,
                 source_text: f.source_text.clone(),
                 captured_new_target: None,
-                uses_arguments: func_uses_arguments(&f.params, &f.body),
-                has_simple_params: crate::ast::params_are_simple(&f.params),
+                uses_arguments: info.uses_arguments,
+                has_simple_params: info.has_simple_params,
             };
             let val = self.create_function(func);
             if is_global {
