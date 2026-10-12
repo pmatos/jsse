@@ -10,12 +10,12 @@ description: >
   resultSetData when a later next() call runs a garbage collection.
 info: |
   Set.prototype.union ( other )
-  5. Let keysIter be ? GetIteratorFromMethod(otherRec.[[SetObject]], otherRec.[[Keys]]).
-  6. Let resultSetData be a copy of O.[[SetData]].
-  7. Let next be NOT-STARTED.
-  8. Repeat, while next is not DONE,
+  4. Let keysIter be ? GetIteratorFromMethod(otherRec.[[SetObject]], otherRec.[[Keys]]).
+  5. Let resultSetData be a copy of O.[[SetData]].
+  6. Let next be not-started.
+  7. Repeat, while next is not done,
     a. Set next to ? IteratorStepValue(keysIter).
-    b. If next is not DONE, then
+    b. If next is not done, then
       i. Set next to CanonicalizeKeyedCollectionKey(next).
       ii. If SetDataHas(resultSetData, next) is false, then
         1. Append next to resultSetData.

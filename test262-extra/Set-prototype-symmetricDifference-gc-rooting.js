@@ -11,15 +11,19 @@ description: >
   collection.
 info: |
   Set.prototype.symmetricDifference ( other )
-  5. Let keysIter be ? GetIteratorFromMethod(otherRec.[[SetObject]], otherRec.[[Keys]]).
-  6. Let resultSetData be a copy of O.[[SetData]].
-  7. Let next be NOT-STARTED.
-  8. Repeat, while next is not DONE,
+  4. Let keysIter be ? GetIteratorFromMethod(otherRec.[[SetObject]], otherRec.[[Keys]]).
+  5. Let resultSetData be a copy of O.[[SetData]].
+  6. Let next be not-started.
+  7. Repeat, while next is not done,
     a. Set next to ? IteratorStepValue(keysIter).
-    b. If next is not DONE, then
-      ...
-      iv. If inResult is false and SetDataHas(O.[[SetData]], next) is false, then
-        1. Append next to resultSetData.
+    b. If next is not done, then
+      i. Set next to CanonicalizeKeyedCollectionKey(next).
+      ii. Let resultIndex be SetDataIndex(resultSetData, next).
+      iii. If resultIndex is not-found, let alreadyInResult be false; otherwise let alreadyInResult be true.
+      iv. If SetDataHas(O.[[SetData]], next) is true, then
+        1. If alreadyInResult is true, set resultSetData[resultIndex] to empty.
+      v. Else,
+        1. If alreadyInResult is false, append next to resultSetData.
 features: [set-methods, host-gc-required]
 ---*/
 

@@ -15,10 +15,10 @@ info: |
     ...
     c. Repeat, while index < thisSize,
       i. Let e be resultSetData[index].
-      ii. If e is not EMPTY, then
+      ii. If e is not empty, then
         1. Let inOther be ToBoolean(? Call(otherRec.[[Has]], otherRec.[[SetObject]], « e »)).
         2. If inOther is true, then
-          a. Set resultSetData[index] to EMPTY.
+          a. Set resultSetData[index] to empty.
       iii. Set index to index + 1.
   6. Else,
     a. Let keysIter be ? GetIteratorFromMethod(otherRec.[[SetObject]], otherRec.[[Keys]]).
