@@ -1488,9 +1488,12 @@ impl Interpreter {
                     {
                         return Completion::Throw(e);
                     }
-                    let elem = match obj_get(interp, &o, &i.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
+                    let elem = match interp.numeric_index_fast_get(&o, i as f64) {
+                        Some(v) => v,
+                        None => match obj_get(interp, &o, &i.to_string()) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        },
                     };
                     if !elem.is_nullish()
                         && let Err(e) = interp.append_js_string(&mut units, &elem)

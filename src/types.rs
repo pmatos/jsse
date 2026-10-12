@@ -1154,6 +1154,30 @@ pub(crate) mod number_ops {
         f64::from(to_int32(x) | to_int32(y))
     }
 
+    // Number::toString of an integral value below 1e15 in magnitude (plain
+    // decimal digits; -0 prints "0") as UTF-16 units written into `buf`.
+    // `None` means the caller must take the general path.
+    pub(crate) fn small_integer_units(x: f64, buf: &mut [u16; 16]) -> Option<&[u16]> {
+        if x != x.trunc() || x.abs() >= 1e15 {
+            return None;
+        }
+        let mut i = buf.len();
+        let mut m = x.abs() as u64;
+        loop {
+            i -= 1;
+            buf[i] = b'0' as u16 + (m % 10) as u16;
+            m /= 10;
+            if m == 0 {
+                break;
+            }
+        }
+        if x < 0.0 {
+            i -= 1;
+            buf[i] = b'-' as u16;
+        }
+        Some(&buf[i..])
+    }
+
     pub(crate) fn to_string(x: f64) -> String {
         if x.is_nan() {
             return "NaN".to_string();

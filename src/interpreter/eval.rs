@@ -1555,6 +1555,12 @@ impl Interpreter {
             let s = self.to_js_string(val)?;
             self.append_code_units(out, s.as_units())
         } else {
+            let mut buf = [0u16; 16];
+            if let Some(n) = val.as_number()
+                && let Some(units) = number_ops::small_integer_units(n, &mut buf)
+            {
+                return self.append_code_units(out, units);
+            }
             out.extend(self.to_string_value(val)?.encode_utf16());
             if out.len() > MAX_STRING_LENGTH {
                 return Err(self.invalid_string_length_error());

@@ -48,22 +48,37 @@ fn clamp_index(pos: f64, len: usize) -> usize {
 // §6.1.4.1 StringIndexOf over UTF-16 code units, so lone surrogates only match
 // themselves; `None` is ~not-found~.
 fn string_index_of(s: &[u16], search: &[u16], from: usize) -> Option<usize> {
-    if search.is_empty() {
+    let Some((&first, rest)) = search.split_first() else {
         return (from <= s.len()).then_some(from);
+    };
+    let last_start = s.len().checked_sub(search.len())?;
+    let mut i = from;
+    while i <= last_start {
+        i += s[i..=last_start].iter().position(|&unit| unit == first)?;
+        if s[i + 1..i + search.len()] == *rest {
+            return Some(i);
+        }
+        i += 1;
     }
-    s.get(from..)?
-        .windows(search.len())
-        .position(|window| window == search)
-        .map(|i| i + from)
+    None
 }
 
 // §6.1.4.2 StringLastIndexOf over UTF-16 code units; `from` is clamped to
 // `s.len()` by the caller.
 fn string_last_index_of(s: &[u16], search: &[u16], from: usize) -> Option<usize> {
     let max_start = from.min(s.len().checked_sub(search.len())?);
-    (0..=max_start)
-        .rev()
-        .find(|&i| &s[i..i + search.len()] == search)
+    let Some((&first, rest)) = search.split_first() else {
+        return Some(max_start);
+    };
+    let mut end = max_start + 1;
+    while end > 0 {
+        let i = s[..end].iter().rposition(|&unit| unit == first)?;
+        if s[i + 1..i + search.len()] == *rest {
+            return Some(i);
+        }
+        end = i;
+    }
+    None
 }
 
 // Apply a `&str` transform (case mapping, normalization) to each well-formed
