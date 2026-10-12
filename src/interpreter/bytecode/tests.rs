@@ -2673,70 +2673,101 @@ fn strict_member_call_in_tail_position_returns_through_trampoline() {
     );
 }
 
-/// Decodes a chunk into `(op, operands)` for the ops local-slot compilation
-/// touches; any other op fails the test so the table cannot drift silently.
+/// Byte widths of an op's operands, in order (1 = u8, 2 = u16/i16, 4 = u32).
+fn operand_layout(op: Op) -> &'static [usize] {
+    match op {
+        Op::LoadConst
+        | Op::LoadName
+        | Op::ResolveName
+        | Op::LoadResolvedName
+        | Op::StoreResolvedName
+        | Op::StoreResolvedNamePop
+        | Op::GetProp
+        | Op::SetProp
+        | Op::LoadCalleeName
+        | Op::LoadMethod
+        | Op::Jump
+        | Op::JumpIfFalse
+        | Op::JumpIfTrue
+        | Op::JumpIfTruthyKeep
+        | Op::JumpIfFalsyKeep
+        | Op::JumpIfNotNullishKeep => &[2],
+        Op::UpdateName => &[2, 1],
+        Op::LoadLocal | Op::StoreLocal | Op::StoreLocalPop => &[2, 2],
+        Op::UpdateLocal => &[2, 2, 1],
+        Op::Call | Op::ReturnCall | Op::Construct => &[2, 4],
+        Op::DupN => &[1],
+        Op::BinConst | Op::CmpJumpIfFalse => &[1, 2],
+        Op::LocalBinConst => &[2, 2, 1, 2],
+        _ => &[],
+    }
+}
+
+/// Decodes a whole chunk into `(op, operands)` through the operand-width
+/// table; operand values are widened to u16 (a u32 keeps its low half).
 fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
     let mut out = Vec::new();
     let mut pc = 0;
     while pc < chunk.code.len() {
         let op = Op::from_u8(chunk.code[pc]).expect("valid opcode");
         pc += 1;
-        let u16_at = |at: usize| u16::from(chunk.code[at]) | (u16::from(chunk.code[at + 1]) << 8);
-        let operands = match op {
-            Op::LoadLocal | Op::StoreLocal => vec![u16_at(pc), u16_at(pc + 2)],
-            Op::UpdateLocal => vec![u16_at(pc), u16_at(pc + 2), u16::from(chunk.code[pc + 4])],
-            Op::LoadName
-            | Op::ResolveName
-            | Op::LoadResolvedName
-            | Op::StoreResolvedName
-            | Op::LoadConst => vec![u16_at(pc)],
-            Op::Pop | Op::Add | Op::ReturnUndefined | Op::Safepoint => Vec::new(),
-            other => panic!("unexpected opcode {other:?} in decode_ops"),
-        };
-        pc += match op {
-            Op::LoadLocal | Op::StoreLocal => 4,
-            Op::UpdateLocal => 5,
-            Op::LoadName
-            | Op::ResolveName
-            | Op::LoadResolvedName
-            | Op::StoreResolvedName
-            | Op::LoadConst => 2,
-            _ => 0,
-        };
+        let mut operands = Vec::new();
+        for &width in operand_layout(op) {
+            operands.push(match width {
+                1 => u16::from(chunk.code[pc]),
+                _ => u16::from(chunk.code[pc]) | (u16::from(chunk.code[pc + 1]) << 8),
+            });
+            pc += width;
+        }
         out.push((op, operands));
     }
     out
 }
 
-#[test]
-fn function_body_compiles_frame_names_to_local_slots_and_free_names_by_name() {
+fn compile_function_source(source: &str, params: &[&str]) -> Chunk {
     use super::compiler::{FrameShape, compile_function_body};
     use crate::parser::Parser;
 
-    let mut parser = Parser::new("var c = a + g; g = c; c++; a = 1;").expect("parser init");
+    let mut parser = Parser::new(source).expect("parser init");
     let program = parser.parse_program().expect("parse");
-    let params = vec!["a".to_string()];
-    let chunk = compile_function_body(
+    let params: Vec<String> = params.iter().map(|p| p.to_string()).collect();
+    compile_function_body(
         program.body.as_slice(),
         &FrameShape {
             arguments_slot: false,
             simple_params: &params,
         },
     )
-    .expect("compile");
+    .expect("compile")
+}
+
+/// The chunk's ops without statement-boundary safepoints.
+fn work_ops(chunk: &Chunk) -> Vec<Op> {
+    decode_ops(chunk)
+        .into_iter()
+        .map(|(op, _)| op)
+        .filter(|op| *op != Op::Safepoint)
+        .collect()
+}
+
+#[test]
+fn function_body_compiles_frame_names_to_local_slots_and_free_names_by_name() {
+    let chunk = compile_function_source("var c = a + g; g = c; c++; a = 1;", &["a"]);
     let name = |idx: u16| chunk.names[usize::from(idx)].as_str().to_string();
     let ops: Vec<(Op, Vec<String>)> = decode_ops(&chunk)
         .into_iter()
         .filter(|(op, _)| !matches!(op, Op::Safepoint | Op::Pop))
         .map(|(op, operands)| {
             let shown = match op {
-                Op::LoadLocal | Op::StoreLocal => {
+                Op::LoadLocal | Op::StoreLocal | Op::StoreLocalPop => {
                     vec![name(operands[0]), operands[1].to_string()]
                 }
                 Op::UpdateLocal => vec![name(operands[0]), operands[1].to_string()],
-                Op::LoadName | Op::ResolveName | Op::LoadResolvedName | Op::StoreResolvedName => {
-                    vec![name(operands[0])]
-                }
+                Op::LoadName
+                | Op::ResolveName
+                | Op::LoadResolvedName
+                | Op::StoreResolvedName
+                | Op::StoreResolvedNamePop => vec![name(operands[0])],
                 _ => Vec::new(),
             };
             (op, shown)
@@ -2749,13 +2780,13 @@ fn function_body_compiles_frame_names_to_local_slots_and_free_names_by_name() {
             (Op::LoadLocal, s(&["a", "0"])),
             (Op::LoadName, s(&["g"])),
             (Op::Add, vec![]),
-            (Op::StoreLocal, s(&["c", "1"])),
+            (Op::StoreLocalPop, s(&["c", "1"])),
             (Op::ResolveName, s(&["g"])),
             (Op::LoadLocal, s(&["c", "1"])),
-            (Op::StoreResolvedName, s(&["g"])),
+            (Op::StoreResolvedNamePop, s(&["g"])),
             (Op::UpdateLocal, s(&["c", "1"])),
             (Op::LoadConst, vec![]),
-            (Op::StoreLocal, s(&["a", "0"])),
+            (Op::StoreLocalPop, s(&["a", "0"])),
             (Op::ReturnUndefined, vec![]),
         ]
     );
@@ -2763,22 +2794,20 @@ fn function_body_compiles_frame_names_to_local_slots_and_free_names_by_name() {
 
 #[test]
 fn function_body_without_frame_names_keeps_by_name_ops() {
-    use super::compiler::{FrameShape, compile_function_body};
-    use crate::parser::Parser;
-
-    let mut parser = Parser::new("g = h + 1;").expect("parser init");
-    let program = parser.parse_program().expect("parse");
-    let chunk = compile_function_body(
-        program.body.as_slice(),
-        &FrameShape {
-            arguments_slot: false,
-            simple_params: &[],
-        },
-    )
-    .expect("compile");
-    let ops: Vec<Op> = decode_ops(&chunk).into_iter().map(|(op, _)| op).collect();
+    let chunk = compile_function_source("g = h + 1;", &[]);
+    let ops = work_ops(&chunk);
     assert!(ops.contains(&Op::ResolveName));
-    assert!(ops.contains(&Op::StoreResolvedName));
+    assert!(ops.contains(&Op::StoreResolvedNamePop));
+    assert!(!ops.contains(&Op::StoreLocal));
+    assert!(!ops.contains(&Op::StoreLocalPop));
+}
+
+#[test]
+fn statement_assignment_to_local_fuses_store_and_pop() {
+    let chunk = compile_function_source("var c = a + 1; c = c + 2;", &["a"]);
+    let ops = work_ops(&chunk);
+    assert_eq!(ops.iter().filter(|op| **op == Op::StoreLocalPop).count(), 2);
+    assert!(!ops.contains(&Op::Pop));
     assert!(!ops.contains(&Op::StoreLocal));
 }
 
@@ -3038,4 +3067,318 @@ fn jump_offset_overflow_in_one_statement_falls_back_for_that_statement_only() {
     assert!(count >= 1, "function must still compile to bytecode");
     assert_eq!(v.as_number(), ast_v.as_number());
     assert_eq!(v.as_number(), Some(3999.0 + 6.0));
+}
+
+#[test]
+fn statement_assignment_to_free_name_resolves_before_rhs() {
+    let chunk = compile_function_source("g = f();", &[]);
+    assert_eq!(
+        work_ops(&chunk),
+        vec![
+            Op::ResolveName,
+            Op::LoadCalleeName,
+            Op::Call,
+            Op::StoreResolvedNamePop,
+            Op::ReturnUndefined,
+        ]
+    );
+}
+
+#[test]
+fn value_context_assignment_keeps_unfused_store() {
+    let chunk = compile_function_source("var c = 0; var y = (c = 1);", &["a"]);
+    let ops = work_ops(&chunk);
+    assert!(
+        ops.contains(&Op::StoreLocal),
+        "inner c = 1 pushes its value"
+    );
+    assert!(ops.contains(&Op::StoreLocalPop), "the declarator discards");
+}
+
+#[test]
+fn script_goal_expression_statement_keeps_completion_value() {
+    use crate::parser::Parser;
+    let mut parser = Parser::new("x = 1;").expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let chunk = compile_script_body(program.body.as_slice()).expect("compile");
+    let ops = work_ops(&chunk);
+    assert!(ops.contains(&Op::SetCompletion));
+    assert!(ops.contains(&Op::StoreResolvedName));
+    assert!(!ops.contains(&Op::StoreResolvedNamePop));
+}
+
+#[test]
+fn comma_statement_discards_each_element() {
+    let chunk = compile_function_source("a = 1, b = 2, a + b;", &["a", "b"]);
+    let ops = work_ops(&chunk);
+    assert_eq!(ops.iter().filter(|op| **op == Op::StoreLocalPop).count(), 2);
+    assert_eq!(ops.iter().filter(|op| **op == Op::Pop).count(), 1);
+}
+
+#[test]
+fn statement_update_of_local_discards_its_result() {
+    let chunk = compile_function_source("i++; --i; var j = i++;", &["i"]);
+    let modes: Vec<u16> = decode_ops(&chunk)
+        .into_iter()
+        .filter(|(op, _)| *op == Op::UpdateLocal)
+        .map(|(_, operands)| operands[2])
+        .collect();
+    // i++ (post inc, discard), --i (pre dec, discard), i++ in value context.
+    assert_eq!(modes, vec![0b100, 0b111, 0]);
+    assert!(!work_ops(&chunk).contains(&Op::Pop));
+}
+
+#[test]
+fn for_loop_update_has_no_pop() {
+    let chunk = compile_function_source("for (var i = 0; i < n; i++) {}", &["n"]);
+    let ops = work_ops(&chunk);
+    assert!(!ops.contains(&Op::Pop));
+    assert!(ops.contains(&Op::CmpJumpIfFalse));
+}
+
+#[test]
+fn binary_with_number_literal_rhs_folds_the_constant() {
+    let chunk = compile_function_source("var r = x | 0; var s = y & 65535;", &["y"]);
+    let ops = work_ops(&chunk);
+    assert!(ops.contains(&Op::BinConst), "free name lhs");
+    assert!(ops.contains(&Op::LocalBinConst), "frame local lhs");
+    assert!(!ops.contains(&Op::LoadConst));
+    assert!(!ops.contains(&Op::BitOr) && !ops.contains(&Op::BitAnd));
+}
+
+#[test]
+fn compound_assignment_with_number_literal_folds_the_constant() {
+    let chunk = compile_function_source("c += 1; g *= 2; c -= d;", &["c", "d"]);
+    assert_eq!(
+        work_ops(&chunk),
+        vec![
+            Op::LocalBinConst,
+            Op::StoreLocalPop,
+            Op::ResolveName,
+            Op::LoadResolvedName,
+            Op::BinConst,
+            Op::StoreResolvedNamePop,
+            Op::LoadLocal,
+            Op::LoadLocal,
+            Op::Sub,
+            Op::StoreLocalPop,
+            Op::ReturnUndefined,
+        ]
+    );
+}
+
+#[test]
+fn binary_with_non_literal_rhs_stays_generic() {
+    let chunk = compile_function_source("var r = x + 's'; var t = x + y; var u = x - -1;", &[]);
+    let ops = work_ops(&chunk);
+    assert!(!ops.contains(&Op::BinConst));
+    assert!(!ops.contains(&Op::LocalBinConst));
+    assert!(ops.contains(&Op::Add));
+    assert!(ops.contains(&Op::Sub));
+}
+
+#[test]
+fn comparison_in_branch_compiles_to_cmp_jump() {
+    for source in [
+        "if (a < b) { c = 1; }",
+        "while (a < b) { c = 1; }",
+        "for (;a <= b;) { c = 1; }",
+        "do { c = 1; } while (a > b);",
+        "c = a >= b ? 1 : 2;",
+        "if (a === b) { c = 1; }",
+    ] {
+        let chunk = compile_function_source(source, &[]);
+        let ops = work_ops(&chunk);
+        assert!(ops.contains(&Op::CmpJumpIfFalse), "{source}");
+        assert!(!ops.contains(&Op::JumpIfFalse), "{source}");
+    }
+}
+
+#[test]
+fn comparison_in_value_context_stays_unfused() {
+    let chunk = compile_function_source("var t = a < b;", &[]);
+    let ops = work_ops(&chunk);
+    assert!(ops.contains(&Op::Lt));
+    assert!(!ops.contains(&Op::CmpJumpIfFalse));
+}
+
+#[test]
+fn local_compared_with_literal_branches_through_local_bin_const() {
+    let chunk = compile_function_source("for (var i = 0; i < 10; i++) {}", &[]);
+    let ops = work_ops(&chunk);
+    assert!(ops.contains(&Op::LocalBinConst));
+    assert!(ops.contains(&Op::JumpIfFalse));
+    assert!(!ops.contains(&Op::CmpJumpIfFalse));
+}
+
+/// The `arith` loop of `benchmarks/scripts/bench_opmix.js` must stay within
+/// 25 dispatched ops per iteration (issue #903; 43 before fusion).
+#[test]
+fn opmix_arith_loop_body_is_at_most_25_ops() {
+    let chunk = compile_function_source(
+        "var r0 = 0, r1 = 1, r2 = 2;
+        for (var i = 0; i < n; i++) {
+            r0 = (r0 + 4) | 0;
+            r1 = (r0 + r1) | 0;
+            r1 = r1 & 65535;
+            r2 = r1 >> 2;
+            r0 = (r2 + r0) | 0;
+            r0 = r0 & 65535;
+        }",
+        &["n"],
+    );
+    let decoded = decode_ops(&chunk);
+    let loop_start = decoded
+        .iter()
+        .position(|(op, _)| *op == Op::LocalBinConst)
+        .expect("loop test");
+    let back_jump = decoded
+        .iter()
+        .rposition(|(op, _)| *op == Op::Jump)
+        .expect("back edge");
+    let per_iteration = decoded[loop_start..=back_jump]
+        .iter()
+        .filter(|(op, _)| *op != Op::Safepoint)
+        .count();
+    assert!(
+        per_iteration <= 25,
+        "arith loop dispatches {per_iteration} ops per iteration"
+    );
+}
+
+#[test]
+fn effect_context_forms_match_tree_walker() {
+    assert_parity_number(
+        "var __r = (function(a, b){ a += b; a -= 1; a <<= 2; b = a, a = b + 1, a++; return a + b; })(5, 3);",
+        {
+            let (mut a, mut b) = (5i32, 3i32);
+            a += b;
+            a -= 1;
+            a <<= 2;
+            b = a;
+            a = b + 1;
+            a += 1;
+            f64::from(a + b)
+        },
+    );
+    assert_parity_number(
+        "var __r = (function(n){ var s = 0; for (var i = 0, j = 10; i < n; i = i + 2, j--) { s = s + i * j; } return s; })(9);",
+        (0..9)
+            .step_by(2)
+            .enumerate()
+            .map(|(k, i)| (i * (10 - k)) as f64)
+            .sum::<f64>(),
+    );
+}
+
+#[test]
+fn update_discard_coerces_like_value_context() {
+    // Objects and BigInts are not compilable literals, so the function reads
+    // them as free names.
+    assert_parity_number(
+        "var o = { n: 0, valueOf() { this.n++; return 3; } }; var big = 1n; \
+         var __r = (function(){ var s = '5'; s++; o++; big++; big--; return s + o + o * 0; })() + o * 0 + 0;",
+        // s -> 6, o -> 4 (valueOf ran once), big stays 1n: 6 + 4 + 0.
+        10.0,
+    );
+}
+
+#[test]
+fn number_binary_ops_match_tree_walker_on_edge_values() {
+    let ops = [
+        "+", "-", "*", "/", "%", "**", "<<", ">>", ">>>", "&", "|", "^", "<", ">", "<=", ">=",
+        "==", "!=", "===", "!==",
+    ];
+    let values = [
+        "0",
+        "-0",
+        "1",
+        "-1",
+        "2147483648",
+        "4294967296",
+        "1e21",
+        "NaN",
+        "Infinity",
+        "0.5",
+    ];
+    for op in ops {
+        let mut body = String::from("var acc = ''; ");
+        for l in values {
+            for r in values {
+                body.push_str(&format!(
+                    "var v = ({l}) {op} ({r}); \
+                     var w = (function(a, b){{ return a {op} b; }})({l}, {r}); \
+                     acc += (Object.is(v, w) ? '' : '!') + (Object.is(v, -0) ? '-0' : String(v)) + ','; "
+                ));
+            }
+        }
+        let source = format!("var __r = (function(){{ {body} return acc; }})();");
+        let (ast_v, _) = eval_with_mode(&source, false);
+        let (bc_v, bc_count) = eval_with_mode(&source, true);
+        assert!(bc_count >= 1, "{op}: must run on the VM");
+        let text = |v: &JsValue| v.as_string().map(|s| s.to_string());
+        let (ast, bc) = (text(&ast_v), text(&bc_v));
+        assert!(ast.is_some(), "{op}: tree-walker produced no string");
+        assert_eq!(ast, bc, "{op}");
+        assert!(
+            !bc.unwrap().contains('!'),
+            "{op}: literal-folded and call forms disagreed"
+        );
+    }
+}
+
+#[test]
+fn compare_branches_match_tree_walker_on_mixed_operands() {
+    let source = "var __r = (function(){
+        var log = '';
+        var o = { valueOf() { log += 'o'; return 2; } };
+        var p = { valueOf() { log += 'p'; return 1; } };
+        var n = 0;
+        if (o > p) n += 1;
+        if (o < p) n += 10;
+        if (o <= p) n += 100;
+        if (o >= p) n += 1000;
+        if (NaN < 1) n += 10000;
+        if (!(NaN >= 1)) n += 100000;
+        if ('10' < 9) n += 1000000;
+        if (1n < 2) n += 10000000;
+        if (null == undefined) n += 100000000;
+        return n + log.length;
+    })();";
+    let (ast_v, _) = eval_with_mode(source, false);
+    let (bc_v, bc_count) = eval_with_mode(source, true);
+    assert!(bc_count >= 1);
+    assert_eq!(ast_v.as_number(), bc_v.as_number());
+    assert_eq!(bc_v.as_number(), Some(110101001.0 + 8.0));
+}
+
+/// An operand byte can equal a return opcode (a slot or name index in 512..1024
+/// has a high byte of 2 or 3); the trailing-return check must look at the last
+/// *opcode*, not the last byte (issue #903 review).
+#[test]
+fn wide_operand_final_statement_still_ends_in_return() {
+    for target in [512usize, 700, 800, 1023] {
+        let mut source = String::new();
+        for i in 0..=target {
+            source.push_str(&format!("var v{i}; "));
+        }
+        source.push_str(&format!("v{target} = 1;"));
+        let chunk = compile_function_source(&source, &[]);
+        assert_eq!(
+            work_ops(&chunk).last(),
+            Some(&Op::ReturnUndefined),
+            "slot {target}"
+        );
+        let free = format!("g{target} = 1;");
+        let mut names = String::new();
+        for i in 0..target {
+            names.push_str(&format!("g{i} = 0; "));
+        }
+        let chunk = compile_function_source(&format!("{names}{free}"), &[]);
+        assert_eq!(
+            work_ops(&chunk).last(),
+            Some(&Op::ReturnUndefined),
+            "name {target}"
+        );
+    }
 }

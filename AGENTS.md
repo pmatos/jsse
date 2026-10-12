@@ -123,8 +123,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   disagree by an order of magnitude on real code, see
   `docs/perf/2026-08-26/mandreel-bytecode-work-share.md`.
 - `local_slot_hits` / `local_slot_misses` count `LoadLocal`/`StoreLocal`/
-  `UpdateLocal` executions whose slot hint matched or fell back to by-name
-  resolution; `atom_intern_calls` / `atom_lookup_calls` count entries into the
+  `StoreLocalPop`/`UpdateLocal`/`LocalBinConst` executions whose slot hint
+  matched or fell back to by-name resolution; `atom_intern_calls` / `atom_lookup_calls` count entries into the
   hashing identifier interner. A call path that is free of identifier hashing
   keeps the two atom counters flat as the call count grows
   (`tests/perf_counters_env_hashing.rs`).

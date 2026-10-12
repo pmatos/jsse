@@ -1,3 +1,7 @@
+/// Bit 2 of the `UpdateName`/`UpdateLocal` mode byte: effect context, the
+/// updated value is not pushed.
+pub(crate) const UPDATE_DISCARD: u8 = 0b100;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Op {
@@ -43,6 +47,9 @@ pub(crate) enum Op {
     ResolveName = 39,
     LoadResolvedName = 40,
     StoreResolvedName = 41,
+    /// `++`/`--` on a name. Operands: name (u16), mode (u8): bits 0-1 select
+    /// post-inc, pre-inc, post-dec, pre-dec; bit 2 means the result is
+    /// discarded (not pushed).
     UpdateName = 42,
     GetProp = 43,
     SetProp = 44,
@@ -105,6 +112,24 @@ pub(crate) enum Op {
     /// binding in the current environment (InitializeBinding, 9.1.1.1.4).
     /// Operands: name (u16), kind (u8: 0 = let, 1 = const).
     InitLexical = 71,
+    /// `StoreLocal` in effect context: the stored value is popped afterwards
+    /// (it stays rooted on the operand stack through the store, which can
+    /// reach a setter and a safepoint). Same operands as `StoreLocal`.
+    StoreLocalPop = 72,
+    /// `StoreResolvedName` in effect context: pops the reference, stores, then
+    /// pops the value. `ResolveName` is still emitted before the right-hand
+    /// side, so the reference is created first (spec order).
+    StoreResolvedNamePop = 73,
+    /// `[..., l]` → `[..., l op K]` for a number literal `K`. Operands: binary
+    /// op (u8, the `Op` byte of one of the 20 binary ops), constant (u16).
+    BinConst = 74,
+    /// `[..., l, r]` → `[...]`, jumping when `l cmp r` is false. Operands:
+    /// comparison (u8, the `Op` byte of `Eq`..`GtEq`), offset (i16, last so
+    /// `patch_jump` applies unchanged).
+    CmpJumpIfFalse = 75,
+    /// Exactly `LoadLocal` followed by `BinConst`. Operands: name (u16), slot
+    /// hint (u16), binary op (u8), constant (u16).
+    LocalBinConst = 76,
 }
 
 impl Op {
@@ -182,6 +207,11 @@ impl Op {
             69 => Some(Op::EvalAst),
             70 => Some(Op::ExecAst),
             71 => Some(Op::InitLexical),
+            72 => Some(Op::StoreLocalPop),
+            73 => Some(Op::StoreResolvedNamePop),
+            74 => Some(Op::BinConst),
+            75 => Some(Op::CmpJumpIfFalse),
+            76 => Some(Op::LocalBinConst),
             _ => None,
         }
     }

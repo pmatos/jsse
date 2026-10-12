@@ -56,6 +56,14 @@ _Avoid_: symbol, interned string, name key.
 The slot operand of the `LoadLocal`/`StoreLocal`/`UpdateLocal` bytecode ops: the expected position of a frame-local name in the call's `BindingMap`. It is verified by atom identity on every execution and falls back to by-name resolution on a miss, so it can be wrong without being unsound. See ADR-2026-10-12-0900.
 _Avoid_: register, frame offset, resolved slot.
 
+**Effect Context**:
+A position in compiled bytecode where an expression's value is discarded: a function-goal expression statement, a `for` initialiser or update, a `var` initialiser, a non-final comma element, a `void` operand. `Compiler::compile_effect` lowers it, fusing the discard into the producing op (`StoreLocalPop`, `StoreResolvedNamePop`, the discard bit of `UpdateLocal`/`UpdateName`) instead of a trailing `Pop`. A Script-goal expression statement is *not* effect context: its value is the completion value. See ADR-2026-10-12-1200.
+_Avoid_: statement context, void context, dead value.
+
+**Fused Op**:
+A bytecode op that is exactly the concatenation of two or three ordinary ops and nothing more (`BinConst`, `LocalBinConst`, `CmpJumpIfFalse`, `StoreLocalPop`): same operand roots, same evaluation order, same errors, one dispatch. A fused op never reorders reference resolution before the right-hand side. See ADR-2026-10-12-1200.
+_Avoid_: superinstruction, macro op, peephole op.
+
 **Bail Reason**:
 The static label a compile attempt carries when it does not produce a whole-body chunk: `CompileError::Unsupported` (this node has no lowering; in Function goal it becomes an AST Fallback) or `CompileError::Ineligible` (the whole body stays on the tree-walker). The counters build's `BAIL` table counts Ineligible bodies and `FALLBACK` counts hand-off nodes, per label. See ADR-2026-10-12-2214.
 _Avoid_: bail code, unsupported flag.

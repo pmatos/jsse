@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 /// Widest opcode discriminant plus one. The assertion below fails to compile
 /// if a new opcode outgrows the histogram.
-const OP_SLOTS: usize = 80;
+const OP_SLOTS: usize = 128;
 
 /// Identity of an attributed body: its display name plus the function object it
 /// came from. Two distinct functions can share a name, and keying on the name
@@ -30,7 +30,7 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
 /// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::InitLexical as usize) < OP_SLOTS);
+const _: () = assert!((Op::LocalBinConst as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.
@@ -70,8 +70,9 @@ pub(crate) struct PerfCounters {
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
     pub(crate) gc_nanos: u128,
-    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`UpdateLocal`) whose slot hint
-    /// matched, and those that fell back to by-name resolution (#898).
+    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`StoreLocalPop`/`UpdateLocal`/
+    /// `LocalBinConst`) whose slot hint matched, and those that fell back to
+    /// by-name resolution (#898).
     pub(crate) local_slot_hits: u64,
     pub(crate) local_slot_misses: u64,
     /// Dynamic `EvalAst`/`ExecAst` executions: nodes a compiled body handed
