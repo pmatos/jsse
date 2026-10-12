@@ -662,16 +662,53 @@ impl RegexInput {
     }
 }
 
-fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
-    if let Some(cached) = interp.regexp_legacy.input_cache.as_ref()
-        && cached.subject.ptr_eq(&subject)
-    {
-        return Rc::clone(cached);
-    }
+/// Recently converted subjects, keyed by `JsString` identity.
+///
+/// A scanner alternates one long subject with many short ones (`/\s/.test(ch)`
+/// between sticky `exec`s of the whole source). A single entry reconverts the
+/// long subject after every short call, so subjects of at least
+/// [`SUBJECT_CACHE_MIN_UNITS`] code units live in a small LRU that short ones
+/// never enter, and short subjects share one slot of their own.
+#[derive(Default)]
+pub(crate) struct SubjectCache {
+    large: Vec<Rc<RegexInput>>,
+    small: Option<Rc<RegexInput>>,
+}
 
-    let input = Rc::new(RegexInput::new(subject));
-    interp.regexp_legacy.input_cache = Some(Rc::clone(&input));
-    input
+const SUBJECT_CACHE_MIN_UNITS: usize = 256;
+const SUBJECT_CACHE_LARGE_ENTRIES: usize = 4;
+
+impl SubjectCache {
+    fn lookup_or_insert(&mut self, subject: JsString) -> Rc<RegexInput> {
+        if subject.len() < SUBJECT_CACHE_MIN_UNITS {
+            if let Some(cached) = &self.small
+                && cached.subject.ptr_eq(&subject)
+            {
+                return Rc::clone(cached);
+            }
+            let input = Rc::new(RegexInput::new(subject));
+            self.small = Some(Rc::clone(&input));
+            return input;
+        }
+        if let Some(index) = self
+            .large
+            .iter()
+            .position(|cached| cached.subject.ptr_eq(&subject))
+        {
+            self.large[..=index].rotate_right(1);
+            return Rc::clone(&self.large[0]);
+        }
+        let input = Rc::new(RegexInput::new(subject));
+        if self.large.len() == SUBJECT_CACHE_LARGE_ENTRIES {
+            self.large.pop();
+        }
+        self.large.insert(0, Rc::clone(&input));
+        input
+    }
+}
+
+fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
+    interp.regexp_legacy.input_cache.lookup_or_insert(subject)
 }
 
 fn regex_input_for_value(
@@ -5142,8 +5179,11 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
 
 enum CompiledRegex {
     Fancy(fancy_regex::Regex),
-    Standard(regex::Regex),
-    Bytes(regex::bytes::Regex),
+    /// The `regex` crate's default configuration, built through the meta
+    /// engine directly so a search can be anchored at its start offset.
+    Standard(regex_automata::meta::Regex),
+    /// Matches over WTF-8 bytes (`\p{Cs}`/`\p{Co}` patterns).
+    Bytes(regex_automata::meta::Regex),
     FancyWithCustomLookbehind {
         outer_regex: fancy_regex::Regex,
         lookbehinds: Vec<super::regexp_lookbehind::LookbehindInfo>,
@@ -5182,8 +5222,8 @@ pub(crate) struct RegexpLegacyState {
     right_context_start: usize,
     pub(crate) parens: [JsString; 9],
     pub(crate) constructor_id: Option<u64>,
-    pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
-    input_cache: Option<Rc<RegexInput>>,
+    pub(crate) regex_cache: RegexCache,
+    input_cache: SubjectCache,
 }
 
 pub(crate) struct CachedRegex {
@@ -5191,17 +5231,68 @@ pub(crate) struct CachedRegex {
     dup_map: DupGroupMap,
     name_order: Vec<String>,
     total_groups: usize,
+    /// The capture-reset tables are a pure function of the pattern source, so
+    /// they are derived once per compiled regex rather than rescanned on every
+    /// successful match.
+    quantifier_resets: std::cell::OnceCell<QuantifierResets>,
+}
+
+impl CachedRegex {
+    fn quantifier_resets(&self, source: &str) -> &QuantifierResets {
+        self.quantifier_resets
+            .get_or_init(|| build_quantified_parent_map(source))
+    }
+}
+
+/// What a match is run with: the compiled matcher plus everything `exec` would
+/// otherwise decode from the slot's source and flags strings on every call.
+pub(crate) struct ExecPlan {
+    pattern: String,
+    cached: Rc<CachedRegex>,
+    global: bool,
+    sticky: bool,
+    has_indices: bool,
+    unicode: bool,
 }
 
 const REGEX_CACHE_MAX: usize = 256;
+
+/// Compiled regexes keyed by `(flags, source)`. Two levels so a lookup borrows
+/// both strings instead of allocating an owned key per call.
+#[derive(Default)]
+pub(crate) struct RegexCache {
+    by_flags: HashMap<String, HashMap<String, Rc<CachedRegex>>>,
+    len: usize,
+}
+
+impl RegexCache {
+    fn get(&self, source: &str, flags: &str) -> Option<&Rc<CachedRegex>> {
+        self.by_flags.get(flags)?.get(source)
+    }
+
+    fn insert(&mut self, source: &str, flags: &str, entry: Rc<CachedRegex>) {
+        if self.len >= REGEX_CACHE_MAX {
+            self.by_flags.clear();
+            self.len = 0;
+        }
+        if self
+            .by_flags
+            .entry(flags.to_string())
+            .or_default()
+            .insert(source.to_string(), entry)
+            .is_none()
+        {
+            self.len += 1;
+        }
+    }
+}
 
 fn build_regex_cached(
     interp: &mut Interpreter,
     source: &str,
     flags: &str,
 ) -> Result<std::rc::Rc<CachedRegex>, String> {
-    let key = (source.to_string(), flags.to_string());
-    if let Some(cached) = interp.regexp_legacy.regex_cache.get(&key) {
+    if let Some(cached) = interp.regexp_legacy.regex_cache.get(source, flags) {
         return Ok(std::rc::Rc::clone(cached));
     }
     let (compiled, dup_map, name_order) = build_regex_ex(source, flags)?;
@@ -5210,15 +5301,45 @@ fn build_regex_cached(
         dup_map,
         name_order,
         total_groups: count_capture_groups(source),
+        quantifier_resets: std::cell::OnceCell::new(),
     });
-    if interp.regexp_legacy.regex_cache.len() >= REGEX_CACHE_MAX {
-        interp.regexp_legacy.regex_cache.clear();
-    }
     interp
         .regexp_legacy
         .regex_cache
-        .insert(key, std::rc::Rc::clone(&entry));
+        .insert(source, flags, std::rc::Rc::clone(&entry));
     Ok(entry)
+}
+
+/// The [`ExecPlan`] for a RegExp object, building and memoizing it on the slot
+/// the first time. `None` when the object has no RegExp slot or its pattern no
+/// longer compiles.
+fn exec_plan_for(interp: &mut Interpreter, obj_id: u64) -> Option<Rc<ExecPlan>> {
+    let obj = interp.get_object_cell(obj_id)?.clone();
+    let (pattern, flags) = {
+        let b = obj.borrow();
+        let r = b.regexp()?;
+        if let Some(plan) = r.exec_plan.0.get() {
+            return Some(Rc::clone(plan));
+        }
+        let flags = r.flags.to_rust_string();
+        (
+            js_string_to_regex_pattern(r.source.as_units(), &flags),
+            flags,
+        )
+    };
+    let cached = build_regex_cached(interp, &pattern, &flags).ok()?;
+    let plan = Rc::new(ExecPlan {
+        global: flags.contains('g'),
+        sticky: flags.contains('y'),
+        has_indices: flags.contains('d'),
+        unicode: flags.contains('u') || flags.contains('v'),
+        pattern,
+        cached,
+    });
+    if let Some(r) = obj.borrow().regexp() {
+        let _ = r.exec_plan.0.set(Rc::clone(&plan));
+    }
+    Some(plan)
 }
 
 struct RegexMatch {
@@ -5299,14 +5420,20 @@ fn strip_renamed_qi_captures(caps: &mut RegexCaptures) {
     }
 }
 
+type QuantifierResets = (
+    Vec<(usize, usize)>,
+    Vec<usize>,
+    Vec<usize>,
+    Vec<Vec<Vec<usize>>>,
+);
+
 /// Reset captures from groups inside quantifiers per ES spec §22.2.2.5.1 RepeatMatcher steps 3-4.
 /// When a quantified group iterates multiple times, captures from inner groups that don't
 /// participate in the final iteration must be reset to undefined.
-fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
-    let (parent_map, zero_width_clears, self_quantified_min_zero, nc_quantified_branches) =
-        build_quantified_parent_map(source);
+fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, resets: &QuantifierResets) {
+    let (parent_map, zero_width_clears, self_quantified_min_zero, nc_quantified_branches) = resets;
     // Handle standard case: child capture outside parent capture bounds
-    for (child_group, parent_group) in &parent_map {
+    for (child_group, parent_group) in parent_map {
         let child_idx = *child_group;
         let parent_idx = *parent_group;
         if child_idx >= caps.groups.len() || parent_idx >= caps.groups.len() {
@@ -5323,7 +5450,7 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
     // Per spec §22.2.2.5.1 RepeatMatcher: captures are cleared at the start of each iteration.
     // The Rust regex engine doesn't do this, so we detect which alternation branch matched
     // in the last iteration and clear captures from all other branches.
-    for branches in &nc_quantified_branches {
+    for branches in nc_quantified_branches {
         // Find which branch has the highest max_end → that branch matched in the last iteration
         let mut best_branch_idx = None;
         let mut best_max_end: usize = 0;
@@ -5355,7 +5482,7 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
     // matches empty string, it returns failure. For groups containing only
     // zero-width assertions, every iteration matches empty, so inner captures
     // must always be cleared.
-    for child_idx in &zero_width_clears {
+    for child_idx in zero_width_clears {
         if *child_idx < caps.groups.len() {
             caps.groups[*child_idx] = None;
         }
@@ -5365,7 +5492,7 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
     // matched empty, the quantifier succeeds without consuming and the capture
     // should be undefined. The regex crate reports these as Some("") matches
     // but ES spec requires undefined.
-    for cap_idx in &self_quantified_min_zero {
+    for cap_idx in self_quantified_min_zero {
         if *cap_idx < caps.groups.len()
             && let Some(ref m) = caps.groups[*cap_idx]
             && m.start == m.end
@@ -5382,14 +5509,7 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
 /// - parent_map: Vec<(child_capture, parent_capture)> for bounds-based clearing
 /// - zero_width_clears: Vec<child_capture> for captures inside zero-width
 ///   quantified groups with min=0 that must always be cleared
-fn build_quantified_parent_map(
-    source: &str,
-) -> (
-    Vec<(usize, usize)>,
-    Vec<usize>,
-    Vec<usize>,
-    Vec<Vec<Vec<usize>>>,
-) {
+fn build_quantified_parent_map(source: &str) -> QuantifierResets {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut result = Vec::new();
@@ -7404,9 +7524,8 @@ fn build_regex_ex_with_nullable_state(
     let name_order = tr.group_name_order;
 
     if tr.needs_bytes_mode {
-        return regex::bytes::Regex::new(&tr.pattern)
-            .map(|r| (CompiledRegex::Bytes(r), dup_map, name_order))
-            .map_err(|e| e.to_string());
+        return build_meta_regex(&tr.pattern, true)
+            .map(|r| (CompiledRegex::Bytes(r), dup_map, name_order));
     }
 
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
@@ -7417,7 +7536,7 @@ fn build_regex_ex_with_nullable_state(
         return Ok(result);
     }
 
-    if let Ok(r) = regex::Regex::new(&tr.pattern) {
+    if let Ok(r) = build_meta_regex(&tr.pattern, false) {
         return Ok((CompiledRegex::Standard(r), dup_map, name_order));
     }
 
@@ -7445,9 +7564,8 @@ fn build_regex_ex_with_nullable_state(
             if retry_without_sentinels {
                 return build_regex_ex_with_nullable_state(original_source, flags, false);
             }
-            regex::Regex::new(&tr.pattern)
+            build_meta_regex(&tr.pattern, false)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
-                .map_err(|e| e.to_string())
         }
     }
 }
@@ -7554,20 +7672,41 @@ fn ensure_capture_slots(caps: &mut RegexCaptures, total_groups: usize) {
     }
 }
 
-fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
+/// Match `re` against `text` from byte offset `pos`. With `anchored` the match
+/// must start exactly at `pos`, which is what a sticky RegExp needs; without it
+/// the leftmost match at or after `pos` wins.
+///
+/// Most matchers honour `anchored` by trying no later start. The custom
+/// lookbehind matcher cannot, so the contract is enforced here: an anchored
+/// result that starts elsewhere is no match.
+fn regex_captures_at(
+    re: &CompiledRegex,
+    text: &str,
+    pos: usize,
+    anchored: bool,
+) -> Option<RegexCaptures> {
+    let caps = search_captures_at(re, text, pos, anchored)?;
+    if anchored && caps.get(0).is_none_or(|m| m.start != pos) {
+        return None;
+    }
+    Some(caps)
+}
+
+fn search_captures_at(
+    re: &CompiledRegex,
+    text: &str,
+    pos: usize,
+    anchored: bool,
+) -> Option<RegexCaptures> {
     match re {
         CompiledRegex::Fancy(r) => {
-            let caps = r.captures_from_pos(text, pos).ok()??;
+            let input = fancy_regex::RegexInput::new(text)
+                .from_pos(pos)
+                .anchored(anchored);
+            let caps = r.captures_input(input).ok()??;
             build_captures!(caps, r.capture_names())
         }
-        CompiledRegex::Standard(r) => {
-            let caps = if pos == 0 {
-                r.captures(text)?
-            } else {
-                r.captures_at(text, pos)?
-            };
-            build_captures!(caps, r.capture_names())
-        }
+        CompiledRegex::Standard(r) => meta_captures_at(r, text.as_bytes(), pos, anchored),
         CompiledRegex::FancyWithCustomLookbehind {
             outer_regex,
             lookbehinds,
@@ -7648,27 +7787,72 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
 }
 
 fn bytes_regex_captures_at(
-    re: &regex::bytes::Regex,
+    re: &regex_automata::meta::Regex,
     input: &[u8],
     pos: usize,
+    anchored: bool,
 ) -> Option<RegexCaptures> {
-    let caps = if pos == 0 {
-        re.captures(input)?
-    } else {
-        re.captures_at(input, pos)?
-    };
-    let names: Vec<Option<String>> = re
-        .capture_names()
-        .map(|n| n.map(|s| s.to_string()))
-        .collect();
-    let mut groups = Vec::new();
-    for i in 0..caps.len() {
-        groups.push(caps.get(i).map(|m| RegexMatch {
-            start: m.start(),
-            end: m.end(),
-        }));
+    meta_captures_at(re, input, pos, anchored)
+}
+
+fn meta_captures_at(
+    re: &regex_automata::meta::Regex,
+    haystack: &[u8],
+    pos: usize,
+    anchored: bool,
+) -> Option<RegexCaptures> {
+    use regex_automata::{Anchored, Input, PatternID};
+    let mut input = Input::new(haystack).span(pos..haystack.len());
+    if anchored {
+        input = input.anchored(Anchored::Yes);
     }
+    let mut caps = re.create_captures();
+    re.search_captures(&input, &mut caps);
+    if !caps.is_match() {
+        return None;
+    }
+    let names: Vec<Option<String>> = re
+        .group_info()
+        .pattern_names(PatternID::ZERO)
+        .map(|n| n.map(str::to_string))
+        .collect();
+    let groups = (0..caps.group_len())
+        .map(|i| {
+            caps.get_group(i).map(|span| RegexMatch {
+                start: span.start,
+                end: span.end,
+            })
+        })
+        .collect();
     Some(RegexCaptures { groups, names })
+}
+
+/// Build with the `regex` crate's default limits and leftmost-first semantics.
+/// `bytes` selects its byte-oriented flavour, where a match need not be UTF-8.
+fn build_meta_regex(pattern: &str, bytes: bool) -> Result<regex_automata::meta::Regex, String> {
+    use regex_automata::{MatchKind, meta, util::syntax};
+    let metac = meta::Config::new()
+        .nfa_size_limit(Some(10 * (1 << 20)))
+        .hybrid_cache_capacity(2 * (1 << 20))
+        .match_kind(MatchKind::LeftmostFirst)
+        .utf8_empty(!bytes);
+    let syntaxc = syntax::Config::default().utf8(!bytes);
+    meta::Builder::new()
+        .configure(metac)
+        .syntax(syntaxc)
+        .build(pattern)
+        .map_err(|meta_err| {
+            // Keep the `regex` crate's diagnostics: they surface verbatim in
+            // the SyntaxError message.
+            let regex_err = if bytes {
+                regex::bytes::Regex::new(pattern)
+                    .err()
+                    .map(|e| e.to_string())
+            } else {
+                regex::Regex::new(pattern).err().map(|e| e.to_string())
+            };
+            regex_err.unwrap_or_else(|| meta_err.to_string())
+        })
 }
 
 fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
@@ -7820,23 +8004,7 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
                 "RegExp.prototype.exec requires that 'this' be a RegExp object",
             ));
         }
-        let (source, flags) = if let Some(obj) = interp.get_object_cell(rx_id) {
-            let b = obj.borrow();
-            let (src, fl) = if let Some(r) = b.regexp() {
-                let flags = r.flags.to_rust_string();
-                (
-                    js_string_to_regex_pattern(r.source.as_units(), &flags),
-                    flags,
-                )
-            } else {
-                (String::new(), String::new())
-            };
-            drop(b);
-            (src, fl)
-        } else {
-            return Completion::Normal(JsValue::NULL);
-        };
-        regexp_exec_raw(interp, rx_id, &source, &flags, input)
+        regexp_exec_raw(interp, rx_id, input)
     }
 }
 
@@ -8049,16 +8217,10 @@ fn resolve_named_group_matches<'a>(
         .collect()
 }
 
-fn regexp_exec_raw(
-    interp: &mut Interpreter,
-    this_id: u64,
-    source: &str,
-    flags: &str,
-    regex_input: &RegexInput,
-) -> Completion {
+fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexInput) -> Completion {
     // Spec: Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
     // ToLength may trigger valueOf side effects that recompile the regexp,
-    // so we re-read source/flags from internal slots afterward.
+    // so the matcher is read from the internal slots only afterward.
     let this_val = JsValue::object(this_id);
     let li_val = match interp.get_object_property(this_id, "lastIndex", &this_val) {
         Completion::Normal(v) => v,
@@ -8074,30 +8236,14 @@ fn regexp_exec_raw(
         li_num.min(9007199254740991.0).floor()
     };
 
-    // Re-read source/flags from internal slots (may have changed via compile() side effect)
-    let (source_owned, flags_owned) = {
-        if let Some(obj) = interp.get_object_cell(this_id) {
-            let b = obj.borrow();
-            if let Some(r) = b.regexp() {
-                let flags = r.flags.to_rust_string();
-                (
-                    js_string_to_regex_pattern(r.source.as_units(), &flags),
-                    flags,
-                )
-            } else {
-                (source.to_string(), flags.to_string())
-            }
-        } else {
-            (source.to_string(), flags.to_string())
-        }
+    let Some(plan) = exec_plan_for(interp, this_id) else {
+        return Completion::Normal(JsValue::NULL);
     };
-    let source = &source_owned;
-    let flags = &flags_owned;
-
-    let global = flags.contains('g');
-    let sticky = flags.contains('y');
-    let has_indices = flags.contains('d');
-    let unicode = flags.contains('u') || flags.contains('v');
+    let global = plan.global;
+    let sticky = plan.sticky;
+    let has_indices = plan.has_indices;
+    let unicode = plan.unicode;
+    let cached = &plan.cached;
 
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
     let input_utf16_len = regex_input.subject.len();
@@ -8113,10 +8259,6 @@ fn regexp_exec_raw(
     } else {
         0
     };
-    let cached = match build_regex_cached(interp, source, flags) {
-        Ok(r) => r,
-        Err(_) => return Completion::Normal(JsValue::NULL),
-    };
 
     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
     let view = RegexView::select(is_bytes_mode, unicode);
@@ -8124,7 +8266,7 @@ fn regexp_exec_raw(
 
     let mut caps = if is_bytes_mode {
         if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
-            match bytes_regex_captures_at(bytes_re, regex_input.wtf8(), last_index_byte) {
+            match bytes_regex_captures_at(bytes_re, regex_input.wtf8(), last_index_byte, sticky) {
                 Some(c) => c,
                 None => {
                     if (global || sticky)
@@ -8143,6 +8285,7 @@ fn regexp_exec_raw(
             &cached.compiled,
             regex_input.as_str(unicode),
             last_index_byte,
+            sticky,
         ) {
             Some(c) => c,
             None => {
@@ -8158,7 +8301,7 @@ fn regexp_exec_raw(
 
     clear_stale_dup_captures(&mut caps, &cached.dup_map);
     strip_renamed_qi_captures(&mut caps);
-    reset_quantifier_inner_captures(&mut caps, source);
+    reset_quantifier_inner_captures(&mut caps, cached.quantifier_resets(&plan.pattern));
     ensure_capture_slots(&mut caps, cached.total_groups);
     let dup_map = &cached.dup_map;
     let name_order = &cached.name_order;
@@ -8167,13 +8310,6 @@ fn regexp_exec_raw(
     // Convert absolute byte offsets to UTF-16 code unit offsets
     let match_start_utf16 = regex_input.byte_offset_to_utf16(view, full_match.start);
     let match_end_utf16 = regex_input.byte_offset_to_utf16(view, full_match.end);
-
-    if sticky && full_match.start != last_index_byte {
-        if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
-            return Completion::Throw(e);
-        }
-        return Completion::Normal(JsValue::NULL);
-    }
 
     if (global || sticky)
         && let Err(e) = set_last_index_strict(interp, this_id, match_end_utf16 as f64)
@@ -8379,8 +8515,11 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let Some((source, flags, obj_id)) = extract_source_flags(interp, this_val) {
-                    return regexp_exec_raw(interp, obj_id, &source, &flags, &input);
+                if interp
+                    .get_object_cell(obj_id)
+                    .is_some_and(|obj| obj.borrow().regexp().is_some())
+                {
+                    return regexp_exec_raw(interp, obj_id, &input);
                 }
                 Completion::Normal(JsValue::NULL)
             },
@@ -8603,10 +8742,10 @@ impl Interpreter {
                 // 5. Return ? RegExpInitialize(O, P, F).
                 if let Some(obj) = interp.get_object_cell(obj_id) {
                     obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::RegExp(
-                        crate::interpreter::types::RegExpData {
-                            source: source_js,
-                            flags: JsString::from_str(&flags_str),
-                        },
+                        crate::interpreter::types::RegExpData::new(
+                            source_js,
+                            JsString::from_str(&flags_str),
+                        ),
                     );
                 }
                 // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
@@ -8678,23 +8817,13 @@ impl Interpreter {
                     .and_then(|o| o.borrow().regexp().map(|r| r.flags.to_rust_string()))
                     .is_some_and(|fo| fo == flags_str);
                 if flags_match_internals && is_pristine_regexp(interp, rx_id) {
-                    let (source, flags_owned) = {
-                        let obj = interp.get_object_cell(rx_id).unwrap();
-                        let b = obj.borrow();
-                        let r = b.regexp().unwrap();
-                        let flags = r.flags.to_rust_string();
-                        (
-                            js_string_to_regex_pattern(r.source.as_units(), &flags),
-                            flags,
-                        )
+                    let Some(plan) = exec_plan_for(interp, rx_id) else {
+                        return Completion::Normal(JsValue::NULL);
                     };
-                    let cached = match build_regex_cached(interp, &source, &flags_owned) {
-                        Ok(r) => r,
-                        Err(_) => return Completion::Normal(JsValue::NULL),
-                    };
+                    let cached = &plan.cached;
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-                    let sticky = flags_owned.contains('y');
-                    let unicode = flags_owned.contains('u') || flags_owned.contains('v');
+                    let sticky = plan.sticky;
+                    let unicode = plan.unicode;
                     let view = RegexView::select(is_bytes_mode, unicode);
                     let input_utf16_len = regex_input.subject.len();
                     let mut results: Vec<JsValue> = Vec::new();
@@ -8711,6 +8840,7 @@ impl Interpreter {
                                     bytes_re,
                                     regex_input.wtf8(),
                                     last_index_byte,
+                                    sticky,
                                 )
                             } else {
                                 unreachable!()
@@ -8720,15 +8850,11 @@ impl Interpreter {
                                 &cached.compiled,
                                 regex_input.as_str(unicode),
                                 last_index_byte,
+                                sticky,
                             )
                         };
                         let Some(caps) = caps else { break };
                         let full_match = caps.get(0).unwrap();
-                        // Sticky: match must start exactly at lastIndex; otherwise terminate.
-                        // regex_captures_at finds the next match from `pos`, not at it.
-                        if sticky && full_match.start != last_index_byte {
-                            break;
-                        }
                         let match_end_utf16 =
                             regex_input.byte_offset_to_utf16(view, full_match.end);
 
@@ -8990,27 +9116,14 @@ impl Interpreter {
                     && flags_match_internals
                     && is_pristine_regexp(interp, rx_id)
                 {
-                    let (source, flags_owned) = {
-                        let obj = interp.get_object_cell(rx_id).unwrap();
-                        let b = obj.borrow();
-                        let r = b.regexp().unwrap();
-                        let flags = r.flags.to_rust_string();
-                        (
-                            js_string_to_regex_pattern(r.source.as_units(), &flags),
-                            flags,
-                        )
+                    let Some(plan) = exec_plan_for(interp, rx_id) else {
+                        return Completion::Normal(JsValue::string(regex_input.subject.clone()));
                     };
-                    let cached = match build_regex_cached(interp, &source, &flags_owned) {
-                        Ok(r) => r,
-                        Err(_) => {
-                            return Completion::Normal(JsValue::string(
-                                regex_input.subject.clone(),
-                            ));
-                        }
-                    };
+                    let cached = &plan.cached;
+                    let source = &plan.pattern;
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-                    let sticky = flags_owned.contains('y');
-                    let unicode = flags_owned.contains('u') || flags_owned.contains('v');
+                    let sticky = plan.sticky;
+                    let unicode = plan.unicode;
                     let view = RegexView::select(is_bytes_mode, unicode);
                     let input_utf16_len = regex_input.subject.len();
                     let template = replace_str.as_ref().unwrap();
@@ -9030,6 +9143,7 @@ impl Interpreter {
                                     bytes_re,
                                     regex_input.wtf8(),
                                     last_index_byte,
+                                    sticky,
                                 ) {
                                     Some(c) => c,
                                     None => break,
@@ -9042,18 +9156,18 @@ impl Interpreter {
                                 &cached.compiled,
                                 regex_input.as_str(unicode),
                                 last_index_byte,
+                                sticky,
                             ) {
                                 Some(c) => c,
                                 None => break,
                             }
                         };
-                        // Sticky: match must start exactly at lastIndex; otherwise terminate.
-                        if sticky && caps.get(0).unwrap().start != last_index_byte {
-                            break;
-                        }
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
-                        reset_quantifier_inner_captures(&mut caps, &source);
+                        reset_quantifier_inner_captures(
+                            &mut caps,
+                            cached.quantifier_resets(source),
+                        );
                         ensure_capture_slots(&mut caps, cached.total_groups);
 
                         let full_match = caps.get(0).unwrap();
@@ -10398,10 +10512,10 @@ impl Interpreter {
                 obj.class_name = "RegExp".into();
                 // Store internal slots ([[OriginalSource]], [[OriginalFlags]])
                 obj.kind = crate::interpreter::types::ObjectKind::RegExp(
-                    crate::interpreter::types::RegExpData {
-                        source: source_js,
-                        flags: JsString::from_str(&flags_str),
-                    },
+                    crate::interpreter::types::RegExpData::new(
+                        source_js,
+                        JsString::from_str(&flags_str),
+                    ),
                 );
                 obj.insert_property(
                     "lastIndex".to_string(),
@@ -10777,6 +10891,48 @@ mod regex_input_cache_tests {
     }
 
     #[test]
+    fn long_subject_survives_interleaved_short_and_long_subjects() {
+        let mut interp = Interpreter::new();
+        let long = JsValue::string(JsString::from_str(&"a".repeat(1024)));
+        let first = regex_input_for_value(&mut interp, &long).unwrap();
+
+        for i in 0..32 {
+            let short = JsValue::string(JsString::from_str(&format!("s{i}")));
+            regex_input_for_value(&mut interp, &short).unwrap();
+        }
+        let again = regex_input_for_value(&mut interp, &long).unwrap();
+        assert!(
+            Rc::ptr_eq(&first, &again),
+            "short subjects must not evict it"
+        );
+
+        // Fewer distinct long subjects than the cache holds keep every entry.
+        let others: Vec<JsValue> = (0..3)
+            .map(|_| JsValue::string(JsString::from_str(&"b".repeat(1024))))
+            .collect();
+        let converted: Vec<_> = others
+            .iter()
+            .map(|other| regex_input_for_value(&mut interp, other).unwrap())
+            .collect();
+        let still = regex_input_for_value(&mut interp, &long).unwrap();
+        assert!(Rc::ptr_eq(&first, &still));
+
+        // One more than the capacity evicts the least recently used entry,
+        // and only that one.
+        let overflow = JsValue::string(JsString::from_str(&"c".repeat(1024)));
+        regex_input_for_value(&mut interp, &overflow).unwrap();
+        let reconverted = regex_input_for_value(&mut interp, &others[0]).unwrap();
+        assert!(
+            !Rc::ptr_eq(&converted[0], &reconverted),
+            "LRU entry evicted"
+        );
+        let kept = regex_input_for_value(&mut interp, &long).unwrap();
+        assert!(Rc::ptr_eq(&first, &kept), "recently used entry kept");
+        let kept = regex_input_for_value(&mut interp, &others[2]).unwrap();
+        assert!(Rc::ptr_eq(&converted[2], &kept));
+    }
+
+    #[test]
     fn maps_unicode_offsets_from_the_original_utf16_subject() {
         let input = RegexInput::new(JsString::from_vec(vec![0xDB80, 0xDC00, b'x' as u16]));
 
@@ -10796,5 +10952,84 @@ mod regex_input_cache_tests {
         assert_eq!(mixed.utf16_to_byte_offset(RegexView::Unicode, 3), 8);
         assert_eq!(mixed.byte_offset_to_utf16(RegexView::Unicode, 8), 3);
         assert_eq!(mixed.byte_offset_to_utf16(RegexView::Unicode, 9), 4);
+    }
+}
+
+#[cfg(test)]
+mod anchored_search_tests {
+    use super::{CompiledRegex, build_regex_ex, regex_captures_at};
+
+    /// An anchored search must agree with an unanchored one whose result is
+    /// rejected unless it starts at the requested offset.
+    fn assert_anchored_matches_filtered_search(pattern: &str, flags: &str, text: &str) {
+        let (compiled, _, _) = build_regex_ex(pattern, flags).expect("pattern compiles");
+        for pos in 0..=text.len() {
+            if !text.is_char_boundary(pos) {
+                continue;
+            }
+            let anchored = regex_captures_at(&compiled, text, pos, true).map(|caps| {
+                caps.groups
+                    .iter()
+                    .map(|g| g.as_ref().map(|m| (m.start, m.end)))
+                    .collect::<Vec<_>>()
+            });
+            let filtered = regex_captures_at(&compiled, text, pos, false)
+                .filter(|caps| caps.get(0).is_some_and(|m| m.start == pos))
+                .map(|caps| {
+                    caps.groups
+                        .iter()
+                        .map(|g| g.as_ref().map(|m| (m.start, m.end)))
+                        .collect::<Vec<_>>()
+                });
+            assert_eq!(
+                anchored, filtered,
+                "/{pattern}/{flags} on {text:?} at {pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn anchored_search_equals_filtered_unanchored_search() {
+        let patterns: &[(&str, &str)] = &[
+            (r"\d", ""),
+            (r"(?!0)\d", ""),
+            (r#"(['"])(?:(?!\1)[^\\\n\r]|\\[^])*\1"#, ""),
+            (r"abc(?!d)", ""),
+            (r"^x", ""),
+            (r"^x", "m"),
+            (r"(?<=a)b", ""),
+            (r"(?<!a)b", ""),
+            (r"\bb", ""),
+            (r"a|ab", ""),
+            (r"ab|a", ""),
+            (r"(?:)", ""),
+            (r"\d*", ""),
+            (r"(\w+)\s*=\s*(\d+)?", ""),
+            (r"x$", ""),
+        ];
+        let texts = [
+            "",
+            "#####5",
+            "x = 'a\\'b' + \"c\";",
+            "xxabc xxabcd",
+            "a\nx ab b",
+            "ab abab 0 5 05 x",
+        ];
+        for (pattern, flags) in patterns {
+            for text in texts {
+                assert_anchored_matches_filtered_search(pattern, flags, text);
+            }
+        }
+    }
+
+    #[test]
+    fn anchored_fancy_search_does_not_scan_forward() {
+        let (compiled, _, _) = build_regex_ex("(?!0)\\d", "").unwrap();
+        assert!(matches!(compiled, CompiledRegex::Fancy(_)));
+        let text = format!("{}5", "#".repeat(10_000));
+        assert!(regex_captures_at(&compiled, &text, 0, true).is_none());
+        assert!(regex_captures_at(&compiled, &text, 10_000, true).is_some());
+        let unanchored = regex_captures_at(&compiled, &text, 0, false).unwrap();
+        assert_eq!(unanchored.get(0).map(|m| m.start), Some(10_000));
     }
 }

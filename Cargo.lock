@@ -1007,6 +1007,7 @@ dependencies = [
  "jiff",
  "num-bigint 0.5.1",
  "regex",
+ "regex-automata",
  "rustc-hash",
  "ryu-js",
  "smallvec",
