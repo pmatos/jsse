@@ -3,7 +3,7 @@ use super::op::Op;
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
-use crate::interpreter::types::{BindingKind, Completion, Environment};
+use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
 use crate::interpreter::{Atom, EnvRef, Interpreter};
 use crate::types::JsValue;
 
@@ -44,6 +44,23 @@ fn load_name_value(interp: &mut Interpreter, name: &Atom, env: &EnvRef) -> Compl
         Some(value) => Completion::Normal(value),
         None => interp.resolve_identifier(name, env, strict),
     }
+}
+
+/// Where a `break`/`continue` completion leaving an `ExecAst` statement
+/// resumes, if its label names a loop compiled into this chunk.
+fn escape_target(
+    chunk: &Chunk,
+    table: u16,
+    is_continue: bool,
+    label: Option<&str>,
+) -> Option<usize> {
+    if table == super::chunk::NO_ESCAPE_TABLE {
+        return None;
+    }
+    chunk.escape_tables[table as usize]
+        .iter()
+        .find(|e| e.is_continue == is_continue && e.label.as_deref() == label)
+        .map(|e| e.target as usize)
 }
 
 fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
@@ -203,6 +220,65 @@ fn member_set_computed(
     interp.set_object_with_key(base, &key, rhs, strict)
 }
 
+/// `++`/`--` on a member reference: the base and key are evaluated once by
+/// the caller; GetValue → ToNumeric → ±1 → PutValue, with ToPropertyKey run
+/// once (sec-postfix-increment-operator-runtime-semantics-evaluation,
+/// sec-prefix-increment-operator-runtime-semantics-evaluation). The postfix
+/// result is the numeric old value. `base.name` reads and writes through the
+/// interned name without building a key.
+fn member_update_named(
+    interp: &mut Interpreter,
+    base: &JsValue,
+    name: &str,
+    op: UpdateOp,
+    prefix: bool,
+    strict: bool,
+) -> Completion {
+    if base.is_nullish() {
+        return Completion::Throw(interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading '{name}')"
+        )));
+    }
+    interp.update_member_value(base, name, op, prefix, strict)
+}
+
+fn member_update_computed(
+    interp: &mut Interpreter,
+    base: &JsValue,
+    key_val: &JsValue,
+    op: UpdateOp,
+    prefix: bool,
+    strict: bool,
+) -> Completion {
+    if base.is_nullish() {
+        return Completion::Throw(interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading property)"
+        )));
+    }
+    match interp.to_property_key(key_val) {
+        Ok(key) => interp.update_member_value(base, &key, op, prefix, strict),
+        Err(e) => Completion::Throw(e),
+    }
+}
+
+/// Declares the chunk's `var` names in first-use order, which is the order
+/// its local slot hints assume. Declaration instantiation that runs first
+/// (`Chunk::needs_instantiation`) calls this beforehand so it cannot choose a
+/// different binding order.
+pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
+    if chunk.var_names.is_empty() {
+        return;
+    }
+    let var_scope = Environment::find_var_scope(env);
+    let mut scope = var_scope.borrow_mut();
+    for &name_idx in &chunk.var_names {
+        let name = &chunk.names[name_idx as usize];
+        if !scope.bindings.contains_key(name) {
+            scope.declare_atom(name, BindingKind::Var);
+        }
+    }
+}
+
 pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -305,15 +381,8 @@ fn run_chunk_inner(
     refs: &mut Vec<IdentifierRef>,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
-    if declare_chunk_vars && !chunk.var_names.is_empty() {
-        let var_scope = Environment::find_var_scope(env);
-        let mut scope = var_scope.borrow_mut();
-        for &name_idx in &chunk.var_names {
-            let name = &chunk.names[name_idx as usize];
-            if !scope.bindings.contains_key(name) {
-                scope.declare_atom(name, BindingKind::Var);
-            }
-        }
+    if declare_chunk_vars {
+        declare_var_prologue(chunk, env);
     }
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
@@ -933,6 +1002,134 @@ fn run_chunk_inner(
                 unroot_stack_value(interp, &v);
                 match result {
                     Completion::Normal(r) => push_value(interp, stack, r),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::EvalAst => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let super::chunk::AstNode::Expr(expr) = &chunk.ast[idx as usize] else {
+                    unreachable!("EvalAst operand names an expression node");
+                };
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.ast_fallback_execs += 1;
+                }
+                // Operands already on the stack stay rooted in
+                // `gc_bytecode_roots` while the tree-walker runs.
+                match interp.eval_expr(expr, env) {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::ExecAst => {
+                let idx = decode_u16(chunk, pc);
+                let table = decode_u16(chunk, pc + 2);
+                pc += 4;
+                let super::chunk::AstNode::Stmt(stmt) = &chunk.ast[idx as usize] else {
+                    unreachable!("ExecAst operand names a statement node");
+                };
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.ast_fallback_execs += 1;
+                }
+                match interp.exec_statement(stmt, env) {
+                    Completion::Normal(_) | Completion::Empty => {}
+                    Completion::Break(label, value) => {
+                        match escape_target(chunk, table, false, label.as_deref()) {
+                            Some(target) => pc = target,
+                            None => return Completion::Break(label, value),
+                        }
+                    }
+                    Completion::Continue(label, value) => {
+                        match escape_target(chunk, table, true, label.as_deref()) {
+                            Some(target) => pc = target,
+                            None => return Completion::Continue(label, value),
+                        }
+                    }
+                    abrupt => return abrupt,
+                }
+            }
+            Op::InitLexical => {
+                let idx = decode_u16(chunk, pc);
+                let kind = if chunk.code[pc + 2] == 0 {
+                    BindingKind::Let
+                } else {
+                    BindingKind::Const
+                };
+                pc += 3;
+                let name = &chunk.names[idx as usize];
+                let value = pop_value(interp, stack, "stack underflow on InitLexical");
+                env.borrow_mut().bindings.insert_atom(
+                    name,
+                    Binding {
+                        value,
+                        kind,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            }
+            Op::Instanceof | Op::In => {
+                let r = stack.pop().expect("stack underflow on relational rhs");
+                let l = stack.pop().expect("stack underflow on relational lhs");
+                let result = if op == Op::Instanceof {
+                    interp.eval_instanceof(&l, &r)
+                } else {
+                    interp.eval_binary(BinaryOp::In, &l, &r)
+                };
+                unroot_stack_value(interp, &r);
+                unroot_stack_value(interp, &l);
+                match result {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::Throw => {
+                let value = pop_value(interp, stack, "stack underflow on Throw");
+                return Completion::Throw(value);
+            }
+            Op::Typeof => {
+                let value = pop_value(interp, stack, "stack underflow on Typeof");
+                let result = interp.typeof_value(&value);
+                push_value(interp, stack, result);
+            }
+            Op::TypeofName => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let name = &chunk.names[idx as usize];
+                match interp.eval_typeof_identifier(name, env) {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::UpdateProp => {
+                let idx = decode_u16(chunk, pc);
+                let mode = chunk.code[pc + 2];
+                pc += 3;
+                let (update, prefix) = update_mode(mode);
+                let name = &chunk.names[idx as usize];
+                let base = stack.pop().expect("stack underflow on UpdateProp");
+                let strict = env.borrow().strict;
+                let result = member_update_named(interp, &base, name, update, prefix, strict);
+                unroot_stack_value(interp, &base);
+                match result {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::UpdateElement => {
+                let mode = chunk.code[pc];
+                pc += 1;
+                let (update, prefix) = update_mode(mode);
+                let key = stack.pop().expect("stack underflow on UpdateElement key");
+                let base = stack.pop().expect("stack underflow on UpdateElement base");
+                let strict = env.borrow().strict;
+                let result = member_update_computed(interp, &base, &key, update, prefix, strict);
+                unroot_stack_value(interp, &key);
+                unroot_stack_value(interp, &base);
+                match result {
+                    Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
             }

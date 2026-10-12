@@ -77,6 +77,34 @@ pub(crate) enum Op {
     /// `++`/`--` on a function-local name. Operands: name (u16), slot hint
     /// (u16), mode (u8, as `UpdateName`).
     UpdateLocal = 61,
+    /// `[..., value]` → abrupt `Throw(value)`.
+    Throw = 62,
+    /// `[..., value]` → `[..., typeof value]`.
+    Typeof = 63,
+    /// `[...]` → `[..., typeof name]`; operand: name (u16). An unresolvable
+    /// name yields `"undefined"` rather than a ReferenceError.
+    TypeofName = 64,
+    /// `[..., value, ctor]` → `[..., value instanceof ctor]`.
+    Instanceof = 65,
+    /// `[..., key, object]` → `[..., key in object]`.
+    In = 66,
+    /// `++`/`--` on `base.name`: `[..., base]` → `[..., result]`. Operands:
+    /// name (u16), mode (u8, as `UpdateName`).
+    UpdateProp = 67,
+    /// `++`/`--` on `base[key]`: `[..., base, key]` → `[..., result]`. The op
+    /// runs the base-nullish check and ToPropertyKey once. Operand: mode (u8).
+    UpdateElement = 68,
+    /// `[...]` → `[..., value]`: evaluate the expression node `ast[idx]` on
+    /// the tree-walker in the current environment. Operand: ast index (u16).
+    EvalAst = 69,
+    /// Run the statement node `ast[idx]` on the tree-walker (operand stack is
+    /// empty at a statement boundary). Operands: ast index (u16), escape
+    /// table (u16, `NO_ESCAPE_TABLE` when no break/continue can leave it).
+    ExecAst = 70,
+    /// `[..., value]` → `[...]`: initialise a function-top-level `let`/`const`
+    /// binding in the current environment (InitializeBinding, 9.1.1.1.4).
+    /// Operands: name (u16), kind (u8: 0 = let, 1 = const).
+    InitLexical = 71,
 }
 
 impl Op {
@@ -144,6 +172,16 @@ impl Op {
             59 => Some(Op::LoadLocal),
             60 => Some(Op::StoreLocal),
             61 => Some(Op::UpdateLocal),
+            62 => Some(Op::Throw),
+            63 => Some(Op::Typeof),
+            64 => Some(Op::TypeofName),
+            65 => Some(Op::Instanceof),
+            66 => Some(Op::In),
+            67 => Some(Op::UpdateProp),
+            68 => Some(Op::UpdateElement),
+            69 => Some(Op::EvalAst),
+            70 => Some(Op::ExecAst),
+            71 => Some(Op::InitLexical),
             _ => None,
         }
     }
