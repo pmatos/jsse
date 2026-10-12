@@ -1672,29 +1672,35 @@ impl Interpreter {
     where
         F: Fn(&Realm) -> Option<u64>,
     {
-        let nt = match self.new_target.clone() {
-            Some(v) => v,
-            None => {
-                return Ok(get_realm_proto(&self.realms[self.current_realm_id]));
-            }
+        let nt = self.new_target.clone().unwrap_or(JsValue::UNDEFINED);
+        self.get_prototype_from_constructor(&nt, get_realm_proto)
+    }
+
+    /// GetPrototypeFromConstructor(constructor, intrinsicDefaultProto) — §10.1.14.
+    /// A non-object `constructor` (no newTarget) yields the current realm's
+    /// intrinsic.
+    pub(crate) fn get_prototype_from_constructor<F>(
+        &mut self,
+        constructor: &JsValue,
+        get_realm_proto: F,
+    ) -> Result<Option<u64>, JsValue>
+    where
+        F: Fn(&Realm) -> Option<u64>,
+    {
+        let Some(nt_id) = constructor.as_object_id() else {
+            return Ok(get_realm_proto(&self.realms[self.current_realm_id]));
         };
-        if let Some(nt_o) = nt.as_object_id().map(|id| crate::types::JsObject { id }) {
-            let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => JsValue::UNDEFINED,
-            };
-            if let Some(po) = (proto_val)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-            {
-                return Ok(Some(po.id));
-            }
-            // proto is not an object: use realm of newTarget
-            let nt_realm_id = self.get_function_realm(&JsValue::object(nt_o.id))?;
-            return Ok(get_realm_proto(&self.realms[nt_realm_id]));
+        let proto_val = match self.get_object_property(nt_id, "prototype", constructor) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        if let Some(proto_id) = proto_val.as_object_id() {
+            return Ok(Some(proto_id));
         }
-        Ok(get_realm_proto(&self.realms[self.current_realm_id]))
+        // proto is not an object: use realm of newTarget
+        let nt_realm_id = self.get_function_realm(constructor)?;
+        Ok(get_realm_proto(&self.realms[nt_realm_id]))
     }
 
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {

@@ -231,69 +231,67 @@ impl Interpreter {
     /// methods and fields of `constructor`, the class whose constructor is
     /// running. That is the active function, not new.target: constructing a
     /// subclass runs every class's own initializers on the way up the chain.
+    /// Every construct path, base or derived, goes through here.
     fn initialize_instance_elements(
         &mut self,
         this_val: JsValue,
         constructor: &JsValue,
-        env: &EnvRef,
     ) -> Result<(), JsValue> {
-        let instance_field_defs = if let Some(o) = constructor
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(o.id)
-        {
-            func_obj.borrow().class_instance_field_defs.clone()
-        } else {
+        // The initializers run user code, and a base class's new object is
+        // reachable from nowhere else until its constructor body runs.
+        self.with_gc_root_scope(|interp| {
+            interp.gc_root_value(&this_val);
+            interp.define_instance_elements(this_val, constructor)
+        })
+    }
+
+    fn define_instance_elements(
+        &mut self,
+        this_val: JsValue,
+        constructor: &JsValue,
+    ) -> Result<(), JsValue> {
+        let (Some(ctor_id), Some(this_obj_id)) =
+            (constructor.as_object_id(), this_val.as_object_id())
+        else {
             return Ok(());
         };
-        let this_obj_id = if let Some(o) = (this_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            o.id
-        } else {
+        let Some(func_obj) = self.get_object_cell(ctor_id) else {
             return Ok(());
         };
-        // Create env for evaluating field initializers.
-        // Use the class constructor's closure (class_env) so the class name binding
-        // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-        let (ctor_closure, class_pn) = if let Some(o) = constructor
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(o.id)
-        {
-            if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                let cls_env = closure.borrow();
-                (Some(closure.clone()), cls_env.class_private_names.clone())
-            } else {
-                (None, None)
+        // Use the class constructor's closure (classEnv) so the class name
+        // binding is visible in field initializers (§15.7.14 step 3).
+        let (instance_field_defs, init_parent, class_pn) = {
+            let func = func_obj.borrow();
+            if func.class_instance_field_defs.is_empty() {
+                return Ok(());
             }
-        } else {
-            (None, None)
+            let Some(JsFunction::User { closure, .. }) = &func.callable else {
+                unreachable!("only class constructors have field definitions");
+            };
+            let class_pn = closure.borrow().class_private_names.clone();
+            (
+                func.class_instance_field_defs.clone(),
+                closure.clone(),
+                class_pn,
+            )
         };
-        let init_parent = ctor_closure.unwrap_or_else(|| env.clone());
         let init_env = Environment::new(Some(init_parent));
         init_env.borrow_mut().set_this(this_val.clone());
         init_env.borrow_mut().class_private_names = class_pn;
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
         // Instance field HomeObject = class prototype.
-        if let Some(o) = constructor
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            let proto_val = self.get_property_on_id(o.id, "prototype");
-            if proto_val.is_object() {
-                init_env.borrow_mut().bindings.insert(
-                    "__home_object__",
-                    crate::interpreter::types::Binding {
-                        value: proto_val,
-                        kind: crate::interpreter::types::BindingKind::Const,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
-            }
+        let proto_val = self.get_property_on_id(ctor_id, "prototype");
+        if proto_val.is_object() {
+            init_env.borrow_mut().bindings.insert(
+                "__home_object__",
+                Binding {
+                    value: proto_val,
+                    kind: BindingKind::Const,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
         }
         // Pass 1: Install private methods and accessors before any field initializer runs.
         for idef in &instance_field_defs {
@@ -4725,7 +4723,7 @@ impl Interpreter {
                 }
                 Self::initialize_this_binding(env, v.clone());
                 // Step 12: InitializeInstanceElements(result, F).
-                if let Err(e) = interp.initialize_instance_elements(v.clone(), &active_ctor, env) {
+                if let Err(e) = interp.initialize_instance_elements(v.clone(), &active_ctor) {
                     return Completion::Throw(e);
                 }
                 Completion::Normal(v)
@@ -5254,21 +5252,26 @@ impl Interpreter {
         func: &JsValue,
         this: &JsValue,
         args: &[JsValue],
+        new_target: &JsValue,
     ) -> (Completion, bool, Option<JsValue>) {
+        let prev_new_target = self.new_target.replace(new_target.clone());
+        self.last_call_had_explicit_return = false;
+        self.last_call_this_value = None;
+        self.calling_as_construct = true;
+        // A base constructor's new object is reachable only through `this`
+        // until the body stores it somewhere, and parameter defaults run
+        // before the body's frame roots it — so root it across the whole call.
+        // The constructor's frame is also popped from the call stack the moment
+        // its body returns a `TailCall`, and `last_call_this_value` is not a GC
+        // root — so while the tail-call chain runs (its callees can allocate or
+        // call `$262.gc()`) the freshly constructed object is reachable only
+        // through these Rust locals. Rooting `final_this` covers the derived
+        // path, whose `this` is `undefined`.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(this);
         let mut result = self.call_function_inner(func, this, args, false);
         let had_explicit_return = self.last_call_had_explicit_return;
         let final_this = self.last_call_this_value.take();
-        // The constructor's frame is popped from the call stack the moment its
-        // body returns a `TailCall`, and `last_call_this_value` is not a GC root
-        // — so while the tail-call chain runs (its callees can allocate or call
-        // `$262.gc()`) the freshly constructed object is reachable only through
-        // these Rust locals. Temp-root it across the drive so it cannot be swept
-        // before `[[Construct]]` returns it. Rooting `final_this` covers the base
-        // path's `this_val` (same object); rooting `this` also guards the
-        // `unwrap_or(this_val)` fallback and is a no-op for the derived path's
-        // `undefined`.
-        let gc_frame = self.gc_root_frame();
-        self.gc_root_value(this);
         if let Some(v) = &final_this {
             self.gc_root_value(v);
         }
@@ -5281,6 +5284,7 @@ impl Interpreter {
             result = self.call_function_inner(&func, &this, &tc_args, false);
         }
         self.gc_unroot_frame(gc_frame);
+        self.new_target = prev_new_target;
         (result, had_explicit_return, final_this)
     }
 
@@ -6547,31 +6551,25 @@ impl Interpreter {
                 return Completion::Throw(e);
             }
         };
-        let result = self.construct_from_evaluated(&callee_val, &evaluated_args, env);
+        let result = self.construct_from_evaluated(&callee_val, &evaluated_args);
         self.gc_unroot_frame(gc_frame);
         result
     }
 
-    /// Everything `new`/`Construct` need once the callee and arguments are
-    /// already evaluated `JsValue`s: the `IsConstructor` check, the proxy
-    /// construct trap, bound-function delegation, and the derived/base
-    /// construction paths. `env` is the caller's lexical environment, used
-    /// only as a fallback closure for instance-field initializers when the
-    /// constructor itself carries none. Shared by the tree-walker's
-    /// `eval_new` and the bytecode VM's `Op::Construct` handler (mirrors
-    /// `Op::LoadThis`'s `resolve_this_binding` precedent) so the two never
-    /// drift.
+    /// Everything `new` needs once the callee and arguments are already
+    /// evaluated `JsValue`s: the `IsConstructor` check (naming the callee in
+    /// its TypeError), then the same [[Construct]] as `Reflect.construct`.
+    /// Shared by the tree-walker's `eval_new` and the bytecode VM's
+    /// `Op::Construct` handler (mirrors `Op::LoadThis`'s
+    /// `resolve_this_binding` precedent) so the two never drift.
     pub(crate) fn construct_from_evaluated(
         &mut self,
         callee_val: &JsValue,
         args: &[JsValue],
-        env: &EnvRef,
     ) -> Completion {
         self.with_gc_root_scope(|interp| {
-            let callee_val = callee_val.clone();
-            interp.gc_root_value(&callee_val);
-            let evaluated_args = args.to_vec();
-            for arg in &evaluated_args {
+            interp.gc_root_value(callee_val);
+            for arg in args {
                 interp.gc_root_value(arg);
             }
             // Check if callee is a constructor
@@ -6601,7 +6599,7 @@ impl Interpreter {
                         };
                         drop(b);
                         let name = if name.is_empty() {
-                            interp.describe_non_callable(&callee_val)
+                            interp.describe_non_callable(callee_val)
                         } else {
                             name
                         };
@@ -6611,273 +6609,14 @@ impl Interpreter {
                     }
                 }
             } else {
-                let desc = interp.describe_non_callable(&callee_val);
+                let desc = interp.describe_non_callable(callee_val);
                 return Completion::Throw(
                     interp.create_type_error(&format!("{desc} is not a constructor")),
                 );
             }
-            // Proxy construct trap
-            if let Some(co) = (callee_val)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && interp.get_proxy_info(co.id).is_some()
-            {
-                let target_val = interp.get_proxy_target_val(co.id);
-                let args_array = interp.create_array(evaluated_args.clone());
-                let new_target = callee_val.clone();
-                match interp.invoke_proxy_trap(
-                    co.id,
-                    "construct",
-                    vec![target_val.clone(), args_array, new_target.clone()],
-                ) {
-                    Ok(Some(v)) => {
-                        if (v).is_object() {
-                            return Completion::Normal(v);
-                        }
-                        return Completion::Throw(
-                            interp.create_type_error("'construct' on proxy: trap returned non-Object"),
-                        );
-                    }
-                    Ok(None) => {
-                        // No trap, forward to target with original newTarget
-                        return interp.construct_with_new_target(
-                            &target_val,
-                            &evaluated_args,
-                            new_target,
-                        );
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            // Bound functions: delegate to construct_with_new_target which handles new_target resolution
-            if let Some(co) = (callee_val)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = interp.get_object_cell(co.id)
-                && func_obj.borrow().bound().is_some()
-            {
-                return interp.construct_with_new_target(
-                    &callee_val,
-                    &evaluated_args,
-                    callee_val.clone(),
-                );
-            }
-            // Check if this is a derived class constructor
-            let is_derived = if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = interp.get_object_cell(o.id)
-            {
-                func_obj.borrow().is_derived_class_constructor()
-            } else {
-                false
-            };
-
-            if is_derived {
-                // The same [[Construct]] as Reflect.construct, with the callee as
-                // newTarget.
-                interp.construct_with_new_target(&callee_val, &evaluated_args, callee_val.clone())
-            } else {
-                // Base constructor: create this object as before
-                let new_obj_id = interp.create_object_id();
-                if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = interp.get_object_cell(o.id)
-                {
-                    let proto = func_obj.borrow().get_property_value("prototype");
-                    if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
-                        interp.get_object_cell_expect(new_obj_id)
-                            .borrow_mut()
-                            .prototype_id = Some(proto_id);
-                    }
-                }
-                let instance_field_defs = if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = interp.get_object_cell(o.id)
-                {
-                    func_obj.borrow().class_instance_field_defs.clone()
-                } else {
-                    Vec::new()
-                };
-                let this_val = JsValue::object(new_obj_id);
-                // Use constructor's closure (class_env) so the class name binding
-                // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-                let init_parent = if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = interp.get_object_cell(o.id)
-                    && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
-                {
-                    closure.clone()
-                } else {
-                    env.clone()
-                };
-                let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().set_this(this_val.clone());
-                init_env.borrow_mut().is_field_initializer = true;
-                if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = interp.get_object_cell(o.id)
-                {
-                    if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                        let cls_env = closure.borrow();
-                        if let Some(ref names) = cls_env.class_private_names {
-                            init_env.borrow_mut().class_private_names = Some(names.clone());
-                        }
-                    }
-                    // Set __home_object__ for super property access in field initializers.
-                    let func_obj_id = func_obj.borrow().id.unwrap();
-                    let proto_val = interp.get_property_on_id(func_obj_id, "prototype");
-                    if proto_val.is_object() {
-                        init_env.borrow_mut().bindings.insert(
-                            "__home_object__",
-                            Binding {
-                                value: proto_val,
-                                kind: BindingKind::Const,
-                                initialized: true,
-                                deletable: false,
-                            },
-                        );
-                    }
-                }
-                // Pass 1: Install private methods and accessors first.
-                for idef in &instance_field_defs {
-                    match idef {
-                        InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
-                                if !obj.borrow().extensible {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot define private method on non-extensible object",
-                                    ));
-                                }
-                                if obj.borrow().private_fields.contains_key(name) {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot add private method to object twice",
-                                    ));
-                                }
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(name.clone(), PrivateElement::Method(value.clone()));
-                            }
-                        }
-                        InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
-                                if !obj.borrow().extensible {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot define private accessor on non-extensible object",
-                                    ));
-                                }
-                                if obj.borrow().private_fields.contains_key(name) {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot add private accessor to object twice",
-                                    ));
-                                }
-                                obj.borrow_mut().private_fields.insert(
-                                    name.clone(),
-                                    PrivateElement::Accessor {
-                                        get: get.clone(),
-                                        set: set.clone(),
-                                    },
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // Pass 2: Run field initializers in source order.
-                for idef in &instance_field_defs {
-                    match idef {
-                        InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
-                            let source_name = name.split('#').next().unwrap_or(name);
-                            let display_name = format!("#{source_name}");
-                            let val = if let Some(init) = initializer {
-                                match interp.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => {
-                                        if init.is_anonymous_function_definition() {
-                                            interp.set_function_name(&v, &display_name);
-                                        }
-                                        v
-                                    }
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
-                                if !obj.borrow().extensible {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot define private field on non-extensible object",
-                                    ));
-                                }
-                                if obj.borrow().private_fields.contains_key(name) {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot initialize private field twice on the same object",
-                                    ));
-                                }
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(name.clone(), PrivateElement::Field(val));
-                            }
-                        }
-                        InstanceFieldDef::Public(key, initializer) => {
-                            let val = if let Some(init) = initializer {
-                                match interp.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => {
-                                        if init.is_anonymous_function_definition() {
-                                            interp.set_function_name(&v, key);
-                                        }
-                                        v
-                                    }
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            match crate::interpreter::builtins::array::create_data_property_or_throw(
-                                interp, &this_val, key, val,
-                            ) {
-                                Ok(()) => {}
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
-                            let val = if let Some(init) = initializer {
-                                match interp.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            if let Some(obj) = interp.get_object_cell(new_obj_id) {
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(slot_name.clone(), PrivateElement::Field(val));
-                            }
-                        }
-                        _ => {} // Methods/accessors handled in pass 1
-                    }
-                }
-                let prev_new_target = interp.new_target.take();
-                interp.new_target = Some(callee_val.clone());
-                interp.last_call_had_explicit_return = false;
-                interp.last_call_this_value = None;
-                interp.calling_as_construct = true;
-                let (result, had_explicit_return, captured_this) =
-                    interp.call_constructor_body(&callee_val, &this_val, &evaluated_args);
-                let final_this = captured_this.unwrap_or(this_val.clone());
-                interp.new_target = prev_new_target;
-                match result {
-                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                        Completion::Normal(v)
-                    }
-                    Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
-                    other => other,
-                }
-            }
+            // EvaluateNew step 7: Construct(constructor, argList), with the
+            // callee as newTarget.
+            interp.construct_with_new_target(callee_val, args, callee_val.clone())
         })
     }
 
@@ -6918,18 +6657,13 @@ impl Interpreter {
     ) -> Completion {
         // F.[[GetPrototypeOf]]() is read now, so setPrototypeOf on the class
         // takes effect.
-        let (parent, class_env) = {
-            let func = f
-                .as_object_id()
-                .and_then(|id| self.get_object_cell(id))
-                .expect("callers check the constructor kind")
-                .borrow();
-            let parent = func.prototype_id.map_or(JsValue::NULL, JsValue::object);
-            let Some(JsFunction::User { closure, .. }) = &func.callable else {
-                unreachable!("a default derived constructor is a class constructor");
-            };
-            (parent, closure.clone())
-        };
+        let parent = f
+            .as_object_id()
+            .and_then(|id| self.get_object_cell(id))
+            .expect("callers check the constructor kind")
+            .borrow()
+            .prototype_id
+            .map_or(JsValue::NULL, JsValue::object);
         // No JS call frame separates this from the parent's [[Construct]], so
         // count the depth here: a class whose [[Prototype]] constructs the
         // class again (a bound or proxied copy of itself) must hit the
@@ -6939,14 +6673,10 @@ impl Interpreter {
         let Completion::Normal(obj) = result else {
             return result;
         };
-        // Field initializers run user code; keep the new object rooted.
-        self.with_gc_root_scope(|interp| {
-            interp.gc_root_value(&obj);
-            match interp.initialize_instance_elements(obj.clone(), f, &class_env) {
-                Ok(()) => Completion::Normal(obj),
-                Err(e) => Completion::Throw(e),
-            }
-        })
+        match self.initialize_instance_elements(obj.clone(), f) {
+            Ok(()) => Completion::Normal(obj),
+            Err(e) => Completion::Throw(e),
+        }
     }
 
     /// Construct with a specific new.target (needed for super() calls where new.target
@@ -7045,17 +6775,11 @@ impl Interpreter {
         }
 
         if is_derived {
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(new_target.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
             let prev_constructing_derived = self.constructing_derived;
             self.constructing_derived = true;
-            self.calling_as_construct = true;
             let (result, had_explicit_return, final_this) =
-                self.call_constructor_body(constructor, &JsValue::UNDEFINED, args);
+                self.call_constructor_body(constructor, &JsValue::UNDEFINED, args, &new_target);
             self.constructing_derived = prev_constructing_derived;
-            self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
@@ -7088,190 +6812,35 @@ impl Interpreter {
                 false
             };
 
-            let (this_val, new_obj_id) = if deferred {
-                (JsValue::UNDEFINED, 0)
+            let this_val = if deferred {
+                JsValue::UNDEFINED
             } else {
-                let new_obj_id = self.create_object_id();
-                // Use new_target's .prototype for the new object's [[Prototype]]
-                // Must use get_object_property to invoke proxy get traps
-                if let Some(nt_o) = new_target
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
+                // OrdinaryCreateFromConstructor: GetPrototypeFromConstructor
+                // first, then allocate. The `prototype` read can run a Proxy
+                // `get` trap, and an object allocated before it would be
+                // unrooted (and collectable) while that trap runs.
+                let proto_id = match self
+                    .get_prototype_from_constructor(&new_target, |r| r.object_prototype)
                 {
-                    let nt_val = new_target.clone();
-                    let proto = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if let Some(proto_obj) = (proto)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        self.get_object_cell_expect(new_obj_id)
-                            .borrow_mut()
-                            .prototype_id = Some(proto_obj.id);
-                    } else {
-                        // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                        let nt_realm_id = match self.get_function_realm(&JsValue::object(nt_o.id)) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let op_id = self.realms[nt_realm_id].object_prototype;
-                        if let Some(proto_rc) = op_id {
-                            self.get_object_cell_expect(new_obj_id)
-                                .borrow_mut()
-                                .prototype_id = Some(proto_rc);
-                        }
-                    }
-                }
-                let id = new_obj_id;
-                (JsValue::object(id), id)
-            };
-
-            // Initialize instance fields from the constructor's class_instance_field_defs.
-            let instance_field_defs = if let Some(co) = (constructor)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = self.get_object_cell(co.id)
-            {
-                func_obj.borrow().class_instance_field_defs.clone()
-            } else {
-                Vec::new()
-            };
-            if !instance_field_defs.is_empty() {
-                let (class_pn, proto_val, outer_env) = if let Some(co) = (constructor)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = self.get_object_cell(co.id)
-                {
-                    let (pn, oe) = if let Some(JsFunction::User { ref closure, .. }) =
-                        func_obj.borrow().callable
-                    {
-                        let cls_env = closure.borrow();
-                        (cls_env.class_private_names.clone(), cls_env.parent.clone())
-                    } else {
-                        (None, None)
-                    };
-                    let func_obj_id = func_obj.borrow().id.unwrap();
-                    let pv = self.get_property_on_id(func_obj_id, "prototype");
-                    (pn, pv, oe)
-                } else {
-                    (None, JsValue::UNDEFINED, None)
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let init_parent =
-                    outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
-                let init_env = Environment::new(Some(init_parent));
-                init_env.borrow_mut().set_this(this_val.clone());
-                init_env.borrow_mut().is_field_initializer = true;
-                init_env.borrow_mut().class_private_names = class_pn;
-                if proto_val.is_object() {
-                    init_env.borrow_mut().bindings.insert(
-                        "__home_object__",
-                        Binding {
-                            value: proto_val,
-                            kind: BindingKind::Const,
-                            initialized: true,
-                            deletable: false,
-                        },
-                    );
+                let new_obj_id = self.create_object_id();
+                if let Some(proto_id) = proto_id {
+                    self.get_object_cell_expect(new_obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_id);
                 }
-                // Pass 1: Install private methods and accessors first.
-                for idef in &instance_field_defs {
-                    match idef {
-                        InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                            if let Some(obj) = self.get_object_cell(new_obj_id) {
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(name.clone(), PrivateElement::Method(value.clone()));
-                            }
-                        }
-                        InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                            if let Some(obj) = self.get_object_cell(new_obj_id) {
-                                obj.borrow_mut().private_fields.insert(
-                                    name.clone(),
-                                    PrivateElement::Accessor {
-                                        get: get.clone(),
-                                        set: set.clone(),
-                                    },
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
+                let this_val = JsValue::object(new_obj_id);
+                if let Err(e) = self.initialize_instance_elements(this_val.clone(), constructor) {
+                    return Completion::Throw(e);
                 }
-                // Pass 2: Run field initializers in source order.
-                for idef in &instance_field_defs {
-                    match idef {
-                        InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
-                            let source_name = name.split('#').next().unwrap_or(name);
-                            let display_name = format!("#{source_name}");
-                            let val = if let Some(init) = initializer {
-                                match self.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => {
-                                        if init.is_anonymous_function_definition() {
-                                            self.set_function_name(&v, &display_name);
-                                        }
-                                        v
-                                    }
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            if let Some(obj) = self.get_object_cell(new_obj_id) {
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(name.clone(), PrivateElement::Field(val));
-                            }
-                        }
-                        InstanceFieldDef::Public(key, initializer) => {
-                            let val = if let Some(init) = initializer {
-                                match self.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => {
-                                        if init.is_anonymous_function_definition() {
-                                            self.set_function_name(&v, key);
-                                        }
-                                        v
-                                    }
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            if let Some(obj) = self.get_object_cell(new_obj_id) {
-                                obj.borrow_mut().insert_value(key.clone(), val);
-                            }
-                        }
-                        InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
-                            let val = if let Some(init) = initializer {
-                                match self.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
-                            if let Some(obj) = self.get_object_cell(new_obj_id) {
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(slot_name.clone(), PrivateElement::Field(val));
-                            }
-                        }
-                        _ => {} // Methods/accessors handled in pass 1
-                    }
-                }
-            }
+                this_val
+            };
 
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(new_target.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
-            self.calling_as_construct = true;
             let (result, had_explicit_return, captured_this) =
-                self.call_constructor_body(constructor, &this_val, args);
-            let final_this = captured_this.unwrap_or(this_val.clone());
-            self.new_target = prev_new_target;
+                self.call_constructor_body(constructor, &this_val, args, &new_target);
+            let final_this = captured_this.unwrap_or(this_val);
             match result {
                 Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)

@@ -1083,7 +1083,7 @@ fn run_chunk_inner(
                 // mirroring Op::Call: construct_from_evaluated can run
                 // arbitrary JS (constructor body, field initializers) and hit
                 // any number of safepoints before returning.
-                let result = interp.construct_from_evaluated(&callee, &stack[base + 1..], env);
+                let result = interp.construct_from_evaluated(&callee, &stack[base + 1..]);
                 pop_operands(interp, stack, argc + 1);
                 match result {
                     Completion::Normal(value) | Completion::Return(value) => {
