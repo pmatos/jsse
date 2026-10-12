@@ -3091,3 +3091,34 @@ fn compare_branches_match_tree_walker_on_mixed_operands() {
     assert_eq!(ast_v.as_number(), bc_v.as_number());
     assert_eq!(bc_v.as_number(), Some(110101001.0 + 8.0));
 }
+
+/// An operand byte can equal a return opcode (a slot or name index in 512..1024
+/// has a high byte of 2 or 3); the trailing-return check must look at the last
+/// *opcode*, not the last byte (issue #903 review).
+#[test]
+fn wide_operand_final_statement_still_ends_in_return() {
+    for target in [512usize, 700, 800, 1023] {
+        let mut source = String::new();
+        for i in 0..=target {
+            source.push_str(&format!("var v{i}; "));
+        }
+        source.push_str(&format!("v{target} = 1;"));
+        let chunk = compile_function_source(&source, &[]);
+        assert_eq!(
+            work_ops(&chunk).last(),
+            Some(&Op::ReturnUndefined),
+            "slot {target}"
+        );
+        let free = format!("g{target} = 1;");
+        let mut names = String::new();
+        for i in 0..target {
+            names.push_str(&format!("g{i} = 0; "));
+        }
+        let chunk = compile_function_source(&format!("{names}{free}"), &[]);
+        assert_eq!(
+            work_ops(&chunk).last(),
+            Some(&Op::ReturnUndefined),
+            "name {target}"
+        );
+    }
+}

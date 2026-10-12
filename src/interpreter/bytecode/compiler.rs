@@ -64,6 +64,10 @@ struct Compiler {
     /// `i` is the expected position of that name in the call's binding
     /// vector. Empty when no local ops are emitted.
     locals: Vec<String>,
+    /// Offset of the most recently emitted opcode byte. The last byte of
+    /// `code` may be an operand (a slot or name index whose high byte equals a
+    /// return opcode), so `finish` must not decode `code.last()`.
+    last_op_at: usize,
 }
 
 impl Compiler {
@@ -71,6 +75,7 @@ impl Compiler {
         Self {
             goal,
             locals: Vec::new(),
+            last_op_at: 0,
             code: Vec::new(),
             constants: Vec::new(),
             names: Vec::new(),
@@ -106,6 +111,7 @@ impl Compiler {
     }
 
     fn emit(&mut self, op: Op) {
+        self.last_op_at = self.code.len();
         self.code.push(op as u8);
     }
 
@@ -806,10 +812,12 @@ impl Compiler {
             debug_assert_eq!(self.current_stack, 0);
             debug_assert_eq!(self.current_refs, 0);
             let safepoint_at = self.code.len();
+            let previous_op_at = self.last_op_at;
             self.emit(Op::Safepoint);
             self.compile_statement(stmt)?;
             if self.code.len() == safepoint_at + 1 {
                 self.code.truncate(safepoint_at);
+                self.last_op_at = previous_op_at;
             }
         }
         Ok(())
@@ -1112,7 +1120,9 @@ impl Compiler {
             // target is the end of the chunk (e.g. the false arm of a one-armed
             // `if` whose consequent ends in `return`) would otherwise run `pc` past
             // the last byte of `code` and panic in the VM dispatch loop.
-            if !ends_with_return(&self.code) || self.max_jump_target >= self.code.len() {
+            if !ends_with_return(&self.code, self.last_op_at)
+                || self.max_jump_target >= self.code.len()
+            {
                 self.emit(Op::ReturnUndefined);
             }
         }
@@ -1141,9 +1151,9 @@ fn contains_tail_call(expr: &Expression) -> bool {
     }
 }
 
-fn ends_with_return(code: &[u8]) -> bool {
+fn ends_with_return(code: &[u8], last_op_at: usize) -> bool {
     matches!(
-        code.last().copied().and_then(Op::from_u8),
+        code.get(last_op_at).copied().and_then(Op::from_u8),
         Some(Op::Return) | Some(Op::ReturnUndefined)
     )
 }
