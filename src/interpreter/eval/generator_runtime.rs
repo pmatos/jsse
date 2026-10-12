@@ -810,19 +810,25 @@ impl Interpreter {
             StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
         };
 
-        obj_rc.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::StateMachineGenerator {
-                state_machine: state_machine.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                execution_state: StateMachineExecutionState::Executing,
-                _sent_value: sent_value.clone(),
-                try_stack: try_stack.clone(),
-                pending_binding: None,
-                delegated_iterator: None,
-                pending_exception: None,
-                pending_return: None,
-            });
+        if let Some(IteratorState::StateMachineGenerator {
+            execution_state,
+            _sent_value,
+            pending_binding,
+            delegated_iterator,
+            pending_exception,
+            pending_return,
+            ..
+        }) = obj_rc.borrow_mut().iterator_state_mut()
+        {
+            *execution_state = StateMachineExecutionState::Executing;
+            *_sent_value = sent_value.clone();
+            *pending_binding = None;
+            *delegated_iterator = None;
+            *pending_exception = None;
+            *pending_return = None;
+        } else {
+            debug_assert!(false, "resumed generator lost its state-machine state");
+        }
 
         use crate::interpreter::generator_transform::SentValueBindingKind;
         let mut initial_inline_yield_target: Option<usize> = None;
@@ -941,8 +947,11 @@ impl Interpreter {
             }};
         }
 
+        // Borrowed terminators must outlive the moves of `state_machine`.
+        let machine = Rc::clone(&state_machine);
+
         loop {
-            let terminator = state_machine.states[current_id].terminator.clone();
+            let terminator = &machine.states[current_id].terminator;
 
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
@@ -964,7 +973,7 @@ impl Interpreter {
             // Block scopes the transition leaves are disposed at their exit
             // (their own DisposeResources), innermost first, before the
             // reconciliation below discards their frames.
-            let keep_scopes = state_machine.states[current_id].scope_depth;
+            let keep_scopes = machine.states[current_id].scope_depth;
             let leaves_resources = scope_stack.get(keep_scopes..).is_some_and(|frames| {
                 frames
                     .iter()
@@ -1022,14 +1031,14 @@ impl Interpreter {
             }
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
-                &state_machine.states[current_id],
+                &machine.states[current_id],
                 current_try_stack.len(),
                 for_of_stack.len(),
                 &for_of_env,
             );
             self.sync_generator_scope_stack(o.id, &scope_stack);
             let mut stmt_result = self.exec_state_machine_body(
-                &state_machine.states[current_id].body,
+                &machine.states[current_id].body,
                 &term_env,
                 &state_machine,
                 false,
@@ -1113,11 +1122,11 @@ impl Interpreter {
                 return self.generator_return_state_machine(this, v);
             }
 
-            let terminator = state_machine.states[current_id]
+            let terminator = machine.states[current_id]
                 .inline_jump_terminator(&stmt_result)
                 .unwrap_or(terminator);
 
-            match &terminator {
+            match terminator {
                 StateTerminator::Yield {
                     value,
                     is_delegate,
@@ -1770,8 +1779,8 @@ impl Interpreter {
                         },
                     );
                     for_of_stack.push(ForOfLoopState {
-                        iter_var: iter_var.clone(),
-                        label_set: label_set.clone(),
+                        iter_var: Rc::from(iter_var.as_str()),
+                        label_set: Rc::from(label_set.as_slice()),
                         head_state: *head_state,
                         after_state: *forinit_after,
                         try_depth: current_try_stack.len(),
@@ -1794,14 +1803,14 @@ impl Interpreter {
                 } => {
                     let loop_pos = match for_of_stack
                         .iter()
-                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                        .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str())
                     {
                         Some(pos) => pos,
                         None => {
                             debug_assert!(false, "for-of head without an active loop state");
                             for_of_stack.push(ForOfLoopState {
-                                iter_var: iter_var.clone(),
-                                label_set: vec![],
+                                iter_var: Rc::from(iter_var.as_str()),
+                                label_set: Rc::from(Vec::new()),
                                 head_state: current_id,
                                 after_state: *after_state,
                                 try_depth: current_try_stack.len(),
@@ -2014,8 +2023,8 @@ impl Interpreter {
                                 },
                             );
                             for_of_stack.push(ForOfLoopState {
-                                iter_var: iter_var.clone(),
-                                label_set: vec![],
+                                iter_var: Rc::from(iter_var.as_str()),
+                                label_set: Rc::from(Vec::new()),
                                 head_state: next_state,
                                 after_state: next_state,
                                 try_depth: current_try_stack.len(),
@@ -2030,7 +2039,7 @@ impl Interpreter {
                         ArrayPatternIterOp::Step { dest_var } => {
                             let loop_pos = for_of_stack
                                 .iter()
-                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                                .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str());
                             let value = match loop_pos {
                                 None => JsValue::UNDEFINED,
                                 Some(pos) => {
@@ -2083,7 +2092,7 @@ impl Interpreter {
                         ArrayPatternIterOp::Drain { dest_var } => {
                             let loop_pos = for_of_stack
                                 .iter()
-                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                                .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str());
                             let rest = match loop_pos {
                                 None => Vec::new(),
                                 Some(pos) => {
@@ -2137,7 +2146,7 @@ impl Interpreter {
                         ArrayPatternIterOp::Finish => {
                             if let Some(pos) = for_of_stack
                                 .iter()
-                                .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                                .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str())
                             {
                                 let loop_state = for_of_stack.remove(pos);
                                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
@@ -4052,7 +4061,7 @@ impl Interpreter {
         let mut for_of_protocol_failure = rejected_head_iter_var.filter(|iter_var| {
             for_of_stack
                 .iter()
-                .any(|loop_state| loop_state.iter_var == *iter_var)
+                .any(|loop_state| &*loop_state.iter_var == iter_var.as_str())
         });
 
         /// Tear this async generator down for an uncatchable host exit
@@ -4248,6 +4257,9 @@ impl Interpreter {
             }};
         }
 
+        // Borrowed terminators must outlive the moves of `state_machine`.
+        let machine = Rc::clone(&state_machine);
+
         loop {
             match std::mem::replace(&mut reentry, GeneratorReentry::State) {
                 GeneratorReentry::State => {}
@@ -4266,9 +4278,9 @@ impl Interpreter {
                 // Check pending_exception before executing state (handles .throw() with no try/catch)
                 if let Some(exc) = pending_exception.take() {
                     if let Some(failed_iter_var) = for_of_protocol_failure.take()
-                        && let Some(pos) = for_of_stack
-                            .iter()
-                            .rposition(|loop_state| loop_state.iter_var == failed_iter_var)
+                        && let Some(pos) = for_of_stack.iter().rposition(|loop_state| {
+                            &*loop_state.iter_var == failed_iter_var.as_str()
+                        })
                     {
                         let loop_state = for_of_stack.remove(pos);
                         let iterator = func_env.borrow().get(&loop_state.iter_var);
@@ -4412,7 +4424,7 @@ impl Interpreter {
                 }
             } // end if check_abrupt_on_resume
 
-            let terminator = state_machine.states[current_id].terminator.clone();
+            let terminator = &machine.states[current_id].terminator;
 
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
@@ -4435,7 +4447,7 @@ impl Interpreter {
             // (their own DisposeResources), innermost first, before the
             // reconciliation below discards their frames.
             let in_flight_unwinding = std::mem::take(&mut just_routed);
-            let keep_scopes = state_machine.states[current_id].scope_depth;
+            let keep_scopes = machine.states[current_id].scope_depth;
             let leaves_resources = scope_stack.get(keep_scopes..).is_some_and(|frames| {
                 frames
                     .iter()
@@ -4519,14 +4531,14 @@ impl Interpreter {
             }
             let term_env = self.reconcile_scope_stack(
                 &mut scope_stack,
-                &state_machine.states[current_id],
+                &machine.states[current_id],
                 current_try_stack.len(),
                 for_of_stack.len(),
                 &for_of_env,
             );
             self.sync_generator_scope_stack(o.id, &scope_stack);
             let mut stmt_result = self.exec_state_machine_body(
-                &state_machine.states[current_id].body,
+                &machine.states[current_id].body,
                 &term_env,
                 &state_machine,
                 true,
@@ -4592,6 +4604,7 @@ impl Interpreter {
             // lowered yield (one `Await`, settled from a later job); the
             // re-entry uses `InlineYield` to fast-forward past earlier yields.
             let mut inline_yield_operand: Option<JsValue> = None;
+            let inline_yield_terminator;
             let terminator = match stmt_result {
                 Completion::Yield(yield_val) => {
                     self.destructuring_yield = false;
@@ -4602,7 +4615,7 @@ impl Interpreter {
                     let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
                     let prev_sent = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
                     inline_yield_operand = Some(yield_val);
-                    StateTerminator::Yield {
+                    inline_yield_terminator = StateTerminator::Yield {
                         value: None,
                         is_delegate: inline_yield_is_delegate,
                         resume_state: current_id,
@@ -4614,9 +4627,10 @@ impl Interpreter {
                                 },
                             },
                         ),
-                    }
+                    };
+                    &inline_yield_terminator
                 }
-                other => state_machine.states[current_id]
+                other => machine.states[current_id]
                     .inline_jump_terminator(&other)
                     .unwrap_or(terminator),
             };
@@ -5260,8 +5274,8 @@ impl Interpreter {
                         },
                     );
                     for_of_stack.push(ForOfLoopState {
-                        iter_var: iter_var.clone(),
-                        label_set: label_set.clone(),
+                        iter_var: Rc::from(iter_var.as_str()),
+                        label_set: Rc::from(label_set.as_slice()),
                         head_state: *head_state,
                         after_state: *forinit_after,
                         try_depth: current_try_stack.len(),
@@ -5284,14 +5298,14 @@ impl Interpreter {
                 } => {
                     let loop_pos = match for_of_stack
                         .iter()
-                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                        .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str())
                     {
                         Some(pos) => pos,
                         None => {
                             debug_assert!(false, "for-of head without an active loop state");
                             for_of_stack.push(ForOfLoopState {
-                                iter_var: iter_var.clone(),
-                                label_set: vec![],
+                                iter_var: Rc::from(iter_var.as_str()),
+                                label_set: Rc::from(Vec::new()),
                                 head_state: current_id,
                                 after_state: *after_state,
                                 try_depth: current_try_stack.len(),
@@ -5624,8 +5638,8 @@ impl Interpreter {
                                 },
                             );
                             for_of_stack.push(ForOfLoopState {
-                                iter_var: iter_var.clone(),
-                                label_set: vec![],
+                                iter_var: Rc::from(iter_var.as_str()),
+                                label_set: Rc::from(Vec::new()),
                                 head_state: next_state,
                                 after_state: next_state,
                                 try_depth: current_try_stack.len(),
@@ -5640,7 +5654,7 @@ impl Interpreter {
                         ArrayPatternIterOp::Step { dest_var } => {
                             let loop_pos = for_of_stack
                                 .iter()
-                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                                .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str());
                             let value = match loop_pos {
                                 None => JsValue::UNDEFINED,
                                 Some(pos) => {
@@ -5695,7 +5709,7 @@ impl Interpreter {
                         ArrayPatternIterOp::Drain { dest_var } => {
                             let loop_pos = for_of_stack
                                 .iter()
-                                .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                                .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str());
                             let rest = match loop_pos {
                                 None => Vec::new(),
                                 Some(pos) => {
@@ -5750,7 +5764,7 @@ impl Interpreter {
                         ArrayPatternIterOp::Finish => {
                             if let Some(pos) = for_of_stack
                                 .iter()
-                                .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                                .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str())
                             {
                                 let loop_state = for_of_stack.remove(pos);
                                 self.sync_generator_for_of_stack(o.id, &for_of_stack);
@@ -7089,8 +7103,7 @@ impl Interpreter {
                 .generator_for_of_stacks
                 .entry(generator_id)
                 .or_default();
-            slot.clear();
-            slot.extend_from_slice(for_of_stack);
+            mirror_stack(slot, for_of_stack, ForOfLoopState::same_as);
         }
     }
 
@@ -7149,8 +7162,7 @@ impl Interpreter {
             }
         } else {
             let slot = self.generator_scope_stacks.entry(generator_id).or_default();
-            slot.clear();
-            slot.extend_from_slice(scope_stack);
+            mirror_stack(slot, scope_stack, ScopeFrame::same_as);
         }
     }
 
@@ -7185,4 +7197,16 @@ fn env_has_pending_dispose(env: &EnvRef) -> bool {
         .dispose_stack
         .as_ref()
         .is_some_and(|stack| !stack.is_empty())
+}
+
+/// Makes `slot` equal to `src`, writing only the entries that differ.
+fn mirror_stack<T: Clone>(slot: &mut Vec<T>, src: &[T], same: fn(&T, &T) -> bool) {
+    slot.truncate(src.len());
+    for (dst, entry) in slot.iter_mut().zip(src) {
+        if !same(dst, entry) {
+            dst.clone_from(entry);
+        }
+    }
+    let kept = slot.len();
+    slot.extend_from_slice(&src[kept..]);
 }

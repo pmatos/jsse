@@ -7874,7 +7874,7 @@ impl Interpreter {
             && let Some(iter_var) = name.strip_suffix("__await")
             && saved_for_of_stack
                 .iter()
-                .any(|loop_state| loop_state.iter_var == iter_var)
+                .any(|loop_state| &*loop_state.iter_var == iter_var)
         {
             for_of_protocol_failure = Some(iter_var.to_string());
         }
@@ -8473,7 +8473,7 @@ impl Interpreter {
             if current_id >= state_machine.states.len() {
                 complete_function!();
             }
-            let terminator = state_machine.states[current_id].terminator.clone();
+            let terminator = &state_machine.states[current_id].terminator;
 
             // Route pending exception through try stack
             // Skip routing if we're at EnterCatch/EnterFinally (already routed to handler)
@@ -8491,7 +8491,7 @@ impl Interpreter {
                 if let Some(failed_iter_var) = for_of_protocol_failure.take()
                     && let Some(pos) = for_of_stack
                         .iter()
-                        .rposition(|loop_state| loop_state.iter_var == failed_iter_var)
+                        .rposition(|loop_state| &*loop_state.iter_var == failed_iter_var.as_str())
                 {
                     let loop_state = for_of_stack.remove(pos);
                     let iterator = func_env.borrow().get(&loop_state.iter_var);
@@ -8786,18 +8786,18 @@ impl Interpreter {
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
-            match terminator {
+            match *terminator {
                 StateTerminator::Await {
-                    value,
+                    ref value,
                     resume_state,
-                    sent_value_binding,
+                    ref sent_value_binding,
                 } => {
                     // The only operand site with bespoke `Suspend` handling
                     // — an inline yield here parks the function at *this*
                     // state, not at `resume_state` — so it spells the match out
                     // rather than using `operand!`. The `Abort` arm is the
                     // macro's, verbatim.
-                    let await_val = match self.eval_operand(&value, &term_env) {
+                    let await_val = match self.eval_operand(value, &term_env) {
                         Operand::Value(v) => v,
                         Operand::Throw(e) => {
                             pending_exception = Some(e);
@@ -9068,8 +9068,8 @@ impl Interpreter {
                     };
                     self.env_set(&func_env, iter_var, iterator).ok();
                     for_of_stack.push(ForOfLoopState {
-                        iter_var: iter_var.clone(),
-                        label_set: label_set.clone(),
+                        iter_var: Rc::from(iter_var.as_str()),
+                        label_set: Rc::from(label_set.as_slice()),
                         head_state,
                         after_state: forinit_after,
                         try_depth: try_stack.len(),
@@ -9093,14 +9093,14 @@ impl Interpreter {
                     // unwinding dropped it; rebuild one rather than abort.
                     let loop_pos = match for_of_stack
                         .iter()
-                        .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                        .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str())
                     {
                         Some(pos) => pos,
                         None => {
                             debug_assert!(false, "for-of head without an active loop state");
                             for_of_stack.push(ForOfLoopState {
-                                iter_var: iter_var.clone(),
-                                label_set: vec![],
+                                iter_var: Rc::from(iter_var.as_str()),
+                                label_set: Rc::from(Vec::new()),
                                 head_state: current_id,
                                 after_state,
                                 try_depth: try_stack.len(),
@@ -9321,8 +9321,8 @@ impl Interpreter {
                         };
                         self.env_set(&func_env, iter_var, iterator).ok();
                         for_of_stack.push(ForOfLoopState {
-                            iter_var: iter_var.clone(),
-                            label_set: vec![],
+                            iter_var: Rc::from(iter_var.as_str()),
+                            label_set: Rc::from(Vec::new()),
                             head_state: next_state,
                             after_state: next_state,
                             try_depth: try_stack.len(),
@@ -9336,7 +9336,7 @@ impl Interpreter {
                     ArrayPatternIterOp::Step { dest_var } => {
                         let loop_pos = for_of_stack
                             .iter()
-                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                            .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str());
                         let value = match loop_pos {
                             None => JsValue::UNDEFINED,
                             Some(pos) => {
@@ -9374,7 +9374,7 @@ impl Interpreter {
                     ArrayPatternIterOp::Drain { dest_var } => {
                         let loop_pos = for_of_stack
                             .iter()
-                            .rposition(|loop_state| loop_state.iter_var == *iter_var);
+                            .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str());
                         let rest = match loop_pos {
                             None => Vec::new(),
                             Some(pos) => {
@@ -9419,7 +9419,7 @@ impl Interpreter {
                     ArrayPatternIterOp::Finish => {
                         if let Some(pos) = for_of_stack
                             .iter()
-                            .rposition(|loop_state| loop_state.iter_var == *iter_var)
+                            .rposition(|loop_state| &*loop_state.iter_var == iter_var.as_str())
                         {
                             let loop_state = for_of_stack.remove(pos);
                             match self.close_for_of_loop(

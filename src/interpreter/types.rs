@@ -453,10 +453,10 @@ pub(crate) struct ScopeFrame {
 
 #[derive(Clone)]
 pub(crate) struct ForOfLoopState {
-    pub(crate) iter_var: String,
+    pub(crate) iter_var: Rc<str>,
     /// The labels attached to this iteration statement. `LoopContinues` uses
     /// this set to decide whether a labelled continue begins its next iteration.
-    pub(crate) label_set: Vec<String>,
+    pub(crate) label_set: Rc<[String]>,
     pub(crate) head_state: usize,
     pub(crate) after_state: usize,
     /// Depth of the driver's try stack when the loop began, so an abrupt
@@ -484,6 +484,46 @@ impl ForOfLoopState {
 
     pub(crate) fn matches_continue_target(&self, target: Option<&str>) -> bool {
         target.is_none_or(|target| self.label_set.iter().any(|label| label == target))
+    }
+
+    pub(crate) fn same_as(&self, other: &ForOfLoopState) -> bool {
+        let ForOfLoopState {
+            iter_var,
+            label_set,
+            head_state,
+            after_state,
+            try_depth,
+            outer_env,
+            iteration_env,
+            is_await,
+            iterator_closed,
+        } = self;
+        *head_state == other.head_state
+            && *after_state == other.after_state
+            && *try_depth == other.try_depth
+            && *is_await == other.is_await
+            && *iterator_closed == other.iterator_closed
+            && Rc::ptr_eq(outer_env, &other.outer_env)
+            && match (iteration_env, &other.iteration_env) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && (Rc::ptr_eq(iter_var, &other.iter_var) || *iter_var == other.iter_var)
+            && (Rc::ptr_eq(label_set, &other.label_set) || *label_set == other.label_set)
+    }
+}
+
+impl ScopeFrame {
+    pub(crate) fn same_as(&self, other: &ScopeFrame) -> bool {
+        let ScopeFrame {
+            env,
+            try_depth,
+            for_of_depth,
+        } = self;
+        *try_depth == other.try_depth
+            && *for_of_depth == other.for_of_depth
+            && Rc::ptr_eq(env, &other.env)
     }
 }
 
@@ -1698,7 +1738,7 @@ mod completed_state_machine_generator_tests {
 
     fn empty_state_machine() -> Rc<GeneratorStateMachine> {
         Rc::new(GeneratorStateMachine {
-            states: Vec::new(),
+            states: Rc::from(Vec::new()),
             local_vars: Vec::new(),
             params: Vec::new(),
             num_yields: 0,
@@ -3512,7 +3552,7 @@ impl JsObjectData {
     }
 
     /// Append an own property whose key the caller knows is absent and
-    /// already interned (a pre-built key from `FunctionKeys`). Skips the key
+    /// already interned (a pre-built key from `CommonKeys`). Skips the key
     /// interning and duplicate scan of [`insert_property`]; only valid on
     /// objects with no array exotic key tracking.
     pub(crate) fn push_fresh_property(&mut self, key: &JsPropertyKey, desc: PropertyDescriptor) {

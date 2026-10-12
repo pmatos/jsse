@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::interpreter::atom::Atom;
 use crate::interpreter::generator_analysis::*;
 use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
@@ -16,7 +17,8 @@ pub(crate) enum StateMachineKind {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct GeneratorStateMachine {
-    pub states: Vec<GeneratorState>,
+    /// Shared so a machine clone never deep-copies terminators (#955).
+    pub states: std::rc::Rc<[GeneratorState]>,
     pub local_vars: Vec<LocalVariable>,
     pub params: Vec<Pattern>,
     pub num_yields: usize,
@@ -70,7 +72,7 @@ pub(crate) enum ScopeAction {
     /// block's *entire* set of lexical names must enter TDZ together at
     /// block entry, not just the subset appearing in whichever fragment a
     /// suspension point happens to split off first.
-    OpenBlock(Vec<(String, bool)>),
+    OpenBlock(Vec<(Atom, bool)>),
     /// `CreatePerIterationEnvironment` (`sec-createperiterationenvironment`):
     /// push a fresh frame copying the named bindings' current values forward,
     /// replacing the frame already at this depth if one is there (the `for`
@@ -79,7 +81,7 @@ pub(crate) enum ScopeAction {
     /// rely on a depth change to know when to fire). `bool` is whether the
     /// binding is `const` (spec still runs this for `const` heads; see
     /// `exec_for`, which this generalizes).
-    CopyForward(Vec<(String, bool)>),
+    CopyForward(Vec<(Atom, bool)>),
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +98,7 @@ impl GeneratorState {
     pub(crate) fn inline_jump_terminator(
         &self,
         completion: &crate::interpreter::types::Completion,
-    ) -> Option<StateTerminator> {
+    ) -> Option<&StateTerminator> {
         use crate::interpreter::types::Completion;
         if self.inline_jumps.is_empty() {
             return None;
@@ -109,7 +111,7 @@ impl GeneratorState {
         self.inline_jumps
             .iter()
             .find(|jump| jump.kind == kind && jump.label == *label)
-            .map(|jump| jump.terminator.clone())
+            .map(|jump| &jump.terminator)
     }
 }
 
@@ -301,6 +303,13 @@ pub(crate) struct LoopControlTarget {
     /// dropped scope frame at the next state transition instead, so their
     /// routing does not consume this field.
     pub scope_depth: usize,
+}
+
+fn intern_scope_decls(decls: Vec<(String, bool)>) -> Vec<(Atom, bool)> {
+    decls
+        .into_iter()
+        .map(|(name, is_const)| (Atom::intern(&name), is_const))
+        .collect()
 }
 
 /// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
@@ -677,7 +686,7 @@ fn transform_generator_inner_opts(
     ctx.states[end_state].terminator = StateTerminator::Completed;
 
     GeneratorStateMachine {
-        states: ctx.states,
+        states: ctx.states.into(),
         local_vars: analysis.local_vars,
         params: params.to_vec(),
         num_yields: analysis.yield_points.len(),
@@ -695,7 +704,7 @@ fn create_simple_machine(
     let mut body = Body::new(body.to_vec());
     crate::ast::assign_ic_sites_for_body(&mut body);
     GeneratorStateMachine {
-        states: vec![GeneratorState {
+        states: std::rc::Rc::from(vec![GeneratorState {
             id: 0,
             body,
             terminator: StateTerminator::Completed,
@@ -703,7 +712,7 @@ fn create_simple_machine(
             scope_depth: 0,
             scope_action: None,
             scope_with_vars: Vec::new(),
-        }],
+        }]),
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
         num_yields: 0,
@@ -1139,7 +1148,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 ctx.current_state_id = entry_state;
                 ctx.scope_depth += 1;
                 ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(stmts.iter()),
+                    intern_scope_decls(collect_block_lexical_decls(stmts.iter())),
                 ));
                 let with_chain = ctx.claim_with_chain(entry_state);
 
@@ -3161,7 +3170,7 @@ fn transform_for_statement(
     // the update runs). `test_state`/`body_state`/`update_state` all share
     // this *one* frame at a constant depth — mirrors `exec_for`'s
     // `per_iteration_bindings` (`exec.rs`).
-    let per_iteration_bindings: Vec<(String, bool)> = if let Some(ForInit::Variable(decl)) =
+    let per_iteration_bindings: Vec<(Atom, bool)> = if let Some(ForInit::Variable(decl)) =
         &for_stmt.init
         && matches!(decl.kind, VarKind::Let | VarKind::Const)
     {
@@ -3170,7 +3179,7 @@ fn transform_for_statement(
         for d in &decl.declarations {
             d.pattern.bound_names(&mut names);
         }
-        names.into_iter().map(|n| (n, is_const)).collect()
+        intern_scope_decls(names.into_iter().map(|n| (n, is_const)).collect())
     } else {
         Vec::new()
     };
@@ -3590,9 +3599,9 @@ fn transform_try_statement(
     if ctx.scopes_disposables(&try_stmt.block) {
         transform_scope_block(&try_stmt.block, ctx, clause_completion_state);
     } else {
-        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(
+        ctx.states[try_body_state].scope_action = Some(ScopeAction::OpenBlock(intern_scope_decls(
             collect_block_lexical_decls(try_stmt.block.iter()),
-        ));
+        )));
         ctx.scope_depth += 1;
         let with_chain = ctx.claim_with_chain(try_body_state);
         transform_statements(&try_stmt.block, ctx, clause_completion_state);
@@ -3654,7 +3663,7 @@ fn transform_try_statement(
                 transform_scope_block(finalizer, ctx, finally_exit_state);
             } else {
                 ctx.states[finally_body_state].scope_action = Some(ScopeAction::OpenBlock(
-                    collect_block_lexical_decls(finalizer.iter()),
+                    intern_scope_decls(collect_block_lexical_decls(finalizer.iter())),
                 ));
                 ctx.scope_depth += 1;
                 let with_chain = ctx.claim_with_chain(finally_body_state);
@@ -3706,7 +3715,8 @@ fn open_case_block_scope(
     ctx.finalize_current_state(StateTerminator::Goto(bridge_state));
     ctx.current_state_id = bridge_state;
     ctx.scope_depth += 1;
-    ctx.states[bridge_state].scope_action = Some(ScopeAction::OpenBlock(case_block_decls));
+    ctx.states[bridge_state].scope_action =
+        Some(ScopeAction::OpenBlock(intern_scope_decls(case_block_decls)));
     bridge_state
 }
 
@@ -3920,7 +3930,9 @@ pub(crate) fn transform_async_function(
 }
 
 fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMachine) {
-    for state in &mut machine.states {
+    let states = std::rc::Rc::get_mut(&mut machine.states)
+        .expect("a freshly transformed machine's states are unshared");
+    for state in states {
         let replacement = match &state.terminator {
             StateTerminator::Yield {
                 value,
@@ -5291,7 +5303,7 @@ mod tests {
             matches!(
                 &s.scope_action,
                 Some(ScopeAction::OpenBlock(decls))
-                    if decls.iter().any(|(name, is_const)| name == "x" && *is_const)
+                    if decls.iter().any(|(name, is_const)| name.as_str() == "x" && *is_const)
             )
         });
         assert!(
@@ -5331,7 +5343,7 @@ mod tests {
         // `let`s must land in a single, shared OpenBlock scope_action, not
         // per-case ones.
         let sm = async_machine("switch (1) { case 1: let y = 1; await 0; case 2: let z = 2; } ");
-        let open_block_decls: Vec<&Vec<(String, bool)>> = sm
+        let open_block_decls: Vec<&Vec<(Atom, bool)>> = sm
             .states
             .iter()
             .filter_map(|s| match &s.scope_action {
@@ -5347,11 +5359,11 @@ mod tests {
         );
         let decls = open_block_decls[0];
         assert!(
-            decls.iter().any(|(name, _)| name == "y"),
+            decls.iter().any(|(name, _)| name.as_str() == "y"),
             "expected `y` in the shared CaseBlock scope, got {decls:?}"
         );
         assert!(
-            decls.iter().any(|(name, _)| name == "z"),
+            decls.iter().any(|(name, _)| name.as_str() == "z"),
             "expected `z` in the shared CaseBlock scope, got {decls:?}"
         );
     }

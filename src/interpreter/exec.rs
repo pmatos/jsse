@@ -85,6 +85,10 @@ impl Interpreter {
     }
 
     fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        // Terminator-only state-machine states have nothing to instantiate or run.
+        if body.as_slice().is_empty() {
+            return Completion::Empty;
+        }
         self.with_ic_body(body, |interp| {
             interp.exec_statements_cached(body.as_slice(), env, None)
         })
@@ -2106,13 +2110,16 @@ impl Interpreter {
                 // run — not just the ones textually in this first fragment.
                 // Never `initialize_binding` here; the state whose body
                 // contains the actual declaration does that when it runs.
-                for (name, is_const) in decls {
-                    let kind = if *is_const {
-                        BindingKind::Const
-                    } else {
-                        BindingKind::Let
-                    };
-                    env.borrow_mut().declare(name, kind);
+                {
+                    let mut env = env.borrow_mut();
+                    for (name, is_const) in decls {
+                        let kind = if *is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        env.declare_atom(name, kind);
+                    }
                 }
                 scope_stack.push(ScopeFrame {
                     env,
@@ -2129,23 +2136,30 @@ impl Interpreter {
                 // push).
                 let replacing = scope_stack.len() == target_depth;
                 let source = innermost(scope_stack, for_of_env);
-                let values: Vec<JsValue> = bindings
+                let values: smallvec::SmallVec<[JsValue; 4]> = bindings
                     .iter()
-                    .map(|(name, _)| self.env_get(&source, name).unwrap_or(JsValue::UNDEFINED))
+                    .map(|(name, _)| {
+                        self.env_get(&source, name.as_str())
+                            .unwrap_or(JsValue::UNDEFINED)
+                    })
                     .collect();
                 if replacing {
                     scope_stack.pop();
                 }
                 let parent = innermost(scope_stack, for_of_env);
                 let fresh = Environment::new(Some(parent));
-                for ((name, is_const), value) in bindings.iter().zip(values) {
-                    let kind = if *is_const {
-                        BindingKind::Const
-                    } else {
-                        BindingKind::Let
-                    };
-                    fresh.borrow_mut().declare(name, kind);
-                    fresh.borrow_mut().initialize_binding(name, value);
+                {
+                    let mut fresh = fresh.borrow_mut();
+                    for ((name, is_const), value) in bindings.iter().zip(values) {
+                        let kind = if *is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        fresh
+                            .bindings
+                            .insert_atom(name, Binding::new(value, kind, true));
+                    }
                 }
                 scope_stack.push(ScopeFrame {
                     env: fresh,
