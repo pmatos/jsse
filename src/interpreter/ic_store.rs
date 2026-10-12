@@ -7,8 +7,9 @@
 //! `ast::assign_ic_sites`; this module creates a `BodyIcStore` per body on
 //! first execution and shares it across all closures of that body.
 
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use crate::ast::{Body, BodyIcInfo, CallSiteId, PropSiteId};
 use crate::interpreter::Interpreter;
@@ -37,7 +38,11 @@ pub(crate) struct IcStore {
     ///
     /// Eviction removes this mapping while its entry still pins the Body, then
     /// drops the entry. Every surviving pointer key therefore names a live Body.
-    index: HashMap<*const Vec<crate::ast::Statement>, usize>,
+    ///
+    /// Keys are `Rc` addresses, never script-controlled strings, so the
+    /// HashDoS resistance of SipHash buys nothing here and `enter_body` runs on
+    /// every call.
+    index: FxHashMap<*const Vec<crate::ast::Statement>, usize>,
     stores: Vec<StoreSlot>,
     free_slots: Vec<usize>,
     capacity: usize,
@@ -64,7 +69,7 @@ impl IcStore {
 
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            index: HashMap::new(),
+            index: FxHashMap::default(),
             stores: Vec::new(),
             free_slots: Vec::new(),
             capacity: capacity.max(2),

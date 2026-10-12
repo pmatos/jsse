@@ -52,6 +52,36 @@ The pool is bounded to avoid retaining storage proportional to pathological
 recursion depth. Environments are cleared before pooling so the free list never
 acts as a GC root for values or outer environments.
 
+## Fixed per-call work (#899)
+
+Later changes removed work every call paid regardless of whether it was
+observable:
+
+- **Call-path snapshot.** `call_function_inner_impl` copies only the fields the
+  call reads out of the callee (`CallTarget`) instead of cloning the whole
+  `JsFunction`, whose `name` and `source_text` allocated per call.
+- **`this`.** Sloppy undefined/null `this` resolves through
+  `Realm.global_object` rather than a global-environment lookup, and
+  `last_call_this_value` — read only by `[[Construct]]` — is written only for
+  constructor calls.
+- **`arguments`.** A function that never mentions `arguments` (no reference,
+  declaration, parameter or direct eval, arrow parameters included) gets no
+  placeholder binding; its sloppy frame keeps the arguments inline
+  (`SmallVec`) for the legacy `fn.arguments` accessor. Arguments objects are
+  built by direct property insertion, and `@@iterator` is the realm's
+  `%Array.prototype.values%` (`Realm.array_prototype_values`, a GC root).
+- **VM.** `Op::Call`/`Op::Construct` hand the callee a slice of the operand
+  stack (the operands stay rooted and are popped after the call), chunk
+  activations recycle their operand/reference stacks through
+  `Interpreter.vm_stack_pool`/`vm_ref_pool`, and `IcStore` keys bodies with
+  FxHash.
+- **Non-simple parameters.** The separate var environment's name set comes from
+  the per-Body hoist cache instead of a body walk and two `HashSet`s per call.
+
+What remains per call is the `String`-keyed `Environment.bindings` insert for
+`this` and each parameter, which belongs to the slot-keyed environment work
+(#898).
+
 ## Alternatives considered
 
 Direct binding and pre-sizing alone have the smallest change surface, but leave

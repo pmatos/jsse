@@ -170,7 +170,7 @@ impl Interpreter {
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.Segmenter".to_string();
+            .class_name = "Intl.Segmenter".into();
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.Segmenter");
@@ -190,9 +190,9 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let input_u16 = input_js.code_units.clone();
+                let input_u16 = input_js.clone();
 
-                let breaks = compute_break_points_utf16(&input_u16, &granularity);
+                let breaks = compute_break_points_utf16(input_u16.as_units(), &granularity);
 
                 let segments_obj_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
@@ -204,7 +204,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(segments_obj_id)
                     .borrow_mut()
-                    .class_name = "Segmenter Segments".to_string();
+                    .class_name = "Segmenter Segments".into();
 
                 interp
                     .get_object_cell_expect(segments_obj_id)
@@ -293,7 +293,7 @@ impl Interpreter {
                                     .properties
                                     .get("[[SegmenterInput]]")
                                     .and_then(|pd| pd.value.as_ref())
-                                    .and_then(|v| v.as_string().map(|s| s.code_units));
+                                    .and_then(|v| v.as_string());
                                 let granularity = b
                                     .properties
                                     .get("[[SegmenterGranularity]]")
@@ -331,6 +331,7 @@ impl Interpreter {
                             Some(s) => s,
                             None => return Completion::Normal(JsValue::UNDEFINED),
                         };
+                        let input_u16 = input_u16.as_units();
                         let granularity = granularity.unwrap_or_else(|| "grapheme".to_string());
 
                         if idx >= input_u16.len() {
@@ -350,7 +351,7 @@ impl Interpreter {
 
                         let segment = input_u16[seg_start..seg_end].to_vec();
                         let is_word_like = if granularity == "word" {
-                            Some(compute_word_like_at_break_utf16(&input_u16, seg_end))
+                            Some(compute_word_like_at_break_utf16(input_u16, seg_end))
                         } else {
                             None
                         };
@@ -359,7 +360,7 @@ impl Interpreter {
                             interp,
                             &segment,
                             seg_start,
-                            &input_u16,
+                            input_u16,
                             is_word_like,
                         ))
                     },
@@ -376,7 +377,7 @@ impl Interpreter {
                     "[Symbol.iterator]".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let segs = compute_segments(&input_clone, &granularity_clone);
+                        let segs = compute_segments(input_clone.as_units(), &granularity_clone);
                         let seg_data: Vec<(Vec<u16>, usize, bool)> = segs
                             .into_iter()
                             .map(|s| (s.segment, s.index, s.is_word_like.unwrap_or(false)))
@@ -392,7 +393,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(iter_obj_id)
                             .borrow_mut()
-                            .class_name = "Segmenter String Iterator".to_string();
+                            .class_name = "Segmenter String Iterator".into();
 
                         let has_word_like = granularity_clone == "word";
 
@@ -400,7 +401,7 @@ impl Interpreter {
                             crate::interpreter::types::ObjectKind::Iterator(
                                 IteratorState::SegmentIterator {
                                     segments: seg_data,
-                                    input: std::rc::Rc::new(input_clone.as_ref().clone()),
+                                    input: std::rc::Rc::new(input_clone.as_units().to_vec()),
                                     position: 0,
                                     done: false,
                                 },
@@ -639,7 +640,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.Segmenter".to_string();
+                    .class_name = "Intl.Segmenter".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Segmenter {
                         locale,

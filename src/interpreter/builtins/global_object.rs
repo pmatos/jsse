@@ -93,15 +93,7 @@ impl Interpreter {
             .declare("globalThis", BindingKind::Var);
         let env = self.realm().global_env.clone();
         let _ = self.env_set(&env, "globalThis", global_val.clone());
-        self.realm().global_env.borrow_mut().bindings.insert(
-            "this".to_string(),
-            Binding {
-                value: global_val,
-                kind: BindingKind::Const,
-                initialized: true,
-                deletable: false,
-            },
-        );
+        self.realm().global_env.borrow_mut().set_this(global_val);
         global_obj_id
     }
 

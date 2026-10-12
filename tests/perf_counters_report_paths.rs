@@ -171,8 +171,11 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
         caller < 100,
         "caller must not absorb the generator's work, got {caller}"
     );
+    // `caller`'s `for-of` runs as a tree-walker node inside its compiled
+    // body; those units are reported as fallback work, not as an AST-body
+    // invocation, so the two together cover both rows.
     assert_eq!(
-        perf("ast_units_in_functions"),
+        perf("ast_units_in_functions") + perf("ast_units_in_fallbacks"),
         caller + eval_caller,
         "generator state-machine steps must stay out of the function-invocation metric"
     );
@@ -414,7 +417,7 @@ fn every_closure_of_an_ineligible_literal_names_its_bail_reason() {
     let dir = scratch("shared-bail");
     fs::write(
         dir.join("main.js"),
-        "function make(k) { return function inner(n) { var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
+        "function make(k) { return function inner(n) { with ({}) {} var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
          var fs = [make(1), make(2), make(3)];\n\
          for (var j = 0; j < fs.length; j++) { fs[j](10); }\n",
     )
@@ -441,4 +444,87 @@ fn every_closure_of_an_ineligible_literal_names_its_bail_reason() {
             "every closure's row must name the bail reason, got {row:?}; stderr:\n{stderr}"
         );
     }
+}
+
+/// Runs `source` as `main.js` in a fresh scratch dir and returns stderr.
+fn run_counted(name: &str, source: &str) -> String {
+    let dir = scratch(name);
+    fs::write(dir.join("main.js"), source).expect("write main");
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .current_dir(&dir)
+        .args(["main.js"])
+        .output()
+        .expect("run jsse");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn perf_value(stderr: &str, key: &str) -> u64 {
+    stderr
+        .lines()
+        .find(|l| l.starts_with(&format!("PERF\t{key}\t")))
+        .and_then(|l| l.split('\t').nth(2))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no PERF {key}; stderr:\n{stderr}"))
+}
+
+/// `compile_ok` counts distinct executed function literals, not closures
+/// (#900): the result must not move when the same literals are instantiated
+/// many more times.
+#[test]
+fn compile_count_is_independent_of_closure_count() {
+    let program = |n: u32| {
+        format!(
+            "function make(k) {{ return function (a, b, c) {{ var s = k; \
+               if (a > b) {{ s += a - b; }} else {{ s += b - a; }} \
+               s = s + a * 2 + b * 3 + c * 5; return s | 0; }}; }}\n\
+             var fs = [], inc = [], t = 0;\n\
+             for (var i = 0; i < {n}; i++) {{ fs.push(make(i)); inc.push(v => v + 1); }}\n\
+             for (var j = 0; j < {n}; j++) {{ t += fs[j](j, 3, 5) + inc[j](j); }}\n"
+        )
+    };
+    let few = perf_value(&run_counted("closures-few", &program(5)), "compile_ok");
+    let many = perf_value(&run_counted("closures-many", &program(100)), "compile_ok");
+    assert_eq!(few, many, "compile_ok must not scale with closure count");
+    // The returned function literal and `v => v + 1`; `make` and the script
+    // body bail once each (a function expression / declaration they contain).
+    assert_eq!(many, 2);
+}
+
+/// Class field initialisers and static blocks are tree-walked, so evaluating
+/// the same class many times must not compile anything per evaluation.
+#[test]
+fn class_evaluation_does_not_compile_per_evaluation() {
+    let program = |n: u32| {
+        format!(
+            "var total = 0;\n\
+             for (var i = 0; i < {n}; i++) {{\n\
+               var C = class {{ x = 1; static y = 2; static {{ total += 1; }} m() {{ return this.x; }} }};\n\
+               total += new C().m();\n\
+             }}\n"
+        )
+    };
+    let few = perf_value(&run_counted("class-few", &program(5)), "compile_ok");
+    let many = perf_value(&run_counted("class-many", &program(50)), "compile_ok");
+    assert_eq!(
+        few, many,
+        "compile_ok must not scale with class evaluations"
+    );
+}
+
+/// An ineligible literal instantiated many times bails once (#900).
+#[test]
+fn ineligible_literal_bails_once_across_many_closures() {
+    let stderr = run_counted(
+        "bail-once",
+        "function make(k) { return function inner(n) { var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
+         for (var j = 0; j < 40; j++) { make(j)(3); }\n",
+    );
+    let inner_bails = stderr
+        .lines()
+        .filter(|l| l.starts_with("BAIL\t") && l.contains("\tinner"))
+        .count();
+    assert!(
+        inner_bails <= 1,
+        "one BAIL row per literal; stderr:\n{stderr}"
+    );
 }

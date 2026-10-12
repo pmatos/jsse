@@ -60,6 +60,9 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `iterators.rs` — setup_iterator_prototypes, setup_generator_prototype
     - `collections.rs` — setup_map/set/weakmap/weakset_prototype
     - `date.rs` — setup_date_builtin
+  - `atom.rs` — `Atom`: randomised-interner identifier atoms (pointer equality, precomputed hash)
+  - `binding_map.rs` — `BindingMap`: atom-keyed `Environment.bindings` storage and the `BindingKey`/`BindingName` lookup traits
+  - `global_access.rs` — Global Data Fast Path: clone-free scope walk plus one re-validated own-property read/write of a global-object data property, with per-site `GlobalHint` slot hints
 - `scripts/` — Test runners and utilities
 - `test262-pass.txt` — Regression baseline of currently passing test262 tests. **Not rewritten by default.** The runner reads the baseline from `origin/main:test262-pass.txt` (override with `--baseline-ref`) so feature branches don't conflict on it. Pass `--update-baseline` to rewrite the working-tree file — typically only done on `main` (or a branch targeting it) to roll the baseline forward.
 - `test262-extra/` — Custom spec-compliance tests not covered by test262
@@ -90,7 +93,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 
 ## GC Stress Mode
 - `JSSE_GC_STRESS=N` (any release or debug binary; read once per interpreter) forces a collection at every Nth safepoint that would not otherwise collect, alternating major (finds missing roots) and minor (finds missing write barriers). Unset, `0` or unparseable leaves it off; the off path costs one predictable branch per safepoint.
-- Safepoints are statement boundaries and loop back-edges. The bytecode VM reaches both: `Op::Safepoint` fires once before every statement-list entry that compiles to any bytecode (function/script top level and `Statement::Block` bodies; a statement compiling to nothing, e.g. `;` or `var a;`, drops its safepoint too — there's nothing new to collect), matching the tree-walker's per-statement safepoint, in addition to the existing back-edge safepoint on negative-offset `Op::Jump` — so bytecode (the default) stress coverage is close to tree-walker parity for compiled chunks, modulo `CompileGoal`/`CompileError::Unsupported` bail coverage (constructs the compiler doesn't accept still run on the tree-walker). Collection never fires at allocation time.
+- Safepoints are statement boundaries and loop back-edges. The bytecode VM reaches both: `Op::Safepoint` fires once before every statement-list entry that compiles to any bytecode (function/script top level and `Statement::Block` bodies; a statement compiling to nothing, e.g. `;` or `var a;`, drops its safepoint too — there's nothing new to collect), matching the tree-walker's per-statement safepoint, in addition to the existing back-edge safepoint on negative-offset `Op::Jump` — so bytecode (the default) stress coverage is close to tree-walker parity for compiled chunks, modulo `CompileGoal`/`CompileError::Ineligible` bail coverage and the AST Fallback nodes (constructs the compiler doesn't accept still run on the tree-walker; a hand-off node's own statements hit the tree-walker's safepoints). Collection never fires at allocation time.
 - The test262 runner and integration tests that spawn the binary inherit the variable (in-crate unit tests ignore it and opt in with `GcPacer::set_stress_period`): `JSSE_GC_STRESS=1 uv run python scripts/run-test262.py test262-extra/ --timeout 300`. `N=1` is only practical on small directories; use `N=16..1000` with `--sample`/`--seed` for broad runs.
 - Triage: a stress-only failure means a live value was unreachable from `collect_gc_roots` at a safepoint (a freed object whose arena id was recycled usually shows up as a wrong-typed value or `TypeError`). Reproduce with a minimal script plus `$262.gc()`, then diff against the same run without the variable. Timeouts under stress are cost, not GC bugs. Never `--update-baseline` under stress.
 - `ci.yml` runs a blocking `JSSE_GC_STRESS=7` pass over `test262-extra/` (normal and `--no-bytecode`) on every PR/push, reusing the plain release binary (#809). The unflagged pass exercises the now-default bytecode VM; the `--no-bytecode` pass keeps the tree-walker covered.
@@ -120,9 +123,26 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   `exec_statement`/`eval_expr` entries), not just by invocation — the two
   disagree by an order of magnitude on real code, see
   `docs/perf/2026-08-26/mandreel-bytecode-work-share.md`.
+- `global_prop_fast_hits` / `global_prop_fast_misses` count bare-name reads and
+  writes served by the Global Data Fast Path (`global_access.rs`) and those that
+  fell back to the generic Object Environment Record path (an accessor,
+  non-writable or inherited property, a `with` scope, a Proxy global).
+- `local_slot_hits` / `local_slot_misses` count `LoadLocal`/`StoreLocal`/
+  `StoreLocalPop`/`UpdateLocal`/`LocalBinConst` executions whose slot hint
+  matched or fell back to by-name resolution; `atom_intern_calls` / `atom_lookup_calls` count entries into the
+  hashing identifier interner. A call path that is free of identifier hashing
+  keeps the two atom counters flat as the call count grows
+  (`tests/perf_counters_env_hashing.rs`).
 - `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
-  AST variant (`statement:Labeled`), `BODY` per-function tree-walker work units
-  spent *exclusive* of nested bodies, plus GC collection counts and time.
+  AST variant (`statement:Labeled`) for bodies that stay wholly on the
+  tree-walker, `FALLBACK` static hand-off nodes per reason inside *compiled*
+  bodies (one row count per literal), `PERF ast_fallback_execs` /
+  `ast_units_in_fallbacks` (dynamic hand-offs and the tree-walker work they
+  spend, attributed to the enclosing function's `BODY` row but not counted as
+  an AST-body invocation), `BODY` per-function tree-walker work units spent
+  *exclusive* of nested bodies, plus GC collection counts and time. A function
+  with no `BAIL` can still run hot constructs on the tree-walker: read
+  `FALLBACK`/`ast_units_in_fallbacks` before calling a body "compiled".
 - Generator/async state-machine bodies do not pass through `dispatch_body`, but
   retain their originating function identity for attribution, so their work is
   reported under individual function names and kept off the calling function's
@@ -188,11 +208,14 @@ harness. See `scripts/README.md` for the full recipe and how to add a library.
 - **esbuild comment stripping**: esbuild removes comments from function bodies. The `TestComments` test relies on `Function.prototype.toString()` preserving comments, so a pre-bundle patch (`scripts/patch-acorn-comments.js`) replaces the `.toString()` call with a string literal.
 
 ## Architecture Notes
-- The interpreter is a single-pass tree-walker over the AST. A bytecode compiler/VM in `bytecode/` is the default execution mode (`bytecode_enabled` defaults on; `--no-bytecode` opts out); unsupported constructs fall back to the tree-walker per body. Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic) are consolidated in `property.rs`.
+- The interpreter is a single-pass tree-walker over the AST. A bytecode compiler/VM in `bytecode/` is the default execution mode (`bytecode_enabled` defaults on; `--no-bytecode` opts out); in Function goal a construct the compiler cannot lower falls back to the tree-walker per *node* (`Op::EvalAst`/`Op::ExecAst`, ADR-2026-10-12-2214), and only `CompileError::Ineligible` constructs (direct `eval`, `with`, `super`, `new.target`, `yield`/`await`, private `in`, compiler resource limits, a body that is nothing but hand-offs) keep a whole body on the tree-walker; the Script goal still bails whole-body. Native lowerings include `switch`, `throw`, `typeof`, member `++`/`--`, `instanceof`, `in`, BigInt literals and function-top-level `let`/`const`; array/object literals, closures, `try`, `for-in`/`for-of` and block-scoped lexicals run as tree-walker nodes (see the `FALLBACK` counters). Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic) are consolidated in `property.rs`.
 - Built-in prototypes (e.g. `string_prototype`, `symbol_prototype`) are stored as fields on `Interpreter` and wired up in `setup_builtins()` / `setup_*_prototype()` methods.
 - GC is mark-and-sweep with ephemeron support for WeakMap/WeakSet. Realm prototype fields are still rooted in `gc_safepoint()`. Kind-specific roots are derived from `ObjectKind` via an exhaustive `match` in `gc::trace_object_fields` — adding a new variant fails to compile until the GC walker handles it.
 - `ObjectKind` (in `interpreter/types.rs`) is the canonical "what shape is this object?" discriminator. Each variant owns the kind-specific slot data (`ProxyData`, `ArrayBufferData`, `TypedArrayInfo`, `IteratorState`, `PromiseData`, `BoundFunctionData`, `IterHelperData`, `FinalizationRegistry`, `Map`, `Set`, `Arguments`, `Array`, `ModuleNamespace`, `DisposableStack`, `TemporalData`, `IntlData`, `WrappedFunctionData`, `ShadowRealm`, `RegExpData`, `DataView`, `Ordinary`, `PrimitiveWrapper`). The disjunction is type-enforced — an object cannot be e.g. both a Proxy and a TypedArray simultaneously. Cross-cutting aspects (`callable`, `constructor_kind`, `prototype_id`, `properties`) remain orthogonal fields on `JsObjectData`. Predicate methods (`is_proxy`, `is_class_constructor`, `arraybuffer_is_shared`, etc.) and accessor methods (`obj.bound()`, `obj.proxy()`, `obj.typed_array_info()`, etc.) pull from `kind` and are the supported read API; direct `obj.kind` matching is fine when destructuring is wanted.
+- `Environment.bindings` is a `BindingMap` (`binding_map.rs`) of interned `Atom`s (`atom.rs`): linear scan up to 16 entries, identity-hashed atom index above that, `this` held in `Environment.this_binding`, and the `arguments` binding declared only when the body can observe it. The interner is the only place identifier text is hashed (randomised, see `docs/specs/2026-07-25-environment-binding-hashing-design.md`). Compiled function bodies use `LoadLocal`/`StoreLocal`/`UpdateLocal` with slot hints verified by atom identity (ADR-2026-10-12-0900). A free name that resolves to an own data property of the global object takes the Global Data Fast Path (ADR-2026-10-12-1500): `PropertyMap`'s spilled storage is a dense entry list plus a key→slot index so each bytecode name site can remember a verified slot (`Chunk.global_hints`).
 - Generators are compiled by `generator_transform.rs` into a `GeneratorStateMachine` (`generator_runtime.rs`): each resume jumps straight to the stored state id and suspends via `StateTerminator::Yield`/`Await`, with no replay. A `self.generator_context`/`SentValueBindingKind::InlineYield` fallback still exists in `generator_runtime.rs` for any construct the transform's analysis doesn't (yet) decompose — it re-executes the current state's statement list and fast-forwards past already-fired yields — but it is a degraded-behavior backstop for undiscovered gaps, not the primary mechanism (see issue #625). In async generators an inline `yield`/`yield*` suspends through the same terminator machinery as a lowered one (no blocking `await_value`, see ADR-2026-09-21-2157); only the replay of the state's preceding statements remains.
+- Closures of one function literal share an `Rc<FunctionLiteralInfo>` (parameter patterns, `uses_arguments`, `has_simple_params`) held in the AST node's `LiteralInfoCell`, alongside the per-`Body` `BodyMemo`s (#900). The cell is filled on first closure creation and `Clone` yields an empty cell, so a cloned-then-mutated node never carries a stale value; a path that clones the node per evaluation (e.g. the per-step `StateTerminator` clone in generator/async state machines) only loses sharing, never correctness.
+- Function objects are built by `create_function_with` from pre-interned `FunctionKeys` via `JsObjectData::push_fresh_property` (no per-closure key hashing; `tests/perf_counters_function_creation.rs` gates `key_intern_calls`). `PropertyMap` stays a linear scan up to `LINEAR_MAX = 8` entries before hashing. `JsObjectData.function_realm` replaces the old function-to-realm map; `None` keeps the caller's realm. `class_name` is `Cow<'static, str>`: assign `"X".into()` for static tags.
 - The `Object()` constructor calls `to_object()` to wrap primitives (String, Number, Boolean, Symbol, BigInt).
 
 ## Agent skills

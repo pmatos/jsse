@@ -12,7 +12,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.PlainDate".to_string();
+            .class_name = "Temporal.PlainDate".into();
         self.define_to_string_tag(proto_id, "Temporal.PlainDate");
 
         // Getter: calendarId
@@ -1572,7 +1572,7 @@ pub(super) fn create_plain_date_result(
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.PlainDate".to_string();
+        .class_name = "Temporal.PlainDate".into();
     if let Some(proto_id) = interp.realm().temporal_plain_date_prototype {
         interp
             .get_object_cell_expect(obj_id)

@@ -90,7 +90,7 @@ impl Interpreter {
                 Some(JsFunction::native(String::new(), 0, |_, _, _| {
                     Completion::Normal(JsValue::UNDEFINED)
                 }));
-            self.get_object_cell_expect(fp_id).borrow_mut().class_name = "Function".to_string();
+            self.get_object_cell_expect(fp_id).borrow_mut().class_name = "Function".into();
             self.realm_mut().function_prototype = Some(fp_id);
         }
 

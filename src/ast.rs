@@ -10,26 +10,31 @@ pub(crate) fn next_template_id() -> u64 {
     NEXT_TEMPLATE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// A function's source text: a span of the enclosing source. Offsets are `u32`
+/// so the AST nodes that carry one stay within their cache-line budget.
 #[derive(Clone, Debug)]
 pub(crate) struct SourceText {
     source: Rc<str>,
-    start: usize,
-    end: usize,
+    start: u32,
+    end: u32,
 }
 
 impl SourceText {
     pub(crate) fn new(source: Rc<str>, start: usize, end: usize) -> Self {
-        Self { source, start, end }
+        match (u32::try_from(start), u32::try_from(end)) {
+            (Ok(start), Ok(end)) => Self { source, start, end },
+            _ => Self::from(source[start..end].to_string()),
+        }
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        &self.source[self.start..self.end]
+        &self.source[self.start as usize..self.end as usize]
     }
 }
 
 impl From<String> for SourceText {
     fn from(source: String) -> Self {
-        let end = source.len();
+        let end = u32::try_from(source.len()).expect("function source text exceeds 4 GiB");
         Self {
             source: Rc::from(source),
             start: 0,
@@ -339,6 +344,27 @@ impl Pattern {
             }
             Pattern::Assign(inner, _) | Pattern::Rest(inner) => inner.bound_names(out),
             Pattern::MemberExpression(_) => {}
+        }
+    }
+
+    /// Whether `name` is among [`bound_names`](Self::bound_names), without
+    /// allocating the list.
+    pub(crate) fn binds_name(&self, name: &str) -> bool {
+        match self {
+            Pattern::Identifier(n) => n == name,
+            Pattern::Array(elems) => elems.iter().flatten().any(|elem| match elem {
+                ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                    p.binds_name(name)
+                }
+            }),
+            Pattern::Object(props) => props.iter().any(|prop| match prop {
+                ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                    p.binds_name(name)
+                }
+                ObjectPatternProperty::Shorthand(n) => n == name,
+            }),
+            Pattern::Assign(inner, _) | Pattern::Rest(inner) => inner.binds_name(name),
+            Pattern::MemberExpression(_) => false,
         }
     }
 }
@@ -826,6 +852,43 @@ pub(crate) struct SwitchCase {
     pub consequent: Vec<Statement>,
 }
 
+/// Facts about a function literal that are pure functions of its AST. Computed
+/// once on first closure creation and shared (by `Rc`) by every closure of the
+/// literal, so creating a closure costs O(1) instead of O(literal size).
+#[derive(Debug)]
+pub(crate) struct FunctionLiteralInfo {
+    pub params: Rc<Vec<Pattern>>,
+    pub uses_arguments: bool,
+    pub has_simple_params: bool,
+}
+
+/// Lazily filled cache of a function literal's [`FunctionLiteralInfo`]. It is
+/// filled on first closure creation, which is after the last post-parse pass
+/// that mutates the node, and `Clone` yields an empty cell, so a cloned-then-
+/// mutated node can never carry a stale value.
+#[derive(Debug, Default)]
+pub(crate) struct LiteralInfoCell(std::cell::OnceCell<Rc<FunctionLiteralInfo>>);
+
+impl Clone for LiteralInfoCell {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl LiteralInfoCell {
+    fn get_or_init(&self, params: &[Pattern], body: Option<&Body>) -> Rc<FunctionLiteralInfo> {
+        self.0
+            .get_or_init(|| {
+                Rc::new(FunctionLiteralInfo {
+                    params: Rc::new(params.to_vec()),
+                    uses_arguments: body.is_some_and(|b| func_uses_arguments(params, b)),
+                    has_simple_params: params_are_simple(params),
+                })
+            })
+            .clone()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionDecl {
     pub name: String,
@@ -835,6 +898,13 @@ pub(crate) struct FunctionDecl {
     pub is_generator: bool,
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
+    pub info: LiteralInfoCell,
+}
+
+impl FunctionDecl {
+    pub(crate) fn info(&self) -> Rc<FunctionLiteralInfo> {
+        self.info.get_or_init(&self.params, Some(&self.body))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -846,6 +916,13 @@ pub(crate) struct FunctionExpr {
     pub is_generator: bool,
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
+    pub info: LiteralInfoCell,
+}
+
+impl FunctionExpr {
+    pub(crate) fn info(&self) -> Rc<FunctionLiteralInfo> {
+        self.info.get_or_init(&self.params, Some(&self.body))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -855,6 +932,15 @@ pub(crate) struct ArrowFunction {
     pub is_async: bool,
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
+    pub info: LiteralInfoCell,
+}
+
+impl ArrowFunction {
+    /// Arrows never have their own `arguments`, so `uses_arguments` is false
+    /// and the body is not walked.
+    pub(crate) fn info(&self) -> Rc<FunctionLiteralInfo> {
+        self.info.get_or_init(&self.params, None)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1117,6 +1203,9 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             }
             // DO recurse into arrow functions (they inherit arguments)
             Expression::ArrowFunction(a) => {
+                if a.params.iter().any(pattern_uses_arguments) {
+                    return true;
+                }
                 let body = a.body.body();
                 match body.statements.as_slice() {
                     [Statement::Return(Some(e))] => stack.push(e),
@@ -2222,6 +2311,7 @@ mod ic_site_tests {
             is_generator: false,
             source_text: None,
             body_is_strict: false,
+            info: Default::default(),
         };
         let mut outer = body_with(vec![expr_stmt(call(
             Expression::Function(func),
