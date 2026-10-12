@@ -3830,8 +3830,10 @@ impl Interpreter {
                 try_stack: vec![],
                 pending_binding: None,
                 pending_for_of_unwind: None,
-                resolve_fn,
-                reject_fn,
+                resolvers: PromiseResolvers::Functions {
+                    resolve: resolve_fn,
+                    reject: reject_fn,
+                },
                 for_of_stack: vec![],
                 module_path: Some(module_path.clone()),
                 scope_stack: vec![],

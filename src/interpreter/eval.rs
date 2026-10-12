@@ -7705,9 +7705,7 @@ impl Interpreter {
                 0
             };
             interp.gc_root_value(&promise);
-            let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
-            interp.gc_root_value(&resolve_fn);
-            interp.gc_root_value(&reject_fn);
+            let resolvers = PromiseResolvers::Internal(promise_id);
 
             let closure_strict = closure.borrow().strict;
             let func_env = Environment::new_function_scope_with_capacity(
@@ -7751,7 +7749,7 @@ impl Interpreter {
             if let Err(error) =
                 interp.bind_function_parameters(params, args, &func_env, has_simple_params)
             {
-                let _ = interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[error]);
+                interp.promise_resolvers_reject(&resolvers, error);
                 // A default-param expression may have called `__host_exit`
                 // (issue #229): return abrupt so the caller unwinds.
                 if interp.pending_exit.is_some() {
@@ -7803,8 +7801,7 @@ impl Interpreter {
                     try_stack: vec![],
                     pending_binding: None,
                     pending_for_of_unwind: None,
-                    resolve_fn,
-                    reject_fn,
+                    resolvers,
                     for_of_stack: vec![],
                     module_path: None,
                     scope_stack: vec![],
@@ -7851,8 +7848,7 @@ impl Interpreter {
             mut try_stack,
             pending_binding,
             pending_for_of_unwind: restored_pending_for_of_unwind,
-            resolve_fn,
-            reject_fn,
+            resolvers,
             for_of_stack: saved_for_of_stack,
             module_path: async_module_path,
             pending_dispose: restored_pending_dispose,
@@ -7928,8 +7924,7 @@ impl Interpreter {
                 try_stack: try_stack.clone(),
                 pending_binding: None,
                 pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
-                resolve_fn: resolve_fn.clone(),
-                reject_fn: reject_fn.clone(),
+                resolvers: resolvers.clone(),
                 for_of_stack: saved_for_of_stack.clone(),
                 module_path: async_module_path.clone(),
                 scope_stack: saved_scope_stack.clone(),
@@ -7966,8 +7961,7 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_for_of_unwind.take(),
-                    &resolve_fn,
-                    &reject_fn,
+                    &resolvers,
                     &$value,
                     &for_of_stack,
                     &scope_stack,
@@ -8211,7 +8205,7 @@ impl Interpreter {
                     });
                 } else {
                     self.scheduler.remove_async_function_state(async_id);
-                    let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[ret_val]);
+                    self.promise_resolvers_resolve(&resolvers, ret_val);
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
             }};
@@ -8319,7 +8313,7 @@ impl Interpreter {
                         });
                         continue;
                     }
-                    None => return self.async_fn_complete(async_id, &resolve_fn),
+                    None => return self.async_fn_complete(async_id, &resolvers),
                 }
             }};
         }
@@ -8449,21 +8443,17 @@ impl Interpreter {
                         }
                         (_, Completion::Throw(e)) => {
                             self.scheduler.remove_async_function_state(async_id);
-                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                            self.promise_resolvers_reject(&resolvers, e);
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
                         (_, Completion::Return(v)) => {
                             self.scheduler.remove_async_function_state(async_id);
-                            let _ = self.call_function(&resolve_fn, &JsValue::UNDEFINED, &[v]);
+                            self.promise_resolvers_resolve(&resolvers, v);
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
                         _ => {
                             self.scheduler.remove_async_function_state(async_id);
-                            let _ = self.call_function(
-                                &resolve_fn,
-                                &JsValue::UNDEFINED,
-                                &[JsValue::UNDEFINED],
-                            );
+                            self.promise_resolvers_resolve(&resolvers, JsValue::UNDEFINED);
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
                     },
@@ -8620,7 +8610,7 @@ impl Interpreter {
                     continue;
                 }
                 self.scheduler.remove_async_function_state(async_id);
-                let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[exc]);
+                self.promise_resolvers_reject(&resolvers, exc);
                 return Completion::Normal(JsValue::UNDEFINED);
             }
 
@@ -8777,8 +8767,7 @@ impl Interpreter {
                     &try_stack,
                     None,
                     pending_for_of_unwind.take(),
-                    &resolve_fn,
-                    &reject_fn,
+                    &resolvers,
                     &yield_val,
                     &for_of_stack,
                     &scope_stack,
@@ -8813,8 +8802,7 @@ impl Interpreter {
                                 &try_stack,
                                 sent_value_binding.clone(),
                                 pending_for_of_unwind.take(),
-                                &resolve_fn,
-                                &reject_fn,
+                                &resolvers,
                                 &v,
                                 &for_of_stack,
                                 &scope_stack,
@@ -8838,8 +8826,7 @@ impl Interpreter {
                         &try_stack,
                         sent_value_binding.clone(),
                         pending_for_of_unwind.take(),
-                        &resolve_fn,
-                        &reject_fn,
+                        &resolvers,
                         &await_val,
                         &for_of_stack,
                         &scope_stack,
@@ -9190,8 +9177,7 @@ impl Interpreter {
                                 &try_stack,
                                 binding,
                                 pending_for_of_unwind.take(),
-                                &resolve_fn,
-                                &reject_fn,
+                                &resolvers,
                                 &raw_result,
                                 &for_of_stack,
                                 &scope_stack,
@@ -9775,9 +9761,9 @@ impl Interpreter {
         ForOfUnwindOutcome::Done(completion)
     }
 
-    fn async_fn_complete(&mut self, async_id: u64, resolve_fn: &JsValue) -> Completion {
+    fn async_fn_complete(&mut self, async_id: u64, resolvers: &PromiseResolvers) -> Completion {
         self.scheduler.remove_async_function_state(async_id);
-        let _ = self.call_function(resolve_fn, &JsValue::UNDEFINED, &[JsValue::UNDEFINED]);
+        self.promise_resolvers_resolve(resolvers, JsValue::UNDEFINED);
         Completion::Normal(JsValue::UNDEFINED)
     }
 
@@ -9791,8 +9777,7 @@ impl Interpreter {
         try_stack: &[TryContextInfo],
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
-        resolve_fn: &JsValue,
-        reject_fn: &JsValue,
+        resolvers: &PromiseResolvers,
         await_val: &JsValue,
         for_of_stack: &[ForOfLoopState],
         scope_stack: &[ScopeFrame],
@@ -9819,8 +9804,7 @@ impl Interpreter {
                 try_stack: try_stack.to_vec(),
                 pending_binding: sent_value_binding,
                 pending_for_of_unwind,
-                resolve_fn: resolve_fn.clone(),
-                reject_fn: reject_fn.clone(),
+                resolvers: resolvers.clone(),
                 for_of_stack: for_of_stack.to_vec(),
                 module_path: self.module_async_info.get(&async_id).cloned(),
                 scope_stack: scope_stack.to_vec(),
@@ -9832,8 +9816,11 @@ impl Interpreter {
         match pstate {
             Some(PromiseState::Fulfilled(v)) => {
                 let value = v.clone();
+                let mut roots = Vec::with_capacity(3);
+                resolvers.for_each_value(|v| roots.push(v.clone()));
+                roots.push(value.clone());
                 self.scheduler.enqueue_microtask((
-                    vec![resolve_fn.clone(), reject_fn.clone(), value.clone()],
+                    roots,
                     // Return the resume completion so a `__host_exit` in the
                     // resumed body (issue #242) reaches the drain loop as
                     // `Completion::Exit` instead of being discarded.
@@ -9842,15 +9829,16 @@ impl Interpreter {
             }
             Some(PromiseState::Rejected(e)) => {
                 let err = e.clone();
+                let mut roots = Vec::with_capacity(3);
+                resolvers.for_each_value(|v| roots.push(v.clone()));
+                roots.push(err.clone());
                 self.scheduler.enqueue_microtask((
-                    vec![resolve_fn.clone(), reject_fn.clone(), err.clone()],
+                    roots,
                     Box::new(move |interp| interp.async_function_resume(async_id, err, true)),
                 ));
             }
             _ => {
                 // Pending or not a promise — attach handlers
-                let resolve_c = resolve_fn.clone();
-                let reject_c = reject_fn.clone();
                 let fulfill_handler = self.create_function(JsFunction::native(
                     "asyncFnFulfill".to_string(),
                     1,
@@ -9878,16 +9866,12 @@ impl Interpreter {
                         pd.is_handled = true;
                         pd.fulfill_reactions.push(PromiseReaction {
                             handler: Some(fulfill_handler),
-                            promise_id: None,
-                            resolve: resolve_c,
-                            reject: reject_c,
+                            target: ReactionTarget::None,
                             reaction_type: PromiseReactionType::Fulfill,
                         });
                         pd.reject_reactions.push(PromiseReaction {
                             handler: Some(reject_handler),
-                            promise_id: None,
-                            resolve: JsValue::UNDEFINED,
-                            reject: JsValue::UNDEFINED,
+                            target: ReactionTarget::None,
                             reaction_type: PromiseReactionType::Reject,
                         });
                     }
@@ -10016,16 +10000,12 @@ impl Interpreter {
                         pd.is_handled = true;
                         pd.fulfill_reactions.push(PromiseReaction {
                             handler: Some(fulfill_handler),
-                            promise_id: None,
-                            resolve: JsValue::UNDEFINED,
-                            reject: JsValue::UNDEFINED,
+                            target: ReactionTarget::None,
                             reaction_type: PromiseReactionType::Fulfill,
                         });
                         pd.reject_reactions.push(PromiseReaction {
                             handler: Some(reject_handler),
-                            promise_id: None,
-                            resolve: JsValue::UNDEFINED,
-                            reject: JsValue::UNDEFINED,
+                            target: ReactionTarget::None,
                             reaction_type: PromiseReactionType::Reject,
                         });
                     }

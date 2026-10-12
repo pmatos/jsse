@@ -1658,6 +1658,113 @@ fn global_pin_count(interp: &Interpreter, name: &str) -> usize {
         .map_or(0, Vec::len)
 }
 
+/// Number of resolving-function pairs recorded on the pending promise held by
+/// global `name`.
+fn global_resolving_function_count(interp: &Interpreter, name: &str) -> usize {
+    let value = interp
+        .get_global_var_ref(name)
+        .unwrap_or_else(|| panic!("expected global {name}"));
+    let id = value
+        .as_object_id()
+        .unwrap_or_else(|| panic!("global {name} must be an object"));
+    interp
+        .get_object_cell(id)
+        .expect("global object must be live")
+        .borrow()
+        .promise_data()
+        .unwrap_or_else(|| panic!("global {name} must be a promise"))
+        .resolving_functions
+        .len()
+}
+
+#[test]
+fn intrinsic_promise_capabilities_create_no_resolving_functions() {
+    // The promise derived by `then` on %Promise%, an async function's result
+    // promise and the promise a handler's thenable result locks in all have
+    // resolving functions nothing can observe, so none may be materialised
+    // (and pinned on the promise) for them.
+    let interp = run_script(
+        r#"
+        globalThis.source = new Promise(function () {});
+        globalThis.derived = source.then(function () {});
+        globalThis.caught = source.catch(function () {});
+        globalThis.chained = derived.then(function () {});
+        globalThis.asyncResult = (async function () { await source; })();
+        globalThis.constructed = new Promise(function () {});
+        "#,
+    );
+    assert_eq!(global_resolving_function_count(&interp, "derived"), 0);
+    assert_eq!(global_resolving_function_count(&interp, "caught"), 0);
+    assert_eq!(global_resolving_function_count(&interp, "chained"), 0);
+    assert_eq!(global_resolving_function_count(&interp, "asyncResult"), 0);
+    // The `Promise` constructor exposes its pair to the executor.
+    assert_eq!(global_resolving_function_count(&interp, "constructed"), 1);
+}
+
+#[test]
+fn internal_resolvers_ignore_settlement_after_the_first_claim() {
+    let mut interp = Interpreter::new();
+    let promise = interp.create_promise_object();
+    let id = promise.as_object_id().unwrap();
+    let resolvers = PromiseResolvers::Internal(id);
+
+    interp.promise_resolvers_resolve(&resolvers, JsValue::number(1.0));
+    interp.promise_resolvers_reject(&resolvers, JsValue::number(2.0));
+    interp.promise_resolvers_resolve(&resolvers, JsValue::number(3.0));
+    assert!(matches!(
+        interp.get_promise_state(id),
+        Some(PromiseState::Fulfilled(v)) if v.as_number() == Some(1.0)
+    ));
+
+    // Locking in to a pending native promise claims the flag even though the
+    // promise itself stays pending, so a later rejection must not settle it.
+    let locked = interp.create_promise_object();
+    let locked_id = locked.as_object_id().unwrap();
+    let pending = interp.create_promise_object();
+    let locked_resolvers = PromiseResolvers::Internal(locked_id);
+    interp.promise_resolvers_resolve(&locked_resolvers, pending);
+    interp.promise_resolvers_reject(&locked_resolvers, JsValue::number(4.0));
+    assert!(matches!(
+        interp.get_promise_state(locked_id),
+        Some(PromiseState::Pending)
+    ));
+}
+
+#[test]
+fn then_chain_derived_promises_survive_major_gc_while_pending() {
+    // Nothing but the reaction record of the promise a derived promise comes
+    // from references the derived promise, and the derived promise of a handler
+    // that returns a pending native promise is referenced only by the
+    // reaction that will settle it.
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const gate = new Promise((resolve) => { globalThis.releaseGate = resolve; });
+            gate
+                .then((v) => new Promise((resolve) => { globalThis.releaseLate = resolve; }))
+                .then((v) => ({ marker: v.marker + "!" }))
+                .then((v) => { globalThis.outcome = "chain:" + v.marker; });
+        })();
+        "#,
+        r#"
+        (function () {
+            var open = globalThis.releaseGate;
+            delete globalThis.releaseGate;
+            open("go");
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseLate;
+            delete globalThis.releaseLate;
+            settle({ marker: "late" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "chain:late!");
+}
+
 #[test]
 fn combinator_pins_do_not_accumulate_on_a_reused_capability_function() {
     // A constructor may hand the same resolving function to every capability it

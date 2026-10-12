@@ -521,8 +521,8 @@ impl Interpreter {
         }
         for afs in self.scheduler.iter_async_function_states() {
             Self::collect_env_roots(&afs.func_env, &mut roots, &mut seen_envs);
-            Self::collect_value_roots(&afs.resolve_fn, &mut roots);
-            Self::collect_value_roots(&afs.reject_fn, &mut roots);
+            afs.resolvers
+                .for_each_value(|v| Self::collect_value_roots(v, &mut roots));
             if let Some(ref pending) = afs.pending_dispose {
                 pending
                     .cursor
@@ -1063,9 +1063,10 @@ impl Interpreter {
                     if let Some(ref h) = reaction.handler {
                         Self::collect_value_roots(h, worklist);
                     }
-                    Self::collect_value_roots(&reaction.resolve, worklist);
-                    Self::collect_value_roots(&reaction.reject, worklist);
-                    if let Some(pid) = reaction.promise_id {
+                    reaction
+                        .target
+                        .for_each_value(|v| Self::collect_value_roots(v, worklist));
+                    if let Some(pid) = reaction.target.promise_id() {
                         worklist.push(pid);
                     }
                 }
