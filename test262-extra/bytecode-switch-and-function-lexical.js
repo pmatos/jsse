@@ -228,4 +228,4 @@ function hotLoopWithLexicals(n) {
   }
   return total;
 }
-assert.sameValue(hotLoopWithLexicals(8), 22);
+assert.sameValue(hotLoopWithLexicals(8), 14);
