@@ -51,3 +51,25 @@ class ExplicitDerived extends Base {
   }
 }
 check(new ExplicitDerived(), ExplicitDerived, "super() from an explicit constructor");
+
+// The object must also survive a collection before the initializers run (a
+// Proxy newTarget's `prototype` getter) and after them (parameter defaults run
+// before the constructor body).
+var newTarget = new Proxy(function() {}, {
+  get: function(target, key) {
+    if (key === "prototype") {
+      collect();
+      return Base.prototype;
+    }
+    return target[key];
+  }
+});
+check(Reflect.construct(Base, [], newTarget), Base, "Reflect.construct with a Proxy newTarget");
+
+class WithDefaults {
+  before = { tag: "before" };
+  after = { tag: "after" };
+  constructor(unused = collect()) {}
+}
+check(new WithDefaults(), WithDefaults, "a parameter default");
+check(Reflect.construct(WithDefaults, []), WithDefaults, "Reflect.construct with a parameter default");

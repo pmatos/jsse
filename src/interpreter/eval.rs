@@ -250,46 +250,30 @@ impl Interpreter {
         this_val: JsValue,
         constructor: &JsValue,
     ) -> Result<(), JsValue> {
-        let instance_field_defs = if let Some(o) = constructor
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(o.id)
-        {
-            func_obj.borrow().class_instance_field_defs.clone()
-        } else {
+        let (Some(ctor_id), Some(this_obj_id)) =
+            (constructor.as_object_id(), this_val.as_object_id())
+        else {
             return Ok(());
         };
-        if instance_field_defs.is_empty() {
-            return Ok(());
-        }
-        let this_obj_id = if let Some(o) = (this_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            o.id
-        } else {
+        let Some(func_obj) = self.get_object_cell(ctor_id) else {
             return Ok(());
         };
-        // Create env for evaluating field initializers.
-        // Use the class constructor's closure (class_env) so the class name binding
-        // is accessible in field initializers (spec §15.7.14 step 28.e.i).
-        let (ctor_closure, class_pn) = if let Some(o) = constructor
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(func_obj) = self.get_object_cell(o.id)
-        {
-            if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                let cls_env = closure.borrow();
-                (Some(closure.clone()), cls_env.class_private_names.clone())
-            } else {
-                (None, None)
+        // Use the class constructor's closure (classEnv) so the class name
+        // binding is visible in field initializers (§15.7.14 step 3).
+        let (instance_field_defs, init_parent, class_pn) = {
+            let func = func_obj.borrow();
+            if func.class_instance_field_defs.is_empty() {
+                return Ok(());
             }
-        } else {
-            (None, None)
-        };
-        // Only class constructors have field definitions.
-        let Some(init_parent) = ctor_closure else {
-            return Ok(());
+            let Some(JsFunction::User { closure, .. }) = &func.callable else {
+                unreachable!("only class constructors have field definitions");
+            };
+            let class_pn = closure.borrow().class_private_names.clone();
+            (
+                func.class_instance_field_defs.clone(),
+                closure.clone(),
+                class_pn,
+            )
         };
         let init_env = Environment::new(Some(init_parent));
         init_env.borrow_mut().set_this(this_val.clone());
@@ -297,22 +281,17 @@ impl Interpreter {
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
         // Instance field HomeObject = class prototype.
-        if let Some(o) = constructor
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            let proto_val = self.get_property_on_id(o.id, "prototype");
-            if proto_val.is_object() {
-                init_env.borrow_mut().bindings.insert(
-                    "__home_object__",
-                    crate::interpreter::types::Binding {
-                        value: proto_val,
-                        kind: crate::interpreter::types::BindingKind::Const,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
-            }
+        let proto_val = self.get_property_on_id(ctor_id, "prototype");
+        if proto_val.is_object() {
+            init_env.borrow_mut().bindings.insert(
+                "__home_object__",
+                crate::interpreter::types::Binding {
+                    value: proto_val,
+                    kind: crate::interpreter::types::BindingKind::Const,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
         }
         // Pass 1: Install private methods and accessors before any field initializer runs.
         for idef in &instance_field_defs {
@@ -5274,20 +5253,20 @@ impl Interpreter {
         this: &JsValue,
         args: &[JsValue],
     ) -> (Completion, bool, Option<JsValue>) {
+        // A base constructor's new object is reachable only through `this`
+        // until the body stores it somewhere, and parameter defaults run
+        // before the body's frame roots it — so root it across the whole call.
+        // The constructor's frame is also popped from the call stack the moment
+        // its body returns a `TailCall`, and `last_call_this_value` is not a GC
+        // root — so while the tail-call chain runs (its callees can allocate or
+        // call `$262.gc()`) the freshly constructed object is reachable only
+        // through these Rust locals. Rooting `final_this` covers the derived
+        // path, whose `this` is `undefined`.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(this);
         let mut result = self.call_function_inner(func, this, args, false);
         let had_explicit_return = self.last_call_had_explicit_return;
         let final_this = self.last_call_this_value.take();
-        // The constructor's frame is popped from the call stack the moment its
-        // body returns a `TailCall`, and `last_call_this_value` is not a GC root
-        // — so while the tail-call chain runs (its callees can allocate or call
-        // `$262.gc()`) the freshly constructed object is reachable only through
-        // these Rust locals. Temp-root it across the drive so it cannot be swept
-        // before `[[Construct]]` returns it. Rooting `final_this` covers the base
-        // path's `this_val` (same object); rooting `this` also guards the
-        // `unwrap_or(this_val)` fallback and is a no-op for the derived path's
-        // `undefined`.
-        let gc_frame = self.gc_root_frame();
-        self.gc_root_value(this);
         if let Some(v) = &final_this {
             self.gc_root_value(v);
         }
@@ -6936,39 +6915,34 @@ impl Interpreter {
             let this_val = if deferred {
                 JsValue::UNDEFINED
             } else {
-                let new_obj_id = self.create_object_id();
-                // Use new_target's .prototype for the new object's [[Prototype]]
-                // Must use get_object_property to invoke proxy get traps
-                if let Some(nt_o) = new_target
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    let nt_val = new_target.clone();
-                    let proto = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
+                // OrdinaryCreateFromConstructor: GetPrototypeFromConstructor
+                // first, then allocate. The `prototype` read can run a Proxy
+                // `get` trap, and an object allocated before it would be
+                // unrooted (and collectable) while that trap runs.
+                let proto_id = if let Some(nt_id) = new_target.as_object_id() {
+                    let proto = match self.get_object_property(nt_id, "prototype", &new_target) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => JsValue::UNDEFINED,
                     };
-                    if let Some(proto_obj) = (proto)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        self.get_object_cell_expect(new_obj_id)
-                            .borrow_mut()
-                            .prototype_id = Some(proto_obj.id);
+                    if let Some(proto_id) = proto.as_object_id() {
+                        Some(proto_id)
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                        let nt_realm_id = match self.get_function_realm(&JsValue::object(nt_o.id)) {
+                        let nt_realm_id = match self.get_function_realm(&new_target) {
                             Ok(r) => r,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let op_id = self.realms[nt_realm_id].object_prototype;
-                        if let Some(proto_rc) = op_id {
-                            self.get_object_cell_expect(new_obj_id)
-                                .borrow_mut()
-                                .prototype_id = Some(proto_rc);
-                        }
+                        self.realms[nt_realm_id].object_prototype
                     }
+                } else {
+                    None
+                };
+                let new_obj_id = self.create_object_id();
+                if let Some(proto_id) = proto_id {
+                    self.get_object_cell_expect(new_obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_id);
                 }
                 JsValue::object(new_obj_id)
             };
