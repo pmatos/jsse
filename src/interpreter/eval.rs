@@ -7836,24 +7836,24 @@ impl Interpreter {
             ArrayPatternIterOp, LoopControlTarget, SentValueBindingKind, StateTerminator,
         };
 
-        let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
+        // The state stays in the scheduler map for the whole run, so the
+        // collector keeps tracing it; the driver works on local copies of the
+        // pieces it mutates and hands them back at the next suspension.
+        let Some(slot) = self.scheduler.async_function_state_mut(async_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
         };
-
-        let AsyncFunctionState {
-            state_machine,
-            func_env,
-            is_strict,
-            current_state,
-            mut try_stack,
-            pending_binding,
-            pending_for_of_unwind: restored_pending_for_of_unwind,
-            resolvers,
-            for_of_stack: saved_for_of_stack,
-            module_path: async_module_path,
-            pending_dispose: restored_pending_dispose,
-            scope_stack: saved_scope_stack,
-        } = state;
+        let state_machine = slot.state_machine.clone();
+        let func_env = slot.func_env.clone();
+        let is_strict = slot.is_strict;
+        let current_state = slot.current_state;
+        let mut try_stack = slot.try_stack.clone();
+        let pending_binding = slot.pending_binding.take();
+        let restored_pending_for_of_unwind = slot.pending_for_of_unwind.clone();
+        let resolvers = slot.resolvers.clone();
+        let saved_for_of_stack = slot.for_of_stack.clone();
+        let async_module_path = slot.module_path.clone();
+        let restored_pending_dispose = slot.pending_dispose.take();
+        let saved_scope_stack = slot.scope_stack.clone();
 
         if let Some(ref mp) = async_module_path {
             self.current_module_path = Some(mp.clone());
@@ -7912,25 +7912,6 @@ impl Interpreter {
             None
         };
 
-        // Re-insert state so GC can trace it during execution
-        self.scheduler.insert_async_function_state(
-            async_id,
-            AsyncFunctionState {
-                pending_dispose: None,
-                state_machine: state_machine.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                current_state,
-                try_stack: try_stack.clone(),
-                pending_binding: None,
-                pending_for_of_unwind: restored_pending_for_of_unwind.clone(),
-                resolvers: resolvers.clone(),
-                for_of_stack: saved_for_of_stack.clone(),
-                module_path: async_module_path.clone(),
-                scope_stack: saved_scope_stack.clone(),
-            },
-        );
-
         func_env.borrow_mut().strict = is_strict;
         let saved_in_state_machine = self.in_state_machine;
         self.in_state_machine = true;
@@ -7958,13 +7939,13 @@ impl Interpreter {
                     &func_env,
                     is_strict,
                     current_id,
-                    &try_stack,
+                    &mut try_stack,
                     None,
                     pending_for_of_unwind.take(),
                     &resolvers,
                     &$value,
-                    &for_of_stack,
-                    &scope_stack,
+                    &mut for_of_stack,
+                    &mut scope_stack,
                 );
                 self.gc_unroot_frame(gc_frame);
                 self.scheduler.park_async_function_dispose(async_id, $park);
@@ -8764,13 +8745,13 @@ impl Interpreter {
                     &func_env,
                     is_strict,
                     current_id,
-                    &try_stack,
+                    &mut try_stack,
                     None,
                     pending_for_of_unwind.take(),
                     &resolvers,
                     &yield_val,
-                    &for_of_stack,
-                    &scope_stack,
+                    &mut for_of_stack,
+                    &mut scope_stack,
                 );
                 return Completion::Normal(JsValue::UNDEFINED);
             }
@@ -8799,13 +8780,13 @@ impl Interpreter {
                                 &func_env,
                                 is_strict,
                                 current_id,
-                                &try_stack,
+                                &mut try_stack,
                                 sent_value_binding.clone(),
                                 pending_for_of_unwind.take(),
                                 &resolvers,
                                 &v,
-                                &for_of_stack,
-                                &scope_stack,
+                                &mut for_of_stack,
+                                &mut scope_stack,
                             );
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
@@ -8823,13 +8804,13 @@ impl Interpreter {
                         &func_env,
                         is_strict,
                         resume_state,
-                        &try_stack,
+                        &mut try_stack,
                         sent_value_binding.clone(),
                         pending_for_of_unwind.take(),
                         &resolvers,
                         &await_val,
-                        &for_of_stack,
-                        &scope_stack,
+                        &mut for_of_stack,
+                        &mut scope_stack,
                     );
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
@@ -9174,13 +9155,13 @@ impl Interpreter {
                                 &func_env,
                                 is_strict,
                                 current_id, // resume to same ForOfHead state
-                                &try_stack,
+                                &mut try_stack,
                                 binding,
                                 pending_for_of_unwind.take(),
                                 &resolvers,
                                 &raw_result,
-                                &for_of_stack,
-                                &scope_stack,
+                                &mut for_of_stack,
+                                &mut scope_stack,
                             );
                             self.in_state_machine = saved_in_state_machine;
                             return Completion::Normal(JsValue::UNDEFINED);
@@ -9767,6 +9748,10 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
+    /// Parks the async function at an `await` of `await_val`, to resume at
+    /// `resume_state`, and registers the continuation. The caller returns
+    /// straight after, so the driver's `try_stack`/`for_of_stack`/`scope_stack`
+    /// are moved into the saved state rather than copied.
     fn async_fn_suspend_at_await(
         &mut self,
         async_id: u64,
@@ -9774,109 +9759,69 @@ impl Interpreter {
         func_env: &EnvRef,
         is_strict: bool,
         resume_state: usize,
-        try_stack: &[TryContextInfo],
+        try_stack: &mut Vec<TryContextInfo>,
         sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
         pending_for_of_unwind: Option<PendingForOfUnwind>,
         resolvers: &PromiseResolvers,
         await_val: &JsValue,
-        for_of_stack: &[ForOfLoopState],
-        scope_stack: &[ScopeFrame],
+        for_of_stack: &mut Vec<ForOfLoopState>,
+        scope_stack: &mut Vec<ScopeFrame>,
     ) {
-        let promise = self.promise_resolve_value(await_val);
-        let promise_id = if let Some(o) = (promise)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
-            o.id
+        // §6.2.3.1 Await step 2: `PromiseResolve(%Promise%, value)`. A
+        // non-object can only produce a promise that is already fulfilled with
+        // it, so its continuation is queued with the value itself; objects go
+        // through `PromiseResolve` (an observable `Get(x, "constructor")` for
+        // a promise, a thenable job otherwise).
+        let awaited = if await_val.is_object() {
+            let promise = self.promise_resolve_value(await_val);
+            promise.as_object_id().unwrap_or(0)
         } else {
             0
         };
 
         // Save state for resumption
-        self.scheduler.insert_async_function_state(
-            async_id,
-            AsyncFunctionState {
-                pending_dispose: None,
-                state_machine: state_machine.clone(),
-                func_env: func_env.clone(),
-                is_strict,
-                current_state: resume_state,
-                try_stack: try_stack.to_vec(),
-                pending_binding: sent_value_binding,
-                pending_for_of_unwind,
-                resolvers: resolvers.clone(),
-                for_of_stack: for_of_stack.to_vec(),
-                module_path: self.module_async_info.get(&async_id).cloned(),
-                scope_stack: scope_stack.to_vec(),
-            },
-        );
+        if let Some(state) = self.scheduler.async_function_state_mut(async_id) {
+            state.current_state = resume_state;
+            state.try_stack = std::mem::take(try_stack);
+            state.pending_binding = sent_value_binding;
+            state.pending_for_of_unwind = pending_for_of_unwind;
+            state.for_of_stack = std::mem::take(for_of_stack);
+            state.scope_stack = std::mem::take(scope_stack);
+        } else {
+            self.scheduler.insert_async_function_state(
+                async_id,
+                AsyncFunctionState {
+                    pending_dispose: None,
+                    state_machine: state_machine.clone(),
+                    func_env: func_env.clone(),
+                    is_strict,
+                    current_state: resume_state,
+                    try_stack: std::mem::take(try_stack),
+                    pending_binding: sent_value_binding,
+                    pending_for_of_unwind,
+                    resolvers: resolvers.clone(),
+                    for_of_stack: std::mem::take(for_of_stack),
+                    module_path: self.module_async_info.get(&async_id).cloned(),
+                    scope_stack: std::mem::take(scope_stack),
+                },
+            );
+        }
 
-        // Schedule continuation based on promise state
-        let pstate = self.get_promise_state(promise_id);
-        match pstate {
-            Some(PromiseState::Fulfilled(v)) => {
-                let value = v.clone();
-                let mut roots = Vec::with_capacity(3);
-                resolvers.for_each_value(|v| roots.push(v.clone()));
-                roots.push(value.clone());
-                self.scheduler.enqueue_microtask((
-                    roots,
-                    // Return the resume completion so a `__host_exit` in the
-                    // resumed body (issue #242) reaches the drain loop as
-                    // `Completion::Exit` instead of being discarded.
-                    Box::new(move |interp| interp.async_function_resume(async_id, value, false)),
-                ));
-            }
-            Some(PromiseState::Rejected(e)) => {
-                let err = e.clone();
-                let mut roots = Vec::with_capacity(3);
-                resolvers.for_each_value(|v| roots.push(v.clone()));
-                roots.push(err.clone());
-                self.scheduler.enqueue_microtask((
-                    roots,
-                    Box::new(move |interp| interp.async_function_resume(async_id, err, true)),
-                ));
-            }
-            _ => {
-                // Pending or not a promise — attach handlers
-                let fulfill_handler = self.create_function(JsFunction::native(
-                    "asyncFnFulfill".to_string(),
-                    1,
-                    // Return the resume completion so a `__host_exit` in the
-                    // resumed body (issue #242) propagates as `Completion::Exit`
-                    // through the Promise reaction to the drain loop.
-                    move |interp, _this, args| {
-                        let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                        interp.async_function_resume(async_id, v, false)
-                    },
-                ));
-
-                let reject_handler = self.create_function(JsFunction::native(
-                    "asyncFnReject".to_string(),
-                    1,
-                    move |interp, _this, args| {
-                        let e = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                        interp.async_function_resume(async_id, e, true)
-                    },
-                ));
-
-                if let Some(obj) = self.get_object_cell(promise_id) {
-                    let mut ob = obj.borrow_mut();
-                    if let Some(pd) = ob.promise_data_mut() {
-                        pd.is_handled = true;
-                        pd.fulfill_reactions.push(PromiseReaction {
-                            handler: Some(fulfill_handler),
-                            target: ReactionTarget::None,
-                            reaction_type: PromiseReactionType::Fulfill,
-                        });
-                        pd.reject_reactions.push(PromiseReaction {
-                            handler: Some(reject_handler),
-                            target: ReactionTarget::None,
-                            reaction_type: PromiseReactionType::Reject,
-                        });
-                    }
-                }
-            }
+        // PerformPromiseThen(promise, onFulfilled, onRejected) with the
+        // continuation as a typed reaction: no handler function objects, and a
+        // settled promise queues its single job at once.
+        let target = ReactionTarget::AsyncResume(async_id);
+        if awaited == 0 {
+            self.scheduler.enqueue_reaction_job(
+                PromiseReaction {
+                    handler: None,
+                    target,
+                    reaction_type: PromiseReactionType::Fulfill,
+                },
+                await_val.clone(),
+            );
+        } else {
+            self.perform_promise_then_internal(awaited, None, None, target);
         }
     }
 
@@ -10032,13 +9977,8 @@ impl Interpreter {
             if self.pending_exit.is_some() {
                 break;
             }
-            if let Some((roots, job)) = self.scheduler.pop_microtask() {
-                let mt_frame = self.gc_root_frame();
-                for val in &roots {
-                    self.gc_root_value(val);
-                }
-                let job_result = job(self);
-                self.gc_unroot_frame(mt_frame);
+            if let Some(task) = self.scheduler.pop_microtask() {
+                let job_result = self.run_microtask(task);
                 // A `__host_exit` inside the job (issue #242) latches the
                 // terminal sink; the post-loop check turns it into a
                 // `Completion::Exit` returned from this `await`.

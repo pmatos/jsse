@@ -14,9 +14,65 @@ use super::AsyncGenRequest;
 use super::Completion;
 use super::Interpreter;
 use super::PendingDispose;
+use super::PromiseReaction;
 use super::TryContextInfo;
 
 pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
+
+/// One entry of the microtask queue.
+///
+/// The Promise machinery queues typed jobs, so a queued reaction costs one
+/// enum value rather than a boxed closure plus a separate roots `Vec`; the
+/// collector reads the queued values straight off the job. `Closure` keeps the
+/// explicit-roots form for the remaining one-off producers (disposal,
+/// async-generator and module plumbing).
+pub(crate) enum Microtask {
+    Closure {
+        roots: Vec<JsValue>,
+        job: MicrotaskJob,
+    },
+    /// NewPromiseReactionJob (ECMA-262 §27.2.2.1).
+    Reaction {
+        reaction: PromiseReaction,
+        argument: JsValue,
+    },
+    /// NewPromiseResolveThenableJob (ECMA-262 §27.2.2.2).
+    ResolveThenable {
+        promise_id: u64,
+        thenable: JsValue,
+        then_fn: JsValue,
+    },
+}
+
+impl Microtask {
+    /// Every value the job keeps alive while it is queued or running.
+    pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
+        match self {
+            Microtask::Closure { roots, .. } => roots.iter().for_each(visit),
+            Microtask::Reaction { reaction, argument } => {
+                visit(argument);
+                if let Some(handler) = &reaction.handler {
+                    visit(handler);
+                }
+                // Resolving closures only capture a promise id, which the
+                // tracer cannot see, so the downstream promise is a root.
+                reaction.target.for_each_value(&mut visit);
+                if let Some(promise_id) = reaction.target.promise_id() {
+                    visit(&JsValue::object(promise_id));
+                }
+            }
+            Microtask::ResolveThenable {
+                promise_id,
+                thenable,
+                then_fn,
+            } => {
+                visit(thenable);
+                visit(then_fn);
+                visit(&JsValue::object(*promise_id));
+            }
+        }
+    }
+}
 
 /// A host timer armed by `setTimeout` or `setInterval`.
 struct Timer {
@@ -188,7 +244,7 @@ impl TimerQueue {
 
 #[derive(Default)]
 pub(crate) struct JobScheduler {
-    microtask_queue: VecDeque<(Vec<JsValue>, MicrotaskJob)>,
+    microtask_queue: VecDeque<Microtask>,
     async_gen_queues: FxHashMap<u64, VecDeque<AsyncGenRequest>>,
     async_gen_yield_pending: bool,
     async_function_states: FxHashMap<u64, AsyncFunctionState>,
@@ -206,11 +262,30 @@ pub(crate) struct JobScheduler {
 }
 
 impl JobScheduler {
-    pub(crate) fn enqueue_microtask(&mut self, item: (Vec<JsValue>, MicrotaskJob)) {
-        self.microtask_queue.push_back(item);
+    pub(crate) fn enqueue_microtask(&mut self, (roots, job): (Vec<JsValue>, MicrotaskJob)) {
+        self.microtask_queue
+            .push_back(Microtask::Closure { roots, job });
     }
 
-    pub(crate) fn pop_microtask(&mut self) -> Option<(Vec<JsValue>, MicrotaskJob)> {
+    pub(crate) fn enqueue_reaction_job(&mut self, reaction: PromiseReaction, argument: JsValue) {
+        self.microtask_queue
+            .push_back(Microtask::Reaction { reaction, argument });
+    }
+
+    pub(crate) fn enqueue_resolve_thenable_job(
+        &mut self,
+        promise_id: u64,
+        thenable: JsValue,
+        then_fn: JsValue,
+    ) {
+        self.microtask_queue.push_back(Microtask::ResolveThenable {
+            promise_id,
+            thenable,
+            then_fn,
+        });
+    }
+
+    pub(crate) fn pop_microtask(&mut self) -> Option<Microtask> {
         self.microtask_queue.pop_front()
     }
 
@@ -222,10 +297,8 @@ impl JobScheduler {
     /// continuations capture it only inside native closures the tracer cannot
     /// walk, so nothing else keeps it alive while the request is outstanding.
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
-        for (roots, _) in &self.microtask_queue {
-            for value in roots {
-                visit(value);
-            }
+        for task in &self.microtask_queue {
+            task.for_each_root(&mut visit);
         }
         for (gen_id, queue) in &self.async_gen_queues {
             if queue.is_empty() {
@@ -289,6 +362,10 @@ impl JobScheduler {
 
     pub(crate) fn remove_async_function_state(&mut self, id: u64) -> Option<AsyncFunctionState> {
         self.async_function_states.remove(&id)
+    }
+
+    pub(crate) fn async_function_state_mut(&mut self, id: u64) -> Option<&mut AsyncFunctionState> {
+        self.async_function_states.get_mut(&id)
     }
 
     pub(crate) fn park_async_function_dispose(&mut self, id: u64, pending: PendingDispose) {
@@ -436,9 +513,13 @@ mod tests {
         sched.enqueue_microtask((tag(3.0), job()));
 
         let popped_tags: Vec<f64> = std::iter::from_fn(|| sched.pop_microtask())
-            .map(|(roots, _)| match roots.as_slice() {
-                [value] => value.as_number().expect("root must be a Number"),
-                _ => panic!("unexpected roots shape"),
+            .map(|task| {
+                let mut tags = Vec::new();
+                task.for_each_root(|v| tags.push(v.clone()));
+                match tags.as_slice() {
+                    [value] => value.as_number().expect("root must be a Number"),
+                    _ => panic!("unexpected roots shape"),
+                }
             })
             .collect();
 

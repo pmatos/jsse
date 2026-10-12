@@ -5462,6 +5462,30 @@ impl Interpreter {
         }
     }
 
+    /// Runs one dequeued job with the values it keeps alive rooted for its
+    /// duration. Once off the queue the job's own values are reachable from
+    /// nowhere else.
+    pub(crate) fn run_microtask(&mut self, task: scheduler::Microtask) -> Completion {
+        use scheduler::Microtask;
+        let frame = self.gc_root_frame();
+        task.for_each_root(|value| self.gc_root_value(value));
+        let rooted_depth = self.gc_root_frame();
+        let result = match task {
+            Microtask::Closure { job, .. } => job(self),
+            Microtask::Reaction { reaction, argument } => {
+                self.run_promise_reaction_job(reaction, argument)
+            }
+            Microtask::ResolveThenable {
+                promise_id,
+                thenable,
+                then_fn,
+            } => self.run_promise_resolve_thenable_job(promise_id, thenable, then_fn),
+        };
+        self.gc_assert_root_depth(rooted_depth, "a microtask job");
+        self.gc_unroot_frame(frame);
+        result
+    }
+
     pub(crate) fn drain_microtasks(&mut self) {
         let mut iterations = 0u64;
         loop {
@@ -5473,15 +5497,8 @@ impl Interpreter {
             if self.pending_exit.is_some() {
                 return;
             }
-            if let Some((roots, job)) = self.scheduler.pop_microtask() {
-                let mt_frame = self.gc_root_frame();
-                for val in &roots {
-                    self.gc_root_value(val);
-                }
-                let rooted_depth = self.gc_root_frame();
-                let job_result = job(self);
-                self.gc_assert_root_depth(rooted_depth, "a microtask job");
-                self.gc_unroot_frame(mt_frame);
+            if let Some(task) = self.scheduler.pop_microtask() {
+                let job_result = self.run_microtask(task);
                 // A `__host_exit` inside the job (issue #242) surfaces as
                 // `Completion::Exit`; the drain loop is a `()`-returning
                 // event-loop boundary, so latch the code into the terminal sink
@@ -5721,15 +5738,8 @@ impl Interpreter {
     pub(crate) fn drain_microtasks_blocking(&mut self) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
-            while let Some((roots, job)) = self.scheduler.pop_microtask() {
-                let mt_frame = self.gc_root_frame();
-                for val in &roots {
-                    self.gc_root_value(val);
-                }
-                let rooted_depth = self.gc_root_frame();
-                let job_result = job(self);
-                self.gc_assert_root_depth(rooted_depth, "a microtask job");
-                self.gc_unroot_frame(mt_frame);
+            while let Some(task) = self.scheduler.pop_microtask() {
+                let job_result = self.run_microtask(task);
                 // A `__host_exit` inside the job (issue #242) latches the
                 // terminal sink and stops draining.
                 if let Completion::Exit(code) = job_result {

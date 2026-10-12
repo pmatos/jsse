@@ -4206,6 +4206,11 @@ pub(crate) enum ReactionTarget {
     /// The result capability of `%Promise%`: its resolving functions can never
     /// be observed, so the reaction settles the promise directly.
     Internal(u64),
+    /// An `await` continuation: the reaction job resumes the suspended async
+    /// function with the settled value (fulfilled) or reason (rejected)
+    /// instead of calling a handler. Carries no handler function, so awaiting
+    /// allocates no function objects.
+    AsyncResume(u64),
 }
 
 impl ReactionTarget {
@@ -4218,13 +4223,13 @@ impl ReactionTarget {
                 visit(resolve);
                 visit(reject);
             }
-            ReactionTarget::Internal(_) => {}
+            ReactionTarget::Internal(_) | ReactionTarget::AsyncResume(_) => {}
         }
     }
 
     pub(crate) fn promise_id(&self) -> Option<u64> {
         match self {
-            ReactionTarget::None => None,
+            ReactionTarget::None | ReactionTarget::AsyncResume(_) => None,
             ReactionTarget::Capability { promise_id, .. } => Some(*promise_id),
             ReactionTarget::Internal(id) => Some(*id),
         }
