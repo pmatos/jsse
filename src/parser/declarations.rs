@@ -755,7 +755,9 @@ impl<'a> Parser<'a> {
                         p.allow_super_property = true;
                         p.allow_super_call = false;
                         p.in_function = 0;
-                        p.in_non_arrow_function = 0;
+                        // A static block body is a method, so `new.target` is
+                        // allowed in it and in the arrow functions it contains.
+                        p.in_non_arrow_function = 1;
                         p.in_generator = false;
                         p.in_async = false;
                         p.in_iteration = 0;
@@ -1047,18 +1049,19 @@ impl<'a> Parser<'a> {
 
     /// Parse field initializer value with ~Await, ~Yield parameters per spec §15.7.
     fn parse_field_initializer_value(&mut self) -> Result<Expression, ParseError> {
-        let prev_async = self.in_async;
-        let prev_gen = self.in_generator;
-        self.in_async = false;
-        self.in_generator = false;
-        // Increment in_function to prevent module-level await from matching
-        // (class field initializers use [~Await] per spec)
-        self.in_function += 1;
-        let result = self.parse_assignment_expression();
-        self.in_function -= 1;
-        self.in_async = prev_async;
-        self.in_generator = prev_gen;
-        result
+        self.with_function_context(
+            |p| {
+                p.in_async = false;
+                p.in_generator = false;
+                // Increment in_function to prevent module-level await from
+                // matching (class field initializers use [~Await] per spec).
+                // An initializer is a method, so `new.target` is allowed in it
+                // (Contains does not look into class bodies, §8.5.1).
+                p.in_function += 1;
+                p.in_non_arrow_function += 1;
+            },
+            |p| p.parse_assignment_expression(),
+        )
     }
 
     pub(super) fn parse_property_name(&mut self) -> Result<(PropertyKey, bool), ParseError> {

@@ -238,11 +238,25 @@ impl Interpreter {
         constructor: &JsValue,
     ) -> Result<(), JsValue> {
         // The initializers run user code, and a base class's new object is
-        // reachable from nowhere else until its constructor body runs.
+        // reachable from nowhere else until its constructor body runs. They
+        // are methods called with no NewTarget.
         self.with_gc_root_scope(|interp| {
             interp.gc_root_value(&this_val);
-            interp.define_instance_elements(this_val, constructor)
+            interp.with_new_target_undefined(|interp| {
+                interp.define_instance_elements(this_val, constructor)
+            })
         })
+    }
+
+    /// Run `body` as a class field initializer or static block: those are
+    /// methods called with no NewTarget (DefineField, ClassStaticBlockDefinition
+    /// call them with [[Call]]), so `new.target` in them, and in the arrow
+    /// functions they create, is undefined whatever is being constructed.
+    fn with_new_target_undefined<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.new_target.take();
+        let result = body(self);
+        self.new_target = saved;
+        result
     }
 
     fn define_instance_elements(

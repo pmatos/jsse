@@ -160,7 +160,6 @@ pub(crate) struct Parser<'a> {
     in_field_initializer_eval: bool,
     in_static_block: bool,
     function_param_names: Option<HashSet<String>>,
-    eval_new_target_allowed: bool,
     last_expr_parenthesized: bool,
     last_obj_had_proto_dup: bool,
     /// Current recursive-descent nesting depth (expressions + statements).
@@ -243,7 +242,6 @@ impl<'a> Parser<'a> {
             in_field_initializer_eval: false,
             in_static_block: false,
             function_param_names: None,
-            eval_new_target_allowed: false,
             last_expr_parenthesized: false,
             last_obj_had_proto_dup: false,
             parse_depth: 0,
@@ -353,7 +351,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn set_eval_new_target_allowed(&mut self) {
-        self.eval_new_target_allowed = true;
+        self.in_non_arrow_function += 1;
     }
 
     fn save_block_scope(&self) -> SavedBlockScope {
@@ -379,9 +377,9 @@ impl<'a> Parser<'a> {
 
     /// Snapshot the function-context fields before a call site re-scopes
     /// whichever subset it needs. `std::mem::take`s `labels` rather than
-    /// cloning it — both call sites already want `labels` reset to empty for
-    /// the nested body, so this both captures the outer value and performs
-    /// that reset in one step.
+    /// cloning it — every call site wants `labels` reset to empty for the
+    /// nested body, so this both captures the outer value and performs that
+    /// reset in one step.
     fn save_function_context(&mut self) -> SavedFunctionContext {
         SavedFunctionContext {
             in_function: self.in_function,
@@ -434,9 +432,9 @@ impl<'a> Parser<'a> {
         result
     }
 
-    /// Function-context counterpart of `with_block_scope`, for the two sites
-    /// that re-scope the full function-context field set (class static
-    /// blocks, function bodies).
+    /// Function-context counterpart of `with_block_scope`, for the sites that
+    /// re-scope the function-context field set (class static blocks, field
+    /// initializers, function bodies).
     fn with_function_context<T>(
         &mut self,
         enter: impl FnOnce(&mut Self),
@@ -1823,7 +1821,7 @@ mod tests {
         // leaves the counter elevated — untidy but harmless. The ninth,
         // `parse_function_body_with_context`, decrements unconditionally, and
         // `export default function` is the only way to reach it. A static block
-        // inside such a body zeroes the counter, so before the restores below
+        // inside such a body resets the counter, so before the restores below
         // were made unconditional that pairing underflowed — on a path
         // `parse_program` cannot reach at all.
         const MODULE_SOURCES: &[&str] = &[
