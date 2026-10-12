@@ -736,7 +736,11 @@ impl Compiler {
     fn compile_effect(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
             Expression::Assign(op, target, value) => {
-                if let Expression::Identifier(name) = target.as_ref() {
+                // An anonymous function value needs NamedEvaluation, which
+                // `compile_expr` hands to the tree-walker.
+                if let Expression::Identifier(name) = target.as_ref()
+                    && !value.is_anonymous_function_definition()
+                {
                     return self.compile_identifier_assign(*op, name, value, true);
                 }
             }
