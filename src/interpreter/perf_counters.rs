@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 /// Widest opcode discriminant plus one. The assertion below fails to compile
 /// if a new opcode outgrows the histogram.
-const OP_SLOTS: usize = 64;
+const OP_SLOTS: usize = 128;
 
 /// Identity of an attributed body: its display name plus the function object it
 /// came from. Two distinct functions can share a name, and keying on the name
@@ -30,7 +30,7 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
 /// bodies). Object ids are allocated upward from 0, so this can never collide.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::UpdateLocal as usize) < OP_SLOTS);
+const _: () = assert!((Op::LocalBinConst as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.
@@ -70,8 +70,9 @@ pub(crate) struct PerfCounters {
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
     pub(crate) gc_nanos: u128,
-    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`UpdateLocal`) whose slot hint
-    /// matched, and those that fell back to by-name resolution (#898).
+    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`StoreLocalPop`/`UpdateLocal`/
+    /// `LocalBinConst`) whose slot hint matched, and those that fell back to
+    /// by-name resolution (#898).
     pub(crate) local_slot_hits: u64,
     pub(crate) local_slot_misses: u64,
     /// Bare-name reads/writes served by the global data fast path
@@ -79,6 +80,14 @@ pub(crate) struct PerfCounters {
     /// Object Environment Record path (#905).
     pub(crate) global_prop_fast_hits: u64,
     pub(crate) global_prop_fast_misses: u64,
+    /// Dynamic `EvalAst`/`ExecAst` executions: nodes a compiled body handed
+    /// back to the tree-walker, and the tree-walker work units they spent
+    /// exclusive of nested bodies. A compiled body is "free" of bail rows yet
+    /// can still execute hot constructs here, so both are reported.
+    pub(crate) ast_fallback_execs: u64,
+    pub(crate) ast_units_in_fallbacks: u64,
+    /// Static fallback nodes per reason, once per compiled literal.
+    pub(crate) fallback_by_reason: FxHashMap<&'static str, u64>,
     /// Per-body AST attribution. `invocation share` cannot localize cost — a
     /// single fallback body can wrap a whole loop — so bodies are ranked by
     /// the tree-walker work units they consume *exclusive* of nested bodies.
@@ -121,6 +130,9 @@ impl Default for PerfCounters {
             local_slot_misses: 0,
             global_prop_fast_hits: 0,
             global_prop_fast_misses: 0,
+            ast_fallback_execs: 0,
+            ast_units_in_fallbacks: 0,
+            fallback_by_reason: FxHashMap::default(),
             ast_body_units: FxHashMap::default(),
             bail_by_name: FxHashMap::default(),
             ast_body_stack: Vec::new(),
@@ -148,6 +160,12 @@ impl PerfCounters {
         self.vm_op_hist[op as usize] += 1;
     }
 
+    pub(crate) fn record_fallbacks(&mut self, reasons: &[&'static str]) {
+        for reason in reasons {
+            *self.fallback_by_reason.entry(reason).or_insert(0) += 1;
+        }
+    }
+
     pub(crate) fn record_bail(&mut self, reason: &'static str, name: Rc<str>, id: u64) {
         *self.compile_bail.entry(reason).or_insert(0) += 1;
         self.bail_by_name.insert((name, id), reason);
@@ -169,11 +187,11 @@ impl PerfCounters {
     /// Pops the innermost body, credits it the units it spent outside any
     /// nested body, and charges its inclusive cost to its caller's child total
     /// so no unit is counted twice.
-    pub(crate) fn leave_ast_body(&mut self) {
+    pub(crate) fn leave_ast_body(&mut self) -> u64 {
         let now = self.ast_units();
         let Some((key, is_function_invocation, at_entry, children)) = self.ast_body_stack.pop()
         else {
-            return;
+            return 0;
         };
         let inclusive = now.saturating_sub(at_entry);
         let exclusive = inclusive.saturating_sub(children);
@@ -186,6 +204,7 @@ impl PerfCounters {
         if let Some(parent) = self.ast_body_stack.last_mut() {
             parent.3 += inclusive;
         }
+        exclusive
     }
 
     pub(crate) fn report(&self) -> String {
@@ -235,6 +254,12 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tgc_ms\t{}", self.gc_nanos / 1_000_000);
         let _ = writeln!(out, "PERF\tlocal_slot_hits\t{}", self.local_slot_hits);
         let _ = writeln!(out, "PERF\tlocal_slot_misses\t{}", self.local_slot_misses);
+        let _ = writeln!(out, "PERF\tast_fallback_execs\t{}", self.ast_fallback_execs);
+        let _ = writeln!(
+            out,
+            "PERF\tast_units_in_fallbacks\t{}",
+            self.ast_units_in_fallbacks
+        );
         let _ = writeln!(
             out,
             "PERF\tglobal_prop_fast_hits\t{}",
@@ -255,11 +280,21 @@ impl PerfCounters {
             "PERF\tatom_lookup_calls\t{}",
             super::atom::lookup_calls()
         );
+        let _ = writeln!(
+            out,
+            "PERF\tkey_intern_calls\t{}",
+            super::key_intern::key_intern_calls()
+        );
 
         let mut bails: Vec<_> = self.compile_bail.iter().collect();
         bails.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
         for (reason, count) in bails {
             let _ = writeln!(out, "BAIL\t{reason}\t{count}");
+        }
+        let mut fallbacks: Vec<_> = self.fallback_by_reason.iter().collect();
+        fallbacks.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        for (reason, count) in fallbacks {
+            let _ = writeln!(out, "FALLBACK\t{reason}\t{count}");
         }
 
         // A name shared by several function objects is rendered `name#id`; a

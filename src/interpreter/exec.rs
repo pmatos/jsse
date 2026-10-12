@@ -130,9 +130,7 @@ impl Interpreter {
                 Err(_e) => {
                     #[cfg(feature = "perf-counters")]
                     {
-                        let crate::interpreter::bytecode::compiler::CompileError::Unsupported(
-                            reason,
-                        ) = _e;
+                        let reason = _e.reason();
                         let name = self.perf.name_script_body.clone();
                         self.perf.record_bail(
                             reason,
@@ -218,7 +216,7 @@ impl Interpreter {
     /// Perform the declaration-instantiation half of Body execution. Keeping
     /// this separate lets eligible Script Bodies establish global bindings
     /// before entering the VM, exactly as the tree-walker does.
-    fn instantiate_body_declarations(
+    pub(super) fn instantiate_body_declarations(
         &mut self,
         stmts: &[Statement],
         env: &EnvRef,

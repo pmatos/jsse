@@ -1,3 +1,7 @@
+/// Bit 2 of the `UpdateName`/`UpdateLocal` mode byte: effect context, the
+/// updated value is not pushed.
+pub(crate) const UPDATE_DISCARD: u8 = 0b100;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Op {
@@ -43,6 +47,9 @@ pub(crate) enum Op {
     ResolveName = 39,
     LoadResolvedName = 40,
     StoreResolvedName = 41,
+    /// `++`/`--` on a name. Operands: name (u16), mode (u8): bits 0-1 select
+    /// post-inc, pre-inc, post-dec, pre-dec; bit 2 means the result is
+    /// discarded (not pushed).
     UpdateName = 42,
     GetProp = 43,
     SetProp = 44,
@@ -77,6 +84,52 @@ pub(crate) enum Op {
     /// `++`/`--` on a function-local name. Operands: name (u16), slot hint
     /// (u16), mode (u8, as `UpdateName`).
     UpdateLocal = 61,
+    /// `[..., value]` → abrupt `Throw(value)`.
+    Throw = 62,
+    /// `[..., value]` → `[..., typeof value]`.
+    Typeof = 63,
+    /// `[...]` → `[..., typeof name]`; operand: name (u16). An unresolvable
+    /// name yields `"undefined"` rather than a ReferenceError.
+    TypeofName = 64,
+    /// `[..., value, ctor]` → `[..., value instanceof ctor]`.
+    Instanceof = 65,
+    /// `[..., key, object]` → `[..., key in object]`.
+    In = 66,
+    /// `++`/`--` on `base.name`: `[..., base]` → `[..., result]`. Operands:
+    /// name (u16), mode (u8, as `UpdateName`).
+    UpdateProp = 67,
+    /// `++`/`--` on `base[key]`: `[..., base, key]` → `[..., result]`. The op
+    /// runs the base-nullish check and ToPropertyKey once. Operand: mode (u8).
+    UpdateElement = 68,
+    /// `[...]` → `[..., value]`: evaluate the expression node `ast[idx]` on
+    /// the tree-walker in the current environment. Operand: ast index (u16).
+    EvalAst = 69,
+    /// Run the statement node `ast[idx]` on the tree-walker (operand stack is
+    /// empty at a statement boundary). Operands: ast index (u16), escape
+    /// table (u16, `NO_ESCAPE_TABLE` when no break/continue can leave it).
+    ExecAst = 70,
+    /// `[..., value]` → `[...]`: initialise a function-top-level `let`/`const`
+    /// binding in the current environment (InitializeBinding, 9.1.1.1.4).
+    /// Operands: name (u16), kind (u8: 0 = let, 1 = const).
+    InitLexical = 71,
+    /// `StoreLocal` in effect context: the stored value is popped afterwards
+    /// (it stays rooted on the operand stack through the store, which can
+    /// reach a setter and a safepoint). Same operands as `StoreLocal`.
+    StoreLocalPop = 72,
+    /// `StoreResolvedName` in effect context: pops the reference, stores, then
+    /// pops the value. `ResolveName` is still emitted before the right-hand
+    /// side, so the reference is created first (spec order).
+    StoreResolvedNamePop = 73,
+    /// `[..., l]` → `[..., l op K]` for a number literal `K`. Operands: binary
+    /// op (u8, the `Op` byte of one of the 20 binary ops), constant (u16).
+    BinConst = 74,
+    /// `[..., l, r]` → `[...]`, jumping when `l cmp r` is false. Operands:
+    /// comparison (u8, the `Op` byte of `Eq`..`GtEq`), offset (i16, last so
+    /// `patch_jump` applies unchanged).
+    CmpJumpIfFalse = 75,
+    /// Exactly `LoadLocal` followed by `BinConst`. Operands: name (u16), slot
+    /// hint (u16), binary op (u8), constant (u16).
+    LocalBinConst = 76,
 }
 
 impl Op {
@@ -144,6 +197,21 @@ impl Op {
             59 => Some(Op::LoadLocal),
             60 => Some(Op::StoreLocal),
             61 => Some(Op::UpdateLocal),
+            62 => Some(Op::Throw),
+            63 => Some(Op::Typeof),
+            64 => Some(Op::TypeofName),
+            65 => Some(Op::Instanceof),
+            66 => Some(Op::In),
+            67 => Some(Op::UpdateProp),
+            68 => Some(Op::UpdateElement),
+            69 => Some(Op::EvalAst),
+            70 => Some(Op::ExecAst),
+            71 => Some(Op::InitLexical),
+            72 => Some(Op::StoreLocalPop),
+            73 => Some(Op::StoreResolvedNamePop),
+            74 => Some(Op::BinConst),
+            75 => Some(Op::CmpJumpIfFalse),
+            76 => Some(Op::LocalBinConst),
             _ => None,
         }
     }

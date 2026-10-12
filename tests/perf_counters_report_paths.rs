@@ -171,8 +171,11 @@ fn generator_and_eval_work_is_not_credited_to_the_caller() {
         caller < 100,
         "caller must not absorb the generator's work, got {caller}"
     );
+    // `caller`'s `for-of` runs as a tree-walker node inside its compiled
+    // body; those units are reported as fallback work, not as an AST-body
+    // invocation, so the two together cover both rows.
     assert_eq!(
-        perf("ast_units_in_functions"),
+        perf("ast_units_in_functions") + perf("ast_units_in_fallbacks"),
         caller + eval_caller,
         "generator state-machine steps must stay out of the function-invocation metric"
     );
@@ -414,7 +417,7 @@ fn every_closure_of_an_ineligible_literal_names_its_bail_reason() {
     let dir = scratch("shared-bail");
     fs::write(
         dir.join("main.js"),
-        "function make(k) { return function inner(n) { var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
+        "function make(k) { return function inner(n) { with ({}) {} var g = function () { return k; }; var s = 0; for (var i = 0; i < n; i++) { s += g(); } return s; }; }\n\
          var fs = [make(1), make(2), make(3)];\n\
          for (var j = 0; j < fs.length; j++) { fs[j](10); }\n",
     )

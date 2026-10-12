@@ -1079,7 +1079,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Array".to_string();
+            .class_name = "Array".into();
         self.get_object_cell_expect(proto_id).borrow_mut().kind =
             crate::interpreter::types::ObjectKind::Array(
                 crate::interpreter::types::ArrayData::default(),
@@ -3542,7 +3542,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -3565,7 +3565,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -3597,7 +3597,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".to_string();
+        obj_data.class_name = "Array".into();
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );

@@ -236,7 +236,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Date".to_string();
+            .class_name = "Date".into();
         // Date.prototype does NOT have [[DateValue]] per spec
 
         // Guard wrapper around `date_field_value`: brand-check `this` as a Date
@@ -1008,7 +1008,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .class_name = "Temporal.Instant".to_string();
+                        .class_name = "Temporal.Instant".into();
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                         interp
                             .get_object_cell_expect(obj_id)
@@ -1220,7 +1220,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let mut b = interp.get_object_cell_expect(object_id).borrow_mut();
-                    b.class_name = "Date".to_string();
+                    b.class_name = "Date".into();
                     b.primitive_value = Some(JsValue::number(time_val));
                     b.prototype_id = Some(proto);
                 }
@@ -1430,7 +1430,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = name.to_string();
+            o.class_name = name.to_string().into();
             if let Some(proto_id) = error_proto_id {
                 o.prototype_id = Some(proto_id);
             }

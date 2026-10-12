@@ -1,12 +1,13 @@
-use super::chunk::Chunk;
-use super::op::Op;
+use super::chunk::{Chunk, Constant};
+use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
-use crate::interpreter::types::{BindingKind, Completion, Environment};
-use crate::interpreter::{EnvRef, Interpreter};
-use crate::types::JsValue;
+use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
+use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
+use crate::types::{JsValue, number_ops};
 
+#[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     let lo = chunk.code[pc] as u16;
     let hi = chunk.code[pc + 1] as u16;
@@ -14,16 +15,227 @@ fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
 }
 
 /// Decodes the mode byte shared by `UpdateName` and `UpdateLocal`.
-fn update_mode(mode: u8) -> (UpdateOp, bool) {
-    match mode {
-        0 => (UpdateOp::Increment, false),
-        1 => (UpdateOp::Increment, true),
-        2 => (UpdateOp::Decrement, false),
-        3 => (UpdateOp::Decrement, true),
-        _ => panic!("invalid update mode"),
+/// Returns the operation, whether it is a prefix form, and whether the result
+/// is discarded (bit 2: effect context, the result is not pushed).
+fn update_mode(mode: u8) -> (UpdateOp, bool, bool) {
+    let discard = mode & UPDATE_DISCARD != 0;
+    match mode & 0b11 {
+        0 => (UpdateOp::Increment, false, discard),
+        1 => (UpdateOp::Increment, true, discard),
+        2 => (UpdateOp::Decrement, false, discard),
+        _ => (UpdateOp::Decrement, true, discard),
     }
 }
 
+/// The `BinaryOp` a binary-op byte (an `Op` discriminant) stands for.
+fn binary_of_op(op: Op) -> BinaryOp {
+    match op {
+        Op::Add => BinaryOp::Add,
+        Op::Sub => BinaryOp::Sub,
+        Op::Mul => BinaryOp::Mul,
+        Op::Div => BinaryOp::Div,
+        Op::Mod => BinaryOp::Mod,
+        Op::Pow => BinaryOp::Exp,
+        Op::Eq => BinaryOp::Eq,
+        Op::NotEq => BinaryOp::NotEq,
+        Op::StrictEq => BinaryOp::StrictEq,
+        Op::StrictNotEq => BinaryOp::StrictNotEq,
+        Op::Lt => BinaryOp::Lt,
+        Op::Gt => BinaryOp::Gt,
+        Op::LtEq => BinaryOp::LtEq,
+        Op::GtEq => BinaryOp::GtEq,
+        Op::BitAnd => BinaryOp::BitAnd,
+        Op::BitOr => BinaryOp::BitOr,
+        Op::BitXor => BinaryOp::BitXor,
+        Op::Shl => BinaryOp::LShift,
+        Op::Shr => BinaryOp::RShift,
+        Op::UShr => BinaryOp::URShift,
+        _ => unreachable!("not a binary op: {op:?}"),
+    }
+}
+
+/// A binary op over two Numbers, computed with the same `number_ops` calls as
+/// `eval_binary`'s own Number fast path.
+#[inline(always)]
+fn number_binop(op: Op, l: f64, r: f64) -> JsValue {
+    match op {
+        Op::Add => JsValue::number(number_ops::add(l, r)),
+        Op::Sub => JsValue::number(number_ops::subtract(l, r)),
+        Op::Mul => JsValue::number(number_ops::multiply(l, r)),
+        Op::Div => JsValue::number(number_ops::divide(l, r)),
+        Op::Mod => JsValue::number(number_ops::remainder(l, r)),
+        Op::Pow => JsValue::number(number_ops::exponentiate(l, r)),
+        Op::Shl => JsValue::number(number_ops::left_shift(l, r)),
+        Op::Shr => JsValue::number(number_ops::signed_right_shift(l, r)),
+        Op::UShr => JsValue::number(number_ops::unsigned_right_shift(l, r)),
+        Op::BitAnd => JsValue::number(number_ops::bitwise_and(l, r)),
+        Op::BitOr => JsValue::number(number_ops::bitwise_or(l, r)),
+        Op::BitXor => JsValue::number(number_ops::bitwise_xor(l, r)),
+        Op::Lt
+        | Op::Gt
+        | Op::LtEq
+        | Op::GtEq
+        | Op::Eq
+        | Op::StrictEq
+        | Op::NotEq
+        | Op::StrictNotEq => JsValue::boolean(number_compare(op, l, r)),
+        _ => unreachable!("not a binary op: {op:?}"),
+    }
+}
+
+/// A comparison over two Numbers, as `eval_binary`'s own Number fast path.
+#[inline(always)]
+fn number_compare(op: Op, l: f64, r: f64) -> bool {
+    match op {
+        Op::Lt => number_ops::less_than(l, r) == Some(true),
+        Op::Gt => number_ops::less_than(r, l) == Some(true),
+        Op::LtEq => number_ops::less_than(r, l) == Some(false),
+        Op::GtEq => number_ops::less_than(l, r) == Some(false),
+        Op::Eq | Op::StrictEq => number_ops::equal(l, r),
+        Op::NotEq | Op::StrictNotEq => !number_ops::equal(l, r),
+        _ => unreachable!("not a comparison: {op:?}"),
+    }
+}
+
+/// The non-Number-pair path of every binary op. Both operands are already
+/// popped from the operand stack but still rooted in `gc_bytecode_roots`, so
+/// they stay alive across the `ToPrimitive`/`valueOf` calls `eval_binary` can
+/// make; they are released (right, then left: LIFO) once it returns.
+#[inline(never)]
+fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -> Completion {
+    let result = if matches!(op, BinaryOp::Add) && is_primitive_string_concat(&l, &r) {
+        interp.concat_primitives(&l, &r)
+    } else {
+        interp.eval_binary(op, &l, &r)
+    };
+    unroot_stack_value(interp, &r);
+    unroot_stack_value(interp, &l);
+    result
+}
+
+/// `StoreLocal`'s store: the frame slot when the hint verifies, else the
+/// by-name reference path.
+#[inline(always)]
+fn store_local(
+    interp: &mut Interpreter,
+    name: &Atom,
+    slot: u16,
+    env: &EnvRef,
+    value: &JsValue,
+    hint: Option<&GlobalHint>,
+) -> Result<(), JsValue> {
+    let stored = {
+        let mut scope = env.borrow_mut();
+        let plain = scope.with_object.is_none()
+            && scope.indirect_bindings.is_none()
+            && scope.global_object_id.is_none();
+        match scope.bindings.entry_at_mut(slot as usize) {
+            Some((atom, binding))
+                if plain
+                    && atom.ptr_eq(name)
+                    && binding.initialized
+                    && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
+            {
+                binding.value = value.clone();
+                true
+            }
+            _ => false,
+        }
+    };
+    if stored {
+        #[cfg(feature = "perf-counters")]
+        {
+            interp.perf.local_slot_hits += 1;
+        }
+        return Ok(());
+    }
+    #[cfg(feature = "perf-counters")]
+    {
+        interp.perf.local_slot_misses += 1;
+    }
+    let id_ref = interp.resolve_identifier_ref_hinted(name, env, hint)?;
+    match interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint) {
+        Completion::Throw(e) => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// `StoreResolvedName`'s store through the reference `ResolveName` created.
+#[inline(always)]
+fn store_resolved_name(
+    interp: &mut Interpreter,
+    name: &Atom,
+    id_ref: &IdentifierRef,
+    env: &EnvRef,
+    value: &JsValue,
+    hint: Option<&GlobalHint>,
+) -> Result<(), JsValue> {
+    let local_store = if let IdentifierRef::SpecificEnv(local_env) = id_ref {
+        let mut scope = local_env.borrow_mut();
+        if scope.global_object_id.is_none()
+            && scope.indirect_bindings.is_none()
+            && let Some(binding) = scope.bindings.get_mut(name)
+            && binding.initialized
+            && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
+        {
+            binding.value = value.clone();
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !local_store
+        && let Completion::Throw(e) =
+            interp.put_value_by_ref_hinted(name, value.clone(), id_ref, env, hint)
+    {
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// The frame binding a verified slot hint names, when it is initialized and
+/// the scope is a plain declarative one; `f` sees its value in place.
+#[inline(always)]
+fn with_local_hit<R>(
+    env: &EnvRef,
+    name: &Atom,
+    slot: u16,
+    f: impl FnOnce(&JsValue) -> R,
+) -> Option<R> {
+    let scope = env.borrow();
+    match scope.bindings.entry_at(slot as usize) {
+        Some((atom, binding))
+            if atom.ptr_eq(name)
+                && binding.initialized
+                && scope.with_object.is_none()
+                && scope.indirect_bindings.is_none() =>
+        {
+            Some(f(&binding.value))
+        }
+        _ => None,
+    }
+}
+
+/// Where a `break`/`continue` completion leaving an `ExecAst` statement
+/// resumes, if its label names a loop compiled into this chunk.
+fn escape_target(
+    chunk: &Chunk,
+    table: u16,
+    is_continue: bool,
+    label: Option<&str>,
+) -> Option<usize> {
+    if table == super::chunk::NO_ESCAPE_TABLE {
+        return None;
+    }
+    chunk.escape_tables[table as usize]
+        .iter()
+        .find(|e| e.is_continue == is_continue && e.label.as_deref() == label)
+        .map(|e| e.target as usize)
+}
+
+#[inline(always)]
 fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
     let lo = chunk.code[pc] as u16;
     let hi = chunk.code[pc + 1] as u16;
@@ -53,23 +265,27 @@ fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
     frame
 }
 
+#[inline(always)]
 fn root_stack_value(interp: &mut Interpreter, value: &JsValue) {
     if let Some(object_id) = value.as_object_id() {
         interp.gc_bytecode_roots.push(object_id);
     }
 }
 
+#[inline(always)]
 fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
     if let Some(object_id) = value.as_object_id() {
         interp.gc_bytecode_roots.pop_expected(object_id);
     }
 }
 
+#[inline(always)]
 fn push_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, value: JsValue) {
     root_stack_value(interp, &value);
     stack.push(value);
 }
 
+#[inline(always)]
 fn pop_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, context: &'static str) -> JsValue {
     let value = stack.pop().unwrap_or_else(|| panic!("{context}"));
     unroot_stack_value(interp, &value);
@@ -181,6 +397,65 @@ fn member_set_computed(
     interp.set_object_with_key(base, &key, rhs, strict)
 }
 
+/// `++`/`--` on a member reference: the base and key are evaluated once by
+/// the caller; GetValue → ToNumeric → ±1 → PutValue, with ToPropertyKey run
+/// once (sec-postfix-increment-operator-runtime-semantics-evaluation,
+/// sec-prefix-increment-operator-runtime-semantics-evaluation). The postfix
+/// result is the numeric old value. `base.name` reads and writes through the
+/// interned name without building a key.
+fn member_update_named(
+    interp: &mut Interpreter,
+    base: &JsValue,
+    name: &str,
+    op: UpdateOp,
+    prefix: bool,
+    strict: bool,
+) -> Completion {
+    if base.is_nullish() {
+        return Completion::Throw(interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading '{name}')"
+        )));
+    }
+    interp.update_member_value(base, name, op, prefix, strict)
+}
+
+fn member_update_computed(
+    interp: &mut Interpreter,
+    base: &JsValue,
+    key_val: &JsValue,
+    op: UpdateOp,
+    prefix: bool,
+    strict: bool,
+) -> Completion {
+    if base.is_nullish() {
+        return Completion::Throw(interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading property)"
+        )));
+    }
+    match interp.to_property_key(key_val) {
+        Ok(key) => interp.update_member_value(base, &key, op, prefix, strict),
+        Err(e) => Completion::Throw(e),
+    }
+}
+
+/// Declares the chunk's `var` names in first-use order, which is the order
+/// its local slot hints assume. Declaration instantiation that runs first
+/// (`Chunk::needs_instantiation`) calls this beforehand so it cannot choose a
+/// different binding order.
+pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
+    if chunk.var_names.is_empty() {
+        return;
+    }
+    let var_scope = Environment::find_var_scope(env);
+    let mut scope = var_scope.borrow_mut();
+    for &name_idx in &chunk.var_names {
+        let name = &chunk.names[name_idx as usize];
+        if !scope.bindings.contains_key(name) {
+            scope.declare_atom(name, BindingKind::Var);
+        }
+    }
+}
+
 pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -283,18 +558,32 @@ fn run_chunk_inner(
     refs: &mut Vec<IdentifierRef>,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
-    if declare_chunk_vars && !chunk.var_names.is_empty() {
-        let var_scope = Environment::find_var_scope(env);
-        let mut scope = var_scope.borrow_mut();
-        for &name_idx in &chunk.var_names {
-            let name = &chunk.names[name_idx as usize];
-            if !scope.bindings.contains_key(name) {
-                scope.declare_atom(name, BindingKind::Var);
-            }
-        }
+    if declare_chunk_vars {
+        declare_var_prologue(chunk, env);
     }
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
+    // One arm per binary op, so the Number-pair fast path is specialised to
+    // the op instead of re-dispatching on it.
+    macro_rules! binary_arm {
+        ($bop:expr) => {{
+            let len = stack.len();
+            if len >= 2
+                && let (Some(l), Some(r)) = (stack[len - 2].as_number(), stack[len - 1].as_number())
+            {
+                // Numbers are never rooted, so nothing needs unrooting.
+                stack.truncate(len - 1);
+                stack[len - 2] = number_binop($bop, l, r);
+            } else {
+                let r = stack.pop().expect("stack underflow on binop rhs");
+                let l = stack.pop().expect("stack underflow on binop lhs");
+                match binary_slow(interp, binary_of_op($bop), l, r) {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+        }};
+    }
     loop {
         let op_byte = chunk.code[pc];
         let op = Op::from_u8(op_byte).expect("invalid opcode");
@@ -322,21 +611,7 @@ fn run_chunk_inner(
                 let slot = decode_u16(chunk, pc + 2);
                 pc += 4;
                 let name = &chunk.names[idx as usize];
-                let hit = {
-                    let scope = env.borrow();
-                    match scope.bindings.entry_at(slot as usize) {
-                        Some((atom, binding))
-                            if atom.ptr_eq(name)
-                                && binding.initialized
-                                && scope.with_object.is_none()
-                                && scope.indirect_bindings.is_none() =>
-                        {
-                            Some(binding.value.clone())
-                        }
-                        _ => None,
-                    }
-                };
-                match hit {
+                match with_local_hit(env, name, slot, JsValue::clone) {
                     Some(value) => {
                         #[cfg(feature = "perf-counters")]
                         {
@@ -356,50 +631,18 @@ fn run_chunk_inner(
                     }
                 }
             }
-            Op::StoreLocal => {
+            Op::StoreLocal | Op::StoreLocalPop => {
                 let idx = decode_u16(chunk, pc);
                 let slot = decode_u16(chunk, pc + 2);
                 pc += 4;
                 let name = &chunk.names[idx as usize];
                 let value = stack.last().expect("stack underflow on StoreLocal");
-                let stored = {
-                    let mut scope = env.borrow_mut();
-                    let plain = scope.with_object.is_none()
-                        && scope.indirect_bindings.is_none()
-                        && scope.global_object_id.is_none();
-                    match scope.bindings.entry_at_mut(slot as usize) {
-                        Some((atom, binding))
-                            if plain
-                                && atom.ptr_eq(name)
-                                && binding.initialized
-                                && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
-                        {
-                            binding.value = value.clone();
-                            true
-                        }
-                        _ => false,
-                    }
-                };
-                if stored {
-                    #[cfg(feature = "perf-counters")]
-                    {
-                        interp.perf.local_slot_hits += 1;
-                    }
-                } else {
-                    #[cfg(feature = "perf-counters")]
-                    {
-                        interp.perf.local_slot_misses += 1;
-                    }
-                    let hint = chunk.global_hint(idx);
-                    let id_ref = match interp.resolve_identifier_ref_hinted(name, env, hint) {
-                        Ok(id_ref) => id_ref,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    if let Completion::Throw(e) =
-                        interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint)
-                    {
-                        return Completion::Throw(e);
-                    }
+                if let Err(e) = store_local(interp, name, slot, env, value, chunk.global_hint(idx))
+                {
+                    return Completion::Throw(e);
+                }
+                if op == Op::StoreLocalPop {
+                    pop_value(interp, stack, "stack underflow on StoreLocalPop");
                 }
             }
             Op::UpdateLocal => {
@@ -407,7 +650,7 @@ fn run_chunk_inner(
                 let slot = decode_u16(chunk, pc + 2);
                 let mode = chunk.code[pc + 4];
                 pc += 5;
-                let (op, prefix) = update_mode(mode);
+                let (op, prefix, discard) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
                 let fast = {
                     let mut scope = env.borrow_mut();
@@ -439,7 +682,9 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_hits += 1;
                         }
-                        push_value(interp, stack, result);
+                        if !discard {
+                            stack.push(result);
+                        }
                     }
                     None => {
                         #[cfg(feature = "perf-counters")]
@@ -453,7 +698,11 @@ fn run_chunk_inner(
                             env,
                             chunk.global_hint(idx),
                         ) {
-                            Completion::Normal(value) => push_value(interp, stack, value),
+                            Completion::Normal(value) => {
+                                if !discard {
+                                    push_value(interp, stack, value);
+                                }
+                            }
                             abrupt => return abrupt,
                         }
                     }
@@ -518,7 +767,7 @@ fn run_chunk_inner(
                     abrupt => return abrupt,
                 }
             }
-            Op::StoreResolvedName => {
+            Op::StoreResolvedName | Op::StoreResolvedNamePop => {
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
@@ -526,39 +775,20 @@ fn run_chunk_inner(
                     .pop()
                     .expect("reference stack underflow on StoreResolvedName");
                 let value = stack.last().expect("stack underflow on StoreResolvedName");
-                let local_store = if let IdentifierRef::SpecificEnv(local_env) = &id_ref {
-                    let mut scope = local_env.borrow_mut();
-                    if scope.global_object_id.is_none()
-                        && scope.indirect_bindings.is_none()
-                        && let Some(binding) = scope.bindings.get_mut(name)
-                        && binding.initialized
-                        && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
-                    {
-                        binding.value = value.clone();
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                if !local_store
-                    && let Completion::Throw(e) = interp.put_value_by_ref_hinted(
-                        name,
-                        value.clone(),
-                        &id_ref,
-                        env,
-                        chunk.global_hint(idx),
-                    )
+                if let Err(e) =
+                    store_resolved_name(interp, name, &id_ref, env, value, chunk.global_hint(idx))
                 {
                     return Completion::Throw(e);
+                }
+                if op == Op::StoreResolvedNamePop {
+                    pop_value(interp, stack, "stack underflow on StoreResolvedNamePop");
                 }
             }
             Op::UpdateName => {
                 let idx = decode_u16(chunk, pc);
                 let mode = chunk.code[pc + 2];
                 pc += 3;
-                let (op, prefix) = update_mode(mode);
+                let (op, prefix, discard) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
                 match interp.eval_identifier_update_hinted(
                     op,
@@ -567,7 +797,11 @@ fn run_chunk_inner(
                     env,
                     chunk.global_hint(idx),
                 ) {
-                    Completion::Normal(value) => push_value(interp, stack, value),
+                    Completion::Normal(value) => {
+                        if !discard {
+                            push_value(interp, stack, value);
+                        }
+                    }
                     abrupt => return abrupt,
                 }
             }
@@ -861,65 +1095,117 @@ fn run_chunk_inner(
                     abrupt => return abrupt,
                 }
             }
-            Op::Add
-            | Op::Sub
-            | Op::Mul
-            | Op::Div
-            | Op::Mod
-            | Op::Pow
-            | Op::Eq
-            | Op::NotEq
-            | Op::StrictEq
-            | Op::StrictNotEq
-            | Op::Lt
-            | Op::Gt
-            | Op::LtEq
-            | Op::GtEq
-            | Op::BitAnd
-            | Op::BitOr
-            | Op::BitXor
-            | Op::Shl
-            | Op::Shr
-            | Op::UShr => {
-                let r = stack.pop().expect("stack underflow on binop rhs");
-                let l = stack.pop().expect("stack underflow on binop lhs");
-                if matches!(op, Op::Add) && is_primitive_string_concat(&l, &r) {
-                    // Primitives are never rooted, so there is nothing to unroot.
-                    match interp.concat_primitives(&l, &r) {
+            Op::Add => binary_arm!(Op::Add),
+            Op::Sub => binary_arm!(Op::Sub),
+            Op::Mul => binary_arm!(Op::Mul),
+            Op::Div => binary_arm!(Op::Div),
+            Op::Mod => binary_arm!(Op::Mod),
+            Op::Pow => binary_arm!(Op::Pow),
+            Op::Eq => binary_arm!(Op::Eq),
+            Op::NotEq => binary_arm!(Op::NotEq),
+            Op::StrictEq => binary_arm!(Op::StrictEq),
+            Op::StrictNotEq => binary_arm!(Op::StrictNotEq),
+            Op::Lt => binary_arm!(Op::Lt),
+            Op::Gt => binary_arm!(Op::Gt),
+            Op::LtEq => binary_arm!(Op::LtEq),
+            Op::GtEq => binary_arm!(Op::GtEq),
+            Op::BitAnd => binary_arm!(Op::BitAnd),
+            Op::BitOr => binary_arm!(Op::BitOr),
+            Op::BitXor => binary_arm!(Op::BitXor),
+            Op::Shl => binary_arm!(Op::Shl),
+            Op::Shr => binary_arm!(Op::Shr),
+            Op::UShr => binary_arm!(Op::UShr),
+            Op::BinConst => {
+                let bop = Op::from_u8(chunk.code[pc]).expect("invalid binary op byte");
+                let Constant::Number(k) = chunk.constants[decode_u16(chunk, pc + 1) as usize]
+                else {
+                    unreachable!("BinConst constant is a Number")
+                };
+                pc += 3;
+                let top = stack.last_mut().expect("stack underflow on BinConst");
+                if let Some(l) = top.as_number() {
+                    *top = number_binop(bop, l, k);
+                } else {
+                    let l = stack.pop().expect("stack underflow on BinConst");
+                    match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => return abrupt,
                     }
-                    continue;
                 }
-                let bop = match op {
-                    Op::Add => BinaryOp::Add,
-                    Op::Sub => BinaryOp::Sub,
-                    Op::Mul => BinaryOp::Mul,
-                    Op::Div => BinaryOp::Div,
-                    Op::Mod => BinaryOp::Mod,
-                    Op::Pow => BinaryOp::Exp,
-                    Op::Eq => BinaryOp::Eq,
-                    Op::NotEq => BinaryOp::NotEq,
-                    Op::StrictEq => BinaryOp::StrictEq,
-                    Op::StrictNotEq => BinaryOp::StrictNotEq,
-                    Op::Lt => BinaryOp::Lt,
-                    Op::Gt => BinaryOp::Gt,
-                    Op::LtEq => BinaryOp::LtEq,
-                    Op::GtEq => BinaryOp::GtEq,
-                    Op::BitAnd => BinaryOp::BitAnd,
-                    Op::BitOr => BinaryOp::BitOr,
-                    Op::BitXor => BinaryOp::BitXor,
-                    Op::Shl => BinaryOp::LShift,
-                    Op::Shr => BinaryOp::RShift,
-                    Op::UShr => BinaryOp::URShift,
-                    _ => unreachable!(),
+            }
+            Op::LocalBinConst => {
+                let idx = decode_u16(chunk, pc);
+                let slot = decode_u16(chunk, pc + 2);
+                let bop = Op::from_u8(chunk.code[pc + 4]).expect("invalid binary op byte");
+                let Constant::Number(k) = chunk.constants[decode_u16(chunk, pc + 5) as usize]
+                else {
+                    unreachable!("LocalBinConst constant is a Number")
                 };
-                let result = interp.eval_binary(bop, &l, &r);
-                unroot_stack_value(interp, &r);
-                unroot_stack_value(interp, &l);
-                match result {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
+                pc += 7;
+                let name = &chunk.names[idx as usize];
+                let hit = with_local_hit(env, name, slot, |v| match v.as_number() {
+                    Some(l) => Ok(number_binop(bop, l, k)),
+                    None => Err(v.clone()),
+                });
+                let operand = match hit {
+                    Some(Ok(result)) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 1;
+                        }
+                        stack.push(result);
+                        None
+                    }
+                    Some(Err(l)) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 1;
+                        }
+                        Some(l)
+                    }
+                    None => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_misses += 1;
+                        }
+                        match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
+                            Completion::Normal(v) => Some(v),
+                            abrupt => return abrupt,
+                        }
+                    }
+                };
+                if let Some(l) = operand {
+                    // As `LoadLocal` then `BinConst`: the loaded value is
+                    // rooted for the whole operation (an object operand's
+                    // `valueOf` may rebind the local and collect).
+                    root_stack_value(interp, &l);
+                    match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => return abrupt,
+                    }
+                }
+            }
+            Op::CmpJumpIfFalse => {
+                let cmp = Op::from_u8(chunk.code[pc]).expect("invalid comparison byte");
+                let offset = decode_i16(chunk, pc + 1) as i32;
+                pc += 3;
+                let len = stack.len();
+                let taken = if len >= 2
+                    && let (Some(l), Some(r)) =
+                        (stack[len - 2].as_number(), stack[len - 1].as_number())
+                {
+                    stack.truncate(len - 2);
+                    !number_compare(cmp, l, r)
+                } else {
+                    let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
+                    let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
+                    match binary_slow(interp, binary_of_op(cmp), l, r) {
+                        Completion::Normal(v) => !interp.to_boolean_val(&v),
+                        abrupt => return abrupt,
+                    }
+                };
+                if taken {
+                    pc = (pc as i32 + offset) as usize;
                 }
             }
             Op::Neg | Op::Plus | Op::Not | Op::BitNot => {
@@ -935,6 +1221,134 @@ fn run_chunk_inner(
                 unroot_stack_value(interp, &v);
                 match result {
                     Completion::Normal(r) => push_value(interp, stack, r),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::EvalAst => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let super::chunk::AstNode::Expr(expr) = &chunk.ast[idx as usize] else {
+                    unreachable!("EvalAst operand names an expression node");
+                };
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.ast_fallback_execs += 1;
+                }
+                // Operands already on the stack stay rooted in
+                // `gc_bytecode_roots` while the tree-walker runs.
+                match interp.eval_expr(expr, env) {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::ExecAst => {
+                let idx = decode_u16(chunk, pc);
+                let table = decode_u16(chunk, pc + 2);
+                pc += 4;
+                let super::chunk::AstNode::Stmt(stmt) = &chunk.ast[idx as usize] else {
+                    unreachable!("ExecAst operand names a statement node");
+                };
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.ast_fallback_execs += 1;
+                }
+                match interp.exec_statement(stmt, env) {
+                    Completion::Normal(_) | Completion::Empty => {}
+                    Completion::Break(label, value) => {
+                        match escape_target(chunk, table, false, label.as_deref()) {
+                            Some(target) => pc = target,
+                            None => return Completion::Break(label, value),
+                        }
+                    }
+                    Completion::Continue(label, value) => {
+                        match escape_target(chunk, table, true, label.as_deref()) {
+                            Some(target) => pc = target,
+                            None => return Completion::Continue(label, value),
+                        }
+                    }
+                    abrupt => return abrupt,
+                }
+            }
+            Op::InitLexical => {
+                let idx = decode_u16(chunk, pc);
+                let kind = if chunk.code[pc + 2] == 0 {
+                    BindingKind::Let
+                } else {
+                    BindingKind::Const
+                };
+                pc += 3;
+                let name = &chunk.names[idx as usize];
+                let value = pop_value(interp, stack, "stack underflow on InitLexical");
+                env.borrow_mut().bindings.insert_atom(
+                    name,
+                    Binding {
+                        value,
+                        kind,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            }
+            Op::Instanceof | Op::In => {
+                let r = stack.pop().expect("stack underflow on relational rhs");
+                let l = stack.pop().expect("stack underflow on relational lhs");
+                let result = if op == Op::Instanceof {
+                    interp.eval_instanceof(&l, &r)
+                } else {
+                    interp.eval_binary(BinaryOp::In, &l, &r)
+                };
+                unroot_stack_value(interp, &r);
+                unroot_stack_value(interp, &l);
+                match result {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::Throw => {
+                let value = pop_value(interp, stack, "stack underflow on Throw");
+                return Completion::Throw(value);
+            }
+            Op::Typeof => {
+                let value = pop_value(interp, stack, "stack underflow on Typeof");
+                let result = interp.typeof_value(&value);
+                push_value(interp, stack, result);
+            }
+            Op::TypeofName => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let name = &chunk.names[idx as usize];
+                match interp.eval_typeof_identifier(name, env) {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::UpdateProp => {
+                let idx = decode_u16(chunk, pc);
+                let mode = chunk.code[pc + 2];
+                pc += 3;
+                let (update, prefix, _) = update_mode(mode);
+                let name = &chunk.names[idx as usize];
+                let base = stack.pop().expect("stack underflow on UpdateProp");
+                let strict = env.borrow().strict;
+                let result = member_update_named(interp, &base, name, update, prefix, strict);
+                unroot_stack_value(interp, &base);
+                match result {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::UpdateElement => {
+                let mode = chunk.code[pc];
+                pc += 1;
+                let (update, prefix, _) = update_mode(mode);
+                let key = stack.pop().expect("stack underflow on UpdateElement key");
+                let base = stack.pop().expect("stack underflow on UpdateElement base");
+                let strict = env.borrow().strict;
+                let result = member_update_computed(interp, &base, &key, update, prefix, strict);
+                unroot_stack_value(interp, &key);
+                unroot_stack_value(interp, &base);
+                match result {
+                    Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
             }

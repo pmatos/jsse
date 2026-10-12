@@ -258,7 +258,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Symbol".to_string();
+            .class_name = "Symbol".into();
 
         fn this_symbol_value(
             interp: &Interpreter,
@@ -394,7 +394,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Number".to_string();
+            .class_name = "Number".into();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .primitive_value = Some(JsValue::number(0.0));
@@ -664,7 +664,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Boolean".to_string();
+            .class_name = "Boolean".into();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .primitive_value = Some(JsValue::FALSE);

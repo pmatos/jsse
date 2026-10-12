@@ -666,56 +666,14 @@ impl Interpreter {
             }
             Expression::Typeof(operand) => {
                 if let Expression::Identifier(name) = operand.as_ref() {
-                    let strict = env.borrow().strict;
-                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
-                        match self.resolve_with_has_binding(name, env) {
-                            Ok(Some(obj_id)) => {
-                                return match self.with_get_binding_value(obj_id, name, strict) {
-                                    Completion::Normal(val) => Completion::Normal(JsValue::string(
-                                        JsString::from_str(typeof_val(&val, &self.objects)),
-                                    )),
-                                    other => other,
-                                };
-                            }
-                            Ok(None) => {}
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    if let Some(result) = self.resolve_global_getter(name, env, None) {
-                        return match result {
-                            Completion::Normal(val) => Completion::Normal(JsValue::string(
-                                JsString::from_str(typeof_val(&val, &self.objects)),
-                            )),
-                            other => other,
-                        };
-                    }
-                    match self.env_get(env, name) {
-                        Some(val) => {
-                            return Completion::Normal(JsValue::string(JsString::from_str(
-                                typeof_val(&val, &self.objects),
-                            )));
-                        }
-                        None => {
-                            if self.env_has(env, name) {
-                                return Completion::Throw(self.create_reference_error(&format!(
-                                    "Cannot access '{name}' before initialization"
-                                )));
-                            }
-                            return Completion::Normal(JsValue::string(JsString::from_str(
-                                "undefined",
-                            )));
-                        }
-                    }
+                    return self.eval_typeof_identifier(name, env);
                 }
                 let val =
                     match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                Completion::Normal(JsValue::string(JsString::from_str(typeof_val(
-                    &val,
-                    &self.objects,
-                ))))
+                Completion::Normal(self.typeof_value(&val))
             }
             Expression::Void(operand) => {
                 match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
@@ -1387,19 +1345,19 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.primitive_value = Some(val.clone());
         if val.is_string() {
-            obj_data.class_name = "String".to_string();
+            obj_data.class_name = "String".into();
             obj_data.prototype_id = self.realm().string_prototype;
         } else if val.is_number() {
-            obj_data.class_name = "Number".to_string();
+            obj_data.class_name = "Number".into();
             obj_data.prototype_id = self.realm().number_prototype;
         } else if val.is_boolean() {
-            obj_data.class_name = "Boolean".to_string();
+            obj_data.class_name = "Boolean".into();
             obj_data.prototype_id = self.realm().boolean_prototype;
         } else if val.is_symbol() {
-            obj_data.class_name = "Symbol".to_string();
+            obj_data.class_name = "Symbol".into();
             obj_data.prototype_id = self.realm().symbol_prototype;
         } else if val.is_bigint() {
-            obj_data.class_name = "BigInt".to_string();
+            obj_data.class_name = "BigInt".into();
             obj_data.prototype_id = self.realm().bigint_prototype;
         } else {
             unreachable!();
@@ -1906,10 +1864,12 @@ impl Interpreter {
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.compile_ok += 1;
+                            self.perf.record_fallbacks(&c.fallback_reasons);
                         }
                         BytecodeCacheState::Compiled(Rc::new(c))
                     }
-                    Err(compiler::CompileError::Unsupported(reason)) => {
+                    Err(e) => {
+                        let reason = e.reason();
                         #[cfg(feature = "perf-counters")]
                         {
                             let (name, seq) = self.perf_body_name(func_obj_id);
@@ -1926,6 +1886,45 @@ impl Interpreter {
             o.borrow_mut().bytecode_cache = state.clone();
         }
         state
+    }
+
+    /// The `typeof` result string for an evaluated value (HTMLDDA aware).
+    pub(super) fn typeof_value(&self, value: &JsValue) -> JsValue {
+        JsValue::string(JsString::from_str(typeof_val(value, &self.objects)))
+    }
+
+    /// `typeof <identifier>`: an unresolvable reference yields `"undefined"`,
+    /// an uninitialised binding throws (sec-typeof-operator-runtime-semantics-
+    /// evaluation, sec-getvalue).
+    pub(super) fn eval_typeof_identifier(&mut self, name: &str, env: &EnvRef) -> Completion {
+        let strict = env.borrow().strict;
+        if self.with_scope_depth > 0 || self.has_ever_entered_with {
+            match self.resolve_with_has_binding(name, env) {
+                Ok(Some(obj_id)) => {
+                    return match self.with_get_binding_value(obj_id, name, strict) {
+                        Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
+                        other => other,
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => return Completion::Throw(e),
+            }
+        }
+        if let Some(result) = self.resolve_global_getter(name, env, None) {
+            return match result {
+                Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
+                other => other,
+            };
+        }
+        match self.env_get(env, name) {
+            Some(val) => Completion::Normal(self.typeof_value(&val)),
+            None if self.env_has(env, name) => {
+                Completion::Throw(self.create_reference_error(&format!(
+                    "Cannot access '{name}' before initialization"
+                )))
+            }
+            None => Completion::Normal(JsValue::string(JsString::from_str("undefined"))),
+        }
     }
 
     pub(super) fn dispatch_body(
@@ -1951,9 +1950,38 @@ impl Interpreter {
                 {
                     self.perf.body_compiled += 1;
                 }
-                return self.with_ic_body(body, |interp| {
+                // Function and lexical declarations are instantiated before
+                // the chunk runs, exactly as the tree-walker does, so the
+                // nodes handed back to it find their bindings in place.
+                let analysis = chunk
+                    .needs_instantiation
+                    .then(|| self.hoist_cache.analysis_for(body));
+                #[cfg(feature = "perf-counters")]
+                let has_fallback = !chunk.ast.is_empty();
+                #[cfg(feature = "perf-counters")]
+                if has_fallback {
+                    let (name, seq) = self.perf_body_name(func_obj_id);
+                    self.perf.enter_ast_body(name, seq, false);
+                }
+                let result = self.with_ic_body(body, |interp| {
+                    if let Some(analysis) = &analysis {
+                        vm::declare_var_prologue(&chunk, exec_env);
+                        if let Some(err) = interp.instantiate_body_declarations(
+                            body.as_slice(),
+                            exec_env,
+                            Some(analysis),
+                        ) {
+                            return err;
+                        }
+                    }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });
+                #[cfg(feature = "perf-counters")]
+                if has_fallback {
+                    let exclusive = self.perf.leave_ast_body();
+                    self.perf.ast_units_in_fallbacks += exclusive;
+                }
+                return result;
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -2343,7 +2371,7 @@ impl Interpreter {
         }
     }
 
-    fn apply_update_numeric(
+    pub(super) fn apply_update_numeric(
         &mut self,
         raw_val: &JsValue,
         op: UpdateOp,
@@ -2607,30 +2635,13 @@ impl Interpreter {
                 }
                 MemberProperty::Private(_) => unreachable!(),
             };
-            // Get current value
-            let cur_val = match obj_val.as_object_id() {
-                Some(id) => match self.get_object_property(id, &key, &obj_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                },
-                None => {
-                    // Primitive member access — use eval_member logic indirectly
-                    match self.eval_expr(arg, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                }
-            };
-            let (old_val, new_val) = match self.apply_update_numeric(&cur_val, op) {
-                Ok(pair) => pair,
-                Err(e) => return Completion::Throw(e),
-            };
-            // Set value back (uses set_object_with_key to handle accessor setters, proxies, etc.)
-            let strict = env.borrow().strict;
-            if let Err(e) = self.set_object_with_key(obj_val, &key, new_val.clone(), strict) {
-                return Completion::Throw(e);
+            if obj_val.is_nullish() {
+                return Completion::Throw(self.create_type_error(&format!(
+                    "Cannot read properties of {obj_val} (reading '{key}')"
+                )));
             }
-            Completion::Normal(if prefix { new_val } else { old_val })
+            let strict = env.borrow().strict;
+            self.update_member_value(&obj_val, &key, op, prefix, strict)
         } else if let Expression::Call(_, _, _) = arg {
             match self.eval_expr(arg, env) {
                 Completion::Normal(_) => {}
@@ -2643,6 +2654,45 @@ impl Interpreter {
             )
         } else {
             Completion::Normal(JsValue::number(f64::NAN))
+        }
+    }
+
+    /// The GetValue → ToNumeric → ±1 → PutValue tail of `++`/`--` on a member
+    /// reference whose base is already known non-nullish and whose key is
+    /// already a property key (sec-postfix-increment-operator-runtime-
+    /// semantics-evaluation, sec-prefix-increment-operator-runtime-semantics-
+    /// evaluation). A primitive base is read through its wrapper with the
+    /// primitive as receiver. The postfix result is the numeric old value.
+    pub(super) fn update_member_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base: &JsValue,
+        key: &K,
+        op: UpdateOp,
+        prefix: bool,
+        strict: bool,
+    ) -> Completion {
+        let current = match base.as_object_id() {
+            Some(id) => self.get_object_property(id, key, base),
+            None => match self.to_object(base) {
+                Completion::Normal(wrapper) => match wrapper.as_object_id() {
+                    Some(id) => self.get_object_property(id, key, base),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                },
+                abrupt => abrupt,
+            },
+        };
+        let current = match current {
+            Completion::Normal(v) => v,
+            abrupt => return abrupt,
+        };
+        let (old_val, new_val) = match self.apply_update_numeric(&current, op) {
+            Ok(pair) => pair,
+            Err(e) => return Completion::Throw(e),
+        };
+        // set_object_with_key handles accessor setters, proxies, etc.
+        match self.set_object_with_key(base.clone(), key, new_val.clone(), strict) {
+            Ok(()) => Completion::Normal(if prefix { new_val } else { old_val }),
+            Err(e) => Completion::Throw(e),
         }
     }
 
@@ -5340,9 +5390,10 @@ impl Interpreter {
             if has_wrapped_target {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
+            let function_realm = obj.borrow().function_realm;
             if is_class_ctor && self.new_target.is_none() {
                 let caller_realm = self.current_realm_id;
-                if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                if let Some(fn_realm) = function_realm {
                     self.current_realm_id = fn_realm;
                 }
                 let err =
@@ -5410,7 +5461,7 @@ impl Interpreter {
                             self.perf.calls_to_native += 1;
                         }
                         let caller_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
                         let operands_base = self.gc_root_frame();
@@ -5451,7 +5502,7 @@ impl Interpreter {
                         }
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
                         let caller_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
 
@@ -5539,7 +5590,7 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "AsyncGenerator".to_string();
+                                .class_name = "AsyncGenerator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
@@ -5685,7 +5736,7 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "Generator".to_string();
+                                .class_name = "Generator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
@@ -7464,7 +7515,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
+    pub(super) fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
         if !(right).is_object() {
             return Completion::Throw(
                 self.create_type_error("Right-hand side of instanceof is not an object"),
