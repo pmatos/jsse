@@ -211,7 +211,7 @@ impl Interpreter {
                     ),
                     is_ctor,
                 );
-                let result = interp.create_function_with(bound, FunctionInit::NO_PROTOTYPE);
+                let result = interp.create_function_with(bound, FunctionInit::NoPrototype);
                 if let Some(result_id) = result.as_object_id()
                     && let Some(obj) = interp.get_object_cell(result_id)
                 {

@@ -9,6 +9,7 @@ use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -2058,7 +2059,7 @@ pub(crate) struct JsObjectData {
     pub property_order: Vec<JsPropertyKey>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
-    pub class_name: std::borrow::Cow<'static, str>,
+    pub class_name: Cow<'static, str>,
     /// Realm the function object was created in; `None` when it was not
     /// built by `create_function` (the call path then keeps the caller's realm).
     pub function_realm: Option<usize>,
@@ -2427,7 +2428,7 @@ impl JsObjectData {
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,
-            class_name: std::borrow::Cow::Borrowed("Object"),
+            class_name: Cow::Borrowed("Object"),
             function_realm: None,
             extensible: true,
             primitive_value: None,

@@ -270,30 +270,17 @@ impl FunctionKeys {
     }
 }
 
-/// Own-property shape requested of `create_function_with`.
+/// Own `prototype` shape requested of `create_function_with`.
 #[derive(Clone, Copy)]
-struct FunctionInit {
-    /// Create the own `prototype` object of a constructable function. Bound
-    /// functions and `Proxy` must not have one (sec-bound-function-exotic-objects).
-    own_prototype: bool,
-    /// `[[Writable]]` of the own `prototype`; false for class constructors
+enum FunctionInit {
+    /// Constructable functions get a writable own `prototype`.
+    Default,
+    /// Class constructors get a non-writable `prototype`
     /// (sec-runtime-semantics-classdefinitionevaluation).
-    prototype_writable: bool,
-}
-
-impl FunctionInit {
-    const DEFAULT: Self = Self {
-        own_prototype: true,
-        prototype_writable: true,
-    };
-    const CLASS_CONSTRUCTOR: Self = Self {
-        own_prototype: true,
-        prototype_writable: false,
-    };
-    const NO_PROTOTYPE: Self = Self {
-        own_prototype: false,
-        prototype_writable: true,
-    };
+    ClassConstructor,
+    /// Bound functions and `Proxy` have no own `prototype`
+    /// (sec-bound-function-exotic-objects).
+    NoPrototype,
 }
 
 pub(crate) struct Interpreter {
@@ -1893,45 +1880,36 @@ impl Interpreter {
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
-        self.create_function_with(func, FunctionInit::DEFAULT)
+        self.create_function_with(func, FunctionInit::Default)
     }
 
     /// Build a function object. `init` lets callers that would otherwise
     /// create-then-strip (bound functions, `Proxy`, class constructors) ask for
     /// the final own-property shape directly.
     fn create_function_with(&mut self, func: JsFunction, init: FunctionInit) -> JsValue {
-        let (is_gen, is_async_gen, is_async_non_gen) = match &func {
+        let (is_gen, is_async) = match &func {
             JsFunction::User {
                 is_generator,
                 is_async,
                 ..
-            } => (
-                *is_generator,
-                *is_generator && *is_async,
-                !*is_generator && *is_async,
-            ),
-            JsFunction::Native(..) => (false, false, false),
+            } => (*is_generator, *is_async),
+            JsFunction::Native(..) => (false, false),
         };
-        let (name_val, fn_length) = match &func {
+        let is_async_gen = is_gen && is_async;
+        let (name, fn_length) = match &func {
             JsFunction::User { name, params, .. } => {
                 let len = params
                     .iter()
                     .take_while(|p| !matches!(p, Pattern::Assign(..) | Pattern::Rest(_)))
                     .count();
-                let name_val = match name.as_deref() {
-                    None | Some("") => self.function_keys.empty_name.clone(),
-                    Some(n) => JsString::from_str(n),
-                };
-                (name_val, len)
+                (name.as_deref().unwrap_or(""), len)
             }
-            JsFunction::Native(name, arity, _, _) => {
-                let name_val = if name.is_empty() {
-                    self.function_keys.empty_name.clone()
-                } else {
-                    JsString::from_str(name)
-                };
-                (name_val, *arity)
-            }
+            JsFunction::Native(name, arity, _, _) => (name.as_str(), *arity),
+        };
+        let name_val = if name.is_empty() {
+            self.function_keys.empty_name.clone()
+        } else {
+            JsString::from_str(name)
         };
         let (proto_id, class_name) = if is_async_gen {
             (
@@ -1943,14 +1921,14 @@ impl Interpreter {
                 self.realm().generator_function_prototype,
                 "GeneratorFunction",
             )
-        } else if is_async_non_gen {
+        } else if is_async {
             (self.realm().async_function_prototype, "AsyncFunction")
         } else {
             (self.realm().function_prototype, "Function")
         };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype_id = proto_id.or(self.realm().object_prototype);
-        obj_data.class_name = std::borrow::Cow::Borrowed(class_name);
+        obj_data.class_name = class_name.into();
         obj_data.function_realm = Some(self.current_realm_id);
         // Annex B: sloppy non-arrow, non-generator, non-async, non-method
         // functions get own caller/arguments to shadow the ThrowTypeError
@@ -1978,7 +1956,11 @@ impl Interpreter {
         };
         // Generators/async-generators always need .prototype (for generator prototype chain)
         // even when they are class methods (non-constructable)
-        let needs_prototype = init.own_prototype && (is_constructable || is_gen || is_async_gen);
+        let needs_prototype =
+            !matches!(init, FunctionInit::NoPrototype) && (is_constructable || is_gen);
+        obj_data.property_order.reserve_exact(
+            2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype),
+        );
         obj_data.callable = Some(func);
 
         obj_data.push_fresh_property(
@@ -1990,19 +1972,15 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::string(name_val), false, false, true),
         );
         if has_restricted_props {
-            let caller = match &self.realm().sloppy_caller_getter {
+            let restricted = |getter: &Option<JsValue>| match getter {
                 Some(getter) => {
                     PropertyDescriptor::accessor(Some(getter.clone()), None, false, true)
                 }
                 None => PropertyDescriptor::data(JsValue::NULL, false, false, true),
             };
+            let caller = restricted(&self.realm().sloppy_caller_getter);
+            let arguments = restricted(&self.realm().sloppy_arguments_getter);
             obj_data.push_fresh_property(&self.function_keys.caller, caller);
-            let arguments = match &self.realm().sloppy_arguments_getter {
-                Some(getter) => {
-                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true)
-                }
-                None => PropertyDescriptor::data(JsValue::NULL, false, false, true),
-            };
             obj_data.push_fresh_property(&self.function_keys.arguments, arguments);
         }
         let mut prototype_id = None;
@@ -2021,7 +1999,7 @@ impl Interpreter {
                 &self.function_keys.prototype,
                 PropertyDescriptor::data(
                     JsValue::object(proto_id),
-                    init.prototype_writable,
+                    matches!(init, FunctionInit::Default),
                     false,
                     false,
                 ),

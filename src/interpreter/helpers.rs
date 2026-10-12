@@ -679,7 +679,7 @@ fn json_stringify_internal(
         let class = if let Some(cell) = interp.get_object_cell(value_id) {
             cell.borrow().class_name.clone()
         } else {
-            std::borrow::Cow::Borrowed("")
+            "".into()
         };
         match &*class {
             "Number" => {

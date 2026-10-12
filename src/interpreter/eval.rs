@@ -5327,9 +5327,10 @@ impl Interpreter {
             if has_wrapped_target {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
+            let function_realm = obj.borrow().function_realm;
             if is_class_ctor && self.new_target.is_none() {
                 let caller_realm = self.current_realm_id;
-                if let Some(fn_realm) = self.function_realm_of(o.id) {
+                if let Some(fn_realm) = function_realm {
                     self.current_realm_id = fn_realm;
                 }
                 let err =
@@ -5397,7 +5398,7 @@ impl Interpreter {
                             self.perf.calls_to_native += 1;
                         }
                         let caller_realm = self.current_realm_id;
-                        if let Some(fn_realm) = self.function_realm_of(o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
                         let operands_base = self.gc_root_frame();
@@ -5438,7 +5439,7 @@ impl Interpreter {
                         }
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
                         let caller_realm = self.current_realm_id;
-                        if let Some(fn_realm) = self.function_realm_of(o.id) {
+                        if let Some(fn_realm) = function_realm {
                             self.current_realm_id = fn_realm;
                         }
 

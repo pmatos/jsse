@@ -45,7 +45,7 @@ impl Interpreter {
                 let proxy_id = proxy_obj_id;
                 Completion::Normal(JsValue::object(proxy_id))
             }),
-            FunctionInit::NO_PROTOTYPE,
+            FunctionInit::NoPrototype,
         );
 
         // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj

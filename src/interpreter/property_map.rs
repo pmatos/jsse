@@ -5,17 +5,15 @@ use smallvec::SmallVec;
 use super::types::PropertyDescriptor;
 use crate::types::{JsPropertyKey, PropertyKeyLike};
 
-// Properties held inline in the SmallVec before it spills to the heap. 8 was
-// the threshold proposed in issue #68; measurement showed it pushes
-// JsObjectData past 3.5 KB, so we use 4 — covers the splay-node case (4
-// fields) without blowing up per-object size.
+// Properties held inline in the SmallVec before it spills to the heap. 8 would
+// push JsObjectData past 3.5 KB (issue #68), so 4 — enough for the splay-node
+// case (4 fields).
 const INLINE_CAP: usize = 4;
 
 // Largest entry count kept in the linear (scan-only) representation. Entries
-// beyond `INLINE_CAP` live in the SmallVec's heap buffer — one allocation, no
-// hashing — which is cheaper than a SipHash `HashMap` for the 5-property
-// shape of a sloppy constructable function (issue #901). The `HashMap` takes
-// over once an insert would exceed this.
+// beyond `INLINE_CAP` live in the SmallVec's heap buffer, which is cheaper
+// than a SipHash `HashMap` for the 5-property shape of a sloppy constructable
+// function (issue #901).
 const LINEAR_MAX: usize = 8;
 
 // Hybrid storage for `JsObjectData.properties`: up to `LINEAR_MAX` entries in a
@@ -93,7 +91,7 @@ impl PropertyMap {
                     v.push((key, value));
                     None
                 } else {
-                    Self::spill(&mut self.inner, key, value);
+                    self.inner = PropertyMapInner::Spilled(Self::spill(v, key, value));
                     None
                 }
             }
@@ -111,24 +109,24 @@ impl PropertyMap {
         );
         match &mut self.inner {
             PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
-            PropertyMapInner::Inline(_) => Self::spill(&mut self.inner, key, value),
+            PropertyMapInner::Inline(v) => {
+                self.inner = PropertyMapInner::Spilled(Self::spill(v, key, value));
+            }
             PropertyMapInner::Spilled(m) => {
                 m.insert(key, value);
             }
         }
     }
 
-    fn spill(inner: &mut PropertyMapInner, key: JsPropertyKey, value: PropertyDescriptor) {
-        let PropertyMapInner::Inline(v) = inner else {
-            unreachable!("spill is only called on the linear representation");
-        };
-        let mut map: HashMap<JsPropertyKey, PropertyDescriptor> =
-            HashMap::with_capacity(LINEAR_MAX + 1);
-        for (k, d) in v.drain(..) {
-            map.insert(k, d);
-        }
+    fn spill(
+        v: &mut SmallVec<[(JsPropertyKey, PropertyDescriptor); INLINE_CAP]>,
+        key: JsPropertyKey,
+        value: PropertyDescriptor,
+    ) -> HashMap<JsPropertyKey, PropertyDescriptor> {
+        let mut map = HashMap::with_capacity(LINEAR_MAX + 1);
+        map.extend(v.drain(..));
         map.insert(key, value);
-        *inner = PropertyMapInner::Spilled(map);
+        map
     }
 
     pub(crate) fn remove<K: PropertyKeyLike + ?Sized>(

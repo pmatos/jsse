@@ -407,9 +407,9 @@ impl Interpreter {
             has_simple_params,
         };
 
-        let ctor_val = self.create_function_with(ctor_func, FunctionInit::CLASS_CONSTRUCTOR);
+        let ctor_val = self.create_function_with(ctor_func, FunctionInit::ClassConstructor);
 
-        // Mark derived class constructors and make .prototype writable:false
+        // Mark derived class constructors
         if let Some(o) = (ctor_val)
             .as_object_id()
             .map(|id| crate::types::JsObject { id })
