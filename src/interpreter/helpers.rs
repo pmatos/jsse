@@ -240,6 +240,25 @@ fn string_to_number(s: &JsString) -> f64 {
     trimmed.parse::<f64>().unwrap_or(f64::NAN)
 }
 
+/// The NumericValue of a BigInt literal's source text (12.9.3): decimal, or a
+/// `0x`/`0o`/`0b` prefixed radix form, with the trailing `n` already removed.
+pub(crate) fn parse_bigint_literal(text: &str) -> num_bigint::BigInt {
+    use num_bigint::BigInt;
+    let radix_digits = |lower: &str, upper: &str| {
+        text.strip_prefix(lower)
+            .or_else(|| text.strip_prefix(upper))
+    };
+    if let Some(hex) = radix_digits("0x", "0X") {
+        BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
+    } else if let Some(oct) = radix_digits("0o", "0O") {
+        BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
+    } else if let Some(bin) = radix_digits("0b", "0B") {
+        BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
+    } else {
+        text.parse::<BigInt>().unwrap_or_default()
+    }
+}
+
 // §7.1.14 StringToBigInt: the single canonical parse of a String value to a
 // BigInt, returning None when the string is not a valid StringIntegerLiteral.
 // Shared by the BigInt constructor, ToBigInt (typed-array/DataView writes,
@@ -3383,24 +3402,5 @@ mod jiff_chrono_tz_name_parity_tests {
             unresolved.is_empty(),
             "chrono-tz zone names that jiff failed to resolve: {unresolved:?}"
         );
-    }
-}
-
-/// The NumericValue of a BigInt literal's source text (12.9.3): decimal, or a
-/// `0x`/`0o`/`0b` prefixed radix form, with the trailing `n` already removed.
-pub(crate) fn parse_bigint_literal(text: &str) -> num_bigint::BigInt {
-    use num_bigint::BigInt;
-    let radix_digits = |lower: &str, upper: &str| {
-        text.strip_prefix(lower)
-            .or_else(|| text.strip_prefix(upper))
-    };
-    if let Some(hex) = radix_digits("0x", "0X") {
-        BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
-    } else if let Some(oct) = radix_digits("0o", "0O") {
-        BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
-    } else if let Some(bin) = radix_digits("0b", "0B") {
-        BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
-    } else {
-        text.parse::<BigInt>().unwrap_or_default()
     }
 }

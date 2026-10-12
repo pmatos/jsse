@@ -7,10 +7,6 @@ use crate::ast::{
 };
 use crate::types::{JsBigInt, JsString};
 
-/// An `i16` jump offset that cannot reach its target. The statement that owns
-/// the jump is handed to the tree-walker instead of failing the whole body.
-const JUMP_OFFSET_OVERFLOW: &str = "jump offset overflow";
-
 #[derive(Debug)]
 pub(crate) enum CompileError {
     /// This node has no native lowering. In Function goal the node itself is
@@ -23,12 +19,16 @@ pub(crate) enum CompileError {
     /// semantics depend on running as one tree-walked frame (direct `eval`,
     /// `with`, `super`, ...), or a compiler resource limit.
     Ineligible(&'static str),
+    /// An `i16` jump offset cannot reach its target. The statement that owns
+    /// the jump is handed to the tree-walker instead of failing the whole body.
+    JumpOverflow,
 }
 
 impl CompileError {
     pub(crate) fn reason(&self) -> &'static str {
         match self {
             CompileError::Unsupported(reason) | CompileError::Ineligible(reason) => reason,
+            CompileError::JumpOverflow => "jump offset overflow",
         }
     }
 }
@@ -212,7 +212,7 @@ impl Compiler {
         let from = self.code.len() + 2;
         let delta = target as isize - from as isize;
         if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
-            return Err(CompileError::Ineligible(JUMP_OFFSET_OVERFLOW));
+            return Err(CompileError::JumpOverflow);
         }
         self.emit_u16(delta as i16 as u16);
         Ok(())
@@ -228,7 +228,7 @@ impl Compiler {
         self.max_jump_target = self.max_jump_target.max(to);
         let delta = to as isize - from as isize;
         if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
-            return Err(CompileError::Ineligible(JUMP_OFFSET_OVERFLOW));
+            return Err(CompileError::JumpOverflow);
         }
         let off = delta as i16 as u16;
         self.code[patch] = (off & 0xff) as u8;
@@ -961,12 +961,9 @@ impl Compiler {
         }
         let snap = self.snapshot();
         match self.compile_statement_native(stmt) {
-            Err(
-                CompileError::Unsupported(reason)
-                | CompileError::Ineligible(reason @ JUMP_OFFSET_OVERFLOW),
-            ) => {
+            Err(err @ (CompileError::Unsupported(_) | CompileError::JumpOverflow)) => {
                 self.rollback(snap);
-                self.emit_exec_ast(stmt, reason)
+                self.emit_exec_ast(stmt, err.reason())
             }
             other => other,
         }
@@ -979,15 +976,8 @@ impl Compiler {
     ) -> Result<(), CompileError> {
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
-        let mut var_names = std::collections::HashSet::new();
-        crate::interpreter::Interpreter::collect_var_names_from_stmts(
-            std::slice::from_ref(stmt),
-            &mut var_names,
-        );
-        let mut var_names: Vec<String> = var_names.into_iter().collect();
-        var_names.sort();
-        for name in &var_names {
-            self.add_var_name(name)?;
+        for name in crate::interpreter::hoisting::collect_var_names(std::slice::from_ref(stmt)) {
+            self.add_var_name(&name)?;
         }
         let table = if stmt_contains(stmt, &|s| {
             matches!(s, Statement::Break(_) | Statement::Continue(_))
@@ -1530,8 +1520,7 @@ fn is_standalone_expression(expr: &Expression) -> bool {
 }
 
 fn is_function_declaration(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::FunctionDeclaration(_))
-        || matches!(stmt, Statement::Labeled(_, inner) if is_function_declaration(inner))
+    crate::interpreter::hoisting::unwrap_labeled_function(stmt).is_some()
 }
 
 /// Whether a statement list declares a binding a block would scope to itself

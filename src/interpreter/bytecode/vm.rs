@@ -5,7 +5,7 @@ use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
 use crate::interpreter::{Atom, EnvRef, Interpreter};
-use crate::types::{JsValue, PropertyKeyLike};
+use crate::types::JsValue;
 
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     let lo = chunk.code[pc] as u16;
@@ -224,70 +224,39 @@ fn member_set_computed(
 /// the caller; GetValue → ToNumeric → ±1 → PutValue, with ToPropertyKey run
 /// once (sec-postfix-increment-operator-runtime-semantics-evaluation,
 /// sec-prefix-increment-operator-runtime-semantics-evaluation). The postfix
-/// result is the numeric old value. `key_val` is `None` for `base.name`, which
-/// reads and writes through the interned name without building a key.
-fn member_update(
+/// result is the numeric old value. `base.name` reads and writes through the
+/// interned name without building a key.
+fn member_update_named(
     interp: &mut Interpreter,
     base: &JsValue,
-    name: Option<&str>,
-    key_val: Option<&JsValue>,
+    name: &str,
     op: UpdateOp,
     prefix: bool,
     strict: bool,
 ) -> Completion {
-    match (name, key_val) {
-        (Some(name), _) => {
-            if base.is_nullish() {
-                return Completion::Throw(interp.create_type_error(&format!(
-                    "Cannot read properties of {base} (reading '{name}')"
-                )));
-            }
-            member_update_with_key(interp, base, name, op, prefix, strict)
-        }
-        (None, Some(key_val)) => {
-            if base.is_nullish() {
-                return Completion::Throw(interp.create_type_error(&format!(
-                    "Cannot read properties of {base} (reading property)"
-                )));
-            }
-            match interp.to_property_key(key_val) {
-                Ok(key) => member_update_with_key(interp, base, &key, op, prefix, strict),
-                Err(e) => Completion::Throw(e),
-            }
-        }
-        (None, None) => unreachable!("member update needs a name or a key value"),
+    if base.is_nullish() {
+        return Completion::Throw(interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading '{name}')"
+        )));
     }
+    interp.update_member_value(base, name, op, prefix, strict)
 }
 
-fn member_update_with_key<K: PropertyKeyLike + ?Sized>(
+fn member_update_computed(
     interp: &mut Interpreter,
     base: &JsValue,
-    key: &K,
+    key_val: &JsValue,
     op: UpdateOp,
     prefix: bool,
     strict: bool,
 ) -> Completion {
-    let wrapper = if base.is_object() {
-        base.clone()
-    } else {
-        match interp.to_object(base) {
-            Completion::Normal(v) => v,
-            abrupt => return abrupt,
-        }
-    };
-    let current = match wrapper.as_object_id() {
-        Some(id) => match interp.get_object_property(id, key, base) {
-            Completion::Normal(v) => v,
-            abrupt => return abrupt,
-        },
-        None => JsValue::UNDEFINED,
-    };
-    let (old_val, new_val) = match interp.apply_update_numeric(&current, op) {
-        Ok(pair) => pair,
-        Err(e) => return Completion::Throw(e),
-    };
-    match interp.set_object_with_key(base.clone(), key, new_val.clone(), strict) {
-        Ok(()) => Completion::Normal(if prefix { new_val } else { old_val }),
+    if base.is_nullish() {
+        return Completion::Throw(interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading property)"
+        )));
+    }
+    match interp.to_property_key(key_val) {
+        Ok(key) => interp.update_member_value(base, &key, op, prefix, strict),
         Err(e) => Completion::Throw(e),
     }
 }
@@ -1142,7 +1111,7 @@ fn run_chunk_inner(
                 let name = &chunk.names[idx as usize];
                 let base = stack.pop().expect("stack underflow on UpdateProp");
                 let strict = env.borrow().strict;
-                let result = member_update(interp, &base, Some(name), None, update, prefix, strict);
+                let result = member_update_named(interp, &base, name, update, prefix, strict);
                 unroot_stack_value(interp, &base);
                 match result {
                     Completion::Normal(v) => push_value(interp, stack, v),
@@ -1156,7 +1125,7 @@ fn run_chunk_inner(
                 let key = stack.pop().expect("stack underflow on UpdateElement key");
                 let base = stack.pop().expect("stack underflow on UpdateElement base");
                 let strict = env.borrow().strict;
-                let result = member_update(interp, &base, None, Some(&key), update, prefix, strict);
+                let result = member_update_computed(interp, &base, &key, update, prefix, strict);
                 unroot_stack_value(interp, &key);
                 unroot_stack_value(interp, &base);
                 match result {

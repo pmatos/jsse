@@ -1964,17 +1964,15 @@ impl Interpreter {
                     self.perf.enter_ast_body(name, seq, false);
                 }
                 let result = self.with_ic_body(body, |interp| {
-                    if analysis.is_some() {
+                    if let Some(analysis) = &analysis {
                         vm::declare_var_prologue(&chunk, exec_env);
-                    }
-                    if let Some(analysis) = &analysis
-                        && let Some(err) = interp.instantiate_body_declarations(
+                        if let Some(err) = interp.instantiate_body_declarations(
                             body.as_slice(),
                             exec_env,
                             Some(analysis),
-                        )
-                    {
-                        return err;
+                        ) {
+                            return err;
+                        }
                     }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });
@@ -2624,44 +2622,13 @@ impl Interpreter {
                 }
                 MemberProperty::Private(_) => unreachable!(),
             };
-            // Get current value
-            let cur_val = match obj_val.as_object_id() {
-                Some(id) => match self.get_object_property(id, &key, &obj_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                },
-                None => {
-                    // Primitive base: read through its wrapper with the
-                    // primitive as receiver, without re-evaluating the base
-                    // and key expressions (GetValue, sec-getvalue).
-                    if obj_val.is_nullish() {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot read properties of {obj_val} (reading '{key}')"
-                        )));
-                    }
-                    let wrapper = match self.to_object(&obj_val) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match wrapper.as_object_id() {
-                        Some(id) => match self.get_object_property(id, &key, &obj_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        },
-                        None => JsValue::UNDEFINED,
-                    }
-                }
-            };
-            let (old_val, new_val) = match self.apply_update_numeric(&cur_val, op) {
-                Ok(pair) => pair,
-                Err(e) => return Completion::Throw(e),
-            };
-            // Set value back (uses set_object_with_key to handle accessor setters, proxies, etc.)
-            let strict = env.borrow().strict;
-            if let Err(e) = self.set_object_with_key(obj_val, &key, new_val.clone(), strict) {
-                return Completion::Throw(e);
+            if obj_val.is_nullish() {
+                return Completion::Throw(self.create_type_error(&format!(
+                    "Cannot read properties of {obj_val} (reading '{key}')"
+                )));
             }
-            Completion::Normal(if prefix { new_val } else { old_val })
+            let strict = env.borrow().strict;
+            self.update_member_value(&obj_val, &key, op, prefix, strict)
         } else if let Expression::Call(_, _, _) = arg {
             match self.eval_expr(arg, env) {
                 Completion::Normal(_) => {}
@@ -2674,6 +2641,45 @@ impl Interpreter {
             )
         } else {
             Completion::Normal(JsValue::number(f64::NAN))
+        }
+    }
+
+    /// The GetValue → ToNumeric → ±1 → PutValue tail of `++`/`--` on a member
+    /// reference whose base is already known non-nullish and whose key is
+    /// already a property key (sec-postfix-increment-operator-runtime-
+    /// semantics-evaluation, sec-prefix-increment-operator-runtime-semantics-
+    /// evaluation). A primitive base is read through its wrapper with the
+    /// primitive as receiver. The postfix result is the numeric old value.
+    pub(super) fn update_member_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base: &JsValue,
+        key: &K,
+        op: UpdateOp,
+        prefix: bool,
+        strict: bool,
+    ) -> Completion {
+        let current = match base.as_object_id() {
+            Some(id) => self.get_object_property(id, key, base),
+            None => match self.to_object(base) {
+                Completion::Normal(wrapper) => match wrapper.as_object_id() {
+                    Some(id) => self.get_object_property(id, key, base),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                },
+                abrupt => abrupt,
+            },
+        };
+        let current = match current {
+            Completion::Normal(v) => v,
+            abrupt => return abrupt,
+        };
+        let (old_val, new_val) = match self.apply_update_numeric(&current, op) {
+            Ok(pair) => pair,
+            Err(e) => return Completion::Throw(e),
+        };
+        // set_object_with_key handles accessor setters, proxies, etc.
+        match self.set_object_with_key(base.clone(), key, new_val.clone(), strict) {
+            Ok(()) => Completion::Normal(if prefix { new_val } else { old_val }),
+            Err(e) => Completion::Throw(e),
         }
     }
 
