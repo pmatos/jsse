@@ -797,7 +797,6 @@ impl Interpreter {
             }
         }
         self.objects.free(id);
-        self.function_realm_map.remove(&id);
         self.iterator_next_cache.remove(&id);
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);
@@ -1872,7 +1871,7 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_map_data = JsObjectData::new();
-        weak_map_data.class_name = "WeakMap".to_string();
+        weak_map_data.class_name = "WeakMap".into();
         weak_map_data.kind = ObjectKind::Map(KeyedEntries::default());
         let weak_map = interp.alloc_object(weak_map_data);
         interp.gc_root_id(weak_map);
@@ -1916,7 +1915,7 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_set_data = JsObjectData::new();
-        weak_set_data.class_name = "WeakSet".to_string();
+        weak_set_data.class_name = "WeakSet".into();
         weak_set_data.kind = ObjectKind::Set(KeyedEntries::default());
         let weak_set = interp.alloc_object(weak_set_data);
         interp.gc_root_id(weak_set);

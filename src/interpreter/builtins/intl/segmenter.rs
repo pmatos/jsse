@@ -170,7 +170,7 @@ impl Interpreter {
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.Segmenter".to_string();
+            .class_name = "Intl.Segmenter".into();
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.Segmenter");
@@ -204,7 +204,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(segments_obj_id)
                     .borrow_mut()
-                    .class_name = "Segmenter Segments".to_string();
+                    .class_name = "Segmenter Segments".into();
 
                 interp
                     .get_object_cell_expect(segments_obj_id)
@@ -393,7 +393,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(iter_obj_id)
                             .borrow_mut()
-                            .class_name = "Segmenter String Iterator".to_string();
+                            .class_name = "Segmenter String Iterator".into();
 
                         let has_word_like = granularity_clone == "word";
 
@@ -640,7 +640,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.Segmenter".to_string();
+                    .class_name = "Intl.Segmenter".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Segmenter {
                         locale,

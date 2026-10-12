@@ -64,6 +64,18 @@ _Avoid_: statement context, void context, dead value.
 A bytecode op that is exactly the concatenation of two or three ordinary ops and nothing more (`BinConst`, `LocalBinConst`, `CmpJumpIfFalse`, `StoreLocalPop`): same operand roots, same evaluation order, same errors, one dispatch. A fused op never reorders reference resolution before the right-hand side. See ADR-2026-10-12-1200.
 _Avoid_: superinstruction, macro op, peephole op.
 
+**Bail Reason**:
+The static label a compile attempt carries when it does not produce a whole-body chunk: `CompileError::Unsupported` (this node has no lowering; in Function goal it becomes an AST Fallback) or `CompileError::Ineligible` (the whole body stays on the tree-walker). The counters build's `BAIL` table counts Ineligible bodies and `FALLBACK` counts hand-off nodes, per label. See ADR-2026-10-12-2214.
+_Avoid_: bail code, unsupported flag.
+
+**Eligibility Membrane**:
+The boundary the bytecode compiler draws around what the VM can run natively. Since #902 it is per node, not per function: a node outside the membrane is handed to the tree-walker (AST Fallback) and only constructs that need the whole frame tree-walked (direct `eval`, `with`, `super`, `new.target`, `yield`/`await`) keep a body wholly outside it.
+_Avoid_: eligibility cliff, compile gate.
+
+**AST Fallback**:
+A syntax node a compiled body hands back to the tree-walker: `Op::EvalAst` for an expression (result pushed) or `Op::ExecAst` for a statement (break/continue routed through an escape table). The node is a clone stored in `Chunk.ast`; semantics are the tree-walker's by construction. See ADR-2026-10-12-2214.
+_Avoid_: deopt, interpreter escape, slow path.
+
 ## Parsing
 
 **Lookahead Cursor**:

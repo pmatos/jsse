@@ -632,7 +632,8 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(func_obj_id).borrow_mut();
             o.prototype_id = fp_id;
-            o.class_name = "Function".to_string();
+            o.class_name = "Function".into();
+            o.function_realm = Some(caller_realm_id);
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
                 Completion::Normal(JsValue::UNDEFINED)
             }));
@@ -648,7 +649,6 @@ impl Interpreter {
                 );
             }
         }
-        self.function_realm_map.insert(func_id, caller_realm_id);
 
         self.current_realm_id = old_realm;
 

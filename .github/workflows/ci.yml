@@ -60,7 +60,7 @@ jobs:
       - name: Run perf-counters gate tests
         run: >
           cargo test --release --features perf-counters --target-dir target/perf-counters
-          --test perf_counters_env_hashing --test perf_counters_report_paths
+          --test perf_counters_env_hashing --test perf_counters_report_paths --test perf_counters_bytecode_fallback
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
