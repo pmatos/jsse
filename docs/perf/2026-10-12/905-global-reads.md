@@ -26,7 +26,7 @@ Acceptance (issue):
 - `bench_numeric_globalvars` ≤ 2.3 s of 3.18 s, i.e. ≤ 0.72× base: **met**
   (≈ 0.42-0.44×).
 - `bench_numeric_typedarray_global` within 1.15× of `typedarray_local`: the
-  ratio is 1.5-1.65× on base and **1.12-1.2× after** depending on host load
+  ratio is 1.33-1.63× on base and **1.12-1.21× after** depending on host load
   (quiet session 0.41 / 0.36 = 1.14 at p50; loaded session 0.76 / 0.63 = 1.21).
   The remaining gap is the scope walk (a frame probe plus the global
   environment probe) that a `LoadLocal` slot never pays; removing it needs the
