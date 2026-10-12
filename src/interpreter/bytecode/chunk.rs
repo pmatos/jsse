@@ -25,7 +25,7 @@ impl Constant {
 #[derive(Debug, Clone)]
 pub(crate) enum AstNode {
     Expr(Expression),
-    Stmt(Statement),
+    Stmt(Box<Statement>),
 }
 
 /// Where a `break`/`continue` that leaves an `ExecAst` statement resumes.

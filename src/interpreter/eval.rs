@@ -1893,10 +1893,14 @@ impl Interpreter {
 
     /// `typeof <identifier>`: an unresolvable reference yields "undefined",
     /// an uninitialised binding throws (sec-typeof-operator-runtime-semantics-evaluation).
+    /// The `typeof` result string for an evaluated value (HTMLDDA aware).
     pub(super) fn typeof_value(&self, value: &JsValue) -> JsValue {
         JsValue::string(JsString::from_str(typeof_val(value, &self.objects)))
     }
 
+    /// `typeof <identifier>`: an unresolvable reference yields `"undefined"`,
+    /// an uninitialised binding throws (sec-typeof-operator-runtime-semantics-
+    /// evaluation, sec-getvalue).
     pub(super) fn eval_typeof_identifier(&mut self, name: &str, env: &EnvRef) -> Completion {
         let strict = env.borrow().strict;
         if self.with_scope_depth > 0 || self.has_ever_entered_with {
@@ -1922,20 +1926,13 @@ impl Interpreter {
             };
         }
         match self.env_get(env, name) {
-            Some(val) => {
-                return Completion::Normal(JsValue::string(JsString::from_str(typeof_val(
-                    &val,
-                    &self.objects,
-                ))));
+            Some(val) => Completion::Normal(self.typeof_value(&val)),
+            None if self.env_has(env, name) => {
+                Completion::Throw(self.create_reference_error(&format!(
+                    "Cannot access '{name}' before initialization"
+                )))
             }
-            None => {
-                if self.env_has(env, name) {
-                    return Completion::Throw(self.create_reference_error(&format!(
-                        "Cannot access '{name}' before initialization"
-                    )));
-                }
-                return Completion::Normal(JsValue::string(JsString::from_str("undefined")));
-            }
+            None => Completion::Normal(JsValue::string(JsString::from_str("undefined"))),
         }
     }
 

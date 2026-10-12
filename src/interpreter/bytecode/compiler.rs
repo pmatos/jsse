@@ -992,7 +992,7 @@ impl Compiler {
         } else {
             NO_ESCAPE_TABLE
         };
-        let idx = self.add_ast_node(AstNode::Stmt(stmt.clone()), reason)?;
+        let idx = self.add_ast_node(AstNode::Stmt(Box::new(stmt.clone())), reason)?;
         self.emit(Op::ExecAst);
         self.emit_u16(idx);
         self.emit_u16(table);
