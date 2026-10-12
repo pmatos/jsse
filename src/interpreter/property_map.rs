@@ -55,6 +55,14 @@ impl PropertyMap {
         }
     }
 
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match &self.inner {
+            PropertyMapInner::Inline(v) => v.len(),
+            PropertyMapInner::Spilled { entries, .. } => entries.len(),
+        }
+    }
+
     pub(crate) fn contains_key<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         self.slot_of(key).is_some()
     }
