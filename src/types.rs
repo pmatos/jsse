@@ -265,6 +265,13 @@ impl JsPropertyKey {
     pub(crate) fn same_allocation(&self, other: &JsPropertyKey) -> bool {
         Arc::ptr_eq(&self.bytes, &other.bytes)
     }
+
+    /// Address of the shared backing allocation. Stable for the key's
+    /// lifetime and identical for clones, so it is a cheap identity hash.
+    #[inline]
+    pub(crate) fn allocation_addr(&self) -> usize {
+        Arc::as_ptr(&self.bytes) as *const u8 as usize
+    }
 }
 
 /// Well-known symbol names in the index order of

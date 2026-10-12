@@ -568,6 +568,12 @@ impl Interpreter {
     /// one frame correctly suppress enumerable inherited keys with matching
     /// names on subsequent frames.
     pub(crate) fn enumerable_keys_with_proto_on_id(&self, start_id: u64) -> Vec<JsPropertyKey> {
+        // Common case: nothing on the prototype chain is enumerable, so the
+        // start object's own enumerable keys (distinct by construction) are
+        // the whole answer and no shadow set is needed.
+        if let Some(keys) = self.own_keys_when_chain_is_not_enumerable(start_id) {
+            return keys;
+        }
         let mut global_seen: HashSet<JsPropertyKey> = HashSet::default();
         let mut result: Vec<JsPropertyKey> = Vec::new();
         let mut current = Some(start_id);
@@ -587,6 +593,23 @@ impl Interpreter {
             current = next;
         }
         result
+    }
+
+    fn own_keys_when_chain_is_not_enumerable(&self, start_id: u64) -> Option<Vec<JsPropertyKey>> {
+        let mut next = {
+            let b = self.get_object_cell(start_id)?.borrow();
+            b.prototype_id
+        };
+        while let Some(id) = next {
+            let b = self.get_object_cell(id)?.borrow();
+            if b.has_enumerable_string_key_hint() != Some(false) {
+                return None;
+            }
+            next = b.prototype_id;
+        }
+        self.get_object_cell(start_id)?
+            .borrow()
+            .ordinary_own_property_keys(crate::interpreter::types::OwnKeyFilter::EnumerableStrings)
     }
 
     /// The keys `EnumerateObjectProperties` walks for for-in over `obj_id`:
@@ -1574,6 +1597,24 @@ impl Interpreter {
         }
     }
 
+    /// `proxy_get_own_property_descriptor(..) !== undefined` without
+    /// materialising a descriptor object for non-Proxy objects.
+    pub(crate) fn proxy_has_own_property<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_none()
+            && let Some(obj) = self.get_object(obj_id)
+        {
+            self.check_namespace_tdz(obj_id, key)?;
+            return Ok(obj.borrow().own_property_enumerable(key).is_some());
+        }
+        Ok(!self
+            .proxy_get_own_property_descriptor(obj_id, key)?
+            .is_undefined())
+    }
+
     /// Proxy-aware [[GetOwnProperty]] - checks proxy `getOwnPropertyDescriptor` trap, recurses on target if no trap.
     pub(crate) fn proxy_get_own_property_descriptor<K: PropertyKeyLike + ?Sized>(
         &mut self,
@@ -1823,6 +1864,25 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
+            // Ordinary, Array and Arguments objects: keys come straight from
+            // the element vector and `property_order`.
+            let fast = obj
+                .borrow()
+                .ordinary_own_property_keys(crate::interpreter::types::OwnKeyFilter::AllKeys);
+            if let Some(keys) = fast {
+                let mut result = Vec::with_capacity(keys.len());
+                for k in &keys {
+                    if k.is_symbol() {
+                        result.push(self.symbol_key_to_jsvalue(k));
+                    } else {
+                        result.push(JsValue::string(
+                            crate::interpreter::key_intern::key_to_js_string(k),
+                        ));
+                    }
+                }
+                return Ok(result);
+            }
+            let obj = self.get_object_cell(obj_id).unwrap();
             // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
             {
                 let is_deferred_ns = obj

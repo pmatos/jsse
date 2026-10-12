@@ -1,4 +1,80 @@
 use super::super::*;
+use crate::interpreter::key_intern::key_to_js_string;
+
+/// EnumerableOwnProperties (§7.3.23) values/entries over a snapshot of an
+/// ordinary object's own String keys. Each key's enumerability is re-read
+/// right before its [[Get]], since a getter may delete or hide later keys.
+fn enumerable_own_values_fast(
+    interp: &mut Interpreter,
+    obj_id: u64,
+    obj_val: &JsValue,
+    keys: &[JsPropertyKey],
+    entries: bool,
+) -> Completion {
+    interp.with_gc_root_scope(|interp| {
+        let mut out: Vec<JsValue> = Vec::with_capacity(keys.len());
+        for k in keys {
+            let enumerable = interp
+                .get_object_cell(obj_id)
+                .and_then(|c| c.borrow().own_property_enumerable(k));
+            if enumerable != Some(true) {
+                continue;
+            }
+            let val = match interp.get_object_property(obj_id, k, obj_val) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            interp.gc_root_value(&val);
+            if entries {
+                let key_val = JsValue::string(key_to_js_string(k));
+                let pair = interp.create_array(vec![key_val, val]);
+                interp.gc_root_value(&pair);
+                out.push(pair);
+            } else {
+                out.push(val);
+            }
+        }
+        Completion::Normal(interp.create_array(out))
+    })
+}
+
+/// Object.assign step for an ordinary source: own enumerable keys in
+/// [[OwnPropertyKeys]] order, each read with [[Get]] and written to the
+/// target with [[Set]] (throwing on failure).
+fn assign_from_ordinary_source(
+    interp: &mut Interpreter,
+    target_id: u64,
+    target: &JsValue,
+    source_id: u64,
+    source: &JsValue,
+    keys: &[JsPropertyKey],
+) -> Result<(), JsValue> {
+    if target_id != source_id
+        && let Some(cell) = interp.get_object_cell(target_id)
+    {
+        let mut t = cell.borrow_mut_untracked();
+        if t.proxy().is_none() && t.array_data().is_none() && t.extensible {
+            t.properties.reserve(keys.len());
+        }
+    }
+    for k in keys {
+        let enumerable = interp
+            .get_object_cell(source_id)
+            .and_then(|c| c.borrow().own_property_enumerable(k));
+        if enumerable != Some(true) {
+            continue;
+        }
+        let val = match interp.get_object_property(source_id, k, source) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        if !interp.proxy_set(target_id, k, val, target)? {
+            return Err(interp.create_type_error("Cannot assign to read only property"));
+        }
+    }
+    Ok(())
+}
 
 impl Interpreter {
     pub(super) fn setup_object_statics(&mut self) {
@@ -77,12 +153,8 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = o.as_object_id() {
-                    match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                        Ok(desc_val) => {
-                            return Completion::Normal(JsValue::boolean(
-                                !(desc_val).is_undefined(),
-                            ));
-                        }
+                    match interp.proxy_has_own_property(obj_id, &key) {
+                        Ok(has) => return Completion::Normal(JsValue::boolean(has)),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -234,6 +306,15 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = o.as_object_id() {
+                    if interp.get_proxy_info(obj_id).is_none()
+                        && let Some(obj) = interp.get_object(obj_id)
+                    {
+                        if let Err(e) = interp.check_namespace_tdz(obj_id, &key) {
+                            return Completion::Throw(e);
+                        }
+                        let enumerable = obj.borrow().own_property_enumerable(&key);
+                        return Completion::Normal(JsValue::boolean(enumerable == Some(true)));
+                    }
                     // Use proxy-aware [[GetOwnProperty]]
                     match interp.proxy_get_own_property_descriptor(obj_id, &key) {
                         Ok(desc_val) => {
@@ -913,6 +994,19 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = obj_val.as_object_id() {
+                    // Ordinary objects: no trap or getter can run between
+                    // [[OwnPropertyKeys]] and the enumerability checks, so
+                    // one pass over the stored keys is exact.
+                    if let Some(keys) = interp.get_object_cell(obj_id).and_then(|c| {
+                        c.borrow()
+                            .ordinary_own_property_keys(OwnKeyFilter::EnumerableStrings)
+                    }) {
+                        let names: Vec<JsValue> = keys
+                            .iter()
+                            .map(|k| JsValue::string(key_to_js_string(k)))
+                            .collect();
+                        return Completion::Normal(interp.create_array(names));
+                    }
                     // [[OwnPropertyKeys]] for all keys
                     let all_keys = match interp.proxy_own_keys(obj_id) {
                         Ok(k) => k,
@@ -1324,6 +1418,12 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = obj_val.as_object_id() {
+                    if let Some(keys) = interp.get_object_cell(obj_id).and_then(|c| {
+                        c.borrow()
+                            .ordinary_own_property_keys(OwnKeyFilter::AllStrings)
+                    }) {
+                        return enumerable_own_values_fast(interp, obj_id, &obj_val, &keys, true);
+                    }
                     // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
                     let all_keys = match interp.proxy_own_keys(obj_id) {
                         Ok(k) => k,
@@ -1376,6 +1476,12 @@ impl Interpreter {
                     other => return other,
                 };
                 if let Some(obj_id) = obj_val.as_object_id() {
+                    if let Some(keys) = interp.get_object_cell(obj_id).and_then(|c| {
+                        c.borrow()
+                            .ordinary_own_property_keys(OwnKeyFilter::AllStrings)
+                    }) {
+                        return enumerable_own_values_fast(interp, obj_id, &obj_val, &keys, false);
+                    }
                     // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
                     let all_keys = match interp.proxy_own_keys(obj_id) {
                         Ok(k) => k,
@@ -1443,6 +1549,22 @@ impl Interpreter {
                     let Some(s_id) = src_obj_val.as_object_id() else {
                         continue;
                     };
+                    if let Some(keys) = interp
+                        .get_object_cell(s_id)
+                        .and_then(|c| c.borrow().ordinary_own_property_keys(OwnKeyFilter::AllKeys))
+                    {
+                        if let Err(e) = assign_from_ordinary_source(
+                            interp,
+                            t_id,
+                            &target,
+                            s_id,
+                            &src_obj_val,
+                            &keys,
+                        ) {
+                            return Completion::Throw(e);
+                        }
+                        continue;
+                    }
                     let raw_keys = match interp.proxy_own_keys(s_id) {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),
@@ -2056,12 +2178,8 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 if let Some(obj_id) = obj_val.as_object_id() {
-                    match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                        Ok(desc_val) => {
-                            return Completion::Normal(JsValue::boolean(
-                                !(desc_val).is_undefined(),
-                            ));
-                        }
+                    match interp.proxy_has_own_property(obj_id, &key) {
+                        Ok(has) => return Completion::Normal(JsValue::boolean(has)),
                         Err(e) => return Completion::Throw(e),
                     }
                 }

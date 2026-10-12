@@ -1215,6 +1215,34 @@ impl Interpreter {
         excluded: &[JsPropertyKey],
     ) -> Result<Vec<(JsPropertyKey, JsValue)>, JsValue> {
         self.with_gc_root_scope(|interp| {
+            // Ordinary sources: walk the stored keys directly. The
+            // enumerability of each key is re-read right before its [[Get]]
+            // because an earlier getter may have deleted or hidden it.
+            if let Some(keys) = interp.get_object_cell(src_id).and_then(|c| {
+                c.borrow()
+                    .ordinary_own_property_keys(crate::interpreter::types::OwnKeyFilter::AllKeys)
+            }) {
+                let mut result = Vec::with_capacity(keys.len());
+                for key in keys {
+                    if !excluded.is_empty() && excluded.contains(&key) {
+                        continue;
+                    }
+                    let enumerable = interp
+                        .get_object_cell(src_id)
+                        .and_then(|c| c.borrow().own_property_enumerable(&key));
+                    if enumerable != Some(true) {
+                        continue;
+                    }
+                    let val = match interp.get_object_property(src_id, &key, src_val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::UNDEFINED,
+                    };
+                    interp.gc_root_value(&val);
+                    result.push((key, val));
+                }
+                return Ok(result);
+            }
             let mut result = Vec::new();
             let keys = interp.proxy_own_keys(src_id)?;
             for key_val in keys {
@@ -1361,9 +1389,11 @@ impl Interpreter {
                             let src_id = o.id;
                             match self.copy_data_properties(src_id, &spread_val, &[]) {
                                 Ok(pairs) => {
+                                    obj_data.properties.reserve(pairs.len());
+                                    obj_data.property_order.reserve(pairs.len());
                                     for (k, v) in pairs {
                                         self.gc_root_value(&v);
-                                        obj_data.insert_value(k, v);
+                                        obj_data.insert_value_prekeyed(k, v);
                                     }
                                 }
                                 Err(e) => return Completion::Throw(e),

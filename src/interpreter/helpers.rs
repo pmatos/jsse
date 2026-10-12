@@ -538,6 +538,12 @@ pub(crate) fn enumerable_own_keys(
     interp: &mut Interpreter,
     obj_id: u64,
 ) -> Result<Vec<JsPropertyKey>, JsValue> {
+    if let Some(keys) = interp.get_object_cell(obj_id).and_then(|c| {
+        c.borrow()
+            .ordinary_own_property_keys(OwnKeyFilter::EnumerableStrings)
+    }) {
+        return Ok(keys);
+    }
     let own_keys = interp.proxy_own_keys(obj_id)?;
     let mut enumerable_keys = Vec::new();
 
