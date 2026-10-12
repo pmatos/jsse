@@ -2111,6 +2111,17 @@ pub(crate) enum TemporalData {
     },
 }
 
+/// Which own keys `JsObjectData::ordinary_own_property_keys` returns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnKeyFilter {
+    /// Every String key (enumerable or not), no Symbols.
+    AllStrings,
+    /// Every key, Strings first and then Symbols.
+    AllKeys,
+    /// Enumerable String keys only.
+    EnumerableStrings,
+}
+
 pub(crate) struct JsObjectData {
     /// Slab index of this object. Set exactly once by
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
@@ -3508,6 +3519,33 @@ impl JsObjectData {
             .insert(key, PropertyDescriptor::data_default(value));
     }
 
+    /// `insert_value` for a key that is already a stored property name of
+    /// another object (so it shares that name's allocation and needs no
+    /// interner round trip). One map lookup decides between replacing the
+    /// descriptor and appending a new entry.
+    pub(crate) fn insert_value_prekeyed(&mut self, key: JsPropertyKey, value: JsValue) {
+        if let Some(existing) = self.properties.get_mut(&key) {
+            *existing = PropertyDescriptor::data_default(value);
+            return;
+        }
+        self.record_property_creation(&key);
+        self.properties
+            .push_fresh(key, PropertyDescriptor::data_default(value));
+    }
+
+    /// Append the `length` property of a freshly built Array. `length` is
+    /// never part of the Array's extra-string-key tracking, so this skips the
+    /// interner and duplicate scan of `insert_property`.
+    pub(crate) fn push_fresh_array_length(
+        &mut self,
+        key: &JsPropertyKey,
+        desc: PropertyDescriptor,
+    ) {
+        debug_assert!(key.eq_str("length") && self.array_data().is_some());
+        self.property_order.push(key.clone());
+        self.properties.push_fresh(key.clone(), desc);
+    }
+
     pub(crate) fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
@@ -3727,6 +3765,129 @@ impl JsObjectData {
         None
     }
 
+    /// Whether this object has any String-keyed property that for-in could
+    /// enumerate, answered without the key sets the full walk builds.
+    /// `None` when String/TypedArray/namespace exotics synthesise keys that
+    /// this cheap scan does not model; callers then take the general path.
+    pub(crate) fn has_enumerable_string_key_hint(&self) -> Option<bool> {
+        if self.proxy().is_some()
+            || self.module_namespace().is_some()
+            || self.typed_array_info().is_some()
+            || (self.class_name == "String"
+                && self
+                    .primitive_value
+                    .as_ref()
+                    .is_some_and(JsValue::is_string))
+        {
+            return None;
+        }
+        if let Some(elems) = self.array_elements()
+            && elems.iter().any(|v| !v.is_undefined())
+        {
+            return Some(true);
+        }
+        Some(
+            self.properties
+                .iter()
+                .any(|(k, d)| !k.is_symbol() && d.enumerable != Some(false)),
+        )
+    }
+
+    /// [[OwnPropertyKeys]] (§10.1.11.1) for an object whose keys are exactly
+    /// its element vector plus `property_order`: integer indices ascending,
+    /// then String keys in creation order, then (for `AllKeys`) Symbols.
+    /// `None` for exotics that synthesise keys or run traps (Proxy, module
+    /// namespace, TypedArray, String wrapper); callers fall back to the
+    /// general path. Never runs user code.
+    ///
+    /// `EnumerableStrings` additionally drops non-enumerable properties, which
+    /// is exact for callers that run no user code between the snapshot and
+    /// their use of it.
+    pub(crate) fn ordinary_own_property_keys(
+        &self,
+        filter: OwnKeyFilter,
+    ) -> Option<Vec<JsPropertyKey>> {
+        if self.proxy().is_some()
+            || self.module_namespace().is_some()
+            || self.typed_array_info().is_some()
+            || (self.class_name == "String"
+                && self
+                    .primitive_value
+                    .as_ref()
+                    .is_some_and(JsValue::is_string))
+        {
+            return None;
+        }
+        let enumerable_only = filter == OwnKeyFilter::EnumerableStrings;
+        let elements = self.array_elements();
+        let mut index_keys: Vec<(u32, JsPropertyKey)> = Vec::new();
+        let mut string_keys: Vec<JsPropertyKey> = Vec::with_capacity(self.property_order.len());
+        let mut symbol_keys: Vec<JsPropertyKey> = Vec::new();
+        let mut order_has_index = false;
+
+        if let Some(elems) = elements {
+            for (i, value) in elems.iter().enumerate() {
+                if value.is_undefined() || i > 0xFFFF_FFFE {
+                    continue;
+                }
+                let key = JsPropertyKey::from_index(i);
+                // A mirrored entry in the property map is emitted (with its
+                // own attributes) by the `property_order` pass below.
+                if self.properties.contains_key(&key) {
+                    continue;
+                }
+                index_keys.push((i as u32, key));
+            }
+        }
+
+        for k in &self.property_order {
+            if k.is_symbol() {
+                if filter == OwnKeyFilter::AllKeys {
+                    symbol_keys.push(k.clone());
+                }
+                continue;
+            }
+            if enumerable_only {
+                match self.properties.get(k) {
+                    Some(d) if d.enumerable != Some(false) => {}
+                    _ => continue,
+                }
+            }
+            if let Some(n) = parse_array_index(k) {
+                index_keys.push((n, k.clone()));
+                order_has_index = true;
+            } else {
+                string_keys.push(k.clone());
+            }
+        }
+
+        if order_has_index {
+            index_keys.sort_by_key(|(n, _)| *n);
+        }
+        let mut keys: Vec<JsPropertyKey> =
+            Vec::with_capacity(index_keys.len() + string_keys.len() + symbol_keys.len());
+        keys.extend(index_keys.into_iter().map(|(_, k)| k));
+        keys.append(&mut string_keys);
+        keys.append(&mut symbol_keys);
+        Some(keys)
+    }
+
+    /// `Some(enumerable)` when `key` is an own property, without cloning the
+    /// descriptor. Mirrors `get_own_property`'s presence rules exactly.
+    #[inline]
+    pub(crate) fn own_property_enumerable<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<bool> {
+        if self.module_namespace().is_none()
+            && let Some(d) = self.properties.get(key)
+        {
+            return Some(d.enumerable != Some(false));
+        }
+        self.get_own_property(key)
+            .map(|d| d.enumerable != Some(false))
+    }
+
     /// Own-property path of `enumerable_keys_with_proto`: returns the own
     /// enumerable keys in spec order (integer indices ascending, then string
     /// keys in insertion order) and the full shadow set of all own keys
@@ -3805,6 +3966,11 @@ impl JsObjectData {
 pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: &K) -> Option<u32> {
     let key = key.as_property_key_str()?;
     if key.is_empty() {
+        return None;
+    }
+    // Rust's integer parser also accepts a leading `+`, which ECMAScript
+    // array indices never have.
+    if !key.as_bytes()[0].is_ascii_digit() {
         return None;
     }
     // No leading zeros (except "0" itself)
@@ -4444,6 +4610,89 @@ mod kind_accessor_tests {
             .map(JsPropertyKey::to_string)
             .collect::<Vec<_>>();
         assert_eq!(keys, vec!["z", "+1"]);
+    }
+
+    #[test]
+    fn ordinary_own_property_keys_orders_indices_strings_then_symbols() {
+        let mut obj = JsObjectData::new();
+        obj.insert_value("b", JsValue::number(1.0));
+        obj.insert_value("10", JsValue::number(2.0));
+        obj.insert_value(
+            JsPropertyKey::well_known_symbol("iterator"),
+            JsValue::number(3.0),
+        );
+        obj.insert_value("2", JsValue::number(4.0));
+        obj.insert_value("01", JsValue::number(5.0));
+        obj.insert_property(
+            "hidden",
+            PropertyDescriptor::data(JsValue::number(6.0), true, false, true),
+        );
+        let names = |keys: Vec<JsPropertyKey>| {
+            keys.iter()
+                .map(JsPropertyKey::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(
+                obj.ordinary_own_property_keys(OwnKeyFilter::EnumerableStrings)
+                    .unwrap()
+            ),
+            vec!["2", "10", "b", "01"]
+        );
+        assert_eq!(
+            names(
+                obj.ordinary_own_property_keys(OwnKeyFilter::AllStrings)
+                    .unwrap()
+            ),
+            vec!["2", "10", "b", "01", "hidden"]
+        );
+        let all = obj
+            .ordinary_own_property_keys(OwnKeyFilter::AllKeys)
+            .unwrap();
+        assert_eq!(all.len(), 6);
+        assert!(all[5].is_symbol(), "symbols come last");
+    }
+
+    #[test]
+    fn ordinary_own_property_keys_declines_exotics() {
+        let mut wrapper = JsObjectData::new();
+        wrapper.class_name = "String".into();
+        wrapper.primitive_value = Some(JsValue::string(JsString::from_str("ab")));
+        assert!(
+            wrapper
+                .ordinary_own_property_keys(OwnKeyFilter::AllKeys)
+                .is_none()
+        );
+        assert!(wrapper.has_enumerable_string_key_hint().is_none());
+    }
+
+    #[test]
+    fn ordinary_own_property_keys_merges_dense_elements_with_named_keys() {
+        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        obj.insert_property(
+            "length",
+            PropertyDescriptor::data(JsValue::number(3.0), true, false, false),
+        );
+        *obj.array_elements_mut().unwrap() = vec![JsValue::TRUE, JsValue::TRUE, JsValue::TRUE];
+        obj.insert_value("tag", JsValue::TRUE);
+        obj.insert_property(
+            "1",
+            PropertyDescriptor::data(JsValue::TRUE, true, false, true),
+        );
+        let keys = obj
+            .ordinary_own_property_keys(OwnKeyFilter::EnumerableStrings)
+            .unwrap()
+            .iter()
+            .map(JsPropertyKey::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["0", "2", "tag"]);
+        let keys = obj
+            .ordinary_own_property_keys(OwnKeyFilter::AllStrings)
+            .unwrap()
+            .iter()
+            .map(JsPropertyKey::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["0", "1", "2", "length", "tag"]);
     }
 
     // --- set_data / set_data_mut ---

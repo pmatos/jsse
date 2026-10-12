@@ -30,10 +30,61 @@
 
 use std::cell::RefCell;
 
-use crate::types::JsPropertyKey;
+use crate::types::{JsPropertyKey, JsString};
 
 thread_local! {
     static KEY_CACHE: RefCell<KeyCache> = RefCell::new(KeyCache::new());
+    static KEY_STRING_CACHE: RefCell<KeyStringCache> = RefCell::new(KeyStringCache::new());
+}
+
+const KEY_STRING_CACHE_SLOTS: usize = 1024;
+
+/// Direct-mapped `JsPropertyKey` -> `JsString` cache, indexed by the key's
+/// backing-allocation address. Property keys are interned, so the same name
+/// keeps hitting the same allocation; materialising its string (a UTF-16
+/// `Vec` plus two `Arc`s) is otherwise repeated for every `Object.keys`,
+/// for-in step and similar. A slot holds a clone of the key, which keeps the
+/// address from being recycled while the entry lives; a hit is verified by
+/// allocation identity, so a colliding key simply replaces the slot.
+struct KeyStringCache {
+    slots: Vec<Option<(JsPropertyKey, JsString)>>,
+}
+
+impl KeyStringCache {
+    fn new() -> Self {
+        Self {
+            slots: vec![None; KEY_STRING_CACHE_SLOTS],
+        }
+    }
+
+    #[inline]
+    fn slot_index(key: &JsPropertyKey) -> usize {
+        let h = (key.allocation_addr() >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        h >> (usize::BITS - KEY_STRING_CACHE_SLOTS.trailing_zeros())
+    }
+}
+
+/// The String value of a non-Symbol property key. Repeated requests for the
+/// same interned key share one `JsString`.
+#[inline]
+pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
+    if key.is_symbol() || key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
+        return key.to_js_string();
+    }
+    KEY_STRING_CACHE
+        .try_with(|c| {
+            let mut c = c.borrow_mut();
+            let idx = KeyStringCache::slot_index(key);
+            if let Some((k, s)) = &c.slots[idx]
+                && k.same_allocation(key)
+            {
+                return s.clone();
+            }
+            let s = key.to_js_string();
+            c.slots[idx] = Some((key.clone(), s.clone()));
+            s
+        })
+        .unwrap_or_else(|_| key.to_js_string())
 }
 
 struct KeyCache {
@@ -163,6 +214,26 @@ pub(crate) fn intern_js_key(key: JsPropertyKey) -> JsPropertyKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_strings_are_cached_per_allocation() {
+        let k = intern_key("cachedKeyString");
+        let a = key_to_js_string(&k);
+        let b = key_to_js_string(&k);
+        assert!(a.ptr_eq(&b), "same interned key must share one JsString");
+        assert_eq!(a.to_rust_string(), "cachedKeyString");
+        let other = JsPropertyKey::from_str("cachedKeyString");
+        let c = key_to_js_string(&other);
+        assert_eq!(c.as_units(), a.as_units());
+    }
+
+    #[test]
+    fn key_string_cache_preserves_lone_surrogates() {
+        let s = JsString::from_vec(vec![0xD800, 0x61]);
+        let k = JsPropertyKey::from_js_string(&s);
+        assert_eq!(key_to_js_string(&k).as_units(), s.as_units());
+        assert_eq!(key_to_js_string(&k).as_units(), s.as_units());
+    }
 
     #[test]
     fn interns_ordinary_names_share_allocation() {

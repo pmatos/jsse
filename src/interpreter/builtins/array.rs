@@ -3549,11 +3549,16 @@ impl Interpreter {
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
+        // The element vector holds every non-undefined value; only an
+        // undefined value needs its own descriptor, because the vector uses
+        // undefined as its hole marker.
         for (i, v) in values.iter().enumerate() {
-            obj_data.insert_value(i.to_string(), v.clone());
+            if v.is_undefined() {
+                obj_data.insert_value(i.to_string(), v.clone());
+            }
         }
-        obj_data.insert_property(
-            "length".to_string(),
+        obj_data.push_fresh_array_length(
+            &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(values.len() as f64), true, false, false),
         );
         *obj_data.array_elements_mut().unwrap() = values;

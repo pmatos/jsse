@@ -156,6 +156,32 @@ impl PropertyMap {
         }
     }
 
+    /// Make room for `additional` more entries, spilling an inline map that
+    /// would overflow `LINEAR_MAX` straight to a right-sized index so a bulk
+    /// copy neither regrows the entry list nor rehashes the index.
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        match &mut self.inner {
+            PropertyMapInner::Inline(v) => {
+                let total = v.len() + additional;
+                if total <= LINEAR_MAX {
+                    return;
+                }
+                let mut entries: Vec<(JsPropertyKey, PropertyDescriptor)> =
+                    Vec::with_capacity(total);
+                let mut index: HashMap<JsPropertyKey, u32> = HashMap::with_capacity(total);
+                for (k, d) in v.drain(..) {
+                    index.insert(k.clone(), entries.len() as u32);
+                    entries.push((k, d));
+                }
+                self.inner = PropertyMapInner::Spilled { entries, index };
+            }
+            PropertyMapInner::Spilled { entries, index } => {
+                entries.reserve(additional);
+                index.reserve(additional);
+            }
+        }
+    }
+
     fn spill(
         v: &mut SmallVec<[(JsPropertyKey, PropertyDescriptor); INLINE_CAP]>,
         key: JsPropertyKey,
@@ -298,6 +324,23 @@ mod tests {
         assert_eq!(num(&prev), 0.0);
         assert!(is_inline(&m));
         assert_eq!(num(m.get("k0").expect("present")), 99.0);
+    }
+
+    #[test]
+    fn reserve_spills_only_when_the_total_overflows_linear_max() {
+        let mut m = PropertyMap::new();
+        m.insert(key("a"), desc(1.0));
+        m.reserve(LINEAR_MAX - 1);
+        assert!(is_inline(&m), "fits inline: no spill");
+        m.reserve(LINEAR_MAX);
+        assert!(!is_inline(&m), "would overflow: spilled up front");
+        assert_eq!(num(m.get("a").expect("kept across the spill")), 1.0);
+        for i in 0..32 {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        for i in 0..32 {
+            assert_eq!(num(m.get(&format!("k{i}")).expect("present")), i as f64);
+        }
     }
 
     #[test]

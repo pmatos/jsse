@@ -1368,11 +1368,13 @@ impl Interpreter {
                 interp.gc_root_id(rest_obj_id);
                 interp.copy_data_properties(o.id, source_val, excluded)
             }));
+            let mut rest = self.get_object_cell_expect(rest_obj_id).borrow_mut();
+            rest.properties.reserve(pairs.len());
+            rest.property_order.reserve(pairs.len());
             for (k, v) in pairs {
-                self.get_object_cell_expect(rest_obj_id)
-                    .borrow_mut()
-                    .insert_value(k, v);
+                rest.insert_value_prekeyed(k, v);
             }
+            drop(rest);
         }
         Completion::Normal(JsValue::object(rest_obj_id))
     }
