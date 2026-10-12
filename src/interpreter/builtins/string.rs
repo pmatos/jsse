@@ -134,6 +134,9 @@ fn string_pad(
     if fill.is_empty() {
         return Completion::Normal(JsValue::string(s));
     }
+    if int_max > MAX_STRING_LENGTH {
+        return Completion::Throw(interp.invalid_string_length_error());
+    }
     let pad = fill.as_units().iter().copied().cycle().take(int_max - len);
     let units = s.as_units().iter().copied();
     let result: Vec<u16> = if at_start {
@@ -185,7 +188,9 @@ fn append_replacement(
             template.as_units(),
         )
         .map_err(Completion::Throw)?;
-        out.extend_from_slice(&substitution);
+        interp
+            .append_code_units(out, &substitution)
+            .map_err(Completion::Throw)?;
         return Ok(());
     }
     let call_args = [
@@ -569,6 +574,12 @@ impl Interpreter {
                     if n < 0.0 || n == f64::INFINITY {
                         return Completion::Throw(interp.create_range_error("Invalid count value"));
                     }
+                    if s.is_empty() || n == 0.0 {
+                        return Completion::Normal(JsValue::string(JsString::default()));
+                    }
+                    if n > (MAX_STRING_LENGTH / s.len()) as f64 {
+                        return Completion::Throw(interp.invalid_string_length_error());
+                    }
                     let repeated = s.as_units().repeat(n as usize);
                     Completion::Normal(JsValue::string(JsString::from_vec(repeated)))
                 }),
@@ -591,6 +602,9 @@ impl Interpreter {
                     let mut tail: Vec<u16> = Vec::new();
                     for arg in args {
                         propagate!(interp.append_js_string(&mut tail, arg));
+                    }
+                    if s.len().saturating_add(tail.len()) > MAX_STRING_LENGTH {
+                        return Completion::Throw(interp.invalid_string_length_error());
                     }
                     Completion::Normal(JsValue::string(s.concat_units(&tail)))
                 }),

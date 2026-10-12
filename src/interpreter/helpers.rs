@@ -317,27 +317,44 @@ pub(crate) fn to_js_string(val: &JsValue) -> String {
 }
 
 /// `lval + rval` for primitives where at least one side is a String.
-/// A left string that owns its buffer's tail is extended in place.
-pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> JsValue {
+/// A left string that owns its buffer's tail is extended in place. `None`
+/// when the result would exceed `MAX_STRING_LENGTH`.
+pub(crate) fn concat_string_values(lval: &JsValue, rval: &JsValue) -> Option<JsValue> {
     if let Some(left) = lval.as_string() {
         if rval.is_string() {
             if left.is_empty() {
-                return rval.clone();
+                return Some(rval.clone());
             }
-            let joined = rval.with_string(|r| left.concat_units(r));
-            return JsValue::string(joined.expect("kind checked"));
+            let joined = rval
+                .with_string(|r| {
+                    (left.len().saturating_add(r.len()) <= MAX_STRING_LENGTH)
+                        .then(|| left.concat_units(r))
+                })
+                .expect("kind checked")?;
+            return Some(JsValue::string(joined));
         }
         let units = js_value_to_code_units(rval);
-        return JsValue::string(if left.is_empty() {
+        if left.len().saturating_add(units.len()) > MAX_STRING_LENGTH {
+            return None;
+        }
+        return Some(JsValue::string(if left.is_empty() {
             JsString::from_vec(units)
         } else {
             left.concat_units(&units)
-        });
+        }));
     }
     debug_assert!(rval.is_string());
     let mut units = js_value_to_code_units(lval);
-    rval.with_string(|r| units.extend_from_slice(r));
-    JsValue::string(JsString::from_vec(units))
+    let fits = rval
+        .with_string(|r| {
+            let fits = units.len().saturating_add(r.len()) <= MAX_STRING_LENGTH;
+            if fits {
+                units.extend_from_slice(r);
+            }
+            fits
+        })
+        .expect("kind checked");
+    fits.then(|| JsValue::string(JsString::from_vec(units)))
 }
 
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.

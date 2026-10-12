@@ -2031,8 +2031,10 @@ impl Interpreter {
                 };
                 let mut units: Vec<u16> = Vec::new();
                 for i in 0..len {
-                    if i > 0 {
-                        units.extend_from_slice(sep.as_units());
+                    if i > 0
+                        && let Err(e) = interp.append_code_units(&mut units, sep.as_units())
+                    {
+                        return Completion::Throw(e);
                     }
                     let elem = typed_array_get_index(&ta, i);
                     if !elem.is_nullish()
@@ -2076,8 +2078,10 @@ impl Interpreter {
                 let len = typed_array_length(&ta);
                 let mut result: Vec<u16> = Vec::new();
                 for k in 0..len {
-                    if k > 0 {
-                        result.push(u16::from(b','));
+                    if k > 0
+                        && let Err(e) = interp.append_code_units(&mut result, &[u16::from(b',')])
+                    {
+                        return Completion::Throw(e);
                     }
                     let next_element = typed_array_get_index(&ta, k);
                     if !next_element.is_nullish()

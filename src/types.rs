@@ -114,6 +114,11 @@ impl StrView {
     }
 }
 
+/// Engine-wide maximum string length in code units (V8's `String::kMaxLength`,
+/// 2^29 - 24). A string-building operation that would exceed it throws
+/// `RangeError: Invalid string length` instead of attempting the allocation.
+pub(crate) const MAX_STRING_LENGTH: usize = (1 << 29) - 24;
+
 /// Strings shorter than this are always copied exact-fit; longer ones in a
 /// growth chain get geometric slack so a following append can claim the tail.
 const STR_SLACK_THRESHOLD: usize = 64;
