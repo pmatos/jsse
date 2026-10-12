@@ -42,35 +42,34 @@ fn to_object_val(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, Co
 fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, Completion> {
     // An exotic Array's `length` is always an own data property, so reading
     // it directly is exactly `Get(O, "length")`.
-    if let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) {
-        let b = cell.borrow();
-        if b.array_elements().is_some()
-            && let Some(n) = b
-                .properties
+    let array_length = o
+        .as_object_id()
+        .and_then(|id| interp.get_object_cell(id))
+        .and_then(|cell| {
+            let b = cell.borrow();
+            b.array_elements()?;
+            b.properties
                 .get("length")
                 .and_then(|d| d.value.as_ref())
                 .and_then(JsValue::as_number)
-        {
-            let len = to_integer_or_infinity(n);
-            return Ok(if len < 0.0 {
-                0
+        });
+    let n = match array_length {
+        Some(n) => n,
+        None => {
+            let len_val = if let Some(obj_id) = o.as_object_id() {
+                match interp.get_object_property(obj_id, "length", o) {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                }
             } else {
-                len.min(9007199254740991.0) as usize
-            });
+                JsValue::UNDEFINED
+            };
+            // ? ToLength(lenProperty) — must propagate errors from ToNumber/ToPrimitive
+            match interp.to_number_value(&len_val) {
+                Ok(v) => v,
+                Err(e) => return Err(Completion::Throw(e)),
+            }
         }
-    }
-    let len_val = if let Some(obj_id) = o.as_object_id() {
-        match interp.get_object_property(obj_id, "length", o) {
-            Completion::Normal(v) => v,
-            other => return Err(other),
-        }
-    } else {
-        JsValue::UNDEFINED
-    };
-    // ? ToLength(lenProperty) — must propagate errors from ToNumber/ToPrimitive
-    let n = match interp.to_number_value(&len_val) {
-        Ok(v) => v,
-        Err(e) => return Err(Completion::Throw(e)),
     };
     let len = to_integer_or_infinity(n);
     if len < 0.0 {

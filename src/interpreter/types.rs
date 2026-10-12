@@ -2522,6 +2522,14 @@ impl JsObjectData {
             return false;
         }
         let index = parse_array_index(key).unwrap() as usize;
+        self.push_dense_array_element(index, value)
+    }
+
+    /// Appends `value` as element `index` when `index` is exactly the current
+    /// element count and a non-writable `length` does not forbid growth.
+    /// Callers have already checked the value, extensibility and that no
+    /// descriptor owns `index`.
+    fn push_dense_array_element(&mut self, index: usize, value: &JsValue) -> bool {
         if self
             .array_elements()
             .is_none_or(|elements| elements.len() != index)
@@ -2560,9 +2568,12 @@ impl JsObjectData {
         let Some(elements) = self.array_elements() else {
             return false;
         };
-        if elements.len() != len || self.properties.len() != 1 {
-            return false;
-        }
+        elements.len() == len && self.properties.len() == 1 && self.has_writable_array_length(len)
+    }
+
+    /// Whether `length` is an own writable data property equal to `len`.
+    #[inline]
+    pub(crate) fn has_writable_array_length(&self, len: usize) -> bool {
         self.properties.get("length").is_some_and(|d| {
             d.writable != Some(false)
                 && d.value.as_ref().and_then(JsValue::as_number) == Some(len as f64)
@@ -2591,28 +2602,7 @@ impl JsObjectData {
         {
             return false;
         }
-        match self.array_elements() {
-            Some(elements) if elements.len() == index => {}
-            _ => return false,
-        }
-        let Some(length_desc) = self.properties.get("length") else {
-            return false;
-        };
-        let length = length_desc
-            .value
-            .as_ref()
-            .and_then(JsValue::as_number)
-            .unwrap_or(0.0);
-        if index as f64 >= length && length_desc.writable == Some(false) {
-            return false;
-        }
-        self.array_elements_mut().unwrap().push(value.clone());
-        if index as f64 >= length {
-            self.properties.get_mut("length").unwrap().value =
-                Some(JsValue::number((index + 1) as f64));
-        }
-        self.shape_id = fresh_shape_id();
-        true
+        self.push_dense_array_element(index, value)
     }
 
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {

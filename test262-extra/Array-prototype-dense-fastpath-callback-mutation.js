@@ -1,12 +1,13 @@
-// Callback-taking Array.prototype methods and the argument conversions of the
-// bulk-moving methods may mutate the receiver while the algorithm runs. Every
-// element read must observe the receiver as it is at that moment, and a bulk
-// fast path may only act on the state checked right before it starts.
-// Spec: sec-array.prototype.foreach, sec-array.prototype.map,
-//       sec-array.prototype.filter, sec-array.prototype.some,
-//       sec-array.prototype.reduce, sec-array.prototype.find,
-//       sec-array.prototype.indexof, sec-array.prototype.splice,
-//       sec-array.prototype.slice, sec-array.prototype.sort.
+/*---
+description: >
+  Callback-taking Array.prototype methods and the argument conversions of the
+  bulk-moving methods may mutate the receiver while the algorithm runs. Every
+  element read must observe the receiver as it is at that moment, and a bulk
+  fast path may only act on the state checked right before it starts.
+esid: sec-array.prototype.foreach
+info: |
+  Also covers: sec-array.prototype.map, sec-array.prototype.filter, sec-array.prototype.some, sec-array.prototype.reduce, sec-array.prototype.find, sec-array.prototype.indexof, sec-array.prototype.splice, sec-array.prototype.slice, sec-array.prototype.sort.
+---*/
 
 function show(a) {
   var out = a.length + ':';

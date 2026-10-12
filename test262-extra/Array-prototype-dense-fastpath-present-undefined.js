@@ -1,11 +1,12 @@
-// A present `undefined` element is not a hole. Array.prototype methods that
-// move, copy or create elements in bulk must keep `undefined` values present
-// (own, enumerable, visited by forEach) and must keep real holes absent.
-// Spec: sec-array.prototype.unshift, sec-array.prototype.splice,
-//       sec-array.prototype.fill, sec-array.prototype.map,
-//       sec-array.prototype.filter, sec-array.prototype.slice,
-//       sec-array.prototype.concat, sec-array.prototype.sort,
-//       sec-array.prototype.reverse, sec-createdatapropertyorthrow.
+/*---
+description: >
+  A present `undefined` element is not a hole. Array.prototype methods that
+  move, copy or create elements in bulk must keep `undefined` values present
+  (own, enumerable, visited by forEach) and must keep real holes absent.
+esid: sec-array.prototype.unshift
+info: |
+  Also covers: sec-array.prototype.splice, sec-array.prototype.fill, sec-array.prototype.map, sec-array.prototype.filter, sec-array.prototype.slice, sec-array.prototype.concat, sec-array.prototype.sort, sec-array.prototype.reverse, sec-createdatapropertyorthrow.
+---*/
 
 function show(a) {
   var out = a.length + ':';

@@ -1,13 +1,13 @@
-// Bulk fast paths of Array.prototype methods must honour ArraySpeciesCreate
-// results of any shape and the integrity attributes of the receiver: frozen,
-// sealed and non-extensible arrays, non-writable `length`, and elements with
-// non-default attributes.
-// Spec: sec-arrayspeciescreate, sec-array.prototype.slice,
-//       sec-array.prototype.splice, sec-array.prototype.map,
-//       sec-array.prototype.shift, sec-array.prototype.unshift,
-//       sec-array.prototype.pop, sec-array.prototype.reverse,
-//       sec-array.prototype.fill, sec-array.prototype.sort,
-//       sec-array-exoticobject-defineownproperty-p-desc.
+/*---
+description: >
+  Bulk fast paths of Array.prototype methods must honour ArraySpeciesCreate
+  results of any shape and the integrity attributes of the receiver: frozen,
+  sealed and non-extensible arrays, non-writable `length`, and elements with
+  non-default attributes.
+esid: sec-arrayspeciescreate
+info: |
+  Also covers: sec-array.prototype.slice, sec-array.prototype.splice, sec-array.prototype.map, sec-array.prototype.shift, sec-array.prototype.unshift, sec-array.prototype.pop, sec-array.prototype.reverse, sec-array.prototype.fill, sec-array.prototype.sort, sec-array-exoticobject-defineownproperty-p-desc.
+---*/
 
 function show(a) {
   var out = a.length + ':';

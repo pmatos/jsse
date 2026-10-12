@@ -47,7 +47,10 @@ pub(super) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -
         };
         let b = cell.borrow();
         match &b.kind {
-            ObjectKind::Ordinary => {}
+            // String wrappers are Ordinary but expose virtual index
+            // properties that never reach `properties`.
+            ObjectKind::Ordinary if !b.primitive_value.as_ref().is_some_and(JsValue::is_string) => {
+            }
             ObjectKind::Array(_) if b.array_elements().is_some_and(Vec::is_empty) => {}
             _ => return false,
         }
@@ -70,13 +73,13 @@ fn has_hole(elements: &[JsValue]) -> bool {
 /// Array.prototype.pop on a plain dense Array whose last element is present.
 pub(super) fn try_pop(interp: &Interpreter, o: &JsValue, len: usize) -> Option<JsValue> {
     let cell = interp.get_object_cell(o.as_object_id()?)?;
+    {
+        let b = cell.borrow();
+        if len == 0 || !b.is_plain_dense_array(len) || b.array_elements()?[len - 1].is_undefined() {
+            return None;
+        }
+    }
     let mut b = cell.borrow_mut();
-    if len == 0 || !b.is_plain_dense_array(len) {
-        return None;
-    }
-    if b.array_elements()?[len - 1].is_undefined() {
-        return None;
-    }
     let v = b.array_elements_mut()?.pop()?;
     b.set_dense_array_length(len - 1);
     Some(v)
@@ -147,10 +150,7 @@ fn is_fresh_result_array(b: &JsObjectData, expected_len: usize) -> bool {
     b.extensible
         && b.properties.len() == 1
         && b.array_elements().is_some_and(Vec::is_empty)
-        && b.properties.get("length").is_some_and(|d| {
-            d.writable != Some(false)
-                && d.value.as_ref().and_then(JsValue::as_number) == Some(expected_len as f64)
-        })
+        && b.has_writable_array_length(expected_len)
 }
 
 /// The element-moving body of Array.prototype.splice (steps 11-17), for a
@@ -185,7 +185,7 @@ pub(super) fn try_splice(
     if new_len > 0xFFFF_FFFE {
         return false;
     }
-    let proto = {
+    let (needs_chain, proto) = {
         let ob = o_cell.borrow();
         if !ob.extensible || !ob.is_plain_dense_array(len) {
             return false;
@@ -194,9 +194,13 @@ pub(super) fn try_splice(
         if !is_fresh_result_array(&ab, delete_count) {
             return false;
         }
-        ob.prototype_id
+        // Without growth and without holes in the moved range, every Set hits
+        // an own present element and no inherited index is consulted.
+        let needs_chain =
+            items.len() > delete_count || has_hole(&ob.array_elements().unwrap()[start..]);
+        (needs_chain, ob.prototype_id)
     };
-    if !proto_chain_index_free(interp, proto) {
+    if needs_chain && !proto_chain_index_free(interp, proto) {
         return false;
     }
     let mut ob = o_cell.borrow_mut();
@@ -379,7 +383,7 @@ pub(super) fn try_fill(
     let Some(cell) = o.as_object_id().and_then(|id| interp.get_object_cell(id)) else {
         return false;
     };
-    let proto = {
+    let (needs_chain, proto) = {
         let b = cell.borrow();
         let Some(elements) = b.array_elements() else {
             return false;
@@ -388,26 +392,27 @@ pub(super) fn try_fill(
             || b.properties.len() != 1
             || elements.len() > len
             || elements.len() < k
-            || !b.properties.get("length").is_some_and(|d| {
-                d.writable != Some(false)
-                    && d.value.as_ref().and_then(JsValue::as_number) == Some(len as f64)
-            })
+            || !b.has_writable_array_length(len)
         {
             return false;
         }
-        b.prototype_id
+        (
+            fin > elements.len() || has_hole(&elements[k..fin]),
+            b.prototype_id,
+        )
     };
-    if !proto_chain_index_free(interp, proto) {
+    if needs_chain && !proto_chain_index_free(interp, proto) {
         return false;
     }
     let mut b = cell.borrow_mut();
     let elements = b.array_elements_mut().unwrap();
     let grew = fin > elements.len();
+    let filled_hole = has_hole(&elements[k..fin.min(elements.len())]);
     if grew {
         elements.resize(fin, JsValue::UNDEFINED);
     }
     elements[k..fin].fill(value.clone());
-    if grew {
+    if grew || filled_hole {
         b.shape_id = fresh_shape_id();
     }
     true

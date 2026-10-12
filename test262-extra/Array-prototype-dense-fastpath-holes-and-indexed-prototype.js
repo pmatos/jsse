@@ -1,14 +1,15 @@
-// Array.prototype shift/unshift/splice/reverse/fill/slice/concat/indexOf/
-// includes on a dense Array must keep the element-by-element semantics of
-// their spec algorithms when a hole meets an indexed property on the prototype
-// chain, when the chain holds a Proxy, and when holes are only present in the
-// range the algorithm visits. A bulk fast path may only be taken when no
-// inherited index can be observed.
-// Spec: sec-array.prototype.shift, sec-array.prototype.unshift,
-//       sec-array.prototype.splice, sec-array.prototype.reverse,
-//       sec-array.prototype.fill, sec-array.prototype.slice,
-//       sec-array.prototype.concat, sec-array.prototype.indexof,
-//       sec-array.prototype.includes, sec-ordinaryset, sec-hasproperty.
+/*---
+description: >
+  Array.prototype shift/unshift/splice/reverse/fill/slice/concat/indexOf/
+  includes on a dense Array must keep the element-by-element semantics of
+  their spec algorithms when a hole meets an indexed property on the prototype
+  chain, when the chain holds a Proxy, and when holes are only present in the
+  range the algorithm visits. A bulk fast path may only be taken when no
+  inherited index can be observed.
+esid: sec-array.prototype.shift
+info: |
+  Also covers: sec-array.prototype.unshift, sec-array.prototype.splice, sec-array.prototype.reverse, sec-array.prototype.fill, sec-array.prototype.slice, sec-array.prototype.concat, sec-array.prototype.indexof, sec-array.prototype.includes, sec-ordinaryset, sec-hasproperty.
+---*/
 
 // Built with string concatenation: helper arrays would themselves be affected
 // by the indexed properties installed on Array.prototype below.
@@ -152,3 +153,36 @@ withProtoIndex(Array.prototype, 0, {
   eq(gets, 1, 'slice invokes the inherited getter once');
   eq(show(s), '2:g,1', 'slice copies getter value');
 });
+
+// A String wrapper on the chain exposes its characters as inherited, read-only
+// index properties even though they are not stored as ordinary properties.
+function holey() {
+  var h = [];
+  for (var i = 0; i < 4; i++) h.push(i + 10);
+  delete h[1];
+  return h;
+}
+var viaString = holey();
+Object.setPrototypeOf(viaString, Object('abc'));
+var sliced = Array.prototype.slice.call(viaString);
+eq(show(sliced), '4:10,b,12,13', 'slice reads an inherited String index through a hole');
+var concatenated = [].concat(viaString);
+eq(show(concatenated), '4:10,b,12,13', 'concat reads an inherited String index through a hole');
+viaString = holey();
+Object.setPrototypeOf(viaString, Object('abc'));
+var threw = false;
+try {
+  Array.prototype.reverse.call(viaString);
+} catch (e) {
+  threw = e instanceof TypeError;
+}
+eq(threw, true, 'reverse onto an inherited read-only String index throws');
+viaString = holey();
+Object.setPrototypeOf(viaString, Object('abc'));
+threw = false;
+try {
+  Array.prototype.shift.call(viaString);
+} catch (e) {
+  threw = e instanceof TypeError;
+}
+eq(threw, true, 'shift onto an inherited read-only String index throws');
