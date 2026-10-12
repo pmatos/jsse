@@ -79,3 +79,36 @@ fn frame_locals_resolve_through_slots() {
     assert!(!ops.contains_key("StoreResolvedName"));
     assert!(!ops.contains_key("StoreResolvedNamePop"));
 }
+
+/// Dispatch budget for fused effect-context ops (#903): the `arith` loop of
+/// `benchmarks/scripts/bench_opmix.js` must dispatch at most 25 counted VM ops
+/// per iteration (43 before statement-context assignment/update fusion,
+/// constant folding and compare+branch fusion). The per-iteration figure is the
+/// difference between two run lengths, so setup and teardown ops cancel out.
+#[test]
+fn arith_loop_dispatches_at_most_25_ops_per_iteration() {
+    fn vm_ops(iterations: u32) -> u64 {
+        let source = format!(
+            "function arith(n) {{\n\
+               var r0 = 0, r1 = 1, r2 = 2;\n\
+               for (var i = 0; i < n; i++) {{\n\
+                 r0 = (r0 + 4) | 0;\n\
+                 r1 = (r0 + r1) | 0;\n\
+                 r1 = r1 & 65535;\n\
+                 r2 = r1 >> 2;\n\
+                 r0 = (r2 + r0) | 0;\n\
+                 r0 = r0 & 65535;\n\
+               }}\n\
+               return r0 + r1 + r2;\n\
+             }}\n\
+             arith({iterations});"
+        );
+        counters(&source).0["vm_ops"]
+    }
+    let (n, m) = (1_000u32, 2_000u32);
+    let per_iteration = (vm_ops(m) - vm_ops(n)) / u64::from(m - n);
+    assert!(
+        per_iteration <= 25,
+        "arith loop dispatches {per_iteration} ops per iteration"
+    );
+}

@@ -1,3 +1,7 @@
+/// Bit 2 of the `UpdateName`/`UpdateLocal` mode byte: effect context, the
+/// updated value is not pushed.
+pub(crate) const UPDATE_DISCARD: u8 = 0b100;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Op {

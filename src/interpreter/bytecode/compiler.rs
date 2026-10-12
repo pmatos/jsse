@@ -1,5 +1,5 @@
 use super::chunk::{Chunk, Constant};
-use super::op::Op;
+use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, DoWhileStatement, Expression, ForInit, ForStatement, Literal,
     LogicalOp, MemberProperty, Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
@@ -192,17 +192,19 @@ impl Compiler {
         self.push_ref();
     }
 
-    fn emit_store_resolved_name(&mut self, name_idx: u16) {
-        self.emit(Op::StoreResolvedName);
+    /// Stores the top of stack through the reference `ResolveName` pushed;
+    /// `discard` also pops the value.
+    fn emit_store_resolved_name(&mut self, name_idx: u16, discard: bool) {
+        self.emit(if discard {
+            Op::StoreResolvedNamePop
+        } else {
+            Op::StoreResolvedName
+        });
         self.emit_u16(name_idx);
         self.pop_ref();
-    }
-
-    fn emit_store_resolved_name_pop(&mut self, name_idx: u16) {
-        self.emit(Op::StoreResolvedNamePop);
-        self.emit_u16(name_idx);
-        self.pop_ref();
-        self.pop_n(1);
+        if discard {
+            self.pop_n(1);
+        }
     }
 
     fn emit_dup_n(&mut self, count: u8) {
@@ -237,17 +239,18 @@ impl Compiler {
             .and_then(|i| u16::try_from(i).ok())
     }
 
-    fn emit_store_local(&mut self, name_idx: u16, slot: u16) {
-        self.emit(Op::StoreLocal);
+    /// Stores the top of stack into a frame local; `discard` also pops it.
+    fn emit_store_local(&mut self, name_idx: u16, slot: u16, discard: bool) {
+        self.emit(if discard {
+            Op::StoreLocalPop
+        } else {
+            Op::StoreLocal
+        });
         self.emit_u16(name_idx);
         self.emit_u16(slot);
-    }
-
-    fn emit_store_local_pop(&mut self, name_idx: u16, slot: u16) {
-        self.emit(Op::StoreLocalPop);
-        self.emit_u16(name_idx);
-        self.emit_u16(slot);
-        self.pop_n(1);
+        if discard {
+            self.pop_n(1);
+        }
     }
 
     /// `[..., l]` → `[..., l op k]`.
@@ -587,20 +590,13 @@ impl Compiler {
             } else if let Expression::Literal(Literal::Number(k)) = value {
                 self.emit_local_bin_const(name, slot, Self::compound_binary_op(op)?, *k)?;
             } else {
-                self.emit(Op::LoadLocal);
-                self.emit_u16(idx);
-                self.emit_u16(slot);
-                self.push_n(1);
+                self.compile_load_name(name)?;
                 self.compile_expr(value)?;
                 self.emit(Self::compound_binary_op(op)?);
                 self.pop_n(2);
                 self.push_n(1);
             }
-            if discard {
-                self.emit_store_local_pop(idx, slot);
-            } else {
-                self.emit_store_local(idx, slot);
-            }
+            self.emit_store_local(idx, slot, discard);
         } else {
             self.emit_resolve_name(idx);
             if op == AssignOp::Assign {
@@ -618,11 +614,7 @@ impl Compiler {
                     self.push_n(1);
                 }
             }
-            if discard {
-                self.emit_store_resolved_name_pop(idx);
-            } else {
-                self.emit_store_resolved_name(idx);
-            }
+            self.emit_store_resolved_name(idx, discard);
         }
         Ok(())
     }
@@ -654,7 +646,8 @@ impl Compiler {
             (UpdateOp::Decrement, false) => 2,
             (UpdateOp::Decrement, true) => 3,
         };
-        self.code.push(if discard { mode | 0b100 } else { mode });
+        self.code
+            .push(if discard { mode | UPDATE_DISCARD } else { mode });
         if !discard {
             self.push_n(1);
         }
@@ -776,11 +769,11 @@ impl Compiler {
             if let Some(init) = &declarator.init {
                 if let Some(slot) = self.local_slot(name) {
                     self.compile_expr(init)?;
-                    self.emit_store_local_pop(idx, slot);
+                    self.emit_store_local(idx, slot, true);
                 } else {
                     self.emit_resolve_name(idx);
                     self.compile_expr(init)?;
-                    self.emit_store_resolved_name_pop(idx);
+                    self.emit_store_resolved_name(idx, true);
                 }
             }
         }

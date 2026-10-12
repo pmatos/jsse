@@ -2959,11 +2959,8 @@ fn local_compared_with_literal_branches_through_local_bin_const() {
 /// 25 dispatched ops per iteration (issue #903; 43 before fusion).
 #[test]
 fn opmix_arith_loop_body_is_at_most_25_ops() {
-    use super::compiler::{FrameShape, compile_function_body};
-    use crate::parser::Parser;
-
-    let source = "function arith(n) {
-        var r0 = 0, r1 = 1, r2 = 2;
+    let chunk = compile_function_source(
+        "var r0 = 0, r1 = 1, r2 = 2;
         for (var i = 0; i < n; i++) {
             r0 = (r0 + 4) | 0;
             r1 = (r0 + r1) | 0;
@@ -2971,23 +2968,9 @@ fn opmix_arith_loop_body_is_at_most_25_ops() {
             r2 = r1 >> 2;
             r0 = (r2 + r0) | 0;
             r0 = r0 & 65535;
-        }
-        return r0 + r1 + r2;
-    }";
-    let mut parser = Parser::new(source).expect("parser init");
-    let program = parser.parse_program().expect("parse");
-    let Statement::FunctionDeclaration(decl) = &program.body.as_slice()[0] else {
-        panic!("expected a function declaration");
-    };
-    let params = vec!["n".to_string()];
-    let chunk = compile_function_body(
-        decl.body.statements.as_slice(),
-        &FrameShape {
-            arguments_slot: false,
-            simple_params: &params,
-        },
-    )
-    .expect("compile");
+        }",
+        &["n"],
+    );
     let decoded = decode_ops(&chunk);
     let loop_start = decoded
         .iter()

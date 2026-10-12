@@ -55,7 +55,7 @@ dispatches per iteration, and dispatch overhead (`run_chunk_inner` self cost,
 ## Consequences
 
 - `arith` drops from 43 to 24 counted ops per iteration (the `intarith` round
-  body 132 → 88), gated by `tests/perf_counters_op_budget.rs` and a compile-time
+  body 132 → 88), gated by `tests/perf_counters_env_hashing.rs` and a compile-time
   shape test in `bytecode/tests.rs`.
 - The trailing-return decision in `Compiler::finish` reads the last emitted
   *opcode* (`last_op_at`), not the last byte: a fused store now ends the chunk on

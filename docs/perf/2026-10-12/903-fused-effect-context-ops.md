@@ -23,7 +23,7 @@ this change the same loop was 43. The "<= 25 on `bench_numeric_intarith`" line
 is read as the `arith` loop (the only one with a body small enough for 25):
 `intarith`'s round body is 88 ops after, a 33% reduction, inside the issue's
 "25-40% fewer dispatches". `arith` is gated by
-`tests/perf_counters_op_budget.rs`.
+`tests/perf_counters_env_hashing.rs`.
 
 `arith` after, per iteration: the loop test `i < n` is `LoadLocal x2 +
 CmpJumpIfFalse` (3), `r0 = (r0 + 4) | 0` is `LocalBinConst + BinConst +

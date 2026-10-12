@@ -1,5 +1,5 @@
 use super::chunk::{Chunk, Constant};
-use super::op::Op;
+use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
@@ -18,7 +18,7 @@ fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
 /// Returns the operation, whether it is a prefix form, and whether the result
 /// is discarded (bit 2: effect context, the result is not pushed).
 fn update_mode(mode: u8) -> (UpdateOp, bool, bool) {
-    let discard = mode & 0b100 != 0;
+    let discard = mode & UPDATE_DISCARD != 0;
     match mode & 0b11 {
         0 => (UpdateOp::Increment, false, discard),
         1 => (UpdateOp::Increment, true, discard),
