@@ -158,3 +158,26 @@ for (var i = 0; i < 20; i++) {
 if (eval("1" + "+1".repeat(500)) !== 501) {
   throw new Error("eval-depth counter leaked: a below-limit expression failed after recovery");
 }
+
+// ---------------------------------------------------------------------------
+// Default derived constructor recursion. Its [[Construct]] constructs the
+// class's [[Prototype]] directly, with no JS call frame in between, so a
+// class whose [[Prototype]] is a bound or proxied copy of itself recursed
+// natively until the process aborted. It must hit the same catchable
+// RangeError as JS call recursion.
+
+class DefaultBase {}
+class SelfViaBound extends DefaultBase {}
+Object.setPrototypeOf(SelfViaBound, SelfViaBound.bind(null));
+callMustRangeError("default derived constructor via a bound self", function () {
+  new SelfViaBound();
+});
+callMustRangeError("default derived constructor via Reflect.construct", function () {
+  Reflect.construct(SelfViaBound, []);
+});
+
+class SelfViaProxy extends DefaultBase {}
+Object.setPrototypeOf(SelfViaProxy, new Proxy(SelfViaProxy, {}));
+callMustRangeError("default derived constructor via a proxied self", function () {
+  new SelfViaProxy();
+});

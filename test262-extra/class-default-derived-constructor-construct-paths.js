@@ -89,3 +89,25 @@ Object.setPrototypeOf(Swapped, Math.max);
 assert.throws(TypeError, function () {
   Reflect.construct(Swapped, []);
 }, "a non-constructor parent throws a TypeError");
+
+var method = {
+  m() {
+    this.methodRan = true;
+  }
+}.m;
+Object.setPrototypeOf(Swapped, method);
+assert.throws(TypeError, function () {
+  new Swapped();
+}, "a method parent is not a constructor");
+
+var trapCalls = 0;
+Object.setPrototypeOf(Swapped, new Proxy(() => {}, {
+  construct: function () {
+    trapCalls++;
+    return {};
+  }
+}));
+assert.throws(TypeError, function () {
+  new Swapped();
+}, "a Proxy whose target is not a constructor is not a constructor");
+assert.sameValue(trapCalls, 0, "the construct trap of a non-constructor Proxy is never called");

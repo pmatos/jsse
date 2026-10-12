@@ -4688,76 +4688,47 @@ impl Interpreter {
         // Handle super() calls - call parent constructor with current this
         if matches!(callee, Expression::Super) {
             // The active function: the constructor whose body contains this call.
-            let active_ctor = env.borrow().get("__constructor_func__");
-            // §13.3.7.2 GetSuperConstructor: dynamically resolve via activeFunction.__proto__
-            let super_ctor = if let Some(ctor_func) = active_ctor.clone() {
-                if let Some(o) = ctor_func
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    if let Some(obj_rc) = self.get_object_cell(o.id) {
-                        if let Some(proto) = &obj_rc.borrow().prototype_id {
-                            if let Some(id) = Some(*proto) {
-                                JsValue::object(id)
-                            } else {
-                                JsValue::UNDEFINED
-                            }
-                        } else {
-                            JsValue::NULL
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    }
-                } else {
-                    JsValue::UNDEFINED
-                }
-            } else {
-                env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED)
+            // The parser only accepts super() where a derived class scope
+            // declares it.
+            let Some(active_ctor) = env.borrow().get("__constructor_func__") else {
+                return Completion::Throw(
+                    self.create_error("SyntaxError", "'super' keyword unexpected here"),
+                );
             };
             return self.with_gc_root_scope(|interp| {
+                // §13.3.7.2 GetSuperConstructor runs before the arguments, which
+                // can change the active function's [[Prototype]].
+                let super_ctor = active_ctor
+                    .as_object_id()
+                    .and_then(|id| interp.get_object_cell(id))
+                    .and_then(|func| func.borrow().prototype_id)
+                    .map_or(JsValue::NULL, JsValue::object);
+                interp.gc_root_value(&super_ctor);
                 let arg_vals = match interp.eval_spread_args(args, env) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let this_in_tdz = Self::this_is_in_tdz(env);
-                if this_in_tdz {
-                    let current_new_target =
-                        interp.new_target.clone().unwrap_or(super_ctor.clone());
-                    let saved_new_target = interp.new_target.clone();
-                    let result = interp.construct_with_new_target(
-                        &super_ctor,
-                        &arg_vals,
-                        current_new_target,
-                    );
-                    interp.new_target = saved_new_target;
-                    if let Completion::Normal(ref v) = result {
-                        Self::initialize_this_binding(env, v.clone());
-                        // §13.3.7.1 SuperCall step 10: InitializeInstanceElements(result, F).
-                        let f = active_ctor.clone().or_else(|| interp.new_target.clone());
-                        if let Some(f) = f
-                            && let Err(e) = interp.initialize_instance_elements(v.clone(), &f, env)
-                        {
-                            return Completion::Throw(e);
-                        }
-                    }
-                    result
-                } else {
-                    let current_new_target =
-                        interp.new_target.clone().unwrap_or(super_ctor.clone());
-                    let saved_new_target = interp.new_target.clone();
-                    let result = interp.construct_with_new_target(
-                        &super_ctor,
-                        &arg_vals,
-                        current_new_target,
-                    );
-                    interp.new_target = saved_new_target;
-                    if let Completion::Throw(_) = result {
-                        return result;
-                    }
-                    Completion::Throw(interp.create_reference_error(
+                let saved_new_target = interp.new_target.clone();
+                let new_target = saved_new_target.clone().unwrap_or(super_ctor.clone());
+                let result = interp.construct_super(&super_ctor, &arg_vals, new_target);
+                interp.new_target = saved_new_target;
+                let Completion::Normal(v) = result else {
+                    return result;
+                };
+                // §13.3.7.1 SuperCall step 9: BindThisValue throws if `this` is
+                // already bound, including by a nested super() in an arrow that
+                // ran during this construct.
+                if !Self::this_is_in_tdz(env) {
+                    return Completion::Throw(interp.create_reference_error(
                         "'super()' has already been called in this derived constructor",
-                    ))
+                    ));
                 }
+                Self::initialize_this_binding(env, v.clone());
+                // Step 12: InitializeInstanceElements(result, F).
+                if let Err(e) = interp.initialize_instance_elements(v.clone(), &active_ctor, env) {
+                    return Completion::Throw(e);
+                }
+                Completion::Normal(v)
             });
         }
 
@@ -5320,15 +5291,24 @@ impl Interpreter {
         args: &[JsValue],
         skip_entry_checks: bool,
     ) -> Completion {
-        // Catchable stack-depth guard: every JS invocation funnels through here,
-        // so bounding this depth bounds native recursion. Throwing a RangeError
-        // before the native stack is exhausted keeps deep recursion catchable in
-        // JS instead of aborting the process (SIGABRT).
-        //
-        // The soft limit fires once, then disarms so a JS catch handler running
-        // deep in the stack (e.g. acorn's stack-overflow recovery) has room to
-        // execute in the [soft, hard) band. The hard ceiling still fires even
-        // while disarmed, and sits far below native capacity.
+        // Every JS invocation funnels through here, so bounding this depth
+        // bounds native recursion.
+        self.with_call_depth(|interp| {
+            interp.call_function_inner_impl(func_val, this_val, args, skip_entry_checks)
+        })
+    }
+
+    /// Catchable stack-depth guard: runs `f` one call level deeper, throwing a
+    /// RangeError before the native stack is exhausted so deep recursion stays
+    /// catchable in JS instead of aborting the process (SIGABRT). Any path that
+    /// can recurse without a JS call must go through it too.
+    ///
+    /// The soft limit fires once, then disarms so a JS catch handler running
+    /// deep in the stack (e.g. acorn's stack-overflow recovery) has room to
+    /// execute in the [soft, hard) band. The hard ceiling still fires even
+    /// while disarmed, and sits far below native capacity.
+    #[inline(always)]
+    fn with_call_depth(&mut self, f: impl FnOnce(&mut Self) -> Completion) -> Completion {
         use crate::interpreter::{
             CALL_DEPTH_HARD_LIMIT, CALL_DEPTH_REARM_LIMIT, CALL_DEPTH_SOFT_LIMIT,
         };
@@ -5341,7 +5321,7 @@ impl Interpreter {
             );
         }
         self.call_depth += 1;
-        let result = self.call_function_inner_impl(func_val, this_val, args, skip_entry_checks);
+        let result = f(self);
         self.call_depth -= 1;
         if self.call_depth <= CALL_DEPTH_REARM_LIMIT {
             self.overflow_armed = true;
@@ -6693,50 +6673,10 @@ impl Interpreter {
                 false
             };
 
-            // The default derived constructor never runs its synthetic body.
-            if is_derived && interp.is_default_derived_constructor(&callee_val) {
-                return interp.construct_default_derived(
-                    &callee_val,
-                    &evaluated_args,
-                    callee_val.clone(),
-                );
-            }
-
             if is_derived {
-                // Derived constructor: don't create this, let super() handle it
-                let prev_new_target = interp.new_target.take();
-                interp.new_target = Some(callee_val.clone());
-                interp.last_call_had_explicit_return = false;
-                interp.last_call_this_value = None;
-                let prev_constructing_derived = interp.constructing_derived;
-                interp.constructing_derived = true;
-                interp.calling_as_construct = true;
-                let (result, had_explicit_return, final_this) =
-                    interp.call_constructor_body(&callee_val, &JsValue::UNDEFINED, &evaluated_args);
-                interp.constructing_derived = prev_constructing_derived;
-                interp.new_target = prev_new_target;
-                match result {
-                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                        Completion::Normal(v)
-                    }
-                    Completion::Normal(ref v) if had_explicit_return && !(v).is_undefined() => {
-                        Completion::Throw(interp.create_type_error(
-                            "Derived constructors may only return object or undefined",
-                        ))
-                    }
-                    Completion::Normal(_) | Completion::Empty => {
-                        match final_this {
-                            Some(v) if (v).is_object() => Completion::Normal(v),
-                            Some(v) if !(v).is_undefined() => Completion::Normal(v),
-                            _ => {
-                                Completion::Throw(interp.create_reference_error(
-                                    "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                                ))
-                            }
-                        }
-                    }
-                    other => other,
-                }
+                // The same [[Construct]] as Reflect.construct, with the callee as
+                // newTarget.
+                interp.construct_with_new_target(&callee_val, &evaluated_args, callee_val.clone())
             } else {
                 // Base constructor: create this object as before
                 let new_obj_id = interp.create_object_id();
@@ -6945,10 +6885,22 @@ impl Interpreter {
         self.construct_with_new_target(constructor, args, constructor.clone())
     }
 
-    fn is_default_derived_constructor(&self, f: &JsValue) -> bool {
-        f.as_object_id()
-            .and_then(|id| self.get_object_cell(id))
-            .is_some_and(|func_obj| func_obj.borrow().is_default_derived_constructor())
+    /// Construct(func, args, newTarget) for a super call (SuperCall step 5, and
+    /// step 14.a.iv.3 of the default derived constructor). IsConstructor(func)
+    /// comes first: construct_with_new_target alone would run a method, or the
+    /// construct trap of a Proxy whose target is not a constructor.
+    fn construct_super(
+        &mut self,
+        parent: &JsValue,
+        args: &[JsValue],
+        new_target: JsValue,
+    ) -> Completion {
+        if !self.is_constructor(parent) {
+            return Completion::Throw(
+                self.create_type_error("Super constructor is not a constructor"),
+            );
+        }
+        self.construct_with_new_target(parent, args, new_target)
     }
 
     /// [[Construct]] of the default derived constructor `constructor(...args) {
@@ -6964,20 +6916,26 @@ impl Interpreter {
         args: &[JsValue],
         new_target: JsValue,
     ) -> Completion {
-        let Some(func_obj) = f.as_object_id().and_then(|id| self.get_object_cell(id)) else {
-            return Completion::Throw(self.create_type_error("not a constructor"));
-        };
         // F.[[GetPrototypeOf]]() is read now, so setPrototypeOf on the class
-        // takes effect; Construct throws if it is not a constructor.
+        // takes effect.
         let (parent, class_env) = {
-            let func = func_obj.borrow();
+            let func = f
+                .as_object_id()
+                .and_then(|id| self.get_object_cell(id))
+                .expect("callers check the constructor kind")
+                .borrow();
             let parent = func.prototype_id.map_or(JsValue::NULL, JsValue::object);
             let Some(JsFunction::User { closure, .. }) = &func.callable else {
                 unreachable!("a default derived constructor is a class constructor");
             };
             (parent, closure.clone())
         };
-        let result = self.construct_with_new_target(&parent, args, new_target);
+        // No JS call frame separates this from the parent's [[Construct]], so
+        // count the depth here: a class whose [[Prototype]] constructs the
+        // class again (a bound or proxied copy of itself) must hit the
+        // catchable RangeError, not overflow the native stack.
+        let result =
+            self.with_call_depth(|interp| interp.construct_super(&parent, args, new_target));
         let Completion::Normal(obj) = result else {
             return result;
         };
@@ -7071,13 +7029,18 @@ impl Interpreter {
             }
         }
 
-        let is_derived = if let Some(func_obj) = self.get_object_cell(co.id) {
-            func_obj.borrow().is_derived_class_constructor()
-        } else {
-            false
-        };
+        let (is_derived, is_default_derived) =
+            self.get_object_cell(co.id)
+                .map_or((false, false), |func_obj| {
+                    let func = func_obj.borrow();
+                    (
+                        func.is_derived_class_constructor(),
+                        func.is_default_derived_constructor(),
+                    )
+                });
 
-        if is_derived && self.is_default_derived_constructor(constructor) {
+        // The default derived constructor never runs its synthetic body.
+        if is_default_derived {
             return self.construct_default_derived(constructor, args, new_target);
         }
 
