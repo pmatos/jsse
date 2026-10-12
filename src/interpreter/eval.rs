@@ -7595,6 +7595,12 @@ impl Interpreter {
         {
             return Ok(IdentifierRef::WithObject(obj_id));
         }
+        if let global_access::NameWalk::Global(gid, Some(global_env)) =
+            global_access::walk_scope_chain(env, key, true, 0)
+            && self.global_object_has_own_entry(gid, name, hint)
+        {
+            return Ok(IdentifierRef::SpecificEnv(global_env));
+        }
         if let Some(specific_env) = Environment::find_binding_env(env, key) {
             let (has_binding, global_obj_id) = {
                 let e = specific_env.borrow();
@@ -7823,6 +7829,47 @@ impl Interpreter {
         }
     }
 
+    /// The clone-free read path shared by identifier resolution: a plain
+    /// initialised declarative binding, or an own data property of the global
+    /// object when no scope on the way binds the name. `None` means "not
+    /// modelled here" and the caller runs the generic resolution.
+    #[inline]
+    fn resolve_name_fast<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Option<JsValue> {
+        match global_access::walk_scope_chain(env, key, false, 0) {
+            global_access::NameWalk::Value(value) => Some(value),
+            global_access::NameWalk::Global(gid, _) => {
+                let value = self.global_object_own_data(gid, key.as_name(), hint)?;
+                #[cfg(feature = "perf-counters")]
+                {
+                    self.perf.global_prop_fast_hits += 1;
+                }
+                Some(value)
+            }
+            global_access::NameWalk::Slow => None,
+        }
+    }
+
+    /// `resolve_identifier_hinted` for callers that only know the strictness
+    /// of `env` lazily: the fast path never needs it.
+    #[inline]
+    pub(super) fn resolve_name_hinted<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        hint: Option<&GlobalHint>,
+    ) -> Completion {
+        if let Some(value) = self.resolve_name_fast(key, env, hint) {
+            return Completion::Normal(value);
+        }
+        let strict = env.borrow().strict;
+        self.resolve_identifier_generic(key, env, strict)
+    }
+
     /// Single-pass identifier resolution: combines with-scope check, binding lookup,
     /// and global getter resolution into one scope chain walk.
     #[inline]
@@ -7843,6 +7890,20 @@ impl Interpreter {
         env: &EnvRef,
         strict: bool,
         hint: Option<&GlobalHint>,
+    ) -> Completion {
+        if let Some(value) = self.resolve_name_fast(key, env, hint) {
+            return Completion::Normal(value);
+        }
+        self.resolve_identifier_generic(key, env, strict)
+    }
+
+    /// Full identifier resolution: `with` scopes, import bindings, TDZ and
+    /// the prototype chain of the global object.
+    fn resolve_identifier_generic<N: BindingName + ?Sized>(
+        &mut self,
+        key: &N,
+        env: &EnvRef,
+        strict: bool,
     ) -> Completion {
         let name = key.as_name();
         let mut current = Some(env.clone());
@@ -7901,7 +7962,7 @@ impl Interpreter {
             // 4. Check global object (at the bottom of the scope chain)
             if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
-                if let Some(value) = self.global_object_own_data(gid, name, hint) {
+                if let Some(value) = self.global_object_own_data(gid, name, None) {
                     #[cfg(feature = "perf-counters")]
                     {
                         self.perf.global_prop_fast_hits += 1;

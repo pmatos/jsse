@@ -32,6 +32,16 @@ struct HashIndex {
 pub(crate) struct BindingMap {
     entries: Vec<(Atom, Binding)>,
     index: Option<HashIndex>,
+    /// One bit per name ever pushed, selected by the top six bits of the
+    /// atom's keyed hash. An atom whose bit is clear is definitely absent, so
+    /// the (common) free-variable miss on a scope costs one `and`, not a scan.
+    /// Removals leave their bit set: the filter may only err towards "maybe".
+    name_filter: u64,
+}
+
+#[inline]
+fn filter_bit(hash: u64) -> u64 {
+    1u64 << (hash >> 58)
 }
 
 /// A lookup key: either script text (`str`) or an already-interned `Atom`.
@@ -67,7 +77,12 @@ impl BindingKey for Atom {
     #[inline]
     fn find_in(&self, map: &BindingMap) -> Option<usize> {
         match &map.index {
-            None => map.entries.iter().position(|(a, _)| a.ptr_eq(self)),
+            None => {
+                if map.name_filter & filter_bit(self.precomputed_hash()) == 0 {
+                    return None;
+                }
+                map.entries.iter().position(|(a, _)| a.ptr_eq(self))
+            }
             Some(index) => map.find_hashed(index, self.precomputed_hash(), |a| a.ptr_eq(self)),
         }
     }
@@ -150,6 +165,7 @@ impl BindingMap {
         BindingMap {
             entries: Vec::new(),
             index: None,
+            name_filter: 0,
         }
     }
 
@@ -157,6 +173,7 @@ impl BindingMap {
         BindingMap {
             entries: Vec::with_capacity(capacity),
             index: None,
+            name_filter: 0,
         }
     }
 
@@ -182,6 +199,7 @@ impl BindingMap {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.index = None;
+        self.name_filter = 0;
     }
 
     #[inline]
@@ -257,6 +275,7 @@ impl BindingMap {
         debug_assert!(name.find_in(self).is_none(), "push_unique of a bound name");
         let slot = self.entries.len() as u32;
         let hash = name.precomputed_hash();
+        self.name_filter |= filter_bit(hash);
         self.entries.push((name, binding));
         if let Some(index) = &mut self.index {
             index.add(hash, slot);

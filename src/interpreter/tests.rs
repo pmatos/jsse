@@ -6365,30 +6365,36 @@ fn global_object_own_data_reads_data_properties_only() {
         "#,
     );
     let gid = realm_global_object(&interp);
-    let hint = GlobalHint::new(0);
-    for hint in [None, Some(&hint), Some(&hint)] {
-        let value = interp.global_object_own_data(gid, "plain", hint);
-        assert_eq!(value.and_then(|v| v.as_number()), Some(41.0));
-        assert!(
-            interp
-                .global_object_own_data(gid, "getterOnly", hint)
-                .is_none()
-        );
-        assert!(
-            interp
-                .global_object_own_data(gid, "setterOnly", hint)
-                .is_none()
-        );
-        assert!(
-            interp
-                .global_object_own_data(gid, "inherited", hint)
-                .is_none()
-        );
-        assert!(
-            interp
-                .global_object_own_data(gid, "missing", hint)
-                .is_none()
-        );
+    let hints: Vec<GlobalHint> = ["plain", "getterOnly", "setterOnly", "inherited", "missing"]
+        .into_iter()
+        .map(GlobalHint::new)
+        .collect();
+    for _ in 0..3 {
+        for with_hints in [false, true] {
+            let hint = |i: usize| if with_hints { Some(&hints[i]) } else { None };
+            let value = interp.global_object_own_data(gid, "plain", hint(0));
+            assert_eq!(value.and_then(|v| v.as_number()), Some(41.0));
+            assert!(
+                interp
+                    .global_object_own_data(gid, "getterOnly", hint(1))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "setterOnly", hint(2))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "inherited", hint(3))
+                    .is_none()
+            );
+            assert!(
+                interp
+                    .global_object_own_data(gid, "missing", hint(4))
+                    .is_none()
+            );
+        }
     }
 }
 
@@ -6396,7 +6402,7 @@ fn global_object_own_data_reads_data_properties_only() {
 fn global_object_own_data_hint_survives_property_churn() {
     let mut interp = run_script("var keep = 1; var churn = 2;");
     let gid = realm_global_object(&interp);
-    let hint = GlobalHint::new(0);
+    let hint = GlobalHint::new("churn");
     assert!(
         interp
             .global_object_own_data(gid, "churn", Some(&hint))
@@ -6436,12 +6442,35 @@ fn global_object_store_own_data_refuses_everything_but_writable_data() {
         "#,
     );
     let gid = realm_global_object(&interp);
-    let hint = GlobalHint::new(0);
+    let hint = GlobalHint::new("writable");
+    let (frozen_hint, accessor_hint, absent_hint) = (
+        GlobalHint::new("frozen"),
+        GlobalHint::new("accessor"),
+        GlobalHint::new("absent"),
+    );
     let new_value = JsValue::number(99.0);
-    for hint in [None, Some(&hint)] {
-        assert!(!interp.global_object_store_own_data(gid, "frozen", &new_value, hint));
-        assert!(!interp.global_object_store_own_data(gid, "accessor", &new_value, hint));
-        assert!(!interp.global_object_store_own_data(gid, "absent", &new_value, hint));
+    for with_hints in [false, true] {
+        fn pick(on: bool, h: &GlobalHint) -> Option<&GlobalHint> {
+            on.then_some(h)
+        }
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "frozen",
+            &new_value,
+            pick(with_hints, &frozen_hint)
+        ));
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "accessor",
+            &new_value,
+            pick(with_hints, &accessor_hint)
+        ));
+        assert!(!interp.global_object_store_own_data(
+            gid,
+            "absent",
+            &new_value,
+            pick(with_hints, &absent_hint)
+        ));
     }
     assert_eq!(
         interp

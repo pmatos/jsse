@@ -36,7 +36,7 @@ mod env_helpers;
 mod eval;
 mod exec;
 mod gc;
-mod global_access;
+pub(crate) mod global_access;
 pub(crate) use global_access::GlobalHint;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;

@@ -996,7 +996,11 @@ impl Compiler {
                 self.emit(Op::ReturnUndefined);
             }
         }
-        let global_hints = self.names.iter().map(|_| GlobalHint::new(0)).collect();
+        let global_hints = self
+            .names
+            .iter()
+            .map(|name| GlobalHint::new(name.as_str()))
+            .collect();
         Chunk {
             code: self.code,
             constants: self.constants,

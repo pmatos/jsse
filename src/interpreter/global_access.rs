@@ -11,28 +11,96 @@
 //! surface.
 
 use super::*;
+use crate::types::JsPropertyKey;
 use std::cell::Cell;
 
-/// A remembered property-map slot for one name site. Only a hint: it is
-/// re-verified by key on every use, so a stale value (property deleted,
-/// object spilled or compacted, a different realm's global object) costs one
-/// failed key comparison and is retrained from a fresh probe.
-pub(crate) type GlobalHint = Cell<u32>;
+/// A remembered property-map slot for one name site, with the interned key it
+/// belongs to; it must only ever be used with that name. Only a hint: it is re-verified on every use, so a stale slot
+/// (property deleted, object spilled or compacted, a different realm's global
+/// object) costs one failed key comparison and is retrained from a fresh
+/// probe.
+#[derive(Debug)]
+pub(crate) struct GlobalHint {
+    slot: Cell<u32>,
+    key: JsPropertyKey,
+}
+
+impl GlobalHint {
+    pub(crate) fn new(name: &str) -> Self {
+        GlobalHint {
+            slot: Cell::new(0),
+            key: crate::interpreter::key_intern::intern_key(name),
+        }
+    }
+}
 
 #[inline]
 fn locate(props: &PropertyMap, name: &str, hint: Option<&GlobalHint>) -> Option<usize> {
     let Some(hint) = hint else {
         return props.slot_of(name);
     };
-    let remembered = hint.get() as usize;
+    debug_assert!(
+        hint.key.as_bytes() == name.as_bytes(),
+        "a GlobalHint belongs to exactly one name"
+    );
+    let remembered = hint.slot.get() as usize;
     if let Some((key, _)) = props.entry_at(remembered)
-        && key.as_bytes() == name.as_bytes()
+        && (key.same_allocation(&hint.key) || key.as_bytes() == name.as_bytes())
     {
         return Some(remembered);
     }
     let slot = props.slot_of(name)?;
-    hint.set(slot as u32);
+    hint.slot.set(slot as u32);
     Some(slot)
+}
+
+/// Outcome of the clone-free scope walk behind the global data fast path.
+pub(super) enum NameWalk {
+    /// A plain declarative binding that is initialised: its value.
+    Value(JsValue),
+    /// No scope on the way binds the name and the chain ends at the global
+    /// environment, whose binding object is `gid`. Carries the global
+    /// environment itself when the caller asked for it.
+    Global(u64, Option<EnvRef>),
+    /// A `with` scope, an import binding, a TDZ binding or an over-deep chain:
+    /// run the generic resolution from the start.
+    Slow,
+}
+
+/// Deepest scope chain the recursive walk follows before giving up.
+const MAX_WALK_DEPTH: u32 = 64;
+
+/// Walk `env` outward looking for `key`, borrowing each scope in turn instead
+/// of cloning the `Rc` per hop. Never runs user code, so holding the borrows
+/// across the recursion is safe. Anything the walk does not model exactly
+/// (`with`, indirect bindings, uninitialised bindings) is `Slow`, and the
+/// caller redoes the lookup through the generic path.
+pub(super) fn walk_scope_chain<N: BindingName + ?Sized>(
+    env: &EnvRef,
+    key: &N,
+    want_global_env: bool,
+    depth: u32,
+) -> NameWalk {
+    let scope = env.borrow();
+    if scope.with_object.is_some() || scope.indirect_bindings.is_some() {
+        return NameWalk::Slow;
+    }
+    if let Some(binding) = scope.bindings.get(key) {
+        return if binding.initialized {
+            NameWalk::Value(binding.value.clone())
+        } else {
+            NameWalk::Slow
+        };
+    }
+    if let Some(gid) = scope.global_object_id {
+        return NameWalk::Global(gid, want_global_env.then(|| env.clone()));
+    }
+    match &scope.parent {
+        Some(parent) if depth < MAX_WALK_DEPTH => {
+            walk_scope_chain(parent, key, want_global_env, depth + 1)
+        }
+        _ => NameWalk::Slow,
+    }
 }
 
 impl Interpreter {

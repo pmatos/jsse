@@ -24,31 +24,17 @@ fn update_mode(mode: u8) -> (UpdateOp, bool) {
     }
 }
 
-/// `LoadName` and the miss path of `LoadLocal`: the frame's own binding when
-/// the current scope is a plain declarative one, else full identifier
-/// resolution.
+/// `LoadName` and the miss path of `LoadLocal`: full identifier resolution,
+/// whose clone-free scope walk covers the frame's own binding and the global
+/// object fast path.
+#[inline]
 fn load_name_value(
     interp: &mut Interpreter,
     name: &Atom,
     env: &EnvRef,
     hint: Option<&GlobalHint>,
 ) -> Completion {
-    let (local_value, strict) = {
-        let scope = env.borrow();
-        let value = if scope.with_object.is_none() && scope.indirect_bindings.is_none() {
-            scope
-                .bindings
-                .get(name)
-                .and_then(|binding| binding.initialized.then(|| binding.value.clone()))
-        } else {
-            None
-        };
-        (value, scope.strict)
-    };
-    match local_value {
-        Some(value) => Completion::Normal(value),
-        None => interp.resolve_identifier_hinted(name, env, strict, hint),
-    }
+    interp.resolve_name_hinted(name, env, hint)
 }
 
 fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
