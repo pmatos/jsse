@@ -6283,6 +6283,49 @@ fn closures_created_in_generator_and_async_bodies_share_params() {
     );
 }
 
+// Closures created while evaluating a state terminator's operand (`yield`,
+// `await`, `return`, a loop condition) must share their literal's parameter
+// patterns across steps and across activations: the drivers borrow the
+// terminator instead of deep-cloning it, which would reset the literal's
+// `FunctionLiteralInfo` cell on every step (#955).
+#[test]
+fn closures_in_generator_terminator_operands_share_params() {
+    assert_literal_params_shared(
+        "function* gen() { yield function (p) { return p; }; }
+         var a = gen().next().value, b = gen().next().value;",
+    );
+    assert_literal_params_shared(
+        "function* gen() { for (var i = 0; i < 2; i++) yield (p) => p; }
+         var it = gen(), a = it.next().value, b = it.next().value;",
+    );
+    assert_literal_params_shared(
+        "function* gen() { yield 0; return function (p) { return p; }; }
+         var it1 = gen(), it2 = gen(); it1.next(); it2.next();
+         var a = it1.next().value, b = it2.next().value;",
+    );
+}
+
+#[test]
+fn closures_in_async_terminator_operands_share_params() {
+    assert_literal_params_shared(
+        "var made = [];
+         async function f() { made.push(await (p => p)); }
+         f(); f();
+         var a, b;
+         Promise.resolve().then(() => 0).then(() => 0).then(() => { a = made[0]; b = made[1]; });",
+    );
+}
+
+#[test]
+fn closures_in_async_generator_terminator_operands_share_params() {
+    assert_literal_params_shared(
+        "async function* gen() { yield function (p) { return p; }; }
+         var a, b;
+         gen().next().then(r => { a = r.value; });
+         gen().next().then(r => { b = r.value; });",
+    );
+}
+
 fn first_function_decl(program: &Program) -> &crate::ast::FunctionDecl {
     program
         .body

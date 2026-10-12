@@ -5365,7 +5365,7 @@ mod tests {
             "expected `y` in the shared CaseBlock scope, got {decls:?}"
         );
         assert!(
-            decls.iter().any(|(name, _)| name == "z"),
+            decls.iter().any(|(name, _)| name.as_str() == "z"),
             "expected `z` in the shared CaseBlock scope, got {decls:?}"
         );
     }
