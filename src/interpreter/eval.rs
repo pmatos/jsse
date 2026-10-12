@@ -666,46 +666,7 @@ impl Interpreter {
             }
             Expression::Typeof(operand) => {
                 if let Expression::Identifier(name) = operand.as_ref() {
-                    let strict = env.borrow().strict;
-                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
-                        match self.resolve_with_has_binding(name, env) {
-                            Ok(Some(obj_id)) => {
-                                return match self.with_get_binding_value(obj_id, name, strict) {
-                                    Completion::Normal(val) => Completion::Normal(JsValue::string(
-                                        JsString::from_str(typeof_val(&val, &self.objects)),
-                                    )),
-                                    other => other,
-                                };
-                            }
-                            Ok(None) => {}
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                    if let Some(result) = self.resolve_global_getter(name, env) {
-                        return match result {
-                            Completion::Normal(val) => Completion::Normal(JsValue::string(
-                                JsString::from_str(typeof_val(&val, &self.objects)),
-                            )),
-                            other => other,
-                        };
-                    }
-                    match self.env_get(env, name) {
-                        Some(val) => {
-                            return Completion::Normal(JsValue::string(JsString::from_str(
-                                typeof_val(&val, &self.objects),
-                            )));
-                        }
-                        None => {
-                            if self.env_has(env, name) {
-                                return Completion::Throw(self.create_reference_error(&format!(
-                                    "Cannot access '{name}' before initialization"
-                                )));
-                            }
-                            return Completion::Normal(JsValue::string(JsString::from_str(
-                                "undefined",
-                            )));
-                        }
-                    }
+                    return self.eval_typeof_identifier(name, env);
                 }
                 let val =
                     match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
@@ -1906,10 +1867,12 @@ impl Interpreter {
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.compile_ok += 1;
+                            self.perf.record_fallbacks(&c.fallback_reasons);
                         }
                         BytecodeCacheState::Compiled(Rc::new(c))
                     }
-                    Err(compiler::CompileError::Unsupported(reason)) => {
+                    Err(e) => {
+                        let reason = e.reason();
                         #[cfg(feature = "perf-counters")]
                         {
                             let (name, seq) = self.perf_body_name(func_obj_id);
@@ -1926,6 +1889,54 @@ impl Interpreter {
             o.borrow_mut().bytecode_cache = state.clone();
         }
         state
+    }
+
+    /// `typeof <identifier>`: an unresolvable reference yields "undefined",
+    /// an uninitialised binding throws (sec-typeof-operator-runtime-semantics-evaluation).
+    pub(super) fn typeof_value(&self, value: &JsValue) -> JsValue {
+        JsValue::string(JsString::from_str(typeof_val(value, &self.objects)))
+    }
+
+    pub(super) fn eval_typeof_identifier(&mut self, name: &str, env: &EnvRef) -> Completion {
+        let strict = env.borrow().strict;
+        if self.with_scope_depth > 0 || self.has_ever_entered_with {
+            match self.resolve_with_has_binding(name, env) {
+                Ok(Some(obj_id)) => {
+                    return match self.with_get_binding_value(obj_id, name, strict) {
+                        Completion::Normal(val) => Completion::Normal(JsValue::string(
+                            JsString::from_str(typeof_val(&val, &self.objects)),
+                        )),
+                        other => other,
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => return Completion::Throw(e),
+            }
+        }
+        if let Some(result) = self.resolve_global_getter(name, env) {
+            return match result {
+                Completion::Normal(val) => Completion::Normal(JsValue::string(JsString::from_str(
+                    typeof_val(&val, &self.objects),
+                ))),
+                other => other,
+            };
+        }
+        match self.env_get(env, name) {
+            Some(val) => {
+                return Completion::Normal(JsValue::string(JsString::from_str(typeof_val(
+                    &val,
+                    &self.objects,
+                ))));
+            }
+            None => {
+                if self.env_has(env, name) {
+                    return Completion::Throw(self.create_reference_error(&format!(
+                        "Cannot access '{name}' before initialization"
+                    )));
+                }
+                return Completion::Normal(JsValue::string(JsString::from_str("undefined")));
+            }
+        }
     }
 
     pub(super) fn dispatch_body(
@@ -1951,9 +1962,37 @@ impl Interpreter {
                 {
                     self.perf.body_compiled += 1;
                 }
-                return self.with_ic_body(body, |interp| {
+                // Function and lexical declarations are instantiated before
+                // the chunk runs, exactly as the tree-walker does, so the
+                // nodes handed back to it find their bindings in place.
+                let analysis = chunk
+                    .needs_instantiation
+                    .then(|| self.hoist_cache.analysis_for(body));
+                #[cfg(feature = "perf-counters")]
+                let has_fallback = !chunk.ast.is_empty();
+                #[cfg(feature = "perf-counters")]
+                if has_fallback {
+                    let (name, seq) = self.perf_body_name(func_obj_id);
+                    self.perf.enter_ast_body(name, seq, false);
+                }
+                let result = self.with_ic_body(body, |interp| {
+                    if let Some(analysis) = &analysis
+                        && let Some(err) = interp.instantiate_body_declarations(
+                            body.as_slice(),
+                            exec_env,
+                            Some(analysis),
+                        )
+                    {
+                        return err;
+                    }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });
+                #[cfg(feature = "perf-counters")]
+                if has_fallback {
+                    let exclusive = self.perf.leave_ast_body();
+                    self.perf.ast_units_in_fallbacks += exclusive;
+                }
+                return result;
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -2343,7 +2382,7 @@ impl Interpreter {
         }
     }
 
-    fn apply_update_numeric(
+    pub(super) fn apply_update_numeric(
         &mut self,
         raw_val: &JsValue,
         op: UpdateOp,
@@ -2601,10 +2640,24 @@ impl Interpreter {
                     other => return other,
                 },
                 None => {
-                    // Primitive member access — use eval_member logic indirectly
-                    match self.eval_expr(arg, env) {
+                    // Primitive base: read through its wrapper with the
+                    // primitive as receiver, without re-evaluating the base
+                    // and key expressions (GetValue, sec-getvalue).
+                    if obj_val.is_nullish() {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot read properties of {obj_val} (reading '{key}')"
+                        )));
+                    }
+                    let wrapper = match self.to_object(&obj_val) {
                         Completion::Normal(v) => v,
                         other => return other,
+                    };
+                    match wrapper.as_object_id() {
+                        Some(id) => match self.get_object_property(id, &key, &obj_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        },
+                        None => JsValue::UNDEFINED,
                     }
                 }
             };
@@ -7451,7 +7504,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
+    pub(super) fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
         if !(right).is_object() {
             return Completion::Throw(
                 self.create_type_error("Right-hand side of instanceof is not an object"),

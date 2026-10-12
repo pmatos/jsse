@@ -114,20 +114,9 @@ impl Interpreter {
             Literal::Boolean(b) => JsValue::boolean(*b),
             Literal::Number(n) => JsValue::number(*n),
             Literal::String(s) => JsValue::string(JsString::from_vec(s.clone())),
-            Literal::BigInt(s) => {
-                use num_bigint::BigInt;
-                let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
-                {
-                    BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
-                } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
-                    BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
-                } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-                    BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
-                } else {
-                    s.parse::<BigInt>().unwrap_or_default()
-                };
-                JsValue::bigint(JsBigInt::new(value))
-            }
+            Literal::BigInt(s) => JsValue::bigint(JsBigInt::new(
+                crate::interpreter::helpers::parse_bigint_literal(s),
+            )),
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
                 obj.prototype_id = self

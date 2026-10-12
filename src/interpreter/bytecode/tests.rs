@@ -1240,25 +1240,22 @@ fn compile_body_if_lowers_via_vm_directly() {
 }
 
 #[test]
-fn if_with_unsupported_branch_bails_to_unsupported() {
-    use super::compiler::CompileError;
+fn if_with_throw_branch_compiles_and_throws() {
     use crate::ast::IfStatement;
-    // The consequent is a `Throw`, which the compiler does not support, so
-    // compile_body must return Err(Unsupported) rather than mis-compiling.
     let body = vec![Statement::If(IfStatement {
         test: Expression::Literal(Literal::Boolean(true)),
         consequent: Box::new(Statement::Throw(Expression::Literal(Literal::Number(1.0)))),
         alternate: None,
     })];
-    match compile_body(&body) {
-        Err(CompileError::Unsupported(_)) => {}
-        other => panic!("expected Err(Unsupported), got {other:?}"),
+    let chunk = compile_body(&body).expect("compile if with throw");
+    match run(chunk) {
+        Completion::Throw(value) => assert_eq!(value.as_number(), Some(1.0)),
+        other => panic!("expected Throw(Number(1.0)), got {other:?}"),
     }
 }
 
 #[test]
-fn if_with_unsupported_alternate_bails_to_unsupported() {
-    use super::compiler::CompileError;
+fn if_with_throw_alternate_compiles_and_throws() {
     use crate::ast::IfStatement;
     let body = vec![Statement::If(IfStatement {
         test: Expression::Literal(Literal::Boolean(false)),
@@ -1269,9 +1266,10 @@ fn if_with_unsupported_alternate_bails_to_unsupported() {
             Literal::Number(2.0),
         )))),
     })];
-    match compile_body(&body) {
-        Err(CompileError::Unsupported(_)) => {}
-        other => panic!("expected Err(Unsupported), got {other:?}"),
+    let chunk = compile_body(&body).expect("compile if/else with throw");
+    match run(chunk) {
+        Completion::Throw(value) => assert_eq!(value.as_number(), Some(2.0)),
+        other => panic!("expected Throw(Number(2.0)), got {other:?}"),
     }
 }
 
@@ -1287,12 +1285,12 @@ fn compound_assign_on_member_compiles_to_bytecode() {
 }
 
 #[test]
-fn update_on_member_bails_to_unsupported() {
+fn update_on_member_compiles_to_bytecode() {
     let source = "var __r = (function(a){ a[0]++; return a[0]; })([1]);";
     let (v, count) = eval_with_mode(source, true);
-    assert_eq!(
-        count, 0,
-        "update expression on a member target must bail to the tree-walker"
+    assert!(
+        count >= 1,
+        "update expression on a member target must compile to bytecode"
     );
     assert_eq!(v.as_number(), Some(2.0));
 }
@@ -2782,4 +2780,168 @@ fn function_body_without_frame_names_keeps_by_name_ops() {
     assert!(ops.contains(&Op::ResolveName));
     assert!(ops.contains(&Op::StoreResolvedName));
     assert!(!ops.contains(&Op::StoreLocal));
+}
+
+// ----- native throw / typeof / member update / instanceof / in / BigInt -----
+
+/// Like `assert_message_parity` for any result: the compiled and
+/// tree-walker runs print the same value and the compiled run executed a
+/// chunk.
+fn assert_value_parity(source: &str) -> String {
+    assert_message_parity(source);
+    format!("{}", eval_with_mode(source, true).0)
+}
+
+#[test]
+fn throw_in_compiled_function_reaches_caller_catch() {
+    let shown = assert_value_parity(
+        "var __r; try { (function(n){ if (n < 0) throw new RangeError('neg'); return n; })(-1); } \
+         catch (e) { __r = e.name + ':' + e.message; }",
+    );
+    assert_eq!(shown, "RangeError:neg");
+}
+
+#[test]
+fn throw_of_primitive_value_is_preserved() {
+    let shown = assert_value_parity(
+        "var __r; try { (function(){ var a = 1; throw a + 41; })(); } catch (e) { __r = e; }",
+    );
+    assert_eq!(shown, "42");
+}
+
+#[test]
+fn typeof_matches_tree_walker_for_each_result() {
+    let shown = assert_value_parity(
+        "var __r = (function(o){ var u; return [typeof u, typeof 1, typeof 's', typeof true, \
+         typeof o, typeof null, typeof function(){}, typeof Symbol(), typeof 1n, \
+         typeof undeclared_name, typeof o.missing].join(); })({});",
+    );
+    assert_eq!(
+        shown,
+        "undefined,number,string,boolean,object,object,function,symbol,bigint,undefined,undefined"
+    );
+}
+
+#[test]
+fn typeof_of_tdz_binding_throws_reference_error() {
+    let shown = assert_value_parity(
+        "var __r; (function(){ try { return (function(){ typeof x; })(); } catch (e) { __r = e.name; } })();",
+    );
+    assert_eq!(shown, "undefined");
+}
+
+#[test]
+fn member_update_prefix_postfix_and_decrement() {
+    let shown = assert_value_parity(
+        "var __r = (function(o, k){ var r = []; r.push(o.x++); r.push(++o.x); r.push(o.x--); \
+         r.push(--o.x); r.push(o[k]++); r.push(o[k]); r.push(--o[k]); return r.join() + '|' + o.x + o.y; })({x: 1, y: 5}, 'y');",
+    );
+    assert_eq!(shown, "1,3,3,1,5,6,5|15");
+}
+
+#[test]
+fn member_update_evaluates_base_and_key_once() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var n = 0, m = 0, o = {a: 1}; \
+         function base() { n++; return o; } function key() { m++; return 'a'; } \
+         base().a++; base()[key()]--; ++base()[key()]; return [n, m, o.a].join(); })();",
+    );
+    assert_eq!(shown, "3,2,2");
+}
+
+#[test]
+fn member_update_coerces_non_number_operands() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var o = {s: '5', n: null, v: {valueOf() { return 7; }}, b: 1n}; \
+         var a = o.s++; var b = o.n++; var c = o.v++; var d = o.b++; \
+         return [typeof a, a, b, c, d, o.s, o.n, o.v, o.b].join(); })();",
+    );
+    assert_eq!(shown, "number,5,0,7,1,6,1,8,2");
+}
+
+#[test]
+fn member_update_runs_getter_and_setter_once_each() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var g = 0, s = 0, v = 10; \
+         var o = {get x() { g++; return v; }, set x(n) { s++; v = n; }}; \
+         var old = o.x++; return [old, v, g, s].join(); })();",
+    );
+    assert_eq!(shown, "10,11,1,1");
+}
+
+#[test]
+fn member_update_on_primitive_base_matches_tree_walker() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var calls = 0; function f() { calls++; return 'abc'; } \
+         var r = f().length++; return r + ',' + calls; })();",
+    );
+    assert_eq!(shown, "3,1");
+}
+
+#[test]
+fn member_update_on_nullish_base_throws_same_message() {
+    assert_message_parity(
+        "var __r; try { (function(o){ o.x++; })(null); } catch (e) { __r = e.message; }",
+    );
+    assert_message_parity(
+        "var __r; try { (function(o, k){ o[k]--; })(undefined, 0); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn member_update_on_frozen_object_follows_strictness() {
+    assert_value_parity(
+        "var __r = (function(){ var o = Object.freeze({x: 1}); o.x++; return o.x; })();",
+    );
+    let shown = assert_value_parity(
+        "var __r; try { (function(){ 'use strict'; var o = Object.freeze({x: 1}); o.x++; })(); } \
+         catch (e) { __r = e.name; }",
+    );
+    assert_eq!(shown, "TypeError");
+}
+
+#[test]
+fn instanceof_and_in_follow_spec_hooks() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ function C() {} var c = new C(); \
+         var hook = {[Symbol.hasInstance](v) { return v === 1; }}; \
+         var bound = C.bind(null); \
+         var seen = []; var p = new Proxy({}, {has(t, k) { seen.push(String(k)); return k === 'q'; }}); \
+         return [c instanceof C, c instanceof Object, 1 instanceof hook, 2 instanceof hook, \
+         c instanceof bound, 'q' in p, 'z' in p, 0 in [5], 1 in [5], seen.join('')].join(); })();",
+    );
+    assert_eq!(shown, "true,true,true,false,true,true,false,true,false,qz");
+}
+
+#[test]
+fn instanceof_and_in_type_errors_match_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(){ return ({}) instanceof 1; })(); } catch (e) { __r = e.message; }",
+    );
+    assert_message_parity(
+        "var __r; try { (function(){ return ({}) instanceof ({}); })(); } catch (e) { __r = e.message; }",
+    );
+    assert_message_parity(
+        "var __r; try { (function(){ return 'x' in 1; })(); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn bigint_literals_compile_to_constants() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var a = 10n ** 5n; return [a, 0x1Fn, 0o7n, 0b101n, 1n + 2n, \
+         typeof 0n].join(); })();",
+    );
+    assert_eq!(shown, "100000,31,7,5,3,bigint");
+    assert_message_parity(
+        "var __r; try { (function(){ return 1n + 1; })(); } catch (e) { __r = e.name; }",
+    );
+}
+
+#[test]
+fn regexp_literal_still_allocates_fresh_object_per_evaluation() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ function mk() { return /a/g; } return mk() === mk(); })();",
+    );
+    assert_eq!(shown, "false");
 }
