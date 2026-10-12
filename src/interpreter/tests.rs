@@ -1702,6 +1702,35 @@ fn intrinsic_promise_capabilities_create_no_resolving_functions() {
 }
 
 #[test]
+fn internal_resolvers_ignore_settlement_after_the_first_claim() {
+    let mut interp = Interpreter::new();
+    let promise = interp.create_promise_object();
+    let id = promise.as_object_id().unwrap();
+    let resolvers = PromiseResolvers::Internal(id);
+
+    interp.promise_resolvers_resolve(&resolvers, JsValue::number(1.0));
+    interp.promise_resolvers_reject(&resolvers, JsValue::number(2.0));
+    interp.promise_resolvers_resolve(&resolvers, JsValue::number(3.0));
+    assert!(matches!(
+        interp.get_promise_state(id),
+        Some(PromiseState::Fulfilled(v)) if v.as_number() == Some(1.0)
+    ));
+
+    // Locking in to a pending native promise claims the flag even though the
+    // promise itself stays pending, so a later rejection must not settle it.
+    let locked = interp.create_promise_object();
+    let locked_id = locked.as_object_id().unwrap();
+    let pending = interp.create_promise_object();
+    let locked_resolvers = PromiseResolvers::Internal(locked_id);
+    interp.promise_resolvers_resolve(&locked_resolvers, pending);
+    interp.promise_resolvers_reject(&locked_resolvers, JsValue::number(4.0));
+    assert!(matches!(
+        interp.get_promise_state(locked_id),
+        Some(PromiseState::Pending)
+    ));
+}
+
+#[test]
 fn then_chain_derived_promises_survive_major_gc_while_pending() {
     // Nothing but the reaction record of the promise a derived promise comes
     // from references the derived promise, and the derived promise of a handler

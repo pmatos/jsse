@@ -546,10 +546,8 @@ pub(crate) struct Realm {
     /// %Array.prototype.values%, captured when the realm's Array prototype is
     /// built; the `@@iterator` value of every arguments object.
     pub(crate) array_prototype_values: Option<JsValue>,
-    /// %Promise%, %Promise.prototype.then% and the original
-    /// `get Promise[@@species]`: the identities that decide whether a promise
-    /// operation can skip the observable (but, for these, behaviourless)
-    /// function-object round trip.
+    /// Intrinsics whose identity lets promise operations skip function-object
+    /// round trips nobody can observe.
     pub(crate) promise_constructor: Option<JsValue>,
     pub(crate) promise_then: Option<JsValue>,
     pub(crate) promise_species_getter: Option<JsValue>,
@@ -4240,9 +4238,7 @@ pub(crate) struct PromiseReaction {
     pub reaction_type: PromiseReactionType,
 }
 
-/// The resolving functions of a promise whose capability is owned by the
-/// engine. `Internal` settles through the promise itself and allocates no
-/// function objects; it is only valid for a promise built from `%Promise%`.
+/// `Internal` settles a `%Promise%`-built promise directly, without function objects.
 #[derive(Debug, Clone)]
 pub(crate) enum PromiseResolvers {
     Internal(u64),

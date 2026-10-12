@@ -2,6 +2,16 @@ use super::*;
 use crate::interpreter::gc::RootedSlots;
 use std::cell::Cell;
 
+fn is_same_object(intrinsic: Option<&JsValue>, value: &JsValue) -> bool {
+    match (
+        value.as_object_id(),
+        intrinsic.and_then(JsValue::as_object_id),
+    ) {
+        (Some(id), Some(intrinsic)) => id == intrinsic,
+        _ => false,
+    }
+}
+
 /// PromiseCapability record: {promise, resolve, reject}
 pub(crate) struct PromiseCapability {
     pub promise: JsValue,
@@ -16,7 +26,6 @@ impl Interpreter {
         Completion::Normal(cap.promise.clone())
     }
 
-    /// %Promise% of the running realm.
     pub(crate) fn intrinsic_promise_constructor(&self) -> JsValue {
         self.realm()
             .promise_constructor
@@ -24,56 +33,27 @@ impl Interpreter {
             .unwrap_or(JsValue::UNDEFINED)
     }
 
-    /// True when `value` is the running realm's %Promise%.
     pub(crate) fn is_intrinsic_promise_constructor(&self, value: &JsValue) -> bool {
-        match (
-            value.as_object_id(),
-            self.realm()
-                .promise_constructor
-                .as_ref()
-                .and_then(JsValue::as_object_id),
-        ) {
-            (Some(id), Some(intrinsic)) => id == intrinsic,
-            _ => false,
-        }
+        is_same_object(self.realm().promise_constructor.as_ref(), value)
     }
 
-    /// True when `value` is the running realm's original
-    /// %Promise.prototype.then%.
     fn is_intrinsic_promise_then(&self, value: &JsValue) -> bool {
-        match (
-            value.as_object_id(),
-            self.realm()
-                .promise_then
-                .as_ref()
-                .and_then(JsValue::as_object_id),
-        ) {
-            (Some(id), Some(intrinsic)) => id == intrinsic,
-            _ => false,
-        }
+        is_same_object(self.realm().promise_then.as_ref(), value)
     }
 
     /// True while `Promise[@@species]` is still the original getter, which
     /// returns its `this` value and has no other effect.
     fn promise_species_getter_is_original(&self, ctor_id: u64) -> bool {
-        let Some(getter_id) = self
-            .realm()
-            .promise_species_getter
-            .as_ref()
-            .and_then(JsValue::as_object_id)
-        else {
-            return false;
-        };
         let Some(ctor) = self.get_object_cell(ctor_id) else {
             return false;
         };
         let key = JsPropertyKey::well_known_symbol("species");
-        ctor.borrow()
-            .properties
-            .get(&key)
-            .and_then(|desc| desc.get.as_ref())
-            .and_then(JsValue::as_object_id)
-            == Some(getter_id)
+        let ctor = ctor.borrow();
+        let getter = ctor.properties.get(&key).and_then(|desc| desc.get.as_ref());
+        match getter {
+            Some(getter) => is_same_object(self.realm().promise_species_getter.as_ref(), getter),
+            None => false,
+        }
     }
 
     /// NewPromiseCapability(C) - spec 27.2.1.5
@@ -861,33 +841,7 @@ impl Interpreter {
                 }
                 ar1.set(true);
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // If resolving with self, reject with TypeError
-                if let Some(o) = value.as_object_id()
-                    && o == promise_id
-                {
-                    let err = interp.create_type_error("A promise cannot be resolved with itself.");
-                    interp.reject_promise(promise_id, err);
-                    return Completion::Normal(JsValue::UNDEFINED);
-                }
-                // Check if value is a thenable
-                if let Some(o) = value.as_object_id() {
-                    // Spec step 8: Let then be Completion(Get(resolution, "then")).
-                    // Step 9: If then is an abrupt completion, then
-                    //   a. Return RejectPromise(promise, then.[[Value]]).
-                    let then_val = match interp.get_object_property(o, "then", &value) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            interp.reject_promise(promise_id, e);
-                            return Completion::Normal(JsValue::UNDEFINED);
-                        }
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if interp.is_callable(&then_val) {
-                        interp.promise_resolve_thenable(promise_id, value.clone(), then_val);
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                }
-                interp.fulfill_promise(promise_id, value);
+                interp.resolve_promise_internal(promise_id, value);
                 Completion::Normal(JsValue::UNDEFINED)
             },
         ));
@@ -999,8 +953,6 @@ impl Interpreter {
         }
     }
 
-    /// Claims the engine-owned `[[AlreadyResolved]]` flag of `promise_id`.
-    /// Returns false when it was already claimed.
     fn claim_internal_resolution(&mut self, promise_id: u64) -> bool {
         let Some(cell) = self.get_object_cell(promise_id) else {
             return false;
@@ -1015,8 +967,6 @@ impl Interpreter {
         }
     }
 
-    /// Calls the `resolve` half of `resolvers`, ignoring its completion as the
-    /// resolving functions themselves never throw.
     pub(crate) fn promise_resolvers_resolve(
         &mut self,
         resolvers: &PromiseResolvers,
@@ -1034,7 +984,6 @@ impl Interpreter {
         }
     }
 
-    /// Calls the `reject` half of `resolvers`.
     pub(crate) fn promise_resolvers_reject(
         &mut self,
         resolvers: &PromiseResolvers,
@@ -1166,17 +1115,17 @@ impl Interpreter {
         // `thenable.then(resolve, reject)` directly. `SpeciesConstructor` stays
         // observable; only the unobservable resolving-function objects and the
         // dropped derived promise are skipped.
-        if self.is_intrinsic_promise_then(&then_fn)
-            && let Some(thenable_id) = thenable.as_object_id()
-            && self
-                .get_object_cell(thenable_id)
-                .is_some_and(|obj| obj.borrow().promise_data().is_some())
-        {
+        let native_thenable_id = thenable.as_object_id().filter(|&id| {
+            self.is_intrinsic_promise_then(&then_fn)
+                && self
+                    .get_object_cell(id)
+                    .is_some_and(|obj| obj.borrow().promise_data().is_some())
+        });
+        let frame = self.gc_root_frame();
+        let outcome = if let Some(thenable_id) = native_thenable_id {
             let default_ctor = self.intrinsic_promise_constructor();
             match self.species_constructor(&thenable, &default_ctor) {
-                Err(e) => {
-                    self.reject_promise(promise_id, e);
-                }
+                Err(e) => self.reject_promise(promise_id, e),
                 Ok(c) if self.is_intrinsic_promise_constructor(&c) => {
                     self.perform_promise_then_internal(
                         thenable_id,
@@ -1187,46 +1136,65 @@ impl Interpreter {
                 }
                 Ok(c) => {
                     let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-                    match self.new_promise_capability(&c) {
-                        Ok(cap) => {
-                            self.perform_promise_then(
-                                &thenable,
-                                &resolve_fn,
-                                &reject_fn,
-                                cap.promise,
-                                cap.resolve,
-                                cap.reject,
-                            );
-                        }
-                        Err(e) => {
-                            let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        }
+                    self.gc_root_value(&resolve_fn);
+                    self.gc_root_value(&reject_fn);
+                    if let Err(e) =
+                        self.promise_then_with_constructor(thenable_id, &c, &resolve_fn, &reject_fn)
+                    {
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
                     }
                 }
             }
-            return Completion::Normal(JsValue::UNDEFINED);
-        }
-
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        let frame = self.gc_root_frame();
-        self.gc_root_value(&resolve_fn);
-        self.gc_root_value(&reject_fn);
-        let result = self.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
-        // A `__host_exit` inside the user `then` (issue #242) propagates out
-        // of the job as `Completion::Exit` rather than being turned into a
-        // rejection.
-        let outcome = match result {
-            Completion::Exit(code) => Completion::Exit(code),
-            Completion::Throw(e) => {
-                match self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]) {
-                    Completion::Throw(e2) => Completion::Throw(e2),
-                    _ => Completion::Normal(JsValue::UNDEFINED),
+            Completion::Normal(JsValue::UNDEFINED)
+        } else {
+            let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+            self.gc_root_value(&resolve_fn);
+            self.gc_root_value(&reject_fn);
+            match self.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]) {
+                // A `__host_exit` inside the user `then` (issue #242)
+                // propagates out of the job as `Completion::Exit` rather than
+                // being turned into a rejection.
+                Completion::Exit(code) => Completion::Exit(code),
+                Completion::Throw(e) => {
+                    match self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]) {
+                        Completion::Throw(e2) => Completion::Throw(e2),
+                        _ => Completion::Normal(JsValue::UNDEFINED),
+                    }
                 }
+                _ => Completion::Normal(JsValue::UNDEFINED),
             }
-            _ => Completion::Normal(JsValue::UNDEFINED),
         };
         self.gc_unroot_frame(frame);
         outcome
+    }
+
+    /// Promise.prototype.then steps 4-5 and 7: NewPromiseCapability(`ctor`),
+    /// then PerformPromiseThen on `promise_id`. For `%Promise%` the derived
+    /// promise is settled directly and no resolving functions exist.
+    fn promise_then_with_constructor(
+        &mut self,
+        promise_id: u64,
+        ctor: &JsValue,
+        on_fulfilled: &JsValue,
+        on_rejected: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let (derived, target) = if self.is_intrinsic_promise_constructor(ctor) {
+            let derived = self.create_promise_object();
+            let derived_id = derived.as_object_id().unwrap_or_default();
+            (derived, ReactionTarget::Internal(derived_id))
+        } else {
+            let cap = self.new_promise_capability(ctor)?;
+            let target = ReactionTarget::Capability {
+                promise_id: cap.promise.as_object_id().unwrap_or_default(),
+                resolve: cap.resolve,
+                reject: cap.reject,
+            };
+            (cap.promise, target)
+        };
+        let fulfill_handler = self.is_callable(on_fulfilled).then(|| on_fulfilled.clone());
+        let reject_handler = self.is_callable(on_rejected).then(|| on_rejected.clone());
+        self.perform_promise_then_internal(promise_id, fulfill_handler, reject_handler, target);
+        Ok(derived)
     }
 
     /// §27.2.5.4.1 PerformPromiseThen with a pre-created result capability.
@@ -1357,30 +1325,10 @@ impl Interpreter {
             Ok(c) => c,
             Err(e) => return Completion::Throw(e),
         };
-
-        // NewPromiseCapability(C): for %Promise% the resolving functions can
-        // never be observed, so the derived promise is settled directly.
-        let (derived, target) = if self.is_intrinsic_promise_constructor(&c) {
-            let derived = self.create_promise_object();
-            let derived_id = derived.as_object_id().unwrap_or_default();
-            (derived, ReactionTarget::Internal(derived_id))
-        } else {
-            let cap = match self.new_promise_capability(&c) {
-                Ok(cap) => cap,
-                Err(e) => return Completion::Throw(e),
-            };
-            let target = ReactionTarget::Capability {
-                promise_id: cap.promise.as_object_id().unwrap_or_default(),
-                resolve: cap.resolve,
-                reject: cap.reject,
-            };
-            (cap.promise, target)
-        };
-
-        let fulfill_handler = self.is_callable(on_fulfilled).then(|| on_fulfilled.clone());
-        let reject_handler = self.is_callable(on_rejected).then(|| on_rejected.clone());
-        self.perform_promise_then_internal(promise_id, fulfill_handler, reject_handler, target);
-        Completion::Normal(derived)
+        match self.promise_then_with_constructor(promise_id, &c, on_fulfilled, on_rejected) {
+            Ok(derived) => Completion::Normal(derived),
+            Err(e) => Completion::Throw(e),
+        }
     }
 
     pub(crate) fn promise_resolve_value(&mut self, value: &JsValue) -> JsValue {
@@ -1407,22 +1355,7 @@ impl Interpreter {
         }
         let promise = self.create_promise_object();
         let promise_id = promise.as_object_id().unwrap_or_default();
-        // Check if value is a thenable using [[Get]] to trigger Proxy traps/getters
-        if let Some(o) = value.as_object_id() {
-            let then_val = match self.get_object_property(o, "then", value) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => {
-                    self.reject_promise(promise_id, e);
-                    return promise;
-                }
-                _ => JsValue::UNDEFINED,
-            };
-            if self.is_callable(&then_val) {
-                self.promise_resolve_thenable(promise_id, value.clone(), then_val);
-                return promise;
-            }
-        }
-        self.fulfill_promise(promise_id, value.clone());
+        self.resolve_promise_internal(promise_id, value.clone());
         promise
     }
 
