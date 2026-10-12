@@ -61,6 +61,17 @@ fn next_live_entry<T: Clone>(
     data(&obj.borrow())?.next_live(cursor).cloned()
 }
 
+/// CanonicalizeKeyedCollectionKey: -0 is stored and compared as +0.
+fn canonicalize_key(key: JsValue) -> JsValue {
+    if key
+        .as_number()
+        .is_some_and(|number| number == 0.0 && number.is_sign_negative())
+    {
+        return JsValue::number(0.0);
+    }
+    key
+}
+
 impl Interpreter {
     pub(crate) fn setup_map_prototype(&mut self) {
         let proto_id = self.create_object_id();
@@ -239,15 +250,8 @@ impl Interpreter {
                     b.map_data().is_some() && b.class_name == "Map"
                 };
                 if has_map {
-                    let mut key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let key = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
                     let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    // Normalize -0 to +0
-                    if key
-                        .as_number()
-                        .is_some_and(|number| number == 0.0 && number.is_sign_negative())
-                    {
-                        key = JsValue::number(0.0);
-                    }
                     interp.gc_write_barrier_value(obj, &key);
                     interp.gc_write_barrier_value(obj, &value);
                     let mut borrowed = obj.borrow_mut_untracked();
@@ -343,15 +347,8 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let mut key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let key = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
             let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            // CanonicalizeKeyedCollectionKey: normalize -0 to +0
-            if key
-                .as_number()
-                .is_some_and(|number| number == 0.0 && number.is_sign_negative())
-            {
-                key = JsValue::number(0.0);
-            }
             interp.gc_write_barrier_value(&obj, &key);
             interp.gc_write_barrier_value(&obj, &value);
             let mut result = value.clone();
@@ -368,7 +365,7 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let mut key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let key = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
             let callbackfn = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             // Step 3: IsCallable check BEFORE anything else
             if !callbackfn.as_object_id().is_some_and(|callback_id| {
@@ -379,20 +376,16 @@ impl Interpreter {
                 let err = interp.create_type_error("callbackfn is not a function");
                 return Completion::Throw(err);
             }
-            // CanonicalizeKeyedCollectionKey: normalize -0 to +0
-            if key
-                .as_number()
-                .is_some_and(|number| number == 0.0 && number.is_sign_negative())
-            {
-                key = JsValue::number(0.0);
-            }
             // Step 5: Search existing entries
             if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
                 return Completion::Normal(entry.1.clone());
             }
             // Step 6: Call(callbackfn, undefined, « key »)
-            let value = match interp.call_function(&callbackfn, &JsValue::UNDEFINED, &[key.clone()])
-            {
+            let value = match interp.call_function(
+                &callbackfn,
+                &JsValue::UNDEFINED,
+                std::slice::from_ref(&key),
+            ) {
                 Completion::Normal(v) => v,
                 other => return other,
             };
@@ -877,13 +870,7 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let mut value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if value
-                .as_number()
-                .is_some_and(|number| number == 0.0 && number.is_sign_negative())
-            {
-                value = JsValue::number(0.0);
-            }
+            let value = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
             interp.gc_write_barrier_value(&obj, &value);
             let mut borrowed = obj.borrow_mut_untracked();
             borrowed.set_data_mut().unwrap().upsert(value, |_, _| {});
@@ -1104,16 +1091,6 @@ impl Interpreter {
                 other => return Err(other),
             };
             Ok(Some(value))
-        }
-
-        fn canonicalize_key(val: JsValue) -> JsValue {
-            if val
-                .as_number()
-                .is_some_and(|number| number == 0.0 && number.is_sign_negative())
-            {
-                return JsValue::number(0.0);
-            }
-            val
         }
 
         /// Whether the live O.[[SetData]] of `obj` contains `val`, checked under
