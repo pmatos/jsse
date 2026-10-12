@@ -612,6 +612,24 @@ impl Interpreter {
             .ordinary_own_property_keys(crate::interpreter::types::OwnKeyFilter::EnumerableStrings)
     }
 
+    /// True when `start_id` or any object on its prototype chain is a Proxy
+    /// (revoked or not) or a module namespace, whose keys and prototype only
+    /// the proxy-aware walk can observe.
+    fn chain_has_proxy_or_namespace(&self, start_id: u64) -> bool {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let Some(cell) = self.get_object_cell(id) else {
+                return false;
+            };
+            let b = cell.borrow();
+            if b.proxy().is_some() || b.module_namespace().is_some() {
+                return true;
+            }
+            current = b.prototype_id;
+        }
+        false
+    }
+
     /// The keys `EnumerateObjectProperties` walks for for-in over `obj_id`:
     /// proxy-aware, own keys before inherited, shadowed and non-enumerable
     /// names excluded. Shared by the tree-walker's `exec_for_in` and the
@@ -620,13 +638,7 @@ impl Interpreter {
         &mut self,
         obj_id: u64,
     ) -> Result<Vec<JsPropertyKey>, JsValue> {
-        let needs_proxy_path = self
-            .get_object_cell(obj_id)
-            .map(|obj| {
-                let b = obj.borrow();
-                b.is_proxy() || b.module_namespace().is_some()
-            })
-            .unwrap_or(false);
+        let needs_proxy_path = self.chain_has_proxy_or_namespace(obj_id);
         if needs_proxy_path {
             self.proxy_enumerable_keys_with_proto(obj_id)
         } else if self.get_object_cell(obj_id).is_some() {

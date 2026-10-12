@@ -3770,7 +3770,8 @@ impl JsObjectData {
     /// `None` when String/TypedArray/namespace exotics synthesise keys that
     /// this cheap scan does not model; callers then take the general path.
     pub(crate) fn has_enumerable_string_key_hint(&self) -> Option<bool> {
-        if self.module_namespace().is_some()
+        if self.proxy().is_some()
+            || self.module_namespace().is_some()
             || self.typed_array_info().is_some()
             || (self.class_name == "String"
                 && self
@@ -3852,9 +3853,7 @@ impl JsObjectData {
                     _ => continue,
                 }
             }
-            if k.as_bytes().first().is_some_and(u8::is_ascii_digit)
-                && let Some(n) = parse_array_index(k)
-            {
+            if let Some(n) = parse_array_index(k) {
                 index_keys.push((n, k.clone()));
                 order_has_index = true;
             } else {
@@ -3967,6 +3966,11 @@ impl JsObjectData {
 pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: &K) -> Option<u32> {
     let key = key.as_property_key_str()?;
     if key.is_empty() {
+        return None;
+    }
+    // Rust's integer parser also accepts a leading `+`, which ECMAScript
+    // array indices never have.
+    if !key.as_bytes()[0].is_ascii_digit() {
         return None;
     }
     // No leading zeros (except "0" itself)

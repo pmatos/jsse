@@ -50,11 +50,22 @@ fn assign_from_ordinary_source(
     keys: &[JsPropertyKey],
 ) -> Result<(), JsValue> {
     if target_id != source_id
+        && let Some(src) = interp.get_object_cell(source_id)
         && let Some(cell) = interp.get_object_cell(target_id)
     {
+        // An upper bound on what gets copied, without per-key lookups: only
+        // a target that will really receive many keys should spill.
+        let copied = {
+            let s = src.borrow();
+            s.properties
+                .iter()
+                .filter(|(_, d)| d.enumerable != Some(false))
+                .count()
+                + s.array_elements().map_or(0, Vec::len)
+        };
         let mut t = cell.borrow_mut_untracked();
-        if t.proxy().is_none() && t.array_data().is_none() && t.extensible {
-            t.properties.reserve(keys.len());
+        if copied > 0 && t.proxy().is_none() && t.array_data().is_none() && t.extensible {
+            t.properties.reserve(copied);
         }
     }
     for k in keys {
@@ -1429,34 +1440,39 @@ impl Interpreter {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let mut pairs = Vec::new();
-                    for key_val in all_keys {
-                        let Some(key_string) = key_val.as_string() else {
-                            continue;
-                        };
-                        let k = JsPropertyKey::from_js_string(&key_string);
-                        let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        if (desc_val).is_undefined() {
-                            continue;
-                        }
-                        if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                            if desc.enumerable == Some(false) {
+                    return interp.with_gc_root_scope(|interp| {
+                        let mut pairs = Vec::new();
+                        for key_val in all_keys {
+                            let Some(key_string) = key_val.as_string() else {
+                                continue;
+                            };
+                            let k = JsPropertyKey::from_js_string(&key_string);
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                            if (desc_val).is_undefined() {
                                 continue;
                             }
-                        } else {
-                            continue;
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.enumerable == Some(false) {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
+                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            interp.gc_root_value(&val);
+                            let pair = interp.create_array(vec![JsValue::string(key_string), val]);
+                            interp.gc_root_value(&pair);
+                            pairs.push(pair);
                         }
-                        let val = match interp.get_object_property(obj_id, &k, &obj_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        pairs.push(interp.create_array(vec![JsValue::string(key_string), val]));
-                    }
-                    let arr = interp.create_array(pairs);
-                    return Completion::Normal(arr);
+                        Completion::Normal(interp.create_array(pairs))
+                    });
                 }
                 Completion::Normal(interp.create_array(Vec::new()))
             },
@@ -1487,34 +1503,37 @@ impl Interpreter {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let mut values = Vec::new();
-                    for key_val in all_keys {
-                        let Some(key_string) = key_val.as_string() else {
-                            continue;
-                        };
-                        let k = JsPropertyKey::from_js_string(&key_string);
-                        let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        if (desc_val).is_undefined() {
-                            continue;
-                        }
-                        if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                            if desc.enumerable == Some(false) {
+                    return interp.with_gc_root_scope(|interp| {
+                        let mut values = Vec::new();
+                        for key_val in all_keys {
+                            let Some(key_string) = key_val.as_string() else {
+                                continue;
+                            };
+                            let k = JsPropertyKey::from_js_string(&key_string);
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                            if (desc_val).is_undefined() {
                                 continue;
                             }
-                        } else {
-                            continue;
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.enumerable == Some(false) {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
+                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            interp.gc_root_value(&val);
+                            values.push(val);
                         }
-                        let val = match interp.get_object_property(obj_id, &k, &obj_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        values.push(val);
-                    }
-                    let arr = interp.create_array(values);
-                    return Completion::Normal(arr);
+                        Completion::Normal(interp.create_array(values))
+                    });
                 }
                 Completion::Normal(interp.create_array(Vec::new()))
             },
