@@ -7,7 +7,8 @@ description: >
   new.target is allowed in a class field initializer, even in a class at the
   top level of a script, and evaluates to undefined there, in arrow functions
   the initializer creates and in a direct eval it runs, whatever constructor
-  is running. Static field initializers and static blocks behave the same.
+  is running. Static field initializers and static blocks, and the arrow
+  functions they create, behave the same.
 info: |
   Static Semantics: Contains (8.5.1)
     ClassTail : ClassHeritage_opt { ClassBody }
@@ -74,6 +75,7 @@ function makeClass() {
     static arrow = () => new.target;
     static {
       this.block = new.target;
+      this.blockArrow = () => new.target;
     }
   };
 }
@@ -81,3 +83,19 @@ var Made = new makeClass();
 assert.sameValue(Made.field, undefined, "static field initializer");
 assert.sameValue(Made.arrow(), undefined, "arrow function in a static field initializer");
 assert.sameValue(Made.block, undefined, "static block");
+assert.sameValue(Made.blockArrow(), undefined, "arrow function in a static block");
+
+class TopLevel {
+  static {
+    this.arrow = () => new.target;
+  }
+}
+assert.sameValue(TopLevel.arrow(), undefined, "arrow function in a static block of a top-level class");
+
+function CallsArrows() {
+  this.fromField = Made.arrow();
+  this.fromBlock = Made.blockArrow();
+}
+var calls = new CallsArrows();
+assert.sameValue(calls.fromField, undefined, "a static field arrow called inside a constructor");
+assert.sameValue(calls.fromBlock, undefined, "a static block arrow called inside a constructor");

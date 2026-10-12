@@ -857,10 +857,7 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_target {
-                if self.in_non_arrow_function == 0
-                    && !self.in_static_block
-                    && !self.eval_new_target_allowed
-                {
+                if self.in_non_arrow_function == 0 {
                     return Err(self.error("new.target expression is not allowed here"));
                 }
                 self.advance()?; // target

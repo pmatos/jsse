@@ -252,7 +252,7 @@ impl Interpreter {
     /// methods called with no NewTarget (DefineField, ClassStaticBlockDefinition
     /// call them with [[Call]]), so `new.target` in them, and in the arrow
     /// functions they create, is undefined whatever is being constructed.
-    pub(crate) fn with_new_target_undefined<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+    fn with_new_target_undefined<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
         let saved = self.new_target.take();
         let result = body(self);
         self.new_target = saved;

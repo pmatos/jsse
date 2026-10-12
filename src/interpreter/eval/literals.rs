@@ -1089,7 +1089,7 @@ impl Interpreter {
 
         // Phase 2: Execute deferred static field initializers and static blocks.
         // Both are methods called with no NewTarget.
-        let static_result = self.with_new_target_undefined(|interp| {
+        self.with_new_target_undefined(|interp| {
             for deferred in deferred_static {
                 match deferred {
                     DeferredStatic::PublicField(key, initializer) => {
@@ -1197,13 +1197,8 @@ impl Interpreter {
                     }
                 }
             }
-            Completion::Normal(JsValue::UNDEFINED)
-        });
-        if static_result.is_abrupt() {
-            return static_result;
-        }
-
-        Completion::Normal(ctor_val)
+            Completion::Normal(ctor_val)
+        })
     }
 
     /// CopyDataProperties (§7.3.26) — copies own enumerable properties from source
