@@ -745,6 +745,7 @@ fn load_const_and_return_yields_number_completion() {
         var_names: vec![],
         max_stack: 1,
         max_refs: 0,
+        ..Chunk::default()
     };
     match run(chunk) {
         Completion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -761,6 +762,7 @@ fn return_undefined_completes_with_undefined() {
         var_names: vec![],
         max_stack: 0,
         max_refs: 0,
+        ..Chunk::default()
     };
     match run(chunk) {
         Completion::Return(value) if value.is_undefined() => {}
@@ -787,6 +789,7 @@ fn add_two_numbers_via_eval_binary() {
         var_names: vec![],
         max_stack: 2,
         max_refs: 0,
+        ..Chunk::default()
     };
     match run(chunk) {
         Completion::Return(value) => assert_eq!(value.as_number(), Some(5.0)),
@@ -1108,6 +1111,7 @@ fn add_string_and_number_falls_through_to_string_concat() {
         var_names: vec![],
         max_stack: 2,
         max_refs: 0,
+        ..Chunk::default()
     };
     match run(chunk) {
         Completion::Return(value) => assert_eq!(
@@ -1203,16 +1207,12 @@ fn if_truthiness_coercion_matches_tree_walker() {
         "var __r = (function(){ if (0/0) return 1; else return 2; })();",
         2.0,
     );
-    // if({}) → truthy → consequent. An object literal is NOT a compilable
-    // expression, so the body bails to the tree-walker. Assert the value is
-    // still correct in both modes (the parity helper requires bytecode to
-    // run, which it won't here).
-    let src = "var __r = (function(){ if ({}) return 1; else return 2; })();";
-    let (ast_v, _) = eval_with_mode(src, false);
-    let (bc_v, bc_count) = eval_with_mode(src, true);
-    assert_eq!(bc_count, 0, "object-literal test must bail to AST");
-    assert_eq!(ast_v.as_number(), Some(1.0), "ast {ast_v:?}");
-    assert_eq!(bc_v.as_number(), Some(1.0), "bc {bc_v:?}");
+    // if({}) → truthy → consequent. An object literal has no native lowering,
+    // so it is evaluated by the tree-walker inside the compiled body.
+    assert_parity_number(
+        "var __r = (function(){ if ({}) return 1; else return 2; })();",
+        1.0,
+    );
 }
 
 #[test]
@@ -1318,9 +1318,11 @@ fn private_field_member_bails_to_unsupported() {
         MemberProperty::Private("x".to_string()),
         PropSiteId::UNASSIGNED,
     )))];
+    // The only work in the body is a tree-walker hand-off, so the body stays
+    // on the tree-walker rather than paying chunk-entry cost for nothing.
     match compile_body(&body) {
-        Err(CompileError::Unsupported(_)) => {}
-        other => panic!("expected Err(Unsupported), got {other:?}"),
+        Err(CompileError::Ineligible(_)) => {}
+        other => panic!("expected Err(Ineligible), got {other:?}"),
     }
 }
 
@@ -1378,6 +1380,7 @@ fn load_undefined_then_return_completes_with_undefined() {
         var_names: vec![],
         max_stack: 1,
         max_refs: 0,
+        ..Chunk::default()
     };
     match run(chunk) {
         Completion::Return(value) if value.is_undefined() => {}
@@ -1728,11 +1731,11 @@ fn for_loop_htmldda_truthiness_matches_tree_walker() {
 }
 
 #[test]
-fn lexical_for_loop_falls_back_to_tree_walker() {
-    let source = "var __r = (function(){ var sum = 0; for (let i = 0; i < 3; i++) sum += i; return sum; })();";
-    let (value, count) = eval_with_mode(source, true);
-    assert_eq!(count, 0, "lexical loop must remain ineligible");
-    assert_eq!(value.as_number(), Some(3.0));
+fn lexical_for_loop_runs_on_tree_walker_inside_compiled_body() {
+    assert_parity_number(
+        "var __r = (function(){ var sum = 0; for (let i = 0; i < 3; i++) sum += i; return sum; })();",
+        3.0,
+    );
 }
 
 #[test]
@@ -1835,14 +1838,11 @@ fn stacked_labels_on_one_loop_either_label_breaks_it() {
 }
 
 #[test]
-fn labeled_non_loop_statement_still_bails_to_tree_walker() {
-    let source = "var __r = (function(){ outer: { break outer; } return 1; })();";
-    let (value, count) = eval_with_mode(source, true);
-    assert_eq!(
-        count, 0,
-        "labeled non-loop statements are out of scope for this slice"
+fn labeled_non_loop_statement_runs_on_tree_walker_inside_compiled_body() {
+    assert_parity_number(
+        "var __r = (function(){ outer: { break outer; } return 1; })();",
+        1.0,
     );
-    assert_eq!(value.as_number(), Some(1.0));
 }
 
 // ----- direct identifier calls -----
@@ -1872,8 +1872,8 @@ fn direct_call_bridges_to_ineligible_callee() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert_eq!(
-        bytecode_count, 1,
-        "only the caller should compile; the object/member callee must fall back"
+        bytecode_count, 2,
+        "caller and callee both compile; the object literal is a tree-walker node"
     );
     assert_eq!(ast.as_number(), Some(37.0));
     assert_eq!(bytecode.as_number(), Some(37.0));
@@ -2245,7 +2245,7 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
     ))];
     assert!(matches!(
         compile_body(&direct_eval),
-        Err(CompileError::Unsupported(_))
+        Err(CompileError::Ineligible(_))
     ));
 
     let spread = vec![Statement::Expression(Expression::Call(
@@ -2257,7 +2257,7 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
     ))];
     assert!(matches!(
         compile_body(&spread),
-        Err(CompileError::Unsupported(_))
+        Err(CompileError::Ineligible(_))
     ));
 }
 
@@ -2285,7 +2285,7 @@ fn nested_tail_positions_and_unsupported_member_callees_remain_ineligible() {
         ))];
         assert!(matches!(
             compile_body(&call),
-            Err(CompileError::Unsupported(_))
+            Err(CompileError::Ineligible(_))
         ));
     }
 
@@ -2300,7 +2300,7 @@ fn nested_tail_positions_and_unsupported_member_callees_remain_ineligible() {
     );
     assert!(matches!(
         compile_body(&[Statement::Return(Some(nested_tail_call))]),
-        Err(CompileError::Unsupported(_))
+        Err(CompileError::Ineligible(_))
     ));
 }
 
