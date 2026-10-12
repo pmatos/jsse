@@ -1,4 +1,5 @@
 use super::super::*;
+use super::array_dense;
 use crate::interpreter::gc::RootedSlots;
 
 // §7.2.2 IsArray — Proxy-aware check
@@ -39,18 +40,36 @@ fn to_object_val(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, Co
 }
 
 fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, Completion> {
-    let len_val = if let Some(obj_id) = o.as_object_id() {
-        match interp.get_object_property(obj_id, "length", o) {
-            Completion::Normal(v) => v,
-            other => return Err(other),
+    // An exotic Array's `length` is always an own data property, so reading
+    // it directly is exactly `Get(O, "length")`.
+    let array_length = o
+        .as_object_id()
+        .and_then(|id| interp.get_object_cell(id))
+        .and_then(|cell| {
+            let b = cell.borrow();
+            b.array_elements()?;
+            b.properties
+                .get("length")
+                .and_then(|d| d.value.as_ref())
+                .and_then(JsValue::as_number)
+        });
+    let n = match array_length {
+        Some(n) => n,
+        None => {
+            let len_val = if let Some(obj_id) = o.as_object_id() {
+                match interp.get_object_property(obj_id, "length", o) {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                }
+            } else {
+                JsValue::UNDEFINED
+            };
+            // ? ToLength(lenProperty) — must propagate errors from ToNumber/ToPrimitive
+            match interp.to_number_value(&len_val) {
+                Ok(v) => v,
+                Err(e) => return Err(Completion::Throw(e)),
+            }
         }
-    } else {
-        JsValue::UNDEFINED
-    };
-    // ? ToLength(lenProperty) — must propagate errors from ToNumber/ToPrimitive
-    let n = match interp.to_number_value(&len_val) {
-        Ok(v) => v,
-        Err(e) => return Err(Completion::Throw(e)),
     };
     let len = to_integer_or_infinity(n);
     if len < 0.0 {
@@ -76,6 +95,48 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, 
     } else {
         Ok(JsValue::UNDEFINED)
     }
+}
+
+// [[Get]](O, ToString(idx)) with an own-present-element fast path.
+fn get_index(interp: &mut Interpreter, o: &JsValue, idx: usize) -> Result<JsValue, Completion> {
+    if let Some(v) = array_dense::dense_element(interp, o, idx) {
+        return Ok(v);
+    }
+    obj_get(interp, o, &idx.to_string())
+}
+
+// HasProperty(O, ToString(idx)) followed by Get when present.
+fn get_if_present(
+    interp: &mut Interpreter,
+    o: &JsValue,
+    idx: usize,
+) -> Result<Option<JsValue>, Completion> {
+    if let Some(v) = array_dense::dense_element(interp, o, idx) {
+        return Ok(Some(v));
+    }
+    let pk = idx.to_string();
+    if !obj_has_throw(interp, o, &pk).map_err(Completion::Throw)? {
+        return Ok(None);
+    }
+    obj_get(interp, o, &pk).map(Some)
+}
+
+// CreateDataPropertyOrThrow(A, ToString(idx), value) appending in place when
+// A is a plain dense Array whose next index is `idx`.
+fn create_data_property_at(
+    interp: &mut Interpreter,
+    a: &JsValue,
+    idx: usize,
+    value: JsValue,
+) -> Result<(), JsValue> {
+    if let Some(cell) = a.as_object_id().and_then(|id| interp.get_object_cell(id))
+        && cell
+            .borrow_mut()
+            .try_append_dense_array_element(idx, &value)
+    {
+        return Ok(());
+    }
+    create_data_property_or_throw(interp, a, &idx.to_string(), value)
 }
 
 // Steps 6.c.i-ii of Array.prototype.toLocaleString, shared with
@@ -353,11 +414,14 @@ fn gather_rooted_elements(
     // `len` can be up to 2^53-1 with few (or no) present elements.
     let mut items: Vec<JsValue> = Vec::with_capacity(len.min(1 << 16));
     for i in 0..len {
-        let pk = i.to_string();
-        if skip_holes && !obj_has_throw(interp, o, &pk).map_err(Completion::Throw)? {
-            continue;
-        }
-        let v = obj_get(interp, o, &pk)?;
+        let v = if skip_holes {
+            match get_if_present(interp, o, i)? {
+                Some(v) => v,
+                None => continue,
+            }
+        } else {
+            get_index(interp, o, i)?
+        };
         interp.gc_root_value(&v);
         items.push(v);
     }
@@ -1205,6 +1269,9 @@ impl Interpreter {
                 }
                 return Completion::Normal(JsValue::UNDEFINED);
             }
+            if let Some(v) = array_dense::try_pop(interp, &o, len) {
+                return Completion::Normal(v);
+            }
             let idx = (len - 1).to_string();
             let val = match obj_get(interp, &o, &idx) {
                 Ok(v) => v,
@@ -1234,6 +1301,9 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
                 return Completion::Normal(JsValue::UNDEFINED);
+            }
+            if let Some(first) = array_dense::try_shift(interp, &o, len) {
+                return Completion::Normal(first);
             }
             let first = match obj_get(interp, &o, "0") {
                 Ok(v) => v,
@@ -1281,6 +1351,9 @@ impl Interpreter {
             // If len + argCount > 2^53-1, throw TypeError
             if (len + arg_count) as u64 > 9007199254740991 {
                 return Completion::Throw(interp.create_type_error("Invalid array length"));
+            }
+            if let Some(new_len) = array_dense::try_unshift(interp, &o, len, args) {
+                return Completion::Normal(JsValue::number(new_len as f64));
             }
             if arg_count > 0 {
                 // Shift existing elements
@@ -1347,20 +1420,20 @@ impl Interpreter {
                 let calc = len as f64 + n;
                 if calc < 0.0 { 0 } else { calc as usize }
             };
-            for i in k..len {
-                let pk = i.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let elem = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+            let (found, resume) =
+                array_dense::scan_forward(interp, &o, k, len, |v| strict_equality(v, &search));
+            if let Some(i) = found {
+                return Completion::Normal(JsValue::number(i as f64));
+            }
+            for i in resume..len {
+                match get_if_present(interp, &o, i) {
+                    Ok(Some(elem)) => {
                         if strict_equality(&elem, &search) {
                             return Completion::Normal(JsValue::number(i as f64));
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
             }
             Completion::Normal(JsValue::number(-1.0))
@@ -1397,20 +1470,20 @@ impl Interpreter {
                 }
                 calc as usize
             };
-            for i in (0..=k).rev() {
-                let pk = i.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let elem = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+            let (found, resume) =
+                array_dense::scan_backward(interp, &o, k, |v| strict_equality(v, &search));
+            if let Some(i) = found {
+                return Completion::Normal(JsValue::number(i as f64));
+            }
+            for i in (0..resume).rev() {
+                match get_if_present(interp, &o, i) {
+                    Ok(Some(elem)) => {
                         if strict_equality(&elem, &search) {
                             return Completion::Normal(JsValue::number(i as f64));
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
             }
             Completion::Normal(JsValue::number(-1.0))
@@ -1444,8 +1517,13 @@ impl Interpreter {
                 let calc = len as f64 + n;
                 if calc < 0.0 { 0 } else { calc as usize }
             };
-            for i in k..len {
-                let elem = match obj_get(interp, &o, &i.to_string()) {
+            let (found, resume) =
+                array_dense::scan_forward(interp, &o, k, len, |v| same_value_zero(v, &search));
+            if found.is_some() {
+                return Completion::Normal(JsValue::boolean(true));
+            }
+            for i in resume..len {
+                let elem = match get_index(interp, &o, i) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1613,30 +1691,19 @@ impl Interpreter {
                                     .create_type_error("Array length exceeds the allowed maximum"),
                             );
                         }
+                        if array_dense::try_concat_item(interp, &a, item, n, len) {
+                            n += len;
+                            continue;
+                        }
                         for k in 0..len {
-                            let pk = k.to_string();
-                            let exists = match obj_has_throw(interp, item, &pk) {
-                                Ok(b) => b,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            if exists {
-                                let val = if let Some(item_id) = item.as_object_id() {
-                                    match interp.get_object_property(item_id, &pk, item) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        other => return other,
+                            match get_if_present(interp, item, k) {
+                                Ok(Some(val)) => {
+                                    if let Err(e) = create_data_property_at(interp, &a, n, val) {
+                                        return Completion::Throw(e);
                                     }
-                                } else {
-                                    match obj_get(interp, item, &pk) {
-                                        Ok(v) => v,
-                                        Err(c) => return c,
-                                    }
-                                };
-                                if let Err(e) =
-                                    create_data_property_or_throw(interp, &a, &n.to_string(), val)
-                                {
-                                    return Completion::Throw(e);
                                 }
+                                Ok(None) => {}
+                                Err(c) => return c,
                             }
                             n += 1;
                         }
@@ -1647,9 +1714,7 @@ impl Interpreter {
                                     .create_type_error("Array length exceeds the allowed maximum"),
                             );
                         }
-                        if let Err(e) =
-                            create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
-                        {
+                        if let Err(e) = create_data_property_at(interp, &a, n, item.clone()) {
                             return Completion::Throw(e);
                         }
                         n += 1;
@@ -1687,23 +1752,19 @@ impl Interpreter {
             };
             interp.with_gc_root_scope(|interp| {
                 interp.gc_root_value(&a);
+                if array_dense::try_slice(interp, &o, &a, k, fin) {
+                    return Completion::Normal(a);
+                }
                 let mut n: usize = 0;
                 for i in k..fin {
-                    let pk = i.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let val = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            if let Err(e) =
-                                create_data_property_or_throw(interp, &a, &n.to_string(), val)
-                            {
+                    match get_if_present(interp, &o, i) {
+                        Ok(Some(val)) => {
+                            if let Err(e) = create_data_property_at(interp, &a, n, val) {
                                 return Completion::Throw(e);
                             }
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                        Ok(None) => {}
+                        Err(c) => return c,
                     }
                     n += 1;
                 }
@@ -1724,6 +1785,9 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             };
+            if array_dense::try_reverse(interp, &o, len) {
+                return Completion::Normal(o);
+            }
             let middle = len / 2;
             for lower in 0..middle {
                 let upper = len - lower - 1;
@@ -1822,22 +1886,18 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in 0..len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
-                        let call_args = vec![kvalue, JsValue::number(k as f64), o.clone()];
-                        if let result @ Completion::Throw(_) =
-                            interp.call_function(&callback, &this_arg, &call_args)
-                        {
+                match get_if_present(interp, &o, k) {
+                    Ok(Some(kvalue)) => {
+                        if let result @ Completion::Throw(_) = interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[kvalue, JsValue::number(k as f64), o.clone()],
+                        ) {
                             return result;
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
             }
             Completion::Normal(JsValue::UNDEFINED)
@@ -1865,30 +1925,23 @@ impl Interpreter {
             interp.with_gc_root_scope(|interp| {
                 interp.gc_root_value(&a);
                 for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                    match get_if_present(interp, &o, k) {
+                        Ok(Some(kvalue)) => {
                             match interp.call_function(
                                 &callback,
                                 &this_arg,
                                 &[kvalue, JsValue::number(k as f64), o.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    if let Err(e) =
-                                        create_data_property_or_throw(interp, &a, &pk, v)
-                                    {
+                                    if let Err(e) = create_data_property_at(interp, &a, k, v) {
                                         return Completion::Throw(e);
                                     }
                                 }
                                 other => return other,
                             }
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                        Ok(None) => {}
+                        Err(c) => return c,
                     }
                 }
                 Completion::Normal(a)
@@ -1919,13 +1972,8 @@ impl Interpreter {
                 interp.gc_root_value(&a);
                 let mut to: usize = 0;
                 for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                    match get_if_present(interp, &o, k) {
+                        Ok(Some(kvalue)) => {
                             match interp.call_function(
                                 &callback,
                                 &this_arg,
@@ -1933,12 +1981,9 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => {
                                     if interp.to_boolean_val(&v) {
-                                        if let Err(e) = create_data_property_or_throw(
-                                            interp,
-                                            &a,
-                                            &to.to_string(),
-                                            kvalue,
-                                        ) {
+                                        if let Err(e) =
+                                            create_data_property_at(interp, &a, to, kvalue)
+                                        {
                                             return Completion::Throw(e);
                                         }
                                         to += 1;
@@ -1947,8 +1992,8 @@ impl Interpreter {
                                 other => return other,
                             }
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                        Ok(None) => {}
+                        Err(c) => return c,
                     }
                 }
                 Completion::Normal(a)
@@ -1986,30 +2031,20 @@ impl Interpreter {
                             interp.create_type_error("Reduce of empty array with no initial value"),
                         );
                     }
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let val = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                    match get_if_present(interp, &o, k) {
+                        Ok(Some(val)) => {
                             k += 1;
                             break val;
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                        Ok(None) => {}
+                        Err(c) => return c,
                     }
                     k += 1;
                 }
             };
             while k < len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                match get_if_present(interp, &o, k) {
+                    Ok(Some(kvalue)) => {
                         match interp.call_function(
                             &callback,
                             &JsValue::UNDEFINED,
@@ -2019,8 +2054,8 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
                 k += 1;
             }
@@ -2058,30 +2093,20 @@ impl Interpreter {
                             interp.create_type_error("Reduce of empty array with no initial value"),
                         );
                     }
-                    let pk = (k as usize).to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let val = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                    match get_if_present(interp, &o, k as usize) {
+                        Ok(Some(val)) => {
                             k -= 1;
                             break val;
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                        Ok(None) => {}
+                        Err(c) => return c,
                     }
                     k -= 1;
                 }
             };
             while k >= 0 {
-                let pk = (k as usize).to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                match get_if_present(interp, &o, k as usize) {
+                    Ok(Some(kvalue)) => {
                         match interp.call_function(
                             &callback,
                             &JsValue::UNDEFINED,
@@ -2091,8 +2116,8 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
                 k -= 1;
             }
@@ -2115,13 +2140,8 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in 0..len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                match get_if_present(interp, &o, k) {
+                    Ok(Some(kvalue)) => {
                         match interp.call_function(
                             &callback,
                             &this_arg,
@@ -2135,8 +2155,8 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
             }
             Completion::Normal(JsValue::boolean(false))
@@ -2159,13 +2179,8 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in 0..len {
-                let pk = k.to_string();
-                match obj_has_throw(interp, &o, &pk) {
-                    Ok(true) => {
-                        let kvalue = match obj_get(interp, &o, &pk) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                match get_if_present(interp, &o, k) {
+                    Ok(Some(kvalue)) => {
                         match interp.call_function(
                             &callback,
                             &this_arg,
@@ -2179,8 +2194,8 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                    Err(e) => return Completion::Throw(e),
-                    _ => {}
+                    Ok(None) => {}
+                    Err(c) => return c,
                 }
             }
             Completion::Normal(JsValue::boolean(true))
@@ -2203,7 +2218,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in 0..len {
-                let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                let kvalue = match get_index(interp, &o, k) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -2241,7 +2256,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in 0..len {
-                let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                let kvalue = match get_index(interp, &o, k) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -2279,7 +2294,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in (0..len).rev() {
-                let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                let kvalue = match get_index(interp, &o, k) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -2319,7 +2334,7 @@ impl Interpreter {
             }
             let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             for k in (0..len).rev() {
-                let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                let kvalue = match get_index(interp, &o, k) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -2379,6 +2394,17 @@ impl Interpreter {
             };
             interp.with_gc_root_scope(|interp| {
                 interp.gc_root_value(&a);
+                if array_dense::try_splice(
+                    interp,
+                    &o,
+                    &a,
+                    len as usize,
+                    actual_start,
+                    actual_delete_count,
+                    args.get(2..).unwrap_or(&[]),
+                ) {
+                    return Completion::Normal(a);
+                }
                 for i in 0..actual_delete_count {
                     let from = (actual_start + i).to_string();
                     match obj_has_throw(interp, &o, &from) {
@@ -2543,6 +2569,9 @@ impl Interpreter {
                 Ok(f) => f,
                 Err(c) => return c,
             };
+            if array_dense::try_fill(interp, &o, len as usize, k, fin, &value) {
+                return Completion::Normal(o);
+            }
             for i in k..fin {
                 if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), value.clone()) {
                     return Completion::Throw(e);
@@ -2581,6 +2610,9 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
                 // Write back
+                if array_dense::try_store_sorted(interp, &o, len, &items) {
+                    return Completion::Normal(o);
+                }
                 let item_count = items.len();
                 for (i, v) in items.into_iter().enumerate() {
                     if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v) {
@@ -2750,13 +2782,8 @@ impl Interpreter {
                 interp.gc_root_value(&a);
                 let mut target_index = 0usize;
                 for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                    match get_if_present(interp, &o, k) {
+                        Ok(Some(kvalue)) => {
                             let mapped = interp.call_function(
                                 &callback,
                                 &this_arg,
@@ -2814,8 +2841,8 @@ impl Interpreter {
                                 other => return other,
                             }
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                        Ok(None) => {}
+                        Err(c) => return c,
                     }
                 }
                 Completion::Normal(a)

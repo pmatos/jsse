@@ -2522,6 +2522,14 @@ impl JsObjectData {
             return false;
         }
         let index = parse_array_index(key).unwrap() as usize;
+        self.push_dense_array_element(index, value)
+    }
+
+    /// Appends `value` as element `index` when `index` is exactly the current
+    /// element count and a non-writable `length` does not forbid growth.
+    /// Callers have already checked the value, extensibility and that no
+    /// descriptor owns `index`.
+    fn push_dense_array_element(&mut self, index: usize, value: &JsValue) -> bool {
         if self
             .array_elements()
             .is_none_or(|elements| elements.len() != index)
@@ -2547,6 +2555,54 @@ impl JsObjectData {
         }
         self.shape_id = fresh_shape_id();
         true
+    }
+
+    /// Whether this is an exotic Array with no own property besides a
+    /// writable data `length` equal to `len`, and exactly `len` backing
+    /// elements. Every `undefined` slot is then a hole (a present `undefined`
+    /// would own a descriptor in `properties`) and every other slot is a
+    /// default-attribute data property, so element reads and writes cannot
+    /// reach a getter, setter, trap or non-default attribute.
+    #[inline]
+    pub(crate) fn is_plain_dense_array(&self, len: usize) -> bool {
+        let Some(elements) = self.array_elements() else {
+            return false;
+        };
+        elements.len() == len && self.properties.len() == 1 && self.has_writable_array_length(len)
+    }
+
+    /// Whether `length` is an own writable data property equal to `len`.
+    #[inline]
+    pub(crate) fn has_writable_array_length(&self, len: usize) -> bool {
+        self.properties.get("length").is_some_and(|d| {
+            d.writable != Some(false)
+                && d.value.as_ref().and_then(JsValue::as_number) == Some(len as f64)
+        })
+    }
+
+    /// Sets the array's `length` data property and invalidates cached shapes,
+    /// after a structural change made directly to the element vector.
+    #[inline]
+    pub(crate) fn set_dense_array_length(&mut self, len: usize) {
+        if let Some(d) = self.properties.get_mut("length") {
+            d.value = Some(JsValue::number(len as f64));
+        }
+        self.shape_id = fresh_shape_id();
+    }
+
+    /// `CreateDataProperty(A, ToString(index), value)` for the next index of a
+    /// plain dense Array: appends in place when `index` is exactly the current
+    /// element count. Mirrors `try_append_dense_array_data_property` without
+    /// the key round trip.
+    pub(crate) fn try_append_dense_array_element(&mut self, index: usize, value: &JsValue) -> bool {
+        if value.is_undefined()
+            || !self.extensible
+            || self.properties.len() != 1
+            || index > 0xFFFF_FFFE
+        {
+            return false;
+        }
+        self.push_dense_array_element(index, value)
     }
 
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
@@ -4651,6 +4707,66 @@ mod kind_accessor_tests {
             .unwrap();
         assert_eq!(all.len(), 6);
         assert!(all[5].is_symbol(), "symbols come last");
+    }
+
+    fn dense_array_with(elements: Vec<JsValue>, length: usize) -> JsObjectData {
+        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        obj.insert_property(
+            "length",
+            PropertyDescriptor::data(JsValue::number(length as f64), true, false, false),
+        );
+        *obj.array_elements_mut().unwrap() = elements;
+        obj
+    }
+
+    #[test]
+    fn plain_dense_array_requires_only_a_synced_writable_length() {
+        let two = vec![JsValue::TRUE, JsValue::TRUE];
+        let obj = dense_array_with(two.clone(), 2);
+        assert!(obj.is_plain_dense_array(2));
+        assert!(!obj.is_plain_dense_array(3), "length mismatch");
+        assert!(
+            !dense_array_with(two.clone(), 3).is_plain_dense_array(2),
+            "sparse tail"
+        );
+
+        let mut extra = dense_array_with(two.clone(), 2);
+        extra.insert_value("tag", JsValue::TRUE);
+        assert!(!extra.is_plain_dense_array(2), "extra own property");
+
+        let mut indexed = dense_array_with(two.clone(), 2);
+        indexed.insert_value("0", JsValue::TRUE);
+        assert!(
+            !indexed.is_plain_dense_array(2),
+            "descriptor-backed element"
+        );
+
+        let mut frozen_length = dense_array_with(two, 2);
+        frozen_length.properties.get_mut("length").unwrap().writable = Some(false);
+        assert!(!frozen_length.is_plain_dense_array(2), "read-only length");
+
+        assert!(!JsObjectData::new().is_plain_dense_array(0), "not an Array");
+    }
+
+    #[test]
+    fn dense_element_append_extends_only_at_the_next_index() {
+        let mut obj = dense_array_with(vec![JsValue::TRUE], 1);
+        assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));
+        assert!(!obj.try_append_dense_array_element(1, &JsValue::UNDEFINED));
+        assert!(obj.try_append_dense_array_element(1, &JsValue::number(7.0)));
+        assert_eq!(obj.array_elements().unwrap().len(), 2);
+        assert_eq!(
+            obj.properties
+                .get("length")
+                .and_then(|d| d.value.as_ref())
+                .and_then(JsValue::as_number),
+            Some(2.0)
+        );
+        obj.extensible = false;
+        assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));
+        obj.extensible = true;
+        obj.properties.get_mut("length").unwrap().writable = Some(false);
+        assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));
     }
 
     #[test]
