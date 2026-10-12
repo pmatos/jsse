@@ -1727,7 +1727,7 @@ mod completed_state_machine_generator_tests {
 
     fn empty_state_machine() -> Rc<GeneratorStateMachine> {
         Rc::new(GeneratorStateMachine {
-            states: Vec::new(),
+            states: Rc::from(Vec::new()),
             local_vars: Vec::new(),
             params: Vec::new(),
             num_yields: 0,

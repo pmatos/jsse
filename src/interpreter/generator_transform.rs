@@ -17,7 +17,10 @@ pub(crate) enum StateMachineKind {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct GeneratorStateMachine {
-    pub states: Vec<GeneratorState>,
+    /// Shared so cloning a machine (the counters build gives every function
+    /// object its own copy to carry a BODY key) never deep-copies the
+    /// terminators, whose function literals cache per-literal info (#955).
+    pub states: std::rc::Rc<[GeneratorState]>,
     pub local_vars: Vec<LocalVariable>,
     pub params: Vec<Pattern>,
     pub num_yields: usize,
@@ -687,7 +690,7 @@ fn transform_generator_inner_opts(
     ctx.states[end_state].terminator = StateTerminator::Completed;
 
     GeneratorStateMachine {
-        states: ctx.states,
+        states: ctx.states.into(),
         local_vars: analysis.local_vars,
         params: params.to_vec(),
         num_yields: analysis.yield_points.len(),
@@ -705,7 +708,7 @@ fn create_simple_machine(
     let mut body = Body::new(body.to_vec());
     crate::ast::assign_ic_sites_for_body(&mut body);
     GeneratorStateMachine {
-        states: vec![GeneratorState {
+        states: std::rc::Rc::from(vec![GeneratorState {
             id: 0,
             body,
             terminator: StateTerminator::Completed,
@@ -713,7 +716,7 @@ fn create_simple_machine(
             scope_depth: 0,
             scope_action: None,
             scope_with_vars: Vec::new(),
-        }],
+        }]),
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
         num_yields: 0,
@@ -3934,7 +3937,9 @@ pub(crate) fn transform_async_function(
 }
 
 fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMachine) {
-    for state in &mut machine.states {
+    let states = std::rc::Rc::get_mut(&mut machine.states)
+        .expect("a freshly transformed machine's states are unshared");
+    for state in states {
         let replacement = match &state.terminator {
             StateTerminator::Yield {
                 value,
