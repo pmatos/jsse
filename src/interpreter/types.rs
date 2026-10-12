@@ -2331,6 +2331,32 @@ pub(crate) struct BoundFunctionData {
 pub(crate) struct RegExpData {
     pub source: JsString,
     pub flags: JsString,
+    /// Compiled matcher and decoded flag bits, filled on first `exec`. Always
+    /// derived from `source`/`flags`, which are only ever replaced together
+    /// with the whole `RegExpData` (`RegExp.prototype.compile`), so it can
+    /// never go stale.
+    pub exec_plan: RegExpExecPlanCell,
+}
+
+impl RegExpData {
+    pub(crate) fn new(source: JsString, flags: JsString) -> Self {
+        Self {
+            source,
+            flags,
+            exec_plan: RegExpExecPlanCell::default(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct RegExpExecPlanCell(
+    pub(crate) std::cell::OnceCell<std::rc::Rc<crate::interpreter::builtins::regexp::ExecPlan>>,
+);
+
+impl std::fmt::Debug for RegExpExecPlanCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RegExpExecPlanCell")
+    }
 }
 
 /// Proxy slot data. Present on an object iff it is (or was) a Proxy.
@@ -4495,10 +4521,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn regexp_some_for_regexp_kind() {
-        let data = RegExpData {
-            source: JsString::from_str("foo"),
-            flags: JsString::from_str(""),
-        };
+        let data = RegExpData::new(JsString::from_str("foo"), JsString::from_str(""));
         let obj = obj_with_kind(ObjectKind::RegExp(data));
         assert!(obj.regexp().is_some());
     }
