@@ -3,7 +3,7 @@ use super::op::Op;
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
-use crate::interpreter::types::{BindingKind, Completion, Environment};
+use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
 use crate::interpreter::{Atom, EnvRef, Interpreter};
 use crate::types::{JsPropertyKey, JsValue};
 
@@ -1069,6 +1069,26 @@ fn run_chunk_inner(
                     }
                     abrupt => return abrupt,
                 }
+            }
+            Op::InitLexical => {
+                let idx = decode_u16(chunk, pc);
+                let kind = if chunk.code[pc + 2] == 0 {
+                    BindingKind::Let
+                } else {
+                    BindingKind::Const
+                };
+                pc += 3;
+                let name = &chunk.names[idx as usize];
+                let value = pop_value(interp, stack, "stack underflow on InitLexical");
+                env.borrow_mut().bindings.insert_atom(
+                    name,
+                    Binding {
+                        value,
+                        kind,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
             }
             Op::Instanceof | Op::In => {
                 let r = stack.pop().expect("stack underflow on relational rhs");

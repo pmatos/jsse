@@ -101,6 +101,10 @@ pub(crate) enum Op {
     /// empty at a statement boundary). Operands: ast index (u16), escape
     /// table (u16, `NO_ESCAPE_TABLE` when no break/continue can leave it).
     ExecAst = 70,
+    /// `[..., value]` → `[...]`: initialise a function-top-level `let`/`const`
+    /// binding in the current environment (InitializeBinding, 9.1.1.1.4).
+    /// Operands: name (u16), kind (u8: 0 = let, 1 = const).
+    InitLexical = 71,
 }
 
 impl Op {
@@ -177,6 +181,7 @@ impl Op {
             68 => Some(Op::UpdateElement),
             69 => Some(Op::EvalAst),
             70 => Some(Op::ExecAst),
+            71 => Some(Op::InitLexical),
             _ => None,
         }
     }

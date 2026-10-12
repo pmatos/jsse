@@ -2,8 +2,8 @@ use super::chunk::{AstNode, Chunk, Constant, EscapeEntry, NO_ESCAPE_TABLE};
 use super::op::Op;
 use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, DoWhileStatement, Expression, ForInit, ForStatement, Literal,
-    LogicalOp, MemberProperty, Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
-    WhileStatement,
+    LogicalOp, MemberProperty, Pattern, Statement, SwitchStatement, UnaryOp, UpdateOp, VarKind,
+    VariableDeclaration, WhileStatement,
 };
 use crate::types::{JsBigInt, JsString};
 
@@ -55,6 +55,8 @@ struct LoopFrame {
     /// break position / continue position, resolved when the loop ends.
     escape_breaks: Vec<(usize, usize)>,
     escape_continues: Vec<(usize, usize)>,
+    /// A `switch` is a `break` target but not a `continue` target.
+    is_switch: bool,
 }
 
 impl LoopFrame {
@@ -66,6 +68,7 @@ impl LoopFrame {
             break_sites: Vec::new(),
             escape_breaks: Vec::new(),
             escape_continues: Vec::new(),
+            is_switch: false,
         }
     }
 }
@@ -102,7 +105,7 @@ struct Compiler {
     max_jump_target: usize,
     /// Innermost loop last. `break`/`continue` resolution for the unlabeled
     /// form reads the last entry; the labeled form searches outward from the
-    /// end via `resolve_loop_frame`.
+    /// end via `resolve_break_frame`/`resolve_continue_frame`.
     loop_frames: Vec<LoopFrame>,
     /// Frame binding order for a function body whose locals are known: slot
     /// `i` is the expected position of that name in the call's binding
@@ -114,6 +117,10 @@ struct Compiler {
     /// would pay chunk-entry cost for nothing.
     native_ops: u32,
     fallback_reasons: Vec<&'static str>,
+    /// Set by the function top-level statement list for the statement about
+    /// to be compiled; consumed on entry so nested statements see `false`.
+    /// Only there may a `let`/`const` initialise its hoisted binding directly.
+    at_function_top_level: bool,
 }
 
 impl Compiler {
@@ -135,6 +142,7 @@ impl Compiler {
             escape_tables: Vec::new(),
             native_ops: 0,
             fallback_reasons: Vec::new(),
+            at_function_top_level: false,
         }
     }
 
@@ -207,9 +215,12 @@ impl Compiler {
     }
 
     fn patch_jump(&mut self, patch: usize) -> Result<(), CompileError> {
-        // Offset is from the byte AFTER the 2-byte operand to the current code length.
+        self.patch_jump_to(patch, self.code.len())
+    }
+
+    fn patch_jump_to(&mut self, patch: usize, to: usize) -> Result<(), CompileError> {
+        // Offset is from the byte AFTER the 2-byte operand to the target.
         let from = patch + 2;
-        let to = self.code.len();
         self.max_jump_target = self.max_jump_target.max(to);
         let delta = to as isize - from as isize;
         if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
@@ -785,9 +796,23 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_var_declaration(&mut self, decl: &VariableDeclaration) -> Result<(), CompileError> {
+    /// `at_function_top_level` lets a `let`/`const` initialise the binding
+    /// that declaration instantiation hoisted (as uninitialised) into the
+    /// function environment. Anywhere else a lexical declaration owns a scope
+    /// the VM does not model, so the tree-walker runs the whole statement.
+    fn compile_var_declaration(
+        &mut self,
+        decl: &VariableDeclaration,
+        at_function_top_level: bool,
+    ) -> Result<(), CompileError> {
         if decl.kind != VarKind::Var {
-            return Err(CompileError::Unsupported("lexical declaration"));
+            if self.goal != CompileGoal::Function
+                || !at_function_top_level
+                || !matches!(decl.kind, VarKind::Let | VarKind::Const)
+            {
+                return Err(CompileError::Unsupported("lexical declaration"));
+            }
+            return self.compile_lexical_declaration(decl);
         }
         for declarator in &decl.declarations {
             let Pattern::Identifier(name) = &declarator.pattern else {
@@ -809,6 +834,38 @@ impl Compiler {
                 self.emit(Op::Pop);
                 self.pop_n(1);
             }
+        }
+        Ok(())
+    }
+
+    fn compile_lexical_declaration(
+        &mut self,
+        decl: &VariableDeclaration,
+    ) -> Result<(), CompileError> {
+        let kind_byte = u8::from(decl.kind == VarKind::Const);
+        for declarator in &decl.declarations {
+            let Pattern::Identifier(name) = &declarator.pattern else {
+                return Err(CompileError::Unsupported("lexical binding pattern"));
+            };
+            if declarator
+                .init
+                .as_ref()
+                .is_some_and(Expression::is_anonymous_function_definition)
+            {
+                return Err(CompileError::Unsupported("anonymous function initializer"));
+            }
+            let idx = self.add_name(name)?;
+            match &declarator.init {
+                Some(init) => self.compile_expr(init)?,
+                None => {
+                    self.emit(Op::LoadUndefined);
+                    self.push_n(1);
+                }
+            }
+            self.emit(Op::InitLexical);
+            self.emit_u16(idx);
+            self.code.push(kind_byte);
+            self.pop_n(1);
         }
         Ok(())
     }
@@ -883,6 +940,7 @@ impl Compiler {
             debug_assert_eq!(self.current_refs, 0);
             let safepoint_at = self.code.len();
             self.emit(Op::Safepoint);
+            self.at_function_top_level = skip_hoisted;
             self.compile_statement(stmt)?;
             if self.code.len() == safepoint_at + 1 {
                 self.code.truncate(safepoint_at);
@@ -899,7 +957,10 @@ impl Compiler {
         }
         let snap = self.snapshot();
         match self.compile_statement_native(stmt) {
-            Err(CompileError::Unsupported(reason)) => {
+            Err(
+                CompileError::Unsupported(reason)
+                | CompileError::Ineligible(reason @ "jump offset overflow"),
+            ) => {
                 self.rollback(snap);
                 self.emit_exec_ast(stmt, reason)
             }
@@ -951,37 +1012,51 @@ impl Compiler {
         }
         let mut entries: Vec<EscapeEntry> = Vec::new();
         let frame_count = self.loop_frames.len();
+        let innermost_loop = self.loop_frames.iter().rposition(|f| !f.is_switch);
         for frame_idx in (0..frame_count).rev() {
-            let mut labels: Vec<Option<String>> = Vec::new();
+            // (label, includes the unlabeled break, includes the unlabeled
+            // continue): unlabeled break binds to the innermost frame of any
+            // kind, unlabeled continue to the innermost loop.
+            let mut targets: Vec<(Option<String>, bool, bool)> = Vec::new();
+            let is_switch = self.loop_frames[frame_idx].is_switch;
             if frame_idx == frame_count - 1 {
-                labels.push(None);
+                targets.push((None, true, false));
             }
-            labels.extend(self.loop_frames[frame_idx].labels.iter().cloned().map(Some));
+            if innermost_loop == Some(frame_idx) {
+                targets.push((None, false, true));
+            }
+            for label in &self.loop_frames[frame_idx].labels {
+                targets.push((Some(label.clone()), true, !is_switch));
+            }
             let continue_target = self.loop_frames[frame_idx].continue_target;
-            for label in labels {
-                self.loop_frames[frame_idx]
-                    .escape_breaks
-                    .push((table_idx, entries.len()));
-                entries.push(EscapeEntry {
-                    is_continue: false,
-                    label: label.clone(),
-                    target: u32::MAX,
-                });
-                match continue_target {
-                    Some(target) => entries.push(EscapeEntry {
-                        is_continue: true,
-                        label,
-                        target: target as u32,
-                    }),
-                    None => {
-                        self.loop_frames[frame_idx]
-                            .escape_continues
-                            .push((table_idx, entries.len()));
-                        entries.push(EscapeEntry {
+            for (label, breaks, continues) in targets {
+                if breaks {
+                    self.loop_frames[frame_idx]
+                        .escape_breaks
+                        .push((table_idx, entries.len()));
+                    entries.push(EscapeEntry {
+                        is_continue: false,
+                        label: label.clone(),
+                        target: u32::MAX,
+                    });
+                }
+                if continues {
+                    match continue_target {
+                        Some(target) => entries.push(EscapeEntry {
                             is_continue: true,
                             label,
-                            target: u32::MAX,
-                        });
+                            target: target as u32,
+                        }),
+                        None => {
+                            self.loop_frames[frame_idx]
+                                .escape_continues
+                                .push((table_idx, entries.len()));
+                            entries.push(EscapeEntry {
+                                is_continue: true,
+                                label,
+                                target: u32::MAX,
+                            });
+                        }
                     }
                 }
             }
@@ -999,6 +1074,7 @@ impl Compiler {
     }
 
     fn compile_statement_native(&mut self, stmt: &Statement) -> Result<(), CompileError> {
+        let at_top_level = std::mem::take(&mut self.at_function_top_level);
         match stmt {
             Statement::Empty => Ok(()),
             Statement::Expression(expr) => {
@@ -1022,7 +1098,7 @@ impl Compiler {
                 }
                 self.compile_statement_list(body)
             }
-            Statement::Variable(decl) => self.compile_var_declaration(decl),
+            Statement::Variable(decl) => self.compile_var_declaration(decl, at_top_level),
             Statement::If(if_stmt) => {
                 // Annex B.3.3 treats `if (x) function f() {}` as if the
                 // function sat in a block; leave that to the tree-walker.
@@ -1065,6 +1141,7 @@ impl Compiler {
             Statement::While(while_stmt) => self.compile_while(while_stmt, Vec::new()),
             Statement::DoWhile(do_while_stmt) => self.compile_do_while(do_while_stmt, Vec::new()),
             Statement::For(for_stmt) => self.compile_for(for_stmt, Vec::new()),
+            Statement::Switch(switch) => self.compile_switch(switch, Vec::new()),
             Statement::Labeled(label, inner) => {
                 let mut labels = vec![label.clone()];
                 let mut current: &Statement = inner;
@@ -1078,6 +1155,7 @@ impl Compiler {
                         self.compile_do_while(do_while_stmt, labels)
                     }
                     Statement::For(for_stmt) => self.compile_for(for_stmt, labels),
+                    Statement::Switch(switch) => self.compile_switch(switch, labels),
                     _ => Err(CompileError::Unsupported("statement:Labeled")),
                 }
             }
@@ -1126,18 +1204,14 @@ impl Compiler {
         )
     }
 
-    /// Resolves `break`/`continue`'s target loop frame. Unlabeled forms bind
-    /// to the innermost (last-pushed) frame; labeled forms search outward so
-    /// a label on an outer loop is reachable past an intervening unlabeled
-    /// inner loop. The parser's early-error checks
-    /// (`sec-continue-statement-static-semantics-containsundefinedcontinuetarget`,
-    /// and `break`'s analogous rule) guarantee a labeled form always names an
-    /// enclosing loop that compiled successfully — this only returns `None`
-    /// for a label that targets a non-loop statement or an unlabeled form
-    /// with no enclosing loop at all, neither of which this compiler should
-    /// ever actually reach given its existing eligibility checks, but it's
-    /// cheap defensive coding against a future change that stops being true.
-    fn resolve_loop_frame(&self, label: Option<&str>) -> Option<usize> {
+    /// Resolves a `break`'s target frame. The unlabeled form binds to the
+    /// innermost frame of either kind (a `switch` is a break target); the
+    /// labeled form searches outward so a label on an outer loop is
+    /// reachable past an intervening unlabeled inner loop. The parser's
+    /// early-error checks guarantee a labeled form always names an enclosing
+    /// frame that compiled successfully — `None` is defensive coding against
+    /// a future change that stops being true.
+    fn resolve_break_frame(&self, label: Option<&str>) -> Option<usize> {
         match label {
             None => self.loop_frames.len().checked_sub(1),
             Some(name) => self
@@ -1147,9 +1221,21 @@ impl Compiler {
         }
     }
 
+    /// A `continue` targets the innermost loop; `switch` frames are skipped
+    /// (sec-continue-statement-runtime-semantics-evaluation).
+    fn resolve_continue_frame(&self, label: Option<&str>) -> Option<usize> {
+        match label {
+            None => self.loop_frames.iter().rposition(|frame| !frame.is_switch),
+            Some(name) => self
+                .loop_frames
+                .iter()
+                .rposition(|frame| !frame.is_switch && frame.labels.iter().any(|l| l == name)),
+        }
+    }
+
     fn compile_break(&mut self, label: Option<&str>) -> Result<(), CompileError> {
         let idx = self
-            .resolve_loop_frame(label)
+            .resolve_break_frame(label)
             .ok_or(CompileError::Ineligible("statement:Break"))?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
@@ -1160,7 +1246,7 @@ impl Compiler {
 
     fn compile_continue(&mut self, label: Option<&str>) -> Result<(), CompileError> {
         let idx = self
-            .resolve_loop_frame(label)
+            .resolve_continue_frame(label)
             .ok_or(CompileError::Ineligible("statement:Continue"))?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
@@ -1172,6 +1258,97 @@ impl Compiler {
                 Ok(())
             }
         }
+    }
+
+    /// `switch` (sec-switch-statement-runtime-semantics-evaluation,
+    /// sec-runtime-semantics-caseblockevaluation): the discriminant is
+    /// evaluated once; each case selector is evaluated lazily, in source
+    /// order, and compared with `===`; execution starts at the first match
+    /// (else the `default` clause) and falls through the later clauses.
+    ///
+    ///   <discriminant>
+    ///   per case:  DupN 1; <selector>; StrictEq; JumpIfTrue match_i
+    ///   Pop; Jump default_body | end
+    ///   match_i:   Pop; Jump body_i            (one trampoline per case)
+    ///   body_0 ... body_n                      (source order)
+    ///   end:
+    fn compile_switch(
+        &mut self,
+        switch: &SwitchStatement,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        if self.goal != CompileGoal::Function {
+            return Err(CompileError::Unsupported("statement:Switch"));
+        }
+        // Case bodies share one block scope whose declarations (and hoisted
+        // function declarations) the VM does not model.
+        if switch
+            .cases
+            .iter()
+            .any(|case| declares_lexical(&case.consequent))
+        {
+            return Err(CompileError::Unsupported("block-scoped declaration"));
+        }
+        self.compile_expr(&switch.discriminant)?;
+        let mut match_sites: Vec<Option<usize>> = Vec::with_capacity(switch.cases.len());
+        for case in &switch.cases {
+            match &case.test {
+                Some(test) => {
+                    self.emit_dup_n(1);
+                    self.compile_expr(test)?;
+                    self.emit(Op::StrictEq);
+                    self.pop_n(2);
+                    self.push_n(1);
+                    self.pop_n(1);
+                    match_sites.push(Some(self.emit_jump(Op::JumpIfTrue)));
+                }
+                None => match_sites.push(None),
+            }
+        }
+        // No selector matched: drop the discriminant and go to `default`,
+        // or past the switch when there is none.
+        self.emit(Op::Pop);
+        self.pop_n(1);
+        let no_match_site = self.emit_jump(Op::Jump);
+        let mut trampoline_sites: Vec<Option<usize>> = Vec::with_capacity(switch.cases.len());
+        for match_site in &match_sites {
+            match match_site {
+                Some(site) => {
+                    self.patch_jump(*site)?;
+                    self.emit(Op::Pop);
+                    trampoline_sites.push(Some(self.emit_jump(Op::Jump)));
+                }
+                None => trampoline_sites.push(None),
+            }
+        }
+        let mut frame = LoopFrame::new(labels, None);
+        frame.is_switch = true;
+        self.loop_frames.push(frame);
+        let mut body_starts: Vec<usize> = Vec::with_capacity(switch.cases.len());
+        for case in &switch.cases {
+            body_starts.push(self.code.len());
+            self.compile_statement_list(&case.consequent)?;
+        }
+        let frame = self
+            .loop_frames
+            .pop()
+            .expect("pushed above, not re-entrant");
+        for (site, start) in trampoline_sites.iter().zip(&body_starts) {
+            if let Some(site) = site {
+                self.patch_jump_to(*site, *start)?;
+            }
+        }
+        match switch.cases.iter().position(|case| case.test.is_none()) {
+            Some(default_index) => {
+                self.patch_jump_to(no_match_site, body_starts[default_index])?;
+            }
+            None => self.patch_jump(no_match_site)?,
+        }
+        for site in frame.break_sites {
+            self.patch_jump(site)?;
+        }
+        self.resolve_escape_targets(&frame.escape_breaks);
+        Ok(())
     }
 
     fn compile_while(
@@ -1260,7 +1437,7 @@ impl Compiler {
         self.reset_script_completion();
         if let Some(init) = &for_stmt.init {
             match init {
-                ForInit::Variable(decl) => self.compile_var_declaration(decl)?,
+                ForInit::Variable(decl) => self.compile_var_declaration(decl, false)?,
                 ForInit::Expression(expr) => {
                     self.compile_expr(expr)?;
                     self.emit(Op::Pop);

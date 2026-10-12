@@ -2945,3 +2945,97 @@ fn regexp_literal_still_allocates_fresh_object_per_evaluation() {
     );
     assert_eq!(shown, "false");
 }
+
+// ----- native switch and function-top-level let/const -----
+
+#[test]
+fn switch_selector_order_fallthrough_and_default_placement() {
+    let shown = assert_value_parity(
+        "var __r = (function(n){ var log = '', r = ''; switch (n) { \
+         case (log += 's1', 1): r += 'one'; \
+         case (log += 's2', 2): r += 'two'; break; \
+         default: r += 'dflt'; \
+         case (log += 's3', 3): r += 'three'; break; \
+         case (log += 's4', 4): r += 'four'; } return r + '|' + log; })(9);",
+    );
+    assert_eq!(shown, "dfltthree|s1s2s3s4");
+}
+
+#[test]
+fn switch_compiles_without_a_tree_walker_hand_off() {
+    use super::compiler::compile_body;
+    use crate::parser::Parser;
+    let mut parser = Parser::new("var r = 0; switch (r) { case 1: r = 2; break; default: r = 3; }")
+        .expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let chunk = compile_body(program.body.as_slice()).expect("compile");
+    assert!(
+        chunk.ast.is_empty(),
+        "switch must compile natively, got fallbacks {:?}",
+        chunk.fallback_reasons
+    );
+}
+
+#[test]
+fn switch_break_and_continue_targets() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var out = ''; \
+         outer: for (var i = 0; i < 5; i++) { \
+           switch (i) { case 0: continue; case 1: out += 'a'; break; \
+             case 2: out += 'b'; continue outer; \
+             case 3: try { out += 't'; continue; } finally { out += 'f'; } \
+             default: break outer; } \
+           out += 'x' + i; } return out; })();",
+    );
+    assert_eq!(shown, "ax1btf");
+}
+
+#[test]
+fn switch_with_lexical_case_body_falls_back_whole() {
+    let shown = assert_value_parity(
+        "var __r = (function(x){ var seen = typeof x; switch (x) { case 1: let y = 'one'; return y; \
+         case 2: return typeof q; } return seen; })(1);",
+    );
+    assert_eq!(shown, "one");
+}
+
+#[test]
+fn top_level_let_const_initialise_hoisted_tdz_bindings() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var seen = []; \
+         try { seen.push(x); } catch (e) { seen.push(e.name); } \
+         let x = 1; const y = x + 1; let z; \
+         seen.push(x, y, typeof z); \
+         try { y = 5; } catch (e) { seen.push(e.name); } \
+         return seen.join(); })();",
+    );
+    assert_eq!(shown, "ReferenceError,1,2,undefined,TypeError");
+}
+
+#[test]
+fn block_scoped_lexical_stays_in_its_block() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var x = 'outer'; { let x = 'inner'; } \
+         for (let i = 0; i < 2; i++) { let x = i; } return x + typeof i; })();",
+    );
+    assert_eq!(shown, "outerundefined");
+}
+
+#[test]
+fn jump_offset_overflow_in_one_statement_falls_back_for_that_statement_only() {
+    // A switch whose body exceeds the 16-bit jump range must not make the
+    // whole function ineligible: that statement alone runs on the tree-walker.
+    let mut body = String::new();
+    for i in 0..4000 {
+        body.push_str(&format!(
+            "case {i}: r += {i}; r += 1; r += 2; r += 3; break;"
+        ));
+    }
+    let source =
+        format!("var __r = (function(n){{ var r = 0; switch (n) {{ {body} }} return r; }})(3999);");
+    let (v, count) = eval_with_mode(&source, true);
+    let (ast_v, _) = eval_with_mode(&source, false);
+    assert!(count >= 1, "function must still compile to bytecode");
+    assert_eq!(v.as_number(), ast_v.as_number());
+    assert_eq!(v.as_number(), Some(3999.0 + 6.0));
+}
