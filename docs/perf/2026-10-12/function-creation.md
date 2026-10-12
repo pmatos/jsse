@@ -25,17 +25,33 @@ was in review; this change reuses that.
 
 ## Measurement
 
-`perf` and `valgrind` are unavailable on the build host, so instruction counts were
-not measured. `user` CPU seconds, median of 5 (3 for promises), same host under
-load average 17-42, HEAD `9703e359` baseline binary vs this branch:
+`perf` and `valgrind` are unavailable on the build host, so instruction counts
+were not measured. `user` CPU seconds, median of 3 runs per round, rounds
+interleaved (`origin/main` @ `4fa14fac` binary, this branch, boa 0.22.0),
+shared host at load average 16-26, so absolute numbers are noisy:
 
-| benchmark | baseline | branch | change |
-|---|---|---|---|
-| `bench_closure_create.js` | 1.85 s | 0.55 s | -43% to -70% by run (load-dependent) |
-| `bench_promise_new.js` | 2.82 s | 1.72 s | -39% |
+| benchmark | origin/main | branch | boa 0.22 | branch / boa |
+|---|---|---|---|---|
+| `bench_calls_closure_create.js` r1 | 1.12 s | 0.70 s | 0.37 s | 1.9x |
+| r2 | 1.12 s | 0.82 s | 0.40 s | 2.1x |
+| r3 | 1.27 s | 0.79 s | 0.34 s | 2.3x |
+| `bench_promises_new_promise.js` r1 | 2.67 s | 2.70 s | 0.82 s | 3.3x |
+| r2 | 3.64 s | 2.66 s | 1.46 s | 1.8x |
+| r3 | 3.66 s | 2.27 s | 1.66 s | 1.4x |
+
+The closure acceptance ratio (<= 3.0 vs boa) is met in every round. The
+promise numbers swing too much under load to quote a ratio; the mean branch vs
+main change is about -20%.
+
+Object-heavy no-regression check (`LINEAR_MAX` changes lookups for 5-8
+property objects), main vs branch, two interleaved rounds: `bench_object.js`
+0.40/0.39 and 0.39/0.42; `bench_opmix.js` 3.95/4.67 and 6.46/5.57 — the sign
+flips between rounds, so no consistent regression is visible at this noise
+level; `bench_closures.js` 2.83/2.08 and 2.46/1.78 (-27%).
 
 The deterministic gate is `tests/perf_counters_function_creation.rs`
-(`key_intern_calls` stays flat as closures and promises grow).
+(`key_intern_calls` stays flat as closures and promises grow). The
+instruction-count criterion (<= 5k per closure) is unverified.
 
 ## Not done
 
