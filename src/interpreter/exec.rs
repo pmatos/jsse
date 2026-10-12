@@ -43,20 +43,12 @@ impl Interpreter {
                 )
             });
             self.perf.enter_ast_body(name, id, false);
-            let result = if body.as_slice().is_empty() {
-                Completion::Empty
-            } else {
-                self.exec_body_inner(body, env)
-            };
+            let result = self.exec_body_inner(body, env);
             self.perf.leave_ast_body();
             result
         };
         #[cfg(not(feature = "perf-counters"))]
-        let result = if body.as_slice().is_empty() {
-            Completion::Empty
-        } else {
-            self.exec_body_inner(body, env)
-        };
+        let result = self.exec_body_inner(body, env);
         self.in_async_generator_body = saved_async_generator_body;
         result
     }
@@ -93,6 +85,10 @@ impl Interpreter {
     }
 
     fn exec_body_inner(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        // Terminator-only state-machine states have nothing to instantiate or run.
+        if body.as_slice().is_empty() {
+            return Completion::Empty;
+        }
         self.with_ic_body(body, |interp| {
             interp.exec_statements_cached(body.as_slice(), env, None)
         })
