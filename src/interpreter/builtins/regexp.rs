@@ -7913,15 +7913,15 @@ pub(super) fn get_substitution(
                     i += 2;
                 }
                 c if c == b'&' as u16 => {
-                    result.extend_from_slice(matched);
+                    interp.append_code_units(&mut result, matched)?;
                     i += 2;
                 }
                 c if c == b'`' as u16 => {
-                    result.extend_from_slice(&s[..position]);
+                    interp.append_code_units(&mut result, &s[..position])?;
                     i += 2;
                 }
                 c if c == b'\'' as u16 => {
-                    result.extend_from_slice(&s[tail_pos..]);
+                    interp.append_code_units(&mut result, &s[tail_pos..])?;
                     i += 2;
                 }
                 c if (b'0' as u16..=b'9' as u16).contains(&c) => {
@@ -7933,7 +7933,7 @@ pub(super) fn get_substitution(
                             let cap = &captures[nn - 1];
                             if !cap.is_undefined() {
                                 let cap_js = interp.to_js_string(cap)?;
-                                result.extend_from_slice(cap_js.as_units());
+                                interp.append_code_units(&mut result, cap_js.as_units())?;
                             }
                             i += 3;
                             continue;
@@ -7943,7 +7943,7 @@ pub(super) fn get_substitution(
                         let cap = &captures[d1 - 1];
                         if !cap.is_undefined() {
                             let cap_js = interp.to_js_string(cap)?;
-                            result.extend_from_slice(cap_js.as_units());
+                            interp.append_code_units(&mut result, cap_js.as_units())?;
                         }
                     } else {
                         result.push(b'$' as u16);
@@ -7953,7 +7953,7 @@ pub(super) fn get_substitution(
                 }
                 c if c == b'<' as u16 => {
                     if named_captures.is_undefined() {
-                        result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
+                        interp.append_code_units(&mut result, &[b'$' as u16, b'<' as u16])?;
                         i += 2;
                     } else {
                         let start = i + 2;
@@ -7967,7 +7967,10 @@ pub(super) fn get_substitution(
                             let nc_obj = match named_captures.as_object_id() {
                                 Some(id) => id,
                                 None => {
-                                    result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
+                                    interp.append_code_units(
+                                        &mut result,
+                                        &[b'$' as u16, b'<' as u16],
+                                    )?;
                                     i += 2;
                                     continue;
                                 }
@@ -7983,11 +7986,11 @@ pub(super) fn get_substitution(
                             };
                             if !capture.is_undefined() {
                                 let cap_js = interp.to_js_string(&capture)?;
-                                result.extend_from_slice(cap_js.as_units());
+                                interp.append_code_units(&mut result, cap_js.as_units())?;
                             }
                             i = end + 1;
                         } else {
-                            result.extend_from_slice(&[b'$' as u16, b'<' as u16]);
+                            interp.append_code_units(&mut result, &[b'$' as u16, b'<' as u16])?;
                             i += 2;
                         }
                     }
@@ -8001,6 +8004,9 @@ pub(super) fn get_substitution(
             result.push(replacement[i]);
             i += 1;
         }
+    }
+    if result.len() > MAX_STRING_LENGTH {
+        return Err(interp.invalid_string_length_error());
     }
     Ok(result)
 }
@@ -8333,6 +8339,18 @@ fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<JsPropertyKey> {
 }
 
 impl Interpreter {
+    // RegExp.prototype[@@replace] steps: accumulatedResult + the unmatched span
+    // before the match + the replacement, within MAX_STRING_LENGTH.
+    fn append_span_and_replacement(
+        &mut self,
+        accumulated: &mut Vec<u16>,
+        span: &[u16],
+        replacement: &[u16],
+    ) -> Result<(), JsValue> {
+        self.append_code_units(accumulated, span)?;
+        self.append_code_units(accumulated, replacement)
+    }
+
     pub(crate) fn setup_regexp(&mut self) {
         let regexp_proto_id = self.create_object_id();
 
@@ -9143,11 +9161,14 @@ impl Interpreter {
                         };
 
                         if position_utf16 >= next_source_position {
-                            accumulated_result.extend_from_slice(
+                            if let Err(e) = interp.append_span_and_replacement(
+                                &mut accumulated_result,
                                 &regex_input.subject.as_units()
                                     [next_source_position..position_utf16],
-                            );
-                            accumulated_result.extend_from_slice(&replacement);
+                                &replacement,
+                            ) {
+                                return Completion::Throw(e);
+                            }
                             next_source_position = tail_pos;
                         }
 
@@ -9164,10 +9185,13 @@ impl Interpreter {
                     if let Err(e) = set_last_index_strict(interp, rx_id, 0.0) {
                         return Completion::Throw(e);
                     }
-                    if next_source_position < s_utf16_len {
-                        accumulated_result.extend_from_slice(
+                    if next_source_position < s_utf16_len
+                        && let Err(e) = interp.append_code_units(
+                            &mut accumulated_result,
                             &regex_input.subject.as_units()[next_source_position..],
-                        );
+                        )
+                    {
+                        return Completion::Throw(e);
                     }
                     return Completion::Normal(JsValue::string(JsString::from_vec(
                         accumulated_result,
@@ -9429,20 +9453,26 @@ impl Interpreter {
                         // p. If position >= nextSourcePosition, then
                         let tail_pos_final = (position_utf16 + match_length_utf16).min(s_utf16_len);
                         if position_utf16 >= next_source_position {
-                            accumulated_result.extend_from_slice(
+                            if let Err(e) = interp.append_span_and_replacement(
+                                &mut accumulated_result,
                                 &regex_input.subject.as_units()
                                     [next_source_position..position_utf16],
-                            );
-                            accumulated_result.extend_from_slice(&replacement);
+                                &replacement,
+                            ) {
+                                return Completion::Throw(e);
+                            }
                             next_source_position = tail_pos_final;
                         }
                     }
 
                     // 15. Return accumulatedResult + remainder of S.
-                    if next_source_position < s_utf16_len {
-                        accumulated_result.extend_from_slice(
+                    if next_source_position < s_utf16_len
+                        && let Err(e) = interp.append_code_units(
+                            &mut accumulated_result,
                             &regex_input.subject.as_units()[next_source_position..],
-                        );
+                        )
+                    {
+                        return Completion::Throw(e);
                     }
                     Completion::Normal(JsValue::string(JsString::from_vec(accumulated_result)))
                 })

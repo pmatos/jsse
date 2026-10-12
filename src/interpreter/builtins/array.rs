@@ -1487,8 +1487,10 @@ impl Interpreter {
             let result = (|| {
                 let mut units: Vec<u16> = Vec::new();
                 for i in 0..len {
-                    if i > 0 {
-                        units.extend_from_slice(sep.as_units());
+                    if i > 0
+                        && let Err(e) = interp.append_code_units(&mut units, sep.as_units())
+                    {
+                        return Completion::Throw(e);
                     }
                     let elem = match obj_get(interp, &o, &i.to_string()) {
                         Ok(v) => v,
@@ -1543,8 +1545,10 @@ impl Interpreter {
             let pass_args = [locales, options];
             let mut result: Vec<u16> = Vec::new();
             for k in 0..len {
-                if k > 0 {
-                    result.push(u16::from(b','));
+                if k > 0
+                    && let Err(e) = interp.append_code_units(&mut result, &[u16::from(b',')])
+                {
+                    return Completion::Throw(e);
                 }
                 let next_element = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,

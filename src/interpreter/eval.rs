@@ -1123,7 +1123,12 @@ impl Interpreter {
                     }
                 }
                 let joined = match base {
-                    Some(base) => base.concat_units(&code_units),
+                    Some(base) => {
+                        if !concat_fits(base.len(), code_units.len()) {
+                            return Completion::Throw(self.invalid_string_length_error());
+                        }
+                        base.concat_units(&code_units)
+                    }
                     None => JsString::from_vec(code_units),
                 };
                 Completion::Normal(JsValue::string(joined))
@@ -1518,6 +1523,24 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn invalid_string_length_error(&mut self) -> JsValue {
+        self.create_range_error("Invalid string length")
+    }
+
+    // Appends `units` to `out`, throwing RangeError before the allocation when
+    // the result would pass MAX_STRING_LENGTH.
+    pub(crate) fn append_code_units(
+        &mut self,
+        out: &mut Vec<u16>,
+        units: &[u16],
+    ) -> Result<(), JsValue> {
+        if !concat_fits(out.len(), units.len()) {
+            return Err(self.invalid_string_length_error());
+        }
+        out.extend_from_slice(units);
+        Ok(())
+    }
+
     // Appends ToString(val) to `out`. Unlike `to_js_string`, a number or other
     // non-string primitive is encoded straight into `out`, with no
     // intermediate JsString.
@@ -1527,14 +1550,17 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<(), JsValue> {
         if let Some(s) = val.as_string() {
-            out.extend_from_slice(s.as_units());
+            self.append_code_units(out, s.as_units())
         } else if val.is_object() {
             let s = self.to_js_string(val)?;
-            out.extend_from_slice(s.as_units());
+            self.append_code_units(out, s.as_units())
         } else {
             out.extend(self.to_string_value(val)?.encode_utf16());
+            if out.len() > MAX_STRING_LENGTH {
+                return Err(self.invalid_string_length_error());
+            }
+            Ok(())
         }
-        Ok(())
     }
 
     // §7.1.4 ToNumber — calls ToPrimitive for objects
@@ -2044,7 +2070,10 @@ impl Interpreter {
                 self.create_type_error("Cannot convert a Symbol value to a string"),
             );
         }
-        Completion::Normal(concat_string_values(lval, rval))
+        match concat_string_values(lval, rval) {
+            Some(v) => Completion::Normal(v),
+            None => Completion::Throw(self.invalid_string_length_error()),
+        }
     }
 
     pub(super) fn eval_binary(

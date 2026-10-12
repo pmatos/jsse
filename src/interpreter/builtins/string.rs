@@ -134,6 +134,9 @@ fn string_pad(
     if fill.is_empty() {
         return Completion::Normal(JsValue::string(s));
     }
+    if int_max > MAX_STRING_LENGTH {
+        return Completion::Throw(interp.invalid_string_length_error());
+    }
     let pad = fill.as_units().iter().copied().cycle().take(int_max - len);
     let units = s.as_units().iter().copied();
     let result: Vec<u16> = if at_start {
@@ -185,7 +188,9 @@ fn append_replacement(
             template.as_units(),
         )
         .map_err(Completion::Throw)?;
-        out.extend_from_slice(&substitution);
+        interp
+            .append_code_units(out, &substitution)
+            .map_err(Completion::Throw)?;
         return Ok(());
     }
     let call_args = [
@@ -223,7 +228,15 @@ fn locale_case_map(
             cm.lowercase_to_string(run, &langid)
         }
     });
-    Completion::Normal(JsValue::string(JsString::from_vec(mapped)))
+    case_mapped_string(interp, mapped)
+}
+
+// Case mapping can lengthen a string (e.g. U+00DF to "SS").
+fn case_mapped_string(interp: &mut Interpreter, units: Vec<u16>) -> Completion {
+    if units.len() > MAX_STRING_LENGTH {
+        return Completion::Throw(interp.invalid_string_length_error());
+    }
+    Completion::Normal(JsValue::string(JsString::from_vec(units)))
 }
 
 // Annex B CreateHTML: `<tag attribute="value">s</tag>`, with `"` in the value
@@ -513,7 +526,7 @@ impl Interpreter {
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let lower = map_well_formed(s.as_units(), |run| Cow::Owned(run.to_lowercase()));
-                    Completion::Normal(JsValue::string(JsString::from_vec(lower)))
+                    case_mapped_string(interp, lower)
                 }),
             ),
             (
@@ -522,7 +535,7 @@ impl Interpreter {
                 Rc::new(|interp, this_val, _args| {
                     let s = propagate!(this_js_string(interp, this_val));
                     let upper = map_well_formed(s.as_units(), |run| Cow::Owned(run.to_uppercase()));
-                    Completion::Normal(JsValue::string(JsString::from_vec(upper)))
+                    case_mapped_string(interp, upper)
                 }),
             ),
             (
@@ -569,6 +582,12 @@ impl Interpreter {
                     if n < 0.0 || n == f64::INFINITY {
                         return Completion::Throw(interp.create_range_error("Invalid count value"));
                     }
+                    if s.is_empty() || n == 0.0 {
+                        return Completion::Normal(JsValue::string(JsString::default()));
+                    }
+                    if n > (MAX_STRING_LENGTH / s.len()) as f64 {
+                        return Completion::Throw(interp.invalid_string_length_error());
+                    }
                     let repeated = s.as_units().repeat(n as usize);
                     Completion::Normal(JsValue::string(JsString::from_vec(repeated)))
                 }),
@@ -591,6 +610,9 @@ impl Interpreter {
                     let mut tail: Vec<u16> = Vec::new();
                     for arg in args {
                         propagate!(interp.append_js_string(&mut tail, arg));
+                    }
+                    if !concat_fits(s.len(), tail.len()) {
+                        return Completion::Throw(interp.invalid_string_length_error());
                     }
                     Completion::Normal(JsValue::string(s.concat_units(&tail)))
                 }),
@@ -720,7 +742,7 @@ impl Interpreter {
                         pos,
                         end
                     ));
-                    result.extend_from_slice(&s_units[end..]);
+                    propagate!(interp.append_code_units(&mut result, &s_units[end..]));
                     Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
@@ -823,7 +845,9 @@ impl Interpreter {
                         ));
                         end_of_last_match = end;
                     }
-                    result.extend_from_slice(&s_units[end_of_last_match..]);
+                    propagate!(
+                        interp.append_code_units(&mut result, &s_units[end_of_last_match..])
+                    );
                     Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
