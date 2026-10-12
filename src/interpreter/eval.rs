@@ -285,9 +285,9 @@ impl Interpreter {
         if proto_val.is_object() {
             init_env.borrow_mut().bindings.insert(
                 "__home_object__",
-                crate::interpreter::types::Binding {
+                Binding {
                     value: proto_val,
-                    kind: crate::interpreter::types::BindingKind::Const,
+                    kind: BindingKind::Const,
                     initialized: true,
                     deletable: false,
                 },
@@ -5252,7 +5252,12 @@ impl Interpreter {
         func: &JsValue,
         this: &JsValue,
         args: &[JsValue],
+        new_target: &JsValue,
     ) -> (Completion, bool, Option<JsValue>) {
+        let prev_new_target = self.new_target.replace(new_target.clone());
+        self.last_call_had_explicit_return = false;
+        self.last_call_this_value = None;
+        self.calling_as_construct = true;
         // A base constructor's new object is reachable only through `this`
         // until the body stores it somewhere, and parameter defaults run
         // before the body's frame roots it — so root it across the whole call.
@@ -5279,6 +5284,7 @@ impl Interpreter {
             result = self.call_function_inner(&func, &this, &tc_args, false);
         }
         self.gc_unroot_frame(gc_frame);
+        self.new_target = prev_new_target;
         (result, had_explicit_return, final_this)
     }
 
@@ -6550,23 +6556,20 @@ impl Interpreter {
         result
     }
 
-    /// Everything `new`/`Construct` need once the callee and arguments are
-    /// already evaluated `JsValue`s: the `IsConstructor` check, the proxy
-    /// construct trap, bound-function delegation, and the derived/base
-    /// construction paths. Shared by the tree-walker's
-    /// `eval_new` and the bytecode VM's `Op::Construct` handler (mirrors
-    /// `Op::LoadThis`'s `resolve_this_binding` precedent) so the two never
-    /// drift.
+    /// Everything `new` needs once the callee and arguments are already
+    /// evaluated `JsValue`s: the `IsConstructor` check (naming the callee in
+    /// its TypeError), then the same [[Construct]] as `Reflect.construct`.
+    /// Shared by the tree-walker's `eval_new` and the bytecode VM's
+    /// `Op::Construct` handler (mirrors `Op::LoadThis`'s
+    /// `resolve_this_binding` precedent) so the two never drift.
     pub(crate) fn construct_from_evaluated(
         &mut self,
         callee_val: &JsValue,
         args: &[JsValue],
     ) -> Completion {
         self.with_gc_root_scope(|interp| {
-            let callee_val = callee_val.clone();
-            interp.gc_root_value(&callee_val);
-            let evaluated_args = args.to_vec();
-            for arg in &evaluated_args {
+            interp.gc_root_value(callee_val);
+            for arg in args {
                 interp.gc_root_value(arg);
             }
             // Check if callee is a constructor
@@ -6596,7 +6599,7 @@ impl Interpreter {
                         };
                         drop(b);
                         let name = if name.is_empty() {
-                            interp.describe_non_callable(&callee_val)
+                            interp.describe_non_callable(callee_val)
                         } else {
                             name
                         };
@@ -6606,111 +6609,14 @@ impl Interpreter {
                     }
                 }
             } else {
-                let desc = interp.describe_non_callable(&callee_val);
+                let desc = interp.describe_non_callable(callee_val);
                 return Completion::Throw(
                     interp.create_type_error(&format!("{desc} is not a constructor")),
                 );
             }
-            // Proxy construct trap
-            if let Some(co) = (callee_val)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && interp.get_proxy_info(co.id).is_some()
-            {
-                let target_val = interp.get_proxy_target_val(co.id);
-                let args_array = interp.create_array(evaluated_args.clone());
-                let new_target = callee_val.clone();
-                match interp.invoke_proxy_trap(
-                    co.id,
-                    "construct",
-                    vec![target_val.clone(), args_array, new_target.clone()],
-                ) {
-                    Ok(Some(v)) => {
-                        if (v).is_object() {
-                            return Completion::Normal(v);
-                        }
-                        return Completion::Throw(
-                            interp.create_type_error(
-                                "'construct' on proxy: trap returned non-Object",
-                            ),
-                        );
-                    }
-                    Ok(None) => {
-                        // No trap, forward to target with original newTarget
-                        return interp.construct_with_new_target(
-                            &target_val,
-                            &evaluated_args,
-                            new_target,
-                        );
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            // Bound functions: delegate to construct_with_new_target which handles new_target resolution
-            if let Some(co) = (callee_val)
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = interp.get_object_cell(co.id)
-                && func_obj.borrow().bound().is_some()
-            {
-                return interp.construct_with_new_target(
-                    &callee_val,
-                    &evaluated_args,
-                    callee_val.clone(),
-                );
-            }
-            // Check if this is a derived class constructor
-            let is_derived = if let Some(o) = callee_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-                && let Some(func_obj) = interp.get_object_cell(o.id)
-            {
-                func_obj.borrow().is_derived_class_constructor()
-            } else {
-                false
-            };
-
-            if is_derived {
-                // The same [[Construct]] as Reflect.construct, with the callee as
-                // newTarget.
-                interp.construct_with_new_target(&callee_val, &evaluated_args, callee_val.clone())
-            } else {
-                // Base constructor: create this object as before
-                let new_obj_id = interp.create_object_id();
-                if let Some(o) = callee_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(func_obj) = interp.get_object_cell(o.id)
-                {
-                    let proto = func_obj.borrow().get_property_value("prototype");
-                    if let Some(proto_id) = proto.as_ref().and_then(JsValue::as_object_id) {
-                        interp
-                            .get_object_cell_expect(new_obj_id)
-                            .borrow_mut()
-                            .prototype_id = Some(proto_id);
-                    }
-                }
-                let this_val = JsValue::object(new_obj_id);
-                if let Err(e) = interp.initialize_instance_elements(this_val.clone(), &callee_val) {
-                    return Completion::Throw(e);
-                }
-                let prev_new_target = interp.new_target.take();
-                interp.new_target = Some(callee_val.clone());
-                interp.last_call_had_explicit_return = false;
-                interp.last_call_this_value = None;
-                interp.calling_as_construct = true;
-                let (result, had_explicit_return, captured_this) =
-                    interp.call_constructor_body(&callee_val, &this_val, &evaluated_args);
-                let final_this = captured_this.unwrap_or(this_val.clone());
-                interp.new_target = prev_new_target;
-                match result {
-                    Completion::Normal(v) if had_explicit_return && (v).is_object() => {
-                        Completion::Normal(v)
-                    }
-                    Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
-                    other => other,
-                }
-            }
+            // EvaluateNew step 7: Construct(constructor, argList), with the
+            // callee as newTarget.
+            interp.construct_with_new_target(callee_val, args, callee_val.clone())
         })
     }
 
@@ -6869,17 +6775,11 @@ impl Interpreter {
         }
 
         if is_derived {
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(new_target.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
             let prev_constructing_derived = self.constructing_derived;
             self.constructing_derived = true;
-            self.calling_as_construct = true;
             let (result, had_explicit_return, final_this) =
-                self.call_constructor_body(constructor, &JsValue::UNDEFINED, args);
+                self.call_constructor_body(constructor, &JsValue::UNDEFINED, args, &new_target);
             self.constructing_derived = prev_constructing_derived;
-            self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
@@ -6919,24 +6819,11 @@ impl Interpreter {
                 // first, then allocate. The `prototype` read can run a Proxy
                 // `get` trap, and an object allocated before it would be
                 // unrooted (and collectable) while that trap runs.
-                let proto_id = if let Some(nt_id) = new_target.as_object_id() {
-                    let proto = match self.get_object_property(nt_id, "prototype", &new_target) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if let Some(proto_id) = proto.as_object_id() {
-                        Some(proto_id)
-                    } else {
-                        // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                        let nt_realm_id = match self.get_function_realm(&new_target) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        self.realms[nt_realm_id].object_prototype
-                    }
-                } else {
-                    None
+                let proto_id = match self
+                    .get_prototype_from_constructor(&new_target, |r| r.object_prototype)
+                {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
                 };
                 let new_obj_id = self.create_object_id();
                 if let Some(proto_id) = proto_id {
@@ -6944,22 +6831,16 @@ impl Interpreter {
                         .borrow_mut()
                         .prototype_id = Some(proto_id);
                 }
-                JsValue::object(new_obj_id)
+                let this_val = JsValue::object(new_obj_id);
+                if let Err(e) = self.initialize_instance_elements(this_val.clone(), constructor) {
+                    return Completion::Throw(e);
+                }
+                this_val
             };
 
-            if let Err(e) = self.initialize_instance_elements(this_val.clone(), constructor) {
-                return Completion::Throw(e);
-            }
-
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(new_target.clone());
-            self.last_call_had_explicit_return = false;
-            self.last_call_this_value = None;
-            self.calling_as_construct = true;
             let (result, had_explicit_return, captured_this) =
-                self.call_constructor_body(constructor, &this_val, args);
-            let final_this = captured_this.unwrap_or(this_val.clone());
-            self.new_target = prev_new_target;
+                self.call_constructor_body(constructor, &this_val, args, &new_target);
+            let final_this = captured_this.unwrap_or(this_val);
             match result {
                 Completion::Normal(v) if had_explicit_return && (v).is_object() => {
                     Completion::Normal(v)
