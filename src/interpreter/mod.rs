@@ -242,6 +242,60 @@ impl std::fmt::Display for ModuleKey {
     }
 }
 
+/// Property keys written on every function object, interned once so
+/// `create_function` appends them without re-hashing (issue #901).
+struct FunctionKeys {
+    length: JsPropertyKey,
+    name: JsPropertyKey,
+    caller: JsPropertyKey,
+    arguments: JsPropertyKey,
+    prototype: JsPropertyKey,
+    constructor: JsPropertyKey,
+    /// Shared `name` value of anonymous functions.
+    empty_name: JsString,
+}
+
+impl FunctionKeys {
+    fn new() -> Self {
+        use key_intern::intern_key;
+        Self {
+            length: intern_key("length"),
+            name: intern_key("name"),
+            caller: intern_key("caller"),
+            arguments: intern_key("arguments"),
+            prototype: intern_key("prototype"),
+            constructor: intern_key("constructor"),
+            empty_name: JsString::from_str(""),
+        }
+    }
+}
+
+/// Own-property shape requested of `create_function_with`.
+#[derive(Clone, Copy)]
+struct FunctionInit {
+    /// Create the own `prototype` object of a constructable function. Bound
+    /// functions and `Proxy` must not have one (sec-bound-function-exotic-objects).
+    own_prototype: bool,
+    /// `[[Writable]]` of the own `prototype`; false for class constructors
+    /// (sec-runtime-semantics-classdefinitionevaluation).
+    prototype_writable: bool,
+}
+
+impl FunctionInit {
+    const DEFAULT: Self = Self {
+        own_prototype: true,
+        prototype_writable: true,
+    };
+    const CLASS_CONSTRUCTOR: Self = Self {
+        own_prototype: true,
+        prototype_writable: false,
+    };
+    const NO_PROTOTYPE: Self = Self {
+        own_prototype: false,
+        prototype_writable: true,
+    };
+}
+
 pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
@@ -310,6 +364,7 @@ pub(crate) struct Interpreter {
     next_auto_accessor_id: u64,
     pub(crate) regexp_legacy: builtins::regexp::RegexpLegacyState,
     pub(crate) function_realm_map: FxHashMap<u64, usize>,
+    function_keys: FunctionKeys,
     pub(crate) in_tail_position: bool,
     pub(crate) in_state_machine: bool,
     pub(crate) next_function_is_method: bool,
@@ -754,6 +809,7 @@ impl Interpreter {
             next_auto_accessor_id: 0,
             regexp_legacy: Default::default(),
             function_realm_map: FxHashMap::default(),
+            function_keys: FunctionKeys::new(),
             in_tail_position: false,
             in_state_machine: false,
             next_function_is_method: false,
@@ -1288,7 +1344,7 @@ impl Interpreter {
         {
             let mut obj = self.get_object_cell_expect(source_id).borrow_mut();
             obj.prototype_id = proto_id;
-            obj.class_name = "AbstractModuleSource".to_string();
+            obj.class_name = "AbstractModuleSource".into();
         }
         let source_val = JsValue::object(source_id);
 
@@ -1831,148 +1887,137 @@ impl Interpreter {
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
-        let is_gen = matches!(
-            &func,
+        self.create_function_with(func, FunctionInit::DEFAULT)
+    }
+
+    /// Build a function object. `init` lets callers that would otherwise
+    /// create-then-strip (bound functions, `Proxy`, class constructors) ask for
+    /// the final own-property shape directly.
+    fn create_function_with(&mut self, func: JsFunction, init: FunctionInit) -> JsValue {
+        let (is_gen, is_async_gen, is_async_non_gen) = match &func {
             JsFunction::User {
-                is_generator: true,
+                is_generator,
+                is_async,
                 ..
-            }
-        );
-        let is_async_gen = matches!(
-            &func,
-            JsFunction::User {
-                is_generator: true,
-                is_async: true,
-                ..
-            }
-        );
-        let is_async_non_gen = matches!(
-            &func,
-            JsFunction::User {
-                is_generator: false,
-                is_async: true,
-                ..
-            }
-        );
-        let (fn_name, fn_length) = match &func {
+            } => (
+                *is_generator,
+                *is_generator && *is_async,
+                !*is_generator && *is_async,
+            ),
+            JsFunction::Native(..) => (false, false, false),
+        };
+        let (name_val, fn_length) = match &func {
             JsFunction::User { name, params, .. } => {
-                let n = name.clone().unwrap_or_default();
                 let len = params
                     .iter()
                     .take_while(|p| !matches!(p, Pattern::Assign(..) | Pattern::Rest(_)))
                     .count();
-                (n, len)
+                let name_val = match name.as_deref() {
+                    None | Some("") => self.function_keys.empty_name.clone(),
+                    Some(n) => JsString::from_str(n),
+                };
+                (name_val, len)
             }
-            JsFunction::Native(name, arity, _, _) => (name.clone(), *arity),
+            JsFunction::Native(name, arity, _, _) => {
+                let name_val = if name.is_empty() {
+                    self.function_keys.empty_name.clone()
+                } else {
+                    JsString::from_str(name)
+                };
+                (name_val, *arity)
+            }
+        };
+        let (proto_id, class_name) = if is_async_gen {
+            (
+                self.realm().async_generator_function_prototype,
+                "AsyncGeneratorFunction",
+            )
+        } else if is_gen {
+            (
+                self.realm().generator_function_prototype,
+                "GeneratorFunction",
+            )
+        } else if is_async_non_gen {
+            (self.realm().async_function_prototype, "AsyncFunction")
+        } else {
+            (self.realm().function_prototype, "Function")
         };
         let mut obj_data = JsObjectData::new();
-        let proto_id = if is_async_gen {
-            self.realm()
-                .async_generator_function_prototype
-                .or(self.realm().object_prototype)
-        } else if is_gen {
-            self.realm()
-                .generator_function_prototype
-                .or(self.realm().object_prototype)
-        } else if is_async_non_gen {
-            self.realm()
-                .async_function_prototype
-                .or(self.realm().object_prototype)
-        } else {
-            self.realm()
-                .function_prototype
-                .or(self.realm().object_prototype)
-        };
-        obj_data.prototype_id = proto_id;
-        obj_data.callable = Some(func);
-        obj_data.class_name = if is_async_gen {
-            "AsyncGeneratorFunction".to_string()
-        } else if is_gen {
-            "GeneratorFunction".to_string()
-        } else if is_async_non_gen {
-            "AsyncFunction".to_string()
-        } else {
-            "Function".to_string()
-        };
-        obj_data.insert_property(
-            "length".to_string(),
-            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
-        );
-        obj_data.insert_property(
-            "name".to_string(),
-            PropertyDescriptor::data(
-                JsValue::string(JsString::from_str(&fn_name)),
-                false,
-                false,
-                true,
-            ),
-        );
-        // Annex B: sloppy non-arrow, non-generator, non-async functions get
-        // own caller/arguments to shadow the ThrowTypeError accessor.
-        if let Some(JsFunction::User {
-            is_strict,
-            is_arrow,
-            is_generator,
-            is_async,
-            ..
-        }) = &obj_data.callable
-            && !*is_strict
-            && !*is_arrow
-            && !*is_generator
-            && !*is_async
-        {
-            if let Some(ref getter) = self.realm().sloppy_caller_getter.clone() {
-                obj_data.insert_property(
-                    "caller".to_string(),
-                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
-                );
-            } else {
-                obj_data.insert_property(
-                    "caller".to_string(),
-                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
-                );
+        obj_data.prototype_id = proto_id.or(self.realm().object_prototype);
+        obj_data.class_name = std::borrow::Cow::Borrowed(class_name);
+        // Annex B: sloppy non-arrow, non-generator, non-async, non-method
+        // functions get own caller/arguments to shadow the ThrowTypeError
+        // accessor.
+        let has_restricted_props = matches!(
+            &func,
+            JsFunction::User {
+                is_strict: false,
+                is_arrow: false,
+                is_generator: false,
+                is_async: false,
+                is_method: false,
+                ..
             }
-            if let Some(ref getter) = self.realm().sloppy_arguments_getter.clone() {
-                obj_data.insert_property(
-                    "arguments".to_string(),
-                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
-                );
-            } else {
-                obj_data.insert_property(
-                    "arguments".to_string(),
-                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
-                );
-            }
-        }
-        let is_constructable = match &obj_data.callable {
-            Some(JsFunction::User {
+        );
+        let is_constructable = match &func {
+            JsFunction::User {
                 is_arrow,
                 is_async,
                 is_generator,
                 is_method,
                 ..
-            }) => !is_arrow && !is_method && !*is_generator && !*is_async,
-            Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
-            None => false,
+            } => !is_arrow && !is_method && !*is_generator && !*is_async,
+            JsFunction::Native(_, _, _, is_ctor) => *is_ctor,
         };
         // Generators/async-generators always need .prototype (for generator prototype chain)
         // even when they are class methods (non-constructable)
-        let needs_prototype = is_constructable || is_gen || is_async_gen;
+        let needs_prototype = init.own_prototype && (is_constructable || is_gen || is_async_gen);
+        obj_data.callable = Some(func);
+
+        obj_data.push_fresh_property(
+            &self.function_keys.length,
+            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
+        );
+        obj_data.push_fresh_property(
+            &self.function_keys.name,
+            PropertyDescriptor::data(JsValue::string(name_val), false, false, true),
+        );
+        if has_restricted_props {
+            let caller = match &self.realm().sloppy_caller_getter {
+                Some(getter) => {
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true)
+                }
+                None => PropertyDescriptor::data(JsValue::NULL, false, false, true),
+            };
+            obj_data.push_fresh_property(&self.function_keys.caller, caller);
+            let arguments = match &self.realm().sloppy_arguments_getter {
+                Some(getter) => {
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true)
+                }
+                None => PropertyDescriptor::data(JsValue::NULL, false, false, true),
+            };
+            obj_data.push_fresh_property(&self.function_keys.arguments, arguments);
+        }
+        let mut prototype_id = None;
         if needs_prototype {
-            let proto_id = self.create_object_id();
-            if is_async_gen {
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .prototype_id = self.realm().async_generator_prototype;
+            let mut proto_data = JsObjectData::new();
+            proto_data.prototype_id = if is_async_gen {
+                self.realm().async_generator_prototype
             } else if is_gen {
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .prototype_id = self.realm().generator_prototype;
-            }
-            let proto_val = JsValue::object(proto_id);
-            obj_data.insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), true, false, false),
+                self.realm().generator_prototype
+            } else {
+                self.realm().object_prototype
+            };
+            let proto_id = self.alloc_object(proto_data);
+            prototype_id = Some(proto_id);
+            obj_data.push_fresh_property(
+                &self.function_keys.prototype,
+                PropertyDescriptor::data(
+                    JsValue::object(proto_id),
+                    init.prototype_writable,
+                    false,
+                    false,
+                ),
             );
         }
         let func_id = self.alloc_object(obj_data);
@@ -1982,17 +2027,13 @@ impl Interpreter {
         // Set prototype.constructor = func (not for generators)
         if is_constructable
             && !is_gen
-            && let Some(proto_id) = self
-                .get_object_cell_expect(func_id)
-                .borrow()
-                .get_property_value("prototype")
-                .as_ref()
-                .and_then(JsValue::as_object_id)
+            && let Some(proto_id) = prototype_id
             && let Some(proto_obj) = self.get_object_cell(proto_id)
         {
-            proto_obj
-                .borrow_mut()
-                .insert_builtin("constructor".to_string(), func_val.clone());
+            proto_obj.borrow_mut().push_fresh_property(
+                &self.function_keys.constructor,
+                PropertyDescriptor::data(func_val.clone(), true, false, true),
+            );
         }
         func_val
     }
@@ -2317,7 +2358,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "Arguments".to_string();
+            o.class_name = "Arguments".into();
             o.property_order.reserve(args.len() + 3);
 
             o.insert_property(
@@ -3532,7 +3573,7 @@ impl Interpreter {
         let ab_obj_id = self.create_object_id();
         {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
-            ab.class_name = "ArrayBuffer".to_string();
+            ab.class_name = "ArrayBuffer".into();
             ab.prototype_id = self.realm().arraybuffer_prototype;
             ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
                 crate::interpreter::types::ArrayBufferData {
@@ -4950,7 +4991,7 @@ impl Interpreter {
                 module_path,
                 deferred: false,
             });
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".into();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
@@ -5031,7 +5072,7 @@ impl Interpreter {
                 module_path,
                 deferred: true,
             });
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".into();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
@@ -5779,7 +5820,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
-                        o.class_name = "SharedArrayBuffer".to_string();
+                        o.class_name = "SharedArrayBuffer".into();
                         o.prototype_id = sab_proto;
                         o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
                             crate::interpreter::types::ArrayBufferData {

@@ -1387,19 +1387,19 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.primitive_value = Some(val.clone());
         if val.is_string() {
-            obj_data.class_name = "String".to_string();
+            obj_data.class_name = "String".into();
             obj_data.prototype_id = self.realm().string_prototype;
         } else if val.is_number() {
-            obj_data.class_name = "Number".to_string();
+            obj_data.class_name = "Number".into();
             obj_data.prototype_id = self.realm().number_prototype;
         } else if val.is_boolean() {
-            obj_data.class_name = "Boolean".to_string();
+            obj_data.class_name = "Boolean".into();
             obj_data.prototype_id = self.realm().boolean_prototype;
         } else if val.is_symbol() {
-            obj_data.class_name = "Symbol".to_string();
+            obj_data.class_name = "Symbol".into();
             obj_data.prototype_id = self.realm().symbol_prototype;
         } else if val.is_bigint() {
-            obj_data.class_name = "BigInt".to_string();
+            obj_data.class_name = "BigInt".into();
             obj_data.prototype_id = self.realm().bigint_prototype;
         } else {
             unreachable!();
@@ -5526,7 +5526,7 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "AsyncGenerator".to_string();
+                                .class_name = "AsyncGenerator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
@@ -5672,7 +5672,7 @@ impl Interpreter {
                             }
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
-                                .class_name = "Generator".to_string();
+                                .class_name = "Generator".into();
                             let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =

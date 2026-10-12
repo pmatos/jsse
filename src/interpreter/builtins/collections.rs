@@ -66,7 +66,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Map".to_string();
+            .class_name = "Map".into();
 
         // Map iterator prototype
         let map_iter_proto_id = self.create_object_id();
@@ -75,7 +75,7 @@ impl Interpreter {
             .prototype_id = self.realm().iterator_prototype;
         self.get_object_cell_expect(map_iter_proto_id)
             .borrow_mut()
-            .class_name = "Map Iterator".to_string();
+            .class_name = "Map Iterator".into();
 
         self.define_to_string_tag(map_iter_proto_id, "Map Iterator");
 
@@ -167,7 +167,7 @@ impl Interpreter {
                 .map_iterator_prototype
                 .or(interp.realm().iterator_prototype)
                 .or(interp.realm().object_prototype);
-            obj_data.class_name = "Map Iterator".to_string();
+            obj_data.class_name = "Map Iterator".into();
             obj_data.kind =
                 crate::interpreter::types::ObjectKind::Iterator(IteratorState::MapIterator {
                     map_id,
@@ -475,7 +475,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Map".to_string();
+                    .class_name = "Map".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Map(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
@@ -658,7 +658,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
-                            .class_name = "Map".to_string();
+                            .class_name = "Map".into();
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
@@ -772,7 +772,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Set".to_string();
+            .class_name = "Set".into();
 
         // Set iterator prototype
         let set_iter_proto_id = self.create_object_id();
@@ -781,7 +781,7 @@ impl Interpreter {
             .prototype_id = self.realm().iterator_prototype;
         self.get_object_cell_expect(set_iter_proto_id)
             .borrow_mut()
-            .class_name = "Set Iterator".to_string();
+            .class_name = "Set Iterator".into();
 
         self.define_to_string_tag(set_iter_proto_id, "Set Iterator");
 
@@ -873,7 +873,7 @@ impl Interpreter {
                 .set_iterator_prototype
                 .or(interp.realm().iterator_prototype)
                 .or(interp.realm().object_prototype);
-            obj_data.class_name = "Set Iterator".to_string();
+            obj_data.class_name = "Set Iterator".into();
             obj_data.kind =
                 crate::interpreter::types::ObjectKind::Iterator(IteratorState::SetIterator {
                     set_id,
@@ -1182,7 +1182,7 @@ impl Interpreter {
             interp
                 .get_object_cell_expect(new_obj_id)
                 .borrow_mut()
-                .class_name = "Set".to_string();
+                .class_name = "Set".into();
             interp.get_object_cell_expect(new_obj_id).borrow_mut().kind =
                 crate::interpreter::types::ObjectKind::Set(entries.into());
             let id = new_obj_id;
@@ -1516,7 +1516,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Set".to_string();
+                    .class_name = "Set".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Set(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
@@ -1678,7 +1678,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakMap".to_string();
+            .class_name = "WeakMap".into();
 
         // WeakMap.prototype.get
         self.define_method(proto_id, "get", 1, |interp, this, args| {
@@ -1920,7 +1920,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakMap".to_string();
+                    .class_name = "WeakMap".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Map(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
@@ -2101,7 +2101,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakSet".to_string();
+            .class_name = "WeakSet".into();
 
         // WeakSet.prototype.add
         self.define_method(proto_id, "add", 1, |interp, this, args| {
@@ -2218,7 +2218,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakSet".to_string();
+                    .class_name = "WeakSet".into();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Set(KeyedEntries::default());
                 let this_val = JsValue::object(obj_id);
@@ -2366,7 +2366,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakRef".to_string();
+            .class_name = "WeakRef".into();
 
         // WeakRef.prototype.deref
         self.define_method(proto_id, "deref", 0, |interp, this, _args| {
@@ -2416,7 +2416,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakRef".to_string();
+                    .class_name = "WeakRef".into();
                 if let Some(p) = proto {
                     interp
                         .get_object_cell_expect(obj_id)
@@ -2465,7 +2465,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "FinalizationRegistry".to_string();
+            .class_name = "FinalizationRegistry".into();
 
         // FinalizationRegistry.prototype.register
         self.define_method(proto_id, "register", 2,
@@ -2626,7 +2626,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "FinalizationRegistry".to_string();
+                    .class_name = "FinalizationRegistry".into();
                 if let Some(p) = proto {
                     interp
                         .get_object_cell_expect(obj_id)

@@ -632,7 +632,7 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(func_obj_id).borrow_mut();
             o.prototype_id = fp_id;
-            o.class_name = "Function".to_string();
+            o.class_name = "Function".into();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
                 Completion::Normal(JsValue::UNDEFINED)
             }));

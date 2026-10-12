@@ -5,15 +5,22 @@ use smallvec::SmallVec;
 use super::types::PropertyDescriptor;
 use crate::types::{JsPropertyKey, PropertyKeyLike};
 
-// Inline up to this many properties before spilling to a HashMap. 8 was the
-// threshold proposed in issue #68; measurement showed it pushes JsObjectData
-// past 3.5 KB, so we use 4 — covers the splay-node case (4 fields) without
-// blowing up per-object size.
+// Properties held inline in the SmallVec before it spills to the heap. 8 was
+// the threshold proposed in issue #68; measurement showed it pushes
+// JsObjectData past 3.5 KB, so we use 4 — covers the splay-node case (4
+// fields) without blowing up per-object size.
 const INLINE_CAP: usize = 4;
 
-// Hybrid storage for `JsObjectData.properties`: inline up to `INLINE_CAP`
-// entries (linear scan, no heap alloc), then spill to a randomised `HashMap`
-// once the inline buffer overflows. Spill is one-way; deletes never collapse
+// Largest entry count kept in the linear (scan-only) representation. Entries
+// beyond `INLINE_CAP` live in the SmallVec's heap buffer — one allocation, no
+// hashing — which is cheaper than a SipHash `HashMap` for the 5-property
+// shape of a sloppy constructable function (issue #901). The `HashMap` takes
+// over once an insert would exceed this.
+const LINEAR_MAX: usize = 8;
+
+// Hybrid storage for `JsObjectData.properties`: up to `LINEAR_MAX` entries in a
+// linear-scan `SmallVec` (the first `INLINE_CAP` without a heap alloc), then a
+// randomised `HashMap` once that overflows. Spill is one-way; deletes never collapse
 // back to inline. Iteration order is unspecified — ordered iteration must
 // continue to go through `JsObjectData.property_order`.
 pub(crate) struct PropertyMap {
@@ -82,24 +89,46 @@ impl PropertyMap {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
                     return Some(std::mem::replace(&mut slot.1, value));
                 }
-                if v.len() < INLINE_CAP {
+                if v.len() < LINEAR_MAX {
                     v.push((key, value));
                     None
                 } else {
-                    // Spill: drain inline entries into a fresh randomised HashMap,
-                    // then add the new entry.
-                    let mut map: HashMap<JsPropertyKey, PropertyDescriptor> =
-                        HashMap::with_capacity(INLINE_CAP + 1);
-                    for (k, d) in v.drain(..) {
-                        map.insert(k, d);
-                    }
-                    map.insert(key, value);
-                    self.inner = PropertyMapInner::Spilled(map);
+                    Self::spill(&mut self.inner, key, value);
                     None
                 }
             }
             PropertyMapInner::Spilled(m) => m.insert(key, value),
         }
+    }
+
+    /// Append an entry whose key the caller knows is absent. Skips the
+    /// duplicate scan of [`insert`]; used on the fresh-object construction
+    /// path (issue #901). Debug builds assert the key really is absent.
+    pub(crate) fn push_fresh(&mut self, key: JsPropertyKey, value: PropertyDescriptor) {
+        debug_assert!(
+            !self.contains_key(&key),
+            "push_fresh called with a key that is already present"
+        );
+        match &mut self.inner {
+            PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
+            PropertyMapInner::Inline(_) => Self::spill(&mut self.inner, key, value),
+            PropertyMapInner::Spilled(m) => {
+                m.insert(key, value);
+            }
+        }
+    }
+
+    fn spill(inner: &mut PropertyMapInner, key: JsPropertyKey, value: PropertyDescriptor) {
+        let PropertyMapInner::Inline(v) = inner else {
+            unreachable!("spill is only called on the linear representation");
+        };
+        let mut map: HashMap<JsPropertyKey, PropertyDescriptor> =
+            HashMap::with_capacity(LINEAR_MAX + 1);
+        for (k, d) in v.drain(..) {
+            map.insert(k, d);
+        }
+        map.insert(key, value);
+        *inner = PropertyMapInner::Spilled(map);
     }
 
     pub(crate) fn remove<K: PropertyKeyLike + ?Sized>(
@@ -200,15 +229,15 @@ mod tests {
     }
 
     #[test]
-    fn one_past_capacity_triggers_spill() {
+    fn one_past_linear_max_triggers_spill() {
         let mut m = PropertyMap::new();
-        for i in 0..INLINE_CAP {
+        for i in 0..LINEAR_MAX {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(is_inline(&m));
-        m.insert(key(format!("k{INLINE_CAP}")), desc(INLINE_CAP as f64));
+        m.insert(key(format!("k{LINEAR_MAX}")), desc(LINEAR_MAX as f64));
         assert!(!is_inline(&m));
-        for i in 0..=INLINE_CAP {
+        for i in 0..=LINEAR_MAX {
             assert!(
                 m.get(&format!("k{i}")).is_some(),
                 "k{i} missing after spill"
@@ -219,7 +248,7 @@ mod tests {
     #[test]
     fn duplicate_insert_returns_previous_and_no_spill() {
         let mut m = PropertyMap::new();
-        for i in 0..INLINE_CAP {
+        for i in 0..LINEAR_MAX {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         let prev = m.insert(key("k0"), desc(99.0)).expect("had previous");
@@ -231,11 +260,11 @@ mod tests {
     #[test]
     fn remove_after_spill_keeps_spilled() {
         let mut m = PropertyMap::new();
-        for i in 0..=INLINE_CAP {
+        for i in 0..=LINEAR_MAX {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
-        for i in 0..=INLINE_CAP {
+        for i in 0..=LINEAR_MAX {
             assert!(m.remove(&format!("k{i}")).is_some());
         }
         assert!(!is_inline(&m), "spill must not collapse back to inline");
@@ -265,7 +294,7 @@ mod tests {
             vec![("k0".into(), 0.0), ("k1".into(), 1.0), ("k2".into(), 2.0)]
         );
 
-        for i in 3..=INLINE_CAP {
+        for i in 3..=LINEAR_MAX {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
@@ -281,7 +310,7 @@ mod tests {
             })
             .collect();
         seen.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(seen.len(), INLINE_CAP + 1);
+        assert_eq!(seen.len(), LINEAR_MAX + 1);
         for (i, (k, n)) in seen.iter().enumerate() {
             assert_eq!(*k, format!("k{i}"));
             assert_eq!(*n, i as f64);
@@ -305,7 +334,7 @@ mod tests {
         }
         assert_eq!(num(m.get("a").expect("present")), 7.0);
 
-        for i in 0..INLINE_CAP {
+        for i in 0..LINEAR_MAX {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
@@ -327,13 +356,36 @@ mod tests {
         assert!(keys.contains(&&text));
         assert_eq!(num(m.get(&symbol).expect("Symbol key present")), 1.0);
         assert_eq!(num(m.get(&text).expect("String key present")), 2.0);
-        for i in 0..INLINE_CAP {
+        for i in 0..LINEAR_MAX {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
         let keys: Vec<&JsPropertyKey> = m.keys().collect();
         assert!(keys.contains(&&symbol), "Symbol key lost on spill");
         assert!(keys.contains(&&text), "String key lost on spill");
+    }
+
+    #[test]
+    fn push_fresh_preserves_entries_across_the_spill_boundary() {
+        let mut m = PropertyMap::new();
+        for i in 0..LINEAR_MAX {
+            m.push_fresh(key(format!("k{i}")), desc(i as f64));
+        }
+        assert!(is_inline(&m));
+        m.push_fresh(key(format!("k{LINEAR_MAX}")), desc(LINEAR_MAX as f64));
+        assert!(!is_inline(&m));
+        for i in 0..=LINEAR_MAX {
+            assert_eq!(num(m.get(&format!("k{i}")).expect("present")), i as f64);
+        }
+    }
+
+    #[test]
+    fn heap_backed_linear_entries_beyond_inline_cap_stay_linear() {
+        let mut m = PropertyMap::new();
+        for i in 0..=INLINE_CAP {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        assert!(is_inline(&m), "{} entries must not hash", INLINE_CAP + 1);
     }
 
     #[test]

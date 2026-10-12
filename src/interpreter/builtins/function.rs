@@ -211,7 +211,7 @@ impl Interpreter {
                     ),
                     is_ctor,
                 );
-                let result = interp.create_function(bound);
+                let result = interp.create_function_with(bound, FunctionInit::NO_PROTOTYPE);
                 if let Some(result_id) = result.as_object_id()
                     && let Some(obj) = interp.get_object_cell(result_id)
                 {
@@ -222,8 +222,6 @@ impl Interpreter {
                     {
                         obj.borrow_mut().prototype_id = target_obj.borrow().prototype_id;
                     }
-                    // Per spec, bound functions do not have own .prototype property
-                    obj.borrow_mut().remove_property("prototype");
                     // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                     obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::BoundFunction(
