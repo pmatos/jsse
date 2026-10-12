@@ -592,7 +592,7 @@ impl Interpreter {
     fn object_has_young_weak_edge(&self, obj: &JsObjectData) -> bool {
         if obj.class_name == "WeakMap" {
             obj.map_data().is_some_and(|entries| {
-                entries.iter().flatten().any(|(key, value)| {
+                entries.iter().any(|(key, value)| {
                     [key, value].iter().any(|candidate| {
                         let Some(object_id) = candidate.as_object_id() else {
                             return false;
@@ -605,7 +605,7 @@ impl Interpreter {
             })
         } else if obj.class_name == "WeakSet" {
             obj.set_data().is_some_and(|entries| {
-                entries.iter().flatten().any(|value| {
+                entries.iter().any(|value| {
                     let Some(object_id) = value.as_object_id() else {
                         return false;
                     };
@@ -701,7 +701,7 @@ impl Interpreter {
                     continue;
                 }
                 if let Some(entries) = obj.map_data() {
-                    for entry in entries.iter().flatten() {
+                    for entry in entries.iter() {
                         if let Some(key_id) = entry.0.as_object_id()
                             && self.minor_value_is_live(key_id)
                             && let Some(value_id) = entry.1.as_object_id()
@@ -736,29 +736,19 @@ impl Interpreter {
             let mut obj = handle.borrow_mut_untracked();
             if obj.class_name == "WeakMap" {
                 if let Some(entries) = obj.map_data_mut() {
-                    for entry in entries.iter_mut() {
-                        let dead = entry.as_ref().is_some_and(|(key, _)| {
-                            key.as_object_id()
-                                .is_some_and(|id| !self.minor_value_is_live(id))
-                        });
-                        if dead {
-                            *entry = None;
-                        }
-                    }
+                    entries.retain(|(key, _)| {
+                        key.as_object_id()
+                            .is_none_or(|id| self.minor_value_is_live(id))
+                    });
                 }
             } else if obj.class_name == "WeakSet"
                 && let Some(entries) = obj.set_data_mut()
             {
-                for entry in entries.iter_mut() {
-                    let dead = entry.as_ref().is_some_and(|value| {
-                        value
-                            .as_object_id()
-                            .is_some_and(|id| !self.minor_value_is_live(id))
-                    });
-                    if dead {
-                        *entry = None;
-                    }
-                }
+                entries.retain(|value| {
+                    value
+                        .as_object_id()
+                        .is_none_or(|id| self.minor_value_is_live(id))
+                });
             }
         }
 
@@ -840,7 +830,7 @@ impl Interpreter {
                     continue;
                 }
                 if let Some(entries) = obj.map_data() {
-                    for entry in entries.iter().flatten() {
+                    for entry in entries.iter() {
                         // Key is reachable — mark the value
                         if let Some(key_id) = entry.0.as_object_id()
                             && (key_id as usize) < obj_count
@@ -892,28 +882,18 @@ impl Interpreter {
             let mut obj = obj_rc.borrow_mut_untracked();
             if obj.class_name == "WeakMap" {
                 if let Some(entries) = obj.map_data_mut() {
-                    for entry in entries.iter_mut() {
-                        let dead = match entry.as_ref().and_then(|(key, _)| key.as_object_id()) {
-                            Some(kid) => (kid as usize) >= obj_count || !marks[kid as usize],
-                            None => false,
-                        };
-                        if dead {
-                            *entry = None;
-                        }
-                    }
+                    entries.retain(|(key, _)| match key.as_object_id() {
+                        Some(kid) => (kid as usize) < obj_count && marks[kid as usize],
+                        None => true,
+                    });
                 }
             } else if obj.class_name == "WeakSet"
                 && let Some(entries) = obj.set_data_mut()
             {
-                for entry in entries.iter_mut() {
-                    let dead = match entry.as_ref().and_then(JsValue::as_object_id) {
-                        Some(vid) => (vid as usize) >= obj_count || !marks[vid as usize],
-                        None => false,
-                    };
-                    if dead {
-                        *entry = None;
-                    }
-                }
+                entries.retain(|value| match value.as_object_id() {
+                    Some(vid) => (vid as usize) < obj_count && marks[vid as usize],
+                    None => true,
+                });
             }
             let requires_persistent_scan = Self::object_requires_persistent_minor_scan(&obj);
             drop(obj);
@@ -1093,7 +1073,7 @@ impl Interpreter {
             ObjectKind::Map(entries) => {
                 // WeakMap entries are visited via the ephemeron fixpoint, not strongly.
                 if obj.class_name != "WeakMap" {
-                    for entry in entries.iter().flatten() {
+                    for entry in entries.iter() {
                         Self::collect_value_roots(&entry.0, worklist);
                         Self::collect_value_roots(&entry.1, worklist);
                     }
@@ -1101,7 +1081,7 @@ impl Interpreter {
             }
             ObjectKind::Set(entries) => {
                 if obj.class_name != "WeakSet" {
-                    for val in entries.iter().flatten() {
+                    for val in entries.iter() {
                         Self::collect_value_roots(val, worklist);
                     }
                 }
@@ -1887,7 +1867,7 @@ mod tests {
             .borrow_mut()
             .map_data_mut()
             .unwrap()
-            .push(Some((obj(key), obj(value))));
+            .push_new((obj(key), obj(value)));
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1904,8 +1884,9 @@ mod tests {
                 .get_cell_expect(weak_map)
                 .borrow()
                 .map_data()
-                .unwrap()[0]
-                .is_none()
+                .unwrap()
+                .live_len()
+                == 0
         );
     }
 
@@ -1929,7 +1910,7 @@ mod tests {
             .borrow_mut()
             .set_data_mut()
             .unwrap()
-            .push(Some(obj(member)));
+            .push_new(obj(member));
 
         interp.gc.request_minor();
         interp.gc_safepoint();
@@ -1941,8 +1922,9 @@ mod tests {
                 .get_cell_expect(weak_set)
                 .borrow()
                 .set_data()
-                .unwrap()[0]
-                .is_none()
+                .unwrap()
+                .live_len()
+                == 0
         );
     }
 

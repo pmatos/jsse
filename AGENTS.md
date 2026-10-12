@@ -62,6 +62,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `date.rs` — setup_date_builtin
   - `atom.rs` — `Atom`: randomised-interner identifier atoms (pointer equality, precomputed hash)
   - `binding_map.rs` — `BindingMap`: atom-keyed `Environment.bindings` storage and the `BindingKey`/`BindingName` lookup traits
+  - `keyed_entries.rs` — `KeyedEntries`: Map/Set/WeakMap/WeakSet [[MapData]]/[[SetData]] storage, an insertion-ordered slot list with a SameValueZero hash index; iterators hold spec-index cursors stepped by `next_live`, so tombstone compaction needs no iterator fix-up
   - `global_access.rs` — Global Data Fast Path: clone-free scope walk plus one re-validated own-property read/write of a global-object data property, with per-site `GlobalHint` slot hints
 - `scripts/` — Test runners and utilities
 - `test262-pass.txt` — Regression baseline of currently passing test262 tests. **Not rewritten by default.** The runner reads the baseline from `origin/main:test262-pass.txt` (override with `--baseline-ref`) so feature branches don't conflict on it. Pass `--update-baseline` to rewrite the working-tree file — typically only done on `main` (or a branch targeting it) to roll the baseline forward.

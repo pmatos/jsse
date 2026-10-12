@@ -47,6 +47,8 @@ mod hoisting;
 pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
+mod keyed_entries;
+pub(crate) use keyed_entries::KeyedEntries;
 mod object_arena;
 #[cfg(feature = "perf-counters")]
 pub(crate) mod perf_counters;

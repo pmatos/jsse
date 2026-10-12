@@ -221,13 +221,12 @@ impl Interpreter {
             };
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let borrowed = obj.borrow();
-            let entries = borrowed.map_data().unwrap();
-            for entry in entries.iter().flatten() {
-                if same_value_zero(&entry.0, &key) {
-                    return Completion::Normal(entry.1.clone());
-                }
-            }
-            Completion::Normal(JsValue::UNDEFINED)
+            let value = borrowed
+                .map_data()
+                .unwrap()
+                .get(&key)
+                .map_or(JsValue::UNDEFINED, |entry| entry.1.clone());
+            Completion::Normal(value)
         });
 
         // Map.prototype.set
@@ -252,14 +251,10 @@ impl Interpreter {
                     interp.gc_write_barrier_value(obj, &key);
                     interp.gc_write_barrier_value(obj, &value);
                     let mut borrowed = obj.borrow_mut_untracked();
-                    let entries = borrowed.map_data_mut().unwrap();
-                    for entry in entries.iter_mut().flatten() {
-                        if same_value_zero(&entry.0, &key) {
-                            entry.1 = value;
-                            return Completion::Normal(this.clone());
-                        }
-                    }
-                    entries.push(Some((key, value)));
+                    borrowed
+                        .map_data_mut()
+                        .unwrap()
+                        .upsert((key, value), |old, new| old.1 = new.1);
                     return Completion::Normal(this.clone());
                 }
             }
@@ -274,13 +269,7 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let found = obj
-                .borrow()
-                .map_data()
-                .unwrap()
-                .iter()
-                .flatten()
-                .any(|entry| same_value_zero(&entry.0, &key));
+            let found = obj.borrow().map_data().unwrap().contains(&key);
             Completion::Normal(JsValue::boolean(found))
         });
 
@@ -291,16 +280,12 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let mut borrowed = obj.borrow_mut_untracked();
-            let entries = borrowed.map_data_mut().unwrap();
-            for entry in entries.iter_mut() {
-                let matches = entry.as_ref().is_some_and(|e| same_value_zero(&e.0, &key));
-                if matches {
-                    *entry = None;
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            let removed = obj
+                .borrow_mut_untracked()
+                .map_data_mut()
+                .unwrap()
+                .remove(&key);
+            Completion::Normal(JsValue::boolean(removed))
         });
 
         // Map.prototype.clear
@@ -368,21 +353,15 @@ impl Interpreter {
                 key = JsValue::number(0.0);
             }
             // Search existing entries
-            {
-                let borrowed = obj.borrow();
-                let entries = borrowed.map_data().unwrap();
-                for entry in entries.iter().flatten() {
-                    if same_value_zero(&entry.0, &key) {
-                        return Completion::Normal(entry.1.clone());
-                    }
-                }
+            if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
+                return Completion::Normal(entry.1.clone());
             }
             // Key not found - append new entry
             interp.gc_write_barrier_value(&obj, &key);
             interp.gc_write_barrier_value(&obj, &value);
             let mut borrowed = obj.borrow_mut_untracked();
             let entries = borrowed.map_data_mut().unwrap();
-            entries.push(Some((key, value.clone())));
+            entries.push_new((key, value.clone()));
             Completion::Normal(value)
         });
 
@@ -411,14 +390,8 @@ impl Interpreter {
                 key = JsValue::number(0.0);
             }
             // Step 5: Search existing entries
-            {
-                let borrowed = obj.borrow();
-                let entries = borrowed.map_data().unwrap();
-                for entry in entries.iter().flatten() {
-                    if same_value_zero(&entry.0, &key) {
-                        return Completion::Normal(entry.1.clone());
-                    }
-                }
+            if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
+                return Completion::Normal(entry.1.clone());
             }
             // Step 6: Call(callbackfn, undefined, « key »)
             let value = match interp.call_function(&callbackfn, &JsValue::UNDEFINED, &[key.clone()])
@@ -432,14 +405,8 @@ impl Interpreter {
                 interp.gc_write_barrier_value(&obj, &value);
                 let mut borrowed = obj.borrow_mut_untracked();
                 let entries = borrowed.map_data_mut().unwrap();
-                for entry in entries.iter_mut().flatten() {
-                    if same_value_zero(&entry.0, &key) {
-                        entry.1 = value.clone();
-                        return Completion::Normal(value);
-                    }
-                }
-                // Step 8-9: Not found, append
-                entries.push(Some((key, value.clone())));
+                // Step 8-9: update the entry the callback inserted, else append
+                entries.upsert((key, value.clone()), |old, new| old.1 = new.1);
             }
             Completion::Normal(value)
         });
@@ -709,19 +676,11 @@ impl Interpreter {
                                 let entries = borrowed.map_data_mut().unwrap();
 
                                 // Find existing entry with SameValueZero key equality
-                                let existing_idx = entries.iter().position(|entry| {
-                                    if let Some((k, _)) = entry {
-                                        same_value_zero(k, &key_val)
-                                    } else {
-                                        false
-                                    }
-                                });
+                                let existing = entries.get(&key_val).map(|entry| entry.1.clone());
 
-                                if let Some(idx) = existing_idx {
+                                if let Some(arr_val) = existing {
                                     // Append to existing array
-                                    if let Some((_, arr_val)) = entries[idx].as_ref()
-                                        && let Some(arr_obj) = (arr_val).as_object_id()
-                                    {
+                                    if let Some(arr_obj) = (arr_val).as_object_id() {
                                         let arr_id = arr_obj;
                                         drop(borrowed);
                                         if let Some(arr) = interp.get_object(arr_id) {
@@ -742,7 +701,7 @@ impl Interpreter {
                                     if let Some(map_obj) = interp.get_object_cell(result_id) {
                                         let mut borrowed = map_obj.borrow_mut();
                                         let entries = borrowed.map_data_mut().unwrap();
-                                        entries.push(Some((key_val, new_arr)));
+                                        entries.push_new((key_val, new_arr));
                                     }
                                 }
                             }
@@ -930,13 +889,7 @@ impl Interpreter {
             }
             interp.gc_write_barrier_value(&obj, &value);
             let mut borrowed = obj.borrow_mut_untracked();
-            let entries = borrowed.set_data_mut().unwrap();
-            for entry in entries.iter().flatten() {
-                if same_value_zero(entry, &value) {
-                    return Completion::Normal(this.clone());
-                }
-            }
-            entries.push(Some(value));
+            borrowed.set_data_mut().unwrap().upsert(value, |_, _| {});
             Completion::Normal(this.clone())
         });
 
@@ -947,13 +900,7 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let found = obj
-                .borrow()
-                .set_data()
-                .unwrap()
-                .iter()
-                .flatten()
-                .any(|entry| same_value_zero(entry, &value));
+            let found = obj.borrow().set_data().unwrap().contains(&value);
             Completion::Normal(JsValue::boolean(found))
         });
 
@@ -964,16 +911,12 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let mut borrowed = obj.borrow_mut_untracked();
-            let entries = borrowed.set_data_mut().unwrap();
-            for entry in entries.iter_mut() {
-                let matches = entry.as_ref().is_some_and(|e| same_value_zero(e, &value));
-                if matches {
-                    *entry = None;
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            let removed = obj
+                .borrow_mut_untracked()
+                .set_data_mut()
+                .unwrap()
+                .remove(&value);
+            Completion::Normal(JsValue::boolean(removed))
         });
 
         // Set.prototype.clear
@@ -1176,16 +1119,12 @@ impl Interpreter {
             val
         }
 
-        fn set_data_has(entries: &[Option<JsValue>], val: &JsValue) -> bool {
-            entries.iter().flatten().any(|e| same_value_zero(e, val))
-        }
-
         /// Whether the live O.[[SetData]] of `obj` contains `val`, checked under
         /// a borrow rather than on a copy of the entries.
         fn live_set_has(obj: &ObjectHandle, val: &JsValue) -> bool {
             obj.borrow()
                 .set_data()
-                .is_some_and(|current| set_data_has(current, val))
+                .is_some_and(|current| current.contains(val))
         }
 
         /// The live values of `obj`'s O.[[SetData]], as a result list. The list
@@ -1194,13 +1133,10 @@ impl Interpreter {
         fn rooted_set_data_copy(
             interp: &mut Interpreter,
             obj: &ObjectHandle,
-        ) -> Vec<Option<JsValue>> {
-            let mut entries = Vec::new();
-            if let Some(data) = obj.borrow().set_data() {
-                for value in data.iter().flatten() {
-                    interp.gc_root_value(value);
-                    entries.push(Some(value.clone()));
-                }
+        ) -> KeyedEntries<JsValue> {
+            let entries = obj.borrow().set_data().cloned().unwrap_or_default();
+            for value in entries.iter() {
+                interp.gc_root_value(value);
             }
             entries
         }
@@ -1210,22 +1146,12 @@ impl Interpreter {
         /// in the caller's root scope.
         fn push_rooted_unique(
             interp: &mut Interpreter,
-            entries: &mut Vec<Option<JsValue>>,
+            entries: &mut KeyedEntries<JsValue>,
             val: JsValue,
         ) {
-            if !set_data_has(entries, &val) {
-                interp.gc_root_value(&val);
-                entries.push(Some(val));
-            }
-        }
-
-        /// Empty the slot of a result list that holds `val`, if any.
-        fn remove_entry(entries: &mut [Option<JsValue>], val: &JsValue) {
-            if let Some(slot) = entries
-                .iter_mut()
-                .find(|e| e.as_ref().is_some_and(|e| same_value_zero(e, val)))
-            {
-                *slot = None;
+            let rooted = val.clone();
+            if entries.upsert(val, |_, _| {}) {
+                interp.gc_root_value(&rooted);
             }
         }
 
@@ -1234,7 +1160,7 @@ impl Interpreter {
             obj.borrow().set_data().map_or(0, KeyedEntries::live_len)
         }
 
-        fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
+        fn make_result_set(interp: &mut Interpreter, entries: KeyedEntries<JsValue>) -> Completion {
             let new_obj_id = interp.create_object_id();
             interp
                 .get_object_cell_expect(new_obj_id)
@@ -1245,7 +1171,7 @@ impl Interpreter {
                 .borrow_mut()
                 .class_name = "Set".into();
             interp.get_object_cell_expect(new_obj_id).borrow_mut().kind =
-                crate::interpreter::types::ObjectKind::Set(entries.into());
+                crate::interpreter::types::ObjectKind::Set(entries);
             let id = new_obj_id;
             Completion::Normal(JsValue::object(id))
         }
@@ -1274,7 +1200,7 @@ impl Interpreter {
         define_set_method(self, proto_id, "intersection", |interp, obj, other, rec| {
             // Re-read the size after GetSetRecord (side-effects may mutate this)
             let this_size = live_set_size(obj);
-            let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+            let mut new_entries = KeyedEntries::default();
             if this_size as f64 <= rec.size {
                 let mut cursor = 0;
                 while let Some(entry) = next_live_entry(obj, JsObjectData::set_data, &mut cursor) {
@@ -1310,18 +1236,16 @@ impl Interpreter {
         define_set_method(self, proto_id, "difference", |interp, obj, other, rec| {
             // Copy O.[[SetData]] after GetSetRecord
             let mut new_entries = rooted_set_data_copy(interp, obj);
-            if new_entries.len() as f64 <= rec.size {
-                for entry in &mut new_entries {
-                    let Some(value) = entry.as_ref() else {
-                        continue;
-                    };
+            if new_entries.live_len() as f64 <= rec.size {
+                let mut cursor = 0;
+                while let Some(value) = new_entries.next_live(&mut cursor).cloned() {
                     let has_result =
-                        match interp.call_function(&rec.has, other, std::slice::from_ref(value)) {
+                        match interp.call_function(&rec.has, other, std::slice::from_ref(&value)) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                     if interp.to_boolean_val(&has_result) {
-                        *entry = None;
+                        new_entries.remove(&value);
                     }
                 }
             } else {
@@ -1335,7 +1259,7 @@ impl Interpreter {
                         Ok(None) => break,
                         Err(c) => return c,
                     };
-                    remove_entry(&mut new_entries, &value);
+                    new_entries.remove(&value);
                 }
             }
             make_result_set(interp, new_entries)
@@ -1363,7 +1287,7 @@ impl Interpreter {
                     let val = canonicalize_key(value);
                     // Check against live O.[[SetData]]
                     if live_set_has(obj, &val) {
-                        remove_entry(&mut new_entries, &val);
+                        new_entries.remove(&val);
                     } else {
                         push_rooted_unique(interp, &mut new_entries, val);
                     }
@@ -1665,13 +1589,10 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::UNDEFINED);
                     }
-                    let found = obj.borrow().map_data().and_then(|entries| {
-                        entries
-                            .iter()
-                            .flatten()
-                            .find(|entry| strict_equality(&entry.0, &key))
-                            .map(|entry| entry.1.clone())
-                    });
+                    let found = obj
+                        .borrow()
+                        .map_data()
+                        .and_then(|entries| entries.get(&key).map(|entry| entry.1.clone()));
                     return Completion::Normal(found.unwrap_or(JsValue::UNDEFINED));
                 }
             }
@@ -1695,14 +1616,10 @@ impl Interpreter {
                     interp.gc_write_barrier_value(obj, &key);
                     interp.gc_write_barrier_value(obj, &value);
                     let mut borrowed = obj.borrow_mut_untracked();
-                    let entries = borrowed.map_data_mut().unwrap();
-                    for entry in entries.iter_mut().flatten() {
-                        if strict_equality(&entry.0, &key) {
-                            entry.1 = value;
-                            return Completion::Normal(this.clone());
-                        }
-                    }
-                    entries.push(Some((key, value)));
+                    borrowed
+                        .map_data_mut()
+                        .unwrap()
+                        .upsert((key, value), |old, new| old.1 = new.1);
                     return Completion::Normal(this.clone());
                 }
             }
@@ -1724,12 +1641,10 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    let found = obj.borrow().map_data().is_some_and(|entries| {
-                        entries
-                            .iter()
-                            .flatten()
-                            .any(|entry| strict_equality(&entry.0, &key))
-                    });
+                    let found = obj
+                        .borrow()
+                        .map_data()
+                        .is_some_and(|entries| entries.contains(&key));
                     return Completion::Normal(JsValue::boolean(found));
                 }
             }
@@ -1749,16 +1664,12 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    let mut borrowed = obj.borrow_mut_untracked();
-                    let entries = borrowed.map_data_mut().unwrap();
-                    for entry in entries.iter_mut() {
-                        let matches = entry.as_ref().is_some_and(|e| strict_equality(&e.0, &key));
-                        if matches {
-                            *entry = None;
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::boolean(false));
+                    let removed = obj
+                        .borrow_mut_untracked()
+                        .map_data_mut()
+                        .unwrap()
+                        .remove(&key);
+                    return Completion::Normal(JsValue::boolean(removed));
                 }
             }
             let err = interp.create_type_error("WeakMap.prototype.delete requires a WeakMap");
@@ -1779,20 +1690,14 @@ impl Interpreter {
                         let err = interp.create_type_error("Invalid value used as weak map key");
                         return Completion::Throw(err);
                     }
-                    {
-                        let borrowed = obj.borrow();
-                        let entries = borrowed.map_data().unwrap();
-                        for entry in entries.iter().flatten() {
-                            if strict_equality(&entry.0, &key) {
-                                return Completion::Normal(entry.1.clone());
-                            }
-                        }
+                    if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
+                        return Completion::Normal(entry.1.clone());
                     }
                     interp.gc_write_barrier_value(obj, &key);
                     interp.gc_write_barrier_value(obj, &value);
                     let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
-                    entries.push(Some((key, value.clone())));
+                    entries.push_new((key, value.clone()));
                     return Completion::Normal(value);
                 }
             }
@@ -1823,14 +1728,8 @@ impl Interpreter {
                         let err = interp.create_type_error("callbackfn is not a function");
                         return Completion::Throw(err);
                     }
-                    {
-                        let borrowed = obj.borrow();
-                        let entries = borrowed.map_data().unwrap();
-                        for entry in entries.iter().flatten() {
-                            if strict_equality(&entry.0, &key) {
-                                return Completion::Normal(entry.1.clone());
-                            }
-                        }
+                    if let Some(entry) = obj.borrow().map_data().unwrap().get(&key) {
+                        return Completion::Normal(entry.1.clone());
                     }
                     let value = match interp.call_function(
                         &callbackfn,
@@ -1845,13 +1744,7 @@ impl Interpreter {
                     interp.gc_write_barrier_value(obj, &value);
                     let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
-                    for entry in entries.iter_mut().flatten() {
-                        if strict_equality(&entry.0, &key) {
-                            entry.1 = value.clone();
-                            return Completion::Normal(value);
-                        }
-                    }
-                    entries.push(Some((key, value.clone())));
+                    entries.upsert((key, value.clone()), |old, new| old.1 = new.1);
                     return Completion::Normal(value);
                 }
             }
@@ -2089,13 +1982,7 @@ impl Interpreter {
                     }
                     interp.gc_write_barrier_value(obj, &value);
                     let mut borrowed = obj.borrow_mut_untracked();
-                    let entries = borrowed.set_data_mut().unwrap();
-                    for entry in entries.iter().flatten() {
-                        if strict_equality(entry, &value) {
-                            return Completion::Normal(this.clone());
-                        }
-                    }
-                    entries.push(Some(value));
+                    borrowed.set_data_mut().unwrap().upsert(value, |_, _| {});
                     return Completion::Normal(this.clone());
                 }
             }
@@ -2117,12 +2004,10 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    let found = obj.borrow().set_data().is_some_and(|entries| {
-                        entries
-                            .iter()
-                            .flatten()
-                            .any(|entry| strict_equality(entry, &value))
-                    });
+                    let found = obj
+                        .borrow()
+                        .set_data()
+                        .is_some_and(|entries| entries.contains(&value));
                     return Completion::Normal(JsValue::boolean(found));
                 }
             }
@@ -2142,16 +2027,12 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
-                    let mut borrowed = obj.borrow_mut_untracked();
-                    let entries = borrowed.set_data_mut().unwrap();
-                    for entry in entries.iter_mut() {
-                        let matches = entry.as_ref().is_some_and(|e| strict_equality(e, &value));
-                        if matches {
-                            *entry = None;
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
-                    }
-                    return Completion::Normal(JsValue::boolean(false));
+                    let removed = obj
+                        .borrow_mut_untracked()
+                        .set_data_mut()
+                        .unwrap()
+                        .remove(&value);
+                    return Completion::Normal(JsValue::boolean(removed));
                 }
             }
             let err = interp.create_type_error("WeakSet.prototype.delete requires a WeakSet");
