@@ -71,13 +71,29 @@ fn number_binop(op: Op, l: f64, r: f64) -> JsValue {
         Op::BitAnd => JsValue::number(number_ops::bitwise_and(l, r)),
         Op::BitOr => JsValue::number(number_ops::bitwise_or(l, r)),
         Op::BitXor => JsValue::number(number_ops::bitwise_xor(l, r)),
-        Op::Lt => JsValue::boolean(number_ops::less_than(l, r) == Some(true)),
-        Op::Gt => JsValue::boolean(number_ops::less_than(r, l) == Some(true)),
-        Op::LtEq => JsValue::boolean(number_ops::less_than(r, l) == Some(false)),
-        Op::GtEq => JsValue::boolean(number_ops::less_than(l, r) == Some(false)),
-        Op::Eq | Op::StrictEq => JsValue::boolean(number_ops::equal(l, r)),
-        Op::NotEq | Op::StrictNotEq => JsValue::boolean(!number_ops::equal(l, r)),
+        Op::Lt
+        | Op::Gt
+        | Op::LtEq
+        | Op::GtEq
+        | Op::Eq
+        | Op::StrictEq
+        | Op::NotEq
+        | Op::StrictNotEq => JsValue::boolean(number_compare(op, l, r)),
         _ => unreachable!("not a binary op: {op:?}"),
+    }
+}
+
+/// A comparison over two Numbers, as `eval_binary`'s own Number fast path.
+#[inline(always)]
+fn number_compare(op: Op, l: f64, r: f64) -> bool {
+    match op {
+        Op::Lt => number_ops::less_than(l, r) == Some(true),
+        Op::Gt => number_ops::less_than(r, l) == Some(true),
+        Op::LtEq => number_ops::less_than(r, l) == Some(false),
+        Op::GtEq => number_ops::less_than(l, r) == Some(false),
+        Op::Eq | Op::StrictEq => number_ops::equal(l, r),
+        Op::NotEq | Op::StrictNotEq => !number_ops::equal(l, r),
+        _ => unreachable!("not a comparison: {op:?}"),
     }
 }
 
@@ -1056,46 +1072,45 @@ fn run_chunk_inner(
                 };
                 pc += 7;
                 let name = &chunk.names[idx as usize];
-                let fast = with_local_hit(env, name, slot, |v| {
-                    v.as_number().map(|l| number_binop(bop, l, k))
+                let hit = with_local_hit(env, name, slot, |v| match v.as_number() {
+                    Some(l) => Ok(number_binop(bop, l, k)),
+                    None => Err(v.clone()),
                 });
-                match fast {
-                    Some(Some(result)) => {
+                let operand = match hit {
+                    Some(Ok(result)) => {
                         #[cfg(feature = "perf-counters")]
                         {
                             interp.perf.local_slot_hits += 1;
                         }
                         stack.push(result);
+                        None
                     }
-                    other => {
-                        let l = match other {
-                            Some(None) => {
-                                #[cfg(feature = "perf-counters")]
-                                {
-                                    interp.perf.local_slot_hits += 1;
-                                }
-                                with_local_hit(env, name, slot, JsValue::clone)
-                                    .expect("hit verified above")
-                            }
-                            _ => {
-                                #[cfg(feature = "perf-counters")]
-                                {
-                                    interp.perf.local_slot_misses += 1;
-                                }
-                                match load_name_value(interp, name, env) {
-                                    Completion::Normal(v) => v,
-                                    abrupt => return abrupt,
-                                }
-                            }
-                        };
-                        // As `LoadLocal` then `BinConst`: the loaded value is
-                        // rooted for the whole operation (an object operand's
-                        // `valueOf` may rebind the local and collect).
-                        root_stack_value(interp, &l);
-                        match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
-                            Completion::Normal(v) => push_value(interp, stack, v),
+                    Some(Err(l)) => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 1;
+                        }
+                        Some(l)
+                    }
+                    None => {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_misses += 1;
+                        }
+                        match load_name_value(interp, name, env) {
+                            Completion::Normal(v) => Some(v),
                             abrupt => return abrupt,
                         }
+                    }
+                };
+                if let Some(l) = operand {
+                    // As `LoadLocal` then `BinConst`: the loaded value is
+                    // rooted for the whole operation (an object operand's
+                    // `valueOf` may rebind the local and collect).
+                    root_stack_value(interp, &l);
+                    match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => return abrupt,
                     }
                 }
             }
@@ -1109,15 +1124,7 @@ fn run_chunk_inner(
                         (stack[len - 2].as_number(), stack[len - 1].as_number())
                 {
                     stack.truncate(len - 2);
-                    match cmp {
-                        Op::Lt => number_ops::less_than(l, r) != Some(true),
-                        Op::Gt => number_ops::less_than(r, l) != Some(true),
-                        Op::LtEq => number_ops::less_than(r, l) != Some(false),
-                        Op::GtEq => number_ops::less_than(l, r) != Some(false),
-                        Op::Eq | Op::StrictEq => !number_ops::equal(l, r),
-                        Op::NotEq | Op::StrictNotEq => number_ops::equal(l, r),
-                        _ => unreachable!("not a comparison: {cmp:?}"),
-                    }
+                    !number_compare(cmp, l, r)
                 } else {
                     let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
                     let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");

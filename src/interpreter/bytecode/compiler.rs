@@ -198,7 +198,6 @@ impl Compiler {
         self.pop_ref();
     }
 
-    /// `StoreResolvedName` plus popping the stored value (effect context).
     fn emit_store_resolved_name_pop(&mut self, name_idx: u16) {
         self.emit(Op::StoreResolvedNamePop);
         self.emit_u16(name_idx);
@@ -244,12 +243,39 @@ impl Compiler {
         self.emit_u16(slot);
     }
 
-    /// `StoreLocal` plus popping the stored value (effect context).
     fn emit_store_local_pop(&mut self, name_idx: u16, slot: u16) {
         self.emit(Op::StoreLocalPop);
         self.emit_u16(name_idx);
         self.emit_u16(slot);
         self.pop_n(1);
+    }
+
+    /// `[..., l]` → `[..., l op k]`.
+    fn emit_bin_const(&mut self, bop: Op, k: f64) -> Result<(), CompileError> {
+        let k_idx = self.add_constant(Constant::Number(k))?;
+        self.emit(Op::BinConst);
+        self.code.push(bop as u8);
+        self.emit_u16(k_idx);
+        Ok(())
+    }
+
+    /// `LoadLocal name` then `BinConst`, in one op: pushes `name op k`.
+    fn emit_local_bin_const(
+        &mut self,
+        name: &str,
+        slot: u16,
+        bop: Op,
+        k: f64,
+    ) -> Result<(), CompileError> {
+        let idx = self.add_name(name)?;
+        let k_idx = self.add_constant(Constant::Number(k))?;
+        self.emit(Op::LocalBinConst);
+        self.emit_u16(idx);
+        self.emit_u16(slot);
+        self.code.push(bop as u8);
+        self.emit_u16(k_idx);
+        self.push_n(1);
+        Ok(())
     }
 
     fn reset_script_completion(&mut self) {
@@ -449,22 +475,13 @@ impl Compiler {
                     // The literal folds into the op: no `LoadConst` dispatch.
                     // The left operand is still evaluated first and the
                     // constant has no effects, so evaluation order holds.
-                    let k_idx = self.add_constant(Constant::Number(*k))?;
                     if let Expression::Identifier(name) = lhs.as_ref()
                         && let Some(slot) = self.local_slot(name)
                     {
-                        let idx = self.add_name(name)?;
-                        self.emit(Op::LocalBinConst);
-                        self.emit_u16(idx);
-                        self.emit_u16(slot);
-                        self.code.push(bop as u8);
-                        self.emit_u16(k_idx);
-                        self.push_n(1);
+                        self.emit_local_bin_const(name, slot, bop, *k)?;
                     } else {
                         self.compile_expr(lhs)?;
-                        self.emit(Op::BinConst);
-                        self.code.push(bop as u8);
-                        self.emit_u16(k_idx);
+                        self.emit_bin_const(bop, *k)?;
                     }
                     return Ok(());
                 }
@@ -565,14 +582,16 @@ impl Compiler {
             // A local of this frame: no `with`, closure or direct eval can
             // change what the name resolves to while the right-hand side
             // runs, so the reference needs no early resolution.
-            if op != AssignOp::Assign {
+            if op == AssignOp::Assign {
+                self.compile_expr(value)?;
+            } else if let Expression::Literal(Literal::Number(k)) = value {
+                self.emit_local_bin_const(name, slot, Self::compound_binary_op(op)?, *k)?;
+            } else {
                 self.emit(Op::LoadLocal);
                 self.emit_u16(idx);
                 self.emit_u16(slot);
                 self.push_n(1);
-            }
-            self.compile_expr(value)?;
-            if op != AssignOp::Assign {
+                self.compile_expr(value)?;
                 self.emit(Self::compound_binary_op(op)?);
                 self.pop_n(2);
                 self.push_n(1);
@@ -590,10 +609,14 @@ impl Compiler {
                 self.emit(Op::LoadResolvedName);
                 self.emit_u16(idx);
                 self.push_n(1);
-                self.compile_expr(value)?;
-                self.emit(Self::compound_binary_op(op)?);
-                self.pop_n(2);
-                self.push_n(1);
+                if let Expression::Literal(Literal::Number(k)) = value {
+                    self.emit_bin_const(Self::compound_binary_op(op)?, *k)?;
+                } else {
+                    self.compile_expr(value)?;
+                    self.emit(Self::compound_binary_op(op)?);
+                    self.pop_n(2);
+                    self.push_n(1);
+                }
             }
             if discard {
                 self.emit_store_resolved_name_pop(idx);

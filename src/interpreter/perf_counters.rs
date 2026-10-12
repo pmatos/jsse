@@ -70,8 +70,9 @@ pub(crate) struct PerfCounters {
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
     pub(crate) gc_nanos: u128,
-    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`UpdateLocal`) whose slot hint
-    /// matched, and those that fell back to by-name resolution (#898).
+    /// Local-slot ops (`LoadLocal`/`StoreLocal`/`StoreLocalPop`/`UpdateLocal`/
+    /// `LocalBinConst`) whose slot hint matched, and those that fell back to
+    /// by-name resolution (#898).
     pub(crate) local_slot_hits: u64,
     pub(crate) local_slot_misses: u64,
     /// Per-body AST attribution. `invocation share` cannot localize cost — a

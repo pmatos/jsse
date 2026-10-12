@@ -2891,6 +2891,27 @@ fn binary_with_number_literal_rhs_folds_the_constant() {
 }
 
 #[test]
+fn compound_assignment_with_number_literal_folds_the_constant() {
+    let chunk = compile_function_source("c += 1; g *= 2; c -= d;", &["c", "d"]);
+    assert_eq!(
+        work_ops(&chunk),
+        vec![
+            Op::LocalBinConst,
+            Op::StoreLocalPop,
+            Op::ResolveName,
+            Op::LoadResolvedName,
+            Op::BinConst,
+            Op::StoreResolvedNamePop,
+            Op::LoadLocal,
+            Op::LoadLocal,
+            Op::Sub,
+            Op::StoreLocalPop,
+            Op::ReturnUndefined,
+        ]
+    );
+}
+
+#[test]
 fn binary_with_non_literal_rhs_stays_generic() {
     let chunk = compile_function_source("var r = x + 's'; var t = x + y; var u = x - -1;", &[]);
     let ops = work_ops(&chunk);

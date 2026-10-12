@@ -43,6 +43,9 @@ pub(crate) enum Op {
     ResolveName = 39,
     LoadResolvedName = 40,
     StoreResolvedName = 41,
+    /// `++`/`--` on a name. Operands: name (u16), mode (u8): bits 0-1 select
+    /// post-inc, pre-inc, post-dec, pre-dec; bit 2 means the result is
+    /// discarded (not pushed).
     UpdateName = 42,
     GetProp = 43,
     SetProp = 44,

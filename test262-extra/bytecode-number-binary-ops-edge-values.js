@@ -22,8 +22,6 @@ ops.forEach(function (op) {
   var compiled = new Function("a", "b", "return a " + op + " b;");
   literals.forEach(function (lhsSource) {
     var lhs = (0, eval)("(" + lhsSource + ")");
-    var withLiteral = new Function("a", "return a " + op + " (" + lhsSource + ");");
-    var withFreeName = new Function("return globalThis.__lhs " + op + " (" + lhsSource + ");");
     literals.forEach(function (rhsSource) {
       var rhs = (0, eval)("(" + rhsSource + ")");
       var expected = generic(lhs, rhs);
