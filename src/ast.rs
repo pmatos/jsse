@@ -10,26 +10,31 @@ pub(crate) fn next_template_id() -> u64 {
     NEXT_TEMPLATE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// A function's source text: a span of the enclosing source. Offsets are `u32`
+/// so the AST nodes that carry one stay within their cache-line budget.
 #[derive(Clone, Debug)]
 pub(crate) struct SourceText {
     source: Rc<str>,
-    start: usize,
-    end: usize,
+    start: u32,
+    end: u32,
 }
 
 impl SourceText {
     pub(crate) fn new(source: Rc<str>, start: usize, end: usize) -> Self {
-        Self { source, start, end }
+        match (u32::try_from(start), u32::try_from(end)) {
+            (Ok(start), Ok(end)) => Self { source, start, end },
+            _ => Self::from(source[start..end].to_string()),
+        }
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        &self.source[self.start..self.end]
+        &self.source[self.start as usize..self.end as usize]
     }
 }
 
 impl From<String> for SourceText {
     fn from(source: String) -> Self {
-        let end = source.len();
+        let end = u32::try_from(source.len()).expect("function source text exceeds 4 GiB");
         Self {
             source: Rc::from(source),
             start: 0,
