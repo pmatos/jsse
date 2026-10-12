@@ -347,9 +347,7 @@ impl Interpreter {
                                     return Completion::Normal(JsValue::NULL);
                                 };
                                 let this_realm_id = interp
-                                    .function_realm_map
-                                    .get(&this_id)
-                                    .copied()
+                                    .function_realm_of(this_id)
                                     .unwrap_or(interp.current_realm_id);
                                 // Walk call_stack_frames from top to find this function's activation
                                 let mut found_idx = None;
@@ -376,9 +374,7 @@ impl Interpreter {
                                         continue;
                                     }
                                     let caller_realm_id = interp
-                                        .function_realm_map
-                                        .get(&frame.func_obj_id)
-                                        .copied()
+                                        .function_realm_of(frame.func_obj_id)
                                         .unwrap_or(interp.current_realm_id);
                                     // Do not leak cross-realm caller function objects.
                                     if caller_realm_id != this_realm_id {

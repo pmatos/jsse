@@ -363,7 +363,6 @@ pub(crate) struct Interpreter {
     next_class_brand_id: u64,
     next_auto_accessor_id: u64,
     pub(crate) regexp_legacy: builtins::regexp::RegexpLegacyState,
-    pub(crate) function_realm_map: FxHashMap<u64, usize>,
     function_keys: FunctionKeys,
     pub(crate) in_tail_position: bool,
     pub(crate) in_state_machine: bool,
@@ -808,7 +807,6 @@ impl Interpreter {
             next_class_brand_id: 0,
             next_auto_accessor_id: 0,
             regexp_legacy: Default::default(),
-            function_realm_map: FxHashMap::default(),
             function_keys: FunctionKeys::new(),
             in_tail_position: false,
             in_state_machine: false,
@@ -1670,8 +1668,7 @@ impl Interpreter {
                 return self.get_function_realm(&JsValue::object(target_id));
             }
             drop(obj_ref);
-            // Check function_realm_map
-            if let Some(&realm_id) = self.function_realm_map.get(&o.id) {
+            if let Some(realm_id) = self.function_realm_of(o.id) {
                 return Ok(realm_id);
             }
         }
@@ -1886,6 +1883,15 @@ impl Interpreter {
         self.create_function(func)
     }
 
+    /// Realm a function object was created in, or `None` for objects that
+    /// are not function objects built by `create_function` (callers fall
+    /// back to the current realm, sec-getfunctionrealm).
+    #[inline]
+    pub(crate) fn function_realm_of(&self, id: u64) -> Option<usize> {
+        self.get_object_cell(id)
+            .and_then(|cell| cell.borrow().function_realm)
+    }
+
     fn create_function(&mut self, func: JsFunction) -> JsValue {
         self.create_function_with(func, FunctionInit::DEFAULT)
     }
@@ -1945,6 +1951,7 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.prototype_id = proto_id.or(self.realm().object_prototype);
         obj_data.class_name = std::borrow::Cow::Borrowed(class_name);
+        obj_data.function_realm = Some(self.current_realm_id);
         // Annex B: sloppy non-arrow, non-generator, non-async, non-method
         // functions get own caller/arguments to shadow the ThrowTypeError
         // accessor.
@@ -2021,8 +2028,6 @@ impl Interpreter {
             );
         }
         let func_id = self.alloc_object(obj_data);
-        self.function_realm_map
-            .insert(func_id, self.current_realm_id);
         let func_val = JsValue::object(func_id);
         // Set prototype.constructor = func (not for generators)
         if is_constructable

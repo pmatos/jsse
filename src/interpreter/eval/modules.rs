@@ -648,7 +648,9 @@ impl Interpreter {
                 );
             }
         }
-        self.function_realm_map.insert(func_id, caller_realm_id);
+        if let Some(cell) = self.get_object_cell(func_id) {
+            cell.borrow_mut().function_realm = Some(caller_realm_id);
+        }
 
         self.current_realm_id = old_realm;
 

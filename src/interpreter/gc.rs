@@ -797,7 +797,6 @@ impl Interpreter {
             }
         }
         self.objects.free(id);
-        self.function_realm_map.remove(&id);
         self.iterator_next_cache.remove(&id);
         self.generator_inline_iters.remove(&id);
         self.generator_for_of_stacks.remove(&id);

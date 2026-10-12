@@ -2059,6 +2059,9 @@ pub(crate) struct JsObjectData {
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub class_name: std::borrow::Cow<'static, str>,
+    /// Realm the function object was created in; `None` when it was not
+    /// built by `create_function` (the call path then keeps the caller's realm).
+    pub function_realm: Option<usize>,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
@@ -2425,6 +2428,7 @@ impl JsObjectData {
             prototype_id: None,
             callable: None,
             class_name: std::borrow::Cow::Borrowed("Object"),
+            function_realm: None,
             extensible: true,
             primitive_value: None,
             private_fields: HashMap::new(),
