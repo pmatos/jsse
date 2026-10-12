@@ -673,10 +673,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                Completion::Normal(JsValue::string(JsString::from_str(typeof_val(
-                    &val,
-                    &self.objects,
-                ))))
+                Completion::Normal(self.typeof_value(&val))
             }
             Expression::Void(operand) => {
                 match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
@@ -1891,8 +1888,6 @@ impl Interpreter {
         state
     }
 
-    /// `typeof <identifier>`: an unresolvable reference yields "undefined",
-    /// an uninitialised binding throws (sec-typeof-operator-runtime-semantics-evaluation).
     /// The `typeof` result string for an evaluated value (HTMLDDA aware).
     pub(super) fn typeof_value(&self, value: &JsValue) -> JsValue {
         JsValue::string(JsString::from_str(typeof_val(value, &self.objects)))
@@ -1907,9 +1902,7 @@ impl Interpreter {
             match self.resolve_with_has_binding(name, env) {
                 Ok(Some(obj_id)) => {
                     return match self.with_get_binding_value(obj_id, name, strict) {
-                        Completion::Normal(val) => Completion::Normal(JsValue::string(
-                            JsString::from_str(typeof_val(&val, &self.objects)),
-                        )),
+                        Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
                         other => other,
                     };
                 }
@@ -1919,9 +1912,7 @@ impl Interpreter {
         }
         if let Some(result) = self.resolve_global_getter(name, env) {
             return match result {
-                Completion::Normal(val) => Completion::Normal(JsValue::string(JsString::from_str(
-                    typeof_val(&val, &self.objects),
-                ))),
+                Completion::Normal(val) => Completion::Normal(self.typeof_value(&val)),
                 other => other,
             };
         }

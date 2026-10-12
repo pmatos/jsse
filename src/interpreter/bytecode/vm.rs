@@ -5,7 +5,7 @@ use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
 use crate::interpreter::{Atom, EnvRef, Interpreter};
-use crate::types::{JsPropertyKey, JsValue};
+use crate::types::{JsValue, PropertyKeyLike};
 
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     let lo = chunk.code[pc] as u16;
@@ -224,7 +224,8 @@ fn member_set_computed(
 /// the caller; GetValue → ToNumeric → ±1 → PutValue, with ToPropertyKey run
 /// once (sec-postfix-increment-operator-runtime-semantics-evaluation,
 /// sec-prefix-increment-operator-runtime-semantics-evaluation). The postfix
-/// result is the numeric old value. `key_val` is `None` for `base.name`.
+/// result is the numeric old value. `key_val` is `None` for `base.name`, which
+/// reads and writes through the interned name without building a key.
 fn member_update(
     interp: &mut Interpreter,
     base: &JsValue,
@@ -234,14 +235,14 @@ fn member_update(
     prefix: bool,
     strict: bool,
 ) -> Completion {
-    let key = match (name, key_val) {
+    match (name, key_val) {
         (Some(name), _) => {
             if base.is_nullish() {
                 return Completion::Throw(interp.create_type_error(&format!(
                     "Cannot read properties of {base} (reading '{name}')"
                 )));
             }
-            JsPropertyKey::from(name)
+            member_update_with_key(interp, base, name, op, prefix, strict)
         }
         (None, Some(key_val)) => {
             if base.is_nullish() {
@@ -250,12 +251,22 @@ fn member_update(
                 )));
             }
             match interp.to_property_key(key_val) {
-                Ok(k) => k,
-                Err(e) => return Completion::Throw(e),
+                Ok(key) => member_update_with_key(interp, base, &key, op, prefix, strict),
+                Err(e) => Completion::Throw(e),
             }
         }
         (None, None) => unreachable!("member update needs a name or a key value"),
-    };
+    }
+}
+
+fn member_update_with_key<K: PropertyKeyLike + ?Sized>(
+    interp: &mut Interpreter,
+    base: &JsValue,
+    key: &K,
+    op: UpdateOp,
+    prefix: bool,
+    strict: bool,
+) -> Completion {
     let wrapper = if base.is_object() {
         base.clone()
     } else {
@@ -265,7 +276,7 @@ fn member_update(
         }
     };
     let current = match wrapper.as_object_id() {
-        Some(id) => match interp.get_object_property(id, &key, base) {
+        Some(id) => match interp.get_object_property(id, key, base) {
             Completion::Normal(v) => v,
             abrupt => return abrupt,
         },
@@ -275,7 +286,7 @@ fn member_update(
         Ok(pair) => pair,
         Err(e) => return Completion::Throw(e),
     };
-    match interp.set_object_with_key(base.clone(), &key, new_val.clone(), strict) {
+    match interp.set_object_with_key(base.clone(), key, new_val.clone(), strict) {
         Ok(()) => Completion::Normal(if prefix { new_val } else { old_val }),
         Err(e) => Completion::Throw(e),
     }

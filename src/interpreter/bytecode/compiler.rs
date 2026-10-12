@@ -7,6 +7,10 @@ use crate::ast::{
 };
 use crate::types::{JsBigInt, JsString};
 
+/// An `i16` jump offset that cannot reach its target. The statement that owns
+/// the jump is handed to the tree-walker instead of failing the whole body.
+const JUMP_OFFSET_OVERFLOW: &str = "jump offset overflow";
+
 #[derive(Debug)]
 pub(crate) enum CompileError {
     /// This node has no native lowering. In Function goal the node itself is
@@ -208,7 +212,7 @@ impl Compiler {
         let from = self.code.len() + 2;
         let delta = target as isize - from as isize;
         if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
-            return Err(CompileError::Ineligible("jump offset overflow"));
+            return Err(CompileError::Ineligible(JUMP_OFFSET_OVERFLOW));
         }
         self.emit_u16(delta as i16 as u16);
         Ok(())
@@ -224,7 +228,7 @@ impl Compiler {
         self.max_jump_target = self.max_jump_target.max(to);
         let delta = to as isize - from as isize;
         if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
-            return Err(CompileError::Ineligible("jump offset overflow"));
+            return Err(CompileError::Ineligible(JUMP_OFFSET_OVERFLOW));
         }
         let off = delta as i16 as u16;
         self.code[patch] = (off & 0xff) as u8;
@@ -959,7 +963,7 @@ impl Compiler {
         match self.compile_statement_native(stmt) {
             Err(
                 CompileError::Unsupported(reason)
-                | CompileError::Ineligible(reason @ "jump offset overflow"),
+                | CompileError::Ineligible(reason @ JUMP_OFFSET_OVERFLOW),
             ) => {
                 self.rollback(snap);
                 self.emit_exec_ast(stmt, reason)
