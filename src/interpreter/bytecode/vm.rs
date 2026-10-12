@@ -281,6 +281,24 @@ fn member_update(
     }
 }
 
+/// Declares the chunk's `var` names in first-use order, which is the order
+/// its local slot hints assume. Declaration instantiation that runs first
+/// (`Chunk::needs_instantiation`) calls this beforehand so it cannot choose a
+/// different binding order.
+pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
+    if chunk.var_names.is_empty() {
+        return;
+    }
+    let var_scope = Environment::find_var_scope(env);
+    let mut scope = var_scope.borrow_mut();
+    for &name_idx in &chunk.var_names {
+        let name = &chunk.names[name_idx as usize];
+        if !scope.bindings.contains_key(name) {
+            scope.declare_atom(name, BindingKind::Var);
+        }
+    }
+}
+
 pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -383,15 +401,8 @@ fn run_chunk_inner(
     refs: &mut Vec<IdentifierRef>,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
-    if declare_chunk_vars && !chunk.var_names.is_empty() {
-        let var_scope = Environment::find_var_scope(env);
-        let mut scope = var_scope.borrow_mut();
-        for &name_idx in &chunk.var_names {
-            let name = &chunk.names[name_idx as usize];
-            if !scope.bindings.contains_key(name) {
-                scope.declare_atom(name, BindingKind::Var);
-            }
-        }
+    if declare_chunk_vars {
+        declare_var_prologue(chunk, env);
     }
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;

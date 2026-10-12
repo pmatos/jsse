@@ -1976,6 +1976,9 @@ impl Interpreter {
                     self.perf.enter_ast_body(name, seq, false);
                 }
                 let result = self.with_ic_body(body, |interp| {
+                    if analysis.is_some() {
+                        vm::declare_var_prologue(&chunk, exec_env);
+                    }
                     if let Some(analysis) = &analysis
                         && let Some(err) = interp.instantiate_body_declarations(
                             body.as_slice(),
