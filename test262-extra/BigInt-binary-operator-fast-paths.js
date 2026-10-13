@@ -21,16 +21,8 @@ features: [BigInt]
 includes: [compareArray.js]
 ---*/
 
-function run(a, b) {
-  var out = [];
-  out.push(a + b, a - b, a * b, a & b, a | b, a ^ b);
-  out.push(a < b, a > b, a <= b, a >= b, a == b, a != b, a === b, a !== b);
-  return out;
-}
-
 var big = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798n;
 var pairs = [[7n, 3n], [-7n, 3n], [3n, -7n], [0n, 0n], [-5n, -5n], [big, 12345n], [-big, big], [big, big]];
-var expected = [];
 pairs.forEach(function (p) {
   var a = p[0], b = p[1];
   assert.sameValue(a + b, BigInt.asIntN(1024, a + b), "sum is a BigInt");
@@ -79,13 +71,12 @@ assert.sameValue(acc, 293n, "compound assignment chain");
 
 // A VM-compiled loop exercises the same operators repeatedly.
 function loop() {
-  var a = big, b = 12345n, s = 2n, r = a, k = 0;
+  var a = big, b = 12345n, s = 2n, r = a;
   for (var i = 0; i < 50; i++) {
     r = a + b;
     r = r * s;
     r = r & a;
     r = r >> s;
-    k += 1;
   }
   return r;
 }
@@ -115,6 +106,13 @@ assert.sameValue(9223372036854775807n < 9223372036854775808, true, "around 2^63"
 assert.sameValue(9223372036854775808n > 9223372036854775807, false, "2^63 as a Number is 2^63");
 assert.sameValue(9223372036854775808n >= 9223372036854775808, true, "2^63 equal");
 assert.sameValue(-9223372036854775808n <= -9223372036854775808, true, "-2^63 equal");
+assert.sameValue(9000000000000000001n > 9e18, true, "just above the i64 comparison cutoff");
+assert.sameValue(8999999999999999999n < 9e18, true, "just below the i64 comparison cutoff");
+assert.sameValue(9223372036854775807n < 9.2e18, false, "i64 max against 9.2e18");
+assert.sameValue(9.2e18 < 9223372036854775807n, true, "9.2e18 against i64 max");
+assert.sameValue(-9000000000000000001n < -9e18, true, "negative side of the cutoff");
+assert.sameValue(1n < 1e19, true, "Number beyond the i64 range");
+assert.sameValue(-1n > -1e19, true, "negative Number beyond the i64 range");
 assert.sameValue(big > 1e30, true);
 assert.sameValue(big < 1e80, true);
 assert.sameValue(-5n < 3, true);

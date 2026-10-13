@@ -1786,8 +1786,9 @@ impl Interpreter {
         right: &JsValue,
         left_first: bool,
     ) -> Result<Option<bool>, JsValue> {
-        // Both operands are already primitives, so ToPrimitive is the
-        // identity and `left_first` is unobservable.
+        // Only BigInt and Number operands match, and ToPrimitive is the
+        // identity on those, so `left_first` is unobservable here. Objects,
+        // Strings and Symbols fall through to the ordered conversions below.
         if let Some(result) = bigint_relational_fast(left, right) {
             return Ok(result);
         }
