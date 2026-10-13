@@ -482,9 +482,9 @@ fn compile_count_is_independent_of_closure_count() {
     let few = perf_value(&run_counted("closures-few", &program(5)), "compile_ok");
     let many = perf_value(&run_counted("closures-many", &program(100)), "compile_ok");
     assert_eq!(few, many, "compile_ok must not scale with closure count");
-    // The returned function literal and `v => v + 1`; `make` and the script
-    // body bail once each (a function expression / declaration they contain).
-    assert_eq!(many, 2);
+    // `make`, the returned function literal and `v => v + 1`; the script body
+    // bails once (it declares a function).
+    assert_eq!(many, 3);
 }
 
 /// Class field initialisers and static blocks are tree-walked, so evaluating
