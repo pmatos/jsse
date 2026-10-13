@@ -1,8 +1,8 @@
 use super::chunk::{
     ArrayTemplate, AstNode, BLOCK_SLOT_FLAG, BLOCK_SLOT_MAX_INDEX, BLOCK_SLOT_MAX_SCOPES,
-    BlockScope, Chunk, Constant, EXEC_NO_TAIL_CALL, EscapeEntry, FinallyExit, FunctionTemplate,
-    Handler, HeadBinding, NO_ESCAPE_TABLE, NO_INIT_SLOT, ObjectShape, RegExpTemplate,
-    ShapeProperty,
+    BlockScope, Chunk, Constant, EXEC_NO_TAIL_CALL, EXEC_SET_COMPLETION, EscapeEntry, FinallyExit,
+    FunctionTemplate, Handler, HeadBinding, NO_ESCAPE_TABLE, NO_INIT_SLOT, ObjectShape,
+    RegExpTemplate, ShapeProperty,
 };
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{
@@ -22,11 +22,11 @@ const LITERAL_VALUE_CHUNK: usize = 256;
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
-    /// This node has no native lowering. In Function goal the node itself is
-    /// handed to the tree-walker (`EvalAst`/`ExecAst`); in Script goal the
-    /// whole body bails. The string carries a construction-site label for
-    /// greppable documentation, `{:?}` traces when debugging the eligibility
-    /// membrane, and the counters build's BAIL/FALLBACK tables.
+    /// This node has no native lowering. In either goal the node itself is
+    /// handed to the tree-walker (`EvalAst`/`ExecAst`). The string carries a
+    /// construction-site label for greppable documentation, `{:?}` traces
+    /// when debugging the eligibility membrane, and the counters build's
+    /// BAIL/FALLBACK tables.
     Unsupported(&'static str),
     /// The whole body must stay on the tree-walker: a construct whose
     /// semantics depend on running as one tree-walked frame (direct `eval`,
@@ -658,12 +658,8 @@ impl Compiler {
     }
 
     /// Compiles `expr`; when it has no native lowering (and can be evaluated
-    /// standalone), the whole node is handed to the tree-walker instead. Only
-    /// Function goal falls back per node — the Script goal still bails whole.
+    /// standalone), the whole node is handed to the tree-walker instead.
     fn compile_expr(&mut self, expr: &Expression) -> Result<(), CompileError> {
-        if self.goal != CompileGoal::Function {
-            return self.compile_expr_native(expr);
-        }
         let snap = self.snapshot();
         match self.compile_expr_native(expr) {
             Err(CompileError::Unsupported(reason)) if is_standalone_expression(expr) => {
@@ -1397,19 +1393,16 @@ impl Compiler {
     /// `owns_lexicals` lets a `let`/`const` initialise the binding its
     /// enclosing environment already holds in its TDZ: declaration
     /// instantiation hoisted it into the function environment, or `PushEnv`
-    /// into the block's. Anywhere else (the Script goal) a lexical
-    /// declaration owns a scope the VM does not model, so the tree-walker
-    /// runs the whole statement.
+    /// into the block's. Anywhere else (a Script's top level, whose lexicals
+    /// are global declarative bindings) the tree-walker runs the whole
+    /// statement.
     fn compile_var_declaration(
         &mut self,
         decl: &VariableDeclaration,
         owns_lexicals: bool,
     ) -> Result<(), CompileError> {
         if decl.kind != VarKind::Var {
-            if self.goal != CompileGoal::Function
-                || !owns_lexicals
-                || !matches!(decl.kind, VarKind::Let | VarKind::Const)
-            {
+            if !owns_lexicals || !matches!(decl.kind, VarKind::Let | VarKind::Const) {
                 return Err(CompileError::Unsupported("lexical declaration"));
             }
             return self.compile_lexical_declaration(decl);
@@ -1667,11 +1660,8 @@ impl Compiler {
     }
 
     /// Compiles `stmt`; a statement with no native lowering is handed to the
-    /// tree-walker as one unit (`ExecAst`) in Function goal.
+    /// tree-walker as one unit (`ExecAst`).
     fn compile_statement(&mut self, stmt: &Statement) -> Result<(), CompileError> {
-        if self.goal != CompileGoal::Function {
-            return self.compile_statement_native(stmt);
-        }
         let snap = self.snapshot();
         match self.compile_statement_native(stmt) {
             Err(err @ (CompileError::Unsupported(_) | CompileError::JumpOverflow)) => {
@@ -1711,11 +1701,15 @@ impl Compiler {
         self.emit(Op::ExecAst);
         self.emit_u16(idx);
         self.emit_u16(table);
-        self.code.push(if self.no_tail > 0 {
+        let mut flags = if self.no_tail > 0 {
             EXEC_NO_TAIL_CALL
         } else {
             0
-        });
+        };
+        if self.goal == CompileGoal::Script {
+            flags |= EXEC_SET_COMPLETION;
+        }
+        self.code.push(flags);
         Ok(())
     }
 
@@ -2886,9 +2880,7 @@ impl Compiler {
         if let Some(ForInit::Variable(decl)) = &for_stmt.init
             && decl.kind != VarKind::Var
         {
-            if self.goal != CompileGoal::Function
-                || !matches!(decl.kind, VarKind::Let | VarKind::Const)
-            {
+            if !matches!(decl.kind, VarKind::Let | VarKind::Const) {
                 return Err(CompileError::Unsupported("lexical declaration"));
             }
             let lexicals = crate::interpreter::hoisting::declaration_bound_names(decl)
@@ -3203,6 +3195,8 @@ fn stmts_contain(stmts: &[Statement], pred: &dyn Fn(&Statement) -> bool) -> bool
     })
 }
 
+type PoisonFn = fn(&Expression) -> bool;
+
 /// A construct that only has its meaning when the whole function runs as one
 /// tree-walked frame, or whose compile-time handling depends on resolving
 /// names in the enclosing scope chain. Such a body stays wholly on the
@@ -3227,63 +3221,85 @@ fn is_poison_expression(expr: &Expression) -> bool {
     }
 }
 
-fn pattern_has_poison(pattern: &Pattern) -> bool {
+/// The Script goal's poison. `yield`, `await`, `new.target`, `super` and
+/// private `in` cannot occur in a Script's own code: the traversal only meets
+/// them inside nested arrows, which own them, so they must not keep the
+/// script whole-body (the JetStream async harness is one such arrow). Direct
+/// `eval`, dynamic `import()` and `import.meta` do.
+fn is_script_poison_expression(expr: &Expression) -> bool {
+    match expr {
+        Expression::ImportMeta
+        | Expression::Import(..)
+        | Expression::ImportDefer(..)
+        | Expression::ImportSource(..) => true,
+        Expression::Call(callee, _, _) => {
+            matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
+        }
+        _ => false,
+    }
+}
+
+fn pattern_has_poison(pattern: &Pattern, poison: PoisonFn) -> bool {
     use crate::ast::{ArrayPatternElement, ObjectPatternProperty, PropertyKey};
     match pattern {
         Pattern::Identifier(_) => false,
-        Pattern::Assign(inner, default) => pattern_has_poison(inner) || expr_has_poison(default),
-        Pattern::Rest(inner) => pattern_has_poison(inner),
-        Pattern::MemberExpression(expr) => expr_has_poison(expr),
+        Pattern::Assign(inner, default) => {
+            pattern_has_poison(inner, poison) || expr_has_poison(default, poison)
+        }
+        Pattern::Rest(inner) => pattern_has_poison(inner, poison),
+        Pattern::MemberExpression(expr) => expr_has_poison(expr, poison),
         Pattern::Array(elements) => elements.iter().flatten().any(|e| match e {
-            ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => pattern_has_poison(p),
+            ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                pattern_has_poison(p, poison)
+            }
         }),
         Pattern::Object(props) => props.iter().any(|p| match p {
             ObjectPatternProperty::KeyValue(key, value) => {
-                matches!(key, PropertyKey::Computed(e) if expr_has_poison(e))
-                    || pattern_has_poison(value)
+                matches!(key, PropertyKey::Computed(e) if expr_has_poison(e, poison))
+                    || pattern_has_poison(value, poison)
             }
             ObjectPatternProperty::Shorthand(_) => false,
-            ObjectPatternProperty::Rest(p) => pattern_has_poison(p),
+            ObjectPatternProperty::Rest(p) => pattern_has_poison(p, poison),
         }),
     }
 }
 
-fn expr_has_poison(expr: &Expression) -> bool {
-    crate::ast::expr_contains_matching(expr, &is_poison_expression)
+fn expr_has_poison(expr: &Expression, poison: PoisonFn) -> bool {
+    crate::ast::expr_contains_matching(expr, &poison)
 }
 
-fn declaration_has_poison(decl: &VariableDeclaration) -> bool {
+fn declaration_has_poison(decl: &VariableDeclaration, poison: PoisonFn) -> bool {
     decl.declarations
         .iter()
-        .any(|d| pattern_has_poison(&d.pattern))
+        .any(|d| pattern_has_poison(&d.pattern, poison))
 }
 
-fn for_in_of_left_has_poison(left: &crate::ast::ForInOfLeft) -> bool {
+fn for_in_of_left_has_poison(left: &crate::ast::ForInOfLeft, poison: PoisonFn) -> bool {
     match left {
-        crate::ast::ForInOfLeft::Variable(decl) => declaration_has_poison(decl),
-        crate::ast::ForInOfLeft::Pattern(p) => pattern_has_poison(p),
-        crate::ast::ForInOfLeft::Expression(e) => expr_has_poison(e),
+        crate::ast::ForInOfLeft::Variable(decl) => declaration_has_poison(decl, poison),
+        crate::ast::ForInOfLeft::Pattern(p) => pattern_has_poison(p, poison),
+        crate::ast::ForInOfLeft::Expression(e) => expr_has_poison(e, poison),
     }
 }
 
 /// One-time deep scan, run before anything is emitted: once a parent falls
 /// back, its subtree is never visited by the compiler, so poison inside it
 /// would otherwise go unnoticed. Does not enter nested function bodies.
-fn body_has_poison(body: &[Statement]) -> bool {
-    crate::ast::stmts_contain_matching(body, &is_poison_expression)
+fn body_has_poison(body: &[Statement], poison: PoisonFn) -> bool {
+    crate::ast::stmts_contain_matching(body, &poison)
         || stmts_contain(body, &|stmt| match stmt {
             Statement::With(..) => true,
-            Statement::Variable(decl) => declaration_has_poison(decl),
-            Statement::ForIn(f) => for_in_of_left_has_poison(&f.left),
-            Statement::ForOf(f) => f.is_await || for_in_of_left_has_poison(&f.left),
+            Statement::Variable(decl) => declaration_has_poison(decl, poison),
+            Statement::ForIn(f) => for_in_of_left_has_poison(&f.left, poison),
+            Statement::ForOf(f) => f.is_await || for_in_of_left_has_poison(&f.left, poison),
             Statement::Try(t) => t
                 .handler
                 .as_ref()
                 .and_then(|h| h.param.as_ref())
-                .is_some_and(pattern_has_poison),
+                .is_some_and(|p| pattern_has_poison(p, poison)),
             Statement::For(f) => matches!(
                 &f.init,
-                Some(ForInit::Variable(decl)) if declaration_has_poison(decl)
+                Some(ForInit::Variable(decl)) if declaration_has_poison(decl, poison)
             ),
             _ => false,
         })
@@ -3393,7 +3409,7 @@ fn expression_kind(node: &Expression) -> &'static str {
 /// worth taking when some native work remains in the chunk; a body that is
 /// nothing but tree-walker hand-offs would pay chunk-entry cost for nothing.
 fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chunk, CompileError> {
-    if body_has_poison(body) {
+    if body_has_poison(body, is_poison_expression) {
         return Err(CompileError::Ineligible(
             "construct needs tree-walked frame",
         ));
@@ -3452,8 +3468,20 @@ pub(crate) fn compile_function_body(
     compile_function_goal(body, locals)
 }
 
+/// Script-goal compile. Like a function body, a Script falls back per node
+/// (and stays whole on the tree-walker when nothing in it is native); its
+/// function declarations are instantiated by GlobalDeclarationInstantiation
+/// before the chunk runs.
 pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileError> {
+    if body_has_poison(body, is_script_poison_expression) {
+        return Err(CompileError::Ineligible(
+            "construct needs tree-walked frame",
+        ));
+    }
     let mut c = Compiler::new(CompileGoal::Script);
-    c.compile_statement_list(body)?;
+    c.compile_statements(body, true, false)?;
+    if !c.ast.is_empty() && c.native_ops == 0 {
+        return Err(CompileError::Ineligible("fallback-only body"));
+    }
     Ok(c.finish())
 }

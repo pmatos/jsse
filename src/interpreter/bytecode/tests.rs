@@ -1680,6 +1680,117 @@ fn script_completion_value_is_rooted_across_nested_gc() {
     );
 }
 
+fn assert_script_completion_parity(source: &str, chunks: usize) {
+    let (tree, tree_count) = eval_script_completion_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_script_completion_with_mode(source, true);
+    assert_eq!(tree_count, 0, "tree-walker mode ran bytecode for {source}");
+    assert_eq!(
+        bytecode_count, chunks,
+        "Script Body ran an unexpected number of chunks for {source}"
+    );
+    assert_eq!(
+        format!("{tree:?}"),
+        format!("{bytecode:?}"),
+        "completion differs for {source}"
+    );
+}
+
+#[test]
+fn script_handoff_statements_keep_completion_values() {
+    for source in [
+        "1; try { 2; } finally { 3; }",
+        "1; try { 2; } catch (e) { 3; }",
+        "1; try { throw 0; } catch (e) { 4; }",
+        "1; switch (1) { case 1: 5; break; }",
+        "1; switch (1) {}",
+        "1; switch (2) { case 1: 5; }",
+        "1; class A {}",
+        "1; let x = 2;",
+        "1; const y = 2; y;",
+        "let z = 1; z + 1;",
+        "1; function f() {} 2;",
+        "1; function f() {}",
+        "foo: { 7; break foo; }",
+        "1; foo: { break foo; }",
+        "1; foo: 2;",
+        "while (true) { 1; foo: { 8; break foo; } break; }",
+        "do { 4; try { 6; break; } finally {} } while (false);",
+        "for (var i = 0; i < 2; i++) { 3; try { continue; } finally {} }",
+        "for (var i = 0; i < 3; i++) { i; switch (i) { case 1: continue; } }",
+        "x: for (var i = 0; i < 3; i++) { 5; for (var j of [1]) { 9; continue x; } }",
+        "x: for (var i = 0; i < 3; i++) { 5; for (var j of [1]) { 9; break x; } }",
+        "var o = { a: 1 }; for (var k in o) { k; }",
+        "var n = 0; for (let i = 0; i < 3; i++) { n += i; i; }",
+        "var n = 0; for (const i of [1, 2]) { n += i; }",
+        "{ let a = 1; a; }",
+        "1; { let a = 1; }",
+        "1; { function g() {} }",
+        "var r = 0; label: { r = 1; { 2; break label; } }",
+        "1; if (true) { let a = 3; try { a; } finally {} }",
+        "var a = 1; a; ;",
+        "1; throw_free: try {} finally {}",
+        "3; do { try { 5; continue; } finally {} } while (false);",
+    ] {
+        // A script that is nothing but hand-offs stays on the tree-walker;
+        // with one native statement in front it compiles and must agree.
+        let (_, whole) = eval_script_completion_with_mode(source, true);
+        assert!(whole <= 1, "{source}");
+        assert_script_completion_parity(source, whole);
+        assert_script_completion_parity(&format!("0; {source}"), 1);
+    }
+}
+
+#[test]
+fn script_with_unsupported_nodes_compiles_instead_of_bailing() {
+    use crate::parser::Parser;
+    for source in [
+        "var a = 1; class A {} let x = 1; const y = 2;",
+        "var a = 1; function f() {} try { f(); } catch (e) {}",
+        "var a = 1; switch (1) { case 1: break; }",
+        "var a = 1; foo: { break foo; }",
+        "var a = 1; for (var k in {}) {} for (var v of []) {}",
+        "var a = [1, 2]; a?.length;",
+    ] {
+        let mut parser = Parser::new(source).expect("parser init");
+        let program = parser.parse_program().expect("parse");
+        compile_script_body(program.body.as_slice())
+            .unwrap_or_else(|e| panic!("{source} must compile: {e:?}"));
+    }
+}
+
+#[test]
+fn script_that_is_only_handoffs_stays_on_the_tree_walker() {
+    use crate::parser::Parser;
+    let mut parser = Parser::new("class A {} let x = 1; foo: { break foo; }").expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    match compile_script_body(program.body.as_slice()) {
+        Err(e) => assert_eq!(e.reason(), "fallback-only body"),
+        Ok(_) => panic!("a script with no native work must not compile"),
+    }
+}
+
+#[test]
+fn script_handoff_completion_value_is_rooted_across_nested_gc() {
+    use crate::parser::Parser;
+
+    let source = "var collect = $262.gc; try { Object(); } finally {} var ignored = collect();";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+
+    let completion = interp.run(&program);
+    assert_eq!(interp.bytecode_chunks_executed, 1);
+    let object_id = match completion {
+        Completion::Normal(value) => value
+            .as_object_id()
+            .unwrap_or_else(|| panic!("expected object completion, got {value:?}")),
+        other => panic!("expected normal object completion, got {other:?}"),
+    };
+    assert!(interp.get_object(object_id).is_some());
+    assert!(interp.gc_bytecode_roots.is_empty());
+}
+
 #[test]
 fn script_direct_eval_stays_on_tree_walker() {
     let source = "var __r = eval('1 + 2');";
@@ -1882,8 +1993,8 @@ fn direct_call_bridges_to_ineligible_callee() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert_eq!(
-        bytecode_count, 2,
-        "caller and callee both compile; the object literal is a tree-walker node"
+        bytecode_count, 3,
+        "script, caller and callee all compile; the object literal is a tree-walker node"
     );
     assert_eq!(ast.as_number(), Some(37.0));
     assert_eq!(bytecode.as_number(), Some(37.0));
@@ -2358,10 +2469,12 @@ fn strict_tail_calls_are_counted_as_vm_issued_calls() {
         interp.perf.body_compiled > 0,
         "outer() must compile for this test to exercise Op::ReturnCall"
     );
+    // The Script's own loop issues five calls to outer(); outer()'s five
+    // strict tail calls to leaf() come on top.
     assert_eq!(
-        interp.perf.calls_from_vm, 5,
+        interp.perf.calls_from_vm, 10,
         "the five strict tail calls from outer()'s compiled body must be \
-         counted, but calls_from_vm was {}",
+         counted beside the script's five calls, but calls_from_vm was {}",
         interp.perf.calls_from_vm
     );
 }

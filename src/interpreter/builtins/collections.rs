@@ -1158,11 +1158,19 @@ impl Interpreter {
             if this_size as f64 <= rec.size {
                 let mut cursor = 0;
                 while let Some(entry) = next_live_entry(obj, JsObjectData::set_data, &mut cursor) {
-                    let has_result =
-                        match interp.call_function(&rec.has, other, std::slice::from_ref(&entry)) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
+                    // `has` may remove `entry` from O and collect before it is
+                    // appended below; a callee without parameters does not
+                    // hold its argument either.
+                    interp.gc_root_value(&entry);
+                    let has_call =
+                        interp.call_function(&rec.has, other, std::slice::from_ref(&entry));
+                    if let Some(id) = entry.as_object_id() {
+                        interp.gc_unroot_id(id);
+                    }
+                    let has_result = match has_call {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                     if interp.to_boolean_val(&has_result) {
                         push_rooted_unique(interp, &mut new_entries, canonicalize_key(entry));
                     }

@@ -1,5 +1,6 @@
 use super::chunk::{
-    ArrayTemplate, BLOCK_SLOT_FLAG, Chunk, Constant, EXEC_NO_TAIL_CALL, HeadBinding,
+    ArrayTemplate, BLOCK_SLOT_FLAG, Chunk, Constant, EXEC_NO_TAIL_CALL, EXEC_SET_COMPLETION,
+    HeadBinding,
 };
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
@@ -265,6 +266,27 @@ fn escape_target(
         })
 }
 
+/// Replaces the Script's completion value, keeping the new value rooted in
+/// `gc_bytecode_roots` for as long as the accumulator holds it.
+fn set_script_completion(interp: &mut Interpreter, slot: &mut Option<JsValue>, value: JsValue) {
+    if let Some(previous) = slot.replace(value.clone()) {
+        unroot_stack_value(interp, &previous);
+    }
+    root_stack_value(interp, &value);
+}
+
+/// A `break`/`continue` completion that carries a value updates the Script's
+/// completion value before the jump (UpdateEmpty).
+fn carry_script_completion(
+    interp: &mut Interpreter,
+    slot: &mut Option<JsValue>,
+    carried: &Option<JsValue>,
+) {
+    if let Some(value) = carried {
+        set_script_completion(interp, slot, value.clone());
+    }
+}
+
 /// Drops operand-stack values (unrooting them, innermost first) until
 /// `height` remain.
 fn truncate_stack(interp: &mut Interpreter, stack: &mut Vec<JsValue>, height: usize) {
@@ -410,18 +432,12 @@ fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completio
         ));
         return Completion::Throw(err);
     }
-    let obj_val = if base.is_object() {
-        base.clone()
-    } else {
-        match interp.to_object(base) {
-            Completion::Normal(v) => v,
-            abrupt => return abrupt,
-        }
-    };
-    let Some(object_id) = obj_val.as_object_id() else {
-        return Completion::Normal(JsValue::UNDEFINED);
-    };
-    interp.get_object_property(object_id, name, &obj_val)
+    if let Some(object_id) = base.as_object_id() {
+        return interp.get_object_property(object_id, name, base);
+    }
+    // GetValue on a primitive base keeps the primitive as the [[Get]]
+    // receiver, so a strict getter sees `this` unboxed.
+    interp.access_property_on_value(base, name)
 }
 
 fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsValue) -> Completion {
@@ -435,18 +451,10 @@ fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsVal
         Ok(k) => k,
         Err(e) => return Completion::Throw(e),
     };
-    let obj_val = if base.is_object() {
-        base.clone()
-    } else {
-        match interp.to_object(base) {
-            Completion::Normal(v) => v,
-            abrupt => return abrupt,
-        }
-    };
-    let Some(object_id) = obj_val.as_object_id() else {
-        return Completion::Normal(JsValue::UNDEFINED);
-    };
-    interp.get_object_property(object_id, &key, &obj_val)
+    if let Some(object_id) = base.as_object_id() {
+        return interp.get_object_property(object_id, &key, base);
+    }
+    interp.access_property_on_value(base, &key)
 }
 
 fn member_set(
@@ -1605,9 +1613,18 @@ fn run_chunk_inner(
                     }
                     let completion = interp.exec_statement(stmt, cur_env!());
                     interp.tco_suppress_depth = saved_tco;
+                    let set_completion = flags & EXEC_SET_COMPLETION != 0;
                     match completion {
-                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Normal(value) => {
+                            if set_completion {
+                                set_script_completion(interp, &mut completion_value, value);
+                            }
+                        }
+                        Completion::Empty => {}
                         Completion::Break(label, value) => {
+                            if set_completion {
+                                carry_script_completion(interp, &mut completion_value, &value);
+                            }
                             match escape_target(chunk, table, false, label.as_deref()) {
                                 Some((target, depth, height)) => {
                                     unwind_scopes(interp, &mut scopes, envs_base, depth);
@@ -1618,6 +1635,9 @@ fn run_chunk_inner(
                             }
                         }
                         Completion::Continue(label, value) => {
+                            if set_completion {
+                                carry_script_completion(interp, &mut completion_value, &value);
+                            }
                             match escape_target(chunk, table, true, label.as_deref()) {
                                 Some((target, depth, height)) => {
                                     unwind_scopes(interp, &mut scopes, envs_base, depth);
@@ -1728,10 +1748,7 @@ fn run_chunk_inner(
                 }
                 Op::SetCompletion => {
                     let value = pop_value(interp, stack, "stack underflow on SetCompletion");
-                    if let Some(previous) = completion_value.replace(value.clone()) {
-                        unroot_stack_value(interp, &previous);
-                    }
-                    root_stack_value(interp, &value);
+                    set_script_completion(interp, &mut completion_value, value);
                 }
                 Op::Jump => {
                     let offset = decode_i16(chunk, pc) as i32;

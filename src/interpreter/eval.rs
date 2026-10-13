@@ -1278,7 +1278,7 @@ impl Interpreter {
         }
     }
 
-    fn access_property_on_value<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn access_property_on_value<K: PropertyKeyLike + ?Sized>(
         &mut self,
         base_val: &JsValue,
         name: &K,

@@ -145,6 +145,13 @@ pub(crate) const NO_ESCAPE_TABLE: u16 = u16::MAX;
 /// must not become a tail call (sec-static-semantics-hascallintailposition).
 pub(crate) const EXEC_NO_TAIL_CALL: u8 = 1;
 
+/// `ExecAst` flag bit (Script goal): the statement's completion value is a
+/// candidate for the script's completion value, which the VM keeps in its
+/// accumulator. A `Normal` value replaces it, `Empty` leaves it, and a
+/// `break`/`continue` carrying a value updates it before the jump
+/// (UpdateEmpty, sec-updateempty).
+pub(crate) const EXEC_SET_COMPLETION: u8 = 2;
+
 /// A protected range of a chunk: a `Throw` raised by an op in
 /// `[start, end)` resumes at `target` with the operand stack cut back to
 /// `stack_height` values and the block environments to `scope_depth`, the
