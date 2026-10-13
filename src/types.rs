@@ -536,6 +536,14 @@ pub(crate) trait PropertyKeyLike {
     }
 
     fn to_js_property_key(&self) -> JsPropertyKey;
+
+    /// The key in the interner's canonical shared storage, for storing in a
+    /// property map. A key that already is the canonical allocation (a
+    /// compiler-interned name) costs no hashing.
+    #[inline]
+    fn to_interned_property_key(&self) -> JsPropertyKey {
+        crate::interpreter::key_intern::intern_js_key(self.to_js_property_key())
+    }
 }
 
 impl PropertyKeyLike for str {
@@ -549,6 +557,11 @@ impl PropertyKeyLike for str {
 
     fn to_js_property_key(&self) -> JsPropertyKey {
         JsPropertyKey::from_str(self)
+    }
+
+    #[inline]
+    fn to_interned_property_key(&self) -> JsPropertyKey {
+        crate::interpreter::key_intern::intern_key(self)
     }
 }
 
@@ -564,6 +577,11 @@ impl PropertyKeyLike for String {
     fn to_js_property_key(&self) -> JsPropertyKey {
         JsPropertyKey::from_str(self)
     }
+
+    #[inline]
+    fn to_interned_property_key(&self) -> JsPropertyKey {
+        crate::interpreter::key_intern::intern_key(self)
+    }
 }
 
 impl PropertyKeyLike for JsPropertyKey {
@@ -578,6 +596,11 @@ impl PropertyKeyLike for JsPropertyKey {
     fn to_js_property_key(&self) -> JsPropertyKey {
         self.clone()
     }
+
+    #[inline]
+    fn to_interned_property_key(&self) -> JsPropertyKey {
+        crate::interpreter::key_intern::intern_js_key(self.clone())
+    }
 }
 
 impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
@@ -591,6 +614,11 @@ impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
 
     fn to_js_property_key(&self) -> JsPropertyKey {
         (*self).to_js_property_key()
+    }
+
+    #[inline]
+    fn to_interned_property_key(&self) -> JsPropertyKey {
+        (*self).to_interned_property_key()
     }
 }
 

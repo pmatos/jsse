@@ -237,11 +237,7 @@ impl Interpreter {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::Collator { .. })) {
                                 Probe::NotCollator
-                            } else if let Some(func) = b
-                                .properties
-                                .get("[[BoundCompare]]")
-                                .and_then(|pd| pd.value.clone())
-                            {
+                            } else if let Some(func) = b.hidden_slot("[[BoundCompare]]") {
                                 Probe::Cached(func)
                             } else {
                                 Probe::Uncached
@@ -332,10 +328,8 @@ impl Interpreter {
                     ));
 
                     if let Some(obj) = interp.get_object_cell(o) {
-                        obj.borrow_mut().properties.insert(
-                            crate::interpreter::key_intern::intern_key("[[BoundCompare]]"),
-                            PropertyDescriptor::data(compare_fn.clone(), false, false, false),
-                        );
+                        obj.borrow_mut()
+                            .set_hidden_slot("[[BoundCompare]]", compare_fn.clone());
                     }
 
                     return Completion::Normal(compare_fn);

@@ -1,13 +1,15 @@
 //! Property-key interning (issue #74).
 //!
-//! Property names are stored twice per object: once as the `PropertyMap` key
-//! and once in `JsObjectData.property_order`. Both copies used to be owned
-//! `String`s, so every property cost two heap allocations of the same bytes.
+//! Property names used to be owned `String`s per object, so every property
+//! cost a heap allocation of the same bytes.
 //!
 //! This module interns ordinary and tagged Symbol keys into a bounded
-//! process-thread cache of `JsPropertyKey`. The storage layer (`PropertyMap` +
-//! `property_order`) holds `JsPropertyKey` rather than `String`, so the two
-//! stored copies share one allocation and "cloning" a key is a refcount bump.
+//! process-thread cache of `JsPropertyKey`. The storage layer (`PropertyMap`)
+//! holds `JsPropertyKey` rather than `String`, so objects share one allocation
+//! per name and "cloning" a key is a refcount bump. A key that already is the
+//! cached allocation is recognised by address (`KeyCache::canonical`), so
+//! re-interning it - what every store of a compile-time-interned name does -
+//! costs no hash.
 //!
 //! A `thread_local!` cache is used so `JsObjectData` methods — which only have
 //! `&mut self`, not `&mut Interpreter` — can intern without threading any extra
@@ -87,8 +89,23 @@ pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
         .unwrap_or_else(|_| key.to_js_string())
 }
 
+/// Hasher of the intern table. Keys are script-controlled text, so the table
+/// is keyed with foldhash's randomly seeded state, not an unkeyed hash; see
+/// `property_map.rs` for the DoS-resistance trade-off versus SipHash (#911).
+type InternState = foldhash::fast::RandomState;
+
+const CANONICAL_SLOTS: usize = 1024;
+
 struct KeyCache {
-    map: std::collections::HashMap<Box<[u8]>, JsPropertyKey>,
+    map: std::collections::HashMap<Box<[u8]>, JsPropertyKey, InternState>,
+    /// Direct-mapped, by allocation address: slot `i` may hold a key that is
+    /// the canonical (cached) allocation for its text, so re-interning a
+    /// key that already is one - every compile-time-interned name - costs a
+    /// multiply and a pointer compare instead of a hash. Holding the key
+    /// keeps its address from being recycled. A key is only recorded once it
+    /// has been found in or admitted to `map`, which never evicts, so a hit
+    /// stays valid for the life of the thread.
+    canonical: Vec<Option<JsPropertyKey>>,
 }
 
 /// Includes the seed keys below. With the per-key byte limit, retained key
@@ -124,7 +141,10 @@ const SEED_SYMBOL_KEYS: &[&str] = &["iterator", "toPrimitive", "toStringTag"];
 
 impl KeyCache {
     fn new() -> Self {
-        let mut map = std::collections::HashMap::with_capacity(SEED_KEYS.len().next_power_of_two());
+        let mut map = std::collections::HashMap::with_capacity_and_hasher(
+            SEED_KEYS.len().next_power_of_two(),
+            InternState::default(),
+        );
         for &s in SEED_KEYS {
             let key = JsPropertyKey::from_str(s);
             map.insert(Box::from(s.as_bytes()), key);
@@ -133,7 +153,28 @@ impl KeyCache {
             let key = JsPropertyKey::well_known_symbol(name);
             map.insert(Box::from(key.as_bytes()), key);
         }
-        Self { map }
+        Self {
+            map,
+            canonical: vec![None; CANONICAL_SLOTS],
+        }
+    }
+
+    #[inline]
+    fn canonical_slot(key: &JsPropertyKey) -> usize {
+        let h = (key.allocation_addr() >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        h >> (usize::BITS - CANONICAL_SLOTS.trailing_zeros())
+    }
+
+    #[inline]
+    fn is_canonical(&self, key: &JsPropertyKey) -> bool {
+        self.canonical[Self::canonical_slot(key)]
+            .as_ref()
+            .is_some_and(|k| k.same_allocation(key))
+    }
+
+    #[inline]
+    fn remember(&mut self, key: &JsPropertyKey) {
+        self.canonical[Self::canonical_slot(key)] = Some(key.clone());
     }
 
     fn intern(&mut self, key: JsPropertyKey) -> JsPropertyKey {
@@ -141,13 +182,26 @@ impl KeyCache {
             return key;
         }
         if let Some(existing) = self.map.get(key.as_bytes()) {
-            return existing.clone();
+            let existing = existing.clone();
+            self.remember(&existing);
+            return existing;
         }
         if self.map.len() >= MAX_CACHE_ENTRIES {
             return key;
         }
         self.map.insert(Box::from(key.as_bytes()), key.clone());
+        self.remember(&key);
         key
+    }
+
+    /// `intern` for text that has no `JsPropertyKey` yet: a hit builds none.
+    fn intern_str(&mut self, s: &str) -> JsPropertyKey {
+        if let Some(existing) = self.map.get(s.as_bytes()) {
+            let existing = existing.clone();
+            self.remember(&existing);
+            return existing;
+        }
+        self.intern(JsPropertyKey::from_str(s))
     }
 }
 
@@ -172,7 +226,8 @@ fn is_canonical_array_index(s: &str) -> bool {
 
 /// Calls into the (hashing) property-key interner, for the `perf-counters`
 /// report: a path that interns keys per object shows up as a count that scales
-/// with the object count (#901).
+/// with the object count (#901). A key that already is the canonical
+/// allocation is recognised by address and not counted (#911).
 #[cfg(feature = "perf-counters")]
 static KEY_INTERN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -199,16 +254,22 @@ pub(crate) fn intern_key(s: &str) -> JsPropertyKey {
     if is_canonical_array_index(s) {
         return JsPropertyKey::from_str(s);
     }
-    KEY_CACHE.with(|c| c.borrow_mut().intern(JsPropertyKey::from_str(s)))
+    KEY_CACHE.with(|c| c.borrow_mut().intern_str(s))
 }
 
 #[inline]
 pub(crate) fn intern_js_key(key: JsPropertyKey) -> JsPropertyKey {
-    count_key_intern();
-    if key.as_str().is_some_and(is_canonical_array_index) {
-        return key;
-    }
-    KEY_CACHE.with(|c| c.borrow_mut().intern(key))
+    KEY_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.is_canonical(&key) {
+            return key;
+        }
+        count_key_intern();
+        if key.as_str().is_some_and(is_canonical_array_index) {
+            return key;
+        }
+        c.intern(key)
+    })
 }
 
 #[cfg(test)]

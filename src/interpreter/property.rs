@@ -2009,7 +2009,7 @@ impl Interpreter {
                 }
             }
 
-            for k in &b.property_order {
+            for k in b.properties.keys() {
                 if k.is_symbol() {
                     sym_keys.push(k.clone());
                 } else if let Some(n) = parse_array_index(k) {

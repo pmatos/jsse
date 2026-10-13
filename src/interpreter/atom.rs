@@ -13,11 +13,13 @@
 //! layout holds it. Dead entries are purged whenever the table doubles, which
 //! bounds memory under `eval`/`new Function` churn.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::rc::{Rc, Weak};
 use std::sync::OnceLock;
+
+use crate::types::JsPropertyKey;
 
 /// The process-wide keyed hash for identifier text. Every atom stores
 /// `hash_text(its text)`, and `BindingMap` hashes a `&str` probe the same way,
@@ -32,6 +34,9 @@ pub(crate) fn hash_text(text: &str) -> u64 {
 struct AtomData {
     hash: u64,
     text: Box<str>,
+    /// The interned property key for this text, built on first use so a
+    /// member access by identifier name never re-hashes or re-allocates it.
+    key: OnceCell<JsPropertyKey>,
 }
 
 /// A canonical identifier. Constructible only through [`Atom::intern`], so two
@@ -47,6 +52,7 @@ impl Atom {
         Atom(Rc::new(AtomData {
             hash,
             text: Box::from(text),
+            key: OnceCell::new(),
         }))
     }
 
@@ -58,6 +64,14 @@ impl Atom {
 
     pub(crate) fn as_str(&self) -> &str {
         &self.0.text
+    }
+
+    /// This identifier as an interned property key, computed once per atom.
+    #[inline]
+    pub(crate) fn property_key(&self) -> &JsPropertyKey {
+        self.0
+            .key
+            .get_or_init(|| crate::interpreter::key_intern::intern_key(&self.0.text))
     }
 
     #[inline]
@@ -159,6 +173,7 @@ impl Interner {
             let data = Rc::new(AtomData {
                 hash,
                 text: Box::from(text),
+                key: OnceCell::new(),
             });
             let weak = Rc::downgrade(&data);
             match dead_slot {
@@ -176,6 +191,7 @@ impl Interner {
         let data = Rc::new(AtomData {
             hash,
             text: Box::from(text),
+            key: OnceCell::new(),
         });
         self.buckets.insert(hash, vec![Rc::downgrade(&data)]);
         self.entries += 1;

@@ -1371,7 +1371,6 @@ impl Interpreter {
             }));
             let mut rest = self.get_object_cell_expect(rest_obj_id).borrow_mut();
             rest.properties.reserve(pairs.len());
-            rest.property_order.reserve(pairs.len());
             for (k, v) in pairs {
                 rest.insert_value_prekeyed(k, v);
             }

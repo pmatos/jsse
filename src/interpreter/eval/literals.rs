@@ -47,6 +47,16 @@ pub(crate) fn static_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
     }
 }
 
+/// [`static_property_key`] in the interner's canonical storage. An identifier
+/// key already in the interner builds no key at all, so the tree-walker's
+/// per-evaluation cost is one hash and no allocation.
+pub(crate) fn static_interned_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
+    match key {
+        PropertyKey::Identifier(name) => Some(crate::interpreter::key_intern::intern_key(name)),
+        other => static_property_key(other).map(crate::interpreter::key_intern::intern_js_key),
+    }
+}
+
 pub(crate) fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
     let mut code_units: Vec<u16> = prefix.encode_utf16().collect();
     code_units.extend_from_slice(key.to_js_string().as_units());
@@ -1328,7 +1338,7 @@ impl Interpreter {
             obj_data.prototype_id = self.realm().object_prototype;
             let mut method_values: Vec<JsValue> = Vec::new();
             for prop in props {
-                let (key, fn_name_for_key) = match static_property_key(&prop.key) {
+                let (key, fn_name_for_key) = match static_interned_property_key(&prop.key) {
                     Some(key) => (key.clone(), key),
                     None => match &prop.key {
                         PropertyKey::Computed(expr) => {
@@ -1391,7 +1401,6 @@ impl Interpreter {
                         match self.copy_data_properties(src_id, &spread_val, &[]) {
                             Ok(pairs) => {
                                 obj_data.properties.reserve(pairs.len());
-                                obj_data.property_order.reserve(pairs.len());
                                 for (k, v) in pairs {
                                     self.gc_root_value(&v);
                                     obj_data.insert_value_prekeyed(k, v);
@@ -1585,7 +1594,7 @@ impl Interpreter {
         let mut method_values: Vec<JsValue> = Vec::new();
         {
             let mut obj_data = self.get_object_cell_expect(id).borrow_mut();
-            obj_data.property_order.reserve(values.len());
+            obj_data.properties.reserve(values.len());
             for (prop, value) in shape.props.iter().zip(values) {
                 self.define_literal_property(
                     &mut obj_data,
@@ -1613,7 +1622,7 @@ impl Interpreter {
         debug_assert_eq!(shape.props.len(), values.len());
         let mut obj_data = JsObjectData::new();
         obj_data.prototype_id = self.realm().object_prototype;
-        obj_data.property_order.reserve(values.len());
+        obj_data.properties.reserve(values.len());
         let mut method_values: Vec<JsValue> = Vec::new();
         for (prop, value) in shape.props.iter().zip(values) {
             if shape.distinct_data && !prop.spec.name_value {

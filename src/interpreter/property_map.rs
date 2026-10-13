@@ -16,18 +16,33 @@ const INLINE_CAP: usize = 4;
 // (issue #901).
 const LINEAR_MAX: usize = 8;
 
-// Hybrid storage for `JsObjectData.properties`: up to `LINEAR_MAX` entries in a
-// linear-scan `SmallVec` (the first `INLINE_CAP` without a heap alloc), then a
-// dense entry list plus a randomised key→slot index once that overflows. Spill
-// is one-way; deletes never collapse back to linear. Iteration order is
-// unspecified — ordered iteration must continue to go through
-// `JsObjectData.property_order`.
+// A spilled map compacts once tombstones outnumber live entries by this much
+// (and the entry list is long enough for the rebuild to matter).
+const COMPACT_MIN_ENTRIES: usize = 32;
+
+type Entry = (JsPropertyKey, PropertyDescriptor);
+
+// Hasher of the spilled key index. Property names come from script, so the
+// index is keyed with foldhash's randomly seeded state rather than an
+// unkeyed hash: every map draws its own seed, so no input list collides in
+// all of them. foldhash is "minimally DoS-resistant" by its own description
+// (it does not defend against an attacker who can observe the seed); the
+// std SipHash it replaces was ~15% of the instructions of property-heavy
+// code (#911). Identifier/binding maps keep their stronger hashing (#393).
+type IndexState = foldhash::fast::RandomState;
+
+// Hybrid storage for `JsObjectData.properties`, in property creation order
+// (the order [[OwnPropertyKeys]] reports String and Symbol keys in): up to
+// `LINEAR_MAX` entries in a linear-scan `SmallVec` (the first `INLINE_CAP`
+// without a heap alloc), then a dense entry list plus a randomised key->slot
+// index once that overflows. Spill is one-way.
 //
 // Entries are addressable by slot (`slot_of` / `entry_at`) so a hot site can
 // remember where a key lived and skip the hash. A slot is only ever a *hint*:
-// `remove` swap-moves the last entry into the hole (and linear `remove`
-// shifts), so a remembered slot must be re-verified by key before it is
-// trusted. `entry_at` returns the key for exactly that purpose.
+// an inline `remove` shifts later entries down, a spilled `remove` leaves a
+// tombstone that a later compaction squeezes out, so a remembered slot must be
+// re-verified by key before it is trusted. `entry_at` returns the key for
+// exactly that purpose.
 pub(crate) struct PropertyMap {
     inner: PropertyMapInner,
     // Number of present keys that begin with an ASCII digit. Zero proves no
@@ -40,16 +55,19 @@ pub(crate) struct PropertyMap {
 // The inline variant is intentionally large — eliminating the heap allocation
 // for small objects is the entire point of issue #68. Boxing it would defeat
 // the optimisation.
-// Keys are `JsPropertyKey` (issue #317): the same interned backing bytes are shared with
-// `JsObjectData.property_order`, so the two stored copies of a property name
-// share one allocation. Its WTF-8 bytes preserve arbitrary UTF-16 keys, and
-// ordinary `&str` lookups borrow their UTF-8 bytes directly.
+// Keys are `JsPropertyKey` (issue #317): interned keys share their backing
+// bytes with every other object that has the property. Its WTF-8 bytes
+// preserve arbitrary UTF-16 keys, and ordinary `&str` lookups borrow their
+// UTF-8 bytes directly.
 #[allow(clippy::large_enum_variant)]
 enum PropertyMapInner {
-    Inline(SmallVec<[(JsPropertyKey, PropertyDescriptor); INLINE_CAP]>),
+    Inline(SmallVec<[Entry; INLINE_CAP]>),
     Spilled {
-        entries: Vec<(JsPropertyKey, PropertyDescriptor)>,
-        index: HashMap<JsPropertyKey, u32>,
+        // Creation order. `None` is a deleted entry whose slot the index no
+        // longer names; `live` counts the `Some`s.
+        entries: Vec<Option<Entry>>,
+        index: HashMap<JsPropertyKey, u32, IndexState>,
+        live: usize,
     },
 }
 
@@ -77,7 +95,7 @@ impl PropertyMap {
     pub(crate) fn len(&self) -> usize {
         match &self.inner {
             PropertyMapInner::Inline(v) => v.len(),
-            PropertyMapInner::Spilled { entries, .. } => entries.len(),
+            PropertyMapInner::Spilled { live, .. } => *live,
         }
     }
 
@@ -105,7 +123,7 @@ impl PropertyMap {
     pub(crate) fn entry_at(&self, slot: usize) -> Option<(&JsPropertyKey, &PropertyDescriptor)> {
         let entry = match &self.inner {
             PropertyMapInner::Inline(v) => v.get(slot),
-            PropertyMapInner::Spilled { entries, .. } => entries.get(slot),
+            PropertyMapInner::Spilled { entries, .. } => entries.get(slot)?.as_ref(),
         };
         entry.map(|(k, d)| (k, d))
     }
@@ -114,7 +132,7 @@ impl PropertyMap {
     pub(crate) fn entry_at_mut(&mut self, slot: usize) -> Option<&mut PropertyDescriptor> {
         let entry = match &mut self.inner {
             PropertyMapInner::Inline(v) => v.get_mut(slot),
-            PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot),
+            PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot)?.as_mut(),
         };
         entry.map(|(_, d)| d)
     }
@@ -133,55 +151,59 @@ impl PropertyMap {
         self.entry_at_mut(slot)
     }
 
+    /// Insert or replace `key`. A new key is appended in creation order; an
+    /// existing key keeps its position.
     pub(crate) fn insert(
         &mut self,
         key: JsPropertyKey,
         value: PropertyDescriptor,
     ) -> Option<PropertyDescriptor> {
-        let digit_leading = Self::is_digit_leading(key.as_bytes());
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
                     return Some(std::mem::replace(&mut slot.1, value));
                 }
-                self.digit_leading_keys += u32::from(digit_leading);
-                if v.len() < LINEAR_MAX {
-                    v.push((key, value));
-                    None
-                } else {
-                    self.inner = Self::spill(v, key, value);
-                    None
-                }
             }
-            PropertyMapInner::Spilled { entries, index } => {
-                if let Some(&slot) = index.get(key.as_bytes()) {
-                    return Some(std::mem::replace(&mut entries[slot as usize].1, value));
+            PropertyMapInner::Spilled { entries, index, .. } => {
+                if let Some(&slot) = index.get(key.as_bytes())
+                    && let Some(entry) = entries[slot as usize].as_mut()
+                {
+                    return Some(std::mem::replace(&mut entry.1, value));
                 }
-                self.digit_leading_keys += u32::from(digit_leading);
-                index.insert(key.clone(), entries.len() as u32);
-                entries.push((key, value));
-                None
             }
         }
+        self.append(key, value);
+        None
     }
 
     /// Append an entry whose key the caller knows is absent. Skips the
     /// duplicate scan of [`insert`]; used on the fresh-object construction
     /// path (issue #901). Debug builds assert the key really is absent.
+    #[inline]
     pub(crate) fn push_fresh(&mut self, key: JsPropertyKey, value: PropertyDescriptor) {
         debug_assert!(
             !self.contains_key(&key),
             "push_fresh called with a key that is already present"
         );
+        self.append(key, value);
+    }
+
+    #[inline]
+    fn append(&mut self, key: JsPropertyKey, value: PropertyDescriptor) {
         self.digit_leading_keys += u32::from(Self::is_digit_leading(key.as_bytes()));
         match &mut self.inner {
             PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
             PropertyMapInner::Inline(v) => {
                 self.inner = Self::spill(v, key, value);
             }
-            PropertyMapInner::Spilled { entries, index } => {
+            PropertyMapInner::Spilled {
+                entries,
+                index,
+                live,
+            } => {
                 index.insert(key.clone(), entries.len() as u32);
-                entries.push((key, value));
+                entries.push(Some((key, value)));
+                *live += 1;
             }
         }
     }
@@ -194,18 +216,26 @@ impl PropertyMap {
             PropertyMapInner::Inline(v) => {
                 let total = v.len() + additional;
                 if total <= LINEAR_MAX {
+                    if total > INLINE_CAP {
+                        v.reserve(additional);
+                    }
                     return;
                 }
-                let mut entries: Vec<(JsPropertyKey, PropertyDescriptor)> =
-                    Vec::with_capacity(total);
-                let mut index: HashMap<JsPropertyKey, u32> = HashMap::with_capacity(total);
+                let mut entries: Vec<Option<Entry>> = Vec::with_capacity(total);
+                let mut index: HashMap<JsPropertyKey, u32, IndexState> =
+                    HashMap::with_capacity_and_hasher(total, IndexState::default());
                 for (k, d) in v.drain(..) {
                     index.insert(k.clone(), entries.len() as u32);
-                    entries.push((k, d));
+                    entries.push(Some((k, d)));
                 }
-                self.inner = PropertyMapInner::Spilled { entries, index };
+                let live = entries.len();
+                self.inner = PropertyMapInner::Spilled {
+                    entries,
+                    index,
+                    live,
+                };
             }
-            PropertyMapInner::Spilled { entries, index } => {
+            PropertyMapInner::Spilled { entries, index, .. } => {
                 entries.reserve(additional);
                 index.reserve(additional);
             }
@@ -213,20 +243,25 @@ impl PropertyMap {
     }
 
     fn spill(
-        v: &mut SmallVec<[(JsPropertyKey, PropertyDescriptor); INLINE_CAP]>,
+        v: &mut SmallVec<[Entry; INLINE_CAP]>,
         key: JsPropertyKey,
         value: PropertyDescriptor,
     ) -> PropertyMapInner {
-        let mut entries: Vec<(JsPropertyKey, PropertyDescriptor)> =
-            Vec::with_capacity(LINEAR_MAX + 1);
-        let mut index: HashMap<JsPropertyKey, u32> = HashMap::with_capacity(LINEAR_MAX + 1);
+        let mut entries: Vec<Option<Entry>> = Vec::with_capacity(LINEAR_MAX + 1);
+        let mut index: HashMap<JsPropertyKey, u32, IndexState> =
+            HashMap::with_capacity_and_hasher(LINEAR_MAX + 1, IndexState::default());
         for (k, d) in v.drain(..) {
             index.insert(k.clone(), entries.len() as u32);
-            entries.push((k, d));
+            entries.push(Some((k, d)));
         }
         index.insert(key.clone(), entries.len() as u32);
-        entries.push((key, value));
-        PropertyMapInner::Spilled { entries, index }
+        entries.push(Some((key, value)));
+        let live = entries.len();
+        PropertyMapInner::Spilled {
+            entries,
+            index,
+            live,
+        }
     }
 
     pub(crate) fn remove<K: PropertyKeyLike + ?Sized>(
@@ -240,13 +275,27 @@ impl PropertyMap {
                     .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes())?;
                 v.remove(pos).1
             }
-            PropertyMapInner::Spilled { entries, index } => {
+            PropertyMapInner::Spilled {
+                entries,
+                index,
+                live,
+            } => {
                 let slot = index.remove(key.as_property_key_bytes())? as usize;
-                let (_, removed) = entries.swap_remove(slot);
-                if let Some((moved_key, _)) = entries.get(slot)
-                    && let Some(moved_slot) = index.get_mut(moved_key.as_bytes())
-                {
-                    *moved_slot = slot as u32;
+                let (_, removed) = entries[slot].take()?;
+                *live -= 1;
+                if slot + 1 == entries.len() {
+                    while matches!(entries.last(), Some(None)) {
+                        entries.pop();
+                    }
+                } else if entries.len() >= COMPACT_MIN_ENTRIES && entries.len() > 2 * *live {
+                    entries.retain(Option::is_some);
+                    for (slot, entry) in entries.iter().enumerate() {
+                        if let Some((k, _)) = entry
+                            && let Some(s) = index.get_mut(k.as_bytes())
+                        {
+                            *s = slot as u32;
+                        }
+                    }
                 }
                 removed
             }
@@ -258,11 +307,10 @@ impl PropertyMap {
     }
 
     pub(crate) fn iter(&self) -> PropertyMapIter<'_> {
-        let inner = match &self.inner {
-            PropertyMapInner::Inline(v) => v.iter(),
-            PropertyMapInner::Spilled { entries, .. } => entries.iter(),
-        };
-        PropertyMapIter { inner }
+        match &self.inner {
+            PropertyMapInner::Inline(v) => PropertyMapIter::Inline(v.iter()),
+            PropertyMapInner::Spilled { entries, .. } => PropertyMapIter::Spilled(entries.iter()),
+        }
     }
 
     pub(crate) fn keys(&self) -> impl Iterator<Item = &JsPropertyKey> {
@@ -280,15 +328,20 @@ impl Default for PropertyMap {
     }
 }
 
-pub(crate) struct PropertyMapIter<'a> {
-    inner: std::slice::Iter<'a, (JsPropertyKey, PropertyDescriptor)>,
+pub(crate) enum PropertyMapIter<'a> {
+    Inline(std::slice::Iter<'a, Entry>),
+    Spilled(std::slice::Iter<'a, Option<Entry>>),
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
     type Item = (&'a JsPropertyKey, &'a PropertyDescriptor);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| (k, v))
+        match self {
+            Self::Inline(it) => it.next().map(|(k, v)| (k, v)),
+            Self::Spilled(it) => it.find_map(|e| e.as_ref().map(|(k, v)| (k, v))),
+        }
     }
 }
 
@@ -566,10 +619,8 @@ mod tests {
         }
         let stale = m.slot_of("k2").unwrap();
         m.remove("k2").expect("removed");
-        // The last entry was swap-moved into the hole: the stale slot now
-        // holds a different key, which a verifying caller must notice.
-        let (k, _) = m.entry_at(stale).expect("slot reused by moved entry");
-        assert_ne!(k.as_bytes(), b"k2");
+        // The slot is a tombstone, so a verifying caller sees no entry.
+        assert!(m.entry_at(stale).is_none());
         assert!(m.get("k2").is_none());
         assert!(m.slot_of("k2").is_none());
         // Every survivor is still reachable and its slot verifies.
@@ -582,6 +633,80 @@ mod tests {
         m.insert(key("k2"), desc(2.0));
         assert_eq!(num(m.get("k2").unwrap()), 2.0);
         assert_eq!(m.iter().count(), total);
+        assert_eq!(m.len(), total);
+    }
+
+    fn order(m: &PropertyMap) -> Vec<String> {
+        m.keys().map(|k| k.to_string()).collect()
+    }
+
+    #[test]
+    fn iteration_is_creation_order_in_both_modes() {
+        for total in [3, LINEAR_MAX + 5] {
+            let mut m = PropertyMap::new();
+            for i in 0..total {
+                m.insert(key(format!("k{i}")), desc(i as f64));
+            }
+            // Replacing keeps the position; removing and re-adding moves to the end.
+            m.insert(key("k1"), desc(100.0));
+            m.remove("k0");
+            m.insert(key("k0"), desc(0.0));
+            let mut want: Vec<String> = (1..total).map(|i| format!("k{i}")).collect();
+            want.push("k0".into());
+            assert_eq!(order(&m), want, "total {total}");
+            let values: Vec<f64> = m.values().map(num).collect();
+            assert_eq!(values.len(), total);
+            assert_eq!(values[0], 100.0);
+        }
+    }
+
+    #[test]
+    fn spilled_removal_keeps_order_through_tombstones_and_compaction() {
+        let mut m = PropertyMap::new();
+        let total = COMPACT_MIN_ENTRIES * 4;
+        for i in 0..total {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        assert!(!is_inline(&m));
+        let mut want: Vec<usize> = (0..total).collect();
+        // Delete every entry but each tenth, in a scattered order, crossing
+        // the compaction threshold several times.
+        for step in [3usize, 7, 1] {
+            for i in (0..total).filter(|i| i % step == 0 && i % 10 != 0) {
+                if m.remove(&format!("k{i}")).is_some() {
+                    want.retain(|w| *w != i);
+                }
+            }
+        }
+        assert_eq!(m.len(), want.len());
+        assert_eq!(
+            order(&m),
+            want.iter().map(|i| format!("k{i}")).collect::<Vec<_>>()
+        );
+        for i in &want {
+            let name = format!("k{i}");
+            let slot = m.slot_of(&name).expect("survivor indexed");
+            assert_eq!(m.entry_at(slot).unwrap().0.as_bytes(), name.as_bytes());
+            assert_eq!(num(m.get(&name).unwrap()), *i as f64);
+        }
+        m.insert(key("late"), desc(-1.0));
+        assert_eq!(order(&m).last().map(String::as_str), Some("late"));
+    }
+
+    #[test]
+    fn removing_every_spilled_entry_leaves_an_empty_reusable_map() {
+        let mut m = PropertyMap::new();
+        for i in 0..(LINEAR_MAX + 6) {
+            m.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        for i in 0..(LINEAR_MAX + 6) {
+            assert!(m.remove(&format!("k{i}")).is_some());
+        }
+        assert_eq!(m.len(), 0);
+        assert_eq!(m.iter().count(), 0);
+        m.insert(key("again"), desc(1.0));
+        assert_eq!(order(&m), vec!["again".to_string()]);
+        assert_eq!(num(m.get("again").unwrap()), 1.0);
     }
 
     #[test]
