@@ -16,7 +16,7 @@ info: |
     8. Perform ? Set(A, "length", lenNumber, true).
 flags: [noStrict]
 includes: [propertyHelper.js, compareArray.js]
-features: [Reflect]
+features: [Reflect, cross-realm]
 ---*/
 
 var setterCalls = 0;
@@ -60,6 +60,23 @@ assert.sameValue(p[1], 8, "plain element");
 var notCtor = Array.of.call(undefined, 5, 6);
 assert.sameValue(Array.isArray(notCtor), true, "non-constructor receiver");
 assert.sameValue(notCtor.length, 2, "non-constructor length");
+
+var other = $262.createRealm().global;
+var crossArray = Array.of.call(other.Array, 1, 2);
+assert.sameValue(Object.getPrototypeOf(crossArray), other.Array.prototype, "foreign %Array% receiver");
+var otherOf = other.Array.of.call(Array, 1, 2);
+assert.sameValue(Object.getPrototypeOf(otherOf), Array.prototype, "own %Array% receiver on foreign Array.of");
+
+var lenArr = new Array(3);
+assert.compareArray(Object.getOwnPropertyNames(lenArr), ["length"], "new Array(3) has no index keys");
+verifyProperty(lenArr, "length", { value: 3, writable: true, enumerable: false, configurable: false });
+assert.sameValue(0 in lenArr, false, "new Array(3) holes");
+
+var holey = [1, , undefined, 4];
+assert.compareArray(Object.getOwnPropertyNames(holey), ["0", "2", "3", "length"], "holey literal own keys");
+assert.sameValue(1 in holey, false, "elision is a hole");
+assert.sameValue(holey.hasOwnProperty(2), true, "explicit undefined is own");
+verifyProperty(holey, "length", { value: 4, writable: true, enumerable: false, configurable: false });
 
 var savedOf = Array.of;
 var SavedArray = Array;
