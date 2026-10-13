@@ -1934,7 +1934,7 @@ fn run_chunk_inner(
                     let array = match &chunk.array_templates[idx as usize] {
                         ArrayTemplate::Dense(values) => interp.create_array(values.clone()),
                         ArrayTemplate::Holey(items) => {
-                            interp.create_array_with_holes(items.clone())
+                            interp.create_array_with_holes(items.iter().cloned())
                         }
                     };
                     push_value(interp, stack, array);

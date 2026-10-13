@@ -3186,6 +3186,15 @@ impl Interpreter {
             |interp, this_val, args: &[JsValue]| {
                 let c = this_val.clone();
                 let len = args.len();
+                // With `this` = %Array%, Construct(C, [len]) yields a fresh
+                // ordinary Array that CreateDataPropertyOrThrow then fills;
+                // no step is observable, so build it directly.
+                if let Some(array_ctor) = interp.realm().array_constructor.as_ref()
+                    && let Some(ctor_id) = array_ctor.as_object_id()
+                    && c.as_object_id() == Some(ctor_id)
+                {
+                    return Completion::Normal(interp.create_array(args.to_vec()));
+                }
                 let a = if interp.is_constructor(&c) {
                     match interp.construct(&c, &[JsValue::number(len as f64)]) {
                         Completion::Normal(v) => v,
@@ -3477,6 +3486,7 @@ impl Interpreter {
             && let Some(array_id) = array_val.as_object_id()
             && self.get_object_cell(array_id).is_some()
         {
+            self.realm_mut().array_constructor = Some(array_val.clone());
             {
                 let mut borrow = self.get_object_cell_expect(array_id).borrow_mut();
                 borrow.insert_builtin("isArray".to_string(), is_array_fn);
@@ -3585,7 +3595,10 @@ impl Interpreter {
         JsValue::object(id)
     }
 
-    pub(crate) fn create_array_with_holes(&mut self, items: Vec<Option<JsValue>>) -> JsValue {
+    pub(crate) fn create_array_with_holes(
+        &mut self,
+        items: impl ExactSizeIterator<Item = Option<JsValue>>,
+    ) -> JsValue {
         let len = items.len();
         let mut obj_data = JsObjectData::new();
         obj_data.prototype_id = self
@@ -3597,7 +3610,7 @@ impl Interpreter {
             crate::interpreter::types::ArrayData::default(),
         );
         let mut array_elements = Vec::with_capacity(len);
-        for (i, item) in items.into_iter().enumerate() {
+        for (i, item) in items.enumerate() {
             match item {
                 Some(v) => {
                     if v.is_undefined() {
@@ -3629,8 +3642,8 @@ impl Interpreter {
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
-        obj_data.insert_property(
-            "length".to_string(),
+        obj_data.push_fresh_array_length(
+            &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(len as f64), true, false, false),
         );
         // Use a small Vec for sparse arrays — don't pre-allocate huge arrays

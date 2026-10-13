@@ -234,7 +234,7 @@ impl Interpreter {
     ) -> Completion {
         let gc_frame = self.gc_root_frame();
         let result = (|| {
-            let mut items: Vec<Option<JsValue>> = Vec::new();
+            let mut items: Vec<Option<JsValue>> = Vec::with_capacity(elements.len());
             for elem in elements {
                 match elem {
                     Some(Expression::Spread(inner)) => {
@@ -264,7 +264,7 @@ impl Interpreter {
                     None => items.push(None), // elision — no own property
                 }
             }
-            Completion::Normal(self.create_array_with_holes(items))
+            Completion::Normal(self.create_array_with_holes(items.into_iter()))
         })();
         self.gc_unroot_frame(gc_frame);
         result
