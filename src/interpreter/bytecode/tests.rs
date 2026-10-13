@@ -1680,13 +1680,13 @@ fn script_completion_value_is_rooted_across_nested_gc() {
     );
 }
 
-fn assert_script_completion_parity(source: &str) {
+fn assert_script_completion_parity(source: &str, chunks: usize) {
     let (tree, tree_count) = eval_script_completion_with_mode(source, false);
     let (bytecode, bytecode_count) = eval_script_completion_with_mode(source, true);
     assert_eq!(tree_count, 0, "tree-walker mode ran bytecode for {source}");
     assert_eq!(
-        bytecode_count, 1,
-        "Script Body did not run exactly one chunk for {source}"
+        bytecode_count, chunks,
+        "Script Body ran an unexpected number of chunks for {source}"
     );
     assert_eq!(
         format!("{tree:?}"),
@@ -1731,7 +1731,12 @@ fn script_handoff_statements_keep_completion_values() {
         "1; throw_free: try {} finally {}",
         "3; do { try { 5; continue; } finally {} } while (false);",
     ] {
-        assert_script_completion_parity(source);
+        // A script that is nothing but hand-offs stays on the tree-walker;
+        // with one native statement in front it compiles and must agree.
+        let (_, whole) = eval_script_completion_with_mode(source, true);
+        assert!(whole <= 1, "{source}");
+        assert_script_completion_parity(source, whole);
+        assert_script_completion_parity(&format!("0; {source}"), 1);
     }
 }
 
@@ -1739,17 +1744,28 @@ fn script_handoff_statements_keep_completion_values() {
 fn script_with_unsupported_nodes_compiles_instead_of_bailing() {
     use crate::parser::Parser;
     for source in [
-        "class A {} let x = 1; const y = 2;",
-        "function f() {} try { f(); } catch (e) {}",
-        "switch (1) { case 1: break; }",
-        "foo: { break foo; }",
-        "for (var k in {}) {} for (var v of []) {}",
+        "var a = 1; class A {} let x = 1; const y = 2;",
+        "var a = 1; function f() {} try { f(); } catch (e) {}",
+        "var a = 1; switch (1) { case 1: break; }",
+        "var a = 1; foo: { break foo; }",
+        "var a = 1; for (var k in {}) {} for (var v of []) {}",
         "var a = [1, 2]; a?.length;",
     ] {
         let mut parser = Parser::new(source).expect("parser init");
         let program = parser.parse_program().expect("parse");
         compile_script_body(program.body.as_slice())
             .unwrap_or_else(|e| panic!("{source} must compile: {e:?}"));
+    }
+}
+
+#[test]
+fn script_that_is_only_handoffs_stays_on_the_tree_walker() {
+    use crate::parser::Parser;
+    let mut parser = Parser::new("class A {} let x = 1; foo: { break foo; }").expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    match compile_script_body(program.body.as_slice()) {
+        Err(e) => assert_eq!(e.reason(), "fallback-only body"),
+        Ok(_) => panic!("a script with no native work must not compile"),
     }
 }
 

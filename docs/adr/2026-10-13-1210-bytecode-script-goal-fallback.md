@@ -47,8 +47,10 @@ the tree-walker.
    nested arrows, which own them. The JetStream async harness is
    `(async () => { ... await ... })()`, which the shared traversal enters
    because arrows share `new.target`/`super` with their parent.
-6. **No "fallback-only" bail.** A Script runs once, so unlike a function body
-   it is compiled even when most of it is hand-offs.
+6. **Fallback-only scripts stay whole.** As for a function body, a Script
+   with no native operation at all (only hand-offs) is `Ineligible("fallback-only
+   body")`: it would pay a deep clone of every hand-off statement and a chunk
+   for nothing.
 7. **Observability.** The counters build records a compiled script's
    `FALLBACK` reasons and attributes the tree-walker work its hand-offs spend
    to the `<script body>` row.
@@ -56,7 +58,7 @@ the tree-walker.
 ## Consequences
 
 - `<script body>` reports `BAIL` only when it holds direct `eval`, `with` or
-  `import()`.
+  `import()`/`import.meta`, or is nothing but hand-offs.
 - A hot top-level loop is VM-resident even when the script declares
   functions, classes or global lexicals around it.
 - Every test262 script now runs through the VM with per-node hand-offs, which

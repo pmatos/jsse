@@ -121,5 +121,7 @@ and a strict callee with no parameters does not hold its argument either, so a
   native). Lowering them natively needs the completion-value bookkeeping per
   construct.
 - Global `let`/`const`/class declarations stay hand-offs by design.
-- A Script with direct `eval`, `with` or `import()`/`import.meta` still
-  bails whole.
+- A Script with direct `eval`, `with` or `import()`/`import.meta`, or one
+  that is nothing but hand-offs, still bails whole.
+- A direct `eval` or `import()` inside an arrow in the script's own code
+  also keeps the script whole (the poison traversal enters arrow bodies).

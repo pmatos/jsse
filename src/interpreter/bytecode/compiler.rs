@@ -22,9 +22,9 @@ const LITERAL_VALUE_CHUNK: usize = 256;
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
-    /// This node has no native lowering. In Function goal the node itself is
-    /// handed to the tree-walker (`EvalAst`/`ExecAst`) in either goal. The string carries a construction-site label for
-    /// greppable documentation, `{:?}` traces when debugging the eligibility
+    /// This node has no native lowering. In either goal the node itself is
+    /// handed to the tree-walker (`EvalAst`/`ExecAst`). The string carries a
+    /// construction-site label for greppable documentation, `{:?}` traces when debugging the eligibility
     /// membrane, and the counters build's BAIL/FALLBACK tables.
     Unsupported(&'static str),
     /// The whole body must stay on the tree-walker: a construct whose
@@ -3194,12 +3194,12 @@ fn stmts_contain(stmts: &[Statement], pred: &dyn Fn(&Statement) -> bool) -> bool
     })
 }
 
+type PoisonFn = fn(&Expression) -> bool;
+
 /// A construct that only has its meaning when the whole function runs as one
 /// tree-walked frame, or whose compile-time handling depends on resolving
 /// names in the enclosing scope chain. Such a body stays wholly on the
 /// tree-walker, exactly as before per-node fallback existed.
-type PoisonFn = fn(&Expression) -> bool;
-
 fn is_poison_expression(expr: &Expression) -> bool {
     match expr {
         Expression::Super
@@ -3467,10 +3467,10 @@ pub(crate) fn compile_function_body(
     compile_function_goal(body, locals)
 }
 
-/// Script-goal compile. Like a function body, a Script falls back per node;
-/// its function declarations are instantiated by GlobalDeclarationInstantiation
-/// before the chunk runs. A Script runs once, so unlike a function body it is
-/// compiled even when most of it is hand-offs.
+/// Script-goal compile. Like a function body, a Script falls back per node
+/// (and stays whole on the tree-walker when nothing in it is native); its
+/// function declarations are instantiated by GlobalDeclarationInstantiation
+/// before the chunk runs.
 pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileError> {
     if body_has_poison(body, is_script_poison_expression) {
         return Err(CompileError::Ineligible(
@@ -3479,5 +3479,8 @@ pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileEr
     }
     let mut c = Compiler::new(CompileGoal::Script);
     c.compile_statements(body, true, false)?;
+    if !c.ast.is_empty() && c.native_ops == 0 {
+        return Err(CompileError::Ineligible("fallback-only body"));
+    }
     Ok(c.finish())
 }

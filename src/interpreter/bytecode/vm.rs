@@ -275,6 +275,18 @@ fn set_script_completion(interp: &mut Interpreter, slot: &mut Option<JsValue>, v
     root_stack_value(interp, &value);
 }
 
+/// A `break`/`continue` completion that carries a value updates the Script's
+/// completion value before the jump (UpdateEmpty).
+fn carry_script_completion(
+    interp: &mut Interpreter,
+    slot: &mut Option<JsValue>,
+    carried: &Option<JsValue>,
+) {
+    if let Some(value) = carried {
+        set_script_completion(interp, slot, value.clone());
+    }
+}
+
 /// Drops operand-stack values (unrooting them, innermost first) until
 /// `height` remain.
 fn truncate_stack(interp: &mut Interpreter, stack: &mut Vec<JsValue>, height: usize) {
@@ -1610,8 +1622,8 @@ fn run_chunk_inner(
                         }
                         Completion::Empty => {}
                         Completion::Break(label, value) => {
-                            if set_completion && let Some(value) = value.clone() {
-                                set_script_completion(interp, &mut completion_value, value);
+                            if set_completion {
+                                carry_script_completion(interp, &mut completion_value, &value);
                             }
                             match escape_target(chunk, table, false, label.as_deref()) {
                                 Some((target, depth, height)) => {
@@ -1623,8 +1635,8 @@ fn run_chunk_inner(
                             }
                         }
                         Completion::Continue(label, value) => {
-                            if set_completion && let Some(value) = value.clone() {
-                                set_script_completion(interp, &mut completion_value, value);
+                            if set_completion {
+                                carry_script_completion(interp, &mut completion_value, &value);
                             }
                             match escape_target(chunk, table, true, label.as_deref()) {
                                 Some((target, depth, height)) => {
