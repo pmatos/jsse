@@ -38,7 +38,7 @@ pub(super) fn dense_element(interp: &Interpreter, o: &JsValue, idx: usize) -> Op
 /// object (or an empty Array such as `Array.prototype`) that owns no
 /// array-index key. Holes then stay absent, and writes of new indices need no
 /// setter, non-writable or proxy-trap consultation.
-pub(super) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -> bool {
+pub(crate) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -> bool {
     let mut next = start;
     let mut hops = 0usize;
     while let Some(id) = next {

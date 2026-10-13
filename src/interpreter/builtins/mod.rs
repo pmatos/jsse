@@ -1,5 +1,5 @@
 pub(crate) mod array;
-mod array_dense;
+pub(crate) mod array_dense;
 mod atomics;
 pub(crate) mod bigint;
 mod collections;

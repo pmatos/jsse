@@ -918,7 +918,7 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
         let mut borrow = cell.borrow_mut_untracked();
         borrow.remove_property(key);
         if let Some(elems) = borrow.array_elements_mut()
-            && let Some(idx) = crate::interpreter::types::parse_array_index(key).map(|i| i as usize)
+            && let Some(idx) = crate::interpreter::types::array_element_index(key)
             && idx < elems.len()
         {
             elems[idx] = JsValue::UNDEFINED;

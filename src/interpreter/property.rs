@@ -173,7 +173,7 @@ impl Interpreter {
                 if value.is_undefined() {
                     return None;
                 }
-                // A clear flag proves no descriptor shadows the element.
+                // No index-keyed descriptor exists, so none shadows the element.
                 if !obj_borrow.properties.may_hold_index_key() {
                     return Some(value.clone());
                 }
@@ -201,13 +201,14 @@ impl Interpreter {
         index: f64,
         value: &JsValue,
     ) -> bool {
-        let Some(obj_id) = obj_val.as_object_id() else {
+        use crate::interpreter::types::DenseArraySet;
+        let Some(obj_rc) = obj_val
+            .as_object_id()
+            .and_then(|obj_id| self.get_object_cell(obj_id))
+        else {
             return false;
         };
-        let Some(obj_rc) = self.get_object_cell(obj_id) else {
-            return false;
-        };
-        {
+        let (plan, proto_id, idx) = {
             let obj_borrow = obj_rc.borrow();
             if let Some(ta) = obj_borrow.typed_array_info() {
                 if value.as_number().is_none()
@@ -219,21 +220,17 @@ impl Interpreter {
                 crate::interpreter::types::typed_array_set_index(ta, index as usize, value);
                 return true;
             }
-        }
-        if index != index.trunc() || index < 0.0 || index >= 4_294_967_295.0 {
-            return false;
-        }
-        let idx = index as usize;
-        let (plan, proto_id) = {
-            let obj_borrow = obj_rc.borrow();
+            if index != index.trunc() || index < 0.0 || index >= 4_294_967_295.0 {
+                return false;
+            }
+            let idx = index as usize;
             let Some(plan) = obj_borrow.dense_array_set_plan(idx, value) else {
                 return false;
             };
-            (plan, obj_borrow.prototype_id)
+            (plan, obj_borrow.prototype_id, idx)
         };
-        if plan == crate::interpreter::types::DenseArraySet::Create
-            && let Some(proto_id) = proto_id
-            && !self.prototype_chain_lacks_index(proto_id, idx)
+        if plan == DenseArraySet::Create
+            && !crate::interpreter::builtins::array_dense::proto_chain_index_free(self, proto_id)
         {
             return false;
         }
@@ -241,47 +238,6 @@ impl Interpreter {
         obj_rc
             .borrow_mut_untracked()
             .apply_dense_array_set(idx, value, plan)
-    }
-
-    /// Whether no object on the prototype chain starting at `proto_id` can
-    /// intercept a [[Set]] of array index `index`: every link is an ordinary
-    /// or Array object that has never stored an index key and holds no
-    /// element there. Anything else (Proxy, TypedArray, String or Arguments
-    /// exotic, module namespace) or a chain deeper than the bound answers
-    /// `false`, leaving the decision to the generic [[Set]].
-    fn prototype_chain_lacks_index(&self, proto_id: u64, index: usize) -> bool {
-        use crate::interpreter::types::ObjectKind;
-        const MAX_DEPTH: usize = 16;
-        let mut next = Some(proto_id);
-        for _ in 0..MAX_DEPTH {
-            let Some(id) = next else {
-                return true;
-            };
-            let Some(cell) = self.get_object_cell(id) else {
-                return false;
-            };
-            let link = cell.borrow();
-            // String wrappers keep their kind `Ordinary`; their characters
-            // are read-only index properties.
-            if link.properties.may_hold_index_key() || link.primitive_value.is_some() {
-                return false;
-            }
-            match &link.kind {
-                ObjectKind::Ordinary => {}
-                ObjectKind::Array(_) => {
-                    if link
-                        .array_elements()
-                        .and_then(|elements| elements.get(index))
-                        .is_some_and(|slot| !slot.is_undefined())
-                    {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-            next = link.prototype_id;
-        }
-        false
     }
 
     fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
@@ -1439,8 +1395,7 @@ impl Interpreter {
             m.remove_property(key);
             if let Some(key_str) = key.as_property_key_str()
                 && let Some(elems) = m.array_elements_mut()
-                && let Some(idx) =
-                    crate::interpreter::types::parse_array_index(key_str).map(|i| i as usize)
+                && let Some(idx) = crate::interpreter::types::array_element_index(key_str)
                 && idx < elems.len()
             {
                 elems[idx] = JsValue::UNDEFINED;

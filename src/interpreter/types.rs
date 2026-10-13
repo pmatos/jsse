@@ -2617,11 +2617,11 @@ impl JsObjectData {
 
     /// How `[[Set]](index, value)` can complete on this Array without the
     /// property MOP, or `None` when the generic path must run. Applies to an
-    /// exotic Array that has never stored an array-index key outside its
-    /// element vector, so every non-`undefined` slot is a writable, enumerable,
-    /// configurable data property and every `undefined` slot is a hole. A
-    /// present `undefined` is never stored here: the vector cannot tell it
-    /// from a hole, so it needs the descriptor the generic path creates.
+    /// exotic Array that owns no array-index key outside its element vector,
+    /// so every non-`undefined` slot is a writable, enumerable, configurable
+    /// data property and every `undefined` slot is a hole. A present
+    /// `undefined` is never stored here: the vector cannot tell it from a
+    /// hole, so it needs the descriptor the generic path creates.
     #[inline]
     pub(crate) fn dense_array_set_plan(
         &self,
@@ -2664,33 +2664,21 @@ impl JsObjectData {
         value: &JsValue,
         plan: DenseArraySet,
     ) -> bool {
-        match plan {
-            DenseArraySet::Overwrite => {
-                let Some(slot) = self
-                    .array_elements_mut()
-                    .and_then(|elements| elements.get_mut(index))
-                else {
-                    return false;
-                };
-                *slot = value.clone();
-                true
-            }
-            DenseArraySet::Create => {
-                let len = self.array_elements().map_or(0, Vec::len);
-                if index == len {
-                    return self.push_dense_array_element(index, value);
-                }
-                let Some(slot) = self
-                    .array_elements_mut()
-                    .and_then(|elements| elements.get_mut(index))
-                else {
-                    return false;
-                };
-                *slot = value.clone();
-                self.shape_id = fresh_shape_id();
-                true
-            }
+        let creating = plan == DenseArraySet::Create;
+        if creating && self.array_elements().is_some_and(|e| e.len() == index) {
+            return self.push_dense_array_element(index, value);
         }
+        let Some(slot) = self
+            .array_elements_mut()
+            .and_then(|elements| elements.get_mut(index))
+        else {
+            return false;
+        };
+        *slot = value.clone();
+        if creating {
+            self.shape_id = fresh_shape_id();
+        }
+        true
     }
 
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
@@ -2876,7 +2864,7 @@ impl JsObjectData {
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
-            && let Some(idx) = parse_array_index(key_str).map(|i| i as usize)
+            && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
         {
@@ -3185,7 +3173,7 @@ impl JsObjectData {
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
             if let Some(elems) = self.array_elements()
-                && let Some(idx) = parse_array_index(&key).map(|i| i as usize)
+                && let Some(idx) = array_element_index(&key)
                 && idx < elems.len()
                 && !elems[idx].is_undefined()
             {
@@ -3595,7 +3583,7 @@ impl JsObjectData {
         // is touched, so a rejected write leaves the array unchanged.
         let mut vector_only_element = false;
         if self.array_elements().is_some()
-            && let Some(idx) = parse_array_index(key).map(|i| i as usize)
+            && let Some(idx) = array_element_index(key)
         {
             if let Some(desc) = self.properties.get(key) {
                 if desc.writable == Some(false) {
@@ -3626,7 +3614,7 @@ impl JsObjectData {
         // Keep array_elements in sync with properties for numeric indices
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elements) = self.array_elements_mut()
-            && let Some(idx) = parse_array_index(key_str).map(|i| i as usize)
+            && let Some(idx) = array_element_index(key_str)
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
             if idx < elements.len() {
@@ -3820,7 +3808,7 @@ impl JsObjectData {
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
-            && let Some(idx) = parse_array_index(key_str).map(|i| i as usize)
+            && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
         {
@@ -3869,7 +3857,7 @@ impl JsObjectData {
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
-            && let Some(idx) = parse_array_index(key_str).map(|i| i as usize)
+            && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
         {
@@ -4162,6 +4150,13 @@ pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: 
         return None;
     }
     Some(n)
+}
+
+/// [`parse_array_index`] widened for indexing an element vector.
+pub(crate) fn array_element_index<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+) -> Option<usize> {
+    parse_array_index(key).map(|i| i as usize)
 }
 
 /// Exact Array-index predicate for internal property-key bookkeeping.
