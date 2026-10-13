@@ -2846,7 +2846,6 @@ impl JsObjectData {
         self.proxy().is_some_and(|p| !p.revoked)
     }
 
-    /// True iff this object has been revoked.
     /// Replace this object's iterator state, reusing the existing allocation
     /// when it already is an iterator (generators swap their state on every
     /// resumption).
@@ -2889,6 +2888,7 @@ impl JsObjectData {
         self.is_weak_map() || self.is_weak_set()
     }
 
+    /// True iff this object has been revoked.
     pub(crate) fn is_proxy_revoked(&self) -> bool {
         self.proxy().is_some_and(|p| p.revoked)
     }
@@ -2939,6 +2939,7 @@ impl JsObjectData {
 
     #[inline]
     pub(crate) fn set_function_realm(&mut self, realm_id: usize) {
+        debug_assert!(realm_id < NO_REALM as usize);
         self.function_realm = realm_id as u32;
     }
 
@@ -2949,6 +2950,7 @@ impl JsObjectData {
 
     #[inline]
     pub(crate) fn set_generator_realm_id(&mut self, realm_id: usize) {
+        debug_assert!(realm_id < NO_REALM as usize);
         self.generator_realm = realm_id as u32;
     }
 
@@ -3430,10 +3432,8 @@ impl JsObjectData {
             }
             return true;
         }
-        // [[Set]] on an existing writable data property redefines it with a
-        // bare `{ [[Value]] }`: ValidateAndApplyPropertyDescriptor then only
-        // replaces the value, so do that in place (a mapped arguments object
-        // also updates its live binding, which the general path handles).
+        // A bare `{ [[Value]] }` on a writable data property only replaces
+        // the value (mapped arguments objects take the general path).
         if desc.writable.is_none()
             && desc.get.is_none()
             && desc.set.is_none()
@@ -5224,7 +5224,7 @@ mod kind_accessor_tests {
     #[test]
     fn ordinary_own_property_keys_declines_exotics() {
         let mut wrapper = JsObjectData::new();
-        wrapper.class_name = "String".into();
+        wrapper.class_name = "String";
         wrapper.primitive_value = Some(JsValue::string(JsString::from_str("ab")));
         assert!(
             wrapper
@@ -5282,7 +5282,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Set(Box::new(KeyedEntries::default())));
+        let mut obj = obj_with_kind(ObjectKind::Set(Box::default()));
         obj.set_data_mut()
             .unwrap()
             .upsert(JsValue::number(1.0), |_, _| {});
@@ -5308,7 +5308,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn map_data_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Map(Box::new(KeyedEntries::default())));
+        let mut obj = obj_with_kind(ObjectKind::Map(Box::default()));
         obj.map_data_mut()
             .unwrap()
             .upsert((JsValue::number(0.0), JsValue::UNDEFINED), |_, _| {});
@@ -5353,14 +5353,14 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_none_when_map_kind_is_set() {
-        let obj = obj_with_kind(ObjectKind::Map(Box::new(KeyedEntries::default())));
+        let obj = obj_with_kind(ObjectKind::Map(Box::default()));
         assert!(obj.set_data().is_none());
         assert!(obj.map_data().is_some());
     }
 
     #[test]
     fn array_elements_none_when_set_kind_is_set() {
-        let obj = obj_with_kind(ObjectKind::Set(Box::new(KeyedEntries::default())));
+        let obj = obj_with_kind(ObjectKind::Set(Box::default()));
         assert!(obj.array_elements().is_none());
         assert!(obj.set_data().is_some());
     }

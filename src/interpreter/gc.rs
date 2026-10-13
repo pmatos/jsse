@@ -829,9 +829,7 @@ impl Interpreter {
         Self::enqueue_unmarked(roots, &mut worklist, &mut marks);
         self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs, &mut weak_maps);
 
-        // Ephemeron fixpoint: mark WeakMap values whose keys are reachable.
-        // Only WeakMaps the mark phase reached take part, so a heap without
-        // any skips the loop entirely.
+        // Ephemeron fixpoint over the WeakMaps the mark phase reached.
         while !weak_maps.is_empty() {
             let mut new_marks = false;
             let scanned = weak_maps.len();
@@ -858,25 +856,18 @@ impl Interpreter {
                     }
                 }
             }
-            // Trace through any newly reachable WeakMap values using the same
-            // deduplicated worklist as the main mark phase. This can reach
-            // further WeakMaps, which the next round then scans.
+            // Tracing can reach further WeakMaps, which the next round scans.
             self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs, &mut weak_maps);
             if !new_marks && scanned == weak_maps.len() {
                 break;
             }
         }
 
-        // The major collection leaves no young objects, so discard stale
-        // generational tracking before the sweep rebuilds the persistent
-        // subset. This runs first so the sweep's `remember_if_old` calls
-        // are not wiped.
+        // Before the sweep, so its `remember_if_old` calls are kept.
         self.objects.reset_generations_after_major();
 
-        // Sweep and tenure in one pass: free the unmarked, tenure survivors,
-        // clear dead weak entries, and keep environment owners visible to
-        // future minor collections. Their shared EnvRefs can be mutated
-        // without borrowing the owner again.
+        // One pass: free the unmarked; tenure survivors, drop their dead weak
+        // entries and keep environment owners visible to minor collections.
         for i in 0..obj_count {
             let id = i as u64;
             let Some(obj_rc) = self.objects.get(id) else {
@@ -1862,8 +1853,8 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_map_data = JsObjectData::new();
-        weak_map_data.class_name = "WeakMap".into();
-        weak_map_data.kind = ObjectKind::Map(Box::new(KeyedEntries::default()));
+        weak_map_data.class_name = "WeakMap";
+        weak_map_data.kind = ObjectKind::Map(Box::default());
         let weak_map = interp.alloc_object(weak_map_data);
         interp.gc_root_id(weak_map);
         interp.gc.request();
@@ -1907,8 +1898,8 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_set_data = JsObjectData::new();
-        weak_set_data.class_name = "WeakSet".into();
-        weak_set_data.kind = ObjectKind::Set(Box::new(KeyedEntries::default()));
+        weak_set_data.class_name = "WeakSet";
+        weak_set_data.kind = ObjectKind::Set(Box::default());
         let weak_set = interp.alloc_object(weak_set_data);
         interp.gc_root_id(weak_set);
         interp.gc.request();

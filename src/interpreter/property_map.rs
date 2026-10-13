@@ -5,10 +5,8 @@ use smallvec::SmallVec;
 use super::types::PropertyDescriptor;
 use crate::types::{JsPropertyKey, JsValue, PropertyKeyLike};
 
-// Properties held inline in the SmallVec before it spills to the heap. Every
-// inline slot costs one `Entry` in every object, and `JsObjectData` is capped
-// at 320 bytes (#909), so 3 — enough for the `length`/`name`/`prototype` of a
-// strict function; a fourth property spills to a right-sized heap buffer.
+// Properties held inline before spilling to the heap; `JsObjectData` is capped
+// at 320 bytes (#909), which leaves room for three entries.
 const INLINE_CAP: usize = 3;
 
 // Largest entry count kept in the linear (scan-only) representation. Entries
@@ -33,12 +31,9 @@ const IS_ENUMERABLE: u16 = 1 << 6;
 const HAS_CONFIGURABLE: u16 = 1 << 7;
 const IS_CONFIGURABLE: u16 = 1 << 8;
 
-/// A `PropertyDescriptor` as the map stores it: the three optional values
-/// live in plain `JsValue` slots (`undefined` when absent) and a flag word
-/// records which are present, which keeps a record at 32 bytes where the
-/// `Option`-per-field descriptor takes 56. Every inline map entry pays this,
-/// so it is what lets `JsObjectData` stay small (#909). It carries exactly the
-/// information of a `PropertyDescriptor`, partial descriptors included.
+/// A `PropertyDescriptor` as the map stores it: 32 bytes where the
+/// `Option`-per-field descriptor takes 56. Absent values are `undefined` and a
+/// flag word records which fields are present, partial descriptors included.
 pub(crate) struct PropertyRecord {
     value: JsValue,
     get: JsValue,
@@ -844,10 +839,7 @@ mod tests {
 
     #[test]
     fn js_object_data_size_cap() {
-        // Tripwire for #909: every arena block holds one JsObjectData, so its
-        // size is the per-object footprint of every collection pass. Keep the
-        // cold fields boxed (`callable`, `extras`, the large `ObjectKind`
-        // payloads) rather than raising the cap.
+        // #909: box cold state rather than raising the cap.
         let size = std::mem::size_of::<JsObjectData>();
         assert!(size <= 320, "JsObjectData grew to {size} bytes (cap 320)");
     }

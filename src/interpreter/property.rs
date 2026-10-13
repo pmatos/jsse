@@ -272,39 +272,23 @@ impl Interpreter {
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
 
-                // Own ordinary property: read the stored record in place rather
-                // than materialising a descriptor for it.
-                if b.parameter_map().is_none()
-                    && let Some(record) = b.properties.get(key)
-                {
-                    match record.getter() {
-                        Some(getter) if !getter.is_undefined() => {
-                            let getter = getter.clone();
-                            drop(b);
-                            return self.call_function(&getter, this_val, &[]);
-                        }
-                        Some(_) => return Completion::Normal(JsValue::UNDEFINED),
-                        None => {
-                            return Completion::Normal(
-                                record.value().cloned().unwrap_or(JsValue::UNDEFINED),
-                            );
-                        }
-                    }
+                let own = match b.parameter_map() {
+                    None => b.properties.get(key),
+                    Some(_) => None,
                 }
-
-                // Check own property
-                let own_desc = b.get_own_property_full(key);
-                match own_desc {
-                    Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
-                        let getter = d.get.clone().unwrap();
+                .map(|record| (record.getter().cloned(), record.value().cloned()))
+                .or_else(|| {
+                    b.get_own_property_full(key)
+                        .map(|desc| (desc.get, desc.value))
+                });
+                match own {
+                    Some((Some(getter), _)) if !getter.is_undefined() => {
                         drop(b);
                         return self.call_function(&getter, this_val, &[]);
                     }
-                    Some(ref d) if d.get.is_some() => {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                    Some(ref d) => {
-                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED));
+                    Some((Some(_), _)) => return Completion::Normal(JsValue::UNDEFINED),
+                    Some((None, value)) => {
+                        return Completion::Normal(value.unwrap_or(JsValue::UNDEFINED));
                     }
                     None => {}
                 }

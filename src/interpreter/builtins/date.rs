@@ -1,4 +1,5 @@
 use super::super::*;
+use super::errors::error_class_name;
 
 /// The pure core shared by every `Date.prototype.get*` component accessor: given
 /// a Date's time value `t`, an invalid Date (`t` is NaN) yields NaN without ever
@@ -1430,15 +1431,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = match name {
-                "RangeError" => "RangeError",
-                "ReferenceError" => "ReferenceError",
-                "SyntaxError" => "SyntaxError",
-                "TypeError" => "TypeError",
-                "URIError" => "URIError",
-                "EvalError" => "EvalError",
-                _ => "Error",
-            };
+            o.class_name = error_class_name(name);
             if let Some(proto_id) = error_proto_id {
                 o.prototype_id = Some(proto_id);
             }

@@ -1,5 +1,23 @@
 use super::super::*;
 
+/// The `class_name` brand of the built-in error constructor called `name`.
+pub(crate) fn error_class_name(name: &str) -> &'static str {
+    match name {
+        "EvalError" => "EvalError",
+        "RangeError" => "RangeError",
+        "ReferenceError" => "ReferenceError",
+        "SyntaxError" => "SyntaxError",
+        "TypeError" => "TypeError",
+        "URIError" => "URIError",
+        "AggregateError" => "AggregateError",
+        "SuppressedError" => "SuppressedError",
+        _ => {
+            debug_assert!(name == "Error", "unknown error constructor {name}");
+            "Error"
+        }
+    }
+}
+
 impl Interpreter {
     pub(super) fn setup_error_builtins(&mut self) {
         let error_prototype = self.setup_error_constructor();
