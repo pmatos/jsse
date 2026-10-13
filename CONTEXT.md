@@ -189,6 +189,18 @@ _Avoid_: root cell, traced box, rooted buffer.
 
 ## Builtins
 
+**Promise Combinator Scope**:
+The synchronous setup and result convention shared by `all`, `allSettled`,
+`race`, `any`, `allKeyed`, and `allSettledKeyed` through `run_promise_combinator`.
+It creates a PromiseCapability before reading the constructor's `resolve`,
+roots the capability and retrieved callable for the operation's GC Root Scope,
+and returns the capability promise after success or rejection. A capability
+construction failure throws; later setup or operation errors reject. Each
+operation retains its own IteratorClose policy, enumeration, and element
+bookkeeping. Captures that survive the native call still use Pinned Native
+Roots and Rooted Slots.
+_Avoid_: combinator setup record, resolver root frame.
+
 **Receiver Guard**:
 The single prologue a native method routes its `this` through to brand-check the
 receiver — or throw the brand `TypeError` — so callers never re-spell the
