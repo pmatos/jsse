@@ -1228,7 +1228,8 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
             cell.borrow_mut().remove_property(key);
             // Also clear dense array storage so get_property doesn't find stale values
             if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
+                && let Some(idx) =
+                    crate::interpreter::types::parse_array_index(key_str).map(|i| i as usize)
             {
                 let mut b = cell.borrow_mut();
                 if let Some(elems) = b.array_elements_mut()

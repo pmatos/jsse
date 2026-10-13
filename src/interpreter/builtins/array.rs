@@ -918,7 +918,7 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
         let mut borrow = cell.borrow_mut_untracked();
         borrow.remove_property(key);
         if let Some(elems) = borrow.array_elements_mut()
-            && let Ok(idx) = key.parse::<usize>()
+            && let Some(idx) = crate::interpreter::types::parse_array_index(key).map(|i| i as usize)
             && idx < elems.len()
         {
             elems[idx] = JsValue::UNDEFINED;
@@ -3608,11 +3608,15 @@ impl Interpreter {
         for (i, item) in items.into_iter().enumerate() {
             match item {
                 Some(v) => {
-                    obj_data.insert_value(i.to_string(), v.clone());
+                    // The element vector holds every non-undefined value; a
+                    // present undefined is told from an elision by its
+                    // descriptor.
+                    if v.is_undefined() {
+                        obj_data.insert_value(i.to_string(), v.clone());
+                    }
                     array_elements.push(v);
                 }
                 None => {
-                    // Elision: no own property, but fill array_elements with undefined for indexing
                     array_elements.push(JsValue::UNDEFINED);
                 }
             }

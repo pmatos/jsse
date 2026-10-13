@@ -30,6 +30,12 @@ const LINEAR_MAX: usize = 8;
 // trusted. `entry_at` returns the key for exactly that purpose.
 pub(crate) struct PropertyMap {
     inner: PropertyMapInner,
+    // Sticky: set when a key that begins with an ASCII digit is first
+    // inserted, never cleared by `remove`. A clear flag proves no
+    // array-index key lives here, which lets Array element reads and writes
+    // skip formatting the index and probing the map. False positives (a
+    // "0x" or "1e3" name, a removed index) only cost the slower probe.
+    may_hold_index_key: bool,
 }
 
 // The inline variant is intentionally large — eliminating the heap allocation
@@ -52,6 +58,21 @@ impl PropertyMap {
     pub(crate) fn new() -> Self {
         Self {
             inner: PropertyMapInner::Inline(SmallVec::new()),
+            may_hold_index_key: false,
+        }
+    }
+
+    /// Whether any array-index key may have been stored. `false` guarantees
+    /// that no key of the form `"0"`..`"4294967294"` is present.
+    #[inline]
+    pub(crate) fn may_hold_index_key(&self) -> bool {
+        self.may_hold_index_key
+    }
+
+    #[inline]
+    fn note_key(&mut self, key: &JsPropertyKey) {
+        if key.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            self.may_hold_index_key = true;
         }
     }
 
@@ -120,6 +141,7 @@ impl PropertyMap {
         key: JsPropertyKey,
         value: PropertyDescriptor,
     ) -> Option<PropertyDescriptor> {
+        self.note_key(&key);
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
@@ -152,6 +174,7 @@ impl PropertyMap {
             !self.contains_key(&key),
             "push_fresh called with a key that is already present"
         );
+        self.note_key(&key);
         match &mut self.inner {
             PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
             PropertyMapInner::Inline(v) => {
@@ -457,6 +480,39 @@ mod tests {
         let keys: Vec<&JsPropertyKey> = m.keys().collect();
         assert!(keys.contains(&&symbol), "Symbol key lost on spill");
         assert!(keys.contains(&&text), "String key lost on spill");
+    }
+
+    #[test]
+    fn index_key_flag_is_set_by_digit_leading_keys_and_never_cleared() {
+        let mut m = PropertyMap::new();
+        assert!(!m.may_hold_index_key());
+        m.insert(key("length"), desc(0.0));
+        m.insert(key(""), desc(0.0));
+        m.insert(key("a1"), desc(0.0));
+        assert!(
+            !m.may_hold_index_key(),
+            "names that do not start with a digit"
+        );
+
+        m.insert(key("7"), desc(1.0));
+        assert!(m.may_hold_index_key());
+        m.remove("7");
+        assert!(m.may_hold_index_key(), "sticky after removal");
+
+        let mut fresh = PropertyMap::new();
+        fresh.push_fresh(key("0"), desc(1.0));
+        assert!(fresh.may_hold_index_key(), "push_fresh records it too");
+
+        let mut spilled = PropertyMap::new();
+        for i in 0..=LINEAR_MAX {
+            spilled.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        assert!(
+            !spilled.may_hold_index_key(),
+            "spilling alone does not set it"
+        );
+        spilled.insert(key("4294967294"), desc(1.0));
+        assert!(spilled.may_hold_index_key(), "recorded in spilled mode");
     }
 
     #[test]

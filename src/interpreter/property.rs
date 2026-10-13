@@ -166,12 +166,21 @@ impl Interpreter {
 
         if let Some(elems) = obj_borrow.array_elements() {
             let trunc = index.trunc();
+            // -0 reaches here too: ToPropertyKey(-0) is "0", element zero.
             if index == trunc && index >= 0.0 && (index as usize) < elems.len() {
                 let idx = index as usize;
+                let value = &elems[idx];
+                if value.is_undefined() {
+                    return None;
+                }
+                // A clear flag proves no descriptor shadows the element.
+                if !obj_borrow.properties.may_hold_index_key() {
+                    return Some(value.clone());
+                }
                 let mut buf = [0u8; 10];
                 let key_str = format_u32_stack(idx as u32, &mut buf);
-                if !obj_borrow.properties.contains_key(key_str) && !elems[idx].is_undefined() {
-                    return Some(elems[idx].clone());
+                if !obj_borrow.properties.contains_key(key_str) {
+                    return Some(value.clone());
                 }
             }
         }
@@ -179,33 +188,100 @@ impl Interpreter {
         None
     }
 
-    /// Complete a computed numeric-index write when both the index and value
-    /// are already primitive numbers and the receiver is an in-bounds numeric
-    /// TypedArray. No user conversion or property trap is possible here.
+    /// Complete a computed numeric-index write that needs neither user code
+    /// nor a property trap: a numeric store into an in-bounds numeric
+    /// TypedArray element, or a store into a plain dense Array whose target
+    /// element is present, or is a hole or the next index and no prototype
+    /// can own it. Returns `false` with no side effect when the generic
+    /// [[Set]] must run (accessors, Proxies, frozen or sealed arrays,
+    /// read-only `length`, `undefined` values, inherited setters).
     pub(super) fn numeric_index_fast_set(
         &self,
         obj_val: &JsValue,
         index: f64,
         value: &JsValue,
     ) -> bool {
-        if value.as_number().is_none() {
-            return false;
-        }
         let Some(obj_id) = obj_val.as_object_id() else {
             return false;
         };
         let Some(obj_rc) = self.get_object_cell(obj_id) else {
             return false;
         };
-        let obj_borrow = obj_rc.borrow();
-        let Some(ta) = obj_borrow.typed_array_info() else {
-            return false;
-        };
-        if ta.kind.is_bigint() || !crate::interpreter::types::is_valid_integer_index(ta, index) {
+        {
+            let obj_borrow = obj_rc.borrow();
+            if let Some(ta) = obj_borrow.typed_array_info() {
+                if value.as_number().is_none()
+                    || ta.kind.is_bigint()
+                    || !crate::interpreter::types::is_valid_integer_index(ta, index)
+                {
+                    return false;
+                }
+                crate::interpreter::types::typed_array_set_index(ta, index as usize, value);
+                return true;
+            }
+        }
+        if index != index.trunc() || index < 0.0 || index >= 4_294_967_295.0 {
             return false;
         }
-        crate::interpreter::types::typed_array_set_index(ta, index as usize, value);
-        true
+        let idx = index as usize;
+        let (plan, proto_id) = {
+            let obj_borrow = obj_rc.borrow();
+            let Some(plan) = obj_borrow.dense_array_set_plan(idx, value) else {
+                return false;
+            };
+            (plan, obj_borrow.prototype_id)
+        };
+        if plan == crate::interpreter::types::DenseArraySet::Create
+            && let Some(proto_id) = proto_id
+            && !self.prototype_chain_lacks_index(proto_id, idx)
+        {
+            return false;
+        }
+        self.gc_write_barrier_value(obj_rc, value);
+        obj_rc
+            .borrow_mut_untracked()
+            .apply_dense_array_set(idx, value, plan)
+    }
+
+    /// Whether no object on the prototype chain starting at `proto_id` can
+    /// intercept a [[Set]] of array index `index`: every link is an ordinary
+    /// or Array object that has never stored an index key and holds no
+    /// element there. Anything else (Proxy, TypedArray, String or Arguments
+    /// exotic, module namespace) or a chain deeper than the bound answers
+    /// `false`, leaving the decision to the generic [[Set]].
+    fn prototype_chain_lacks_index(&self, proto_id: u64, index: usize) -> bool {
+        use crate::interpreter::types::ObjectKind;
+        const MAX_DEPTH: usize = 16;
+        let mut next = Some(proto_id);
+        for _ in 0..MAX_DEPTH {
+            let Some(id) = next else {
+                return true;
+            };
+            let Some(cell) = self.get_object_cell(id) else {
+                return false;
+            };
+            let link = cell.borrow();
+            // String wrappers keep their kind `Ordinary`; their characters
+            // are read-only index properties.
+            if link.properties.may_hold_index_key() || link.primitive_value.is_some() {
+                return false;
+            }
+            match &link.kind {
+                ObjectKind::Ordinary => {}
+                ObjectKind::Array(_) => {
+                    if link
+                        .array_elements()
+                        .and_then(|elements| elements.get(index))
+                        .is_some_and(|slot| !slot.is_undefined())
+                    {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+            next = link.prototype_id;
+        }
+        false
     }
 
     fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(
@@ -1363,7 +1439,8 @@ impl Interpreter {
             m.remove_property(key);
             if let Some(key_str) = key.as_property_key_str()
                 && let Some(elems) = m.array_elements_mut()
-                && let Ok(idx) = key_str.parse::<usize>()
+                && let Some(idx) =
+                    crate::interpreter::types::parse_array_index(key_str).map(|i| i as usize)
                 && idx < elems.len()
             {
                 elems[idx] = JsValue::UNDEFINED;
