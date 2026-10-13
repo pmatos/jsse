@@ -3608,9 +3608,6 @@ impl Interpreter {
         for (i, item) in items.into_iter().enumerate() {
             match item {
                 Some(v) => {
-                    // The element vector holds every non-undefined value; a
-                    // present undefined is told from an elision by its
-                    // descriptor.
                     if v.is_undefined() {
                         obj_data.insert_value(i.to_string(), v.clone());
                     }

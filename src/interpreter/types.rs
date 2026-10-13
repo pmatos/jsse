@@ -3187,6 +3187,7 @@ impl JsObjectData {
             if let Some(elems) = self.array_elements()
                 && let Some(idx) = parse_array_index(&key).map(|i| i as usize)
                 && idx < elems.len()
+                && !elems[idx].is_undefined()
             {
                 Some(PropertyDescriptor {
                     value: Some(elems[idx].clone()),
@@ -3588,6 +3589,40 @@ impl JsObjectData {
                 return true;
             }
         }
+        // An element held only in the vector is an existing own property: it
+        // stays writable on a non-extensible array and needs no creation
+        // checks. Everything else is validated before the vector or `length`
+        // is touched, so a rejected write leaves the array unchanged.
+        let mut vector_only_element = false;
+        if self.array_elements().is_some()
+            && let Some(idx) = parse_array_index(key).map(|i| i as usize)
+        {
+            if let Some(desc) = self.properties.get(key) {
+                if desc.writable == Some(false) {
+                    return false;
+                }
+            } else {
+                vector_only_element = self
+                    .array_elements()
+                    .and_then(|elements| elements.get(idx))
+                    .is_some_and(|slot| !slot.is_undefined());
+                if !vector_only_element {
+                    if !self.extensible {
+                        return false;
+                    }
+                    if let Some(length) = self.properties.get("length")
+                        && length.writable == Some(false)
+                        && length
+                            .value
+                            .as_ref()
+                            .and_then(JsValue::as_number)
+                            .is_none_or(|len| idx as f64 >= len)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
         // Keep array_elements in sync with properties for numeric indices
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elements) = self.array_elements_mut()
@@ -3639,7 +3674,7 @@ impl JsObjectData {
             {
                 return false;
             }
-            if !self.extensible {
+            if !self.extensible && !vector_only_element {
                 return false;
             }
             let ikey = intern_js_key(key.to_js_property_key());

@@ -881,7 +881,8 @@ impl Interpreter {
                             }
                             recv_obj.borrow_mut().define_own_property(key, update_desc);
                         } else {
-                            recv_obj.borrow_mut().set_property_value(&key, value);
+                            let succeeded = recv_obj.borrow_mut().set_property_value(&key, value);
+                            return Completion::Normal(JsValue::boolean(succeeded));
                         }
                     }
                     return Completion::Normal(JsValue::boolean(true));
