@@ -2180,8 +2180,8 @@ pub(crate) struct JsObjectData {
     /// Slab index of this object. Set exactly once by
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
     pub id: Option<u64>,
+    /// Own properties in creation order.
     pub properties: PropertyMap,
-    pub property_order: Vec<JsPropertyKey>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub class_name: Cow<'static, str>,
@@ -2281,7 +2281,7 @@ pub(crate) enum DenseArraySet {
 /// Array-exotic internal data.
 ///
 /// `extra_string_property_order` mirrors only the subset of
-/// `JsObjectData::property_order` needed by the Node-compatible inspector.
+/// the property map's creation order needed by the Node-compatible inspector.
 /// Maintaining that subset as properties change lets inspection find named
 /// Array properties without scanning descriptor-backed element indices.
 #[derive(Clone, Default)]
@@ -2506,7 +2506,6 @@ impl JsObjectData {
         Self {
             id: None,
             properties: PropertyMap::new(),
-            property_order: Vec::new(),
             prototype_id: None,
             callable: None,
             class_name: Cow::Borrowed("Object"),
@@ -2740,8 +2739,17 @@ impl JsObjectData {
             .map(|data| data.extra_string_property_order.as_slice())
     }
 
-    fn record_property_creation(&mut self, key: &JsPropertyKey) {
-        self.property_order.push(key.clone());
+    /// Whether property creation must be mirrored into the Array's
+    /// `extra_string_property_order`.
+    #[inline]
+    fn tracks_array_keys(&self) -> bool {
+        self.array_data().is_some()
+    }
+
+    /// Mirror the creation of `key` into an Array's extra-string-key list.
+    /// Call it once per newly created own property, and only on Arrays
+    /// (`tracks_array_keys`); creation order itself is the `PropertyMap`'s.
+    fn record_array_key_creation(&mut self, key: &JsPropertyKey) {
         // `length` is permanently non-enumerable on Arrays and can never be
         // returned by the host hook. Excluding it keeps this Vec allocation-free
         // for Arrays that never receive an actual extra String property.
@@ -2750,6 +2758,32 @@ impl JsObjectData {
         }
         if let Some(data) = self.array_data_mut() {
             data.extra_string_property_order.push(key.clone());
+        }
+    }
+
+    /// Insert or replace `key`, keeping an Array's extra-string-key list in
+    /// step. One key lookup decides between replacing and appending.
+    #[inline]
+    fn insert_tracked(&mut self, key: JsPropertyKey, desc: PropertyDescriptor) {
+        if self.tracks_array_keys() {
+            let tracked = key.clone();
+            if self.properties.insert(key, desc).is_none() {
+                self.record_array_key_creation(&tracked);
+            }
+        } else {
+            self.properties.insert(key, desc);
+        }
+    }
+
+    /// [`insert_tracked`] for a key the caller knows is absent.
+    #[inline]
+    fn push_fresh_tracked(&mut self, key: JsPropertyKey, desc: PropertyDescriptor) {
+        if self.tracks_array_keys() {
+            let tracked = key.clone();
+            self.properties.push_fresh(key, desc);
+            self.record_array_key_creation(&tracked);
+        } else {
+            self.properties.push_fresh(key, desc);
         }
     }
 
@@ -2784,6 +2818,22 @@ impl JsObjectData {
     /// True iff this is a synthesized default derived constructor.
     pub(crate) fn is_default_derived_constructor(&self) -> bool {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
+    }
+
+    /// An engine-internal slot (a cached bound function, say) that script can
+    /// neither enumerate, read nor overwrite. It lives with the private
+    /// elements, which the collector already traces, so it is never an own
+    /// property of the object.
+    pub(crate) fn hidden_slot(&self, name: &str) -> Option<JsValue> {
+        match self.private_fields.get(name) {
+            Some(PrivateElement::Field(v)) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_hidden_slot(&mut self, name: &str, value: JsValue) {
+        self.private_fields
+            .insert(name.to_string(), PrivateElement::Field(value));
     }
 
     /// Intl slot data (any of the Intl kinds).
@@ -2907,8 +2957,8 @@ impl JsObjectData {
     ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(key_str) = key.as_property_key_str()
-                && let Some(map) = self.parameter_map()
+            if let Some(map) = self.parameter_map()
+                && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -2916,8 +2966,8 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elems) = self.array_elements()
+        if let Some(elems) = self.array_elements()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
@@ -2950,7 +3000,7 @@ impl JsObjectData {
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = s.as_units();
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
@@ -2981,8 +3031,8 @@ impl JsObjectData {
         key: &K,
     ) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(ns_data) = self.module_namespace()
+        if let Some(ns_data) = self.module_namespace()
+            && let Some(key_str) = key.as_property_key_str()
         {
             if ns_data.export_names.contains(&key_str.to_string()) {
                 let val = if let Some(binding_name) = ns_data.export_to_binding.get(key_str) {
@@ -3010,8 +3060,8 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
-            if let Some(key_str) = key.as_property_key_str()
-                && let Some(map) = self.parameter_map()
+            if let Some(map) = self.parameter_map()
+                && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -3062,7 +3112,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor::data(
                     JsValue::number(s.len() as f64),
                     false,
@@ -3084,8 +3134,8 @@ impl JsObjectData {
 
     pub(crate) fn has_own_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(ns_data) = self.module_namespace()
+        if let Some(ns_data) = self.module_namespace()
+            && let Some(key_str) = key.as_property_key_str()
         {
             return ns_data.export_names.contains(&key_str.to_string());
         }
@@ -3108,7 +3158,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return true;
             }
             return string_exotic_index(key, s.len()).is_some();
@@ -3400,16 +3450,9 @@ impl JsObjectData {
                 }
             };
 
-            // Intern once; the same backing bytes are shared between property_order and
-            // the property map so the two stored copies share one allocation.
-            // The map and property_order are kept in sync. An Array element can
-            // be current without a map entry, in which case this descriptor
-            // needs a new order entry; a map lookup avoids scanning the order
-            // list for every element created by Array builtins.
+            // An Array element can be current without a map entry, in which
+            // case this descriptor creates one.
             let ikey = key.clone();
-            if !self.properties.contains_key(&ikey) {
-                self.record_property_creation(&ikey);
-            }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
@@ -3419,7 +3462,7 @@ impl JsObjectData {
             } else {
                 None
             };
-            self.properties.insert(ikey, merged);
+            self.insert_tracked(ikey, merged);
 
             // §10.4.4.3 step 7: post-define parameter map handling
             if let Some(key_ref) = key_for_step7
@@ -3449,18 +3492,15 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(key_str) = key.as_str()
-                && let Some(map) = self.parameter_map_mut()
+            if let Some(map) = self.parameter_map_mut()
+                && let Some(key_str) = key.as_str()
                 && map.contains_key(key_str)
                 && let Some(ref val) = desc.value
                 && let Some((env_ref, param_name)) = map.get(key_str)
             {
                 let _ = env_ref.borrow_mut().set(param_name, val.clone());
             }
-            // New property: intern once and share the backing bytes between
-            // property_order and the property map (one allocation, not two).
             let ikey = key;
-            self.record_property_creation(&ikey);
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
@@ -3477,7 +3517,7 @@ impl JsObjectData {
                 enumerable: desc.enumerable.or(Some(false)),
                 configurable: desc.configurable.or(Some(false)),
             };
-            self.properties.insert(ikey, new_desc);
+            self.insert_tracked(ikey, new_desc);
         }
         // Issue #71 (Step 5): reaching this point means either an existing
         // property was redefined (line ~2296 `properties.insert(key, merged)`)
@@ -3504,7 +3544,7 @@ impl JsObjectData {
             return false;
         }
         // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
-        if self.class_name == "Array" && key.as_property_key_str() == Some("length") {
+        if self.class_name == "Array" && key.as_property_key_bytes() == b"length" {
             // Check if length is writable before allowing set
             let len_writable = self
                 .properties
@@ -3577,8 +3617,8 @@ impl JsObjectData {
                 }
             }
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(map) = self.parameter_map()
+        if let Some(map) = self.parameter_map()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some((env_ref, param_name)) = map.get(key_str)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
@@ -3666,8 +3706,8 @@ impl JsObjectData {
             }
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elements) = self.array_elements_mut()
+        if let Some(elements) = self.array_elements_mut()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
@@ -3711,7 +3751,7 @@ impl JsObjectData {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
             if self.class_name == "String"
                 && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
-                && (key.as_property_key_str() == Some("length")
+                && (key.as_property_key_bytes() == b"length"
                     || string_exotic_index(key, s.len()).is_some())
             {
                 return false;
@@ -3719,10 +3759,8 @@ impl JsObjectData {
             if !self.extensible && !vector_only_element {
                 return false;
             }
-            let ikey = intern_js_key(key.to_js_property_key());
-            self.record_property_creation(&ikey);
-            self.properties
-                .insert(ikey, PropertyDescriptor::data_default(value));
+            let ikey = key.to_interned_property_key();
+            self.push_fresh_tracked(ikey, PropertyDescriptor::data_default(value));
             // Issue #71 (Step 5): new own property added — structural mutation.
             // The earlier `properties.get_mut(key)` branch (in-place update)
             // does NOT bump; only this insert branch does.
@@ -3733,11 +3771,7 @@ impl JsObjectData {
 
     pub(crate) fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
-        if !self.properties.contains_key(&key) {
-            self.record_property_creation(&key);
-        }
-        self.properties
-            .insert(key, PropertyDescriptor::data_default(value));
+        self.insert_tracked(key, PropertyDescriptor::data_default(value));
     }
 
     /// `insert_value` for a key that is already a stored property name of
@@ -3745,22 +3779,14 @@ impl JsObjectData {
     /// interner round trip). One map lookup decides between replacing the
     /// descriptor and appending a new entry.
     pub(crate) fn insert_value_prekeyed(&mut self, key: JsPropertyKey, value: JsValue) {
-        if let Some(existing) = self.properties.get_mut(&key) {
-            *existing = PropertyDescriptor::data_default(value);
-            return;
-        }
-        self.record_property_creation(&key);
-        self.properties
-            .push_fresh(key, PropertyDescriptor::data_default(value));
+        self.insert_tracked(key, PropertyDescriptor::data_default(value));
     }
 
     /// `insert_value_prekeyed` for a key the caller knows this object does
     /// not have yet.
     pub(crate) fn push_fresh_value(&mut self, key: JsPropertyKey, value: JsValue) {
         debug_assert!(!self.properties.contains_key(&key));
-        self.record_property_creation(&key);
-        self.properties
-            .push_fresh(key, PropertyDescriptor::data_default(value));
+        self.push_fresh_tracked(key, PropertyDescriptor::data_default(value));
     }
 
     /// Append the `length` property of a freshly built Array. `length` is
@@ -3772,17 +3798,12 @@ impl JsObjectData {
         desc: PropertyDescriptor,
     ) {
         debug_assert!(key.eq_str("length") && self.array_data().is_some());
-        self.property_order.push(key.clone());
         self.properties.push_fresh(key.clone(), desc);
     }
 
     pub(crate) fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
-        if !self.properties.contains_key(&key) {
-            self.record_property_creation(&key);
-        }
-        self.properties
-            .insert(key, PropertyDescriptor::data(value, true, false, true));
+        self.insert_tracked(key, PropertyDescriptor::data(value, true, false, true));
     }
 
     /// Append an own property whose key the caller knows is absent and
@@ -3791,7 +3812,6 @@ impl JsObjectData {
     /// objects with no array exotic key tracking.
     pub(crate) fn push_fresh_property(&mut self, key: &JsPropertyKey, desc: PropertyDescriptor) {
         debug_assert!(self.array_data().is_none());
-        self.property_order.push(key.clone());
         self.properties.push_fresh(key.clone(), desc);
     }
 
@@ -3801,29 +3821,22 @@ impl JsObjectData {
         desc: PropertyDescriptor,
     ) {
         let key = intern_js_key(key.into());
-        if !self.properties.contains_key(&key) {
-            self.record_property_creation(&key);
-        }
-        self.properties.insert(key, desc);
+        self.insert_tracked(key, desc);
     }
 
-    /// Remove `key` from the object, keeping `properties` and `property_order`
-    /// in sync. The mirror of [`insert_property`]: the two structures must move
-    /// together, and this is the single place that guarantees it. Returns the
-    /// removed descriptor, or `None` if the key was absent (in which case the
-    /// order list is left untouched).
+    /// Remove `key` from the object, keeping an Array's extra-string-key list
+    /// in step. The mirror of [`insert_property`]. Returns the removed
+    /// descriptor, or `None` if the key was absent.
     pub(crate) fn remove_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
         let removed = self.properties.remove(key);
-        if removed.is_some() {
-            self.property_order
+        if removed.is_some()
+            && let Some(data) = self.array_data_mut()
+        {
+            data.extra_string_property_order
                 .retain(|k| k.as_bytes() != key.as_property_key_bytes());
-            if let Some(data) = self.array_data_mut() {
-                data.extra_string_property_order
-                    .retain(|k| k.as_bytes() != key.as_property_key_bytes());
-            }
         }
         removed
     }
@@ -3844,8 +3857,8 @@ impl JsObjectData {
         &self,
         key: &K,
     ) -> Option<JsValue> {
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(ns_data) = self.module_namespace()
+        if let Some(ns_data) = self.module_namespace()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
         {
             return Some(
@@ -3856,8 +3869,8 @@ impl JsObjectData {
                     .unwrap_or(JsValue::UNDEFINED),
             );
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(map) = self.parameter_map()
+        if let Some(map) = self.parameter_map()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some((env_ref, param_name)) = map.get(key_str)
             && let Some(val) = env_ref.borrow().get(param_name)
         {
@@ -3869,8 +3882,8 @@ impl JsObjectData {
             }
             return Some(JsValue::UNDEFINED);
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elems) = self.array_elements()
+        if let Some(elems) = self.array_elements()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
@@ -3901,8 +3914,8 @@ impl JsObjectData {
     ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(key_str) = key.as_property_key_str()
-                && let Some(map) = self.parameter_map()
+            if let Some(map) = self.parameter_map()
+                && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -3918,8 +3931,8 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elems) = self.array_elements()
+        if let Some(elems) = self.array_elements()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
@@ -3952,7 +3965,7 @@ impl JsObjectData {
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = s.as_units();
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
@@ -4024,7 +4037,7 @@ impl JsObjectData {
     }
 
     /// [[OwnPropertyKeys]] (§10.1.11.1) for an object whose keys are exactly
-    /// its element vector plus `property_order`: integer indices ascending,
+    /// its element vector plus its property map: integer indices ascending,
     /// then String keys in creation order, then (for `AllKeys`) Symbols.
     /// `None` for exotics that synthesise keys or run traps (Proxy, module
     /// namespace, TypedArray, String wrapper); callers fall back to the
@@ -4051,7 +4064,7 @@ impl JsObjectData {
         let enumerable_only = filter == OwnKeyFilter::EnumerableStrings;
         let elements = self.array_elements();
         let mut index_keys: Vec<(u32, JsPropertyKey)> = Vec::new();
-        let mut string_keys: Vec<JsPropertyKey> = Vec::with_capacity(self.property_order.len());
+        let mut string_keys: Vec<JsPropertyKey> = Vec::with_capacity(self.properties.len());
         let mut symbol_keys: Vec<JsPropertyKey> = Vec::new();
         let mut order_has_index = false;
 
@@ -4062,7 +4075,7 @@ impl JsObjectData {
                 }
                 let key = JsPropertyKey::from_index(i);
                 // A mirrored entry in the property map is emitted (with its
-                // own attributes) by the `property_order` pass below.
+                // own attributes) by the property-map pass below.
                 if self.properties.contains_key(&key) {
                     continue;
                 }
@@ -4070,18 +4083,15 @@ impl JsObjectData {
             }
         }
 
-        for k in &self.property_order {
+        for (k, d) in self.properties.iter() {
             if k.is_symbol() {
                 if filter == OwnKeyFilter::AllKeys {
                     symbol_keys.push(k.clone());
                 }
                 continue;
             }
-            if enumerable_only {
-                match self.properties.get(k) {
-                    Some(d) if d.enumerable != Some(false) => {}
-                    _ => continue,
-                }
+            if enumerable_only && d.enumerable == Some(false) {
+                continue;
             }
             if let Some(n) = parse_array_index(k) {
                 index_keys.push((n, k.clone()));
@@ -4167,18 +4177,16 @@ impl JsObjectData {
             }
         }
 
-        for k in &self.property_order {
+        for (k, desc) in self.properties.iter() {
             if k.is_symbol() {
                 continue;
             }
-            if let Some(desc) = self.properties.get(k) {
-                let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.clone()) && is_enumerable {
-                    if let Some(idx) = parse_array_index(k) {
-                        index_keys.push((idx, k.clone()));
-                    } else {
-                        string_keys.push(k.clone());
-                    }
+            let is_enumerable = desc.enumerable != Some(false);
+            if seen.insert(k.clone()) && is_enumerable {
+                if let Some(idx) = parse_array_index(k) {
+                    index_keys.push((idx, k.clone()));
+                } else {
+                    string_keys.push(k.clone());
                 }
             }
         }
@@ -4836,7 +4844,7 @@ mod kind_accessor_tests {
             .map(JsPropertyKey::to_string)
             .collect::<Vec<_>>();
         assert_eq!(keys, vec!["+1", "z"]);
-        assert_eq!(obj.property_order.len(), 1028);
+        assert_eq!(obj.properties.len(), 1028);
 
         obj.remove_property("+1");
         obj.insert_value("+1", JsValue::number(4.0));
@@ -5188,11 +5196,11 @@ mod property_bag_tests {
     use super::*;
 
     fn keys(obj: &JsObjectData) -> Vec<String> {
-        obj.property_order.iter().map(|k| k.to_string()).collect()
+        obj.properties.keys().map(|k| k.to_string()).collect()
     }
 
     #[test]
-    fn remove_property_clears_both_map_and_order() {
+    fn remove_property_clears_the_map_entry() {
         let mut obj = JsObjectData::new();
         obj.insert_property("a", PropertyDescriptor::data_default(JsValue::number(1.0)));
         obj.insert_property("b", PropertyDescriptor::data_default(JsValue::number(2.0)));
@@ -5201,7 +5209,7 @@ mod property_bag_tests {
 
         assert!(removed.is_some(), "returns the removed descriptor");
         assert!(!obj.properties.contains_key("a"), "gone from property map");
-        assert_eq!(keys(&obj), vec!["b"], "gone from property_order too");
+        assert_eq!(keys(&obj), vec!["b"], "gone from the key order too");
     }
 
     #[test]

@@ -34,6 +34,9 @@ tinystr = "0.8"
 icu_normalizer = "2.1.1"
 writeable = "0.6"
 rustc-hash = "2"
+# Randomly seeded fast hasher for property-key maps (not for identifier/binding
+# maps, which need the keyed SipHash of #393).
+foldhash = "0.2"
 smallvec = "1"
 getrandom = "0.4"
 

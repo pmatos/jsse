@@ -460,16 +460,17 @@ fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsVal
 fn member_set(
     interp: &mut Interpreter,
     base: JsValue,
-    name: &str,
+    name: &Atom,
     rhs: JsValue,
     strict: bool,
 ) -> Result<(), JsValue> {
     if base.is_nullish() {
         return Err(interp.create_type_error(&format!(
-            "Cannot set properties of {base} (setting '{name}')"
+            "Cannot set properties of {base} (setting '{}')",
+            name.as_str()
         )));
     }
-    interp.put_member_value(base, name, rhs, strict)
+    interp.put_member_value(base, name.property_key(), rhs, strict)
 }
 
 fn member_set_computed(

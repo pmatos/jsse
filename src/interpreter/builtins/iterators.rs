@@ -4110,7 +4110,7 @@ impl Interpreter {
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
         let mut data = JsObjectData::new();
         data.prototype_id = self.realm().object_prototype;
-        data.property_order.reserve_exact(2);
+        data.properties.reserve(2);
         data.push_fresh_property(
             &self.common_keys.value,
             PropertyDescriptor::data_default(value),

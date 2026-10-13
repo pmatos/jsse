@@ -470,18 +470,18 @@ fn define_to_string_tag_installs_a_correctly_shaped_data_property() {
     assert!(desc.get.is_none(), "data property has no getter");
     assert!(desc.set.is_none(), "data property has no setter");
 
-    // Routed through insert_property, so property_order and properties stay in
-    // sync: the symbol key must appear exactly once in the enumeration order.
+    // Routed through insert_property: the symbol key must appear exactly once
+    // in the enumeration order.
     let cell = interp.get_object_cell_expect(target_id);
     let order_hits = cell
         .borrow()
-        .property_order
-        .iter()
+        .properties
+        .keys()
         .filter(|k| k.as_bytes() == tag_key.as_bytes())
         .count();
     assert_eq!(
         order_hits, 1,
-        "@@toStringTag appears once in property_order"
+        "@@toStringTag appears once in the property order"
     );
 
     // Observable: Object.prototype.toString sees the installed tag.

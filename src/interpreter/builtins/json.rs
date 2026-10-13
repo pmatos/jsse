@@ -197,7 +197,6 @@ impl Interpreter {
                         false,
                     );
                     let key = crate::interpreter::key_intern::intern_key("rawJSON");
-                    o.property_order.push(key.clone());
                     o.properties.insert(key, desc);
                 }
                 interp

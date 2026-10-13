@@ -221,7 +221,6 @@ impl Interpreter {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     let key = crate::interpreter::key_intern::intern_key(name);
-                    g.property_order.push(key.clone());
                     g.properties.insert(
                         key,
                         PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
@@ -249,7 +248,6 @@ impl Interpreter {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     let key = crate::interpreter::key_intern::intern_key(name);
-                    g.property_order.push(key.clone());
                     g.properties.insert(
                         key,
                         PropertyDescriptor::data(JsValue::UNDEFINED, true, true, true),
@@ -331,9 +329,6 @@ impl Interpreter {
             if need_full_desc {
                 let desc = PropertyDescriptor::data(value, true, true, configurable);
                 let key = crate::interpreter::key_intern::intern_key(name);
-                if !g.properties.contains_key(name) {
-                    g.property_order.push(key.clone());
-                }
                 g.properties.insert(key, desc);
             } else {
                 g.set_property_value(name, value);

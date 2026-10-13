@@ -1753,20 +1753,13 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         } else {
-                            // Return symbol keys in property_order first, then any not in order
+                            // Symbol keys in creation order
                             let b = obj.borrow();
-                            let mut sym_keys: Vec<JsPropertyKey> = b
-                                .property_order
-                                .iter()
+                            b.properties
+                                .keys()
                                 .filter(|k| k.is_symbol())
                                 .cloned()
-                                .collect();
-                            for k in b.properties.keys() {
-                                if k.is_symbol() && !sym_keys.contains(k) {
-                                    sym_keys.push(k.clone());
-                                }
-                            }
-                            sym_keys
+                                .collect()
                         }
                     } else {
                         Vec::new()

@@ -1991,9 +1991,9 @@ impl Interpreter {
         // even when they are class methods (non-constructable)
         let needs_prototype =
             !matches!(init, FunctionInit::NoPrototype) && (is_constructable || is_gen);
-        obj_data.property_order.reserve_exact(
-            2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype),
-        );
+        obj_data
+            .properties
+            .reserve(2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype));
         obj_data.callable = Some(func);
 
         obj_data.push_fresh_property(
@@ -2105,9 +2105,8 @@ impl Interpreter {
     /// Companion to `define_method` / `define_getter`; concentrates the
     /// `@@toStringTag` install "dance" that was otherwise open-coded at ~45
     /// builtin sites as a six-field `PropertyDescriptor` literal (some of which
-    /// bypassed `insert_property` with a raw `property_order.push` +
-    /// `properties.insert` pair). Routing through `insert_property` keeps
-    /// `property_order` and `properties` in sync in one place.
+    /// bypassed `insert_property`). Routing through `insert_property` keeps
+    /// the Array key tracking in sync in one place.
     ///
     /// This is the *data*-property tag only. The handful of prototypes whose
     /// `@@toStringTag` is an accessor (`%TypedArray%.prototype`,
@@ -2407,7 +2406,7 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "Arguments".into();
-            o.property_order.reserve(args.len() + 3);
+            o.properties.reserve(args.len() + 3);
 
             o.insert_property(
                 "length",

@@ -38,11 +38,16 @@ pub(crate) fn regexp_literal_source(pattern: &str) -> JsString {
 
 /// The property key of a statically named literal property, `None` for a
 /// computed or private one.
+/// The key of a statically named property, in the interner's canonical
+/// storage. An identifier key already in the interner builds no key at all.
 pub(crate) fn static_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
+    use crate::interpreter::key_intern::{intern_js_key, intern_key};
     match key {
-        PropertyKey::Identifier(name) => Some(JsPropertyKey::from(name.clone())),
-        PropertyKey::String(units) => Some(literal_string_property_key(units)),
-        PropertyKey::Number(n) => Some(JsPropertyKey::from(number_ops::to_string(*n))),
+        PropertyKey::Identifier(name) => Some(intern_key(name)),
+        PropertyKey::String(units) => Some(intern_js_key(literal_string_property_key(units))),
+        PropertyKey::Number(n) => Some(intern_js_key(JsPropertyKey::from(number_ops::to_string(
+            *n,
+        )))),
         PropertyKey::Computed(_) | PropertyKey::Private(_) => None,
     }
 }
@@ -1391,7 +1396,6 @@ impl Interpreter {
                         match self.copy_data_properties(src_id, &spread_val, &[]) {
                             Ok(pairs) => {
                                 obj_data.properties.reserve(pairs.len());
-                                obj_data.property_order.reserve(pairs.len());
                                 for (k, v) in pairs {
                                     self.gc_root_value(&v);
                                     obj_data.insert_value_prekeyed(k, v);
@@ -1585,7 +1589,7 @@ impl Interpreter {
         let mut method_values: Vec<JsValue> = Vec::new();
         {
             let mut obj_data = self.get_object_cell_expect(id).borrow_mut();
-            obj_data.property_order.reserve(values.len());
+            obj_data.properties.reserve(values.len());
             for (prop, value) in shape.props.iter().zip(values) {
                 self.define_literal_property(
                     &mut obj_data,
@@ -1613,7 +1617,7 @@ impl Interpreter {
         debug_assert_eq!(shape.props.len(), values.len());
         let mut obj_data = JsObjectData::new();
         obj_data.prototype_id = self.realm().object_prototype;
-        obj_data.property_order.reserve(values.len());
+        obj_data.properties.reserve(values.len());
         let mut method_values: Vec<JsValue> = Vec::new();
         for (prop, value) in shape.props.iter().zip(values) {
             if shape.distinct_data && !prop.spec.name_value {

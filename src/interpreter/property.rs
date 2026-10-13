@@ -873,7 +873,7 @@ impl Interpreter {
         desc: PropertyDescriptor,
     ) -> Result<bool, JsValue> {
         // 1. If P is "length", return ArraySetLength(A, Desc).
-        if key.as_property_key_str() == Some("length") {
+        if key.as_property_key_bytes() == b"length" {
             return self.array_set_length(obj_id, desc);
         }
 
@@ -1116,7 +1116,7 @@ impl Interpreter {
                     // class — routing every existing-element write (e.g. `a[0]++`)
                     // through descriptor allocation regressed a 200k-iteration
                     // increment loop by ~1.7-2x.
-                    if key.as_property_key_str() == Some("length")
+                    if key.as_property_key_bytes() == b"length"
                         && obj.borrow().class_name == "Array"
                     {
                         // Call ArraySetLength directly with a native descriptor —
@@ -1378,7 +1378,7 @@ impl Interpreter {
                         .as_ref()
                         .and_then(|v| v.with_string(|s| s.len()))
                 {
-                    if key.as_property_key_str() == Some("length") {
+                    if key.as_property_key_bytes() == b"length" {
                         return Ok(false);
                     }
                     if crate::interpreter::types::string_exotic_index(key, len).is_some() {
@@ -1932,7 +1932,7 @@ impl Interpreter {
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             // Ordinary, Array and Arguments objects: keys come straight from
-            // the element vector and `property_order`.
+            // the element vector and the property map.
             let fast = obj
                 .borrow()
                 .ordinary_own_property_keys(crate::interpreter::types::OwnKeyFilter::AllKeys);
@@ -2009,7 +2009,7 @@ impl Interpreter {
                 }
             }
 
-            for k in &b.property_order {
+            for k in b.properties.keys() {
                 if k.is_symbol() {
                     sym_keys.push(k.clone());
                 } else if let Some(n) = parse_array_index(k) {

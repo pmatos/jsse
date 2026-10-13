@@ -5643,10 +5643,7 @@ impl Interpreter {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::DateTimeFormat { .. })) {
                                 Probe::NotDtf
-                            } else if let Some(func) = b
-                                .properties
-                                .get("[[BoundFormat]]")
-                                .and_then(|pd| pd.value.clone())
+                            } else if let Some(func) = b.hidden_slot("[[BoundFormat]]")
                             {
                                 Probe::Cached(func)
                             } else {
@@ -5763,10 +5760,7 @@ impl Interpreter {
                     ));
 
                     if let Some(obj) = interp.get_object_cell(o) {
-                        obj.borrow_mut().properties.insert(
-                            crate::interpreter::key_intern::intern_key("[[BoundFormat]]"),
-                            PropertyDescriptor::data(format_fn.clone(), false, false, false),
-                        );
+                        obj.borrow_mut().set_hidden_slot("[[BoundFormat]]", format_fn.clone());
                     }
 
                     return Completion::Normal(format_fn);

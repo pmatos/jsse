@@ -7054,24 +7054,16 @@ impl Interpreter {
             let (target_nonconfig, target_config): (Vec<JsPropertyKey>, Vec<JsPropertyKey>) = {
                 let b = tobj.borrow();
                 let nc: Vec<JsPropertyKey> = b
-                    .property_order
+                    .properties
                     .iter()
-                    .filter(|k| {
-                        b.properties
-                            .get(k)
-                            .is_some_and(|d| d.configurable == Some(false))
-                    })
-                    .cloned()
+                    .filter(|(_, d)| d.configurable == Some(false))
+                    .map(|(k, _)| k.clone())
                     .collect();
                 let c: Vec<JsPropertyKey> = b
-                    .property_order
+                    .properties
                     .iter()
-                    .filter(|k| {
-                        b.properties
-                            .get(k)
-                            .is_some_and(|d| d.configurable != Some(false))
-                    })
-                    .cloned()
+                    .filter(|(_, d)| d.configurable != Some(false))
+                    .map(|(k, _)| k.clone())
                     .collect();
                 (nc, c)
             };
