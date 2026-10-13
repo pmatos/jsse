@@ -24,8 +24,9 @@ const LITERAL_VALUE_CHUNK: usize = 256;
 pub(crate) enum CompileError {
     /// This node has no native lowering. In either goal the node itself is
     /// handed to the tree-walker (`EvalAst`/`ExecAst`). The string carries a
-    /// construction-site label for greppable documentation, `{:?}` traces when debugging the eligibility
-    /// membrane, and the counters build's BAIL/FALLBACK tables.
+    /// construction-site label for greppable documentation, `{:?}` traces
+    /// when debugging the eligibility membrane, and the counters build's
+    /// BAIL/FALLBACK tables.
     Unsupported(&'static str),
     /// The whole body must stay on the tree-walker: a construct whose
     /// semantics depend on running as one tree-walked frame (direct `eval`,
