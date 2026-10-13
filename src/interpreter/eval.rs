@@ -370,24 +370,9 @@ impl Interpreter {
         ctor_id: u64,
         instance_field_defs: &[InstanceFieldDef],
     ) -> Result<(), JsValue> {
-        // Only an initializer expression is evaluated in the init environment;
-        // a class of private methods or uninitialised fields never builds one.
-        let needs_env = instance_field_defs.iter().any(|d| {
-            matches!(
-                d,
-                InstanceFieldDef::Public(_, Some(_))
-                    | InstanceFieldDef::Private(PrivateFieldDef::Field {
-                        initializer: Some(_),
-                        ..
-                    })
-                    | InstanceFieldDef::AutoAccessorStorage(_, Some(_))
-            )
-        });
-        let init_env = if needs_env {
-            Some(self.make_field_init_env(this_val, ctor_id))
-        } else {
-            None
-        };
+        // Built at the first initializer: a class of private methods or
+        // uninitialised fields never needs one.
+        let mut init_env: Option<EnvRef> = None;
         // Pass 1: Install private methods and accessors before any field initializer runs.
         for idef in instance_field_defs {
             match idef {
@@ -435,8 +420,9 @@ impl Interpreter {
         for idef in instance_field_defs {
             match idef {
                 InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
-                    let val = match (initializer, &init_env) {
-                        (Some(init), Some(env)) => match self.eval_expr(init, env) {
+                    let val = if let Some(init) = initializer {
+                        let env = self.field_init_env(&mut init_env, this_val, ctor_id);
+                        match self.eval_expr(init, &env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
                                     let source_name = name.split('#').next().unwrap_or(name);
@@ -446,8 +432,9 @@ impl Interpreter {
                             }
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
-                        },
-                        _ => JsValue::UNDEFINED,
+                        }
+                    } else {
+                        JsValue::UNDEFINED
                     };
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         if !obj.borrow().extensible {
@@ -466,8 +453,9 @@ impl Interpreter {
                     }
                 }
                 InstanceFieldDef::Public(key, initializer) => {
-                    let val = match (initializer, &init_env) {
-                        (Some(init), Some(env)) => match self.eval_expr(init, env) {
+                    let val = if let Some(init) = initializer {
+                        let env = self.field_init_env(&mut init_env, this_val, ctor_id);
+                        match self.eval_expr(init, &env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
                                     self.set_function_name(&v, key);
@@ -476,21 +464,24 @@ impl Interpreter {
                             }
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
-                        },
-                        _ => JsValue::UNDEFINED,
+                        }
+                    } else {
+                        JsValue::UNDEFINED
                     };
                     crate::interpreter::builtins::array::create_data_property_or_throw(
                         self, this_val, key, val,
                     )?;
                 }
                 InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
-                    let val = match (initializer, &init_env) {
-                        (Some(init), Some(env)) => match self.eval_expr(init, env) {
+                    let val = if let Some(init) = initializer {
+                        let env = self.field_init_env(&mut init_env, this_val, ctor_id);
+                        match self.eval_expr(init, &env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
-                        },
-                        _ => JsValue::UNDEFINED,
+                        }
+                    } else {
+                        JsValue::UNDEFINED
                     };
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         obj.borrow_mut()
@@ -502,6 +493,20 @@ impl Interpreter {
             }
         }
         Ok(())
+    }
+
+    fn field_init_env(
+        &mut self,
+        slot: &mut Option<EnvRef>,
+        this_val: &JsValue,
+        ctor_id: u64,
+    ) -> EnvRef {
+        if let Some(env) = slot {
+            return env.clone();
+        }
+        let env = self.make_field_init_env(this_val, ctor_id);
+        *slot = Some(env.clone());
+        env
     }
 
     /// The environment instance field initializers run in: the class

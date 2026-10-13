@@ -15,7 +15,7 @@ info: |
     3. Let fields be the value of constructor.[[Fields]].
     4. For each element fieldRecord of fields, do
       a. Perform ? DefineField(O, fieldRecord).
-features: [class-fields-public, class-fields-private, class-methods-private]
+features: [class-fields-public, class-fields-private, class-methods-private, decorators]
 ---*/
 
 var counter = 0;
@@ -125,3 +125,23 @@ var good = {};
 new Stamp(good);
 assert.sameValue(Stamp.has(good), true);
 assert.throws(TypeError, function () { new Stamp(good); }, "adding the same private field twice throws");
+
+var accessorCalls = 0;
+class WithAccessor {
+  accessor a = ++accessorCalls;
+  accessor b;
+  static first = new WithAccessor().a;
+}
+assert.sameValue(WithAccessor.first, 1, "a construction inside a static initializer");
+assert.sameValue(new WithAccessor().a, 2, "accessor initializer runs per construction");
+assert.sameValue(new WithAccessor().a, 3);
+assert.sameValue(new WithAccessor().b, undefined, "accessor without initializer");
+
+class FieldlessBase {}
+class InitDerived extends FieldlessBase {
+  v = 5;
+  #w = 6;
+  sum() { return this.v + this.#w; }
+}
+assert.sameValue(new InitDerived().sum(), 11, "derived class with initializers over a field-less base");
+assert.sameValue(new InitDerived().sum(), 11);
