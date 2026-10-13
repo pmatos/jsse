@@ -962,7 +962,7 @@ pub(crate) struct Environment {
     pub(crate) global_object_id: Option<u64>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
-    pub(crate) class_private_names: Option<HashMap<String, String>>,
+    pub(crate) class_private_names: Option<Rc<HashMap<String, String>>>,
     pub(crate) is_field_initializer: bool,
     pub(crate) arguments_immutable: bool,
     pub(crate) has_parameter_expressions: bool,
@@ -2187,8 +2187,11 @@ const NO_REALM: u32 = u32::MAX;
 /// See [`JsObjectData::extras`].
 #[derive(Default)]
 pub(crate) struct ObjectExtras {
-    pub(crate) private_fields: HashMap<String, PrivateElement>,
-    pub(crate) class_instance_field_defs: Vec<InstanceFieldDef>,
+    pub(crate) private_fields: FxHashMap<String, PrivateElement>,
+    /// Shared with every construction (`Rc::clone`); `Rc::make_mut` in
+    /// `instance_field_defs_mut` only copies if a construction still holds it,
+    /// which class evaluation (the sole mutator) never races with.
+    pub(crate) class_instance_field_defs: Rc<Vec<InstanceFieldDef>>,
     /// Values the collector must keep alive on behalf of this object's native
     /// closures (see `Interpreter::pin_native_root`).
     pub(crate) gc_native_roots: Vec<JsValue>,
@@ -3085,7 +3088,7 @@ impl JsObjectData {
         self.private_field(name).is_some()
     }
 
-    pub(crate) fn private_fields_mut(&mut self) -> &mut HashMap<String, PrivateElement> {
+    pub(crate) fn private_fields_mut(&mut self) -> &mut FxHashMap<String, PrivateElement> {
         &mut self.extras_mut().private_fields
     }
 
@@ -3102,8 +3105,14 @@ impl JsObjectData {
             .map_or(&[], |extras| &extras.class_instance_field_defs)
     }
 
+    #[inline]
+    pub(crate) fn instance_field_defs_shared(&self) -> Option<Rc<Vec<InstanceFieldDef>>> {
+        let defs = &self.extras.as_ref()?.class_instance_field_defs;
+        (!defs.is_empty()).then(|| Rc::clone(defs))
+    }
+
     pub(crate) fn instance_field_defs_mut(&mut self) -> &mut Vec<InstanceFieldDef> {
-        &mut self.extras_mut().class_instance_field_defs
+        Rc::make_mut(&mut self.extras_mut().class_instance_field_defs)
     }
 
     #[inline]

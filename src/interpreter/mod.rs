@@ -358,7 +358,7 @@ pub(crate) struct Interpreter {
     pub(crate) gc_temp_roots: root_stack::RootStack,
     pub(crate) gc_bytecode_roots: root_stack::RootStack,
     // microtask roots are stored inline alongside their jobs in JobScheduler
-    pub(crate) class_private_names: Vec<HashMap<String, String>>,
+    pub(crate) class_private_names: Vec<Rc<HashMap<String, String>>>,
     next_class_brand_id: u64,
     next_auto_accessor_id: u64,
     pub(crate) regexp_legacy: builtins::regexp::RegexpLegacyState,

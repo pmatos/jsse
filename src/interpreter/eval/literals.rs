@@ -311,7 +311,7 @@ impl Interpreter {
                 ClassElement::StaticBlock(_) => {}
             }
         }
-        self.class_private_names.push(pn_set);
+        self.class_private_names.push(Rc::new(pn_set));
         let result = self.eval_class_inner(
             name,
             class_binding_name,
