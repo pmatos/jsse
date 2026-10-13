@@ -1786,6 +1786,12 @@ impl Interpreter {
         right: &JsValue,
         left_first: bool,
     ) -> Result<Option<bool>, JsValue> {
+        // Only BigInt and Number operands match, and ToPrimitive is the
+        // identity on those, so `left_first` is unobservable here. Objects,
+        // Strings and Symbols fall through to the ordered conversions below.
+        if let Some(result) = bigint_relational_fast(left, right) {
+            return Ok(result);
+        }
         let (lprim, rprim) = if left_first {
             let l = self.to_primitive(left, "number")?;
             let r = self.to_primitive(right, "number")?;
@@ -2193,7 +2199,28 @@ impl Interpreter {
                 _ => self.eval_binary_slow(op, left, right),
             };
         }
+        if let Some(completion) = self.bigint_binary(op, left, right) {
+            return completion;
+        }
         self.eval_binary_slow(op, left, right)
+    }
+
+    /// `op` over two BigInt operands, or `None` when either is not a BigInt or
+    /// the operator has no BigInt/BigInt form (see [`bigint_binary_op`]).
+    fn bigint_binary(
+        &mut self,
+        op: BinaryOp,
+        left: &JsValue,
+        right: &JsValue,
+    ) -> Option<Completion> {
+        let result = left
+            .with_bigint(|a| right.with_bigint(|b| bigint_binary_op(op, a, b)))
+            .flatten()
+            .flatten()?;
+        Some(match result {
+            Ok(v) => Completion::Normal(v),
+            Err(message) => Completion::Throw(self.create_error("RangeError", message)),
+        })
     }
 
     fn eval_binary_slow(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
@@ -2214,10 +2241,8 @@ impl Interpreter {
                 }
                 if is_string(&lprim) || is_string(&rprim) {
                     self.concat_primitives(&lprim, &rprim)
-                } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
-                    Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
-                        &a.value, &b.value,
-                    ))))
+                } else if let Some(completion) = self.bigint_binary(op, &lprim, &rprim) {
+                    completion
                 } else if lprim.is_bigint() || rprim.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -2239,34 +2264,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
-                    match op {
-                        BinaryOp::Sub => Completion::Normal(JsValue::bigint(JsBigInt::new(
-                            bigint_ops::subtract(&a.value, &b.value),
-                        ))),
-                        BinaryOp::Mul => Completion::Normal(JsValue::bigint(JsBigInt::new(
-                            bigint_ops::multiply(&a.value, &b.value),
-                        ))),
-                        BinaryOp::Div => match bigint_ops::divide(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
-                            Err(_) => Completion::Throw(
-                                self.create_error("RangeError", "Division by zero"),
-                            ),
-                        },
-                        BinaryOp::Mod => match bigint_ops::remainder(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
-                            Err(_) => Completion::Throw(
-                                self.create_error("RangeError", "Division by zero"),
-                            ),
-                        },
-                        BinaryOp::Exp => match bigint_ops::exponentiate(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
-                            Err(_) => Completion::Throw(
-                                self.create_error("RangeError", "Exponent must be positive"),
-                            ),
-                        },
-                        _ => unreachable!(),
-                    }
+                if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
+                    completion
                 } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -2337,12 +2336,8 @@ impl Interpreter {
                             "Cannot mix BigInt and other types, use explicit conversions",
                         ));
                     }
-                    if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
-                        Completion::Normal(JsValue::bigint(JsBigInt::new(match op {
-                            BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
-                            BinaryOp::RShift => bigint_ops::signed_right_shift(&a.value, &b.value),
-                            _ => unreachable!(),
-                        })))
+                    if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
+                        completion
                     } else {
                         Completion::Throw(self.create_type_error(
                             "Cannot mix BigInt and other types, use explicit conversions",
@@ -2376,13 +2371,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
-                    Completion::Normal(JsValue::bigint(JsBigInt::new(match op {
-                        BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
-                        BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
-                        BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
-                        _ => unreachable!(),
-                    })))
+                if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
+                    completion
                 } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -10083,6 +10073,62 @@ pub(super) fn is_primitive_string_concat(l: &JsValue, r: &JsValue) -> bool {
     !l.is_object() && !r.is_object() && (l.is_string() || r.is_string())
 }
 
+/// A binary operator over two BigInts, or `None` when the operator has no
+/// BigInt/BigInt fast form (`>>>` throws a TypeError, `in` and `instanceof`
+/// need an object). `Err` carries the RangeError message.
+fn bigint_binary_op(
+    op: BinaryOp,
+    a: &num_bigint::BigInt,
+    b: &num_bigint::BigInt,
+) -> Option<Result<JsValue, &'static str>> {
+    let big = |v: num_bigint::BigInt| Ok(JsValue::bigint(JsBigInt::new(v)));
+    Some(match op {
+        BinaryOp::Add => big(bigint_ops::add(a, b)),
+        BinaryOp::Sub => big(bigint_ops::subtract(a, b)),
+        BinaryOp::Mul => big(bigint_ops::multiply(a, b)),
+        BinaryOp::Div => match bigint_ops::divide(a, b) {
+            Ok(v) => big(v),
+            Err(_) => Err("Division by zero"),
+        },
+        BinaryOp::Mod => match bigint_ops::remainder(a, b) {
+            Ok(v) => big(v),
+            Err(_) => Err("Division by zero"),
+        },
+        BinaryOp::Exp => match bigint_ops::exponentiate(a, b) {
+            Ok(v) => big(v),
+            Err(_) => Err("Exponent must be positive"),
+        },
+        BinaryOp::LShift => big(bigint_ops::left_shift(a, b)),
+        BinaryOp::RShift => big(bigint_ops::signed_right_shift(a, b)),
+        BinaryOp::BitAnd => big(bigint_ops::bitwise_and(a, b)),
+        BinaryOp::BitOr => big(bigint_ops::bitwise_or(a, b)),
+        BinaryOp::BitXor => big(bigint_ops::bitwise_xor(a, b)),
+        BinaryOp::Lt => Ok(JsValue::boolean(a < b)),
+        BinaryOp::Gt => Ok(JsValue::boolean(a > b)),
+        BinaryOp::LtEq => Ok(JsValue::boolean(a <= b)),
+        BinaryOp::GtEq => Ok(JsValue::boolean(a >= b)),
+        BinaryOp::Eq | BinaryOp::StrictEq => Ok(JsValue::boolean(bigint_ops::equal(a, b))),
+        BinaryOp::NotEq | BinaryOp::StrictNotEq => Ok(JsValue::boolean(!bigint_ops::equal(a, b))),
+        _ => return None,
+    })
+}
+
+/// IsLessThan(x, y) when both are BigInts or one is a BigInt and the other a
+/// Number, the cases that need no ToPrimitive, StringToBigInt or Symbol check.
+fn bigint_relational_fast(left: &JsValue, right: &JsValue) -> Option<Option<bool>> {
+    if let Some(r) = left.with_bigint(|a| {
+        right
+            .with_bigint(|b| bigint_ops::less_than(a, b))
+            .or_else(|| right.as_number().map(|n| compare_bigint_number(a, n, true)))
+    }) {
+        return r;
+    }
+    if let (Some(n), true) = (left.as_number(), right.is_bigint()) {
+        return right.with_bigint(|b| compare_bigint_number(b, n, false));
+    }
+    None
+}
+
 /// §7.2.13 IsLessThan — the numeric comparison of a BigInt against a Number.
 ///
 /// Both the BigInt-vs-Number and Number-vs-BigInt arms of IsLessThan reduce to
@@ -10113,8 +10159,13 @@ fn compare_bigint_number(
         });
     }
     let trunc = number.trunc();
-    let integer_part = crate::interpreter::builtins::bigint::f64_to_bigint(trunc);
-    match bigint.cmp(&integer_part) {
+    // |trunc| < 2^63, so the integer part is an exact i64 and a machine-word
+    // BigInt compares without building a BigInt for it.
+    let ordering = match i64::try_from(bigint) {
+        Ok(small) if trunc.abs() < 9.0e18 => small.cmp(&(trunc as i64)),
+        _ => bigint.cmp(&crate::interpreter::builtins::bigint::f64_to_bigint(trunc)),
+    };
+    match ordering {
         std::cmp::Ordering::Less => Some(bigint_is_left),
         std::cmp::Ordering::Greater => Some(!bigint_is_left),
         std::cmp::Ordering::Equal => {
