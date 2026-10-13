@@ -1006,48 +1006,12 @@ impl Interpreter {
             let Some(this_id) = this.as_object_id() else {
                 return Completion::Throw(interp.create_type_error("next called on non-object"));
             };
-            let Some(obj) = interp.get_object(this_id) else {
-                return Completion::Throw(interp.create_type_error("next called on non-object"));
-            };
-            loop {
-                let step = {
-                    let mut b = obj.borrow_mut();
-                    match &mut b.kind {
-                        ObjectKind::Iterator(IteratorState::ForInEnumerator {
-                            obj_id,
-                            keys,
-                            index,
-                        }) => match keys.get(*index) {
-                            Some(key) => {
-                                let key = key.clone();
-                                *index += 1;
-                                obj_id.map(|id| (id, key))
-                            }
-                            None => None,
-                        },
-                        _ => {
-                            drop(b);
-                            return Completion::Throw(
-                                interp.create_type_error("next called on non-for-in iterator"),
-                            );
-                        }
-                    }
-                };
-                let Some((target_id, key)) = step else {
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
-                };
-                match interp.proxy_has_property(target_id, &key) {
-                    Ok(true) => {
-                        return Completion::Normal(interp.create_iter_result_object(
-                            JsValue::string(key.to_js_string()),
-                            false,
-                        ));
-                    }
-                    Ok(false) => {}
-                    Err(e) => return Completion::Throw(e),
+            match interp.for_in_enumerator_step(this_id) {
+                Ok(Some(key)) => Completion::Normal(interp.create_iter_result_object(key, false)),
+                Ok(None) => {
+                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
                 }
+                Err(e) => Completion::Throw(e),
             }
         });
         self.realm_mut().for_in_iterator_prototype = Some(for_in_proto_id);
@@ -3608,6 +3572,48 @@ impl Interpreter {
             self.for_in_head_iterator(value)
         } else {
             self.get_iterator(value)
+        }
+    }
+
+    /// One step of %ForInIteratorPrototype%.next (§14.7.5.10) on the
+    /// enumerator `iter_id`: the next key still present on the object, or
+    /// `None` once the snapshot is exhausted. Keys deleted since the snapshot
+    /// are skipped (proxy-aware `HasProperty`).
+    pub(crate) fn for_in_enumerator_step(
+        &mut self,
+        iter_id: u64,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let Some(obj) = self.get_object(iter_id) else {
+            return Err(self.create_type_error("next called on non-object"));
+        };
+        loop {
+            let step = {
+                let mut b = obj.borrow_mut();
+                match &mut b.kind {
+                    ObjectKind::Iterator(IteratorState::ForInEnumerator {
+                        obj_id,
+                        keys,
+                        index,
+                    }) => match keys.get(*index) {
+                        Some(key) => {
+                            let key = key.clone();
+                            *index += 1;
+                            obj_id.map(|id| (id, key))
+                        }
+                        None => None,
+                    },
+                    _ => {
+                        drop(b);
+                        return Err(self.create_type_error("next called on non-for-in iterator"));
+                    }
+                }
+            };
+            let Some((target_id, key)) = step else {
+                return Ok(None);
+            };
+            if self.proxy_has_property(target_id, &key)? {
+                return Ok(Some(JsValue::string(key.to_js_string())));
+            }
         }
     }
 

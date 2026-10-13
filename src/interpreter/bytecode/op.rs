@@ -169,6 +169,45 @@ pub(crate) enum Op {
     /// (literals longer than one operand chunk). Operand: object shape index
     /// (u16).
     ObjectAppend = 86,
+    /// `[..., iterable]` → `[..., iterator]`: GetIterator(iterable, sync)
+    /// (sec-getiterator). The iterator stays on the operand stack for the
+    /// whole loop, where it is rooted.
+    GetIterator = 87,
+    /// `[..., value]` → `[..., enumerator]`: the for-in head
+    /// (sec-runtime-semantics-forinofheadevaluation, enumerate): a nullish
+    /// value yields an already exhausted enumerator.
+    ForInHead = 88,
+    /// `[..., iterator]` → `[..., iterator, value]`, or when the iterator is
+    /// done `[...]` (the iterator dropped) and a jump. Operand: offset (i16).
+    /// An error from `next`, `done` or `value` propagates without closing the
+    /// iterator (IteratorStepValue marks it done).
+    IterStep = 89,
+    /// `IterStep` over a for-in enumerator.
+    ForInStep = 90,
+    /// IteratorClose with a normal completion (sec-iteratorclose): the
+    /// iterator is `depth` values below the top (0 or 1: a pending return
+    /// value sits above it) and is removed. A throw from `return()` or a
+    /// non-object result propagates. Operand: depth (u8).
+    IterClose = 91,
+    /// Handler entry for an abrupt exit of a for-of body or head binding:
+    /// `[..., iterator, thrown]`, IteratorClose with the throw completion
+    /// (errors from `return()` are discarded), then rethrows `thrown`.
+    IterCloseThrow = 92,
+    /// Removes `count` values that sit `depth` values below the top.
+    /// Operands: depth (u8), count (u8).
+    DropBelow = 93,
+    /// Leaves a `finally` block: `[..., value, kind]`. Kind 0 falls through,
+    /// 1 throws `value`, and `n >= 2` resumes at the `n - 2`th entry of the
+    /// finalizer's exit table (pushing `value` back when it carries one).
+    /// Operand: exit table (u16).
+    EndFinally = 94,
+    /// `[..., value]` → `[...]`: stores a for-in/for-of iteration value
+    /// through the head binding `head_bindings[idx]` (a destructuring or
+    /// assignment pattern). Operand: index (u16).
+    BindHead = 95,
+    /// Honors a `__host_exit` latched while the `try` block ran (it must stay
+    /// uncatchable and skip `finally`).
+    CheckExit = 96,
 }
 
 impl Op {
@@ -261,6 +300,16 @@ impl Op {
             84 => Some(Op::MakeClosure),
             85 => Some(Op::NewRegExp),
             86 => Some(Op::ObjectAppend),
+            87 => Some(Op::GetIterator),
+            88 => Some(Op::ForInHead),
+            89 => Some(Op::IterStep),
+            90 => Some(Op::ForInStep),
+            91 => Some(Op::IterClose),
+            92 => Some(Op::IterCloseThrow),
+            93 => Some(Op::DropBelow),
+            94 => Some(Op::EndFinally),
+            95 => Some(Op::BindHead),
+            96 => Some(Op::CheckExit),
             _ => None,
         }
     }

@@ -1,4 +1,6 @@
-use super::chunk::{ArrayTemplate, BLOCK_SLOT_FLAG, Chunk, Constant};
+use super::chunk::{
+    ArrayTemplate, BLOCK_SLOT_FLAG, Chunk, Constant, EXEC_NO_TAIL_CALL, HeadBinding,
+};
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
@@ -247,14 +249,42 @@ fn escape_target(
     table: u16,
     is_continue: bool,
     label: Option<&str>,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, usize, usize)> {
     if table == super::chunk::NO_ESCAPE_TABLE {
         return None;
     }
     chunk.escape_tables[table as usize]
         .iter()
         .find(|e| e.is_continue == is_continue && e.label.as_deref() == label)
-        .map(|e| (e.target as usize, usize::from(e.scope_depth)))
+        .map(|e| {
+            (
+                e.target as usize,
+                usize::from(e.scope_depth),
+                usize::from(e.stack_height),
+            )
+        })
+}
+
+/// Drops operand-stack values (unrooting them, innermost first) until
+/// `height` remain.
+fn truncate_stack(interp: &mut Interpreter, stack: &mut Vec<JsValue>, height: usize) {
+    while stack.len() > height {
+        pop_value(interp, stack, "stack underflow truncating operands");
+    }
+}
+
+/// Stores one for-in/for-of iteration value through a head binding the
+/// compiler left to the tree-walker's pattern machinery.
+fn bind_head(
+    interp: &mut Interpreter,
+    head: &HeadBinding,
+    value: JsValue,
+    env: &EnvRef,
+) -> Completion {
+    match head {
+        HeadBinding::Declare { pattern, kind } => interp.bind_pattern(pattern, value, *kind, env),
+        HeadBinding::Assign { pattern } => interp.assign_to_for_pattern(pattern, value, env),
+    }
 }
 
 /// Leaves block environments until `depth` remain, keeping the VM's scope
@@ -596,10 +626,11 @@ fn run_chunk_with_var_prologue(
 fn safepoint_with_empty_stacks(
     interp: &mut Interpreter,
     stack: &[JsValue],
+    persistent: usize,
     refs: &[IdentifierRef],
     context: &str,
 ) {
-    debug_assert!(stack.is_empty(), "operand stack live at {context}");
+    debug_assert!(stack.len() <= persistent, "operand stack live at {context}");
     debug_assert!(refs.is_empty(), "reference stack live at {context}");
     interp.gc_safepoint();
 }
@@ -626,15 +657,26 @@ fn run_chunk_inner(
     // use goes through `cur_env!()`.
     let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
     let envs_base = interp.call_stack_envs.len();
+    let roots_base = interp.gc_bytecode_roots.len();
     macro_rules! cur_env {
         () => {
             scopes.last().unwrap_or(frame_env)
         };
     }
+    // A `Throw` resumes at the innermost handler covering the op (below the
+    // dispatch loop); every other abrupt completion leaves the chunk.
+    macro_rules! bail {
+        ($l:lifetime, $completion:expr) => {
+            match $completion {
+                Completion::Throw(e) => break $l e,
+                other => return other,
+            }
+        };
+    }
     // One arm per binary op, so the Number-pair fast path is specialised to
     // the op instead of re-dispatching on it.
     macro_rules! binary_arm {
-        ($bop:expr) => {{
+        ($l:lifetime, $bop:expr) => {{
             let len = stack.len();
             if len >= 2
                 && let (Some(l), Some(r)) = (stack[len - 2].as_number(), stack[len - 1].as_number())
@@ -647,1045 +689,1242 @@ fn run_chunk_inner(
                 let l = stack.pop().expect("stack underflow on binop lhs");
                 match binary_slow(interp, binary_of_op($bop), l, r) {
                     Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
+                    abrupt => bail!($l, abrupt),
                 }
             }
         }};
     }
     loop {
-        let op_byte = chunk.code[pc];
-        let op = Op::from_u8(op_byte).expect("invalid opcode");
-        #[cfg(feature = "perf-counters")]
-        interp.perf.record_op(op);
-        pc += 1;
-        match op {
-            Op::LoadConst => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let v = chunk.constants[idx as usize].to_value();
-                push_value(interp, stack, v);
-            }
-            Op::LoadName => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
+        let thrown: JsValue = 'dispatch: loop {
+            let op_byte = chunk.code[pc];
+            let op = Op::from_u8(op_byte).expect("invalid opcode");
+            #[cfg(feature = "perf-counters")]
+            interp.perf.record_op(op);
+            pc += 1;
+            match op {
+                Op::LoadConst => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let v = chunk.constants[idx as usize].to_value();
+                    push_value(interp, stack, v);
+                }
+                Op::LoadName => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
+                    match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::LoadLocal => {
+                    let idx = decode_u16(chunk, pc);
+                    let slot = decode_u16(chunk, pc + 2);
+                    pc += 4;
+                    let name = &chunk.names[idx as usize];
+                    let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                    match with_local_hit(target, name, hint_slot, JsValue::clone) {
+                        Some(value) => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_hits += 1;
+                            }
+                            push_value(interp, stack, value);
+                        }
+                        None => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_misses += 1;
+                            }
+                            match interp.resolve_name_hinted(
+                                name,
+                                cur_env!(),
+                                chunk.global_hint(idx),
+                            ) {
+                                Completion::Normal(v) => push_value(interp, stack, v),
+                                abrupt => bail!('dispatch, abrupt),
+                            }
+                        }
+                    }
+                }
+                Op::StoreLocal | Op::StoreLocalPop => {
+                    let idx = decode_u16(chunk, pc);
+                    let slot = decode_u16(chunk, pc + 2);
+                    pc += 4;
+                    let name = &chunk.names[idx as usize];
+                    let value = stack.last().expect("stack underflow on StoreLocal");
+                    let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                    if let Err(e) = store_local(
+                        interp,
+                        name,
+                        hint_slot,
+                        target,
+                        cur_env!(),
+                        value,
+                        chunk.global_hint(idx),
+                    ) {
+                        break 'dispatch e;
+                    }
+                    if op == Op::StoreLocalPop {
+                        pop_value(interp, stack, "stack underflow on StoreLocalPop");
+                    }
+                }
+                Op::UpdateLocal => {
+                    let idx = decode_u16(chunk, pc);
+                    let slot = decode_u16(chunk, pc + 2);
+                    let mode = chunk.code[pc + 4];
+                    pc += 5;
+                    let (op, prefix, discard) = update_mode(mode);
+                    let name = &chunk.names[idx as usize];
+                    let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                    let fast = {
+                        let mut scope = target.borrow_mut();
+                        let plain = scope.with_object.is_none()
+                            && scope.indirect_bindings.is_none()
+                            && scope.global_object_id.is_none();
+                        match scope.bindings.entry_at_mut(hint_slot as usize) {
+                            Some((atom, binding))
+                                if plain
+                                    && atom.ptr_eq(name)
+                                    && binding.initialized
+                                    && matches!(
+                                        binding.kind,
+                                        BindingKind::Var | BindingKind::Let
+                                    ) =>
+                            {
+                                binding.value.as_number().map(|old| {
+                                    let new = match op {
+                                        UpdateOp::Increment => old + 1.0,
+                                        UpdateOp::Decrement => old - 1.0,
+                                    };
+                                    binding.value = JsValue::number(new);
+                                    JsValue::number(if prefix { new } else { old })
+                                })
+                            }
+                            _ => None,
+                        }
+                    };
+                    match fast {
+                        Some(result) => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_hits += 1;
+                            }
+                            if !discard {
+                                stack.push(result);
+                            }
+                        }
+                        None => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_misses += 1;
+                            }
+                            match interp.eval_identifier_update_hinted(
+                                op,
+                                prefix,
+                                name,
+                                cur_env!(),
+                                chunk.global_hint(idx),
+                            ) {
+                                Completion::Normal(value) => {
+                                    if !discard {
+                                        push_value(interp, stack, value);
+                                    }
+                                }
+                                abrupt => bail!('dispatch, abrupt),
+                            }
+                        }
+                    }
+                }
+                Op::LoadThis => match interp.resolve_this_binding(cur_env!()) {
                     Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
+                    abrupt => bail!('dispatch, abrupt),
+                },
+                Op::LoadCalleeName => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
+                    let strict = frame_env.borrow().strict;
+                    interp.last_identifier_with_base = None;
+                    let callee_result = interp.resolve_identifier_hinted(
+                        name,
+                        cur_env!(),
+                        strict,
+                        chunk.global_hint(idx),
+                    );
+                    let this_value = match interp.last_identifier_with_base.take() {
+                        Some(id) => JsValue::object(id),
+                        None => JsValue::UNDEFINED,
+                    };
+                    let callee = match callee_result {
+                        Completion::Normal(value) => value,
+                        abrupt => bail!('dispatch, abrupt),
+                    };
+                    push_value(interp, stack, callee);
+                    push_value(interp, stack, this_value);
                 }
-            }
-            Op::LoadLocal => {
-                let idx = decode_u16(chunk, pc);
-                let slot = decode_u16(chunk, pc + 2);
-                pc += 4;
-                let name = &chunk.names[idx as usize];
-                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
-                match with_local_hit(target, name, hint_slot, JsValue::clone) {
-                    Some(value) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_hits += 1;
-                        }
-                        push_value(interp, stack, value);
-                    }
-                    None => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_misses += 1;
-                        }
-                        match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
-                            Completion::Normal(v) => push_value(interp, stack, v),
-                            abrupt => return abrupt,
-                        }
-                    }
-                }
-            }
-            Op::StoreLocal | Op::StoreLocalPop => {
-                let idx = decode_u16(chunk, pc);
-                let slot = decode_u16(chunk, pc + 2);
-                pc += 4;
-                let name = &chunk.names[idx as usize];
-                let value = stack.last().expect("stack underflow on StoreLocal");
-                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
-                if let Err(e) = store_local(
-                    interp,
-                    name,
-                    hint_slot,
-                    target,
-                    cur_env!(),
-                    value,
-                    chunk.global_hint(idx),
-                ) {
-                    return Completion::Throw(e);
-                }
-                if op == Op::StoreLocalPop {
-                    pop_value(interp, stack, "stack underflow on StoreLocalPop");
-                }
-            }
-            Op::UpdateLocal => {
-                let idx = decode_u16(chunk, pc);
-                let slot = decode_u16(chunk, pc + 2);
-                let mode = chunk.code[pc + 4];
-                pc += 5;
-                let (op, prefix, discard) = update_mode(mode);
-                let name = &chunk.names[idx as usize];
-                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
-                let fast = {
-                    let mut scope = target.borrow_mut();
-                    let plain = scope.with_object.is_none()
-                        && scope.indirect_bindings.is_none()
-                        && scope.global_object_id.is_none();
-                    match scope.bindings.entry_at_mut(hint_slot as usize) {
-                        Some((atom, binding))
-                            if plain
-                                && atom.ptr_eq(name)
-                                && binding.initialized
-                                && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
-                        {
-                            binding.value.as_number().map(|old| {
-                                let new = match op {
-                                    UpdateOp::Increment => old + 1.0,
-                                    UpdateOp::Decrement => old - 1.0,
-                                };
-                                binding.value = JsValue::number(new);
-                                JsValue::number(if prefix { new } else { old })
-                            })
-                        }
-                        _ => None,
-                    }
-                };
-                match fast {
-                    Some(result) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_hits += 1;
-                        }
-                        if !discard {
-                            stack.push(result);
-                        }
-                    }
-                    None => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_misses += 1;
-                        }
-                        match interp.eval_identifier_update_hinted(
-                            op,
-                            prefix,
+                Op::ResolveName => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
+                    let local_ref = {
+                        let scope = cur_env!().borrow();
+                        scope.with_object.is_none()
+                            && scope.indirect_bindings.is_none()
+                            && scope.bindings.contains_key(name)
+                    };
+                    if local_ref {
+                        refs.push(IdentifierRef::SpecificEnv(cur_env!().clone()));
+                    } else {
+                        match interp.resolve_identifier_ref_hinted(
                             name,
                             cur_env!(),
                             chunk.global_hint(idx),
                         ) {
-                            Completion::Normal(value) => {
-                                if !discard {
-                                    push_value(interp, stack, value);
-                                }
-                            }
-                            abrupt => return abrupt,
+                            Ok(id_ref) => refs.push(id_ref),
+                            Err(e) => break 'dispatch e,
                         }
                     }
                 }
-            }
-            Op::LoadThis => match interp.resolve_this_binding(cur_env!()) {
-                Completion::Normal(v) => push_value(interp, stack, v),
-                abrupt => return abrupt,
-            },
-            Op::LoadCalleeName => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                let strict = frame_env.borrow().strict;
-                interp.last_identifier_with_base = None;
-                let callee_result = interp.resolve_identifier_hinted(
-                    name,
-                    cur_env!(),
-                    strict,
-                    chunk.global_hint(idx),
-                );
-                let this_value = match interp.last_identifier_with_base.take() {
-                    Some(id) => JsValue::object(id),
-                    None => JsValue::UNDEFINED,
-                };
-                let callee = match callee_result {
-                    Completion::Normal(value) => value,
-                    abrupt => return abrupt,
-                };
-                push_value(interp, stack, callee);
-                push_value(interp, stack, this_value);
-            }
-            Op::ResolveName => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                let local_ref = {
-                    let scope = cur_env!().borrow();
-                    scope.with_object.is_none()
-                        && scope.indirect_bindings.is_none()
-                        && scope.bindings.contains_key(name)
-                };
-                if local_ref {
-                    refs.push(IdentifierRef::SpecificEnv(cur_env!().clone()));
-                } else {
-                    match interp.resolve_identifier_ref_hinted(
+                Op::LoadResolvedName => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
+                    let id_ref = refs
+                        .last()
+                        .expect("reference stack underflow on LoadResolvedName");
+                    match interp.get_identifier_value_by_ref_hinted(
+                        name,
+                        id_ref,
+                        cur_env!(),
+                        chunk.global_hint(idx),
+                    ) {
+                        Completion::Normal(value) => push_value(interp, stack, value),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::StoreResolvedName | Op::StoreResolvedNamePop => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
+                    let id_ref = refs
+                        .pop()
+                        .expect("reference stack underflow on StoreResolvedName");
+                    let value = stack.last().expect("stack underflow on StoreResolvedName");
+                    if let Err(e) = store_resolved_name(
+                        interp,
+                        name,
+                        &id_ref,
+                        cur_env!(),
+                        value,
+                        chunk.global_hint(idx),
+                    ) {
+                        break 'dispatch e;
+                    }
+                    if op == Op::StoreResolvedNamePop {
+                        pop_value(interp, stack, "stack underflow on StoreResolvedNamePop");
+                    }
+                }
+                Op::UpdateName => {
+                    let idx = decode_u16(chunk, pc);
+                    let mode = chunk.code[pc + 2];
+                    pc += 3;
+                    let (op, prefix, discard) = update_mode(mode);
+                    let name = &chunk.names[idx as usize];
+                    match interp.eval_identifier_update_hinted(
+                        op,
+                        prefix,
                         name,
                         cur_env!(),
                         chunk.global_hint(idx),
                     ) {
-                        Ok(id_ref) => refs.push(id_ref),
-                        Err(e) => return Completion::Throw(e),
+                        Completion::Normal(value) => {
+                            if !discard {
+                                push_value(interp, stack, value);
+                            }
+                        }
+                        abrupt => bail!('dispatch, abrupt),
                     }
                 }
-            }
-            Op::LoadResolvedName => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                let id_ref = refs
-                    .last()
-                    .expect("reference stack underflow on LoadResolvedName");
-                match interp.get_identifier_value_by_ref_hinted(
-                    name,
-                    id_ref,
-                    cur_env!(),
-                    chunk.global_hint(idx),
-                ) {
-                    Completion::Normal(value) => push_value(interp, stack, value),
-                    abrupt => return abrupt,
+                Op::GetProp => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = chunk.names[idx as usize].clone();
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let base = stack.pop().expect("stack underflow on GetProp");
+                    let result = member_get(interp, &base, &name);
+                    unroot_stack_value(interp, &base);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
                 }
-            }
-            Op::StoreResolvedName | Op::StoreResolvedNamePop => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                let id_ref = refs
-                    .pop()
-                    .expect("reference stack underflow on StoreResolvedName");
-                let value = stack.last().expect("stack underflow on StoreResolvedName");
-                if let Err(e) = store_resolved_name(
-                    interp,
-                    name,
-                    &id_ref,
-                    cur_env!(),
-                    value,
-                    chunk.global_hint(idx),
-                ) {
-                    return Completion::Throw(e);
-                }
-                if op == Op::StoreResolvedNamePop {
-                    pop_value(interp, stack, "stack underflow on StoreResolvedNamePop");
-                }
-            }
-            Op::UpdateName => {
-                let idx = decode_u16(chunk, pc);
-                let mode = chunk.code[pc + 2];
-                pc += 3;
-                let (op, prefix, discard) = update_mode(mode);
-                let name = &chunk.names[idx as usize];
-                match interp.eval_identifier_update_hinted(
-                    op,
-                    prefix,
-                    name,
-                    cur_env!(),
-                    chunk.global_hint(idx),
-                ) {
-                    Completion::Normal(value) => {
-                        if !discard {
-                            push_value(interp, stack, value);
+                Op::GetElement => {
+                    let key_val = stack.last().expect("stack underflow on GetElement key");
+                    let base_index = stack
+                        .len()
+                        .checked_sub(2)
+                        .expect("stack underflow on GetElement base");
+                    let base = &stack[base_index];
+                    let fast_value = key_val
+                        .as_number()
+                        .and_then(|index| interp.numeric_index_fast_get(base, index));
+
+                    if let Some(value) = fast_value {
+                        pop_value(interp, stack, "stack underflow on GetElement key");
+                        pop_value(interp, stack, "stack underflow on GetElement base");
+                        push_value(interp, stack, value);
+                    } else {
+                        let gc_frame = root_operand_stack(interp, stack);
+                        let key_val = stack.pop().expect("stack underflow on GetElement key");
+                        let base = stack.pop().expect("stack underflow on GetElement base");
+                        let result = member_get_computed(interp, &base, &key_val);
+                        unroot_stack_value(interp, &key_val);
+                        unroot_stack_value(interp, &base);
+                        interp.gc_unroot_frame(gc_frame);
+                        match result {
+                            Completion::Normal(v) => push_value(interp, stack, v),
+                            abrupt => bail!('dispatch, abrupt),
                         }
                     }
-                    abrupt => return abrupt,
                 }
-            }
-            Op::GetProp => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = chunk.names[idx as usize].clone();
-                let gc_frame = root_operand_stack(interp, stack);
-                let base = stack.pop().expect("stack underflow on GetProp");
-                let result = member_get(interp, &base, &name);
-                unroot_stack_value(interp, &base);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
-                }
-            }
-            Op::GetElement => {
-                let key_val = stack.last().expect("stack underflow on GetElement key");
-                let base_index = stack
-                    .len()
-                    .checked_sub(2)
-                    .expect("stack underflow on GetElement base");
-                let base = &stack[base_index];
-                let fast_value = key_val
-                    .as_number()
-                    .and_then(|index| interp.numeric_index_fast_get(base, index));
-
-                if let Some(value) = fast_value {
-                    pop_value(interp, stack, "stack underflow on GetElement key");
-                    pop_value(interp, stack, "stack underflow on GetElement base");
-                    push_value(interp, stack, value);
-                } else {
+                Op::LoadMethod => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
                     let gc_frame = root_operand_stack(interp, stack);
-                    let key_val = stack.pop().expect("stack underflow on GetElement key");
-                    let base = stack.pop().expect("stack underflow on GetElement base");
+                    let base = stack.pop().expect("stack underflow on LoadMethod");
+                    let result = member_get(interp, &base, name);
+                    unroot_stack_value(interp, &base);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Completion::Normal(method) => {
+                            push_value(interp, stack, method);
+                            push_value(interp, stack, base);
+                        }
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::LoadMethodElement => {
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let key_val = stack
+                        .pop()
+                        .expect("stack underflow on LoadMethodElement key");
+                    let base = stack
+                        .pop()
+                        .expect("stack underflow on LoadMethodElement base");
                     let result = member_get_computed(interp, &base, &key_val);
                     unroot_stack_value(interp, &key_val);
                     unroot_stack_value(interp, &base);
                     interp.gc_unroot_frame(gc_frame);
                     match result {
-                        Completion::Normal(v) => push_value(interp, stack, v),
-                        abrupt => return abrupt,
+                        Completion::Normal(method) => {
+                            push_value(interp, stack, method);
+                            push_value(interp, stack, base);
+                        }
+                        abrupt => bail!('dispatch, abrupt),
                     }
                 }
-            }
-            Op::LoadMethod => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                let gc_frame = root_operand_stack(interp, stack);
-                let base = stack.pop().expect("stack underflow on LoadMethod");
-                let result = member_get(interp, &base, name);
-                unroot_stack_value(interp, &base);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Completion::Normal(method) => {
-                        push_value(interp, stack, method);
-                        push_value(interp, stack, base);
+                Op::SetProp => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = chunk.names[idx as usize].clone();
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let rhs = stack.pop().expect("stack underflow on SetProp rhs");
+                    let base = stack.pop().expect("stack underflow on SetProp base");
+                    let base_root = base.clone();
+                    let strict = frame_env.borrow().strict;
+                    let result = member_set(interp, base, &name, rhs.clone(), strict);
+                    unroot_stack_value(interp, &rhs);
+                    unroot_stack_value(interp, &base_root);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Ok(()) => push_value(interp, stack, rhs),
+                        Err(e) => break 'dispatch e,
                     }
-                    abrupt => return abrupt,
                 }
-            }
-            Op::LoadMethodElement => {
-                let gc_frame = root_operand_stack(interp, stack);
-                let key_val = stack
-                    .pop()
-                    .expect("stack underflow on LoadMethodElement key");
-                let base = stack
-                    .pop()
-                    .expect("stack underflow on LoadMethodElement base");
-                let result = member_get_computed(interp, &base, &key_val);
-                unroot_stack_value(interp, &key_val);
-                unroot_stack_value(interp, &base);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Completion::Normal(method) => {
-                        push_value(interp, stack, method);
-                        push_value(interp, stack, base);
+                Op::SetElement => {
+                    let len = stack.len();
+                    if len >= 3
+                        && let Some(index) = stack[len - 2].as_number()
+                        && interp.numeric_index_fast_set(&stack[len - 3], index, &stack[len - 1])
+                    {
+                        let rhs = pop_value(interp, stack, "stack underflow on SetElement rhs");
+                        pop_value(interp, stack, "stack underflow on SetElement key");
+                        pop_value(interp, stack, "stack underflow on SetElement base");
+                        push_value(interp, stack, rhs);
+                        continue;
                     }
-                    abrupt => return abrupt,
-                }
-            }
-            Op::SetProp => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = chunk.names[idx as usize].clone();
-                let gc_frame = root_operand_stack(interp, stack);
-                let rhs = stack.pop().expect("stack underflow on SetProp rhs");
-                let base = stack.pop().expect("stack underflow on SetProp base");
-                let base_root = base.clone();
-                let strict = frame_env.borrow().strict;
-                let result = member_set(interp, base, &name, rhs.clone(), strict);
-                unroot_stack_value(interp, &rhs);
-                unroot_stack_value(interp, &base_root);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Ok(()) => push_value(interp, stack, rhs),
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            Op::SetElement => {
-                let len = stack.len();
-                if len >= 3
-                    && let Some(index) = stack[len - 2].as_number()
-                    && interp.numeric_index_fast_set(&stack[len - 3], index, &stack[len - 1])
-                {
-                    let rhs = pop_value(interp, stack, "stack underflow on SetElement rhs");
-                    pop_value(interp, stack, "stack underflow on SetElement key");
-                    pop_value(interp, stack, "stack underflow on SetElement base");
-                    push_value(interp, stack, rhs);
-                    continue;
-                }
-                let gc_frame = root_operand_stack(interp, stack);
-                let rhs = stack.pop().expect("stack underflow on SetElement rhs");
-                let key_val = stack.pop().expect("stack underflow on SetElement key");
-                let base = stack.pop().expect("stack underflow on SetElement base");
-                let base_root = base.clone();
-                let strict = frame_env.borrow().strict;
-                let result = member_set_computed(interp, base, &key_val, rhs.clone(), strict);
-                unroot_stack_value(interp, &rhs);
-                unroot_stack_value(interp, &key_val);
-                unroot_stack_value(interp, &base_root);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Ok(()) => push_value(interp, stack, rhs),
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            Op::LoadUndefined => {
-                push_value(interp, stack, JsValue::UNDEFINED);
-            }
-            Op::LoadTrue => {
-                push_value(interp, stack, JsValue::TRUE);
-            }
-            Op::LoadFalse => {
-                push_value(interp, stack, JsValue::FALSE);
-            }
-            Op::LoadNull => {
-                push_value(interp, stack, JsValue::NULL);
-            }
-            Op::Return => {
-                let v = if stack.is_empty() {
-                    JsValue::UNDEFINED
-                } else {
-                    pop_value(interp, stack, "stack underflow on Return")
-                };
-                return Completion::Return(v);
-            }
-            Op::ReturnUndefined => {
-                return Completion::Return(JsValue::UNDEFINED);
-            }
-            Op::ReturnCompletion => {
-                return match completion_value.take() {
-                    Some(value) => {
-                        unroot_stack_value(interp, &value);
-                        Completion::Normal(value)
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let rhs = stack.pop().expect("stack underflow on SetElement rhs");
+                    let key_val = stack.pop().expect("stack underflow on SetElement key");
+                    let base = stack.pop().expect("stack underflow on SetElement base");
+                    let base_root = base.clone();
+                    let strict = frame_env.borrow().strict;
+                    let result = member_set_computed(interp, base, &key_val, rhs.clone(), strict);
+                    unroot_stack_value(interp, &rhs);
+                    unroot_stack_value(interp, &key_val);
+                    unroot_stack_value(interp, &base_root);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Ok(()) => push_value(interp, stack, rhs),
+                        Err(e) => break 'dispatch e,
                     }
-                    None => Completion::Empty,
-                };
-            }
-            Op::Call | Op::ReturnCall => {
-                let argc = decode_u16(chunk, pc) as usize;
-                pc += 2;
-                let site_id = CallSiteId(decode_u32(chunk, pc));
-                pc += 4;
-                // Counted here, before the strict tail-call return below: that
-                // path leaves the VM without ever reaching the dispatch site,
-                // so incrementing later would omit every strict tail call from
-                // `calls_from_vm` and understate VM-issued calls on
-                // tail-call-heavy code.
-                #[cfg(feature = "perf-counters")]
-                {
-                    interp.perf.calls_from_vm += 1;
                 }
-                if op == Op::ReturnCall && frame_env.borrow().strict {
-                    let (callee, this_value, args) = take_call_operands(stack, argc);
-                    release_call_operands(interp, &callee, &this_value, &args);
-                    return Completion::TailCall {
-                        func: callee,
-                        this: this_value,
-                        args,
+                Op::LoadUndefined => {
+                    push_value(interp, stack, JsValue::UNDEFINED);
+                }
+                Op::LoadTrue => {
+                    push_value(interp, stack, JsValue::TRUE);
+                }
+                Op::LoadFalse => {
+                    push_value(interp, stack, JsValue::FALSE);
+                }
+                Op::LoadNull => {
+                    push_value(interp, stack, JsValue::NULL);
+                }
+                Op::Return => {
+                    let v = if stack.is_empty() {
+                        JsValue::UNDEFINED
+                    } else {
+                        pop_value(interp, stack, "stack underflow on Return")
+                    };
+                    return Completion::Return(v);
+                }
+                Op::ReturnUndefined => {
+                    return Completion::Return(JsValue::UNDEFINED);
+                }
+                Op::ReturnCompletion => {
+                    return match completion_value.take() {
+                        Some(value) => {
+                            unroot_stack_value(interp, &value);
+                            Completion::Normal(value)
+                        }
+                        None => Completion::Empty,
                     };
                 }
-                assert!(stack.len() >= argc + 2, "stack underflow on call operands");
-                let base = stack.len() - argc - 2;
-                let callee = stack[base].clone();
-                let this_value = stack[base + 1].clone();
-                // Call-site IC probe + record, mirroring eval_call's tree-walker
-                // sequence (issue #432). `with_scope_depth != 0` is excluded
-                // because a `with`-resolved binding can dynamically pick a
-                // different callee per invocation, defeating monomorphic
-                // caching.
-                let ic_callee_id =
-                    if site_id != CallSiteId::UNASSIGNED && interp.with_scope_depth == 0 {
-                        callee.as_object_id()
+                Op::Call | Op::ReturnCall => {
+                    let argc = decode_u16(chunk, pc) as usize;
+                    pc += 2;
+                    let site_id = CallSiteId(decode_u32(chunk, pc));
+                    pc += 4;
+                    // Counted here, before the strict tail-call return below: that
+                    // path leaves the VM without ever reaching the dispatch site,
+                    // so incrementing later would omit every strict tail call from
+                    // `calls_from_vm` and understate VM-issued calls on
+                    // tail-call-heavy code.
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        interp.perf.calls_from_vm += 1;
+                    }
+                    if op == Op::ReturnCall && frame_env.borrow().strict {
+                        let (callee, this_value, args) = take_call_operands(stack, argc);
+                        release_call_operands(interp, &callee, &this_value, &args);
+                        // Persistent slots below the call (a for-in enumerator, a
+                        // `finally` completion record) die with the frame.
+                        truncate_stack(interp, stack, 0);
+                        return Completion::TailCall {
+                            func: callee,
+                            this: this_value,
+                            args,
+                        };
+                    }
+                    assert!(stack.len() >= argc + 2, "stack underflow on call operands");
+                    let base = stack.len() - argc - 2;
+                    let callee = stack[base].clone();
+                    let this_value = stack[base + 1].clone();
+                    // Call-site IC probe + record, mirroring eval_call's tree-walker
+                    // sequence (issue #432). `with_scope_depth != 0` is excluded
+                    // because a `with`-resolved binding can dynamically pick a
+                    // different callee per invocation, defeating monomorphic
+                    // caching.
+                    let ic_callee_id =
+                        if site_id != CallSiteId::UNASSIGNED && interp.with_scope_depth == 0 {
+                            callee.as_object_id()
+                        } else {
+                            None
+                        };
+                    let mut probe_hit = false;
+                    if let Some(callee_id) = ic_callee_id {
+                        let slot = *interp.call_slot(site_id);
+                        if let CallIcSlot::Mono {
+                            callee_obj_id,
+                            callee_shape_id,
+                            ..
+                        } = slot
+                            && callee_id == callee_obj_id
+                            && let Some(obj_rc) = interp.get_object(callee_id)
+                            && obj_rc.borrow().shape_id == callee_shape_id
+                        {
+                            interp
+                                .call_ic_hit_count
+                                .set(interp.call_ic_hit_count.get() + 1);
+                            probe_hit = true;
+                        }
+                        if !probe_hit {
+                            interp
+                                .call_ic_slow_path_count
+                                .set(interp.call_ic_slow_path_count.get() + 1);
+                        }
+                    }
+                    // The operands stay on the operand stack (and in
+                    // gc_bytecode_roots) for the complete nested invocation: the
+                    // callee borrows its arguments straight from the stack and can
+                    // execute arbitrary JS and hit any number of safepoints.
+                    let result = if probe_hit {
+                        interp.call_function_ic_validated(&callee, &this_value, &stack[base + 2..])
+                    } else {
+                        interp.call_function(&callee, &this_value, &stack[base + 2..])
+                    };
+                    // Record only on success to avoid caching error-paths.
+                    if let Some(callee_id) = ic_callee_id
+                        && !probe_hit
+                        && matches!(result, Completion::Normal(_))
+                    {
+                        let slot = *interp.call_slot(site_id);
+                        let new_slot = interp.classify_for_call_ic(callee_id);
+                        let next = match (slot, new_slot) {
+                            (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
+                            (_, None) => CallIcSlot::Empty,
+                            (CallIcSlot::Empty, Some(s)) => s,
+                            (
+                                CallIcSlot::Mono {
+                                    callee_obj_id: prev,
+                                    ..
+                                },
+                                Some(
+                                    s @ CallIcSlot::Mono {
+                                        callee_obj_id: new, ..
+                                    },
+                                ),
+                            ) if prev == new => s,
+                            (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
+                        };
+                        *interp.call_slot(site_id) = next;
+                    }
+                    pop_operands(interp, stack, argc + 2);
+                    match result {
+                        Completion::Normal(value) | Completion::Return(value) => {
+                            push_value(interp, stack, value);
+                        }
+                        Completion::Empty => {
+                            push_value(interp, stack, JsValue::UNDEFINED);
+                        }
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::Construct => {
+                    let argc = decode_u16(chunk, pc) as usize;
+                    pc += 2;
+                    let _site_id = CallSiteId(decode_u32(chunk, pc));
+                    pc += 4;
+                    assert!(stack.len() > argc, "stack underflow on construct operands");
+                    let base = stack.len() - argc - 1;
+                    let callee = stack[base].clone();
+                    // The operands stay on the operand stack (and in
+                    // gc_bytecode_roots) for the complete nested construction,
+                    // mirroring Op::Call: construct_from_evaluated can run
+                    // arbitrary JS (constructor body, field initializers) and hit
+                    // any number of safepoints before returning.
+                    let result = interp.construct_from_evaluated(&callee, &stack[base + 1..]);
+                    pop_operands(interp, stack, argc + 1);
+                    match result {
+                        Completion::Normal(value) | Completion::Return(value) => {
+                            push_value(interp, stack, value);
+                        }
+                        Completion::Empty => {
+                            push_value(interp, stack, JsValue::UNDEFINED);
+                        }
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::Add => binary_arm!('dispatch, Op::Add),
+                Op::Sub => binary_arm!('dispatch, Op::Sub),
+                Op::Mul => binary_arm!('dispatch, Op::Mul),
+                Op::Div => binary_arm!('dispatch, Op::Div),
+                Op::Mod => binary_arm!('dispatch, Op::Mod),
+                Op::Pow => binary_arm!('dispatch, Op::Pow),
+                Op::Eq => binary_arm!('dispatch, Op::Eq),
+                Op::NotEq => binary_arm!('dispatch, Op::NotEq),
+                Op::StrictEq => binary_arm!('dispatch, Op::StrictEq),
+                Op::StrictNotEq => binary_arm!('dispatch, Op::StrictNotEq),
+                Op::Lt => binary_arm!('dispatch, Op::Lt),
+                Op::Gt => binary_arm!('dispatch, Op::Gt),
+                Op::LtEq => binary_arm!('dispatch, Op::LtEq),
+                Op::GtEq => binary_arm!('dispatch, Op::GtEq),
+                Op::BitAnd => binary_arm!('dispatch, Op::BitAnd),
+                Op::BitOr => binary_arm!('dispatch, Op::BitOr),
+                Op::BitXor => binary_arm!('dispatch, Op::BitXor),
+                Op::Shl => binary_arm!('dispatch, Op::Shl),
+                Op::Shr => binary_arm!('dispatch, Op::Shr),
+                Op::UShr => binary_arm!('dispatch, Op::UShr),
+                Op::BinConst => {
+                    let bop = Op::from_u8(chunk.code[pc]).expect("invalid binary op byte");
+                    let Constant::Number(k) = chunk.constants[decode_u16(chunk, pc + 1) as usize]
+                    else {
+                        unreachable!("BinConst constant is a Number")
+                    };
+                    pc += 3;
+                    let top = stack.last_mut().expect("stack underflow on BinConst");
+                    if let Some(l) = top.as_number() {
+                        *top = number_binop(bop, l, k);
+                    } else {
+                        let l = stack.pop().expect("stack underflow on BinConst");
+                        match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
+                            Completion::Normal(v) => push_value(interp, stack, v),
+                            abrupt => bail!('dispatch, abrupt),
+                        }
+                    }
+                }
+                Op::LocalBinConst => {
+                    let idx = decode_u16(chunk, pc);
+                    let slot = decode_u16(chunk, pc + 2);
+                    let bop = Op::from_u8(chunk.code[pc + 4]).expect("invalid binary op byte");
+                    let Constant::Number(k) = chunk.constants[decode_u16(chunk, pc + 5) as usize]
+                    else {
+                        unreachable!("LocalBinConst constant is a Number")
+                    };
+                    pc += 7;
+                    let name = &chunk.names[idx as usize];
+                    let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                    let hit = with_local_hit(target, name, hint_slot, |v| match v.as_number() {
+                        Some(l) => Ok(number_binop(bop, l, k)),
+                        None => Err(v.clone()),
+                    });
+                    let operand = match hit {
+                        Some(Ok(result)) => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_hits += 1;
+                            }
+                            stack.push(result);
+                            None
+                        }
+                        Some(Err(l)) => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_hits += 1;
+                            }
+                            Some(l)
+                        }
+                        None => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_misses += 1;
+                            }
+                            match interp.resolve_name_hinted(
+                                name,
+                                cur_env!(),
+                                chunk.global_hint(idx),
+                            ) {
+                                Completion::Normal(v) => Some(v),
+                                abrupt => bail!('dispatch, abrupt),
+                            }
+                        }
+                    };
+                    if let Some(l) = operand {
+                        // As `LoadLocal` then `BinConst`: the loaded value is
+                        // rooted for the whole operation (an object operand's
+                        // `valueOf` may rebind the local and collect).
+                        root_stack_value(interp, &l);
+                        match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
+                            Completion::Normal(v) => push_value(interp, stack, v),
+                            abrupt => bail!('dispatch, abrupt),
+                        }
+                    }
+                }
+                Op::CmpJumpIfFalse => {
+                    let cmp = Op::from_u8(chunk.code[pc]).expect("invalid comparison byte");
+                    let offset = decode_i16(chunk, pc + 1) as i32;
+                    pc += 3;
+                    let len = stack.len();
+                    let taken = if len >= 2
+                        && let (Some(l), Some(r)) =
+                            (stack[len - 2].as_number(), stack[len - 1].as_number())
+                    {
+                        stack.truncate(len - 2);
+                        !number_compare(cmp, l, r)
+                    } else {
+                        let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
+                        let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
+                        match binary_slow(interp, binary_of_op(cmp), l, r) {
+                            Completion::Normal(v) => !interp.to_boolean_val(&v),
+                            abrupt => bail!('dispatch, abrupt),
+                        }
+                    };
+                    if taken {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::Neg | Op::Plus | Op::Not | Op::BitNot => {
+                    let v = stack.pop().expect("stack underflow on unary");
+                    let uop = match op {
+                        Op::Neg => UnaryOp::Minus,
+                        Op::Plus => UnaryOp::Plus,
+                        Op::Not => UnaryOp::Not,
+                        Op::BitNot => UnaryOp::BitNot,
+                        _ => unreachable!(),
+                    };
+                    let result = interp.eval_unary(uop, &v);
+                    unroot_stack_value(interp, &v);
+                    match result {
+                        Completion::Normal(r) => push_value(interp, stack, r),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::EvalAst => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let super::chunk::AstNode::Expr(expr) = &chunk.ast[idx as usize] else {
+                        unreachable!("EvalAst operand names an expression node");
+                    };
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        interp.perf.ast_fallback_execs += 1;
+                    }
+                    // Operands already on the stack stay rooted in
+                    // `gc_bytecode_roots` while the tree-walker runs.
+                    match interp.eval_expr(expr, cur_env!()) {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::ExecAst => {
+                    let idx = decode_u16(chunk, pc);
+                    let table = decode_u16(chunk, pc + 2);
+                    let flags = chunk.code[pc + 4];
+                    pc += 5;
+                    let super::chunk::AstNode::Stmt(stmt) = &chunk.ast[idx as usize] else {
+                        unreachable!("ExecAst operand names a statement node");
+                    };
+                    #[cfg(feature = "perf-counters")]
+                    {
+                        interp.perf.ast_fallback_execs += 1;
+                    }
+                    // Inside a `try` block the statement's calls are never in
+                    // tail position: the handler must stay on the stack.
+                    let saved_tco = interp.tco_suppress_depth;
+                    if flags & EXEC_NO_TAIL_CALL != 0 {
+                        interp.tco_suppress_depth = saved_tco + 1;
+                    }
+                    let completion = interp.exec_statement(stmt, cur_env!());
+                    interp.tco_suppress_depth = saved_tco;
+                    match completion {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Break(label, value) => {
+                            match escape_target(chunk, table, false, label.as_deref()) {
+                                Some((target, depth, height)) => {
+                                    unwind_scopes(interp, &mut scopes, envs_base, depth);
+                                    truncate_stack(interp, stack, height);
+                                    pc = target;
+                                }
+                                None => return Completion::Break(label, value),
+                            }
+                        }
+                        Completion::Continue(label, value) => {
+                            match escape_target(chunk, table, true, label.as_deref()) {
+                                Some((target, depth, height)) => {
+                                    unwind_scopes(interp, &mut scopes, envs_base, depth);
+                                    truncate_stack(interp, stack, height);
+                                    pc = target;
+                                }
+                                None => return Completion::Continue(label, value),
+                            }
+                        }
+                        left @ (Completion::Return(_) | Completion::TailCall { .. }) => {
+                            truncate_stack(interp, stack, 0);
+                            return left;
+                        }
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::InitLexical => {
+                    let idx = decode_u16(chunk, pc);
+                    let kind = if chunk.code[pc + 2] == 0 {
+                        BindingKind::Let
+                    } else {
+                        BindingKind::Const
+                    };
+                    let slot = decode_u16(chunk, pc + 3);
+                    pc += 5;
+                    let name = &chunk.names[idx as usize];
+                    let value = pop_value(interp, stack, "stack underflow on InitLexical");
+                    let binding = Binding {
+                        value,
+                        kind,
+                        initialized: true,
+                        deletable: false,
+                    };
+                    let mut scope = cur_env!().borrow_mut();
+                    match scope.bindings.entry_at_mut(usize::from(slot)) {
+                        Some((atom, entry)) if atom.ptr_eq(name) => *entry = binding,
+                        _ => {
+                            scope.bindings.insert_atom(name, binding);
+                        }
+                    }
+                }
+                Op::Instanceof | Op::In => {
+                    let r = stack.pop().expect("stack underflow on relational rhs");
+                    let l = stack.pop().expect("stack underflow on relational lhs");
+                    let result = if op == Op::Instanceof {
+                        interp.eval_instanceof(&l, &r)
+                    } else {
+                        interp.eval_binary(BinaryOp::In, &l, &r)
+                    };
+                    unroot_stack_value(interp, &r);
+                    unroot_stack_value(interp, &l);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::Throw => {
+                    let value = pop_value(interp, stack, "stack underflow on Throw");
+                    break 'dispatch value;
+                }
+                Op::Typeof => {
+                    let value = pop_value(interp, stack, "stack underflow on Typeof");
+                    let result = interp.typeof_value(&value);
+                    push_value(interp, stack, result);
+                }
+                Op::TypeofName => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let name = &chunk.names[idx as usize];
+                    match interp.eval_typeof_identifier(name, cur_env!()) {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::UpdateProp => {
+                    let idx = decode_u16(chunk, pc);
+                    let mode = chunk.code[pc + 2];
+                    pc += 3;
+                    let (update, prefix, _) = update_mode(mode);
+                    let name = &chunk.names[idx as usize];
+                    let base = stack.pop().expect("stack underflow on UpdateProp");
+                    let strict = frame_env.borrow().strict;
+                    let result = member_update_named(interp, &base, name, update, prefix, strict);
+                    unroot_stack_value(interp, &base);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::UpdateElement => {
+                    let mode = chunk.code[pc];
+                    pc += 1;
+                    let (update, prefix, _) = update_mode(mode);
+                    let key = stack.pop().expect("stack underflow on UpdateElement key");
+                    let base = stack.pop().expect("stack underflow on UpdateElement base");
+                    let strict = frame_env.borrow().strict;
+                    let result =
+                        member_update_computed(interp, &base, &key, update, prefix, strict);
+                    unroot_stack_value(interp, &key);
+                    unroot_stack_value(interp, &base);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::Pop => {
+                    pop_value(interp, stack, "stack underflow on Pop");
+                }
+                Op::SetCompletion => {
+                    let value = pop_value(interp, stack, "stack underflow on SetCompletion");
+                    if let Some(previous) = completion_value.replace(value.clone()) {
+                        unroot_stack_value(interp, &previous);
+                    }
+                    root_stack_value(interp, &value);
+                }
+                Op::Jump => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    if offset < 0 {
+                        safepoint_with_empty_stacks(
+                            interp,
+                            stack,
+                            usize::from(chunk.persistent_slots),
+                            refs,
+                            "loop backedge",
+                        );
+                    }
+                    pc = (pc as i32 + 2 + offset) as usize;
+                }
+                Op::JumpIfFalse => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let v = pop_value(interp, stack, "stack underflow on JumpIfFalse");
+                    if !interp.to_boolean_val(&v) {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::JumpIfTrue => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let v = pop_value(interp, stack, "stack underflow on JumpIfTrue");
+                    if interp.to_boolean_val(&v) {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::JumpIfTruthyKeep => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let v = stack.last().expect("stack underflow on JumpIfTruthyKeep");
+                    if interp.to_boolean_val(v) {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::JumpIfFalsyKeep => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let v = stack.last().expect("stack underflow on JumpIfFalsyKeep");
+                    if !interp.to_boolean_val(v) {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::DupN => {
+                    let count = chunk.code[pc] as usize;
+                    pc += 1;
+                    let start = stack
+                        .len()
+                        .checked_sub(count)
+                        .expect("stack underflow on DupN");
+                    for i in 0..count {
+                        let v = stack[start + i].clone();
+                        push_value(interp, stack, v);
+                    }
+                }
+                Op::ToPrimitiveKey => {
+                    // sec-getvalue: the base-nullish check runs before ToPropertyKey's
+                    // ToPrimitive side effect, so peek the base (one below the key,
+                    // don't pop it) and check it first, without touching the key.
+                    let base_index = stack
+                        .len()
+                        .checked_sub(2)
+                        .expect("stack underflow on ToPrimitiveKey base");
+                    if stack[base_index].is_nullish() {
+                        let base = stack[base_index].clone();
+                        break 'dispatch interp
+                            .create_type_error(&format!("Cannot read properties of {base}"));
+                    }
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
+                    let result = interp.to_primitive(&key, "string");
+                    unroot_stack_value(interp, &key);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Ok(v) => push_value(interp, stack, v),
+                        Err(e) => break 'dispatch e,
+                    }
+                }
+                Op::JumpIfNotNullishKeep => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let v = stack
+                        .last()
+                        .expect("stack underflow on JumpIfNotNullishKeep");
+                    if !v.is_nullish() {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::PushEnv => {
+                    let scope = &chunk.block_scopes[decode_u16(chunk, pc) as usize];
+                    pc += 2;
+                    let parent = cur_env!().clone();
+                    let block_env = interp.acquire_block_environment(
+                        parent,
+                        scope.functions.len() + scope.lexicals.len(),
+                    );
+                    if scope.simple_catch {
+                        block_env.borrow_mut().is_simple_catch_scope = true;
+                    }
+                    // Reachable from the GC before any closure is built into it.
+                    interp.call_stack_envs.push(block_env.clone());
+                    for stmt in &scope.functions {
+                        interp.hoist_block_function_declaration(stmt, &block_env);
+                    }
+                    if !scope.lexicals.is_empty() {
+                        let mut declared = block_env.borrow_mut();
+                        for &(name_idx, is_const) in &scope.lexicals {
+                            let kind = if is_const {
+                                BindingKind::Const
+                            } else {
+                                BindingKind::Let
+                            };
+                            declared.declare_atom(&chunk.names[name_idx as usize], kind);
+                        }
+                    }
+                    scopes.push(block_env);
+                    debug_assert_eq!(interp.call_stack_envs.len(), envs_base + scopes.len());
+                }
+                Op::PopEnv => {
+                    let count = usize::from(chunk.code[pc]);
+                    pc += 1;
+                    let depth = scopes.len() - count;
+                    unwind_scopes(interp, &mut scopes, envs_base, depth);
+                }
+                Op::CopyIterEnv => {
+                    let current = scopes
+                        .last()
+                        .expect("CopyIterEnv inside a block environment");
+                    // Only `scopes` and its `call_stack_envs` mirror own it: no
+                    // closure took this iteration's environment, so a fresh copy
+                    // could not be told apart from it.
+                    if std::rc::Rc::strong_count(current) <= 2 {
+                        continue;
+                    }
+                    let (parent, bindings) = {
+                        let source = current.borrow();
+                        (
+                            source
+                                .parent
+                                .clone()
+                                .expect("block environments have a parent"),
+                            source.bindings.capacity(),
+                        )
+                    };
+                    let fresh = interp.acquire_block_environment(parent, bindings);
+                    {
+                        let source = current.borrow();
+                        let mut copy = fresh.borrow_mut();
+                        let mut i = 0;
+                        while let Some((name, binding)) = source.bindings.entry_at(i) {
+                            copy.bindings.push_unique(
+                                name.clone(),
+                                Binding::new(binding.value.clone(), binding.kind, true),
+                            );
+                            i += 1;
+                        }
+                    }
+                    let top = scopes.len() - 1;
+                    interp.call_stack_envs[envs_base + top] = fresh.clone();
+                    let replaced = std::mem::replace(&mut scopes[top], fresh);
+                    interp.recycle_block_environment(replaced);
+                }
+                Op::MakeClosure => {
+                    let idx = decode_u16(chunk, pc);
+                    let is_method = chunk.code[pc + 2] != 0;
+                    pc += 3;
+                    let template = &chunk.functions[idx as usize];
+                    let closure = interp.make_closure(
+                        &template.spec(),
+                        cur_env!(),
+                        is_method,
+                        template.inferred_name.as_ref(),
+                    );
+                    push_value(interp, stack, closure);
+                }
+                Op::NewArrayConst => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let array = match &chunk.array_templates[idx as usize] {
+                        ArrayTemplate::Dense(values) => interp.create_array(values.clone()),
+                        ArrayTemplate::Holey(items) => {
+                            interp.create_array_with_holes(items.clone())
+                        }
+                    };
+                    push_value(interp, stack, array);
+                }
+                Op::NewArray => {
+                    let count = usize::from(decode_u16(chunk, pc));
+                    pc += 2;
+                    let values = take_literal_values(interp, stack, count);
+                    let array = interp.create_array(values);
+                    push_value(interp, stack, array);
+                }
+                Op::ArrayAppend => {
+                    let count = usize::from(decode_u16(chunk, pc));
+                    pc += 2;
+                    let values = take_literal_values(interp, stack, count);
+                    let array = stack.last().expect("stack underflow on ArrayAppend");
+                    interp.array_literal_append(array, values);
+                }
+                Op::NewObject => {
+                    let shape = &chunk.object_shapes[decode_u16(chunk, pc) as usize];
+                    pc += 2;
+                    let count = shape.props.len();
+                    assert!(stack.len() >= count, "stack underflow on NewObject");
+                    let object = interp.build_object_literal(shape, &stack[stack.len() - count..]);
+                    pop_operands(interp, stack, count);
+                    push_value(interp, stack, object);
+                }
+                Op::ObjectAppend => {
+                    let shape = &chunk.object_shapes[decode_u16(chunk, pc) as usize];
+                    pc += 2;
+                    let count = shape.props.len();
+                    assert!(stack.len() > count, "stack underflow on ObjectAppend");
+                    let base = stack.len() - count;
+                    let object = stack[base - 1].clone();
+                    interp.extend_object_literal(&object, shape, &stack[base..]);
+                    pop_operands(interp, stack, count);
+                }
+                Op::NewRegExp => {
+                    let template = &chunk.regexps[decode_u16(chunk, pc) as usize];
+                    pc += 2;
+                    let regexp = interp
+                        .alloc_regexp_literal(template.source.clone(), template.flags.clone());
+                    push_value(interp, stack, regexp);
+                }
+                Op::GetIterator => {
+                    let iterable = stack.pop().expect("stack underflow on GetIterator");
+                    let result = interp.get_iterator(&iterable);
+                    unroot_stack_value(interp, &iterable);
+                    match result {
+                        Ok(iterator) => push_value(interp, stack, iterator),
+                        Err(e) => break 'dispatch e,
+                    }
+                }
+                Op::ForInHead => {
+                    let value = stack.pop().expect("stack underflow on ForInHead");
+                    let result = interp.for_in_head_iterator(&value);
+                    unroot_stack_value(interp, &value);
+                    match result {
+                        Ok(enumerator) => push_value(interp, stack, enumerator),
+                        Err(e) => break 'dispatch e,
+                    }
+                }
+                Op::IterStep | Op::ForInStep => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let iterator = stack.last().expect("stack underflow on IterStep").clone();
+                    let step = if op == Op::IterStep {
+                        interp.iterator_step_value(&iterator)
+                    } else {
+                        match iterator.as_object_id() {
+                            Some(id) => interp.for_in_enumerator_step(id),
+                            None => Ok(None),
+                        }
+                    };
+                    match step {
+                        Ok(Some(value)) => push_value(interp, stack, value),
+                        Ok(None) => {
+                            pop_value(interp, stack, "stack underflow on IterStep");
+                            pc = (pc as i32 + offset) as usize;
+                        }
+                        Err(e) => break 'dispatch e,
+                    }
+                }
+                Op::IterClose => {
+                    let depth = usize::from(chunk.code[pc]);
+                    pc += 1;
+                    let index = stack
+                        .len()
+                        .checked_sub(1 + depth)
+                        .expect("stack underflow on IterClose");
+                    // The iterator and any pending value above it stay rooted
+                    // while `return()` runs.
+                    let iterator = stack[index].clone();
+                    if let Err(e) = interp.iterator_close_result(&iterator) {
+                        break 'dispatch e;
+                    }
+                    let mut held: SmallVec<[JsValue; 1]> = SmallVec::new();
+                    for _ in 0..depth {
+                        held.push(pop_value(interp, stack, "stack underflow on IterClose"));
+                    }
+                    pop_value(interp, stack, "stack underflow on IterClose");
+                    for value in held.into_iter().rev() {
+                        push_value(interp, stack, value);
+                    }
+                }
+                Op::IterCloseThrow => {
+                    let thrown = stack
+                        .last()
+                        .expect("stack underflow on IterCloseThrow")
+                        .clone();
+                    let iterator = stack[stack.len() - 2].clone();
+                    interp.iterator_close(&iterator, thrown.clone());
+                    pop_value(interp, stack, "stack underflow on IterCloseThrow");
+                    pop_value(interp, stack, "stack underflow on IterCloseThrow");
+                    break 'dispatch thrown;
+                }
+                Op::DropBelow => {
+                    let has_value = chunk.code[pc] != 0;
+                    let count = usize::from(chunk.code[pc + 1]);
+                    pc += 2;
+                    let held = if has_value {
+                        Some(pop_value(interp, stack, "stack underflow on DropBelow"))
                     } else {
                         None
                     };
-                let mut probe_hit = false;
-                if let Some(callee_id) = ic_callee_id {
-                    let slot = *interp.call_slot(site_id);
-                    if let CallIcSlot::Mono {
-                        callee_obj_id,
-                        callee_shape_id,
-                        ..
-                    } = slot
-                        && callee_id == callee_obj_id
-                        && let Some(obj_rc) = interp.get_object(callee_id)
-                        && obj_rc.borrow().shape_id == callee_shape_id
-                    {
-                        interp
-                            .call_ic_hit_count
-                            .set(interp.call_ic_hit_count.get() + 1);
-                        probe_hit = true;
+                    for _ in 0..count {
+                        pop_value(interp, stack, "stack underflow on DropBelow");
                     }
-                    if !probe_hit {
-                        interp
-                            .call_ic_slow_path_count
-                            .set(interp.call_ic_slow_path_count.get() + 1);
-                    }
-                }
-                // The operands stay on the operand stack (and in
-                // gc_bytecode_roots) for the complete nested invocation: the
-                // callee borrows its arguments straight from the stack and can
-                // execute arbitrary JS and hit any number of safepoints.
-                let result = if probe_hit {
-                    interp.call_function_ic_validated(&callee, &this_value, &stack[base + 2..])
-                } else {
-                    interp.call_function(&callee, &this_value, &stack[base + 2..])
-                };
-                // Record only on success to avoid caching error-paths.
-                if let Some(callee_id) = ic_callee_id
-                    && !probe_hit
-                    && matches!(result, Completion::Normal(_))
-                {
-                    let slot = *interp.call_slot(site_id);
-                    let new_slot = interp.classify_for_call_ic(callee_id);
-                    let next = match (slot, new_slot) {
-                        (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
-                        (_, None) => CallIcSlot::Empty,
-                        (CallIcSlot::Empty, Some(s)) => s,
-                        (
-                            CallIcSlot::Mono {
-                                callee_obj_id: prev,
-                                ..
-                            },
-                            Some(
-                                s @ CallIcSlot::Mono {
-                                    callee_obj_id: new, ..
-                                },
-                            ),
-                        ) if prev == new => s,
-                        (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
-                    };
-                    *interp.call_slot(site_id) = next;
-                }
-                pop_operands(interp, stack, argc + 2);
-                match result {
-                    Completion::Normal(value) | Completion::Return(value) => {
+                    if let Some(value) = held {
                         push_value(interp, stack, value);
                     }
-                    Completion::Empty => {
-                        push_value(interp, stack, JsValue::UNDEFINED);
-                    }
-                    abrupt => return abrupt,
                 }
-            }
-            Op::Construct => {
-                let argc = decode_u16(chunk, pc) as usize;
-                pc += 2;
-                let _site_id = CallSiteId(decode_u32(chunk, pc));
-                pc += 4;
-                assert!(stack.len() > argc, "stack underflow on construct operands");
-                let base = stack.len() - argc - 1;
-                let callee = stack[base].clone();
-                // The operands stay on the operand stack (and in
-                // gc_bytecode_roots) for the complete nested construction,
-                // mirroring Op::Call: construct_from_evaluated can run
-                // arbitrary JS (constructor body, field initializers) and hit
-                // any number of safepoints before returning.
-                let result = interp.construct_from_evaluated(&callee, &stack[base + 1..]);
-                pop_operands(interp, stack, argc + 1);
-                match result {
-                    Completion::Normal(value) | Completion::Return(value) => {
-                        push_value(interp, stack, value);
-                    }
-                    Completion::Empty => {
-                        push_value(interp, stack, JsValue::UNDEFINED);
-                    }
-                    abrupt => return abrupt,
-                }
-            }
-            Op::Add => binary_arm!(Op::Add),
-            Op::Sub => binary_arm!(Op::Sub),
-            Op::Mul => binary_arm!(Op::Mul),
-            Op::Div => binary_arm!(Op::Div),
-            Op::Mod => binary_arm!(Op::Mod),
-            Op::Pow => binary_arm!(Op::Pow),
-            Op::Eq => binary_arm!(Op::Eq),
-            Op::NotEq => binary_arm!(Op::NotEq),
-            Op::StrictEq => binary_arm!(Op::StrictEq),
-            Op::StrictNotEq => binary_arm!(Op::StrictNotEq),
-            Op::Lt => binary_arm!(Op::Lt),
-            Op::Gt => binary_arm!(Op::Gt),
-            Op::LtEq => binary_arm!(Op::LtEq),
-            Op::GtEq => binary_arm!(Op::GtEq),
-            Op::BitAnd => binary_arm!(Op::BitAnd),
-            Op::BitOr => binary_arm!(Op::BitOr),
-            Op::BitXor => binary_arm!(Op::BitXor),
-            Op::Shl => binary_arm!(Op::Shl),
-            Op::Shr => binary_arm!(Op::Shr),
-            Op::UShr => binary_arm!(Op::UShr),
-            Op::BinConst => {
-                let bop = Op::from_u8(chunk.code[pc]).expect("invalid binary op byte");
-                let Constant::Number(k) = chunk.constants[decode_u16(chunk, pc + 1) as usize]
-                else {
-                    unreachable!("BinConst constant is a Number")
-                };
-                pc += 3;
-                let top = stack.last_mut().expect("stack underflow on BinConst");
-                if let Some(l) = top.as_number() {
-                    *top = number_binop(bop, l, k);
-                } else {
-                    let l = stack.pop().expect("stack underflow on BinConst");
-                    match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
-                        Completion::Normal(v) => push_value(interp, stack, v),
-                        abrupt => return abrupt,
-                    }
-                }
-            }
-            Op::LocalBinConst => {
-                let idx = decode_u16(chunk, pc);
-                let slot = decode_u16(chunk, pc + 2);
-                let bop = Op::from_u8(chunk.code[pc + 4]).expect("invalid binary op byte");
-                let Constant::Number(k) = chunk.constants[decode_u16(chunk, pc + 5) as usize]
-                else {
-                    unreachable!("LocalBinConst constant is a Number")
-                };
-                pc += 7;
-                let name = &chunk.names[idx as usize];
-                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
-                let hit = with_local_hit(target, name, hint_slot, |v| match v.as_number() {
-                    Some(l) => Ok(number_binop(bop, l, k)),
-                    None => Err(v.clone()),
-                });
-                let operand = match hit {
-                    Some(Ok(result)) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_hits += 1;
-                        }
-                        stack.push(result);
-                        None
-                    }
-                    Some(Err(l)) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_hits += 1;
-                        }
-                        Some(l)
-                    }
-                    None => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_misses += 1;
-                        }
-                        match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
-                            Completion::Normal(v) => Some(v),
-                            abrupt => return abrupt,
-                        }
-                    }
-                };
-                if let Some(l) = operand {
-                    // As `LoadLocal` then `BinConst`: the loaded value is
-                    // rooted for the whole operation (an object operand's
-                    // `valueOf` may rebind the local and collect).
-                    root_stack_value(interp, &l);
-                    match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
-                        Completion::Normal(v) => push_value(interp, stack, v),
-                        abrupt => return abrupt,
-                    }
-                }
-            }
-            Op::CmpJumpIfFalse => {
-                let cmp = Op::from_u8(chunk.code[pc]).expect("invalid comparison byte");
-                let offset = decode_i16(chunk, pc + 1) as i32;
-                pc += 3;
-                let len = stack.len();
-                let taken = if len >= 2
-                    && let (Some(l), Some(r)) =
-                        (stack[len - 2].as_number(), stack[len - 1].as_number())
-                {
-                    stack.truncate(len - 2);
-                    !number_compare(cmp, l, r)
-                } else {
-                    let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
-                    let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
-                    match binary_slow(interp, binary_of_op(cmp), l, r) {
-                        Completion::Normal(v) => !interp.to_boolean_val(&v),
-                        abrupt => return abrupt,
-                    }
-                };
-                if taken {
-                    pc = (pc as i32 + offset) as usize;
-                }
-            }
-            Op::Neg | Op::Plus | Op::Not | Op::BitNot => {
-                let v = stack.pop().expect("stack underflow on unary");
-                let uop = match op {
-                    Op::Neg => UnaryOp::Minus,
-                    Op::Plus => UnaryOp::Plus,
-                    Op::Not => UnaryOp::Not,
-                    Op::BitNot => UnaryOp::BitNot,
-                    _ => unreachable!(),
-                };
-                let result = interp.eval_unary(uop, &v);
-                unroot_stack_value(interp, &v);
-                match result {
-                    Completion::Normal(r) => push_value(interp, stack, r),
-                    abrupt => return abrupt,
-                }
-            }
-            Op::EvalAst => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let super::chunk::AstNode::Expr(expr) = &chunk.ast[idx as usize] else {
-                    unreachable!("EvalAst operand names an expression node");
-                };
-                #[cfg(feature = "perf-counters")]
-                {
-                    interp.perf.ast_fallback_execs += 1;
-                }
-                // Operands already on the stack stay rooted in
-                // `gc_bytecode_roots` while the tree-walker runs.
-                match interp.eval_expr(expr, cur_env!()) {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
-                }
-            }
-            Op::ExecAst => {
-                let idx = decode_u16(chunk, pc);
-                let table = decode_u16(chunk, pc + 2);
-                pc += 4;
-                let super::chunk::AstNode::Stmt(stmt) = &chunk.ast[idx as usize] else {
-                    unreachable!("ExecAst operand names a statement node");
-                };
-                #[cfg(feature = "perf-counters")]
-                {
-                    interp.perf.ast_fallback_execs += 1;
-                }
-                match interp.exec_statement(stmt, cur_env!()) {
-                    Completion::Normal(_) | Completion::Empty => {}
-                    Completion::Break(label, value) => {
-                        match escape_target(chunk, table, false, label.as_deref()) {
-                            Some((target, depth)) => {
-                                unwind_scopes(interp, &mut scopes, envs_base, depth);
-                                pc = target;
+                Op::EndFinally => {
+                    let table = usize::from(decode_u16(chunk, pc));
+                    pc += 2;
+                    let kind = pop_value(interp, stack, "stack underflow on EndFinally kind");
+                    let value = pop_value(interp, stack, "stack underflow on EndFinally value");
+                    let kind = kind.as_number().expect("finalizer completion kind") as usize;
+                    match kind {
+                        0 => {}
+                        1 => break 'dispatch value,
+                        n => {
+                            let exit = chunk.finally_tables[table][n - 2];
+                            if exit.keep_value {
+                                push_value(interp, stack, value);
                             }
-                            None => return Completion::Break(label, value),
+                            pc = exit.target as usize;
                         }
                     }
-                    Completion::Continue(label, value) => {
-                        match escape_target(chunk, table, true, label.as_deref()) {
-                            Some((target, depth)) => {
-                                unwind_scopes(interp, &mut scopes, envs_base, depth);
-                                pc = target;
-                            }
-                            None => return Completion::Continue(label, value),
-                        }
-                    }
-                    abrupt => return abrupt,
                 }
-            }
-            Op::InitLexical => {
-                let idx = decode_u16(chunk, pc);
-                let kind = if chunk.code[pc + 2] == 0 {
-                    BindingKind::Let
-                } else {
-                    BindingKind::Const
-                };
-                let slot = decode_u16(chunk, pc + 3);
-                pc += 5;
-                let name = &chunk.names[idx as usize];
-                let value = pop_value(interp, stack, "stack underflow on InitLexical");
-                let binding = Binding {
-                    value,
-                    kind,
-                    initialized: true,
-                    deletable: false,
-                };
-                let mut scope = cur_env!().borrow_mut();
-                match scope.bindings.entry_at_mut(usize::from(slot)) {
-                    Some((atom, entry)) if atom.ptr_eq(name) => *entry = binding,
-                    _ => {
-                        scope.bindings.insert_atom(name, binding);
+                Op::BindHead => {
+                    let head = &chunk.head_bindings[usize::from(decode_u16(chunk, pc))];
+                    pc += 2;
+                    let value = stack.last().expect("stack underflow on BindHead").clone();
+                    let result = bind_head(interp, head, value, cur_env!());
+                    pop_value(interp, stack, "stack underflow on BindHead");
+                    match result {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        abrupt => bail!('dispatch, abrupt),
                     }
                 }
-            }
-            Op::Instanceof | Op::In => {
-                let r = stack.pop().expect("stack underflow on relational rhs");
-                let l = stack.pop().expect("stack underflow on relational lhs");
-                let result = if op == Op::Instanceof {
-                    interp.eval_instanceof(&l, &r)
-                } else {
-                    interp.eval_binary(BinaryOp::In, &l, &r)
-                };
-                unroot_stack_value(interp, &r);
-                unroot_stack_value(interp, &l);
-                match result {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
+                Op::CheckExit => {
+                    if let Some(code) = interp.pending_exit {
+                        return Completion::Exit(code);
+                    }
                 }
-            }
-            Op::Throw => {
-                let value = pop_value(interp, stack, "stack underflow on Throw");
-                return Completion::Throw(value);
-            }
-            Op::Typeof => {
-                let value = pop_value(interp, stack, "stack underflow on Typeof");
-                let result = interp.typeof_value(&value);
-                push_value(interp, stack, result);
-            }
-            Op::TypeofName => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let name = &chunk.names[idx as usize];
-                match interp.eval_typeof_identifier(name, cur_env!()) {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
-                }
-            }
-            Op::UpdateProp => {
-                let idx = decode_u16(chunk, pc);
-                let mode = chunk.code[pc + 2];
-                pc += 3;
-                let (update, prefix, _) = update_mode(mode);
-                let name = &chunk.names[idx as usize];
-                let base = stack.pop().expect("stack underflow on UpdateProp");
-                let strict = frame_env.borrow().strict;
-                let result = member_update_named(interp, &base, name, update, prefix, strict);
-                unroot_stack_value(interp, &base);
-                match result {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
-                }
-            }
-            Op::UpdateElement => {
-                let mode = chunk.code[pc];
-                pc += 1;
-                let (update, prefix, _) = update_mode(mode);
-                let key = stack.pop().expect("stack underflow on UpdateElement key");
-                let base = stack.pop().expect("stack underflow on UpdateElement base");
-                let strict = frame_env.borrow().strict;
-                let result = member_update_computed(interp, &base, &key, update, prefix, strict);
-                unroot_stack_value(interp, &key);
-                unroot_stack_value(interp, &base);
-                match result {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => return abrupt,
-                }
-            }
-            Op::Pop => {
-                pop_value(interp, stack, "stack underflow on Pop");
-            }
-            Op::SetCompletion => {
-                let value = pop_value(interp, stack, "stack underflow on SetCompletion");
-                if let Some(previous) = completion_value.replace(value.clone()) {
-                    unroot_stack_value(interp, &previous);
-                }
-                root_stack_value(interp, &value);
-            }
-            Op::Jump => {
-                let offset = decode_i16(chunk, pc) as i32;
-                if offset < 0 {
-                    safepoint_with_empty_stacks(interp, stack, refs, "loop backedge");
-                }
-                pc = (pc as i32 + 2 + offset) as usize;
-            }
-            Op::JumpIfFalse => {
-                let offset = decode_i16(chunk, pc) as i32;
-                pc += 2;
-                let v = pop_value(interp, stack, "stack underflow on JumpIfFalse");
-                if !interp.to_boolean_val(&v) {
-                    pc = (pc as i32 + offset) as usize;
-                }
-            }
-            Op::JumpIfTrue => {
-                let offset = decode_i16(chunk, pc) as i32;
-                pc += 2;
-                let v = pop_value(interp, stack, "stack underflow on JumpIfTrue");
-                if interp.to_boolean_val(&v) {
-                    pc = (pc as i32 + offset) as usize;
-                }
-            }
-            Op::JumpIfTruthyKeep => {
-                let offset = decode_i16(chunk, pc) as i32;
-                pc += 2;
-                let v = stack.last().expect("stack underflow on JumpIfTruthyKeep");
-                if interp.to_boolean_val(v) {
-                    pc = (pc as i32 + offset) as usize;
-                }
-            }
-            Op::JumpIfFalsyKeep => {
-                let offset = decode_i16(chunk, pc) as i32;
-                pc += 2;
-                let v = stack.last().expect("stack underflow on JumpIfFalsyKeep");
-                if !interp.to_boolean_val(v) {
-                    pc = (pc as i32 + offset) as usize;
-                }
-            }
-            Op::DupN => {
-                let count = chunk.code[pc] as usize;
-                pc += 1;
-                let start = stack
-                    .len()
-                    .checked_sub(count)
-                    .expect("stack underflow on DupN");
-                for i in 0..count {
-                    let v = stack[start + i].clone();
-                    push_value(interp, stack, v);
-                }
-            }
-            Op::ToPrimitiveKey => {
-                // sec-getvalue: the base-nullish check runs before ToPropertyKey's
-                // ToPrimitive side effect, so peek the base (one below the key,
-                // don't pop it) and check it first, without touching the key.
-                let base_index = stack
-                    .len()
-                    .checked_sub(2)
-                    .expect("stack underflow on ToPrimitiveKey base");
-                if stack[base_index].is_nullish() {
-                    let base = stack[base_index].clone();
-                    return Completion::Throw(
-                        interp.create_type_error(&format!("Cannot read properties of {base}")),
+                Op::Safepoint => {
+                    safepoint_with_empty_stacks(
+                        interp,
+                        stack,
+                        usize::from(chunk.persistent_slots),
+                        refs,
+                        "statement boundary",
                     );
                 }
-                let gc_frame = root_operand_stack(interp, stack);
-                let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
-                let result = interp.to_primitive(&key, "string");
-                unroot_stack_value(interp, &key);
-                interp.gc_unroot_frame(gc_frame);
-                match result {
-                    Ok(v) => push_value(interp, stack, v),
-                    Err(e) => return Completion::Throw(e),
-                }
             }
-            Op::JumpIfNotNullishKeep => {
-                let offset = decode_i16(chunk, pc) as i32;
-                pc += 2;
-                let v = stack
-                    .last()
-                    .expect("stack underflow on JumpIfNotNullishKeep");
-                if !v.is_nullish() {
-                    pc = (pc as i32 + offset) as usize;
-                }
-            }
-            Op::PushEnv => {
-                let scope = &chunk.block_scopes[decode_u16(chunk, pc) as usize];
-                pc += 2;
-                let parent = cur_env!().clone();
-                let block_env = interp.acquire_block_environment(
-                    parent,
-                    scope.functions.len() + scope.lexicals.len(),
-                );
-                // Reachable from the GC before any closure is built into it.
-                interp.call_stack_envs.push(block_env.clone());
-                for stmt in &scope.functions {
-                    interp.hoist_block_function_declaration(stmt, &block_env);
-                }
-                if !scope.lexicals.is_empty() {
-                    let mut declared = block_env.borrow_mut();
-                    for &(name_idx, is_const) in &scope.lexicals {
-                        let kind = if is_const {
-                            BindingKind::Const
-                        } else {
-                            BindingKind::Let
-                        };
-                        declared.declare_atom(&chunk.names[name_idx as usize], kind);
-                    }
-                }
-                scopes.push(block_env);
-                debug_assert_eq!(interp.call_stack_envs.len(), envs_base + scopes.len());
-            }
-            Op::PopEnv => {
-                let count = usize::from(chunk.code[pc]);
-                pc += 1;
-                let depth = scopes.len() - count;
-                unwind_scopes(interp, &mut scopes, envs_base, depth);
-            }
-            Op::CopyIterEnv => {
-                let current = scopes
-                    .last()
-                    .expect("CopyIterEnv inside a block environment");
-                // Only `scopes` and its `call_stack_envs` mirror own it: no
-                // closure took this iteration's environment, so a fresh copy
-                // could not be told apart from it.
-                if std::rc::Rc::strong_count(current) <= 2 {
-                    continue;
-                }
-                let (parent, bindings) = {
-                    let source = current.borrow();
-                    (
-                        source
-                            .parent
-                            .clone()
-                            .expect("block environments have a parent"),
-                        source.bindings.capacity(),
-                    )
-                };
-                let fresh = interp.acquire_block_environment(parent, bindings);
-                {
-                    let source = current.borrow();
-                    let mut copy = fresh.borrow_mut();
-                    let mut i = 0;
-                    while let Some((name, binding)) = source.bindings.entry_at(i) {
-                        copy.bindings.push_unique(
-                            name.clone(),
-                            Binding::new(binding.value.clone(), binding.kind, true),
-                        );
-                        i += 1;
-                    }
-                }
-                let top = scopes.len() - 1;
-                interp.call_stack_envs[envs_base + top] = fresh.clone();
-                let replaced = std::mem::replace(&mut scopes[top], fresh);
-                interp.recycle_block_environment(replaced);
-            }
-            Op::MakeClosure => {
-                let idx = decode_u16(chunk, pc);
-                let is_method = chunk.code[pc + 2] != 0;
-                pc += 3;
-                let template = &chunk.functions[idx as usize];
-                let closure = interp.make_closure(
-                    &template.spec(),
-                    cur_env!(),
-                    is_method,
-                    template.inferred_name.as_ref(),
-                );
-                push_value(interp, stack, closure);
-            }
-            Op::NewArrayConst => {
-                let idx = decode_u16(chunk, pc);
-                pc += 2;
-                let array = match &chunk.array_templates[idx as usize] {
-                    ArrayTemplate::Dense(values) => interp.create_array(values.clone()),
-                    ArrayTemplate::Holey(items) => interp.create_array_with_holes(items.clone()),
-                };
-                push_value(interp, stack, array);
-            }
-            Op::NewArray => {
-                let count = usize::from(decode_u16(chunk, pc));
-                pc += 2;
-                let values = take_literal_values(interp, stack, count);
-                let array = interp.create_array(values);
-                push_value(interp, stack, array);
-            }
-            Op::ArrayAppend => {
-                let count = usize::from(decode_u16(chunk, pc));
-                pc += 2;
-                let values = take_literal_values(interp, stack, count);
-                let array = stack.last().expect("stack underflow on ArrayAppend");
-                interp.array_literal_append(array, values);
-            }
-            Op::NewObject => {
-                let shape = &chunk.object_shapes[decode_u16(chunk, pc) as usize];
-                pc += 2;
-                let count = shape.props.len();
-                assert!(stack.len() >= count, "stack underflow on NewObject");
-                let object = interp.build_object_literal(shape, &stack[stack.len() - count..]);
-                pop_operands(interp, stack, count);
-                push_value(interp, stack, object);
-            }
-            Op::ObjectAppend => {
-                let shape = &chunk.object_shapes[decode_u16(chunk, pc) as usize];
-                pc += 2;
-                let count = shape.props.len();
-                assert!(stack.len() > count, "stack underflow on ObjectAppend");
-                let base = stack.len() - count;
-                let object = stack[base - 1].clone();
-                interp.extend_object_literal(&object, shape, &stack[base..]);
-                pop_operands(interp, stack, count);
-            }
-            Op::NewRegExp => {
-                let template = &chunk.regexps[decode_u16(chunk, pc) as usize];
-                pc += 2;
-                let regexp =
-                    interp.alloc_regexp_literal(template.source.clone(), template.flags.clone());
-                push_value(interp, stack, regexp);
-            }
-            Op::Safepoint => {
-                safepoint_with_empty_stacks(interp, stack, refs, "statement boundary");
-            }
+        };
+        // A `Throw` from an op of the protected range resumes at its handler
+        // (the innermost entry, which the compiler lists first): the operand
+        // stack and block environments are cut back to the handler's depth and
+        // the thrown value is pushed. `pc - 1` lies inside the faulting op.
+        let at = (pc - 1) as u32;
+        let Some(handler) = chunk.handlers.iter().find(|h| h.start <= at && at < h.end) else {
+            return Completion::Throw(thrown);
+        };
+        if handler.checks_exit
+            && let Some(code) = interp.pending_exit
+        {
+            return Completion::Exit(code);
         }
+        stack.truncate(usize::from(handler.stack_height));
+        let kept_roots = roots_base + stack.iter().filter(|v| v.as_object_id().is_some()).count();
+        if interp.gc_bytecode_roots.len() > kept_roots {
+            interp.gc_bytecode_roots.truncate(kept_roots);
+        }
+        refs.clear();
+        unwind_scopes(
+            interp,
+            &mut scopes,
+            envs_base,
+            usize::from(handler.scope_depth),
+        );
+        push_value(interp, stack, thrown);
+        pc = handler.target as usize;
     }
 }

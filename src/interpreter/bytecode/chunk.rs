@@ -1,5 +1,6 @@
-use crate::ast::{Body, Expression, FunctionLiteralInfo, SourceText, Statement};
+use crate::ast::{Body, Expression, FunctionLiteralInfo, Pattern, SourceText, Statement};
 use crate::interpreter::eval::{ClosureSpec, LiteralPropertySpec};
+use crate::interpreter::types::BindingKind;
 use crate::interpreter::{Atom, GlobalHint};
 use crate::types::{JsBigInt, JsPropertyKey, JsString, JsValue};
 use std::rc::Rc;
@@ -40,6 +41,9 @@ pub(crate) struct EscapeEntry {
     /// Block environments open at `target`; the VM unwinds to this depth
     /// before resuming there.
     pub(crate) scope_depth: u16,
+    /// Persistent operand-stack slots (for-in enumerators, completion
+    /// records) live at `target`; the VM drops any above it.
+    pub(crate) stack_height: u16,
 }
 
 /// What `PushEnv` instantiates in a fresh block environment
@@ -52,6 +56,9 @@ pub(crate) struct BlockScope {
     /// `let`/`const`/class bindings entering their TDZ: `names` index and
     /// whether the binding is immutable.
     pub(crate) lexicals: Vec<(u16, bool)>,
+    /// The environment is a `catch (identifier)` parameter scope, which B.3.4
+    /// lets a `var` of the same name redeclare.
+    pub(crate) simple_catch: bool,
 }
 
 /// A local-op slot operand with this bit set names a binding of a block
@@ -133,6 +140,47 @@ pub(crate) struct ObjectShape {
 /// `ExecAst` operand meaning "no break/continue can leave this statement".
 pub(crate) const NO_ESCAPE_TABLE: u16 = u16::MAX;
 
+/// `ExecAst` flag bit: the statement runs inside a `try` block (or a `catch`
+/// whose `finally` still has to run), so a call in tail position inside it
+/// must not become a tail call (sec-static-semantics-hascallintailposition).
+pub(crate) const EXEC_NO_TAIL_CALL: u8 = 1;
+
+/// A protected range of a chunk: a `Throw` raised by an op in
+/// `[start, end)` resumes at `target` with the operand stack cut back to
+/// `stack_height` values and the block environments to `scope_depth`, the
+/// thrown value pushed on top. Entries are ordered innermost first.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Handler {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) target: u32,
+    pub(crate) stack_height: u16,
+    pub(crate) scope_depth: u16,
+    /// A `try` handler: a latched `__host_exit` makes the exit uncatchable
+    /// instead (the tree-walker's `exec_try` does the same).
+    pub(crate) checks_exit: bool,
+}
+
+/// Where `EndFinally` resumes for a pending break/continue/return the
+/// finalizer was entered with.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FinallyExit {
+    pub(crate) target: u32,
+    /// The pending completion's value (a return value) goes back on the
+    /// operand stack at `target`.
+    pub(crate) keep_value: bool,
+}
+
+/// How `BindHead` stores an iteration value in a for-in/for-of head the
+/// native binding ops do not cover (sec-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset).
+#[derive(Debug, Clone)]
+pub(crate) enum HeadBinding {
+    /// `let`/`const`/`var` with a destructuring pattern.
+    Declare { pattern: Pattern, kind: BindingKind },
+    /// An assignment target pattern: `[a, b]`, `{x: o.p}`, `o.p`.
+    Assign { pattern: Pattern },
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
@@ -157,6 +205,12 @@ pub(crate) struct Chunk {
     /// The body declares functions or lexical bindings that the tree-walker's
     /// declaration instantiation must establish before the chunk runs.
     pub(crate) needs_instantiation: bool,
+    pub(crate) handlers: Vec<Handler>,
+    pub(crate) finally_tables: Vec<Vec<FinallyExit>>,
+    pub(crate) head_bindings: Vec<HeadBinding>,
+    /// Most operand-stack slots the chunk keeps live across statement
+    /// boundaries (an iterator, a pending completion record).
+    pub(crate) persistent_slots: u16,
     /// Why each fallback node could not compile natively, one entry per node.
     #[cfg_attr(not(feature = "perf-counters"), allow(dead_code))]
     pub(crate) fallback_reasons: Vec<&'static str>,
