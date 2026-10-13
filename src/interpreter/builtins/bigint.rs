@@ -310,6 +310,8 @@ impl Interpreter {
     }
 }
 
+use num_bigint::Sign;
+
 const RADIX_DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
 /// BigInt::toString for a Number-sized value (`Number.prototype.toString`'s
@@ -331,9 +333,7 @@ pub(crate) fn bigint_to_js_string(n: &num_bigint::BigInt, radix: u32) -> Option<
     } else {
         bits / 6
     };
-    if min_digits.saturating_add(u64::from(n.sign() == num_bigint::Sign::Minus))
-        > MAX_STRING_LENGTH as u64
-    {
+    if min_digits.saturating_add(u64::from(n.sign() == Sign::Minus)) > MAX_STRING_LENGTH as u64 {
         return None;
     }
     let units = bigint_radix_units(n, radix);
@@ -341,7 +341,6 @@ pub(crate) fn bigint_to_js_string(n: &num_bigint::BigInt, radix: u32) -> Option<
 }
 
 fn bigint_radix_units(n: &num_bigint::BigInt, radix: u32) -> Vec<u16> {
-    use num_bigint::Sign;
     let negative = match n.sign() {
         Sign::NoSign => return vec![u16::from(b'0')],
         Sign::Minus => true,
