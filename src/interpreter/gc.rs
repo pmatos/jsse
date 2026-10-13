@@ -516,6 +516,9 @@ impl Interpreter {
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut roots);
         }
+        if let Some((value, _)) = &self.raw_iter_step {
+            Self::collect_value_roots(value, &mut roots);
+        }
         for disposal in self.scheduler.iter_async_disposals() {
             disposal.for_each_value(|v| Self::collect_value_roots(v, &mut roots));
         }

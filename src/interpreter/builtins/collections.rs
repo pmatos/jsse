@@ -73,6 +73,97 @@ fn canonicalize_key(key: JsValue) -> JsValue {
 }
 
 impl Interpreter {
+    /// Advances a Map iterator: `%MapIteratorPrototype%.next` (§24.1.5.2.1)
+    /// minus the iterator-result object. `Ok(None)` is the exhausted result.
+    pub(crate) fn map_iterator_step(
+        &mut self,
+        iter_id: u64,
+    ) -> Result<Option<JsValue>, Completion> {
+        let state =
+            self.get_object(iter_id)
+                .and_then(|iter| match iter.borrow().iterator_state() {
+                    Some(IteratorState::MapIterator {
+                        map_id,
+                        index,
+                        kind,
+                        done,
+                    }) => Some((iter.clone(), *map_id, *index, *kind, *done)),
+                    _ => None,
+                });
+        let Some((iter, map_id, mut index, kind, done)) = state else {
+            return Err(Completion::Throw(self.create_type_error(
+                "Map Iterator.prototype.next requires a Map Iterator",
+            )));
+        };
+        if done {
+            return Ok(None);
+        }
+        // Find the next live entry under a borrow; cloning the whole entry
+        // Vec per step made iteration quadratic.
+        let next = self
+            .get_object(map_id)
+            .and_then(|map_obj| next_live_entry(&map_obj, JsObjectData::map_data, &mut index));
+        let value = next.map(|(key, value)| match kind {
+            IteratorKind::Key => key,
+            IteratorKind::Value => value,
+            IteratorKind::KeyValue => self.create_array(vec![key, value]),
+        });
+        if let Some(IteratorState::MapIterator {
+            index: stored,
+            done,
+            ..
+        }) = iter.borrow_mut_untracked().iterator_state_mut()
+        {
+            *stored = index;
+            *done = value.is_none();
+        }
+        Ok(value)
+    }
+
+    /// Advances a Set iterator: `%SetIteratorPrototype%.next` (§24.2.5.2.1)
+    /// minus the iterator-result object.
+    pub(crate) fn set_iterator_step(
+        &mut self,
+        iter_id: u64,
+    ) -> Result<Option<JsValue>, Completion> {
+        let state =
+            self.get_object(iter_id)
+                .and_then(|iter| match iter.borrow().iterator_state() {
+                    Some(IteratorState::SetIterator {
+                        set_id,
+                        index,
+                        kind,
+                        done,
+                    }) => Some((iter.clone(), *set_id, *index, *kind, *done)),
+                    _ => None,
+                });
+        let Some((iter, set_id, mut index, kind, done)) = state else {
+            return Err(Completion::Throw(self.create_type_error(
+                "Set Iterator.prototype.next requires a Set Iterator",
+            )));
+        };
+        if done {
+            return Ok(None);
+        }
+        let next = self
+            .get_object(set_id)
+            .and_then(|set_obj| next_live_entry(&set_obj, JsObjectData::set_data, &mut index));
+        let value = next.map(|entry| match kind {
+            IteratorKind::Value | IteratorKind::Key => entry,
+            IteratorKind::KeyValue => self.create_array(vec![entry.clone(), entry]),
+        });
+        if let Some(IteratorState::SetIterator {
+            index: stored,
+            done,
+            ..
+        }) = iter.borrow_mut_untracked().iterator_state_mut()
+        {
+            *stored = index;
+            *done = value.is_none();
+        }
+        Ok(value)
+    }
+
     pub(crate) fn setup_map_prototype(&mut self) {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
@@ -90,65 +181,24 @@ impl Interpreter {
 
         self.define_to_string_tag(map_iter_proto_id, "Map Iterator");
 
-        self.define_method(map_iter_proto_id, "next", 0, |interp, this, _args| {
-            if let Some(o) = (this).as_object_id()
-                && let Some(obj) = interp.get_object(o)
-            {
-                let state = obj.borrow().iterator_state().cloned();
-                if let Some(IteratorState::MapIterator {
-                    map_id,
-                    mut index,
-                    kind,
-                    done,
-                }) = state
-                {
-                    if done {
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
-                    if let Some(map_obj) = interp.get_object(map_id) {
-                        // Find the next live entry under a borrow; cloning the
-                        // whole entry Vec per step made iteration quadratic.
-                        let next = next_live_entry(&map_obj, JsObjectData::map_data, &mut index);
-                        if let Some((key, value)) = next {
-                            let result = match kind {
-                                IteratorKind::Key => key,
-                                IteratorKind::Value => value,
-                                IteratorKind::KeyValue => interp.create_array(vec![key, value]),
-                            };
-                            obj.borrow_mut_untracked().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::MapIterator {
-                                        map_id,
-                                        index,
-                                        kind,
-                                        done: false,
-                                    },
-                                );
-                            return Completion::Normal(
-                                interp.create_iter_result_object(result, false),
-                            );
-                        }
-                    }
-                    obj.borrow_mut_untracked().kind =
-                        crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::MapIterator {
-                                map_id,
-                                index,
-                                kind,
-                                done: true,
-                            },
-                        );
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+        let map_next = self.define_method(map_iter_proto_id, "next", 0, |interp, this, _args| {
+            let step = match this.as_object_id() {
+                Some(id) => interp.map_iterator_step(id),
+                None => Err(Completion::Throw(interp.create_type_error(
+                    "Map Iterator.prototype.next requires a Map Iterator",
+                ))),
+            };
+            match step {
+                Ok(Some(value)) => {
+                    Completion::Normal(interp.create_iter_result_object(value, false))
                 }
+                Ok(None) => {
+                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
+                }
+                Err(completion) => completion,
             }
-            let err =
-                interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
-            Completion::Throw(err)
         });
+        self.realm_mut().iterator_next_intrinsics.map = map_next.as_object_id();
 
         if let Some(key) = self.get_symbol_iterator_key() {
             let iter_self_fn = self.create_function(JsFunction::native(
@@ -469,17 +519,9 @@ impl Interpreter {
 
                     // Iterate
                     loop {
-                        let next = match interp.iterator_step(&iterator) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let next = match next {
-                            Some(v) => v,
-                            None => break,
-                        };
-
-                        let value = match interp.iterator_value(&next) {
-                            Ok(v) => v,
+                        let value = match interp.iterator_step_value(&iterator) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
                             Err(e) => return Completion::Throw(e),
                         };
 
@@ -628,13 +670,9 @@ impl Interpreter {
                         // 4. Iterate and group
                         let mut k: u64 = 0;
                         loop {
-                            let next = match interp.iterator_step(&iterator) {
+                            let value = match interp.iterator_step_value(&iterator) {
                                 Ok(Some(v)) => v,
                                 Ok(None) => break,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            let value = match interp.iterator_value(&next) {
-                                Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
 
@@ -734,66 +772,24 @@ impl Interpreter {
 
         self.define_to_string_tag(set_iter_proto_id, "Set Iterator");
 
-        self.define_method(set_iter_proto_id, "next", 0, |interp, this, _args| {
-            if let Some(o) = (this).as_object_id()
-                && let Some(obj) = interp.get_object(o)
-            {
-                let state = obj.borrow().iterator_state().cloned();
-                if let Some(IteratorState::SetIterator {
-                    set_id,
-                    mut index,
-                    kind,
-                    done,
-                }) = state
-                {
-                    if done {
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
-                    if let Some(set_obj) = interp.get_object(set_id) {
-                        // Find the next live entry under a borrow; cloning the
-                        // whole entry Vec per step made iteration quadratic.
-                        let next = next_live_entry(&set_obj, JsObjectData::set_data, &mut index);
-                        if let Some(val) = next {
-                            let result = match kind {
-                                IteratorKind::Value | IteratorKind::Key => val,
-                                IteratorKind::KeyValue => {
-                                    interp.create_array(vec![val.clone(), val])
-                                }
-                            };
-                            obj.borrow_mut_untracked().kind =
-                                crate::interpreter::types::ObjectKind::Iterator(
-                                    IteratorState::SetIterator {
-                                        set_id,
-                                        index,
-                                        kind,
-                                        done: false,
-                                    },
-                                );
-                            return Completion::Normal(
-                                interp.create_iter_result_object(result, false),
-                            );
-                        }
-                    }
-                    obj.borrow_mut_untracked().kind =
-                        crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::SetIterator {
-                                set_id,
-                                index,
-                                kind,
-                                done: true,
-                            },
-                        );
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+        let set_next = self.define_method(set_iter_proto_id, "next", 0, |interp, this, _args| {
+            let step = match this.as_object_id() {
+                Some(id) => interp.set_iterator_step(id),
+                None => Err(Completion::Throw(interp.create_type_error(
+                    "Set Iterator.prototype.next requires a Set Iterator",
+                ))),
+            };
+            match step {
+                Ok(Some(value)) => {
+                    Completion::Normal(interp.create_iter_result_object(value, false))
                 }
+                Ok(None) => {
+                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
+                }
+                Err(completion) => completion,
             }
-            let err =
-                interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
-            Completion::Throw(err)
         });
+        self.realm_mut().iterator_next_intrinsics.set = set_next.as_object_id();
 
         if let Some(key) = self.get_symbol_iterator_key() {
             let iter_self_fn = self.create_function(JsFunction::native(
@@ -1413,68 +1409,17 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let Some(io) = iterable.as_object_id() {
-                            let v = interp.get_property_on_id(io, key);
-                            if v.is_undefined() {
-                                JsValue::UNDEFINED
-                            } else {
-                                v
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
                     interp.gc_root_value(&iterator);
 
                     loop {
-                        let next_fn = if let Some(io) = iterator.as_object_id() {
-                            interp.get_property_on_id(io, "next")
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-
-                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-
-                        // Use getter-aware property access for done/value
-                        let done = if let Some(ro) = next_result.as_object_id() {
-                            match interp.get_object_property(ro, "done", &next_result) {
-                                Completion::Normal(v) => interp.to_boolean_val(&v),
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            }
-                        } else {
-                            false
-                        };
-                        if done {
-                            break;
-                        }
-                        // Per IteratorStepValue, if accessing .value throws, the error
-                        // propagates directly without closing the iterator.
-                        let value = if let Some(ro) = next_result.as_object_id() {
-                            match interp.get_object_property(ro, "value", &next_result) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
+                        let value = match interp.iterator_step_value(&iterator) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(e) => return Completion::Throw(e),
                         };
 
                         match interp.call_function(&adder, &this_val, &[value]) {

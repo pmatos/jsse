@@ -4306,9 +4306,8 @@ impl Interpreter {
                 None => {
                     // Elision — skip one iterator position
                     if !done {
-                        match self.iterator_step(&iterator) {
-                            Ok(None) => done = true,
-                            Ok(Some(_)) => {}
+                        match self.iterator_skip(&iterator) {
+                            Ok(exhausted) => done = exhausted,
                             Err(e) => {
                                 done = true;
                                 error = Some(e);
@@ -4336,19 +4335,13 @@ impl Interpreter {
                         let mut rest = Vec::new();
                         if !done {
                             loop {
-                                match interp.iterator_step(&iterator) {
-                                    Ok(Some(result)) => match interp.iterator_value(&result) {
-                                        Ok(v) => {
-                                            // Later steps run user code; the
-                                            // Vec is invisible to the GC.
-                                            interp.gc_root_value(&v);
-                                            rest.push(v);
-                                        }
-                                        Err(e) => {
-                                            done = true;
-                                            return Completion::Throw(e);
-                                        }
-                                    },
+                                match interp.iterator_step_value(&iterator) {
+                                    Ok(Some(v)) => {
+                                        // Later steps run user code; the
+                                        // Vec is invisible to the GC.
+                                        interp.gc_root_value(&v);
+                                        rest.push(v);
+                                    }
                                     Ok(None) => {
                                         done = true;
                                         break;
@@ -4398,14 +4391,8 @@ impl Interpreter {
                         let item = if done {
                             JsValue::UNDEFINED
                         } else {
-                            match interp.iterator_step(&iterator) {
-                                Ok(Some(result)) => match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        done = true;
-                                        return Completion::Throw(e);
-                                    }
-                                },
+                            match interp.iterator_step_value(&iterator) {
+                                Ok(Some(v)) => v,
                                 Ok(None) => {
                                     done = true;
                                     JsValue::UNDEFINED
@@ -9127,58 +9114,74 @@ impl Interpreter {
                     // For `for await`, use the presence of a private temp binding to
                     // distinguish first entry from resume. The fulfilled value may
                     // itself be `undefined`, so no JavaScript value can be a sentinel.
-                    let step_result = if is_await {
-                        let await_tmp = format!("{}__await", iter_var);
-                        let cached = func_env
-                            .borrow_mut()
-                            .bindings
-                            .remove(&await_tmp)
-                            .map(|binding| binding.value);
-                        if let Some(v) = cached {
-                            v
-                        } else {
-                            // First entry — call iterator_next, then suspend for await
-                            let iterator = func_env
-                                .borrow()
-                                .get(iter_var)
-                                .unwrap_or(JsValue::UNDEFINED);
-                            let raw_result = match self.iterator_next(&iterator) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    for_of_protocol_failure = Some(iter_var.clone());
-                                    pending_exception = Some(e);
-                                    continue;
+                    let step: Option<JsValue> = if is_await {
+                        let step_result = {
+                            let await_tmp = format!("{}__await", iter_var);
+                            let cached = func_env
+                                .borrow_mut()
+                                .bindings
+                                .remove(&await_tmp)
+                                .map(|binding| binding.value);
+                            if let Some(v) = cached {
+                                v
+                            } else {
+                                // First entry — call iterator_next, then suspend for await
+                                let iterator = func_env
+                                    .borrow()
+                                    .get(iter_var)
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                let raw_result = match self.iterator_next(&iterator) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        for_of_protocol_failure = Some(iter_var.clone());
+                                        pending_exception = Some(e);
+                                        continue;
+                                    }
+                                };
+                                if !func_env.borrow().bindings.contains_key(&await_tmp) {
+                                    func_env.borrow_mut().declare(&await_tmp, BindingKind::Var);
                                 }
-                            };
-                            if !func_env.borrow().bindings.contains_key(&await_tmp) {
-                                func_env.borrow_mut().declare(&await_tmp, BindingKind::Var);
+                                use crate::interpreter::generator_transform::{
+                                    SentValueBinding, SentValueBindingKind,
+                                };
+                                let binding = Some(SentValueBinding {
+                                    kind: SentValueBindingKind::Variable(await_tmp),
+                                });
+                                self.async_fn_suspend_at_await(
+                                    async_id,
+                                    current_id, // resume to same ForOfHead state
+                                    &mut try_stack,
+                                    binding,
+                                    pending_for_of_unwind.take(),
+                                    &raw_result,
+                                    &mut for_of_stack,
+                                    &mut scope_stack,
+                                );
+                                self.in_state_machine = saved_in_state_machine;
+                                return Completion::Normal(JsValue::UNDEFINED);
                             }
-                            use crate::interpreter::generator_transform::{
-                                SentValueBinding, SentValueBindingKind,
-                            };
-                            let binding = Some(SentValueBinding {
-                                kind: SentValueBindingKind::Variable(await_tmp),
-                            });
-                            self.async_fn_suspend_at_await(
-                                async_id,
-                                current_id, // resume to same ForOfHead state
-                                &mut try_stack,
-                                binding,
-                                pending_for_of_unwind.take(),
-                                &raw_result,
-                                &mut for_of_stack,
-                                &mut scope_stack,
-                            );
-                            self.in_state_machine = saved_in_state_machine;
-                            return Completion::Normal(JsValue::UNDEFINED);
+                        };
+                        if !step_result.is_object() {
+                            for_of_protocol_failure = Some(iter_var.clone());
+                            pending_exception =
+                                Some(self.create_type_error("Iterator result is not an object"));
+                            continue;
+                        }
+                        match self.iterator_result_value(&step_result) {
+                            Ok(step) => step,
+                            Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
+                                pending_exception = Some(e);
+                                continue;
+                            }
                         }
                     } else {
                         let iterator = func_env
                             .borrow()
                             .get(iter_var)
                             .unwrap_or(JsValue::UNDEFINED);
-                        match self.iterator_next(&iterator) {
-                            Ok(v) => v,
+                        match self.iterator_step_value(&iterator) {
+                            Ok(step) => step,
                             Err(e) => {
                                 for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
@@ -9186,20 +9189,7 @@ impl Interpreter {
                             }
                         }
                     };
-                    if is_await && !step_result.is_object() {
-                        for_of_protocol_failure = Some(iter_var.clone());
-                        pending_exception =
-                            Some(self.create_type_error("Iterator result is not an object"));
-                        continue;
-                    }
-                    let done = match self.iterator_complete(&step_result) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            for_of_protocol_failure = Some(iter_var.clone());
-                            pending_exception = Some(e);
-                            continue;
-                        }
-                    };
+                    let done = step.is_none();
                     if done {
                         let iterator = func_env
                             .borrow()
@@ -9209,13 +9199,8 @@ impl Interpreter {
                         for_of_stack.remove(loop_pos);
                         current_id = after_state;
                     } else {
-                        let value = match self.iterator_value(&step_result) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                for_of_protocol_failure = Some(iter_var.clone());
-                                pending_exception = Some(e);
-                                continue;
-                            }
+                        let Some(value) = step else {
+                            unreachable!("a step that is not done carries a value")
                         };
                         let needs_iter_env = Self::for_of_head_lexical(left).is_some();
                         let outer_env = for_of_stack[loop_pos].outer_env.clone();
@@ -9317,15 +9302,8 @@ impl Interpreter {
                                     .borrow()
                                     .get(iter_var)
                                     .unwrap_or(JsValue::UNDEFINED);
-                                match self.iterator_step(&iterator) {
-                                    Ok(Some(result)) => match self.iterator_value(&result) {
-                                        Ok(v) => v,
-                                        Err(e) => {
-                                            for_of_protocol_failure = Some(iter_var.clone());
-                                            pending_exception = Some(e);
-                                            continue;
-                                        }
-                                    },
+                                match self.iterator_step_value(&iterator) {
+                                    Ok(Some(v)) => v,
                                     Ok(None) => {
                                         self.forget_for_of_iterator(&iterator);
                                         for_of_stack.remove(pos);
@@ -9358,16 +9336,8 @@ impl Interpreter {
                                 let mut rest = Vec::new();
                                 let mut drain_failed = false;
                                 loop {
-                                    match self.iterator_step(&iterator) {
-                                        Ok(Some(result)) => match self.iterator_value(&result) {
-                                            Ok(v) => rest.push(v),
-                                            Err(e) => {
-                                                for_of_protocol_failure = Some(iter_var.clone());
-                                                pending_exception = Some(e);
-                                                drain_failed = true;
-                                                break;
-                                            }
-                                        },
+                                    match self.iterator_step_value(&iterator) {
+                                        Ok(Some(v)) => rest.push(v),
                                         Ok(None) => break,
                                         Err(e) => {
                                             for_of_protocol_failure = Some(iter_var.clone());

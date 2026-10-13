@@ -1495,15 +1495,8 @@ impl Interpreter {
                                 let item = if done {
                                     JsValue::UNDEFINED
                                 } else {
-                                    match self.iterator_step(&iterator) {
-                                        Ok(Some(result)) => match self.iterator_value(&result) {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                done = true;
-                                                error = Some(e);
-                                                break;
-                                            }
-                                        },
+                                    match self.iterator_step_value(&iterator) {
+                                        Ok(Some(v)) => v,
                                         Ok(None) => {
                                             done = true;
                                             JsValue::UNDEFINED
@@ -1538,19 +1531,10 @@ impl Interpreter {
                                     // invisible to the GC (issue #794).
                                     let rest_frame = self.gc_root_frame();
                                     loop {
-                                        match self.iterator_step(&iterator) {
-                                            Ok(Some(result)) => {
-                                                match self.iterator_value(&result) {
-                                                    Ok(v) => {
-                                                        self.gc_root_value(&v);
-                                                        rest.push(v);
-                                                    }
-                                                    Err(e) => {
-                                                        done = true;
-                                                        error = Some(e);
-                                                        break;
-                                                    }
-                                                }
+                                        match self.iterator_step_value(&iterator) {
+                                            Ok(Some(v)) => {
+                                                self.gc_root_value(&v);
+                                                rest.push(v);
                                             }
                                             Ok(None) => {
                                                 done = true;
@@ -1583,11 +1567,8 @@ impl Interpreter {
                     } else {
                         // Elision — skip one iterator step
                         if !done {
-                            match self.iterator_step(&iterator) {
-                                Ok(None) => {
-                                    done = true;
-                                }
-                                Ok(Some(_)) => {}
+                            match self.iterator_skip(&iterator) {
+                                Ok(exhausted) => done = exhausted,
                                 Err(e) => {
                                     done = true;
                                     error = Some(e);
@@ -2449,32 +2430,36 @@ impl Interpreter {
         self.gc_root_value(&v);
         loop {
             self.gc_safepoint();
-            let step_result = match self.iterator_next(iterator) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
-            let step_result = if fo.is_await {
-                match self.await_value(&step_result) {
+            let val = if fo.is_await {
+                let step_result = match self.iterator_next(iterator) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let step_result = match self.await_value(&step_result) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
                         return Completion::Throw(e);
                     }
                     other => return other,
+                };
+                match self.iterator_complete(&step_result) {
+                    Ok(true) => break,
+                    Err(e) => {
+                        return Completion::Throw(e);
+                    }
+                    _ => {}
+                }
+                match self.iterator_value(&step_result) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Completion::Throw(e);
+                    }
                 }
             } else {
-                step_result
-            };
-            match self.iterator_complete(&step_result) {
-                Ok(true) => break,
-                Err(e) => {
-                    return Completion::Throw(e);
-                }
-                _ => {}
-            }
-            let val = match self.iterator_value(&step_result) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Completion::Throw(e);
+                match self.iterator_step_value(iterator) {
+                    Ok(Some(v)) => v,
+                    Ok(None) => break,
+                    Err(e) => return Completion::Throw(e),
                 }
             };
 
