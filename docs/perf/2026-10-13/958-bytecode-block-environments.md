@@ -5,8 +5,7 @@ Design: `docs/adr/2026-10-13-0632-bytecode-block-environments.md`.
 Measured on a shared 24-core Linux host (load average 17-45 over the runs, so
 absolute seconds are noisy; the ratios between interleaved runs are the
 signal), release builds, medians of 5 runs **interleaved** between the
-binaries, wall-clock including startup, each run pinned to nothing in
-particular. `before` is `main` at `45a0ec8a`; `after` is this branch.
+binaries, wall-clock including startup. `before` is `main` at `45a0ec8a`; `after` is this branch.
 `boa` is boa 0.22 (`~/.cargo/bin/boa`).
 Repros are `docs/perf/2026-10-13/repros/`; the JetStream scripts are the
 runner's concatenated driver for one iteration of each benchmark.
@@ -57,12 +56,22 @@ environment) and template literals.
 ## Correctness gates
 
 - `cargo test --lib` (debug): 1027 passed, including the new
-  `bytecode::tests` parity/op-shape cases.
+  `bytecode::tests` parity/op-shape cases; `cargo test --release` and the
+  `perf-counters` integration tests pass.
 - Full `scripts/run-test262.py`: 99,911 / 99,911, 0 regressions, default and
   `--no-bytecode`.
-- `test262-extra/` (702 files, 1,292 scenarios): 100% on the plain release
+- `test262-extra/` (703 files, 1,294 scenarios): 100% on the plain release
   build and `release-checked`, with and without `--no-bytecode`, and under
   `JSSE_GC_STRESS=7` with and without `--no-bytecode`.
-- The two tree-walker `switch` fixes found while writing the GC-rooting test
-  (case-block TDZ, discriminant/environment rooting) are covered by
-  `test262-extra/bytecode-block-environments{,-gc-rooting}.js` in both modes.
+- Tree-walker fixes found on the way: `switch` case-block TDZ and
+  discriminant/environment rooting (`bytecode-block-environments{,-gc-rooting}.js`),
+  and `for (let ...)` head TDZ while the initializers run
+  (`for-let-head-tdz-in-initializer.js`), all in both modes.
+
+## Not done here
+
+- Environment elision for blocks no closure/`eval`/hand-off can observe: the
+  per-iteration `PushEnv` still acquires (from the pool) and resets an
+  environment. `bench_block_let` stays ~1.8x boa on this; a static
+  no-capture analysis for blocks would let such blocks keep their bindings in
+  the frame environment.
