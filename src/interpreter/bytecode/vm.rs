@@ -461,7 +461,7 @@ fn member_set(
             "Cannot set properties of {base} (setting '{name}')"
         )));
     }
-    interp.set_object_with_key(base, name, rhs, strict)
+    interp.put_member_value(base, name, rhs, strict)
 }
 
 fn member_set_computed(
@@ -477,7 +477,7 @@ fn member_set_computed(
             "Cannot set properties of {base} (setting '{key}')"
         )));
     }
-    interp.set_object_with_key(base, &key, rhs, strict)
+    interp.put_member_value(base, &key, rhs, strict)
 }
 
 /// `++`/`--` on a member reference: the base and key are evaluated once by

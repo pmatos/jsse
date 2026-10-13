@@ -3742,6 +3742,38 @@ impl Interpreter {
             .map(|_| ())
     }
 
+    /// PutValue of a member reference whose base, key and value are already
+    /// evaluated (the bytecode VM's `SetProp`/`SetElement`). A strict
+    /// rejection is reported with the host-compatible diagnostics of the
+    /// assignment-expression path (`member_assignment_error`).
+    pub(crate) fn put_member_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base: JsValue,
+        key: &K,
+        val: JsValue,
+        strict: bool,
+    ) -> Result<(), JsValue> {
+        // The base is consumed by [[Set]]; only a primitive needs keeping
+        // (its text is in the diagnostic), an object is rebuilt from its id.
+        let object_id = base.as_object_id();
+        let primitive = if object_id.is_none() {
+            Some(base.clone())
+        } else {
+            None
+        };
+        let outcome = self.set_object_with_key_result(base, key, val, false)?;
+        if !outcome.succeeded() && strict {
+            let key = key.to_js_property_key();
+            let base = match (object_id, primitive) {
+                (Some(id), _) => JsValue::object(id),
+                (None, Some(primitive)) => primitive,
+                (None, None) => unreachable!("a primitive base was kept above"),
+            };
+            return Err(self.member_assignment_error(&base, &key));
+        }
+        Ok(())
+    }
+
     fn set_object_with_key_result<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_val: JsValue,
@@ -5415,18 +5447,28 @@ impl Interpreter {
                     has_simple_params,
                     captured_new_target,
                     ..
-                }) => Some(CallTarget::User {
-                    params: params.clone(),
-                    body: body.clone(),
-                    closure: closure.clone(),
-                    flags: u8::from(*is_arrow) * CALL_ARROW
-                        | u8::from(*is_strict) * CALL_STRICT
-                        | u8::from(*is_generator) * CALL_GENERATOR
-                        | u8::from(*is_async) * CALL_ASYNC
-                        | u8::from(*uses_arguments) * CALL_USES_ARGUMENTS
-                        | u8::from(*has_simple_params) * CALL_SIMPLE_PARAMS,
-                    captured_new_target: captured_new_target.clone(),
-                }),
+                }) => {
+                    let mut flags = 0u8;
+                    for (set, bit) in [
+                        (*is_arrow, CALL_ARROW),
+                        (*is_strict, CALL_STRICT),
+                        (*is_generator, CALL_GENERATOR),
+                        (*is_async, CALL_ASYNC),
+                        (*uses_arguments, CALL_USES_ARGUMENTS),
+                        (*has_simple_params, CALL_SIMPLE_PARAMS),
+                    ] {
+                        if set {
+                            flags |= bit;
+                        }
+                    }
+                    Some(CallTarget::User {
+                        params: params.clone(),
+                        body: body.clone(),
+                        closure: closure.clone(),
+                        flags,
+                        captured_new_target: captured_new_target.clone(),
+                    })
+                }
                 Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
                 None => None,
             };

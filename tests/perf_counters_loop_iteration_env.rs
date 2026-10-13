@@ -13,7 +13,12 @@
 use std::process::Command;
 
 fn intern_calls(source: &str) -> u64 {
+    intern_calls_with(&[], source)
+}
+
+fn intern_calls_with(flags: &[&str], source: &str) -> u64 {
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .args(flags)
         .args(["-e", source])
         .output()
         .expect("run jsse");
@@ -69,11 +74,28 @@ fn non_capturing_loops_intern_nothing_per_iteration() {
 #[test]
 fn capturing_tree_walked_loops_keep_a_fresh_environment_per_iteration() {
     for build in [for_of, for_in] {
-        let small = intern_calls(&build(1_000, "s = (s + 1) | 0; if (s < 0) (() => s);"));
-        let large = intern_calls(&build(3_000, "s = (s + 1) | 0; if (s < 0) (() => s);"));
+        let body = "s = (s + 1) | 0; if (s < 0) (() => s);";
+        let small = intern_calls_with(&["--no-bytecode"], &build(1_000, body));
+        let large = intern_calls_with(&["--no-bytecode"], &build(3_000, body));
         assert!(
             large >= small + 1_000,
             "a capturing loop must still build per-iteration environments: {small} -> {large}"
+        );
+    }
+}
+
+/// The VM's for-in/for-of build the fresh per-iteration environment from the
+/// pre-interned names of a block scope (`PushEnv`), so a capturing loop
+/// hashes no name per iteration either (#960).
+#[test]
+fn capturing_vm_iteration_loops_intern_nothing_per_iteration() {
+    for build in [for_of, for_in] {
+        let body = "s = (s + 1) | 0; if (s < 0) (() => s);";
+        let small = intern_calls(&build(1_000, body));
+        let large = intern_calls(&build(3_000, body));
+        assert!(
+            large <= small,
+            "atom_intern_calls grew with the iteration count: {small} -> {large}"
         );
     }
 }
