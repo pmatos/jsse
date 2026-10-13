@@ -2297,12 +2297,12 @@ impl Interpreter {
                                     break 'unroot Completion::Throw(e);
                                 }
                             }
-                            _ => {
-                                match self.bind_pattern(pat, key_val, BindingKind::Let, &for_env) {
-                                    Completion::Normal(_) => {}
-                                    other => break 'unroot other,
-                                }
-                            }
+                            // A destructuring assignment target: its names are
+                            // existing bindings, not new ones of the loop's scope.
+                            _ => match self.assign_to_for_pattern(pat, key_val, env) {
+                                Completion::Normal(_) | Completion::Empty => {}
+                                other => break 'unroot other,
+                            },
                         },
                         ForInOfLeft::Expression(expr) => {
                             match expr {

@@ -46,16 +46,19 @@ enum CallTarget {
         params: Rc<Vec<Pattern>>,
         body: Body,
         closure: EnvRef,
-        is_arrow: bool,
-        is_strict: bool,
-        is_generator: bool,
-        is_async: bool,
-        uses_arguments: bool,
-        has_simple_params: bool,
+        /// The function's boolean attributes, one bit each (`CALL_*`).
+        flags: u8,
         /// Only populated for arrow functions, which inherit it.
         captured_new_target: Option<JsValue>,
     },
 }
+
+const CALL_ARROW: u8 = 1;
+const CALL_STRICT: u8 = 1 << 1;
+const CALL_GENERATOR: u8 = 1 << 2;
+const CALL_ASYNC: u8 = 1 << 3;
+const CALL_USES_ARGUMENTS: u8 = 1 << 4;
+const CALL_SIMPLE_PARAMS: u8 = 1 << 5;
 
 /// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
 /// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
@@ -3739,6 +3742,38 @@ impl Interpreter {
             .map(|_| ())
     }
 
+    /// PutValue of a member reference whose base, key and value are already
+    /// evaluated (the bytecode VM's `SetProp`/`SetElement`). A strict
+    /// rejection is reported with the host-compatible diagnostics of the
+    /// assignment-expression path (`member_assignment_error`).
+    pub(crate) fn put_member_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base: JsValue,
+        key: &K,
+        val: JsValue,
+        strict: bool,
+    ) -> Result<(), JsValue> {
+        // The base is consumed by [[Set]]; only a primitive needs keeping
+        // (its text is in the diagnostic), an object is rebuilt from its id.
+        let object_id = base.as_object_id();
+        let primitive = if object_id.is_none() {
+            Some(base.clone())
+        } else {
+            None
+        };
+        let outcome = self.set_object_with_key_result(base, key, val, false)?;
+        if !outcome.succeeded() && strict {
+            let key = key.to_js_property_key();
+            let base = match (object_id, primitive) {
+                (Some(id), _) => JsValue::object(id),
+                (None, Some(primitive)) => primitive,
+                (None, None) => unreachable!("a primitive base was kept above"),
+            };
+            return Err(self.member_assignment_error(&base, &key));
+        }
+        Ok(())
+    }
+
     fn set_object_with_key_result<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_val: JsValue,
@@ -5416,12 +5451,12 @@ impl Interpreter {
                     params: params.clone(),
                     body: body.clone(),
                     closure: closure.clone(),
-                    is_arrow: *is_arrow,
-                    is_strict: *is_strict,
-                    is_generator: *is_generator,
-                    is_async: *is_async,
-                    uses_arguments: *uses_arguments,
-                    has_simple_params: *has_simple_params,
+                    flags: (u8::from(*is_arrow) * CALL_ARROW)
+                        | (u8::from(*is_strict) * CALL_STRICT)
+                        | (u8::from(*is_generator) * CALL_GENERATOR)
+                        | (u8::from(*is_async) * CALL_ASYNC)
+                        | (u8::from(*uses_arguments) * CALL_USES_ARGUMENTS)
+                        | (u8::from(*has_simple_params) * CALL_SIMPLE_PARAMS),
                     captured_new_target: captured_new_target.clone(),
                 }),
                 Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
@@ -5432,7 +5467,8 @@ impl Interpreter {
                 // - [[Call]]: new.target = undefined (clear for non-arrow functions)
                 // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
                 // - Arrow functions: inherit new.target from enclosing scope (don't clear)
-                let is_arrow_func = matches!(func, CallTarget::User { is_arrow, .. } if is_arrow);
+                let is_arrow_func =
+                    matches!(func, CallTarget::User { flags, .. } if flags & CALL_ARROW != 0);
                 let was_construct = std::mem::replace(&mut self.calling_as_construct, false);
                 let outer_new_target = if !is_arrow_func {
                     let nt = self.new_target.take();
@@ -5486,14 +5522,15 @@ impl Interpreter {
                         params,
                         body,
                         closure,
-                        is_arrow,
-                        is_strict,
-                        is_generator,
-                        is_async,
-                        uses_arguments,
-                        has_simple_params,
+                        flags,
                         ..
                     } => {
+                        let is_arrow = flags & CALL_ARROW != 0;
+                        let is_strict = flags & CALL_STRICT != 0;
+                        let is_generator = flags & CALL_GENERATOR != 0;
+                        let is_async = flags & CALL_ASYNC != 0;
+                        let uses_arguments = flags & CALL_USES_ARGUMENTS != 0;
+                        let has_simple_params = flags & CALL_SIMPLE_PARAMS != 0;
                         #[cfg(feature = "perf-counters")]
                         {
                             self.perf.calls_to_user += 1;

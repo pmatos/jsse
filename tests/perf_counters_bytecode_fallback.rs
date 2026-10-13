@@ -140,6 +140,20 @@ fn natively_lowered_constructs_leave_no_fallback_nodes() {
             "switchlet",
             "switch (n & 1) { case 0: { const z = 1; s = s + z; break; } default: let w = 2; s = s + w; }",
         ),
+        (
+            "trycatch",
+            "try { if (n < 0) throw 1; s = s + 1; } catch (e) { s = e; } finally { s = s | 0; }",
+        ),
+        ("forof", "for (const v of [1, 2]) { s = s + v; }"),
+        (
+            "forofdestructure",
+            "for (const [a, b] of [[1, 2]]) { s = s + a + b; }",
+        ),
+        ("forin", "for (var k in o) { s = s + k.length; }"),
+        (
+            "forinlet",
+            "outer: for (let k in o) { for (const v of [1]) { if (v) continue outer; } }",
+        ),
     ] {
         let r = run(&kernel(extra, 2_000));
         assert!(
@@ -179,7 +193,7 @@ fn block_scoped_loop_bodies_run_on_the_vm() {
 fn a_hot_fallback_node_is_reported_as_fallback_work_not_an_ast_body() {
     let r = run(&kernel("", 10).replace(
         "return s;",
-        "for (var k = 0; k < 50; k++) { try { s += k; } finally { s ^= 1; } } return s;",
+        "for (var k = 0; k < 50; k++) { l: { s += k; if (s > 0) break l; } } return s;",
     ));
     assert_eq!(r.perf["body_dispatch_ast"], 0);
     assert!(

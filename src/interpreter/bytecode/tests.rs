@@ -2714,8 +2714,11 @@ fn operand_layout(op: Op) -> &'static [usize] {
         Op::LocalBinConst => &[2, 2, 1, 2],
         Op::PushEnv | Op::EvalAst => &[2],
         Op::PopEnv => &[1],
-        Op::ExecAst => &[2, 2],
+        Op::ExecAst => &[2, 2, 1],
         Op::InitLexical => &[2, 1, 2],
+        Op::IterStep | Op::ForInStep | Op::EndFinally | Op::BindHead => &[2],
+        Op::IterClose => &[1],
+        Op::DropBelow => &[1, 1],
         Op::NewArrayConst
         | Op::NewArray
         | Op::ArrayAppend
@@ -3926,4 +3929,153 @@ fn immediately_invoked_closures_compile_natively_and_call_with_undefined_this() 
         })();",
         "3,7,false,true,true,9,undefined",
     );
+}
+
+#[test]
+fn try_catch_finally_and_iteration_compile_without_hand_offs() {
+    let chunk = compile_function_source(
+        "try { s += 1; } catch (e) { s += e; } finally { s += 2; }
+         for (var k in o) { s += k; }
+         for (const v of a) { s += v; }
+         for (let [p, q] of a) { s += p; }
+         outer: for (x of a) { for (y in o) { if (y) continue outer; break; } }",
+        &["s", "o", "a", "x", "y"],
+    );
+    assert!(chunk.ast.is_empty(), "{:?}", chunk.fallback_reasons);
+    let ops = work_ops(&chunk);
+    assert_eq!(count_ops(&chunk, Op::ExecAst), 0, "{ops:?}");
+    assert_eq!(count_ops(&chunk, Op::GetIterator), 3);
+    assert_eq!(count_ops(&chunk, Op::ForInHead), 2);
+    assert_eq!(count_ops(&chunk, Op::EndFinally), 1);
+    // The try's block and catch, plus the three for-of loops' bodies.
+    assert_eq!(chunk.handlers.len(), 1 + 1 + 1 + 3 - 1);
+}
+
+#[test]
+fn hoisted_for_of_head_scope_is_entered_once_per_loop() {
+    // `PushEnv` after `IterStep` is a fresh environment per iteration; before
+    // it, the head's one scope. The first `PushEnv` is the TDZ scope the
+    // iterated expression runs in.
+    let envs_around_step = |source: &str, params: &[&str]| {
+        let ops = work_ops(&compile_function_source(source, params));
+        let step = ops
+            .iter()
+            .position(|op| *op == Op::IterStep)
+            .expect("IterStep");
+        let before = ops[..step].iter().filter(|op| **op == Op::PushEnv).count();
+        let after = ops[step..].iter().filter(|op| **op == Op::PushEnv).count();
+        (before, after)
+    };
+    assert_eq!(
+        envs_around_step("for (const v of a) { s += v; }", &["s", "a"]),
+        (2, 0)
+    );
+    assert_eq!(
+        envs_around_step(
+            "for (const v of a) { fs.push(function () { return v; }); }",
+            &["fs", "a"]
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        envs_around_step("for (const [p, q] of a) { s += p; }", &["s", "a"]),
+        (1, 1)
+    );
+}
+
+#[test]
+fn escaping_hand_off_inside_a_finalizer_region_keeps_the_try_on_the_tree_walker() {
+    // A fallback `return` would skip the finalizer, so the whole `try` is
+    // handed over instead of just the labelled block.
+    let chunk = compile_function_source(
+        "var pad = 0; for (var i = 0; i < 2; i++) { try { a: { continue; } } finally { pad = 1; } }",
+        &["x"],
+    );
+    assert_eq!(
+        chunk.fallback_reasons,
+        vec!["completion leaves a cleanup region"]
+    );
+    assert_eq!(count_ops(&chunk, Op::EndFinally), 0);
+}
+
+#[test]
+fn escaping_hand_off_in_a_for_in_body_is_dropped_by_the_escape_table() {
+    // for-in has no iterator close, so the loop stays native and its slot is
+    // dropped when a hand-off statement breaks out of it.
+    assert_value_parity(
+        "var __r = (function(){ var out = []; \
+         for (var k in {a:1,b:2}) { l: { if (k === 'a') break l; out.push(k); } } \
+         outer: for (var i = 0; i < 2; i++) { for (var k in {a:1}) { l2: { continue outer; } } } \
+         return out.join() + i; })();",
+    );
+}
+
+fn run_both_modes(source: &str) -> String {
+    let (tree, _) = eval_with_mode(source, false);
+    let (vm, chunks) = eval_with_mode(source, true);
+    assert!(chunks >= 1, "no chunk ran for {source}");
+    let show = |v: &JsValue| {
+        v.as_number()
+            .map(|n| n.to_string())
+            .or_else(|| v.as_string().map(|s| s.to_rust_string()))
+            .unwrap_or_else(|| format!("{v:?}"))
+    };
+    assert_eq!(show(&tree), show(&vm), "{source}");
+    show(&vm)
+}
+
+#[test]
+fn try_finally_completion_routing_matches_tree_walker() {
+    for (source, expected) in [
+        (
+            "var __r = (function(){ var l = []; for (var i = 0; i < 3; i++) { try { if (i === 1) continue; \
+             if (i === 2) break; l.push('b' + i); } finally { l.push('f' + i); } } return l.join(); })();",
+            "b0,f0,f1,f2",
+        ),
+        (
+            "var __r = (function(){ try { return 'a'; } finally { return 'b'; } })();",
+            "b",
+        ),
+        (
+            "var __r = (function(){ for (var i = 0; i < 2; i++) { try { throw 1; } finally { break; } } return i; })();",
+            "0",
+        ),
+        (
+            "var __r = (function(){ var l = []; try { try { throw 'x'; } finally { l.push('in'); } } \
+             catch (e) { l.push(e); } return l.join(); })();",
+            "in,x",
+        ),
+    ] {
+        assert_eq!(run_both_modes(source), expected, "{source}");
+    }
+}
+
+#[test]
+fn for_of_closes_its_iterator_on_every_early_exit() {
+    let source = "var __r = (function(){ var log = []; \
+        var it = { [Symbol.iterator]() { return { next() { return { value: 1, done: false }; }, \
+        return() { log.push('r'); return {}; } }; } }; \
+        for (var a of it) break; \
+        (function () { for (var a of it) return; })(); \
+        try { for (var a of it) throw 0; } catch (e) {} \
+        outer: for (var b of [1]) { for (var a of it) continue outer; } \
+        return log.join(''); })();";
+    assert_eq!(run_both_modes(source), "rrrr");
+}
+
+#[test]
+fn handler_keeps_pending_operands_rooted_and_restores_the_stack() {
+    let source = "var __r = (function(){ var s = 0; var o = { m: function (a, b) { return a + b; } }; \
+        function boom() { $262.gc(); throw 1; } \
+        for (var i = 0; i < 4; i++) { try { s += o.m({}, [1, boom()]); } catch (e) { s += e; } } \
+        return s; })();";
+    let mut parser = crate::parser::Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    let _ = interp.run(&program);
+    assert_eq!(
+        interp.get_global_var_ref("__r").and_then(|v| v.as_number()),
+        Some(4.0)
+    );
+    assert!(interp.gc_bytecode_roots.is_empty());
 }

@@ -1,16 +1,19 @@
 use super::chunk::{
     ArrayTemplate, AstNode, BLOCK_SLOT_FLAG, BLOCK_SLOT_MAX_INDEX, BLOCK_SLOT_MAX_SCOPES,
-    BlockScope, Chunk, Constant, EscapeEntry, FunctionTemplate, NO_ESCAPE_TABLE, NO_INIT_SLOT,
-    ObjectShape, RegExpTemplate, ShapeProperty,
+    BlockScope, Chunk, Constant, EXEC_NO_TAIL_CALL, EscapeEntry, FinallyExit, FunctionTemplate,
+    Handler, HeadBinding, NO_ESCAPE_TABLE, NO_INIT_SLOT, ObjectShape, RegExpTemplate,
+    ShapeProperty,
 };
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{
-    AssignOp, BinaryOp, CallSiteId, DoWhileStatement, Expression, ForInit, ForStatement, Literal,
-    LogicalOp, MemberProperty, Pattern, Property, PropertyKey, PropertyKind, Statement,
-    SwitchStatement, UnaryOp, UpdateOp, VarKind, VariableDeclaration, WhileStatement,
+    AssignOp, BinaryOp, CallSiteId, CatchClause, DoWhileStatement, Expression, ForInOfLeft,
+    ForInit, ForStatement, Literal, LogicalOp, MemberProperty, Pattern, Property, PropertyKey,
+    PropertyKind, Statement, SwitchStatement, TryStatement, UnaryOp, UpdateOp, VarKind,
+    VariableDeclaration, WhileStatement,
 };
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
+use crate::interpreter::types::BindingKind;
 use crate::types::{JsBigInt, JsString, JsValue};
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
@@ -75,14 +78,27 @@ struct LoopFrame {
     /// loop head's own environment included). A jump from deeper inside
     /// leaves the difference first.
     scope_depth: usize,
+    /// Cleanup entries open at this frame's targets; a jump from deeper
+    /// inside runs the entries above this depth on its way out.
+    cleanup_depth: usize,
+    /// Persistent operand-stack slots live at the targets.
+    stack_height: u16,
 }
 
 impl LoopFrame {
-    fn new(labels: Vec<String>, continue_target: Option<usize>, scope_depth: usize) -> Self {
+    fn new(
+        labels: Vec<String>,
+        continue_target: Option<usize>,
+        scope_depth: usize,
+        cleanup_depth: usize,
+        stack_height: u16,
+    ) -> Self {
         Self {
             labels,
             continue_target,
             scope_depth,
+            cleanup_depth,
+            stack_height,
             continue_sites: Vec::new(),
             break_sites: Vec::new(),
             escape_breaks: Vec::new(),
@@ -110,6 +126,14 @@ struct Snapshot {
     array_templates_len: usize,
     object_shapes_len: usize,
     regexps_len: usize,
+    cleanups_len: usize,
+    finally_ctxs: Vec<(usize, usize)>,
+    handlers_len: usize,
+    finally_tables_len: usize,
+    head_bindings_len: usize,
+    stack_base: u16,
+    no_tail: u32,
+    unwind_segments_len: usize,
 }
 
 #[derive(Default)]
@@ -117,6 +141,46 @@ struct ScopeDecls {
     functions: Vec<Statement>,
     function_names: Vec<String>,
     lexicals: Vec<(String, bool)>,
+    simple_catch: bool,
+}
+
+/// Something a `break`, `continue` or `return` leaving a construct has to do
+/// on its way out, innermost last.
+#[derive(Clone, Copy)]
+enum Cleanup {
+    /// A for-in/for-of loop's iterator, one persistent operand slot. A for-of
+    /// closes it (`close`); for-in enumerators are simply dropped.
+    Iter { close: bool, scope_depth: usize },
+    /// The pending completion record (value, kind) of a running `finally`
+    /// block: two persistent slots to drop.
+    Record { scope_depth: usize },
+    /// The `try` block or `catch` of a `try`/`finally`: leaving it for
+    /// anywhere else runs the finalizer first.
+    Finally { ctx: usize, scope_depth: usize },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Terminal {
+    Return,
+    /// Index into `loop_frames`.
+    Break(usize),
+    Continue(usize),
+}
+
+/// The exits routed through one `try`/`finally`'s finalizer: entry `i` is the
+/// completion kind `i + 2` (0 is normal, 1 a throw).
+#[derive(Default)]
+struct FinallyCtx {
+    routes: Vec<(Terminal, bool)>,
+    /// Jumps into the finalizer, patched to its start.
+    jump_sites: Vec<usize>,
+}
+
+/// A `break`/`continue`/`return` an `ExecAst` statement can complete with.
+enum EscapingJump {
+    Return,
+    Break(Option<String>),
+    Continue(Option<String>),
 }
 
 struct Compiler {
@@ -167,6 +231,26 @@ struct Compiler {
     /// to be compiled; consumed on entry so nested statements see `false`.
     /// Only there may a `let`/`const` initialise its hoisted binding directly.
     at_function_top_level: bool,
+    cleanups: Vec<Cleanup>,
+    finally_ctxs: Vec<FinallyCtx>,
+    handlers: Vec<Handler>,
+    finally_tables: Vec<Vec<FinallyExit>>,
+    head_bindings: Vec<HeadBinding>,
+    /// Operand-stack slots live across statement boundaries here (iterators,
+    /// completion records); `current_stack` equals this between statements.
+    stack_base: u16,
+    max_persistent: u16,
+    /// Open `try` blocks (and `catch` blocks with a `finally`): a call here is
+    /// never in tail position.
+    no_tail: u32,
+    /// Constant-pool index of each finalizer completion kind used so far.
+    kind_constants: Vec<(u16, u16)>,
+    /// Code ranges `[start, end)` of the `IterClose` an exit emits for the
+    /// cleanup at the given index. An exit is logically a completion leaving
+    /// the construct, so a `return()` error it raises belongs to the code
+    /// *around* that construct, and handlers of the constructs it just left
+    /// must not see it (see `push_handler`).
+    unwind_segments: Vec<(usize, usize, usize)>,
 }
 
 impl Compiler {
@@ -196,6 +280,16 @@ impl Compiler {
             object_shapes: Vec::new(),
             regexps: Vec::new(),
             at_function_top_level: false,
+            cleanups: Vec::new(),
+            finally_ctxs: Vec::new(),
+            handlers: Vec::new(),
+            finally_tables: Vec::new(),
+            head_bindings: Vec::new(),
+            stack_base: 0,
+            max_persistent: 0,
+            no_tail: 0,
+            kind_constants: Vec::new(),
+            unwind_segments: Vec::new(),
         }
     }
 
@@ -234,6 +328,8 @@ impl Compiler {
                 | Op::PushEnv
                 | Op::PopEnv
                 | Op::CopyIterEnv
+                | Op::CheckExit
+                | Op::DropBelow
         ) {
             self.native_ops += 1;
         }
@@ -498,6 +594,18 @@ impl Compiler {
             array_templates_len: self.array_templates.len(),
             object_shapes_len: self.object_shapes.len(),
             regexps_len: self.regexps.len(),
+            cleanups_len: self.cleanups.len(),
+            finally_ctxs: self
+                .finally_ctxs
+                .iter()
+                .map(|c| (c.routes.len(), c.jump_sites.len()))
+                .collect(),
+            handlers_len: self.handlers.len(),
+            finally_tables_len: self.finally_tables.len(),
+            head_bindings_len: self.head_bindings.len(),
+            stack_base: self.stack_base,
+            no_tail: self.no_tail,
+            unwind_segments_len: self.unwind_segments.len(),
         }
     }
 
@@ -525,6 +633,18 @@ impl Compiler {
         self.array_templates.truncate(snap.array_templates_len);
         self.object_shapes.truncate(snap.object_shapes_len);
         self.regexps.truncate(snap.regexps_len);
+        self.cleanups.truncate(snap.cleanups_len);
+        self.finally_ctxs.truncate(snap.finally_ctxs.len());
+        for (ctx, &(routes, sites)) in self.finally_ctxs.iter_mut().zip(&snap.finally_ctxs) {
+            ctx.routes.truncate(routes);
+            ctx.jump_sites.truncate(sites);
+        }
+        self.handlers.truncate(snap.handlers_len);
+        self.finally_tables.truncate(snap.finally_tables_len);
+        self.head_bindings.truncate(snap.head_bindings_len);
+        self.stack_base = snap.stack_base;
+        self.no_tail = snap.no_tail;
+        self.unwind_segments.truncate(snap.unwind_segments_len);
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
@@ -1410,6 +1530,7 @@ impl Compiler {
         self.block_scopes.push(BlockScope {
             functions: decls.functions,
             lexicals,
+            simple_catch: decls.simple_catch,
         });
         self.emit(Op::PushEnv);
         self.emit_u16(operand);
@@ -1432,6 +1553,21 @@ impl Compiler {
             self.code.push(n as u8);
             count -= n;
         }
+    }
+
+    /// A statement list that runs in its own environment when it declares a
+    /// binding (a block, a `try`/`catch`/`finally` block).
+    fn compile_scoped_block(&mut self, body: &[Statement]) -> Result<(), CompileError> {
+        if !declares_lexical(body) {
+            return self.compile_statement_list(body);
+        }
+        let decls = self
+            .scope_declarations(&[body])
+            .ok_or(CompileError::Unsupported("block-scoped declaration"))?;
+        self.open_scope(decls)?;
+        self.compile_statements(body, false, true)?;
+        self.close_scope();
+        Ok(())
     }
 
     fn compile_literal(&mut self, lit: &Literal) -> Result<(), CompileError> {
@@ -1515,7 +1651,7 @@ impl Compiler {
             if skip_hoisted && matches!(stmt, Statement::FunctionDeclaration(_)) {
                 continue;
             }
-            debug_assert_eq!(self.current_stack, 0);
+            debug_assert_eq!(self.current_stack, self.stack_base);
             debug_assert_eq!(self.current_refs, 0);
             let safepoint_at = self.code.len();
             let previous_op_at = self.last_op_at;
@@ -1551,8 +1687,16 @@ impl Compiler {
         stmt: &Statement,
         reason: &'static str,
     ) -> Result<(), CompileError> {
-        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_stack, self.stack_base);
         debug_assert_eq!(self.current_refs, 0);
+        // A `return`, `break` or `continue` leaving the statement would skip
+        // the code a `finally` block or an iterator close has to run: the
+        // construct that owns it stays on the tree-walker as a whole instead.
+        if self.exec_ast_escape_blocked(stmt) {
+            return Err(CompileError::Unsupported(
+                "completion leaves a cleanup region",
+            ));
+        }
         for name in crate::interpreter::hoisting::collect_var_names(std::slice::from_ref(stmt)) {
             self.add_var_name(&name)?;
         }
@@ -1567,7 +1711,48 @@ impl Compiler {
         self.emit(Op::ExecAst);
         self.emit_u16(idx);
         self.emit_u16(table);
+        self.code.push(if self.no_tail > 0 {
+            EXEC_NO_TAIL_CALL
+        } else {
+            0
+        });
         Ok(())
+    }
+
+    /// Whether a completion of `stmt` leaving it would cross a cleanup that
+    /// has code to run (a finalizer, an iterator `return()`).
+    fn exec_ast_escape_blocked(&self, stmt: &Statement) -> bool {
+        if !self.cleanups.iter().any(runs_code) {
+            return false;
+        }
+        let mut jumps = Vec::new();
+        collect_escaping_jumps(stmt, &mut Vec::new(), 0, 0, &mut jumps);
+        jumps.iter().any(|jump| match jump {
+            EscapingJump::Return => true,
+            EscapingJump::Break(label) => self
+                .resolve_break_frame(label.as_deref())
+                .is_none_or(|f| self.crosses_cleanup_code(self.loop_frames[f].cleanup_depth)),
+            EscapingJump::Continue(label) => self
+                .resolve_continue_frame(label.as_deref())
+                .is_none_or(|f| self.crosses_cleanup_code(self.loop_frames[f].cleanup_depth)),
+        })
+    }
+
+    fn crosses_cleanup_code(&self, from_depth: usize) -> bool {
+        self.cleanups[from_depth.min(self.cleanups.len())..]
+            .iter()
+            .any(runs_code)
+    }
+
+    /// A call in tail position may leave the chunk as a `TailCall` only when
+    /// nothing has to run after it.
+    fn tail_call_allowed(&self) -> bool {
+        self.no_tail == 0 && !self.crosses_cleanup_code(0)
+    }
+
+    fn bump_persistent(&mut self, n: u16) {
+        self.stack_base += n;
+        self.max_persistent = self.max_persistent.max(self.stack_base);
     }
 
     /// One entry per way a `break`/`continue` completion can leave the
@@ -1602,6 +1787,7 @@ impl Compiler {
             let continue_target = self.loop_frames[frame_idx].continue_target;
             let scope_depth = u16::try_from(self.loop_frames[frame_idx].scope_depth)
                 .map_err(|_| CompileError::Ineligible("block scope depth overflow"))?;
+            let stack_height = self.loop_frames[frame_idx].stack_height;
             for (label, breaks, continues) in targets {
                 if breaks {
                     self.loop_frames[frame_idx]
@@ -1612,6 +1798,7 @@ impl Compiler {
                         label: label.clone(),
                         target: u32::MAX,
                         scope_depth,
+                        stack_height,
                     });
                 }
                 if continues {
@@ -1621,6 +1808,7 @@ impl Compiler {
                             label,
                             target: target as u32,
                             scope_depth,
+                            stack_height,
                         }),
                         None => {
                             self.loop_frames[frame_idx]
@@ -1631,6 +1819,7 @@ impl Compiler {
                                 label,
                                 target: u32::MAX,
                                 scope_depth,
+                                stack_height,
                             });
                         }
                     }
@@ -1670,16 +1859,7 @@ impl Compiler {
                 // a binding runs in its own environment, instantiated by
                 // `PushEnv` (BlockDeclarationInstantiation,
                 // sec-blockdeclarationinstantiation).
-                if !declares_lexical(body) {
-                    return self.compile_statement_list(body);
-                }
-                let decls = self
-                    .scope_declarations(std::slice::from_ref(&body.as_slice()))
-                    .ok_or(CompileError::Unsupported("block-scoped declaration"))?;
-                self.open_scope(decls)?;
-                self.compile_statements(body, false, true)?;
-                self.close_scope();
-                Ok(())
+                self.compile_scoped_block(body)
             }
             Statement::Variable(decl) => self.compile_var_declaration(decl, at_top_level),
             Statement::If(if_stmt) => {
@@ -1722,6 +1902,9 @@ impl Compiler {
             Statement::While(while_stmt) => self.compile_while(while_stmt, Vec::new()),
             Statement::DoWhile(do_while_stmt) => self.compile_do_while(do_while_stmt, Vec::new()),
             Statement::For(for_stmt) => self.compile_for(for_stmt, Vec::new()),
+            Statement::ForIn(for_in) => self.compile_for_in(for_in, Vec::new()),
+            Statement::ForOf(for_of) => self.compile_for_of(for_of, Vec::new()),
+            Statement::Try(try_stmt) => self.compile_try(try_stmt),
             Statement::Switch(switch) => self.compile_switch(switch, Vec::new()),
             Statement::Labeled(label, inner) => {
                 let mut labels = vec![label.clone()];
@@ -1736,6 +1919,8 @@ impl Compiler {
                         self.compile_do_while(do_while_stmt, labels)
                     }
                     Statement::For(for_stmt) => self.compile_for(for_stmt, labels),
+                    Statement::ForIn(for_in) => self.compile_for_in(for_in, labels),
+                    Statement::ForOf(for_of) => self.compile_for_of(for_of, labels),
                     Statement::Switch(switch) => self.compile_switch(switch, labels),
                     _ => Err(CompileError::Unsupported("statement:Labeled")),
                 }
@@ -1752,21 +1937,32 @@ impl Compiler {
                 Err(CompileError::Unsupported("return in script"))
             }
             Statement::Return(None) => {
-                self.emit(Op::ReturnUndefined);
+                if self.cleanups.is_empty() {
+                    self.emit(Op::ReturnUndefined);
+                } else {
+                    self.emit(Op::LoadUndefined);
+                    self.push_n(1);
+                    self.compile_jump(Terminal::Return, true)?;
+                    self.pop_n(1);
+                }
                 Ok(())
             }
             Statement::Return(Some(Expression::Call(callee, args, site_id))) => {
-                self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
-                self.emit(Op::Return);
+                if self.tail_call_allowed() {
+                    self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
+                } else {
+                    self.compile_call(callee, args, Op::Call, *site_id)?;
+                }
+                self.compile_jump(Terminal::Return, true)?;
                 self.pop_n(1);
                 Ok(())
             }
             Statement::Return(Some(expr)) => {
-                if contains_tail_call(expr) {
+                if self.tail_call_allowed() && contains_tail_call(expr) {
                     return Err(CompileError::Unsupported("nested tail call"));
                 }
                 self.compile_expr(expr)?;
-                self.emit(Op::Return);
+                self.compile_jump(Terminal::Return, true)?;
                 self.pop_n(1);
                 Ok(())
             }
@@ -1818,29 +2014,143 @@ impl Compiler {
         let idx = self
             .resolve_break_frame(label)
             .ok_or(CompileError::Ineligible("statement:Break"))?;
-        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_stack, self.stack_base);
         debug_assert_eq!(self.current_refs, 0);
-        self.emit_pop_env(self.scopes.len() - self.loop_frames[idx].scope_depth);
-        let site = self.emit_jump(Op::Jump);
-        self.loop_frames[idx].break_sites.push(site);
-        Ok(())
+        self.compile_jump(Terminal::Break(idx), false)
     }
 
     fn compile_continue(&mut self, label: Option<&str>) -> Result<(), CompileError> {
         let idx = self
             .resolve_continue_frame(label)
             .ok_or(CompileError::Ineligible("statement:Continue"))?;
-        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_stack, self.stack_base);
         debug_assert_eq!(self.current_refs, 0);
-        self.emit_pop_env(self.scopes.len() - self.loop_frames[idx].scope_depth);
-        match self.loop_frames[idx].continue_target {
-            Some(target) => self.emit_jump_to(Op::Jump, target),
-            None => {
-                let site = self.emit_jump(Op::Jump);
-                self.loop_frames[idx].continue_sites.push(site);
-                Ok(())
+        self.compile_jump(Terminal::Continue(idx), false)
+    }
+
+    /// A completion value pending on the operand stack (a return value)
+    /// is `has_value`; it stays on top while the exit runs the cleanups.
+    fn compile_jump(&mut self, terminal: Terminal, has_value: bool) -> Result<(), CompileError> {
+        // The exit sequence pushes at most a placeholder value and a kind.
+        self.push_n(2);
+        self.pop_n(2);
+        self.emit_unwind(terminal, has_value, self.cleanups.len(), self.scopes.len())
+    }
+
+    fn emit_pop_env_to(&mut self, cur_scope: &mut usize, target: usize) {
+        debug_assert!(*cur_scope >= target, "unwinding to a deeper scope");
+        self.emit_pop_env(cur_scope.saturating_sub(target));
+        *cur_scope = target.min(*cur_scope);
+    }
+
+    fn emit_drop_below(&mut self, has_value: bool, count: u8) {
+        self.emit(Op::DropBelow);
+        self.code.push(u8::from(has_value));
+        self.code.push(count);
+    }
+
+    /// Emits the exit from the innermost of the `from_entry` open cleanups
+    /// out to `terminal`'s target: leaves block environments, drops
+    /// persistent slots, closes iterators, and where a finalizer is in the
+    /// way jumps into it with a completion kind (the rest of the exit is
+    /// emitted behind that finalizer by `compile_try`).
+    fn emit_unwind(
+        &mut self,
+        terminal: Terminal,
+        has_value: bool,
+        from_entry: usize,
+        mut cur_scope: usize,
+    ) -> Result<(), CompileError> {
+        let target_depth = match terminal {
+            Terminal::Return => 0,
+            Terminal::Break(f) | Terminal::Continue(f) => self.loop_frames[f].cleanup_depth,
+        };
+        for i in (target_depth..from_entry).rev() {
+            match self.cleanups[i] {
+                Cleanup::Iter { close, scope_depth } => {
+                    self.emit_pop_env_to(&mut cur_scope, scope_depth);
+                    if close {
+                        let start = self.code.len();
+                        self.emit(Op::IterClose);
+                        self.code.push(u8::from(has_value));
+                        self.unwind_segments.push((start, self.code.len(), i));
+                    } else {
+                        self.emit_drop_below(has_value, 1);
+                    }
+                }
+                Cleanup::Record { scope_depth } => {
+                    self.emit_pop_env_to(&mut cur_scope, scope_depth);
+                    self.emit_drop_below(has_value, 2);
+                }
+                Cleanup::Finally { ctx, scope_depth } => {
+                    self.emit_pop_env_to(&mut cur_scope, scope_depth);
+                    let kind = self.finally_route(ctx, terminal, has_value)?;
+                    if !has_value {
+                        self.emit(Op::LoadUndefined);
+                    }
+                    self.emit_load_kind(kind)?;
+                    let site = self.emit_jump(Op::Jump);
+                    self.finally_ctxs[ctx].jump_sites.push(site);
+                    return Ok(());
+                }
             }
         }
+        match terminal {
+            Terminal::Return => {
+                debug_assert!(has_value);
+                self.emit(Op::Return);
+            }
+            Terminal::Break(f) => {
+                let depth = self.loop_frames[f].scope_depth;
+                self.emit_pop_env_to(&mut cur_scope, depth);
+                let site = self.emit_jump(Op::Jump);
+                self.loop_frames[f].break_sites.push(site);
+            }
+            Terminal::Continue(f) => {
+                let depth = self.loop_frames[f].scope_depth;
+                self.emit_pop_env_to(&mut cur_scope, depth);
+                match self.loop_frames[f].continue_target {
+                    Some(target) => self.emit_jump_to(Op::Jump, target)?,
+                    None => {
+                        let site = self.emit_jump(Op::Jump);
+                        self.loop_frames[f].continue_sites.push(site);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finally_route(
+        &mut self,
+        ctx: usize,
+        terminal: Terminal,
+        has_value: bool,
+    ) -> Result<u16, CompileError> {
+        let routes = &mut self.finally_ctxs[ctx].routes;
+        let index = match routes.iter().position(|r| *r == (terminal, has_value)) {
+            Some(i) => i,
+            None => {
+                routes.push((terminal, has_value));
+                routes.len() - 1
+            }
+        };
+        u16::try_from(index + 2).map_err(|_| CompileError::Ineligible("finalizer exit overflow"))
+    }
+
+    /// Pushes a finalizer completion kind (a Number constant).
+    fn emit_load_kind(&mut self, kind: u16) -> Result<(), CompileError> {
+        let idx = match self.kind_constants.iter().find(|(k, _)| *k == kind) {
+            Some(&(_, idx)) => idx,
+            None => {
+                let idx = self.add_constant(Constant::Number(f64::from(kind)))?;
+                self.kind_constants.push((kind, idx));
+                idx
+            }
+        };
+        self.emit(Op::LoadConst);
+        self.emit_u16(idx);
+        Ok(())
     }
 
     /// `switch` (sec-switch-statement-runtime-semantics-evaluation,
@@ -1922,7 +2232,13 @@ impl Compiler {
                 None => trampoline_sites.push(None),
             }
         }
-        let mut frame = LoopFrame::new(labels, None, self.scopes.len());
+        let mut frame = LoopFrame::new(
+            labels,
+            None,
+            self.scopes.len(),
+            self.cleanups.len(),
+            self.stack_base,
+        );
         frame.is_switch = true;
         self.loop_frames.push(frame);
         let mut body_starts: Vec<usize> = Vec::with_capacity(switch.cases.len());
@@ -1955,6 +2271,521 @@ impl Compiler {
         Ok(())
     }
 
+    /// `try`/`catch`/`finally` (sec-try-statement-runtime-semantics-evaluation).
+    ///
+    ///   <block>                        protected by `Handler` -> catch_pad
+    ///   CheckExit
+    ///   [Jump past_catch]
+    /// catch_pad:                       [thrown]
+    ///   [PushEnv; InitLexical e | BindHead pattern | Pop]
+    ///   <catch block>
+    ///   [PopEnv]
+    /// past_catch:
+    ///   LoadUndefined; LoadConst 0     completion record (value, kind)
+    ///   [Jump finalizer]
+    /// throw_pad:                       [thrown]; Handler over block+catch
+    ///   LoadConst 1
+    /// finalizer:                       also entered by every break/continue/
+    ///   <finally block>                return crossing it, with a kind >= 2
+    ///   EndFinally table
+    ///   [Jump end] exit pads...        one per kind: the rest of the exit
+    ///
+    /// A `Throw` is dispatched through the chunk's handler table, so the
+    /// block's and the catch's ranges are the only places it can resume from.
+    fn compile_try(&mut self, t: &TryStatement) -> Result<(), CompileError> {
+        if self.goal != CompileGoal::Function {
+            return Err(CompileError::Unsupported("statement:Try"));
+        }
+        debug_assert_eq!(self.current_stack, self.stack_base);
+        let base = self.stack_base;
+        let scope_depth = self.scopes.len();
+        let has_finally = t.finalizer.is_some();
+        let inner_from = self.cleanups.len() + usize::from(has_finally);
+        let ctx = if has_finally {
+            let ctx = self.finally_ctxs.len();
+            self.finally_ctxs.push(FinallyCtx::default());
+            self.cleanups.push(Cleanup::Finally { ctx, scope_depth });
+            Some(ctx)
+        } else {
+            None
+        };
+        let height = u16_state(base)?;
+        let depth = u16_state(scope_depth)?;
+
+        let try_start = self.code.len();
+        self.no_tail += 1;
+        self.compile_scoped_block(&t.block)?;
+        self.no_tail -= 1;
+        self.emit(Op::CheckExit);
+        let try_end = self.code.len();
+
+        if let Some(handler) = &t.handler {
+            let past_catch = self.emit_jump(Op::Jump);
+            let catch_start = self.code.len();
+            self.push_handler(
+                (try_start, try_end),
+                catch_start,
+                (height, depth),
+                true,
+                inner_from,
+            );
+            self.push_n(1);
+            self.compile_catch(handler, has_finally)?;
+            self.patch_jump(past_catch)?;
+        }
+        let (Some(ctx), Some(finalizer)) = (ctx, &t.finalizer) else {
+            return Ok(());
+        };
+        let protected_end = self.code.len();
+        self.cleanups.pop();
+
+        // The block and the catch ran to completion.
+        self.emit(Op::LoadUndefined);
+        self.push_n(1);
+        self.emit_load_kind(0)?;
+        self.push_n(1);
+        let to_finalizer = self.emit_jump(Op::Jump);
+        // A throw out of either arrives with the thrown value on the stack.
+        let throw_pad = self.code.len();
+        self.push_handler(
+            (try_start, protected_end),
+            throw_pad,
+            (height, depth),
+            true,
+            inner_from,
+        );
+        self.current_stack = base + 1;
+        self.emit_load_kind(1)?;
+        self.push_n(1);
+        let finalizer_start = self.code.len();
+        self.patch_jump_to(to_finalizer, finalizer_start)?;
+        let sites = std::mem::take(&mut self.finally_ctxs[ctx].jump_sites);
+        for site in sites {
+            self.patch_jump_to(site, finalizer_start)?;
+        }
+
+        self.cleanups.push(Cleanup::Record { scope_depth });
+        self.bump_persistent(2);
+        self.compile_scoped_block(finalizer)?;
+        self.cleanups.pop();
+        self.stack_base -= 2;
+
+        let routes = std::mem::take(&mut self.finally_ctxs[ctx].routes);
+        let table = u16::try_from(self.finally_tables.len())
+            .map_err(|_| CompileError::Ineligible("finalizer table overflow"))?;
+        self.finally_tables.push(
+            routes
+                .iter()
+                .map(|&(_, has_value)| FinallyExit {
+                    target: 0,
+                    keep_value: has_value,
+                })
+                .collect(),
+        );
+        self.emit(Op::EndFinally);
+        self.emit_u16(table);
+        self.pop_n(2);
+        // Each exit's remainder lives behind the finalizer; the normal
+        // completion jumps over them.
+        let past_exits = if routes.is_empty() {
+            None
+        } else {
+            Some(self.emit_jump(Op::Jump))
+        };
+        for (i, &(terminal, has_value)) in routes.iter().enumerate() {
+            self.finally_tables[usize::from(table)][i].target = self.code.len() as u32;
+            self.max_jump_target = self.max_jump_target.max(self.code.len());
+            self.emit_unwind(terminal, has_value, self.cleanups.len(), scope_depth)?;
+        }
+        if let Some(site) = past_exits {
+            self.patch_jump(site)?;
+        }
+        self.finally_ctxs.pop();
+        debug_assert_eq!(self.current_stack, self.stack_base);
+        Ok(())
+    }
+
+    /// Registers a handler over `[start, end)` except for the `IterClose`
+    /// exits emitted inside it for cleanups below `inner_from` (the first
+    /// cleanup index lying inside the construct the handler belongs to):
+    /// those close iterators of the construct itself or of enclosing ones,
+    /// after the completion has left the protected code, so an error from
+    /// their `return()` must reach the enclosing handlers instead.
+    fn push_handler(
+        &mut self,
+        range: (usize, usize),
+        target: usize,
+        state: (u16, u16),
+        checks_exit: bool,
+        inner_from: usize,
+    ) {
+        let (start, end) = range;
+        let mut holes: Vec<(usize, usize)> = self
+            .unwind_segments
+            .iter()
+            .filter(|&&(s, e, cleanup)| s >= start && e <= end && cleanup < inner_from)
+            .map(|&(s, e, _)| (s, e))
+            .collect();
+        holes.sort_unstable();
+        let mut from = start;
+        for (hole_start, hole_end) in holes {
+            if hole_start > from {
+                self.handlers.push(Handler {
+                    start: from as u32,
+                    end: hole_start as u32,
+                    target: target as u32,
+                    stack_height: state.0,
+                    scope_depth: state.1,
+                    checks_exit,
+                });
+            }
+            from = hole_end;
+        }
+        if end > from {
+            self.handlers.push(Handler {
+                start: from as u32,
+                end: end as u32,
+                target: target as u32,
+                stack_height: state.0,
+                scope_depth: state.1,
+                checks_exit,
+            });
+        }
+    }
+
+    /// The `catch` clause, entered with the thrown value on the operand stack.
+    fn compile_catch(
+        &mut self,
+        clause: &CatchClause,
+        has_finally: bool,
+    ) -> Result<(), CompileError> {
+        if has_finally {
+            self.no_tail += 1;
+        }
+        let scoped = clause.param.is_some();
+        if let Some(param) = &clause.param {
+            let mut names = Vec::new();
+            param.bound_names(&mut names);
+            self.open_scope(ScopeDecls {
+                lexicals: names.into_iter().map(|name| (name, false)).collect(),
+                simple_catch: matches!(param, Pattern::Identifier(_)),
+                ..ScopeDecls::default()
+            })?;
+        }
+        match &clause.param {
+            Some(Pattern::Identifier(name)) => {
+                self.emit_init_lexical(name, false)?;
+            }
+            Some(pattern) => {
+                self.emit_bind_head(HeadBinding::Declare {
+                    pattern: pattern.clone(),
+                    kind: BindingKind::Let,
+                })?;
+            }
+            None => {
+                self.emit(Op::Pop);
+                self.pop_n(1);
+            }
+        }
+        self.compile_scoped_block(&clause.body)?;
+        if scoped {
+            self.close_scope();
+        }
+        if has_finally {
+            self.no_tail -= 1;
+        }
+        Ok(())
+    }
+
+    /// `InitLexical` of `name` in the innermost block environment, consuming
+    /// the value on top of the stack.
+    fn emit_init_lexical(&mut self, name: &str, is_const: bool) -> Result<(), CompileError> {
+        let idx = self.add_name(name)?;
+        let slot = self
+            .scopes
+            .last()
+            .and_then(|names| names.iter().position(|n| n == name))
+            .and_then(|i| u16::try_from(i).ok())
+            .filter(|&i| i != NO_INIT_SLOT)
+            .unwrap_or(NO_INIT_SLOT);
+        self.emit(Op::InitLexical);
+        self.emit_u16(idx);
+        self.code.push(u8::from(is_const));
+        self.emit_u16(slot);
+        self.pop_n(1);
+        Ok(())
+    }
+
+    fn emit_bind_head(&mut self, head: HeadBinding) -> Result<(), CompileError> {
+        let idx = u16::try_from(self.head_bindings.len())
+            .map_err(|_| CompileError::Ineligible("head binding pool overflow"))?;
+        self.head_bindings.push(head);
+        self.emit(Op::BindHead);
+        self.emit_u16(idx);
+        self.pop_n(1);
+        Ok(())
+    }
+
+    /// Stores the value on top of the stack into the existing binding `name`
+    /// (the `var` of a for-in/of head, or an assignment target).
+    fn emit_store_name(&mut self, name: &str) -> Result<(), CompileError> {
+        let idx = self.add_name(name)?;
+        if let Some(slot) = self.local_slot(name) {
+            self.emit_store_local(idx, slot, true);
+        } else {
+            self.emit_resolve_name(idx);
+            self.emit_store_resolved_name(idx, true);
+        }
+        Ok(())
+    }
+
+    fn compile_for_in(
+        &mut self,
+        for_in: &crate::ast::ForInStatement,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        self.compile_for_in_of(
+            &for_in.left,
+            &for_in.right,
+            &for_in.body,
+            false,
+            for_in.may_capture_iteration_scope(),
+            labels,
+        )
+    }
+
+    fn compile_for_of(
+        &mut self,
+        for_of: &crate::ast::ForOfStatement,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        if for_of.is_await {
+            return Err(CompileError::Unsupported("for await"));
+        }
+        self.compile_for_in_of(
+            &for_of.left,
+            &for_of.right,
+            &for_of.body,
+            true,
+            for_of.may_capture_iteration_scope(),
+            labels,
+        )
+    }
+
+    /// `for (head in/of expr) body` (sec-forin-div-ofheadevaluation,
+    /// sec-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset).
+    /// The iterator (a for-of's iterator, a for-in's enumerator) is one
+    /// persistent operand slot for the whole loop:
+    ///
+    ///   [PushEnv (TDZ)] <expr> [PopEnv]; GetIterator | ForInHead
+    ///   [PushEnv head scope]            only when no closure can capture it
+    /// top:
+    ///   IterStep done                   [it] -> [it, value] | jump, it dropped
+    ///   [PushEnv head scope]            a fresh environment per iteration
+    ///   <bind head>                     consumes the value
+    ///   <body>
+    ///   [PopEnv]; Jump top
+    /// throw_pad: IterCloseThrow         handler over bind + body (for-of)
+    /// break_pad: IterClose | Pop        `break` and exits from nested loops
+    /// done:      [PopEnv]
+    fn compile_for_in_of(
+        &mut self,
+        left: &ForInOfLeft,
+        right: &Expression,
+        body: &Statement,
+        is_of: bool,
+        may_capture: bool,
+        labels: Vec<String>,
+    ) -> Result<(), CompileError> {
+        if self.goal != CompileGoal::Function {
+            return Err(CompileError::Unsupported(if is_of {
+                "statement:ForOf"
+            } else {
+                "statement:ForIn"
+            }));
+        }
+        enum Head<'a> {
+            Lexical(String, bool),
+            LexicalPattern(&'a Pattern, bool, Vec<String>),
+            VarName(String),
+            VarPattern(&'a Pattern, Vec<String>),
+            AssignName(String),
+            AssignPattern(&'a Pattern),
+        }
+        let head = match left {
+            ForInOfLeft::Variable(decl) => {
+                let [declarator] = decl.declarations.as_slice() else {
+                    return Err(CompileError::Unsupported("for-in/of head declarations"));
+                };
+                match (decl.kind, &declarator.pattern) {
+                    (VarKind::Var, _) if declarator.init.is_some() => {
+                        return Err(CompileError::Unsupported("for-in initializer"));
+                    }
+                    (VarKind::Let | VarKind::Const, Pattern::Identifier(name)) => {
+                        Head::Lexical(name.clone(), decl.kind == VarKind::Const)
+                    }
+                    (VarKind::Let | VarKind::Const, pattern) => {
+                        let mut names = Vec::new();
+                        pattern.bound_names(&mut names);
+                        Head::LexicalPattern(pattern, decl.kind == VarKind::Const, names)
+                    }
+                    (VarKind::Var, Pattern::Identifier(name)) => Head::VarName(name.clone()),
+                    (VarKind::Var, pattern) => {
+                        let mut names = Vec::new();
+                        pattern.bound_names(&mut names);
+                        Head::VarPattern(pattern, names)
+                    }
+                    _ => return Err(CompileError::Unsupported("for-in/of using head")),
+                }
+            }
+            ForInOfLeft::Pattern(Pattern::Identifier(name)) => Head::AssignName(name.clone()),
+            ForInOfLeft::Pattern(pattern) => Head::AssignPattern(pattern),
+            ForInOfLeft::Expression(Expression::Identifier(name)) => Head::AssignName(name.clone()),
+            ForInOfLeft::Expression(_) => {
+                return Err(CompileError::Unsupported("for-in/of expression target"));
+            }
+        };
+
+        // The head's names are in their TDZ while the expression runs.
+        let lexical_names: Vec<(String, bool)> = match &head {
+            Head::Lexical(name, is_const) => vec![(name.clone(), *is_const)],
+            Head::LexicalPattern(_, is_const, names) => {
+                names.iter().map(|n| (n.clone(), *is_const)).collect()
+            }
+            _ => Vec::new(),
+        };
+        if lexical_names.is_empty() {
+            self.compile_expr(right)?;
+        } else {
+            self.open_scope(ScopeDecls {
+                lexicals: lexical_names.clone(),
+                ..ScopeDecls::default()
+            })?;
+            self.compile_expr(right)?;
+            self.close_scope();
+        }
+        self.emit(if is_of {
+            Op::GetIterator
+        } else {
+            Op::ForInHead
+        });
+        match &head {
+            Head::VarName(name) => {
+                self.add_var_name(name)?;
+            }
+            Head::VarPattern(_, names) => {
+                for name in names {
+                    self.add_var_name(name)?;
+                }
+            }
+            _ => {}
+        }
+
+        // The iterator stays below everything the loop runs.
+        self.cleanups.push(Cleanup::Iter {
+            close: is_of,
+            scope_depth: self.scopes.len(),
+        });
+        self.bump_persistent(1);
+
+        let hoisted = matches!(head, Head::Lexical(..)) && !may_capture;
+        if hoisted {
+            self.open_scope(ScopeDecls {
+                lexicals: lexical_names.clone(),
+                ..ScopeDecls::default()
+            })?;
+        }
+        let loop_top = self.code.len();
+        self.loop_frames.push(LoopFrame::new(
+            labels,
+            Some(loop_top),
+            self.scopes.len(),
+            self.cleanups.len(),
+            self.stack_base,
+        ));
+        let step = self.emit_jump(if is_of { Op::IterStep } else { Op::ForInStep });
+        // The iteration value is on top, below the loop body's statements.
+        self.push_n(1);
+        let range_start = self.code.len();
+        let per_iteration = !lexical_names.is_empty() && !hoisted;
+        if per_iteration {
+            self.open_scope(ScopeDecls {
+                lexicals: lexical_names.clone(),
+                ..ScopeDecls::default()
+            })?;
+        }
+        match &head {
+            Head::Lexical(name, is_const) => self.emit_init_lexical(name, *is_const)?,
+            Head::LexicalPattern(pattern, is_const, _) => {
+                self.emit_bind_head(HeadBinding::Declare {
+                    pattern: (*pattern).clone(),
+                    kind: if *is_const {
+                        BindingKind::Const
+                    } else {
+                        BindingKind::Let
+                    },
+                })?;
+            }
+            Head::VarName(name) | Head::AssignName(name) => self.emit_store_name(name)?,
+            Head::VarPattern(pattern, _) => {
+                self.emit_bind_head(HeadBinding::Declare {
+                    pattern: (*pattern).clone(),
+                    kind: BindingKind::Var,
+                })?;
+            }
+            Head::AssignPattern(pattern) => {
+                self.emit_bind_head(HeadBinding::Assign {
+                    pattern: (*pattern).clone(),
+                })?;
+            }
+        }
+        self.compile_statement(body)?;
+        if per_iteration {
+            self.close_scope();
+        }
+        let range_end = self.code.len();
+        debug_assert_eq!(self.current_stack, self.stack_base);
+        self.emit_jump_to(Op::Jump, loop_top)?;
+        let frame = self
+            .loop_frames
+            .pop()
+            .expect("pushed above, not re-entrant");
+        debug_assert!(
+            frame.continue_sites.is_empty(),
+            "a for-in/of's continue target is known up front"
+        );
+        if is_of {
+            let pad = self.code.len();
+            self.push_handler(
+                (range_start, range_end),
+                pad,
+                (u16_state(self.stack_base)?, u16_state(frame.scope_depth)?),
+                false,
+                self.cleanups.len(),
+            );
+            self.emit(Op::IterCloseThrow);
+        }
+        for site in frame.break_sites {
+            self.patch_jump(site)?;
+        }
+        self.resolve_escape_targets(&frame.escape_breaks);
+        if is_of {
+            self.emit(Op::IterClose);
+            self.code.push(0);
+        } else {
+            self.emit(Op::Pop);
+        }
+        self.patch_jump(step)?;
+        if hoisted {
+            self.close_scope();
+        }
+        self.cleanups.pop();
+        self.stack_base -= 1;
+        self.pop_n(1);
+        debug_assert_eq!(self.current_stack, self.stack_base);
+        Ok(())
+    }
+
     fn compile_while(
         &mut self,
         while_stmt: &WhileStatement,
@@ -1964,15 +2795,20 @@ impl Compiler {
         // only when the body produces a non-empty value.
         self.reset_script_completion();
         let loop_start = self.code.len();
-        self.loop_frames
-            .push(LoopFrame::new(labels, Some(loop_start), self.scopes.len()));
+        self.loop_frames.push(LoopFrame::new(
+            labels,
+            Some(loop_start),
+            self.scopes.len(),
+            self.cleanups.len(),
+            self.stack_base,
+        ));
         let exit = if Self::test_always_true(Some(&while_stmt.test)) {
             None
         } else {
             Some(self.compile_cond_jump(&while_stmt.test)?)
         };
         self.compile_statement(&while_stmt.body)?;
-        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_stack, self.stack_base);
         debug_assert_eq!(self.current_refs, 0);
         self.emit_jump_to(Op::Jump, loop_start)?;
         if let Some(exit) = exit {
@@ -2002,8 +2838,13 @@ impl Compiler {
         // only after the body, including after a matching continue.
         self.reset_script_completion();
         let loop_start = self.code.len();
-        self.loop_frames
-            .push(LoopFrame::new(labels, None, self.scopes.len()));
+        self.loop_frames.push(LoopFrame::new(
+            labels,
+            None,
+            self.scopes.len(),
+            self.cleanups.len(),
+            self.stack_base,
+        ));
         self.compile_statement(&do_while_stmt.body)?;
         let frame = self
             .loop_frames
@@ -2080,8 +2921,13 @@ impl Compiler {
                 .expect("test_always_true(None) is true");
             Some(self.compile_cond_jump(test)?)
         };
-        self.loop_frames
-            .push(LoopFrame::new(labels, None, self.scopes.len()));
+        self.loop_frames.push(LoopFrame::new(
+            labels,
+            None,
+            self.scopes.len(),
+            self.cleanups.len(),
+            self.stack_base,
+        ));
         self.compile_statement(&for_stmt.body)?;
         let frame = self
             .loop_frames
@@ -2097,7 +2943,7 @@ impl Compiler {
         if let Some(update) = &for_stmt.update {
             self.compile_effect(update)?;
         }
-        debug_assert_eq!(self.current_stack, 0);
+        debug_assert_eq!(self.current_stack, self.stack_base);
         debug_assert_eq!(self.current_refs, 0);
         self.emit_jump_to(Op::Jump, loop_start)?;
         if let Some(exit) = exit {
@@ -2152,8 +2998,96 @@ impl Compiler {
             object_shapes: self.object_shapes,
             regexps: self.regexps,
             needs_instantiation: false,
+            handlers: self.handlers,
+            finally_tables: self.finally_tables,
+            head_bindings: self.head_bindings,
+            persistent_slots: self.max_persistent,
             fallback_reasons: self.fallback_reasons,
         }
+    }
+}
+
+fn u16_state(n: impl TryInto<u16>) -> Result<u16, CompileError> {
+    n.try_into()
+        .map_err(|_| CompileError::Ineligible("handler state overflow"))
+}
+
+/// Whether leaving through this cleanup runs code (a finalizer, an iterator's
+/// `return()`), as opposed to only dropping operand slots.
+fn runs_code(cleanup: &Cleanup) -> bool {
+    matches!(
+        cleanup,
+        Cleanup::Finally { .. } | Cleanup::Iter { close: true, .. }
+    )
+}
+
+/// The `break`/`continue`/`return` statements of `stmt` (not entering nested
+/// function bodies) whose completion leaves `stmt`: a `break` or `continue`
+/// not bound by a loop, `switch` or label inside it.
+fn collect_escaping_jumps(
+    stmt: &Statement,
+    labels: &mut Vec<String>,
+    loops: usize,
+    switches: usize,
+    out: &mut Vec<EscapingJump>,
+) {
+    match stmt {
+        Statement::Return(_) => out.push(EscapingJump::Return),
+        Statement::Break(None) if loops == 0 && switches == 0 => {
+            out.push(EscapingJump::Break(None));
+        }
+        Statement::Break(Some(label)) if !labels.contains(label) => {
+            out.push(EscapingJump::Break(Some(label.clone())));
+        }
+        Statement::Continue(None) if loops == 0 => out.push(EscapingJump::Continue(None)),
+        Statement::Continue(Some(label)) if !labels.contains(label) => {
+            out.push(EscapingJump::Continue(Some(label.clone())));
+        }
+        Statement::Block(body) => {
+            for inner in body {
+                collect_escaping_jumps(inner, labels, loops, switches, out);
+            }
+        }
+        Statement::If(i) => {
+            collect_escaping_jumps(&i.consequent, labels, loops, switches, out);
+            if let Some(alternate) = &i.alternate {
+                collect_escaping_jumps(alternate, labels, loops, switches, out);
+            }
+        }
+        Statement::While(w) => collect_escaping_jumps(&w.body, labels, loops + 1, switches, out),
+        Statement::DoWhile(d) => collect_escaping_jumps(&d.body, labels, loops + 1, switches, out),
+        Statement::For(f) => collect_escaping_jumps(&f.body, labels, loops + 1, switches, out),
+        Statement::ForIn(f) => collect_escaping_jumps(&f.body, labels, loops + 1, switches, out),
+        Statement::ForOf(f) => collect_escaping_jumps(&f.body, labels, loops + 1, switches, out),
+        Statement::Labeled(label, inner) => {
+            labels.push(label.clone());
+            collect_escaping_jumps(inner, labels, loops, switches, out);
+            labels.pop();
+        }
+        Statement::With(_, inner) => collect_escaping_jumps(inner, labels, loops, switches, out),
+        Statement::Try(t) => {
+            for inner in &t.block {
+                collect_escaping_jumps(inner, labels, loops, switches, out);
+            }
+            if let Some(handler) = &t.handler {
+                for inner in &handler.body {
+                    collect_escaping_jumps(inner, labels, loops, switches, out);
+                }
+            }
+            if let Some(finalizer) = &t.finalizer {
+                for inner in finalizer {
+                    collect_escaping_jumps(inner, labels, loops, switches, out);
+                }
+            }
+        }
+        Statement::Switch(s) => {
+            for case in &s.cases {
+                for inner in &case.consequent {
+                    collect_escaping_jumps(inner, labels, loops, switches + 1, out);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
