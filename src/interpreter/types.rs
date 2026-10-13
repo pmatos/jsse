@@ -2214,6 +2214,16 @@ pub(crate) enum ConstructorKind {
     DefaultDerivedClass,
 }
 
+/// Outcome of [`JsObjectData::dense_array_set_plan`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DenseArraySet {
+    /// The element is present: the own data property is updated in place.
+    Overwrite,
+    /// The element is a hole or one past the end: it is created, which is
+    /// only sound when no prototype owns the index.
+    Create,
+}
+
 /// Array-exotic internal data.
 ///
 /// `extra_string_property_order` mirrors only the subset of
@@ -2605,6 +2615,72 @@ impl JsObjectData {
         self.push_dense_array_element(index, value)
     }
 
+    /// How `[[Set]](index, value)` can complete on this Array without the
+    /// property MOP, or `None` when the generic path must run. Applies to an
+    /// exotic Array that owns no array-index key outside its element vector,
+    /// so every non-`undefined` slot is a writable, enumerable, configurable
+    /// data property and every `undefined` slot is a hole. A present
+    /// `undefined` is never stored here: the vector cannot tell it from a
+    /// hole, so it needs the descriptor the generic path creates.
+    #[inline]
+    pub(crate) fn dense_array_set_plan(
+        &self,
+        index: usize,
+        value: &JsValue,
+    ) -> Option<DenseArraySet> {
+        if value.is_undefined() || self.properties.may_hold_index_key() {
+            return None;
+        }
+        let elements = self.array_elements()?;
+        match elements.get(index) {
+            Some(slot) if !slot.is_undefined() => Some(DenseArraySet::Overwrite),
+            slot => {
+                if !self.extensible || index > elements.len() || index >= 0xFFFF_FFFF {
+                    return None;
+                }
+                let length = self
+                    .properties
+                    .get("length")?
+                    .value
+                    .as_ref()
+                    .and_then(JsValue::as_number)?;
+                // A hole inside the vector must already be below `length`;
+                // an append may grow it, which a read-only `length` forbids.
+                if slot.is_some() && index as f64 >= length {
+                    return None;
+                }
+                Some(DenseArraySet::Create)
+            }
+        }
+    }
+
+    /// Performs the write `plan` described. `dense_array_set_plan` must have
+    /// returned `plan` for the same `index` and `value`, and for `Create` the
+    /// caller must have verified that no prototype owns `index`.
+    #[inline]
+    pub(crate) fn apply_dense_array_set(
+        &mut self,
+        index: usize,
+        value: &JsValue,
+        plan: DenseArraySet,
+    ) -> bool {
+        let creating = plan == DenseArraySet::Create;
+        if creating && self.array_elements().is_some_and(|e| e.len() == index) {
+            return self.push_dense_array_element(index, value);
+        }
+        let Some(slot) = self
+            .array_elements_mut()
+            .and_then(|elements| elements.get_mut(index))
+        else {
+            return false;
+        };
+        *slot = value.clone();
+        if creating {
+            self.shape_id = fresh_shape_id();
+        }
+        true
+    }
+
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
         self.array_data()
             .map(|data| data.extra_string_property_order.as_slice())
@@ -2788,7 +2864,7 @@ impl JsObjectData {
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
-            && let Ok(idx) = key_str.parse::<usize>()
+            && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
         {
@@ -3097,8 +3173,9 @@ impl JsObjectData {
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
             if let Some(elems) = self.array_elements()
-                && let Ok(idx) = key.parse::<usize>()
+                && let Some(idx) = array_element_index(&key)
                 && idx < elems.len()
+                && !elems[idx].is_undefined()
             {
                 Some(PropertyDescriptor {
                     value: Some(elems[idx].clone()),
@@ -3500,10 +3577,44 @@ impl JsObjectData {
                 return true;
             }
         }
+        // An element held only in the vector is an existing own property: it
+        // stays writable on a non-extensible array and needs no creation
+        // checks. Everything else is validated before the vector or `length`
+        // is touched, so a rejected write leaves the array unchanged.
+        let mut vector_only_element = false;
+        if self.array_elements().is_some()
+            && let Some(idx) = array_element_index(key)
+        {
+            if let Some(desc) = self.properties.get(key) {
+                if desc.writable == Some(false) {
+                    return false;
+                }
+            } else {
+                vector_only_element = self
+                    .array_elements()
+                    .and_then(|elements| elements.get(idx))
+                    .is_some_and(|slot| !slot.is_undefined());
+                if !vector_only_element {
+                    if !self.extensible {
+                        return false;
+                    }
+                    if let Some(length) = self.properties.get("length")
+                        && length.writable == Some(false)
+                        && length
+                            .value
+                            .as_ref()
+                            .and_then(JsValue::as_number)
+                            .is_none_or(|len| idx as f64 >= len)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
         // Keep array_elements in sync with properties for numeric indices
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elements) = self.array_elements_mut()
-            && let Ok(idx) = key_str.parse::<usize>()
+            && let Some(idx) = array_element_index(key_str)
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
             if idx < elements.len() {
@@ -3551,7 +3662,7 @@ impl JsObjectData {
             {
                 return false;
             }
-            if !self.extensible {
+            if !self.extensible && !vector_only_element {
                 return false;
             }
             let ikey = intern_js_key(key.to_js_property_key());
@@ -3697,7 +3808,7 @@ impl JsObjectData {
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
-            && let Ok(idx) = key_str.parse::<usize>()
+            && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
         {
@@ -3746,7 +3857,7 @@ impl JsObjectData {
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
-            && let Ok(idx) = key_str.parse::<usize>()
+            && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
         {
@@ -4039,6 +4150,13 @@ pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: 
         return None;
     }
     Some(n)
+}
+
+/// [`parse_array_index`] widened for indexing an element vector.
+pub(crate) fn array_element_index<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+) -> Option<usize> {
+    parse_array_index(key).map(|i| i as usize)
 }
 
 /// Exact Array-index predicate for internal property-key bookkeeping.
@@ -4746,6 +4864,80 @@ mod kind_accessor_tests {
         assert!(!frozen_length.is_plain_dense_array(2), "read-only length");
 
         assert!(!JsObjectData::new().is_plain_dense_array(0), "not an Array");
+    }
+
+    #[test]
+    fn dense_array_set_plan_distinguishes_overwrite_create_and_generic() {
+        use DenseArraySet::{Create, Overwrite};
+        let v = JsValue::number(1.0);
+        let obj = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 2);
+        assert_eq!(obj.dense_array_set_plan(0, &v), Some(Overwrite));
+        assert_eq!(obj.dense_array_set_plan(1, &v), Some(Create), "hole");
+        assert_eq!(obj.dense_array_set_plan(2, &v), Some(Create), "append");
+        assert_eq!(obj.dense_array_set_plan(3, &v), None, "past the next index");
+        assert_eq!(
+            obj.dense_array_set_plan(0, &JsValue::UNDEFINED),
+            None,
+            "undefined needs a descriptor"
+        );
+        assert_eq!(obj.dense_array_set_plan(0xFFFF_FFFF, &v), None);
+
+        let mut named = dense_array_with(vec![JsValue::TRUE], 1);
+        named.insert_value("tag", JsValue::TRUE);
+        assert_eq!(named.dense_array_set_plan(0, &v), Some(Overwrite));
+        named.insert_value("0x", JsValue::TRUE);
+        assert_eq!(named.dense_array_set_plan(0, &v), None, "index-like key");
+
+        let mut sealed = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 2);
+        sealed.extensible = false;
+        assert_eq!(sealed.dense_array_set_plan(0, &v), Some(Overwrite));
+        assert_eq!(
+            sealed.dense_array_set_plan(1, &v),
+            None,
+            "hole, not extensible"
+        );
+        assert_eq!(
+            sealed.dense_array_set_plan(2, &v),
+            None,
+            "append, not extensible"
+        );
+
+        let mut readonly = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 2);
+        readonly.properties.get_mut("length").unwrap().writable = Some(false);
+        assert_eq!(readonly.dense_array_set_plan(1, &v), Some(Create));
+        // The plan is advisory: the append itself re-checks the read-only length.
+        assert!(!readonly.apply_dense_array_set(2, &v, Create));
+
+        let short_length = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 1);
+        assert_eq!(
+            short_length.dense_array_set_plan(1, &v),
+            None,
+            "hole at or past length"
+        );
+
+        assert_eq!(JsObjectData::new().dense_array_set_plan(0, &v), None);
+    }
+
+    #[test]
+    fn apply_dense_array_set_keeps_length_and_holes_consistent() {
+        use DenseArraySet::{Create, Overwrite};
+        let mut obj = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 4);
+        assert!(obj.apply_dense_array_set(0, &JsValue::number(5.0), Overwrite));
+        assert!(obj.apply_dense_array_set(1, &JsValue::number(6.0), Create));
+        assert!(obj.apply_dense_array_set(2, &JsValue::number(7.0), Create));
+        let elements = obj.array_elements().unwrap();
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements[0].as_number(), Some(5.0));
+        assert_eq!(elements[1].as_number(), Some(6.0));
+        assert_eq!(elements[2].as_number(), Some(7.0));
+        assert!(
+            obj.has_writable_array_length(4),
+            "writes below length leave it alone"
+        );
+        assert!(obj.apply_dense_array_set(3, &JsValue::number(8.0), Create));
+        assert!(obj.is_plain_dense_array(4));
+        assert!(obj.apply_dense_array_set(4, &JsValue::number(9.0), Create));
+        assert!(obj.is_plain_dense_array(5), "append past length grows it");
     }
 
     #[test]

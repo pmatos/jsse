@@ -30,6 +30,11 @@ const LINEAR_MAX: usize = 8;
 // trusted. `entry_at` returns the key for exactly that purpose.
 pub(crate) struct PropertyMap {
     inner: PropertyMapInner,
+    // Number of present keys that begin with an ASCII digit. Zero proves no
+    // array-index key lives here, which lets Array element reads and writes
+    // skip formatting the index and probing the map. A "0x" or "1e3" name
+    // also counts; that only costs the slower probe.
+    digit_leading_keys: u32,
 }
 
 // The inline variant is intentionally large — eliminating the heap allocation
@@ -52,7 +57,20 @@ impl PropertyMap {
     pub(crate) fn new() -> Self {
         Self {
             inner: PropertyMapInner::Inline(SmallVec::new()),
+            digit_leading_keys: 0,
         }
+    }
+
+    /// Whether any array-index key may be present. `false` guarantees that no
+    /// key of the form `"0"`..`"4294967294"` is.
+    #[inline]
+    pub(crate) fn may_hold_index_key(&self) -> bool {
+        self.digit_leading_keys != 0
+    }
+
+    #[inline]
+    fn is_digit_leading(key: &[u8]) -> bool {
+        key.first().is_some_and(u8::is_ascii_digit)
     }
 
     #[inline]
@@ -120,11 +138,13 @@ impl PropertyMap {
         key: JsPropertyKey,
         value: PropertyDescriptor,
     ) -> Option<PropertyDescriptor> {
+        let digit_leading = Self::is_digit_leading(key.as_bytes());
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
                     return Some(std::mem::replace(&mut slot.1, value));
                 }
+                self.digit_leading_keys += u32::from(digit_leading);
                 if v.len() < LINEAR_MAX {
                     v.push((key, value));
                     None
@@ -137,6 +157,7 @@ impl PropertyMap {
                 if let Some(&slot) = index.get(key.as_bytes()) {
                     return Some(std::mem::replace(&mut entries[slot as usize].1, value));
                 }
+                self.digit_leading_keys += u32::from(digit_leading);
                 index.insert(key.clone(), entries.len() as u32);
                 entries.push((key, value));
                 None
@@ -152,6 +173,7 @@ impl PropertyMap {
             !self.contains_key(&key),
             "push_fresh called with a key that is already present"
         );
+        self.digit_leading_keys += u32::from(Self::is_digit_leading(key.as_bytes()));
         match &mut self.inner {
             PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
             PropertyMapInner::Inline(v) => {
@@ -211,12 +233,12 @@ impl PropertyMap {
         &mut self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
-        match &mut self.inner {
+        let removed = match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 let pos = v
                     .iter()
                     .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes())?;
-                Some(v.remove(pos).1)
+                v.remove(pos).1
             }
             PropertyMapInner::Spilled { entries, index } => {
                 let slot = index.remove(key.as_property_key_bytes())? as usize;
@@ -226,9 +248,13 @@ impl PropertyMap {
                 {
                     *moved_slot = slot as u32;
                 }
-                Some(removed)
+                removed
             }
+        };
+        if Self::is_digit_leading(key.as_property_key_bytes()) {
+            self.digit_leading_keys -= 1;
         }
+        Some(removed)
     }
 
     pub(crate) fn iter(&self) -> PropertyMapIter<'_> {
@@ -457,6 +483,50 @@ mod tests {
         let keys: Vec<&JsPropertyKey> = m.keys().collect();
         assert!(keys.contains(&&symbol), "Symbol key lost on spill");
         assert!(keys.contains(&&text), "String key lost on spill");
+    }
+
+    #[test]
+    fn index_key_count_tracks_digit_leading_keys() {
+        let mut m = PropertyMap::new();
+        assert!(!m.may_hold_index_key());
+        m.insert(key("length"), desc(0.0));
+        m.insert(key(""), desc(0.0));
+        m.insert(key("a1"), desc(0.0));
+        assert!(
+            !m.may_hold_index_key(),
+            "names that do not start with a digit"
+        );
+
+        m.insert(key("7"), desc(1.0));
+        assert!(m.may_hold_index_key());
+        m.insert(key("7"), desc(2.0));
+        m.remove("7");
+        assert!(
+            !m.may_hold_index_key(),
+            "replacing a key must not count twice"
+        );
+        assert!(m.remove("7").is_none());
+        assert!(
+            !m.may_hold_index_key(),
+            "removing an absent key changes nothing"
+        );
+
+        let mut fresh = PropertyMap::new();
+        fresh.push_fresh(key("0"), desc(1.0));
+        assert!(fresh.may_hold_index_key(), "push_fresh records it too");
+
+        let mut spilled = PropertyMap::new();
+        for i in 0..=LINEAR_MAX {
+            spilled.insert(key(format!("k{i}")), desc(i as f64));
+        }
+        assert!(
+            !spilled.may_hold_index_key(),
+            "spilling alone does not set it"
+        );
+        spilled.insert(key("4294967294"), desc(1.0));
+        assert!(spilled.may_hold_index_key(), "recorded in spilled mode");
+        spilled.remove("4294967294");
+        assert!(!spilled.may_hold_index_key(), "cleared in spilled mode");
     }
 
     #[test]

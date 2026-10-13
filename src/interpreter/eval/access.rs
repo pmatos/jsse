@@ -460,7 +460,7 @@ impl Interpreter {
             {
                 map.remove(key);
             }
-            if let Ok(idx) = key.parse::<usize>()
+            if let Some(idx) = crate::interpreter::types::array_element_index(&key)
                 && let Some(elems) = obj_mut.array_elements_mut()
                 && idx < elems.len()
             {

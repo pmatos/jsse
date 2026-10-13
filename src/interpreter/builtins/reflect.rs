@@ -261,7 +261,7 @@ impl Interpreter {
                     {
                         map.remove(key_str);
                     }
-                    if let Ok(idx) = key.parse::<usize>()
+                    if let Some(idx) = crate::interpreter::types::array_element_index(&key)
                         && let Some(elems) = obj_mut.array_elements_mut()
                         && idx < elems.len()
                     {
@@ -880,7 +880,8 @@ impl Interpreter {
                             }
                             recv_obj.borrow_mut().define_own_property(key, update_desc);
                         } else {
-                            recv_obj.borrow_mut().set_property_value(&key, value);
+                            let succeeded = recv_obj.borrow_mut().set_property_value(&key, value);
+                            return Completion::Normal(JsValue::boolean(succeeded));
                         }
                     }
                     return Completion::Normal(JsValue::boolean(true));
