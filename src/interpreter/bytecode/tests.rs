@@ -2865,6 +2865,13 @@ fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
 }
 
 fn compile_function_source(source: &str, params: &[&str]) -> Chunk {
+    try_compile_function_source(source, params).expect("compile")
+}
+
+fn try_compile_function_source(
+    source: &str,
+    params: &[&str],
+) -> Result<Chunk, super::compiler::CompileError> {
     use super::compiler::{FrameShape, compile_function_body};
     use crate::parser::Parser;
 
@@ -2878,7 +2885,6 @@ fn compile_function_source(source: &str, params: &[&str]) -> Chunk {
             simple_params: &params,
         },
     )
-    .expect("compile")
 }
 
 /// The chunk's ops without statement-boundary safepoints.
@@ -3824,6 +3830,37 @@ fn literals_and_closures_compile_without_tree_walker_hand_offs() {
         assert!(ops.contains(&op), "missing {op:?} in {ops:?}");
     }
     assert!(!ops.contains(&Op::EvalAst) && !ops.contains(&Op::ExecAst));
+}
+
+#[test]
+fn await_inside_a_nested_async_arrow_does_not_keep_the_body_whole() {
+    let chunk = compile_function_source(
+        "var total = 0;
+         for (let datum of data) total += datum;
+         var later = async () => { let s = await data; for await (let d of s) total += d; };
+         total;",
+        &["data"],
+    );
+    assert!(chunk.ast.is_empty(), "no node left on the tree-walker");
+    assert!(work_ops(&chunk).contains(&Op::MakeClosure));
+}
+
+#[test]
+fn inherited_constructs_in_a_nested_async_arrow_still_keep_the_body_whole() {
+    use super::compiler::CompileError;
+
+    for source in [
+        "var later = async () => { await 1; return eval('1'); };",
+        "var later = async () => { await 1; return import('x'); };",
+    ] {
+        assert!(
+            matches!(
+                try_compile_function_source(source, &[]),
+                Err(CompileError::Ineligible(_))
+            ),
+            "{source}: expected Ineligible"
+        );
+    }
 }
 
 #[test]
