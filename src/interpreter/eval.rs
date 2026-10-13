@@ -251,21 +251,26 @@ impl Interpreter {
         self.dynamic_import_module_type(&attrs)
     }
 
-    fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> String {
-        let mut current = Some(env.clone());
-        while let Some(e) = current {
+    /// The Private Name `source_name` denotes in `env`'s Private Environment
+    /// chain (the nearest enclosing class that declares it), or
+    /// `PrivateId::UNRESOLVED`, which no object holds.
+    pub(crate) fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> PrivateId {
+        let mut current = env.clone();
+        loop {
             let next = {
-                let borrowed = e.borrow();
-                if let Some(ref names) = borrowed.class_private_names
-                    && let Some(branded) = names.get(source_name)
+                let borrowed = current.borrow();
+                if let Some(ref scope) = borrowed.class_private_names
+                    && let Some(id) = scope.get(source_name)
                 {
-                    return branded.clone();
+                    return id;
                 }
-                borrowed.parent.clone()
+                match borrowed.parent {
+                    Some(ref parent) => Rc::clone(parent),
+                    None => return PrivateId::UNRESOLVED,
+                }
             };
             current = next;
         }
-        source_name.to_string()
     }
 
     /// Check if `this` is in TDZ (derived constructor before super() called).
@@ -383,14 +388,14 @@ impl Interpreter {
                                 "Cannot define private method on non-extensible object",
                             ));
                         }
-                        if obj.borrow().has_private_field(name) {
+                        if obj.borrow().has_private_field(*name) {
                             return Err(
                                 self.create_type_error("Cannot add private method to object twice")
                             );
                         }
                         obj.borrow_mut()
                             .private_fields_mut()
-                            .insert(name.clone(), PrivateElement::Method(value.clone()));
+                            .insert(*name, PrivateElement::Method(value.clone()));
                     }
                 }
                 InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
@@ -400,12 +405,12 @@ impl Interpreter {
                                 "Cannot define private accessor on non-extensible object",
                             ));
                         }
-                        if obj.borrow().has_private_field(name) {
+                        if obj.borrow().has_private_field(*name) {
                             return Err(self
                                 .create_type_error("Cannot add private accessor to object twice"));
                         }
                         obj.borrow_mut().private_fields_mut().insert(
-                            name.clone(),
+                            *name,
                             PrivateElement::Accessor {
                                 get: get.clone(),
                                 set: set.clone(),
@@ -419,14 +424,17 @@ impl Interpreter {
         // Pass 2: Run field initializers in source order.
         for idef in instance_field_defs {
             match idef {
-                InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
+                InstanceFieldDef::Private(PrivateFieldDef::Field {
+                    name,
+                    source_name,
+                    initializer,
+                }) => {
                     let val = if let Some(init) = initializer {
                         let env = init_env
                             .get_or_insert_with(|| self.make_field_init_env(this_val, ctor_id));
                         match self.eval_expr(init, env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
-                                    let source_name = name.split('#').next().unwrap_or(name);
                                     self.set_function_name(&v, &format!("#{source_name}"));
                                 }
                                 v
@@ -443,14 +451,14 @@ impl Interpreter {
                                 "Cannot define private field on non-extensible object",
                             ));
                         }
-                        if obj.borrow().has_private_field(name) {
+                        if obj.borrow().has_private_field(*name) {
                             return Err(self.create_type_error(
                                 "Cannot initialize private field twice on the same object",
                             ));
                         }
                         obj.borrow_mut()
                             .private_fields_mut()
-                            .insert(name.clone(), PrivateElement::Field(val));
+                            .insert(*name, PrivateElement::Field(val));
                     }
                 }
                 InstanceFieldDef::Public(key, initializer) => {
@@ -489,7 +497,7 @@ impl Interpreter {
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         obj.borrow_mut()
                             .private_fields_mut()
-                            .insert(slot_name.clone(), PrivateElement::Field(val));
+                            .insert(*slot_name, PrivateElement::Field(val));
                     }
                 }
                 _ => {} // Methods/accessors handled in pass 1
@@ -629,18 +637,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let Some(id) = rval.as_object_id() else {
-                        return Completion::Throw(self.create_type_error(
-                            "Cannot use 'in' operator to search for a private field without an object",
-                        ));
-                    };
-                    return if let Some(obj) = self.get_object_cell(id) {
-                        Completion::Normal(JsValue::boolean(
-                            obj.borrow().has_private_field(&branded),
-                        ))
-                    } else {
-                        Completion::Normal(JsValue::boolean(false))
-                    };
+                    return self.private_in(branded, &rval);
                 }
                 let lval = match self.eval_expr(left, env) {
                     Completion::Normal(v) => v,
@@ -2703,28 +2700,8 @@ impl Interpreter {
                 other => return other,
             };
             if let MemberProperty::Private(name) = prop {
-                // §13.4 UpdateExpression on a private reference desugars to
-                // PrivateGet -> ToNumeric -> PrivateSet, so accessor-backed
-                // privates read through their getter and write through their
-                // setter just like a data field does. The receiver has to stay
-                // rooted across all three steps: ToNumeric runs a user
-                // `valueOf` that can reach a GC safepoint while `obj_val`
-                // exists only as a Rust local, invisible to the collector.
-                return self.with_gc_root_scope(|i| {
-                    i.gc_root_value(&obj_val);
-                    let old = match i.private_get(&obj_val, name, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let (old_val, new_val) = match i.apply_update_numeric(&old, op) {
-                        Ok(pair) => pair,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    if let Err(e) = i.set_private_field(&obj_val, name, new_val.clone(), env) {
-                        return Completion::Throw(e);
-                    }
-                    Completion::Normal(if prefix { new_val } else { old_val })
-                });
+                let branded = self.resolve_private_name(name, env);
+                return self.update_private_resolved(&obj_val, branded, name, op, prefix);
             }
             let key = match prop {
                 MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
@@ -3107,17 +3084,17 @@ impl Interpreter {
                 self.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&obj_val);
                     if let MemberProperty::Private(name) = prop {
-                        // The RHS is evaluated first (preserving jsse's existing
-                        // evaluation order). A plain `= ` performs PrivateSet with
-                        // no preceding PrivateGet; every compound operator desugars
-                        // to PrivateGet -> op -> PrivateSet, so accessor-backed
-                        // privates read through the getter and write through the
-                        // setter exactly as a data field does.
-                        let rval = match interp.eval_expr(right, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
+                        // A plain `=` performs PrivateSet with no preceding
+                        // PrivateGet; every compound operator desugars to
+                        // PrivateGet -> RHS -> op -> PrivateSet, so
+                        // accessor-backed privates read through the getter and
+                        // write through the setter exactly as a data field
+                        // does, and the getter runs before the RHS.
                         if op == AssignOp::Assign {
+                            let rval = match interp.eval_expr(right, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
                             if let Err(e) =
                                 interp.set_private_field(&obj_val, name, rval.clone(), env)
                             {
@@ -3129,10 +3106,17 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
+                        interp.gc_root_value(&lval);
+                        let rval = match interp.eval_expr(right, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        interp.gc_root_value(&rval);
                         let final_val = match interp.apply_compound_assign(op, lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
+                        interp.gc_root_value(&final_val);
                         if let Err(e) =
                             interp.set_private_field(&obj_val, name, final_val.clone(), env)
                         {
@@ -3991,6 +3975,38 @@ impl Interpreter {
         self.set_member_property_with_base(obj_val, prop, val, env)
     }
 
+    /// §13.4 UpdateExpression on a private reference desugars to
+    /// PrivateGet -> ToNumeric -> PrivateSet, so accessor-backed privates
+    /// read through their getter and write through their setter just like a
+    /// data field does. The receiver has to stay rooted across all three
+    /// steps: ToNumeric runs a user `valueOf` that can reach a GC safepoint
+    /// while `obj_val` exists only as a Rust local, invisible to the
+    /// collector.
+    pub(crate) fn update_private_resolved(
+        &mut self,
+        obj_val: &JsValue,
+        branded: PrivateId,
+        name: &str,
+        op: UpdateOp,
+        prefix: bool,
+    ) -> Completion {
+        self.with_gc_root_scope(|i| {
+            i.gc_root_value(obj_val);
+            let old = match i.private_get_resolved(obj_val, branded, name) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            let (old_val, new_val) = match i.apply_update_numeric(&old, op) {
+                Ok(pair) => pair,
+                Err(e) => return Completion::Throw(e),
+            };
+            if let Err(e) = i.set_private_resolved(obj_val, branded, name, new_val.clone()) {
+                return Completion::Throw(e);
+            }
+            Completion::Normal(if prefix { new_val } else { old_val })
+        })
+    }
+
     /// PrivateGet ( O, P ) — §7.3.28. Resolves the private name `name` in `env`
     /// and performs the private-element MOP: a data field or method returns its
     /// stored value; an accessor invokes its getter, or throws a TypeError when
@@ -3999,6 +4015,17 @@ impl Interpreter {
     /// operation that every `o.#x` reference form routes through.
     fn private_get(&mut self, obj_val: &JsValue, name: &str, env: &EnvRef) -> Completion {
         let branded = self.resolve_private_name(name, env);
+        self.private_get_resolved(obj_val, branded, name)
+    }
+
+    /// `private_get` once the Private Name is resolved. `name` only spells
+    /// the TypeError messages.
+    pub(crate) fn private_get_resolved(
+        &mut self,
+        obj_val: &JsValue,
+        branded: PrivateId,
+        name: &str,
+    ) -> Completion {
         let Some(obj_id) = obj_val.as_object_id() else {
             return Completion::Throw(self.create_type_error(&format!(
                 "Cannot read private member #{name} from a non-object"
@@ -4007,24 +4034,39 @@ impl Interpreter {
         let Some(obj) = self.get_object_cell(obj_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
         };
-        let elem = obj.borrow().private_field(&branded).cloned();
-        match elem {
+        let found = match obj.borrow().private_field(branded) {
             Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
-                Completion::Normal(v)
+                return Completion::Normal(v.clone());
             }
-            Some(PrivateElement::Accessor { get, .. }) => {
-                if let Some(getter) = get {
-                    self.call_function(&getter, obj_val, &[])
-                } else {
-                    Completion::Throw(self.create_type_error(&format!(
-                        "Cannot read private member #{name} which has no getter"
-                    )))
-                }
-            }
-            None => Completion::Throw(self.create_type_error(&format!(
+            Some(PrivateElement::Accessor { get, .. }) => Some(get.clone()),
+            None => None,
+        };
+        let Some(getter) = found else {
+            return Completion::Throw(self.create_type_error(&format!(
                 "Cannot read private member #{name} from an object whose class did not declare it"
+            )));
+        };
+        match getter {
+            Some(getter) => self.call_function(&getter, obj_val, &[]),
+            None => Completion::Throw(self.create_type_error(&format!(
+                "Cannot read private member #{name} which has no getter"
             ))),
         }
+    }
+
+    /// `#x in o` (`sec-relational-operators-runtime-semantics-evaluation`
+    /// step for a PrivateIdentifier left operand): a non-object right operand
+    /// is a TypeError, otherwise PrivateElementFind decides.
+    pub(crate) fn private_in(&mut self, branded: PrivateId, rval: &JsValue) -> Completion {
+        let Some(id) = rval.as_object_id() else {
+            return Completion::Throw(self.create_type_error(
+                "Cannot use 'in' operator to search for a private field without an object",
+            ));
+        };
+        Completion::Normal(JsValue::boolean(
+            self.get_object_cell(id)
+                .is_some_and(|obj| obj.borrow().has_private_field(branded)),
+        ))
     }
 
     fn set_private_field(
@@ -4035,45 +4077,54 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let branded = self.resolve_private_name(name, env);
-        match obj_val.as_object_id() {
-            Some(id) => {
-                if let Some(obj) = self.get_object_cell(id) {
-                    let elem = obj.borrow().private_field(&branded).cloned();
-                    match elem {
-                        Some(PrivateElement::Field(_)) => {
-                            obj.borrow_mut()
-                                .private_fields_mut()
-                                .insert(branded, PrivateElement::Field(val));
-                            Ok(())
-                        }
-                        Some(PrivateElement::Method(_)) => Err(self.create_type_error(
-                            &format!("Cannot assign to private method #{name}"),
-                        )),
-                        Some(PrivateElement::Accessor { set, .. }) => {
-                            if let Some(setter) = &set {
-                                let setter = setter.clone();
-                                let obj_val = obj_val.clone();
-                                match self.call_function(&setter, &obj_val, &[val]) {
-                                    Completion::Normal(_) => Ok(()),
-                                    Completion::Throw(e) => Err(e),
-                                    _ => Ok(()),
-                                }
-                            } else {
-                                Err(self.create_type_error(&format!(
-                                    "Cannot set private member #{name} which has no setter"
-                                )))
-                            }
-                        }
-                        None => Err(self.create_type_error(&format!(
-                            "Cannot write private member #{name} to an object whose class did not declare it"
-                        ))),
-                    }
-                } else {
-                    Ok(())
+        self.set_private_resolved(obj_val, branded, name, val)
+    }
+
+    /// PrivateSet (`sec-privateset`) once the Private Name is resolved.
+    pub(crate) fn set_private_resolved(
+        &mut self,
+        obj_val: &JsValue,
+        branded: PrivateId,
+        name: &str,
+        val: JsValue,
+    ) -> Result<(), JsValue> {
+        let Some(id) = obj_val.as_object_id() else {
+            return Err(self.create_type_error(&format!(
+                "Cannot write private member #{name} to a non-object"
+            )));
+        };
+        let Some(obj) = self.get_object_cell(id) else {
+            return Ok(());
+        };
+        let setter = {
+            let mut borrowed = obj.borrow_mut();
+            match borrowed.private_field_mut(branded) {
+                Some(PrivateElement::Field(slot)) => {
+                    *slot = val;
+                    return Ok(());
+                }
+                Some(PrivateElement::Method(_)) => {
+                    drop(borrowed);
+                    return Err(
+                        self.create_type_error(&format!("Cannot assign to private method #{name}"))
+                    );
+                }
+                Some(PrivateElement::Accessor { set, .. }) => set.clone(),
+                None => {
+                    drop(borrowed);
+                    return Err(self.create_type_error(&format!(
+                        "Cannot write private member #{name} to an object whose class did not declare it"
+                    )));
                 }
             }
+        };
+        match setter {
+            Some(setter) => match self.call_function(&setter, obj_val, &[val]) {
+                Completion::Throw(e) => Err(e),
+                _ => Ok(()),
+            },
             None => Err(self.create_type_error(&format!(
-                "Cannot write private member #{name} to a non-object"
+                "Cannot set private member #{name} which has no setter"
             ))),
         }
     }
@@ -6132,7 +6183,7 @@ impl Interpreter {
                     function_boundary_count += 1;
                 }
                 if let Some(ref names) = borrowed.class_private_names {
-                    let name_set: HashSet<String> = names.keys().cloned().collect();
+                    let name_set: HashSet<String> = names.names().map(str::to_string).collect();
                     p.set_eval_in_class_with_names(name_set);
                     break;
                 }

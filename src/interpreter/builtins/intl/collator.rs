@@ -237,7 +237,7 @@ impl Interpreter {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::Collator { .. })) {
                                 Probe::NotCollator
-                            } else if let Some(func) = b.hidden_slot("[[BoundCompare]]") {
+                            } else if let Some(func) = b.hidden_slot(PrivateId::BOUND_COMPARE) {
                                 Probe::Cached(func)
                             } else {
                                 Probe::Uncached
@@ -329,7 +329,7 @@ impl Interpreter {
 
                     if let Some(obj) = interp.get_object_cell(o) {
                         obj.borrow_mut()
-                            .set_hidden_slot("[[BoundCompare]]", compare_fn.clone());
+                            .set_hidden_slot(PrivateId::BOUND_COMPARE, compare_fn.clone());
                     }
 
                     return Completion::Normal(compare_fn);

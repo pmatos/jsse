@@ -1311,22 +1311,49 @@ fn optional_member_access_bails_to_unsupported() {
 }
 
 #[test]
-fn private_field_member_bails_to_unsupported() {
-    use super::compiler::CompileError;
+fn private_member_access_compiles_to_private_ops() {
     use crate::ast::{MemberProperty, PropSiteId};
-    // `this.#x` — private-field access always bails, regardless of what the
-    // base expression is; the `MemberProperty::Private` arm short-circuits
-    // before ever recursing into the base.
+    // `this.#x` lowers to `GetPrivate` over the chunk's private-name pool, so
+    // a body of private accesses no longer hands off to the tree-walker.
     let body = vec![Statement::Return(Some(Expression::Member(
         ExprBox::new(Expression::This),
         MemberProperty::Private("x".to_string()),
         PropSiteId::UNASSIGNED,
     )))];
-    // The only work in the body is a tree-walker hand-off, so the body stays
-    // on the tree-walker rather than paying chunk-entry cost for nothing.
-    match compile_body(&body) {
-        Err(CompileError::Ineligible(_)) => {}
-        other => panic!("expected Err(Ineligible), got {other:?}"),
+    let chunk = compile_body(&body).expect("private member access compiles");
+    assert!(chunk.ast.is_empty(), "{:?}", chunk.fallback_reasons);
+    assert_eq!(count_ops(&chunk, Op::GetPrivate), 1);
+    assert_eq!(chunk.private_names, vec!["x".to_string()]);
+}
+
+#[test]
+fn private_member_forms_run_identically_on_both_engines() {
+    for (source, expected) in [
+        (
+            "var __r = (function(){ class A { #a = 1; #b = 2; \
+               run(n){ var s = 0; for (var i = 0; i < n; i++) { this.#a = this.#a + 1; s += this.#a + this.#b; this.#b += 1; this.#b++; --this.#a; } return s + ',' + this.#a + ',' + this.#b; } } \
+               return new A().run(4); })();",
+            "28,1,10",
+        ),
+        (
+            "var __r = (function(){ class A { #m(x){ return this.#v + x; } #v = 5; get #g(){ return this.#v; } set #g(x){ this.#v = x; } \
+               static has(o){ return #m in o; } \
+               run(){ this.#g += 10; this.#g++; return this.#m(1) + ',' + A.has(this) + ',' + A.has({}); } } \
+               return new A().run(); })();",
+            "17,true,false",
+        ),
+        (
+            "var __r = (function(){ class A { #x; static t(o){ try { return #x in o; } catch (e) { return e.constructor.name; } } } \
+               return [A.t(1), A.t(new A()), A.t({})].join(); })();",
+            "TypeError,true,false",
+        ),
+        (
+            "var __r = (function(){ function make(){ return class { #p = 1; static get(o){ return o.#p; } }; } \
+               var C = make(), D = make(); var r = C.get(new C()); try { D.get(new C()); } catch (e) { r += e.constructor.name; } return r; })();",
+            "1TypeError",
+        ),
+    ] {
+        assert_eq!(run_both_modes(source), expected, "{source}");
     }
 }
 

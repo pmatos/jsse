@@ -962,7 +962,7 @@ pub(crate) struct Environment {
     pub(crate) global_object_id: Option<u64>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
-    pub(crate) class_private_names: Option<Rc<HashMap<String, String>>>,
+    pub(crate) class_private_names: Option<Rc<PrivateNameScope>>,
     pub(crate) is_field_initializer: bool,
     pub(crate) arguments_immutable: bool,
     pub(crate) has_parameter_expressions: bool,
@@ -1632,18 +1632,95 @@ impl PropertyDescriptor {
 #[derive(Debug, Clone)]
 pub(crate) enum PrivateFieldDef {
     Field {
-        name: String,
+        name: PrivateId,
+        /// Source spelling without the `#`, for NamedEvaluation of an
+        /// anonymous function initializer.
+        source_name: String,
         initializer: Option<Expression>,
     },
     Method {
-        name: String,
+        name: PrivateId,
         value: JsValue,
     },
     Accessor {
-        name: String,
+        name: PrivateId,
         get: Option<JsValue>,
         set: Option<JsValue>,
     },
+}
+
+/// A Private Name (`sec-private-names`): unique per class evaluation and
+/// source name, so two evaluations of one class body (or two classes spelling
+/// `#x`) never alias. `0` is reserved for an unresolvable name, which no
+/// object ever holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PrivateId(pub(crate) u64);
+
+impl PrivateId {
+    pub(crate) const UNRESOLVED: PrivateId = PrivateId(0);
+    /// Engine-internal slots (`JsObjectData::hidden_slot`) take ids from the
+    /// top of the range, which the class-evaluation counter never reaches.
+    pub(crate) const BOUND_COMPARE: PrivateId = PrivateId(u64::MAX);
+    pub(crate) const BOUND_FORMAT: PrivateId = PrivateId(u64::MAX - 1);
+}
+
+/// The Private Environment Record of one class evaluation: source name to
+/// the Private Name that evaluation created.
+#[derive(Debug, Default)]
+pub(crate) struct PrivateNameScope {
+    entries: Vec<(String, PrivateId)>,
+}
+
+impl PrivateNameScope {
+    pub(crate) fn insert_if_absent(&mut self, name: &str, fresh: impl FnOnce() -> PrivateId) {
+        if self.get(name).is_none() {
+            self.entries.push((name.to_string(), fresh()));
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get(&self, name: &str) -> Option<PrivateId> {
+        self.entries
+            .iter()
+            .find_map(|(n, id)| (n == name).then_some(*id))
+    }
+
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().map(|(n, _)| n.as_str())
+    }
+}
+
+/// An object's [[PrivateElements]]. Objects hold a handful, so a linear scan
+/// over integer ids beats hashing.
+#[derive(Debug, Default)]
+pub(crate) struct PrivateFields {
+    entries: Vec<(PrivateId, PrivateElement)>,
+}
+
+impl PrivateFields {
+    #[inline]
+    pub(crate) fn get(&self, id: PrivateId) -> Option<&PrivateElement> {
+        self.entries.iter().find(|(k, _)| *k == id).map(|(_, e)| e)
+    }
+
+    #[inline]
+    pub(crate) fn get_mut(&mut self, id: PrivateId) -> Option<&mut PrivateElement> {
+        self.entries
+            .iter_mut()
+            .find(|(k, _)| *k == id)
+            .map(|(_, e)| e)
+    }
+
+    pub(crate) fn insert(&mut self, id: PrivateId, elem: PrivateElement) {
+        match self.get_mut(id) {
+            Some(slot) => *slot = elem,
+            None => self.entries.push((id, elem)),
+        }
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &PrivateElement> {
+        self.entries.iter().map(|(_, e)| e)
+    }
 }
 
 /// Unified ordered instance field definition (private or public), preserving source order.
@@ -1652,7 +1729,7 @@ pub(crate) enum InstanceFieldDef {
     Private(PrivateFieldDef),
     Public(JsPropertyKey, Option<Expression>),
     /// Auto accessor backing storage initialization: (storage_slot_name, initializer)
-    AutoAccessorStorage(String, Option<Expression>),
+    AutoAccessorStorage(PrivateId, Option<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -2187,7 +2264,7 @@ const NO_REALM: u32 = u32::MAX;
 /// See [`JsObjectData::extras`].
 #[derive(Default)]
 pub(crate) struct ObjectExtras {
-    pub(crate) private_fields: FxHashMap<String, PrivateElement>,
+    pub(crate) private_fields: PrivateFields,
     /// Shared with every construction (`Rc::clone`); `Rc::make_mut` in
     /// `instance_field_defs_mut` only copies if a construction still holds it,
     /// which class evaluation (the sole mutator) never races with.
@@ -3039,16 +3116,16 @@ impl JsObjectData {
     /// neither enumerate, read nor overwrite. It lives with the private
     /// elements, which the collector already traces, so it is never an own
     /// property of the object.
-    pub(crate) fn hidden_slot(&self, name: &str) -> Option<JsValue> {
+    pub(crate) fn hidden_slot(&self, name: PrivateId) -> Option<JsValue> {
         match self.private_field(name) {
             Some(PrivateElement::Field(v)) => Some(v.clone()),
             _ => None,
         }
     }
 
-    pub(crate) fn set_hidden_slot(&mut self, name: &str, value: JsValue) {
+    pub(crate) fn set_hidden_slot(&mut self, name: PrivateId, value: JsValue) {
         self.private_fields_mut()
-            .insert(name.to_string(), PrivateElement::Field(value));
+            .insert(name, PrivateElement::Field(value));
     }
 
     #[inline]
@@ -3079,16 +3156,21 @@ impl JsObjectData {
     }
 
     #[inline]
-    pub(crate) fn private_field(&self, name: &str) -> Option<&PrivateElement> {
+    pub(crate) fn private_field(&self, name: PrivateId) -> Option<&PrivateElement> {
         self.extras.as_ref()?.private_fields.get(name)
     }
 
     #[inline]
-    pub(crate) fn has_private_field(&self, name: &str) -> bool {
+    pub(crate) fn private_field_mut(&mut self, name: PrivateId) -> Option<&mut PrivateElement> {
+        self.extras.as_mut()?.private_fields.get_mut(name)
+    }
+
+    #[inline]
+    pub(crate) fn has_private_field(&self, name: PrivateId) -> bool {
         self.private_field(name).is_some()
     }
 
-    pub(crate) fn private_fields_mut(&mut self) -> &mut FxHashMap<String, PrivateElement> {
+    pub(crate) fn private_fields_mut(&mut self) -> &mut PrivateFields {
         &mut self.extras_mut().private_fields
     }
 

@@ -208,6 +208,21 @@ pub(crate) enum Op {
     /// Honors a `__host_exit` latched while the `try` block ran (it must stay
     /// uncatchable and skip `finally`).
     CheckExit = 96,
+    /// `base.#name`: `[..., base]` → `[..., value]` (PrivateGet). Operand:
+    /// index into `Chunk::private_names` (u16).
+    GetPrivate = 97,
+    /// `base.#name = value`: `[..., base, value]` → `[..., value]`
+    /// (PrivateSet). Operand: private-name index (u16).
+    SetPrivate = 98,
+    /// `++`/`--` on `base.#name`: `[..., base]` → `[..., result]`. Operands:
+    /// private-name index (u16), mode (u8, as `UpdateProp`).
+    UpdatePrivate = 99,
+    /// `[..., base]` → `[..., method, base]` for `base.#name(...)`. Operand:
+    /// private-name index (u16).
+    LoadMethodPrivate = 100,
+    /// `#name in object`: `[..., object]` → `[..., boolean]`. Operand:
+    /// private-name index (u16).
+    PrivateIn = 101,
 }
 
 impl Op {
@@ -310,6 +325,11 @@ impl Op {
             94 => Some(Op::EndFinally),
             95 => Some(Op::BindHead),
             96 => Some(Op::CheckExit),
+            97 => Some(Op::GetPrivate),
+            98 => Some(Op::SetPrivate),
+            99 => Some(Op::UpdatePrivate),
+            100 => Some(Op::LoadMethodPrivate),
+            101 => Some(Op::PrivateIn),
             _ => None,
         }
     }

@@ -6,7 +6,7 @@ use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::ic::CallIcSlot;
-use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
+use crate::interpreter::types::{Binding, BindingKind, Completion, Environment, PrivateId};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
@@ -856,6 +856,22 @@ fn run_chunk_inner(
             scopes.last().unwrap_or(frame_env)
         };
     }
+    // Private Names this frame has resolved, by `Chunk::private_names` index.
+    // The Private Environment is fixed for the life of a frame (a class
+    // evaluated inside it scopes only its own members' closures), so one
+    // walk of the environment chain per name serves every access.
+    let mut private_ids: SmallVec<[PrivateId; 4]> =
+        SmallVec::from_elem(PrivateId::UNRESOLVED, chunk.private_names.len());
+    macro_rules! private_id {
+        ($idx:expr) => {{
+            let slot = $idx as usize;
+            if private_ids[slot] == PrivateId::UNRESOLVED {
+                private_ids[slot] =
+                    interp.resolve_private_name(&chunk.private_names[slot], frame_env);
+            }
+            private_ids[slot]
+        }};
+    }
     // A `Throw` resumes at the innermost handler covering the op (below the
     // dispatch loop); every other abrupt completion leaves the chunk.
     macro_rules! bail {
@@ -1160,6 +1176,90 @@ fn run_chunk_inner(
                     unroot_stack_value(interp, &base);
                     interp.gc_unroot_frame(gc_frame);
                     match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::GetPrivate => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let id = private_id!(idx);
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let base = stack.pop().expect("stack underflow on GetPrivate");
+                    let result =
+                        interp.private_get_resolved(&base, id, &chunk.private_names[idx as usize]);
+                    unroot_stack_value(interp, &base);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::LoadMethodPrivate => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let id = private_id!(idx);
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let base = stack.pop().expect("stack underflow on LoadMethodPrivate");
+                    let result =
+                        interp.private_get_resolved(&base, id, &chunk.private_names[idx as usize]);
+                    unroot_stack_value(interp, &base);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Completion::Normal(method) => {
+                            push_value(interp, stack, method);
+                            push_value(interp, stack, base);
+                        }
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::SetPrivate => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let id = private_id!(idx);
+                    let gc_frame = root_operand_stack(interp, stack);
+                    let rhs = stack.pop().expect("stack underflow on SetPrivate rhs");
+                    let base = stack.pop().expect("stack underflow on SetPrivate base");
+                    let result = interp.set_private_resolved(
+                        &base,
+                        id,
+                        &chunk.private_names[idx as usize],
+                        rhs.clone(),
+                    );
+                    unroot_stack_value(interp, &rhs);
+                    unroot_stack_value(interp, &base);
+                    interp.gc_unroot_frame(gc_frame);
+                    match result {
+                        Ok(()) => push_value(interp, stack, rhs),
+                        Err(e) => throw!('dispatch, e),
+                    }
+                }
+                Op::UpdatePrivate => {
+                    let idx = decode_u16(chunk, pc);
+                    let mode = chunk.code[pc + 2];
+                    pc += 3;
+                    let (update, prefix, _) = update_mode(mode);
+                    let id = private_id!(idx);
+                    let base = stack.pop().expect("stack underflow on UpdatePrivate");
+                    let result = interp.update_private_resolved(
+                        &base,
+                        id,
+                        &chunk.private_names[idx as usize],
+                        update,
+                        prefix,
+                    );
+                    unroot_stack_value(interp, &base);
+                    match result {
+                        Completion::Normal(v) => push_value(interp, stack, v),
+                        abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::PrivateIn => {
+                    let idx = decode_u16(chunk, pc);
+                    pc += 2;
+                    let id = private_id!(idx);
+                    let object = pop_value(interp, stack, "stack underflow on PrivateIn");
+                    match interp.private_in(id, &object) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
                     }

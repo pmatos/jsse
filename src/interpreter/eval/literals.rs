@@ -282,33 +282,19 @@ impl Interpreter {
         env: &EnvRef,
         class_source_text: Option<SourceText>,
     ) -> Completion {
-        let brand_id = self.next_class_brand_id;
-        self.next_class_brand_id += 1;
-        let mut pn_set = HashMap::new();
+        let mut pn_set = PrivateNameScope::default();
         for elem in body {
-            match elem {
-                ClassElement::Method(m) => {
-                    if let PropertyKey::Private(n) = &m.key {
-                        pn_set
-                            .entry(n.clone())
-                            .or_insert_with(|| format!("{n}#{brand_id}"));
-                    }
-                }
-                ClassElement::Property(p) => {
-                    if let PropertyKey::Private(n) = &p.key {
-                        pn_set
-                            .entry(n.clone())
-                            .or_insert_with(|| format!("{n}#{brand_id}"));
-                    }
-                }
-                ClassElement::AutoAccessor(p) => {
-                    if let PropertyKey::Private(n) = &p.key {
-                        pn_set
-                            .entry(n.clone())
-                            .or_insert_with(|| format!("{n}#{brand_id}"));
-                    }
-                }
-                ClassElement::StaticBlock(_) => {}
+            let key = match elem {
+                ClassElement::Method(m) => &m.key,
+                ClassElement::Property(p) | ClassElement::AutoAccessor(p) => &p.key,
+                ClassElement::StaticBlock(_) => continue,
+            };
+            if let PropertyKey::Private(n) = key {
+                pn_set.insert_if_absent(n, || {
+                    let id = PrivateId(self.next_private_id);
+                    self.next_private_id += 1;
+                    id
+                });
             }
         }
         self.class_private_names.push(Rc::new(pn_set));
@@ -554,10 +540,10 @@ impl Interpreter {
         // Phase 2: Execute static field initializers and static blocks in order.
         enum DeferredStatic {
             PublicField(JsPropertyKey, Option<Expression>),
-            // (source_name, branded_name, initializer)
-            PrivateField(String, String, Option<Expression>),
+            // (source_name, private name, initializer)
+            PrivateField(String, PrivateId, Option<Expression>),
             Block(Vec<Statement>),
-            AutoAccessor(JsPropertyKey, String, Option<Expression>),
+            AutoAccessor(JsPropertyKey, PrivateId, Option<Expression>),
         }
         let mut deferred_static: Vec<DeferredStatic> = Vec::new();
 
@@ -650,7 +636,7 @@ impl Interpreter {
                                     match m.kind {
                                         ClassMethodKind::Get => {
                                             let existing =
-                                                func_obj.borrow().private_field(&branded).cloned();
+                                                func_obj.borrow().private_field(branded).cloned();
                                             let elem = if let Some(PrivateElement::Accessor {
                                                 get: _,
                                                 set,
@@ -669,11 +655,11 @@ impl Interpreter {
                                             func_obj
                                                 .borrow_mut()
                                                 .private_fields_mut()
-                                                .insert(branded.clone(), elem);
+                                                .insert(branded, elem);
                                         }
                                         ClassMethodKind::Set => {
                                             let existing =
-                                                func_obj.borrow().private_field(&branded).cloned();
+                                                func_obj.borrow().private_field(branded).cloned();
                                             let elem = if let Some(PrivateElement::Accessor {
                                                 get,
                                                 set: _,
@@ -692,11 +678,11 @@ impl Interpreter {
                                             func_obj
                                                 .borrow_mut()
                                                 .private_fields_mut()
-                                                .insert(branded.clone(), elem);
+                                                .insert(branded, elem);
                                         }
                                         _ => {
                                             func_obj.borrow_mut().private_fields_mut().insert(
-                                                branded.clone(),
+                                                branded,
                                                 PrivateElement::Method(method_val),
                                             );
                                         }
@@ -728,7 +714,7 @@ impl Interpreter {
                                             b.instance_field_defs_mut().push(
                                                 InstanceFieldDef::Private(
                                                     PrivateFieldDef::Accessor {
-                                                        name: branded.clone(),
+                                                        name: branded,
                                                         get: Some(method_val),
                                                         set: None,
                                                     },
@@ -756,7 +742,7 @@ impl Interpreter {
                                             b.instance_field_defs_mut().push(
                                                 InstanceFieldDef::Private(
                                                     PrivateFieldDef::Accessor {
-                                                        name: branded.clone(),
+                                                        name: branded,
                                                         get: None,
                                                         set: Some(method_val),
                                                     },
@@ -767,7 +753,7 @@ impl Interpreter {
                                     _ => {
                                         func_obj.borrow_mut().instance_field_defs_mut().push(
                                             InstanceFieldDef::Private(PrivateFieldDef::Method {
-                                                name: branded.clone(),
+                                                name: branded,
                                                 value: method_val,
                                             }),
                                         );
@@ -897,6 +883,7 @@ impl Interpreter {
                                 func_obj.borrow_mut().instance_field_defs_mut().push(
                                     InstanceFieldDef::Private(PrivateFieldDef::Field {
                                         name: branded,
+                                        source_name: name.clone(),
                                         initializer: p.value.clone(),
                                     }),
                                 );
@@ -976,6 +963,7 @@ impl Interpreter {
                                 func_obj.borrow_mut().instance_field_defs_mut().push(
                                     InstanceFieldDef::Private(PrivateFieldDef::Field {
                                         name: branded,
+                                        source_name: name.clone(),
                                         initializer: p.value.clone(),
                                     }),
                                 );
@@ -1004,11 +992,10 @@ impl Interpreter {
                         },
                         PropertyKey::Private(_) => unreachable!(),
                     };
-                    let slot_id = self.next_auto_accessor_id;
-                    self.next_auto_accessor_id += 1;
-                    let storage_slot = format!("__auto_accessor_{slot_id}");
+                    let storage_slot = PrivateId(self.next_private_id);
+                    self.next_private_id += 1;
 
-                    let getter_slot = storage_slot.clone();
+                    let getter_slot = storage_slot;
                     let getter_func = JsFunction::native(
                         String::new(),
                         0,
@@ -1020,7 +1007,7 @@ impl Interpreter {
                             };
                             if let Some(obj) = interp.get_object_cell(obj_id)
                                 && let Some(PrivateElement::Field(v)) =
-                                    obj.borrow().private_field(&getter_slot)
+                                    obj.borrow().private_field(getter_slot)
                             {
                                 return Completion::Normal(v.clone());
                             }
@@ -1032,7 +1019,7 @@ impl Interpreter {
                     let getter_val = self.create_function(getter_func);
                     self.set_function_name(&getter_val, &prefixed_function_name("get ", &key));
 
-                    let setter_slot = storage_slot.clone();
+                    let setter_slot = storage_slot;
                     let setter_func = JsFunction::native(
                         String::new(),
                         1,
@@ -1044,11 +1031,11 @@ impl Interpreter {
                             };
                             let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             if let Some(obj) = interp.get_object_cell(obj_id)
-                                && obj.borrow().has_private_field(&setter_slot)
+                                && obj.borrow().has_private_field(setter_slot)
                             {
                                 obj.borrow_mut()
                                     .private_fields_mut()
-                                    .insert(setter_slot.clone(), PrivateElement::Field(val));
+                                    .insert(setter_slot, PrivateElement::Field(val));
                                 return Completion::Normal(JsValue::UNDEFINED);
                             }
                             Completion::Throw(interp.create_type_error(
@@ -1165,7 +1152,7 @@ impl Interpreter {
                                     "Cannot add private field to non-extensible object",
                                 ));
                             }
-                            if func_obj.borrow().has_private_field(&branded) {
+                            if func_obj.borrow().has_private_field(branded) {
                                 return Completion::Throw(interp.create_type_error(
                                     "Cannot initialize private field twice on the same object",
                                 ));
