@@ -289,24 +289,39 @@ impl RootedSlots {
     }
 }
 
-/// The nursery as a bitmap indexed by object id, built once per minor
-/// collection. Scanning a large remembered Array then asks one cache-resident
-/// bit per element whether it references a young object, instead of loading
-/// each referent's header.
-struct YoungIds {
+fn object_ids(values: &[JsValue]) -> impl Iterator<Item = u64> + '_ {
+    values.iter().filter_map(JsValue::as_object_id)
+}
+
+/// The nursery as a bitmap indexed by object id, filled at the start of each
+/// minor collection and cleared (in O(nursery)) at its end, so the buffers
+/// persist across collections. Scanning a large remembered Array then asks one
+/// cache-resident bit per element whether it references a young object,
+/// instead of loading each referent's header.
+#[derive(Default)]
+pub(crate) struct YoungIds {
     bits: Vec<u64>,
     /// Nursery objects whose traced fields referenced a nursery object.
     edge_bits: Vec<u64>,
 }
 
 impl YoungIds {
-    fn new(nursery: &[u64], capacity: u64) -> Self {
-        let mut bits = vec![0u64; (capacity as usize).div_ceil(64)];
-        for &id in nursery {
-            bits[(id / 64) as usize] |= 1 << (id % 64);
+    fn fill(&mut self, nursery: &[u64], capacity: u64) {
+        let words = (capacity as usize).div_ceil(64);
+        if self.bits.len() < words {
+            self.bits.resize(words, 0);
+            self.edge_bits.resize(words, 0);
         }
-        let edge_bits = vec![0u64; bits.len()];
-        Self { bits, edge_bits }
+        for &id in nursery {
+            self.bits[(id / 64) as usize] |= 1 << (id % 64);
+        }
+    }
+
+    fn clear(&mut self, nursery: &[u64]) {
+        for &id in nursery {
+            self.bits[(id / 64) as usize] &= !(1 << (id % 64));
+            self.edge_bits[(id / 64) as usize] &= !(1 << (id % 64));
+        }
     }
 
     /// Record that the nursery object `id` references a nursery object.
@@ -423,8 +438,11 @@ impl Interpreter {
                 .get_cell(object_id)
                 .is_some_and(crate::interpreter::object_arena::ObjectHandle::is_young)
         {
-            owner.borrow_mut_untracked().mark_element_card(index);
-            owner.remember_elements_if_old();
+            if owner.mark_element_card(index) {
+                owner.remember_elements_if_old();
+            } else {
+                owner.remember_if_old();
+            }
         }
     }
 
@@ -478,13 +496,6 @@ impl Interpreter {
                 #[cfg(feature = "perf-counters")]
                 {
                     let nanos = start.elapsed().as_nanos();
-                    eprintln!(
-                        "MINOR {} us live={} nursery_after={} remembered_after={}",
-                        nanos / 1000,
-                        self.objects.live_count(),
-                        self.objects.nursery_ids().len(),
-                        self.objects.remembered_len()
-                    );
                     self.perf.gc_minor += 1;
                     self.perf.gc_nanos += nanos;
                     self.perf.gc_minor_nanos += nanos;
@@ -730,13 +741,16 @@ impl Interpreter {
             return (false, false);
         };
         if elements.len() <= CARD_ELEMENTS {
-            return (self.scan_element_range(elements, young, worklist), false);
+            return (
+                self.enqueue_young(object_ids(elements), worklist, young),
+                false,
+            );
         }
         let card_count = elements.len().div_ceil(CARD_ELEMENTS);
         let mut scan_card = |card: usize| {
             let start = card * CARD_ELEMENTS;
             let end = (start + CARD_ELEMENTS).min(elements.len());
-            if self.scan_element_range(&elements[start..end], young, worklist) {
+            if self.enqueue_young(object_ids(&elements[start..end]), worklist, young) {
                 retained_cards.push(card);
             }
         };
@@ -756,28 +770,6 @@ impl Interpreter {
             }
         }
         (false, true)
-    }
-
-    fn scan_element_range(
-        &self,
-        range: &[JsValue],
-        young: &YoungIds,
-        worklist: &mut Vec<u64>,
-    ) -> bool {
-        let mut any_young = false;
-        for value in range {
-            if let Some(id) = value.as_object_id()
-                && young.contains(id)
-            {
-                any_young = true;
-                if let Some(handle) = self.objects.get_cell(id)
-                    && handle.mark_young()
-                {
-                    worklist.push(id);
-                }
-            }
-        }
-        any_young
     }
 
     fn minor_value_is_live(&self, id: u64) -> bool {
@@ -809,7 +801,8 @@ impl Interpreter {
 
         let (roots, mut seen_envs) = self.collect_gc_roots();
         let remembered = self.objects.take_remembered();
-        let mut young = YoungIds::new(self.objects.nursery_ids(), self.objects.capacity());
+        let mut young = std::mem::take(&mut self.gc_young);
+        young.fill(self.objects.nursery_ids(), self.objects.capacity());
         let mut worklist = Vec::new();
         let mut weak_containers = Vec::new();
         let mut children = Vec::new();
@@ -937,12 +930,16 @@ impl Interpreter {
             }
         }
 
+        // Walks the whole heap, so only while it is small enough for that to
+        // be cheap next to the collection itself.
         #[cfg(debug_assertions)]
-        self.debug_assert_old_arrays_reach_only_marked_young();
+        if self.objects.live_count() <= 100_000 {
+            self.debug_assert_old_arrays_reach_only_marked_young();
+        }
 
         let nursery = self.objects.take_nursery();
         let mut survivors = Vec::with_capacity(nursery.len());
-        for id in nursery {
+        for &id in &nursery {
             let Some(handle) = self.objects.get(id) else {
                 continue;
             };
@@ -964,6 +961,8 @@ impl Interpreter {
                 survivors.push(id);
             }
         }
+        young.clear(&nursery);
+        self.gc_young = young;
         self.objects.replace_nursery(survivors);
         self.gc.end_minor_collection();
     }

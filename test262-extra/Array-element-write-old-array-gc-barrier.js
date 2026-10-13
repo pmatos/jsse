@@ -103,6 +103,50 @@ for (var round = 0; round < 3; round++) {
   checkAll("after splice " + round);
 }
 
+// More operations that rewrite elements without naming a card.
+for (var round2 = 0; round2 < 2; round2++) {
+  overwrite(300);
+  var low2 = next(50);
+  table[low2] = { id: serial };
+  expected[low2] = serial++;
+  table.shift();
+  expected.shift();
+  table.unshift({ id: serial });
+  expected.unshift(serial++);
+  churn();
+  checkAll("after shift and unshift " + round2);
+
+  var from = expected.length - 200;
+  var late = expected.length - 100;
+  table[late] = { id: serial };
+  expected[late] = serial++;
+  table.copyWithin(0, from);
+  expected.copyWithin(0, from);
+  churn();
+  checkAll("after copyWithin " + round2);
+
+  var victim = next(expected.length);
+  table[victim] = { id: serial };
+  expected[victim] = serial++;
+  var keep = expected.length - 300;
+  table.length = keep;
+  expected.length = keep;
+  for (var g = 0; g < 300; g++) {
+    table.push({ id: serial });
+    expected.push(serial++);
+  }
+  churn();
+  checkAll("after truncating and regrowing " + round2);
+
+  var shared = { id: serial };
+  table.fill(shared, 10, 400);
+  expected.fill(serial++, 10, 400);
+  table.pop();
+  expected.pop();
+  churn();
+  checkAll("after fill and pop " + round2);
+}
+
 var sortIndex = next(expected.length);
 table[sortIndex] = { id: serial };
 expected[sortIndex] = serial++;

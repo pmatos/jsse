@@ -2301,7 +2301,7 @@ pub(crate) enum DenseArraySet {
 /// the property map's creation order needed by the Node-compatible inspector.
 /// Maintaining that subset as properties change lets inspection find named
 /// Array properties without scanning descriptor-backed element indices.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct ArrayData {
     elements: Vec<JsValue>,
     /// Allocated on the first extra String key, so a plain Array pays one
@@ -2319,6 +2319,18 @@ pub(crate) struct ArrayData {
     /// bitmap, and only a precise single-slot store marks a bit.
     #[allow(clippy::box_collection)] // a pointer per Array, not the 24-byte Vec
     dirty_cards: Option<Box<Vec<u64>>>,
+}
+
+impl Clone for ArrayData {
+    /// A copy is a new object that no collection has scanned, so it starts with
+    /// every card dirty rather than inheriting the original's bitmap.
+    fn clone(&self) -> Self {
+        Self {
+            elements: self.elements.clone(),
+            extra_string_property_order: self.extra_string_property_order.clone(),
+            dirty_cards: None,
+        }
+    }
 }
 
 /// Elements per card of an Array's dirty-card bitmap. Debug builds use tiny
@@ -2657,8 +2669,7 @@ impl JsObjectData {
         bits[word] |= 1 << (card % 64);
     }
 
-    /// Store into an existing element without disturbing the card bitmap: the
-    /// caller has already run `Interpreter::gc_write_barrier_element`.
+    /// Keeps the card bitmap: the caller ran `gc_write_barrier_element`.
     #[inline]
     pub(crate) fn overwrite_array_element(&mut self, index: usize, value: &JsValue) -> bool {
         let Some(slot) = self
@@ -2671,15 +2682,13 @@ impl JsObjectData {
         true
     }
 
-    /// Append `values` without disturbing the card bitmap: the caller has
-    /// already run `Interpreter::gc_write_barrier_element` for each new index.
+    /// Keeps the card bitmap: the caller ran `gc_write_barrier_element` per index.
     pub(crate) fn extend_array_elements_precise(&mut self, values: &[JsValue]) {
         if let Some(data) = self.array_data_mut() {
             data.elements.extend_from_slice(values);
         }
     }
 
-    /// The elements and, when the Array tracks them, its dirty-card bitmap.
     pub(crate) fn array_elements_and_cards(&self) -> Option<(&[JsValue], Option<&[u64]>)> {
         self.array_data().map(|data| {
             (
@@ -2689,8 +2698,7 @@ impl JsObjectData {
         })
     }
 
-    /// Replace the bitmap after a collection has scanned every element: only
-    /// `cards` still hold a nursery reference.
+    /// Called after a scan of every element: only `cards` still hold a young reference.
     pub(crate) fn set_dirty_cards(&mut self, cards: &[usize]) {
         if let Some(data) = self.array_data_mut() {
             let words = data.elements.len().div_ceil(CARD_ELEMENTS).div_ceil(64);
@@ -2703,8 +2711,6 @@ impl JsObjectData {
         }
     }
 
-    /// Every card dirty: the state of an Array the collector has not scanned
-    /// since it became old.
     pub(crate) fn mark_all_cards_dirty(&mut self) {
         if let Some(data) = self.array_data_mut() {
             data.dirty_cards = None;
@@ -2748,17 +2754,16 @@ impl JsObjectData {
     /// Callers have already checked the value, extensibility and that no
     /// descriptor owns `index`.
     fn push_dense_array_element(&mut self, index: usize, value: &JsValue) -> bool {
-        self.push_dense_array_element_inner(index, value, false)
+        let pushed = self.push_dense_array_element_raw(index, value);
+        if pushed {
+            self.mark_all_cards_dirty();
+        }
+        pushed
     }
 
-    /// [`Self::push_dense_array_element`], leaving the card bitmap alone when
-    /// `precise`: the caller has already marked the new element's card.
-    fn push_dense_array_element_inner(
-        &mut self,
-        index: usize,
-        value: &JsValue,
-        precise: bool,
-    ) -> bool {
+    /// [`Self::push_dense_array_element`], leaving the card bitmap alone: the
+    /// caller has already marked the new element's card.
+    fn push_dense_array_element_raw(&mut self, index: usize, value: &JsValue) -> bool {
         if self
             .array_elements()
             .is_none_or(|elements| elements.len() != index)
@@ -2776,11 +2781,7 @@ impl JsObjectData {
             return false;
         }
 
-        if precise {
-            self.array_data_mut().unwrap().elements.push(value.clone());
-        } else {
-            self.array_elements_mut().unwrap().push(value.clone());
-        }
+        self.array_data_mut().unwrap().elements.push(value.clone());
         if index as f64 >= length {
             self.properties
                 .get_mut("length")
@@ -2891,7 +2892,7 @@ impl JsObjectData {
     ) -> bool {
         let creating = plan == DenseArraySet::Create;
         if creating && self.array_elements().is_some_and(|e| e.len() == index) {
-            return self.push_dense_array_element_inner(index, value, true);
+            return self.push_dense_array_element_raw(index, value);
         }
         if !self.overwrite_array_element(index, value) {
             return false;

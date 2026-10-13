@@ -155,6 +155,19 @@ impl ObjectHandle {
 
     /// Conservative old-to-young barrier: the whole object, element vector
     /// included, must be re-scanned by the next minor collection.
+    /// Mark element `index`'s card on an Array, returning false (the caller
+    /// then falls back to the conservative barrier) if the object is borrowed.
+    #[inline]
+    pub(crate) fn mark_element_card(&self, index: usize) -> bool {
+        match self.allocation().value.try_borrow_mut() {
+            Ok(mut data) => {
+                data.mark_element_card(index);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     #[inline]
     pub(crate) fn remember_if_old(&self) {
         if self.is_old() {

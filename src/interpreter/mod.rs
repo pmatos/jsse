@@ -305,6 +305,8 @@ pub(crate) struct Interpreter {
     gc: crate::interpreter::gc::GcPacer,
     // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
     gc_marks: Vec<bool>,
+    // Nursery bitmap scratch buffers reused by every minor collection.
+    gc_young: crate::interpreter::gc::YoungIds,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     /// The running state-machine body belongs to an async generator; set for
@@ -775,6 +777,7 @@ impl Interpreter {
             new_target: None,
             gc: crate::interpreter::gc::GcPacer::new(),
             gc_marks: Vec::new(),
+            gc_young: Default::default(),
             generator_context: None,
             destructuring_yield: false,
             in_async_generator_body: false,
