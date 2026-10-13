@@ -69,6 +69,20 @@ assert.sameValue(BigInt.prototype.toString.call(Object(-8n), 2), "-1000", "call 
 assert.sameValue(BigInt.prototype.valueOf.call(Object(7n)), 7n, "valueOf on wrapper");
 assert.sameValue(BigInt.prototype.valueOf.call(7n), 7n, "valueOf on primitive");
 
+assert.throws(RangeError, function () {
+  (1n << 536870912n).toString(2);
+}, "a result longer than the maximum string length");
+assert.throws(RangeError, function () {
+  (-(1n << 536870900n)).toString(2);
+}, "the sign counts toward the maximum string length");
+assert.sameValue(typeof BigInt.prototype.toLocaleString.call(Object(12n)), "string", "toLocaleString on wrapper");
+assert.sameValue(BigInt.prototype.toLocaleString.call(12n), 12n.toLocaleString(), "toLocaleString on primitive");
+assert.throws(TypeError, function () {
+  BigInt.prototype.toString.call(BigInt.prototype);
+}, "BigInt.prototype is not a BigInt wrapper");
+assert.throws(TypeError, function () {
+  BigInt.prototype.toLocaleString.call("1");
+}, "toLocaleString on a string");
 assert.throws(RangeError, function () { 1n.toString(1); }, "radix 1");
 assert.throws(RangeError, function () { 1n.toString(37); }, "radix 37");
 assert.throws(RangeError, function () { 1n.toString(NaN); }, "radix NaN");
