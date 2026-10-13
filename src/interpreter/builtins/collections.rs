@@ -188,15 +188,7 @@ impl Interpreter {
                     "Map Iterator.prototype.next requires a Map Iterator",
                 ))),
             };
-            match step {
-                Ok(Some(value)) => {
-                    Completion::Normal(interp.create_iter_result_object(value, false))
-                }
-                Ok(None) => {
-                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
-                }
-                Err(completion) => completion,
-            }
+            interp.iterator_step_completion(step)
         });
         self.realm_mut().iterator_next_intrinsics.map = map_next.as_object_id();
 
@@ -779,15 +771,7 @@ impl Interpreter {
                     "Set Iterator.prototype.next requires a Set Iterator",
                 ))),
             };
-            match step {
-                Ok(Some(value)) => {
-                    Completion::Normal(interp.create_iter_result_object(value, false))
-                }
-                Ok(None) => {
-                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
-                }
-                Err(completion) => completion,
-            }
+            interp.iterator_step_completion(step)
         });
         self.realm_mut().iterator_next_intrinsics.set = set_next.as_object_id();
 

@@ -963,15 +963,8 @@ impl Interpreter {
             let Some(this_id) = this.as_object_id() else {
                 return Completion::Throw(interp.create_type_error("next called on non-object"));
             };
-            match interp.array_iterator_step(this_id) {
-                Ok(Some(value)) => {
-                    Completion::Normal(interp.create_iter_result_object(value, false))
-                }
-                Ok(None) => {
-                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
-                }
-                Err(completion) => completion,
-            }
+            let step = interp.array_iterator_step(this_id);
+            interp.iterator_step_completion(step)
         });
         self.realm_mut().iterator_next_intrinsics.array = array_next.as_object_id();
 
@@ -996,15 +989,8 @@ impl Interpreter {
                         interp.create_type_error("next called on non-object"),
                     );
                 };
-                match interp.string_iterator_step(this_id) {
-                    Ok(Some(value)) => {
-                        Completion::Normal(interp.create_iter_result_object(value, false))
-                    }
-                    Ok(None) => Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    ),
-                    Err(completion) => completion,
-                }
+                let step = interp.string_iterator_step(this_id);
+                interp.iterator_step_completion(step)
             });
         self.realm_mut().iterator_next_intrinsics.string = string_next.as_object_id();
 
@@ -4506,6 +4492,20 @@ impl Interpreter {
         Completion::Normal(outer_promise)
     }
 
+    /// The completion a native iterator `next` returns for a raw step.
+    pub(crate) fn iterator_step_completion(
+        &mut self,
+        step: Result<Option<JsValue>, Completion>,
+    ) -> Completion {
+        match step {
+            Ok(Some(value)) => Completion::Normal(self.create_iter_result_object(value, false)),
+            Ok(None) => {
+                Completion::Normal(self.create_iter_result_object(JsValue::UNDEFINED, true))
+            }
+            Err(completion) => completion,
+        }
+    }
+
     /// Advances an Array or TypedArray iterator: the body of
     /// `%ArrayIteratorPrototype%.next` (§23.1.5.1) minus the iterator-result
     /// object. `Ok(None)` is the exhausted result; `Err` carries the abrupt
@@ -4594,9 +4594,8 @@ impl Interpreter {
             return Ok(Some(value));
         }
 
-        let is_proxy = self
-            .get_object_cell(target_id)
-            .is_some_and(|o| o.borrow().is_proxy());
+        let target_obj = self.get_object(target_id);
+        let is_proxy = target_obj.as_ref().is_some_and(|o| o.borrow().is_proxy());
         if is_proxy {
             let len = match self.get_object_property(target_id, "length", &target) {
                 Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
@@ -4608,7 +4607,7 @@ impl Interpreter {
             }
         } else {
             // §23.1.5.1.1 step 3: TypedArray OOB check
-            let len = match self.get_object(target_id) {
+            let len = match &target_obj {
                 Some(arr_obj) => {
                     let b = arr_obj.borrow();
                     if let Some(ta) = b.typed_array_info() {
