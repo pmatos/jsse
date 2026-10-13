@@ -3197,36 +3197,11 @@ fn stmts_contain(stmts: &[Statement], pred: &dyn Fn(&Statement) -> bool) -> bool
 
 type PoisonFn = fn(&Expression) -> bool;
 
-/// A construct that only has its meaning when the whole function runs as one
-/// tree-walked frame, or whose compile-time handling depends on resolving
-/// names in the enclosing scope chain. Such a body stays wholly on the
-/// tree-walker, exactly as before per-node fallback existed. `yield` and
-/// `await` are not poison: only plain functions reach this compile, so the
-/// traversal meets them only inside nested generator-free async arrows,
-/// which own them.
-fn is_poison_expression(expr: &Expression) -> bool {
-    match expr {
-        Expression::Super
-        | Expression::NewTarget
-        | Expression::ImportMeta
-        | Expression::Import(..)
-        | Expression::ImportDefer(..)
-        | Expression::ImportSource(..) => true,
-        Expression::Call(callee, _, _) => {
-            matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
-        }
-        Expression::Binary(BinaryOp::In, lhs, _) => {
-            matches!(lhs.as_ref(), Expression::PrivateIdentifier(_))
-        }
-        _ => false,
-    }
-}
-
-/// The Script goal's poison. `yield`, `await`, `new.target`, `super` and
-/// private `in` cannot occur in a Script's own code: the traversal only meets
-/// them inside nested arrows, which own them, so they must not keep the
-/// script whole-body (the JetStream async harness is one such arrow). Direct
-/// `eval`, dynamic `import()` and `import.meta` do.
+/// The Script goal's poison: direct `eval`, dynamic `import()` and
+/// `import.meta`. `yield`, `await`, `new.target`, `super` and private `in`
+/// cannot occur in a Script's own code: the traversal only meets them inside
+/// nested arrows, which own them, so they must not keep the script
+/// whole-body (the JetStream async harness is one such arrow).
 fn is_script_poison_expression(expr: &Expression) -> bool {
     match expr {
         Expression::ImportMeta
@@ -3238,6 +3213,27 @@ fn is_script_poison_expression(expr: &Expression) -> bool {
         }
         _ => false,
     }
+}
+
+/// A construct that only has its meaning when the whole function runs as one
+/// tree-walked frame, or whose compile-time handling depends on resolving
+/// names in the enclosing scope chain. Such a body stays wholly on the
+/// tree-walker, exactly as before per-node fallback existed.
+///
+/// `yield` and `await` are not poison. Only plain (non-async, non-generator)
+/// function bodies reach `compile_function_goal`, so a `yield`/`await`
+/// expression the traversal meets can only belong to a nested arrow, which
+/// owns it. A nested arrow's `new.target`, `super` and direct `eval` are
+/// inherited from the frame, so those stay poison.
+fn is_poison_expression(expr: &Expression) -> bool {
+    is_script_poison_expression(expr)
+        || match expr {
+            Expression::Super | Expression::NewTarget => true,
+            Expression::Binary(BinaryOp::In, lhs, _) => {
+                matches!(lhs.as_ref(), Expression::PrivateIdentifier(_))
+            }
+            _ => false,
+        }
 }
 
 fn pattern_has_poison(pattern: &Pattern, poison: PoisonFn) -> bool {
@@ -3409,6 +3405,7 @@ fn expression_kind(node: &Expression) -> &'static str {
 /// Function-goal compile of a statement list. Per-node fallback is only
 /// worth taking when some native work remains in the chunk; a body that is
 /// nothing but tree-walker hand-offs would pay chunk-entry cost for nothing.
+/// Callers pass plain function bodies only (see `is_poison_expression`).
 fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chunk, CompileError> {
     if body_has_poison(body, is_poison_expression) {
         return Err(CompileError::Ineligible(

@@ -63,6 +63,18 @@ function tryCatchInside(flag) {
   }
 }
 
+var arrowOwner = (tag) => {
+  var inner = async () => { await null; return tag; };
+  return inner;
+};
+
+function classPositions(base) {
+  var key = "k";
+  class C extends base { [key + "1"]() { return 1; } }
+  var viaExtends = (async () => { await null; return new C().k1(); })();
+  return viaExtends;
+}
+
 function awaitAsIdentifier() {
   var await = 7;
   var yield = 8;
@@ -92,6 +104,9 @@ asyncTest(async function () {
   assert.compareArray(results[1], [true, true, 1, 2]);
   assert.compareArray(results[2], [true, true, 2, 2]);
   assert.sameValue(results[3], "block");
+
+  assert.sameValue(await arrowOwner("from-arrow")(), "from-arrow", "async arrow inside a plain arrow");
+  assert.sameValue(await classPositions(class {}), 1, "async arrow beside a class with computed key and extends");
 
   assert.sameValue(await tryCatchInside(false), "ok");
   assert.sameValue(await tryCatchInside(true), "boom");

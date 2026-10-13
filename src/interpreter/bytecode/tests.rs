@@ -3840,6 +3840,35 @@ fn await_inside_a_nested_async_arrow_does_not_keep_the_body_whole() {
 }
 
 #[test]
+fn inherited_constructs_in_a_nested_async_arrow_still_keep_the_body_whole() {
+    use super::compiler::{CompileError, FrameShape, compile_function_body};
+    use crate::parser::Parser;
+
+    for source in [
+        "function f() { var later = async () => { await 1; return new.target; }; }",
+        "function f() { var later = async () => { await 1; return eval('1'); }; }",
+        "function f() { var later = async () => { await 1; return import('x'); }; }",
+    ] {
+        let mut parser = Parser::new(source).expect("parser init");
+        let program = parser.parse_program().expect("parse");
+        let Some(Statement::FunctionDeclaration(decl)) = program.body.as_slice().first() else {
+            panic!("{source}: expected a function declaration");
+        };
+        let result = compile_function_body(
+            decl.body.as_slice(),
+            &FrameShape {
+                arguments_slot: false,
+                simple_params: &[],
+            },
+        );
+        assert!(
+            matches!(result, Err(CompileError::Ineligible(_))),
+            "{source}: expected Ineligible"
+        );
+    }
+}
+
+#[test]
 fn unsupported_literal_forms_hand_off_the_whole_literal() {
     for (source, reason) in [
         ("[...x];", "array literal: spread"),
