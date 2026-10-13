@@ -1893,10 +1893,13 @@ impl Interpreter {
 
     fn exec_for(&mut self, f: &ForStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         let for_env = Environment::new(Some(env.clone()));
-        // Collect lexical binding names for per-iteration freshness (§14.7.4.2)
+        // Collect lexical binding names for per-iteration freshness (§14.7.4.2).
+        // A loop that cannot capture or `eval` its scope never observes the
+        // copies' identity, so it keeps running in `for_env`.
         let per_iteration_bindings: Vec<(String, BindingKind)> =
             if let Some(ForInit::Variable(decl)) = &f.init
                 && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                && f.may_capture_iteration_scope()
             {
                 let kind = if decl.kind == VarKind::Let {
                     BindingKind::Let
@@ -2210,6 +2213,12 @@ impl Interpreter {
             Completion::Throw(e) => return Completion::Throw(e),
             _ => return Completion::Normal(JsValue::UNDEFINED),
         };
+        let shared_env =
+            Self::shared_iteration_env(&fi.left, env, || fi.may_capture_iteration_scope());
+        let head_binding = Self::simple_head_binding(&fi.left, shared_env.as_ref());
+        if let Some(shared) = &shared_env {
+            self.call_stack_envs.push(shared.clone());
+        }
         let mut v = JsValue::UNDEFINED;
         // Root the iterable wrapper across the entire for-in body. Primitive
         // iterables (e.g. `for (k in Object("abc"))`) get a fresh String wrapper
@@ -2241,7 +2250,7 @@ impl Interpreter {
                         continue;
                     }
                     let key_val = JsValue::string(key.to_js_string());
-                    let for_env = Environment::new(Some(env.clone()));
+                    let for_env = Self::iteration_env(shared_env.as_ref(), env);
                     match &fi.left {
                         ForInOfLeft::Variable(decl) => {
                             let kind = match decl.kind {
@@ -2256,7 +2265,12 @@ impl Interpreter {
                             } else {
                                 &for_env
                             };
-                            if let Some(d) = decl.declarations.first() {
+                            if let Some((atom, binding_kind)) = &head_binding {
+                                for_env.borrow_mut().bindings.push_unique(
+                                    atom.clone(),
+                                    Binding::new(key_val, *binding_kind, true),
+                                );
+                            } else if let Some(d) = decl.declarations.first() {
                                 match self.bind_pattern(&d.pattern, key_val, kind, bind_env) {
                                     Completion::Normal(_) => {}
                                     other => break 'unroot other,
@@ -2320,6 +2334,9 @@ impl Interpreter {
             Completion::Normal(v)
         };
         self.gc_unroot_value(&obj_val);
+        if shared_env.is_some() {
+            self.call_stack_envs.pop();
+        }
         loop_result
     }
 
@@ -2408,20 +2425,85 @@ impl Interpreter {
             }
         };
 
+        let shared_env =
+            Self::shared_iteration_env(&fo.left, env, || fo.may_capture_iteration_scope());
+        if let Some(shared) = &shared_env {
+            self.call_stack_envs.push(shared.clone());
+        }
         let gc_frame = self.gc_root_frame();
         self.gc_root_value(&iterator);
-        let result = self.exec_for_of_loop(fo, env, &iterator, label);
+        let result = self.exec_for_of_loop(fo, env, shared_env.as_ref(), &iterator, label);
         self.gc_unroot_frame(gc_frame);
+        if shared_env.is_some() {
+            self.call_stack_envs.pop();
+        }
         result
+    }
+
+    /// The single environment a for-in/for-of loop can run every iteration in
+    /// when nothing in the loop can observe a per-iteration environment's
+    /// identity (§14.7.5.7 ForIn/OfBodyEvaluation creates a fresh one each
+    /// time). `None` keeps the spec's fresh environment per iteration: either
+    /// the loop may capture it, or its `using` head owns a dispose stack.
+    fn shared_iteration_env(
+        left: &ForInOfLeft,
+        parent: &EnvRef,
+        may_capture: impl FnOnce() -> bool,
+    ) -> Option<EnvRef> {
+        if matches!(
+            left,
+            ForInOfLeft::Variable(decl)
+                if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
+        ) || may_capture()
+        {
+            return None;
+        }
+        Some(Environment::new(Some(parent.clone())))
+    }
+
+    /// The environment one for-in/for-of iteration runs in: the loop's shared
+    /// environment emptied of the previous iteration's bindings, or a fresh one.
+    fn iteration_env(shared: Option<&EnvRef>, parent: &EnvRef) -> EnvRef {
+        match shared {
+            Some(shared) => {
+                shared.borrow_mut().bindings.clear();
+                shared.clone()
+            }
+            None => Environment::new(Some(parent.clone())),
+        }
+    }
+
+    /// For a loop sharing one iteration environment, the `let`/`const`
+    /// identifier its head binds, interned once so each iteration installs it
+    /// without hashing the name again.
+    fn simple_head_binding(
+        left: &ForInOfLeft,
+        shared_env: Option<&EnvRef>,
+    ) -> Option<(Atom, BindingKind)> {
+        shared_env?;
+        let ForInOfLeft::Variable(decl) = left else {
+            return None;
+        };
+        let kind = match decl.kind {
+            VarKind::Let => BindingKind::Let,
+            VarKind::Const => BindingKind::Const,
+            _ => return None,
+        };
+        match decl.declarations.first().map(|d| &d.pattern) {
+            Some(Pattern::Identifier(name)) => Some((Atom::intern(name), kind)),
+            _ => None,
+        }
     }
 
     fn exec_for_of_loop(
         &mut self,
         fo: &ForOfStatement,
         env: &EnvRef,
+        shared_env: Option<&EnvRef>,
         iterator: &JsValue,
         loop_label: Option<&str>,
     ) -> Completion {
+        let head_binding = Self::simple_head_binding(&fo.left, shared_env);
         let mut v = JsValue::UNDEFINED;
         // `v` (the loop's running completion value) must stay rooted for as
         // long as it's live: `iterator_next()` below and the loop body run
@@ -2463,7 +2545,7 @@ impl Interpreter {
                 }
             };
 
-            let for_env = Environment::new(Some(env.clone()));
+            let for_env = Self::iteration_env(shared_env, env);
             match &fo.left {
                 ForInOfLeft::Variable(decl) => {
                     let is_using = matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
@@ -2484,7 +2566,12 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     }
-                    if let Some(d) = decl.declarations.first() {
+                    if let Some((atom, binding_kind)) = &head_binding {
+                        for_env
+                            .borrow_mut()
+                            .bindings
+                            .push_unique(atom.clone(), Binding::new(val, *binding_kind, true));
+                    } else if let Some(d) = decl.declarations.first() {
                         match self.bind_pattern(&d.pattern, val, kind, bind_env) {
                             Completion::Normal(_) => {}
                             Completion::Throw(e) => {

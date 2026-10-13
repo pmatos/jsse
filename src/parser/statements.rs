@@ -602,6 +602,7 @@ impl<'a> Parser<'a> {
                     right,
                     body,
                     is_await,
+                    scope_capture: Default::default(),
                 }));
             }
             // for (using x = init; test; update)
@@ -656,8 +657,9 @@ impl<'a> Parser<'a> {
             return Ok(Statement::For(ForStatement {
                 init,
                 test,
-                update,
+                update: update.map(ExprBox::new),
                 body,
+                scope_capture: Default::default(),
             }));
         }
 
@@ -710,6 +712,7 @@ impl<'a> Parser<'a> {
                     right,
                     body,
                     is_await,
+                    scope_capture: Default::default(),
                 }));
             }
             // for (await using x = init; test; update)
@@ -763,8 +766,9 @@ impl<'a> Parser<'a> {
             return Ok(Statement::For(ForStatement {
                 init,
                 test,
-                update,
+                update: update.map(ExprBox::new),
                 body,
+                scope_capture: Default::default(),
             }));
         }
 
@@ -805,6 +809,7 @@ impl<'a> Parser<'a> {
                         }),
                         right,
                         body,
+                        scope_capture: Default::default(),
                     }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
@@ -825,6 +830,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         is_await,
+                        scope_capture: Default::default(),
                     }));
                 }
                 Some(ForInit::Variable(VariableDeclaration {
@@ -881,7 +887,12 @@ impl<'a> Parser<'a> {
                             self.check_strict_assignment_pattern(&pat)?;
                             ForInOfLeft::Pattern(pat)
                         };
-                        return Ok(Statement::ForIn(ForInStatement { left, right, body }));
+                        return Ok(Statement::ForIn(ForInStatement {
+                            left,
+                            right,
+                            body,
+                            scope_capture: Default::default(),
+                        }));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
                         if matches!(&expr, Expression::Identifier(n) if n == "let") {
@@ -903,6 +914,7 @@ impl<'a> Parser<'a> {
                             right,
                             body,
                             is_await,
+                            scope_capture: Default::default(),
                         }));
                     }
                     Some(ForInit::Expression(expr))
@@ -936,6 +948,7 @@ impl<'a> Parser<'a> {
                             }),
                             right,
                             body,
+                            scope_capture: Default::default(),
                         }));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
@@ -957,6 +970,7 @@ impl<'a> Parser<'a> {
                             right,
                             body,
                             is_await,
+                            scope_capture: Default::default(),
                         }));
                     }
                     // Duplicate lexical bindings: for (let [z, z] = ...; ...)
@@ -1011,6 +1025,7 @@ impl<'a> Parser<'a> {
                         }),
                         right,
                         body,
+                        scope_capture: Default::default(),
                     }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
@@ -1032,6 +1047,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         is_await,
+                        scope_capture: Default::default(),
                     }));
                 }
                 // §14.3.1.1: const declarations must have initializers
@@ -1087,7 +1103,12 @@ impl<'a> Parser<'a> {
                         self.check_strict_assignment_pattern(&pat)?;
                         ForInOfLeft::Pattern(pat)
                     };
-                    return Ok(Statement::ForIn(ForInStatement { left, right, body }));
+                    return Ok(Statement::ForIn(ForInStatement {
+                        left,
+                        right,
+                        body,
+                        scope_capture: Default::default(),
+                    }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     if matches!(&expr, Expression::Identifier(n) if n == "let") {
@@ -1117,6 +1138,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         is_await,
+                        scope_capture: Default::default(),
                     }));
                 }
                 Some(ForInit::Expression(expr))
@@ -1163,8 +1185,9 @@ impl<'a> Parser<'a> {
         Ok(Statement::For(ForStatement {
             init,
             test,
-            update,
+            update: update.map(ExprBox::new),
             body,
+            scope_capture: Default::default(),
         }))
     }
 

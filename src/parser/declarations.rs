@@ -591,7 +591,7 @@ impl<'a> Parser<'a> {
                         .iter()
                         .any(|dd| dd.init.as_ref().is_some_and(Self::expr_has_direct_super)),
                 }) || f.test.as_ref().is_some_and(Self::expr_has_direct_super)
-                    || f.update.as_ref().is_some_and(Self::expr_has_direct_super)
+                    || f.update.as_deref().is_some_and(Self::expr_has_direct_super)
                     || Self::stmt_has_direct_super(&f.body)
             }
             Statement::ForIn(f) => {

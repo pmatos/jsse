@@ -752,11 +752,28 @@ pub(crate) struct DoWhileStatement {
 pub(crate) struct ForStatement {
     pub init: Option<ForInit>,
     pub test: Option<Expression>,
-    pub update: Option<Expression>,
+    /// Boxed so the loop's `scope_capture` cell keeps `Statement` within its
+    /// size budget (`function_literal_cache_does_not_grow_ast_nodes`).
+    pub update: Option<ExprBox>,
     pub body: Box<Statement>,
+    pub scope_capture: ScopeCaptureCell,
 }
 
 impl ForStatement {
+    /// Whether anything in the loop (head, test, update or body) could observe
+    /// the identity of a per-iteration lexical environment. `false` lets the
+    /// loop reuse one environment in place.
+    pub(crate) fn may_capture_iteration_scope(&self) -> bool {
+        self.scope_capture.get_or_compute(|| {
+            let mut walk = CaptureWalk::default();
+            walk.push_for_init(self.init.as_ref());
+            walk.push_opt_expr(self.test.as_ref());
+            walk.push_opt_expr(self.update.as_deref());
+            walk.push_stmt(&self.body);
+            walk.run()
+        })
+    }
+
     /// Whether the head is `for (await using ...;;)`, whose loop environment's
     /// DisposeResources at loop exit may `Await`.
     pub(crate) fn disposes_at_head(&self) -> bool {
@@ -788,6 +805,15 @@ pub(crate) struct ForInStatement {
     pub left: ForInOfLeft,
     pub right: Expression,
     pub body: Box<Statement>,
+    pub scope_capture: ScopeCaptureCell,
+}
+
+impl ForInStatement {
+    /// See [`ForStatement::may_capture_iteration_scope`].
+    pub(crate) fn may_capture_iteration_scope(&self) -> bool {
+        self.scope_capture
+            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.body))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -800,9 +826,16 @@ pub(crate) struct ForOfStatement {
     /// which also covers `await using` ForDeclarations that suspend at iteration disposal
     /// without awaiting the iteration protocol itself.
     pub is_await: bool,
+    pub scope_capture: ScopeCaptureCell,
 }
 
 impl ForOfStatement {
+    /// See [`ForStatement::may_capture_iteration_scope`].
+    pub(crate) fn may_capture_iteration_scope(&self) -> bool {
+        self.scope_capture
+            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.body))
+    }
+
     /// Whether this loop can suspend the enclosing async function/generator at its head,
     /// either through the async iteration protocol (`is_await`) or through an `await using`
     /// ForDeclaration's per-iteration DisposeResources `Await`.
@@ -817,6 +850,305 @@ impl ForOfStatement {
             &self.left,
             ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing
         )
+    }
+}
+
+/// Cached answer to "could this loop's per-iteration scope be observed?".
+/// Filled on first execution, after the last post-parse pass that mutates the
+/// node, and `Clone` yields an empty cell, so a cloned-then-mutated node never
+/// carries a stale verdict.
+#[derive(Debug, Default)]
+pub(crate) struct ScopeCaptureCell(std::cell::Cell<Option<bool>>);
+
+impl Clone for ScopeCaptureCell {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl ScopeCaptureCell {
+    fn get_or_compute(&self, compute: impl FnOnce() -> bool) -> bool {
+        if let Some(verdict) = self.0.get() {
+            return verdict;
+        }
+        let verdict = compute();
+        self.0.set(Some(verdict));
+        verdict
+    }
+}
+
+/// The loop's own iterable expression is deliberately not scanned: it runs in
+/// the head's TDZ environment (or the enclosing one), never in an iteration's.
+fn for_in_of_may_capture(left: &ForInOfLeft, body: &Statement) -> bool {
+    let mut walk = CaptureWalk::default();
+    walk.push_for_in_of_left(left);
+    walk.push_stmt(body);
+    walk.run()
+}
+
+enum CaptureNode<'a> {
+    Stmt(&'a Statement),
+    Expr(&'a Expression),
+    Pattern(&'a Pattern),
+}
+
+/// Conservative scan for any construct that can hold on to, or reach into, the
+/// lexical environment it runs in: a function, arrow function, class (method
+/// and field closures), `with`, or any mention of `eval` (a direct eval can
+/// create closures). Destructuring defaults and computed keys are visited too.
+/// Explicit worklist, so a very long left-nested operator chain cannot
+/// overflow the stack. Exhaustive over `Statement`/`Expression`/`Pattern`: a
+/// new AST variant forces a decision here.
+#[derive(Default)]
+struct CaptureWalk<'a> {
+    work: Vec<CaptureNode<'a>>,
+}
+
+impl<'a> CaptureWalk<'a> {
+    fn push_stmt(&mut self, s: &'a Statement) {
+        self.work.push(CaptureNode::Stmt(s));
+    }
+
+    fn push_expr(&mut self, e: &'a Expression) {
+        self.work.push(CaptureNode::Expr(e));
+    }
+
+    fn push_opt_expr(&mut self, e: Option<&'a Expression>) {
+        if let Some(e) = e {
+            self.push_expr(e);
+        }
+    }
+
+    fn push_pattern(&mut self, p: &'a Pattern) {
+        self.work.push(CaptureNode::Pattern(p));
+    }
+
+    fn push_decl(&mut self, d: &'a VariableDeclaration) {
+        for declarator in &d.declarations {
+            self.push_pattern(&declarator.pattern);
+            self.push_opt_expr(declarator.init.as_ref());
+        }
+    }
+
+    fn push_for_init(&mut self, init: Option<&'a ForInit>) {
+        match init {
+            Some(ForInit::Expression(e)) => self.push_expr(e),
+            Some(ForInit::Variable(d)) => self.push_decl(d),
+            None => {}
+        }
+    }
+
+    fn push_for_in_of_left(&mut self, left: &'a ForInOfLeft) {
+        match left {
+            ForInOfLeft::Variable(d) => self.push_decl(d),
+            ForInOfLeft::Pattern(p) => self.push_pattern(p),
+            ForInOfLeft::Expression(e) => self.push_expr(e),
+        }
+    }
+
+    fn push_key(&mut self, key: &'a PropertyKey) {
+        if let PropertyKey::Computed(e) = key {
+            self.push_expr(e);
+        }
+    }
+
+    fn run(mut self) -> bool {
+        while let Some(node) = self.work.pop() {
+            let captures = match node {
+                CaptureNode::Stmt(s) => self.visit_stmt(s),
+                CaptureNode::Expr(e) => self.visit_expr(e),
+                CaptureNode::Pattern(p) => {
+                    self.visit_pattern(p);
+                    false
+                }
+            };
+            if captures {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn visit_stmt(&mut self, stmt: &'a Statement) -> bool {
+        match stmt {
+            Statement::Empty
+            | Statement::Debugger
+            | Statement::Break(_)
+            | Statement::Continue(_)
+            | Statement::Return(None) => {}
+            Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_)
+            | Statement::With(..) => return true,
+            Statement::Expression(e) | Statement::Throw(e) | Statement::Return(Some(e)) => {
+                self.push_expr(e)
+            }
+            Statement::Block(stmts) => stmts.iter().for_each(|s| self.push_stmt(s)),
+            Statement::Variable(decl) => self.push_decl(decl),
+            Statement::If(i) => {
+                self.push_expr(&i.test);
+                self.push_stmt(&i.consequent);
+                if let Some(alt) = &i.alternate {
+                    self.push_stmt(alt);
+                }
+            }
+            Statement::While(w) => {
+                self.push_expr(&w.test);
+                self.push_stmt(&w.body);
+            }
+            Statement::DoWhile(d) => {
+                self.push_expr(&d.test);
+                self.push_stmt(&d.body);
+            }
+            Statement::For(f) => {
+                self.push_for_init(f.init.as_ref());
+                self.push_opt_expr(f.test.as_ref());
+                self.push_opt_expr(f.update.as_deref());
+                self.push_stmt(&f.body);
+            }
+            Statement::ForIn(f) => {
+                self.push_for_in_of_left(&f.left);
+                self.push_expr(&f.right);
+                self.push_stmt(&f.body);
+            }
+            Statement::ForOf(f) => {
+                self.push_for_in_of_left(&f.left);
+                self.push_expr(&f.right);
+                self.push_stmt(&f.body);
+            }
+            Statement::Try(t) => {
+                t.block.iter().for_each(|s| self.push_stmt(s));
+                if let Some(h) = &t.handler {
+                    if let Some(param) = &h.param {
+                        self.push_pattern(param);
+                    }
+                    h.body.iter().for_each(|s| self.push_stmt(s));
+                }
+                if let Some(f) = &t.finalizer {
+                    f.iter().for_each(|s| self.push_stmt(s));
+                }
+            }
+            Statement::Switch(s) => {
+                self.push_expr(&s.discriminant);
+                for case in &s.cases {
+                    self.push_opt_expr(case.test.as_ref());
+                    case.consequent.iter().for_each(|s| self.push_stmt(s));
+                }
+            }
+            Statement::Labeled(_, inner) => self.push_stmt(inner),
+        }
+        false
+    }
+
+    fn visit_pattern(&mut self, pattern: &'a Pattern) {
+        match pattern {
+            Pattern::Identifier(_) => {}
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            self.push_pattern(p)
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(key, p) => {
+                            self.push_key(key);
+                            self.push_pattern(p);
+                        }
+                        ObjectPatternProperty::Rest(p) => self.push_pattern(p),
+                        ObjectPatternProperty::Shorthand(_) => {}
+                    }
+                }
+            }
+            Pattern::Assign(inner, default) => {
+                self.push_pattern(inner);
+                self.push_expr(default);
+            }
+            Pattern::Rest(inner) => self.push_pattern(inner),
+            Pattern::MemberExpression(e) => self.push_expr(e),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expression) -> bool {
+        match expr {
+            Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => {
+                return true;
+            }
+            Expression::Identifier(name) => return name == "eval",
+            Expression::Literal(_)
+            | Expression::This
+            | Expression::Super
+            | Expression::ImportMeta
+            | Expression::NewTarget
+            | Expression::PrivateIdentifier(_) => {}
+            Expression::Array(elems, _) => {
+                for e in elems.iter().flatten() {
+                    self.push_expr(e);
+                }
+            }
+            Expression::Object(props, _) => {
+                for p in props {
+                    self.push_key(&p.key);
+                    self.push_expr(&p.value);
+                }
+            }
+            Expression::Unary(_, e)
+            | Expression::Update(_, _, e)
+            | Expression::Spread(e)
+            | Expression::Await(e)
+            | Expression::Typeof(e)
+            | Expression::Void(e)
+            | Expression::Delete(e) => self.push_expr(e),
+            Expression::Yield(arg, _) => {
+                if let Some(arg) = arg {
+                    self.push_expr(arg);
+                }
+            }
+            Expression::Binary(_, l, r)
+            | Expression::Logical(_, l, r)
+            | Expression::Assign(_, l, r)
+            | Expression::OptionalChain(l, r) => {
+                self.push_expr(l);
+                self.push_expr(r);
+            }
+            Expression::Conditional(t, c, a) => {
+                self.push_expr(t);
+                self.push_expr(c);
+                self.push_expr(a);
+            }
+            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
+                self.push_expr(callee);
+                args.iter().for_each(|a| self.push_expr(a));
+            }
+            Expression::Member(object, property, _) => {
+                self.push_expr(object);
+                if let MemberProperty::Computed(e) = property {
+                    self.push_expr(e);
+                }
+            }
+            Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+                exprs.iter().for_each(|e| self.push_expr(e));
+            }
+            Expression::TaggedTemplate(tag, tpl) => {
+                self.push_expr(tag);
+                tpl.expressions.iter().for_each(|e| self.push_expr(e));
+            }
+            Expression::Template(tpl) => {
+                tpl.expressions.iter().for_each(|e| self.push_expr(e));
+            }
+            Expression::Import(spec, opts)
+            | Expression::ImportDefer(spec, opts)
+            | Expression::ImportSource(spec, opts) => {
+                self.push_expr(spec);
+                if let Some(opts) = opts {
+                    self.push_expr(opts);
+                }
+            }
+        }
+        false
     }
 }
 
@@ -1120,7 +1452,7 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
                         || d.init.as_ref().is_some_and(expr_uses_arguments)
                 }),
             }) || f.test.as_ref().is_some_and(expr_uses_arguments)
-                || f.update.as_ref().is_some_and(expr_uses_arguments)
+                || f.update.as_deref().is_some_and(expr_uses_arguments)
                 || stmt_uses_arguments(&f.body)
         }
         Statement::ForIn(f) => {
@@ -1392,7 +1724,7 @@ fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) 
                     .iter()
                     .any(|dd| dd.init.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
             }) || f.test.as_ref().is_some_and(|e| expr_contains_matching(e, pred))
-                || f.update.as_ref().is_some_and(|e| expr_contains_matching(e, pred))
+                || f.update.as_deref().is_some_and(|e| expr_contains_matching(e, pred))
                 || stmt_contains_matching(&f.body, pred)
         }
         Statement::ForIn(f) => {
@@ -2642,5 +2974,85 @@ mod bound_names_tests {
         let mut out = vec!["pre".to_string()];
         ident("x").bound_names(&mut out);
         assert_eq!(out, vec!["pre", "x"]);
+    }
+}
+
+#[cfg(test)]
+mod scope_capture_tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    /// Whether the first loop statement of `source` may capture its
+    /// per-iteration scope.
+    fn loop_may_capture(source: &str) -> bool {
+        let program = Parser::new(source)
+            .expect("parser init")
+            .parse_program()
+            .expect("parse program");
+        match &program.body.as_slice()[0] {
+            Statement::For(f) => f.may_capture_iteration_scope(),
+            Statement::ForIn(f) => f.may_capture_iteration_scope(),
+            Statement::ForOf(f) => f.may_capture_iteration_scope(),
+            other => panic!("not a loop: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loops_without_scope_observers_cannot_capture() {
+        for source in [
+            "for (let i = 0; i < 3; i++) { s += i; }",
+            "for (let i = 0, j = 1; i < j; i++, j--) s += i + j;",
+            "for (const k in o) { if (k) continue; s += o[k]; }",
+            "for (const [a, b = 2] of xs) { s += a + b; }",
+            "for (const x of xs.map((v) => v + 1)) { s += x; }",
+            "for (const k in Object.keys(o).filter(function (n) { return n; })) { s += k; }",
+            "for (const { a, [k]: b } of xs) { try { s += a; } catch ({ message }) { s += b; } }",
+            "for (let i = 0; i < 3; i++) { for (const v of xs) { switch (v) { case 1: s++; } } }",
+            "for (let i = 0; i < 3; i++) { `x${i}`; tag`y${i}`; new Foo(i, ...rest); }",
+        ] {
+            assert!(!loop_may_capture(source), "{source}");
+        }
+    }
+
+    #[test]
+    fn loops_with_scope_observers_may_capture() {
+        for source in [
+            "for (let i = 0, f = () => i; i < 3; i++) {}",
+            "for (let i = 0; (g = () => i, i < 3); i++) {}",
+            "for (let i = 0; i < 3; g = function () { return i; }, i++) {}",
+            "for (let i = 0; i < 3; i++) { function f() { return i; } }",
+            "for (let i = 0; i < 3; i++) { class C { m() { return i; } } }",
+            "for (let i = 0; i < 3; i++) { g = class { static x = i; }; }",
+            "for (let i = 0; i < 3; i++) { eval('i'); }",
+            "for (let i = 0; i < 3; i++) { (0, eval)('i'); }",
+            "for (let i = 0; i < 3; i++) { with (o) { s++; } }",
+            "for (let i = 0; i < 3; i++) { let { f = () => i } = {}; }",
+            "for (let i = 0; i < 3; i++) { try {} catch ({ f = () => i }) {} }",
+            "for (let i = 0; i < 3; i++) { o = { m() { return i; } }; }",
+            "for (let i = 0; i < 3; i++) { o = { get x() { return i; } }; }",
+            "for (let i = 0; i < 3; i++) { o = { [(g = () => i, 'k')]: 1 }; }",
+            "for (const [a, f = () => a] of xs) {}",
+            "for (const k in o) { g = () => k; }",
+            "for (const v of xs) { for (const w of ys) { g = async () => v + w; } }",
+            "for (const { f = () => 1 } in o) {}",
+            "for (const a of xs) { for (const b of ys.map((v) => v + a)) { s += b; } }",
+        ] {
+            assert!(loop_may_capture(source), "{source}");
+        }
+    }
+
+    #[test]
+    fn verdict_is_cached_but_not_cloned() {
+        let program = Parser::new("for (let i = 0; i < 3; i++) {}")
+            .expect("parser init")
+            .parse_program()
+            .expect("parse program");
+        let Statement::For(f) = &program.body.as_slice()[0] else {
+            panic!("not a for loop");
+        };
+        assert!(f.scope_capture.0.get().is_none());
+        assert!(!f.may_capture_iteration_scope());
+        assert_eq!(f.scope_capture.0.get(), Some(false));
+        assert_eq!(f.clone().scope_capture.0.get(), None);
     }
 }

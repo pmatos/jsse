@@ -1787,6 +1787,7 @@ fn labeled_literal_true_for_omits_repeated_test_dispatch() {
             test: Some(Expression::Literal(Literal::Boolean(true))),
             update: None,
             body: Box::new(Statement::Break(Some("loop".to_string()))),
+            scope_capture: Default::default(),
         })),
     )];
     let chunk = compile_body(&body).expect("compile labeled for(;true;)");

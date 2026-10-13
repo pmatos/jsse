@@ -3170,6 +3170,11 @@ fn transform_for_statement(
     // the update runs). `test_state`/`body_state`/`update_state` all share
     // this *one* frame at a constant depth — mirrors `exec_for`'s
     // `per_iteration_bindings` (`exec.rs`).
+    //
+    // A loop whose head, test, update and body create no closure, class,
+    // `with` or direct `eval` cannot observe which frame it runs in, so it
+    // keeps the single frame the head's `OpenBlock` pushed and skips the
+    // `CopyForward` refreshes (`copy_per_iteration`).
     let per_iteration_bindings: Vec<(Atom, bool)> = if let Some(ForInit::Variable(decl)) =
         &for_stmt.init
         && matches!(decl.kind, VarKind::Let | VarKind::Const)
@@ -3184,6 +3189,7 @@ fn transform_for_statement(
         Vec::new()
     };
     let has_per_iteration_env = !per_iteration_bindings.is_empty();
+    let copy_per_iteration = has_per_iteration_env && for_stmt.may_capture_iteration_scope();
 
     if has_per_iteration_env {
         // §14.7.4.2 step 2's `NewDeclarativeEnvironment` for the
@@ -3247,7 +3253,7 @@ fn transform_for_statement(
     let labeled_continues =
         ctx.install_labeled_continue_targets(&iteration_labels, continue_target);
 
-    if has_per_iteration_env {
+    if copy_per_iteration {
         ctx.states[test_state].scope_action =
             Some(ScopeAction::CopyForward(per_iteration_bindings.clone()));
         ctx.states[update_state].scope_action =
@@ -3295,7 +3301,7 @@ fn transform_for_statement(
         if expr_has_suspension(update, ctx.is_async) {
             transform_yielding_expression(update, ctx, test_state, None);
         } else {
-            ctx.emit_statement(Statement::Expression(update.clone()));
+            ctx.emit_statement(Statement::Expression((**update).clone()));
         }
     }
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
@@ -4009,19 +4015,22 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                 ForInit::Expression(e) => ForInit::Expression(rewrite_expr(e)),
             }),
             test: f.test.as_ref().map(rewrite_expr),
-            update: f.update.as_ref().map(rewrite_expr),
+            update: f.update.as_deref().map(|e| ExprBox::new(rewrite_expr(e))),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
+            scope_capture: Default::default(),
         }),
         Statement::ForIn(f) => Statement::ForIn(ForInStatement {
             left: rewrite_for_left(&f.left),
             right: rewrite_expr(&f.right),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
+            scope_capture: Default::default(),
         }),
         Statement::ForOf(f) => Statement::ForOf(ForOfStatement {
             left: rewrite_for_left(&f.left),
             right: rewrite_expr(&f.right),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
             is_await: f.is_await,
+            scope_capture: Default::default(),
         }),
         Statement::Return(e) => Statement::Return(e.as_ref().map(rewrite_expr)),
         Statement::Throw(e) => Statement::Throw(rewrite_expr(e)),
@@ -4370,6 +4379,7 @@ mod tests {
             right: Expression::Identifier("ys".to_string()),
             body: Box::new(body),
             is_await: true,
+            scope_capture: Default::default(),
         })
     }
 
@@ -4379,6 +4389,7 @@ mod tests {
             right: Expression::Identifier("xs".to_string()),
             body: Box::new(body),
             is_await: false,
+            scope_capture: Default::default(),
         })
     }
 
