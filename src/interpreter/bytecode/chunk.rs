@@ -107,18 +107,14 @@ pub(crate) enum ArrayTemplate {
     Holey(Vec<Option<JsValue>>),
 }
 
-/// A regular expression literal: the `source` and `flags` a fresh RegExp
-/// object is created with on every evaluation.
 #[derive(Debug)]
 pub(crate) struct RegExpTemplate {
     pub(crate) source: JsString,
     pub(crate) flags: JsString,
 }
 
-/// One statically keyed property of an object literal.
 #[derive(Debug)]
 pub(crate) struct ShapeProperty {
-    /// Interned at compile time.
     pub(crate) key: JsPropertyKey,
     pub(crate) spec: LiteralPropertySpec,
 }
@@ -128,6 +124,10 @@ pub(crate) struct ShapeProperty {
 #[derive(Debug)]
 pub(crate) struct ObjectShape {
     pub(crate) props: Vec<ShapeProperty>,
+    /// Every entry is a plain data property under its own key, so a fresh
+    /// object can take them without checking for earlier definitions: no
+    /// accessors, methods, `__proto__` setters or repeated keys.
+    pub(crate) distinct_data: bool,
 }
 
 /// `ExecAst` operand meaning "no break/continue can leave this statement".

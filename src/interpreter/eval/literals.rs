@@ -28,12 +28,22 @@ pub(crate) fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units.to_vec()))
 }
 
-/// The `source` of a regular expression literal's pattern text.
 pub(crate) fn regexp_literal_source(pattern: &str) -> JsString {
     if pattern.is_empty() {
         JsString::from_str("(?:)")
     } else {
         crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
+    }
+}
+
+/// The property key of a statically named literal property, `None` for a
+/// computed or private one.
+pub(crate) fn static_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
+    match key {
+        PropertyKey::Identifier(name) => Some(JsPropertyKey::from(name.clone())),
+        PropertyKey::String(units) => Some(literal_string_property_key(units)),
+        PropertyKey::Number(n) => Some(JsPropertyKey::from(number_ops::to_string(*n))),
+        PropertyKey::Computed(_) | PropertyKey::Private(_) => None,
     }
 }
 
@@ -1318,20 +1328,9 @@ impl Interpreter {
             obj_data.prototype_id = self.realm().object_prototype;
             let mut method_values: Vec<JsValue> = Vec::new();
             for prop in props {
-                let (key, fn_name_for_key) =
-                    match &prop.key {
-                        PropertyKey::Identifier(n) => {
-                            let key = JsPropertyKey::from(n.clone());
-                            (key.clone(), key)
-                        }
-                        PropertyKey::String(s) => {
-                            let key = literal_string_property_key(s);
-                            (key.clone(), key)
-                        }
-                        PropertyKey::Number(n) => {
-                            let key = JsPropertyKey::from(number_ops::to_string(*n));
-                            (key.clone(), key)
-                        }
+                let (key, fn_name_for_key) = match static_property_key(&prop.key) {
+                    Some(key) => (key.clone(), key),
+                    None => match &prop.key {
                         PropertyKey::Computed(expr) => {
                             let v = match self.eval_expr(expr, env) {
                                 Completion::Normal(v) => v,
@@ -1358,12 +1357,16 @@ impl Interpreter {
                             };
                             (pk, name)
                         }
+                        PropertyKey::Identifier(_)
+                        | PropertyKey::String(_)
+                        | PropertyKey::Number(_) => unreachable!("static key"),
                         PropertyKey::Private(_) => {
                             return Completion::Throw(self.create_type_error(
                                 "Private names are not valid in object literals",
                             ));
                         }
-                    };
+                    },
+                };
                 if prop.method {
                     self.next_function_is_method = true;
                 }
@@ -1616,6 +1619,10 @@ impl Interpreter {
         obj_data.property_order.reserve(values.len());
         let mut method_values: Vec<JsValue> = Vec::new();
         for (prop, value) in shape.props.iter().zip(values) {
+            if shape.distinct_data && !prop.spec.name_value {
+                obj_data.push_fresh_value(prop.key.clone(), value.clone());
+                continue;
+            }
             self.define_literal_property(
                 &mut obj_data,
                 prop.key.clone(),

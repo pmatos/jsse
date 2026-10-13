@@ -3750,6 +3750,15 @@ impl JsObjectData {
             .push_fresh(key, PropertyDescriptor::data_default(value));
     }
 
+    /// `insert_value_prekeyed` for a key the caller knows this object does
+    /// not have yet.
+    pub(crate) fn push_fresh_value(&mut self, key: JsPropertyKey, value: JsValue) {
+        debug_assert!(!self.properties.contains_key(&key));
+        self.record_property_creation(&key);
+        self.properties
+            .push_fresh(key, PropertyDescriptor::data_default(value));
+    }
+
     /// Append the `length` property of a freshly built Array. `length` is
     /// never part of the Array's extra-string-key tracking, so this skips the
     /// interner and duplicate scan of `insert_property`.

@@ -8,7 +8,7 @@ mod access;
 mod generator_runtime;
 mod literals;
 pub(crate) use literals::{
-    LiteralPropertySpec, literal_string_property_key, prefixed_function_name, regexp_literal_source,
+    LiteralPropertySpec, prefixed_function_name, regexp_literal_source, static_property_key,
 };
 mod modules;
 mod operand;

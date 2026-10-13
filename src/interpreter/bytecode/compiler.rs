@@ -11,11 +11,10 @@ use crate::ast::{
 };
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
-use crate::types::{JsBigInt, JsPropertyKey, JsString, JsValue, number_ops};
+use crate::types::{JsBigInt, JsString, JsValue};
 
-/// Operand values one `NewArray`/`ArrayAppend`/`NewObject` keeps on the
-/// operand stack at once: larger literals are built in chunks (arrays) or
-/// stay on the tree-walker (objects).
+/// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
+/// keeps on the operand stack at once: larger literals are built in chunks.
 const LITERAL_VALUE_CHUNK: usize = 256;
 
 #[derive(Debug)]
@@ -861,10 +860,20 @@ impl Compiler {
         }
     }
 
+    /// A literal keeps up to one chunk of pending values on the operand
+    /// stack; one too deep to take another chunk stays on the tree-walker.
+    fn check_literal_stack(&self) -> Result<(), CompileError> {
+        if usize::from(self.current_stack) + LITERAL_VALUE_CHUNK + 2 > usize::from(u16::MAX) {
+            return Err(CompileError::Unsupported("literal operand stack"));
+        }
+        Ok(())
+    }
+
     fn compile_array_literal(
         &mut self,
         elements: &[Option<Expression>],
     ) -> Result<(), CompileError> {
+        self.check_literal_stack()?;
         if let Some(template) = constant_array_template(elements) {
             let idx = u16::try_from(self.array_templates.len())
                 .map_err(|_| CompileError::Ineligible("array template pool overflow"))?;
@@ -919,6 +928,7 @@ impl Compiler {
     }
 
     fn compile_object_literal(&mut self, props: &[Property]) -> Result<(), CompileError> {
+        self.check_literal_stack()?;
         // Everything that cannot be a static key with a value on the stack is
         // rejected before anything is emitted.
         for prop in props {
@@ -950,7 +960,16 @@ impl Compiler {
             let idx = u16::try_from(self.object_shapes.len())
                 .map_err(|_| CompileError::Ineligible("object shape pool overflow"))?;
             let count = shape.len() as u16;
-            self.object_shapes.push(ObjectShape { props: shape });
+            let distinct_data = shape.iter().enumerate().all(|(i, prop)| {
+                prop.spec.kind == PropertyKind::Init
+                    && !prop.spec.is_method
+                    && !(prop.spec.plain_init && prop.key.eq_str("__proto__"))
+                    && !shape[..i].iter().any(|earlier| earlier.key == prop.key)
+            });
+            self.object_shapes.push(ObjectShape {
+                props: shape,
+                distinct_data,
+            });
             self.emit(if created {
                 Op::ObjectAppend
             } else {
@@ -971,29 +990,27 @@ impl Compiler {
     /// Compiles one statically keyed property's value onto the operand stack
     /// and returns its shape entry.
     fn compile_shape_property(&mut self, prop: &Property) -> Result<ShapeProperty, CompileError> {
-        let key = match &prop.key {
-            PropertyKey::Identifier(name) => JsPropertyKey::from(name.clone()),
-            PropertyKey::String(units) => {
-                crate::interpreter::eval::literal_string_property_key(units)
-            }
-            PropertyKey::Number(n) => JsPropertyKey::from(number_ops::to_string(*n)),
-            PropertyKey::Computed(_) | PropertyKey::Private(_) => {
-                unreachable!("rejected by compile_object_literal")
-            }
-        };
+        let key = crate::interpreter::eval::static_property_key(&prop.key)
+            .expect("compile_object_literal rejects computed and private keys");
         let key = crate::interpreter::key_intern::intern_js_key(key);
+        let plain_init = !prop.computed && !prop.shorthand && !prop.method;
+        // `__proto__: v` sets the prototype and is not a NamedEvaluation
+        // position (sec-runtime-semantics-propertydefinitionevaluation).
+        let is_proto_setter =
+            prop.kind == PropertyKind::Init && plain_init && key.eq_str("__proto__");
         let mut name_value = false;
         if is_anonymous_closure(&prop.value) {
             let fn_name = match prop.kind {
-                PropertyKind::Init => key.to_js_string(),
-                PropertyKind::Get => {
-                    crate::interpreter::eval::prefixed_function_name("get ", &key).to_js_string()
-                }
-                PropertyKind::Set => {
-                    crate::interpreter::eval::prefixed_function_name("set ", &key).to_js_string()
-                }
+                _ if is_proto_setter => None,
+                PropertyKind::Init => Some(key.to_js_string()),
+                PropertyKind::Get => Some(
+                    crate::interpreter::eval::prefixed_function_name("get ", &key).to_js_string(),
+                ),
+                PropertyKind::Set => Some(
+                    crate::interpreter::eval::prefixed_function_name("set ", &key).to_js_string(),
+                ),
             };
-            self.compile_closure(&prop.value, Some(fn_name), prop.method)?;
+            self.compile_closure(&prop.value, fn_name, prop.method)?;
         } else {
             self.compile_expr(&prop.value)?;
             // An anonymous class is named by the literal after the fact.
@@ -1004,7 +1021,7 @@ impl Compiler {
             key,
             spec: LiteralPropertySpec {
                 kind: prop.kind,
-                plain_init: !prop.computed && !prop.shorthand && !prop.method,
+                plain_init,
                 is_method: prop.method,
                 name_value,
             },

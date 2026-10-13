@@ -102,6 +102,19 @@ assert.sameValue(Object.getPrototypeOf(s.shorthandProto), Object.prototype);
 assert.sameValue(s.methodProto.__proto__(), "own method");
 assert.sameValue(Object.prototype.hasOwnProperty.call(s.methodProto, "__proto__"), true);
 
+function protoSetterIsNotNamed() {
+  return [
+    { __proto__: function () {} },
+    { "__proto__": () => {} },
+    { __proto__() {} },
+  ];
+}
+var named = protoSetterIsNotNamed();
+assert.sameValue(Object.getPrototypeOf(named[0]).name, "",
+  "__proto__: <anonymous function> is not a NamedEvaluation position");
+assert.sameValue(Object.getPrototypeOf(named[1]).name, "");
+assert.sameValue(named[2].__proto__.name, "__proto__", "a __proto__ method is named after its key");
+
 function accessorPairs() {
   var onlyGetter = { get x() { return 1; } };
   var replaced = { get x() { return 1; }, x: 5 };
