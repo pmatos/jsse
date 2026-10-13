@@ -2199,17 +2199,28 @@ impl Interpreter {
                 _ => self.eval_binary_slow(op, left, right),
             };
         }
-        if let Some(result) = left
-            .with_bigint(|a| right.with_bigint(|b| bigint_binary_op(op, a, b)))
-            .flatten()
-            .flatten()
-        {
-            return match result {
-                Ok(v) => Completion::Normal(v),
-                Err(message) => Completion::Throw(self.create_error("RangeError", message)),
-            };
+        if let Some(completion) = self.bigint_binary(op, left, right) {
+            return completion;
         }
         self.eval_binary_slow(op, left, right)
+    }
+
+    /// `op` over two BigInt operands, or `None` when either is not a BigInt or
+    /// the operator has no BigInt/BigInt form (see [`bigint_binary_op`]).
+    fn bigint_binary(
+        &mut self,
+        op: BinaryOp,
+        left: &JsValue,
+        right: &JsValue,
+    ) -> Option<Completion> {
+        let result = left
+            .with_bigint(|a| right.with_bigint(|b| bigint_binary_op(op, a, b)))
+            .flatten()
+            .flatten()?;
+        Some(match result {
+            Ok(v) => Completion::Normal(v),
+            Err(message) => Completion::Throw(self.create_error("RangeError", message)),
+        })
     }
 
     fn eval_binary_slow(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
@@ -2230,10 +2241,8 @@ impl Interpreter {
                 }
                 if is_string(&lprim) || is_string(&rprim) {
                     self.concat_primitives(&lprim, &rprim)
-                } else if let (Some(a), Some(b)) = (lprim.as_bigint(), rprim.as_bigint()) {
-                    Completion::Normal(JsValue::bigint(JsBigInt::new(bigint_ops::add(
-                        &a.value, &b.value,
-                    ))))
+                } else if let Some(completion) = self.bigint_binary(op, &lprim, &rprim) {
+                    completion
                 } else if lprim.is_bigint() || rprim.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -2255,34 +2264,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
-                    match op {
-                        BinaryOp::Sub => Completion::Normal(JsValue::bigint(JsBigInt::new(
-                            bigint_ops::subtract(&a.value, &b.value),
-                        ))),
-                        BinaryOp::Mul => Completion::Normal(JsValue::bigint(JsBigInt::new(
-                            bigint_ops::multiply(&a.value, &b.value),
-                        ))),
-                        BinaryOp::Div => match bigint_ops::divide(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
-                            Err(_) => Completion::Throw(
-                                self.create_error("RangeError", "Division by zero"),
-                            ),
-                        },
-                        BinaryOp::Mod => match bigint_ops::remainder(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
-                            Err(_) => Completion::Throw(
-                                self.create_error("RangeError", "Division by zero"),
-                            ),
-                        },
-                        BinaryOp::Exp => match bigint_ops::exponentiate(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::bigint(JsBigInt::new(v))),
-                            Err(_) => Completion::Throw(
-                                self.create_error("RangeError", "Exponent must be positive"),
-                            ),
-                        },
-                        _ => unreachable!(),
-                    }
+                if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
+                    completion
                 } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -2353,12 +2336,8 @@ impl Interpreter {
                             "Cannot mix BigInt and other types, use explicit conversions",
                         ));
                     }
-                    if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
-                        Completion::Normal(JsValue::bigint(JsBigInt::new(match op {
-                            BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
-                            BinaryOp::RShift => bigint_ops::signed_right_shift(&a.value, &b.value),
-                            _ => unreachable!(),
-                        })))
+                    if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
+                        completion
                     } else {
                         Completion::Throw(self.create_type_error(
                             "Cannot mix BigInt and other types, use explicit conversions",
@@ -2392,13 +2371,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (Some(a), Some(b)) = (lnum.as_bigint(), rnum.as_bigint()) {
-                    Completion::Normal(JsValue::bigint(JsBigInt::new(match op {
-                        BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
-                        BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
-                        BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
-                        _ => unreachable!(),
-                    })))
+                if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
+                    completion
                 } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
