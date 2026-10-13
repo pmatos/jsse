@@ -39,11 +39,14 @@ clauses (AES `throw`, gbemu `switch`, crypto/richards member `++`).
    - *Name inference*: assignment / declarator whose value
      `is_anonymous_function_definition()` falls back at that node, since
      NamedEvaluation is applied by the parent.
-   - *Scope rule*: the VM has no block environments, so a block, `switch` or
-     loop head that declares a binding (`let`/`const`/`using`, class,
-     function) runs as one `ExecAst` unit and the tree-walker creates the
-     scope, hoists TDZ and makes per-iteration copies. Function top level is
-     exempt: its lexicals live in the function environment.
+   - *Scope rule* (superseded by ADR-2026-10-13-0632, which gives the VM
+     block environments; only `using` blocks and a `switch` whose clauses
+     declare functions still take this path): the VM has no block
+     environments, so a block, `switch` or loop head that declares a binding
+     (`let`/`const`/`using`, class, function) runs as one `ExecAst` unit and
+     the tree-walker creates the scope, hoists TDZ and makes per-iteration
+     copies. Function top level is exempt: its lexicals live in the function
+     environment.
    - *Tail position*: `return <expr containing a call>` (other than the direct
      `return f(...)` lowering) falls back at the `return`, so `TailCall` is
      produced by the tree-walker; `TaggedTemplate` counts as a call.

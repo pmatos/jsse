@@ -67,8 +67,8 @@ fn non_capturing_loops_intern_nothing_per_iteration() {
 }
 
 #[test]
-fn capturing_loops_keep_a_fresh_environment_per_iteration() {
-    for build in [for_let, for_of, for_in] {
+fn capturing_tree_walked_loops_keep_a_fresh_environment_per_iteration() {
+    for build in [for_of, for_in] {
         let small = intern_calls(&build(1_000, "s = (s + 1) | 0; if (s < 0) (() => s);"));
         let large = intern_calls(&build(3_000, "s = (s + 1) | 0; if (s < 0) (() => s);"));
         assert!(
@@ -76,4 +76,18 @@ fn capturing_loops_keep_a_fresh_environment_per_iteration() {
             "a capturing loop must still build per-iteration environments: {small} -> {large}"
         );
     }
+}
+
+/// The VM's `for (let ...)` copies its head environment per iteration through
+/// atoms (`CopyIterEnv`): the fresh environment is still built, but no name
+/// is hashed for it. That the copies are distinct is a semantics check, in
+/// `test262-extra/bytecode-block-environments.js`.
+#[test]
+fn capturing_for_let_loops_copy_their_environment_without_interning() {
+    let small = intern_calls(&for_let(1_000, "s = (s + 1) | 0; if (s < 0) (() => s);"));
+    let large = intern_calls(&for_let(3_000, "s = (s + 1) | 0; if (s < 0) (() => s);"));
+    assert!(
+        large <= small,
+        "atom_intern_calls grew with the iteration count: {small} -> {large}"
+    );
 }

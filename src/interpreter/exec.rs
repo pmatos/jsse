@@ -588,6 +588,15 @@ impl Interpreter {
         None
     }
 
+    /// The function half of BlockDeclarationInstantiation for one statement
+    /// of a block the bytecode VM entered (`Op::PushEnv`): a (possibly
+    /// labelled) function declaration becomes a closure over `env`.
+    pub(crate) fn hoist_block_function_declaration(&mut self, stmt: &Statement, env: &EnvRef) {
+        if let Some(f) = super::hoisting::unwrap_labeled_function(stmt) {
+            self.hoist_function_decl(f, env, false);
+        }
+    }
+
     fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
         let enclosing_strict = env.borrow().strict;
         let info = f.info();
@@ -619,31 +628,13 @@ impl Interpreter {
     /// §14.2.2 BlockDeclarationInstantiation: Hoist let/const/class declarations as
     /// uninitialized (TDZ) bindings at the top of a block scope.
     fn hoist_lexical_declarations(stmts: &[Statement], env: &EnvRef) {
-        for stmt in stmts {
-            match stmt {
-                Statement::Variable(decl)
-                    if matches!(
-                        decl.kind,
-                        VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-                    ) =>
-                {
-                    let kind = match decl.kind {
-                        VarKind::Let => BindingKind::Let,
-                        _ => BindingKind::Const,
-                    };
-                    for d in &decl.declarations {
-                        let mut names = Vec::new();
-                        d.pattern.bound_names(&mut names);
-                        for name in names {
-                            env.borrow_mut().declare(&name, kind);
-                        }
-                    }
-                }
-                Statement::ClassDeclaration(c) if !c.name.is_empty() => {
-                    env.borrow_mut().declare(&c.name, BindingKind::Const);
-                }
-                _ => {}
-            }
+        for (name, is_const) in super::hoisting::collect_lexical_names(stmts) {
+            let kind = if is_const {
+                BindingKind::Const
+            } else {
+                BindingKind::Let
+            };
+            env.borrow_mut().declare(&name, kind);
         }
     }
 
@@ -1906,14 +1897,29 @@ impl Interpreter {
                 } else {
                     BindingKind::Const
                 };
-                let mut names = Vec::new();
-                for d in &decl.declarations {
-                    d.pattern.bound_names(&mut names);
-                }
-                names.into_iter().map(|n| (n, kind)).collect()
+                super::hoisting::declaration_bound_names(decl)
+                    .into_iter()
+                    .map(|n| (n, kind))
+                    .collect()
             } else {
                 Vec::new()
             };
+
+        // §14.7.4.2 step 2-5: the head's bindings exist, uninitialised, while
+        // the initializers run, so `for (let i = i;;)` cannot see an outer `i`.
+        if let Some(ForInit::Variable(decl)) = &f.init
+            && decl.kind != VarKind::Var
+        {
+            let kind = if decl.kind == VarKind::Let {
+                BindingKind::Let
+            } else {
+                BindingKind::Const
+            };
+            let mut scope = for_env.borrow_mut();
+            for name in &super::hoisting::declaration_bound_names(decl) {
+                scope.declare(name, kind);
+            }
+        }
 
         if let Some(init) = &f.init {
             match init {
@@ -2779,7 +2785,24 @@ impl Interpreter {
             other => return other,
         };
         let switch_env = Environment::new(Some(env.clone()));
+        // The discriminant and the CaseBlock's environment (holding the
+        // clauses' `let`/`const` values) are reachable only from this frame
+        // while selectors and clauses run arbitrary code.
+        let roots = self.gc_root_frame();
+        self.gc_root_value(&disc);
+        self.call_stack_envs.push(switch_env.clone());
+        let result = self.exec_switch_block(s, &disc, &switch_env);
+        self.call_stack_envs.pop();
+        self.gc_unroot_frame(roots);
+        result
+    }
 
+    fn exec_switch_block(
+        &mut self,
+        s: &SwitchStatement,
+        disc: &JsValue,
+        switch_env: &EnvRef,
+    ) -> Completion {
         // Hoist function declarations from all case bodies
         // (only regular functions, not generators/async — those stay block-scoped)
         for case in &s.cases {
@@ -2808,9 +2831,15 @@ impl Interpreter {
                         has_simple_params: info.has_simple_params,
                     };
                     let val = self.create_function(func);
-                    let _ = self.env_set(&switch_env, &f.name, val);
+                    let _ = self.env_set(switch_env, &f.name, val);
                 }
             }
+        }
+
+        // BlockDeclarationInstantiation over the whole CaseBlock: every
+        // lexical name is in its TDZ before any selector or clause runs.
+        for case in &s.cases {
+            Self::hoist_lexical_declarations(&case.consequent, switch_env);
         }
 
         let default_idx = s.cases.iter().position(|c| c.test.is_none());
@@ -2821,27 +2850,27 @@ impl Interpreter {
         let mut found = false;
         for (i, case) in s.cases[..a_end].iter().enumerate() {
             if !found {
-                let test = match self.eval_expr(case.test.as_ref().unwrap(), &switch_env) {
+                let test = match self.eval_expr(case.test.as_ref().unwrap(), switch_env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if strict_equality(&disc, &test) {
+                if strict_equality(disc, &test) {
                     found = true;
                 }
             }
             if found {
                 // Fall through from match in A through rest of A, then default + B
-                if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env, &mut v) {
-                    let r = self.dispose_resources(&switch_env, r);
+                if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], switch_env, &mut v) {
+                    let r = self.dispose_resources(switch_env, r);
                     return r;
                 }
                 if let Some(di) = default_idx
-                    && let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v)
+                    && let Some(r) = self.exec_switch_cases(&s.cases[di..], switch_env, &mut v)
                 {
-                    let r = self.dispose_resources(&switch_env, r);
+                    let r = self.dispose_resources(switch_env, r);
                     return r;
                 }
-                return self.dispose_resources(&switch_env, Completion::Normal(v));
+                return self.dispose_resources(switch_env, Completion::Normal(v));
             }
         }
 
@@ -2853,29 +2882,29 @@ impl Interpreter {
                 if case.test.is_none() {
                     continue;
                 }
-                let test = match self.eval_expr(case.test.as_ref().unwrap(), &switch_env) {
+                let test = match self.eval_expr(case.test.as_ref().unwrap(), switch_env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if strict_equality(&disc, &test) {
+                if strict_equality(disc, &test) {
                     if let Some(r) =
-                        self.exec_switch_cases(&s.cases[b_start + i..], &switch_env, &mut v)
+                        self.exec_switch_cases(&s.cases[b_start + i..], switch_env, &mut v)
                     {
-                        let r = self.dispose_resources(&switch_env, r);
+                        let r = self.dispose_resources(switch_env, r);
                         return r;
                     }
-                    return self.dispose_resources(&switch_env, Completion::Normal(v));
+                    return self.dispose_resources(switch_env, Completion::Normal(v));
                 }
             }
 
             // Phase 3: No match anywhere — execute default, then fall through B
-            if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
-                let r = self.dispose_resources(&switch_env, r);
+            if let Some(r) = self.exec_switch_cases(&s.cases[di..], switch_env, &mut v) {
+                let r = self.dispose_resources(switch_env, r);
                 return r;
             }
         }
 
-        self.dispose_resources(&switch_env, Completion::Normal(v))
+        self.dispose_resources(switch_env, Completion::Normal(v))
     }
 
     fn exec_switch_cases(

@@ -1140,13 +1140,40 @@ impl Environment {
     }
 
     pub(crate) fn reset_function_scope(&mut self, parent: Option<EnvRef>, binding_capacity: usize) {
+        self.reset_scope(parent, binding_capacity, true);
+    }
+
+    /// Drops what a pooled environment holds on to (its parent chain and
+    /// bindings); every other field is rewritten when it is next acquired.
+    pub(crate) fn release_block_scope(&mut self) {
+        self.bindings.clear();
+        self.parent = None;
+        self.this_binding = None;
+        self.dispose_stack = None;
+        self.annexb_function_names = None;
+        self.class_private_names = None;
+        self.indirect_bindings = None;
+    }
+
+    /// Reinitialises a pooled environment as a fresh block scope under
+    /// `parent`, as `Environment::new` would build one.
+    pub(crate) fn reset_block_scope(&mut self, parent: EnvRef, binding_capacity: usize) {
+        self.reset_scope(Some(parent), binding_capacity, false);
+    }
+
+    fn reset_scope(
+        &mut self,
+        parent: Option<EnvRef>,
+        binding_capacity: usize,
+        is_function_scope: bool,
+    ) {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         self.bindings.clear();
         self.bindings.reserve(binding_capacity);
         self.this_binding = None;
         self.parent = parent;
         self.strict = strict;
-        self.is_function_scope = true;
+        self.is_function_scope = is_function_scope;
         self.is_arrow_scope = false;
         self.with_object = None;
         self.dispose_stack = None;

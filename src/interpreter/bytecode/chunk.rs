@@ -35,7 +35,33 @@ pub(crate) struct EscapeEntry {
     pub(crate) label: Option<String>,
     /// Absolute code offset of the loop's break/continue target.
     pub(crate) target: u32,
+    /// Block environments open at `target`; the VM unwinds to this depth
+    /// before resuming there.
+    pub(crate) scope_depth: u16,
 }
+
+/// What `PushEnv` instantiates in a fresh block environment
+/// (BlockDeclarationInstantiation, sec-blockdeclarationinstantiation).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BlockScope {
+    /// Function declaration statements (possibly labelled), closed over the
+    /// new environment, in source order.
+    pub(crate) functions: Vec<Statement>,
+    /// `let`/`const`/class bindings entering their TDZ: `names` index and
+    /// whether the binding is immutable.
+    pub(crate) lexicals: Vec<(u16, bool)>,
+}
+
+/// A local-op slot operand with this bit set names a binding of a block
+/// environment: bits 8-14 are the environment's index among the chunk's open
+/// block environments (outermost first) and bits 0-7 its slot there. Without
+/// it the operand is a slot in the frame (function) environment.
+pub(crate) const BLOCK_SLOT_FLAG: u16 = 0x8000;
+
+/// `InitLexical`'s slot operand when the compiler has no position to hint.
+pub(crate) const NO_INIT_SLOT: u16 = u16::MAX;
+pub(crate) const BLOCK_SLOT_MAX_SCOPES: usize = 0x80;
+pub(crate) const BLOCK_SLOT_MAX_INDEX: usize = 0x100;
 
 /// `ExecAst` operand meaning "no break/continue can leave this statement".
 pub(crate) const NO_ESCAPE_TABLE: u16 = u16::MAX;
@@ -56,6 +82,7 @@ pub(crate) struct Chunk {
     /// Nodes executed on the tree-walker by `EvalAst`/`ExecAst`.
     pub(crate) ast: Vec<AstNode>,
     pub(crate) escape_tables: Vec<Vec<EscapeEntry>>,
+    pub(crate) block_scopes: Vec<BlockScope>,
     /// The body declares functions or lexical bindings that the tree-walker's
     /// declaration instantiation must establish before the chunk runs.
     pub(crate) needs_instantiation: bool,

@@ -1,4 +1,4 @@
-use super::chunk::{Chunk, Constant};
+use super::chunk::{BLOCK_SLOT_FLAG, Chunk, Constant};
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
@@ -6,6 +6,7 @@ use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
+use smallvec::SmallVec;
 
 #[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
@@ -120,12 +121,13 @@ fn store_local(
     interp: &mut Interpreter,
     name: &Atom,
     slot: u16,
+    target: &EnvRef,
     env: &EnvRef,
     value: &JsValue,
     hint: Option<&GlobalHint>,
 ) -> Result<(), JsValue> {
     let stored = {
-        let mut scope = env.borrow_mut();
+        let mut scope = target.borrow_mut();
         let plain = scope.with_object.is_none()
             && scope.indirect_bindings.is_none()
             && scope.global_object_id.is_none();
@@ -195,6 +197,26 @@ fn store_resolved_name(
     Ok(())
 }
 
+/// The environment a local-op slot operand addresses, and the slot within it:
+/// the frame (function) environment, or one of the chunk's open block
+/// environments (see `BLOCK_SLOT_FLAG`). Only a hint: the caller verifies the
+/// binding by atom identity and falls back to by-name resolution from the
+/// current environment.
+#[inline(always)]
+fn local_target<'a>(frame_env: &'a EnvRef, scopes: &'a [EnvRef], slot: u16) -> (&'a EnvRef, u16) {
+    if slot & BLOCK_SLOT_FLAG == 0 {
+        (frame_env, slot)
+    } else {
+        let scope = usize::from((slot >> 8) & 0x7f);
+        debug_assert!(
+            scope < scopes.len(),
+            "block slot names environment {scope} of {}",
+            scopes.len()
+        );
+        (scopes.get(scope).unwrap_or(frame_env), slot & 0xff)
+    }
+}
+
 /// The frame binding a verified slot hint names, when it is initialized and
 /// the scope is a plain declarative one; `f` sees its value in place.
 #[inline(always)]
@@ -225,14 +247,29 @@ fn escape_target(
     table: u16,
     is_continue: bool,
     label: Option<&str>,
-) -> Option<usize> {
+) -> Option<(usize, usize)> {
     if table == super::chunk::NO_ESCAPE_TABLE {
         return None;
     }
     chunk.escape_tables[table as usize]
         .iter()
         .find(|e| e.is_continue == is_continue && e.label.as_deref() == label)
-        .map(|e| e.target as usize)
+        .map(|e| (e.target as usize, usize::from(e.scope_depth)))
+}
+
+/// Leaves block environments until `depth` remain, keeping the VM's scope
+/// stack and its GC-rooted mirror in `call_stack_envs` in step.
+fn unwind_scopes(
+    interp: &mut Interpreter,
+    scopes: &mut SmallVec<[EnvRef; 4]>,
+    envs_base: usize,
+    depth: usize,
+) {
+    interp.call_stack_envs.truncate(envs_base + depth);
+    while scopes.len() > depth {
+        let env = scopes.pop().expect("length checked above");
+        interp.recycle_block_environment(env);
+    }
 }
 
 #[inline(always)]
@@ -502,6 +539,7 @@ fn run_chunk_with_var_prologue(
     declare_chunk_vars: bool,
 ) -> Completion {
     let gc_frame = interp.gc_bytecode_roots.len();
+    let envs_frame = interp.call_stack_envs.len();
     let mut stack = interp.vm_stack_pool.pop().unwrap_or_default();
     let mut refs = if chunk.max_refs == 0 {
         Vec::new()
@@ -531,6 +569,8 @@ fn run_chunk_with_var_prologue(
             .assert_depth(gc_frame, "a bytecode chunk exit");
     }
     interp.gc_bytecode_roots.truncate(gc_frame);
+    // Block environments a `return`, `throw` or escaping `break` left open.
+    interp.call_stack_envs.truncate(envs_frame);
     result
 }
 
@@ -551,7 +591,7 @@ fn safepoint_with_empty_stacks(
 fn run_chunk_inner(
     interp: &mut Interpreter,
     chunk: &Chunk,
-    env: &EnvRef,
+    frame_env: &EnvRef,
     _this: JsValue,
     declare_chunk_vars: bool,
     stack: &mut Vec<JsValue>,
@@ -559,10 +599,22 @@ fn run_chunk_inner(
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
     if declare_chunk_vars {
-        declare_var_prologue(chunk, env);
+        declare_var_prologue(chunk, frame_env);
     }
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
+    // Block environments `PushEnv` opened, innermost last, mirrored in
+    // `call_stack_envs` from `envs_base` so the GC sees their bindings. The
+    // frame environment stays the one the caller rooted. Local-op slot hints
+    // address `frame_env` or one of these directly; every other environment
+    // use goes through `cur_env!()`.
+    let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
+    let envs_base = interp.call_stack_envs.len();
+    macro_rules! cur_env {
+        () => {
+            scopes.last().unwrap_or(frame_env)
+        };
+    }
     // One arm per binary op, so the Number-pair fast path is specialised to
     // the op instead of re-dispatching on it.
     macro_rules! binary_arm {
@@ -601,7 +653,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
+                match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
                     Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
@@ -611,7 +663,8 @@ fn run_chunk_inner(
                 let slot = decode_u16(chunk, pc + 2);
                 pc += 4;
                 let name = &chunk.names[idx as usize];
-                match with_local_hit(env, name, slot, JsValue::clone) {
+                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                match with_local_hit(target, name, hint_slot, JsValue::clone) {
                     Some(value) => {
                         #[cfg(feature = "perf-counters")]
                         {
@@ -624,7 +677,7 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_misses += 1;
                         }
-                        match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
+                        match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
                             Completion::Normal(v) => push_value(interp, stack, v),
                             abrupt => return abrupt,
                         }
@@ -637,8 +690,16 @@ fn run_chunk_inner(
                 pc += 4;
                 let name = &chunk.names[idx as usize];
                 let value = stack.last().expect("stack underflow on StoreLocal");
-                if let Err(e) = store_local(interp, name, slot, env, value, chunk.global_hint(idx))
-                {
+                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                if let Err(e) = store_local(
+                    interp,
+                    name,
+                    hint_slot,
+                    target,
+                    cur_env!(),
+                    value,
+                    chunk.global_hint(idx),
+                ) {
                     return Completion::Throw(e);
                 }
                 if op == Op::StoreLocalPop {
@@ -652,12 +713,13 @@ fn run_chunk_inner(
                 pc += 5;
                 let (op, prefix, discard) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
+                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
                 let fast = {
-                    let mut scope = env.borrow_mut();
+                    let mut scope = target.borrow_mut();
                     let plain = scope.with_object.is_none()
                         && scope.indirect_bindings.is_none()
                         && scope.global_object_id.is_none();
-                    match scope.bindings.entry_at_mut(slot as usize) {
+                    match scope.bindings.entry_at_mut(hint_slot as usize) {
                         Some((atom, binding))
                             if plain
                                 && atom.ptr_eq(name)
@@ -695,7 +757,7 @@ fn run_chunk_inner(
                             op,
                             prefix,
                             name,
-                            env,
+                            cur_env!(),
                             chunk.global_hint(idx),
                         ) {
                             Completion::Normal(value) => {
@@ -708,7 +770,7 @@ fn run_chunk_inner(
                     }
                 }
             }
-            Op::LoadThis => match interp.resolve_this_binding(env) {
+            Op::LoadThis => match interp.resolve_this_binding(cur_env!()) {
                 Completion::Normal(v) => push_value(interp, stack, v),
                 abrupt => return abrupt,
             },
@@ -716,10 +778,14 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                let strict = env.borrow().strict;
+                let strict = frame_env.borrow().strict;
                 interp.last_identifier_with_base = None;
-                let callee_result =
-                    interp.resolve_identifier_hinted(name, env, strict, chunk.global_hint(idx));
+                let callee_result = interp.resolve_identifier_hinted(
+                    name,
+                    cur_env!(),
+                    strict,
+                    chunk.global_hint(idx),
+                );
                 let this_value = match interp.last_identifier_with_base.take() {
                     Some(id) => JsValue::object(id),
                     None => JsValue::UNDEFINED,
@@ -736,15 +802,19 @@ fn run_chunk_inner(
                 pc += 2;
                 let name = &chunk.names[idx as usize];
                 let local_ref = {
-                    let scope = env.borrow();
+                    let scope = cur_env!().borrow();
                     scope.with_object.is_none()
                         && scope.indirect_bindings.is_none()
                         && scope.bindings.contains_key(name)
                 };
                 if local_ref {
-                    refs.push(IdentifierRef::SpecificEnv(env.clone()));
+                    refs.push(IdentifierRef::SpecificEnv(cur_env!().clone()));
                 } else {
-                    match interp.resolve_identifier_ref_hinted(name, env, chunk.global_hint(idx)) {
+                    match interp.resolve_identifier_ref_hinted(
+                        name,
+                        cur_env!(),
+                        chunk.global_hint(idx),
+                    ) {
                         Ok(id_ref) => refs.push(id_ref),
                         Err(e) => return Completion::Throw(e),
                     }
@@ -760,7 +830,7 @@ fn run_chunk_inner(
                 match interp.get_identifier_value_by_ref_hinted(
                     name,
                     id_ref,
-                    env,
+                    cur_env!(),
                     chunk.global_hint(idx),
                 ) {
                     Completion::Normal(value) => push_value(interp, stack, value),
@@ -775,9 +845,14 @@ fn run_chunk_inner(
                     .pop()
                     .expect("reference stack underflow on StoreResolvedName");
                 let value = stack.last().expect("stack underflow on StoreResolvedName");
-                if let Err(e) =
-                    store_resolved_name(interp, name, &id_ref, env, value, chunk.global_hint(idx))
-                {
+                if let Err(e) = store_resolved_name(
+                    interp,
+                    name,
+                    &id_ref,
+                    cur_env!(),
+                    value,
+                    chunk.global_hint(idx),
+                ) {
                     return Completion::Throw(e);
                 }
                 if op == Op::StoreResolvedNamePop {
@@ -794,7 +869,7 @@ fn run_chunk_inner(
                     op,
                     prefix,
                     name,
-                    env,
+                    cur_env!(),
                     chunk.global_hint(idx),
                 ) {
                     Completion::Normal(value) => {
@@ -893,7 +968,7 @@ fn run_chunk_inner(
                 let rhs = stack.pop().expect("stack underflow on SetProp rhs");
                 let base = stack.pop().expect("stack underflow on SetProp base");
                 let base_root = base.clone();
-                let strict = env.borrow().strict;
+                let strict = frame_env.borrow().strict;
                 let result = member_set(interp, base, &name, rhs.clone(), strict);
                 unroot_stack_value(interp, &rhs);
                 unroot_stack_value(interp, &base_root);
@@ -920,7 +995,7 @@ fn run_chunk_inner(
                 let key_val = stack.pop().expect("stack underflow on SetElement key");
                 let base = stack.pop().expect("stack underflow on SetElement base");
                 let base_root = base.clone();
-                let strict = env.borrow().strict;
+                let strict = frame_env.borrow().strict;
                 let result = member_set_computed(interp, base, &key_val, rhs.clone(), strict);
                 unroot_stack_value(interp, &rhs);
                 unroot_stack_value(interp, &key_val);
@@ -977,7 +1052,7 @@ fn run_chunk_inner(
                 {
                     interp.perf.calls_from_vm += 1;
                 }
-                if op == Op::ReturnCall && env.borrow().strict {
+                if op == Op::ReturnCall && frame_env.borrow().strict {
                     let (callee, this_value, args) = take_call_operands(stack, argc);
                     release_call_operands(interp, &callee, &this_value, &args);
                     return Completion::TailCall {
@@ -1143,7 +1218,8 @@ fn run_chunk_inner(
                 };
                 pc += 7;
                 let name = &chunk.names[idx as usize];
-                let hit = with_local_hit(env, name, slot, |v| match v.as_number() {
+                let (target, hint_slot) = local_target(frame_env, &scopes, slot);
+                let hit = with_local_hit(target, name, hint_slot, |v| match v.as_number() {
                     Some(l) => Ok(number_binop(bop, l, k)),
                     None => Err(v.clone()),
                 });
@@ -1168,7 +1244,7 @@ fn run_chunk_inner(
                         {
                             interp.perf.local_slot_misses += 1;
                         }
-                        match interp.resolve_name_hinted(name, env, chunk.global_hint(idx)) {
+                        match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
                             Completion::Normal(v) => Some(v),
                             abrupt => return abrupt,
                         }
@@ -1236,7 +1312,7 @@ fn run_chunk_inner(
                 }
                 // Operands already on the stack stay rooted in
                 // `gc_bytecode_roots` while the tree-walker runs.
-                match interp.eval_expr(expr, env) {
+                match interp.eval_expr(expr, cur_env!()) {
                     Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
@@ -1252,17 +1328,23 @@ fn run_chunk_inner(
                 {
                     interp.perf.ast_fallback_execs += 1;
                 }
-                match interp.exec_statement(stmt, env) {
+                match interp.exec_statement(stmt, cur_env!()) {
                     Completion::Normal(_) | Completion::Empty => {}
                     Completion::Break(label, value) => {
                         match escape_target(chunk, table, false, label.as_deref()) {
-                            Some(target) => pc = target,
+                            Some((target, depth)) => {
+                                unwind_scopes(interp, &mut scopes, envs_base, depth);
+                                pc = target;
+                            }
                             None => return Completion::Break(label, value),
                         }
                     }
                     Completion::Continue(label, value) => {
                         match escape_target(chunk, table, true, label.as_deref()) {
-                            Some(target) => pc = target,
+                            Some((target, depth)) => {
+                                unwind_scopes(interp, &mut scopes, envs_base, depth);
+                                pc = target;
+                            }
                             None => return Completion::Continue(label, value),
                         }
                     }
@@ -1276,18 +1358,23 @@ fn run_chunk_inner(
                 } else {
                     BindingKind::Const
                 };
-                pc += 3;
+                let slot = decode_u16(chunk, pc + 3);
+                pc += 5;
                 let name = &chunk.names[idx as usize];
                 let value = pop_value(interp, stack, "stack underflow on InitLexical");
-                env.borrow_mut().bindings.insert_atom(
-                    name,
-                    Binding {
-                        value,
-                        kind,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
+                let binding = Binding {
+                    value,
+                    kind,
+                    initialized: true,
+                    deletable: false,
+                };
+                let mut scope = cur_env!().borrow_mut();
+                match scope.bindings.entry_at_mut(usize::from(slot)) {
+                    Some((atom, entry)) if atom.ptr_eq(name) => *entry = binding,
+                    _ => {
+                        scope.bindings.insert_atom(name, binding);
+                    }
+                }
             }
             Op::Instanceof | Op::In => {
                 let r = stack.pop().expect("stack underflow on relational rhs");
@@ -1317,7 +1404,7 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                match interp.eval_typeof_identifier(name, env) {
+                match interp.eval_typeof_identifier(name, cur_env!()) {
                     Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => return abrupt,
                 }
@@ -1329,7 +1416,7 @@ fn run_chunk_inner(
                 let (update, prefix, _) = update_mode(mode);
                 let name = &chunk.names[idx as usize];
                 let base = stack.pop().expect("stack underflow on UpdateProp");
-                let strict = env.borrow().strict;
+                let strict = frame_env.borrow().strict;
                 let result = member_update_named(interp, &base, name, update, prefix, strict);
                 unroot_stack_value(interp, &base);
                 match result {
@@ -1343,7 +1430,7 @@ fn run_chunk_inner(
                 let (update, prefix, _) = update_mode(mode);
                 let key = stack.pop().expect("stack underflow on UpdateElement key");
                 let base = stack.pop().expect("stack underflow on UpdateElement base");
-                let strict = env.borrow().strict;
+                let strict = frame_env.borrow().strict;
                 let result = member_update_computed(interp, &base, &key, update, prefix, strict);
                 unroot_stack_value(interp, &key);
                 unroot_stack_value(interp, &base);
@@ -1446,6 +1533,77 @@ fn run_chunk_inner(
                 if !v.is_nullish() {
                     pc = (pc as i32 + offset) as usize;
                 }
+            }
+            Op::PushEnv => {
+                let scope = &chunk.block_scopes[decode_u16(chunk, pc) as usize];
+                pc += 2;
+                let parent = cur_env!().clone();
+                let block_env = interp.acquire_block_environment(
+                    parent,
+                    scope.functions.len() + scope.lexicals.len(),
+                );
+                // Reachable from the GC before any closure is built into it.
+                interp.call_stack_envs.push(block_env.clone());
+                for stmt in &scope.functions {
+                    interp.hoist_block_function_declaration(stmt, &block_env);
+                }
+                if !scope.lexicals.is_empty() {
+                    let mut declared = block_env.borrow_mut();
+                    for &(name_idx, is_const) in &scope.lexicals {
+                        let kind = if is_const {
+                            BindingKind::Const
+                        } else {
+                            BindingKind::Let
+                        };
+                        declared.declare_atom(&chunk.names[name_idx as usize], kind);
+                    }
+                }
+                scopes.push(block_env);
+                debug_assert_eq!(interp.call_stack_envs.len(), envs_base + scopes.len());
+            }
+            Op::PopEnv => {
+                let count = usize::from(chunk.code[pc]);
+                pc += 1;
+                let depth = scopes.len() - count;
+                unwind_scopes(interp, &mut scopes, envs_base, depth);
+            }
+            Op::CopyIterEnv => {
+                let current = scopes
+                    .last()
+                    .expect("CopyIterEnv inside a block environment");
+                // Only `scopes` and its `call_stack_envs` mirror own it: no
+                // closure took this iteration's environment, so a fresh copy
+                // could not be told apart from it.
+                if std::rc::Rc::strong_count(current) <= 2 {
+                    continue;
+                }
+                let (parent, bindings) = {
+                    let source = current.borrow();
+                    (
+                        source
+                            .parent
+                            .clone()
+                            .expect("block environments have a parent"),
+                        source.bindings.capacity(),
+                    )
+                };
+                let fresh = interp.acquire_block_environment(parent, bindings);
+                {
+                    let source = current.borrow();
+                    let mut copy = fresh.borrow_mut();
+                    let mut i = 0;
+                    while let Some((name, binding)) = source.bindings.entry_at(i) {
+                        copy.bindings.push_unique(
+                            name.clone(),
+                            Binding::new(binding.value.clone(), binding.kind, true),
+                        );
+                        i += 1;
+                    }
+                }
+                let top = scopes.len() - 1;
+                interp.call_stack_envs[envs_base + top] = fresh.clone();
+                let replaced = std::mem::replace(&mut scopes[top], fresh);
+                interp.recycle_block_environment(replaced);
             }
             Op::Safepoint => {
                 safepoint_with_empty_stacks(interp, stack, refs, "statement boundary");

@@ -108,9 +108,10 @@ pub(crate) enum Op {
     /// empty at a statement boundary). Operands: ast index (u16), escape
     /// table (u16, `NO_ESCAPE_TABLE` when no break/continue can leave it).
     ExecAst = 70,
-    /// `[..., value]` → `[...]`: initialise a function-top-level `let`/`const`
-    /// binding in the current environment (InitializeBinding, 9.1.1.1.4).
-    /// Operands: name (u16), kind (u8: 0 = let, 1 = const).
+    /// `[..., value]` → `[...]`: initialise a `let`/`const` binding of the
+    /// current environment (InitializeBinding, 9.1.1.1.4). Operands: name
+    /// (u16), kind (u8: 0 = let, 1 = const), slot hint (u16, the binding's
+    /// position in a block environment, or `NO_INIT_SLOT`).
     InitLexical = 71,
     /// `StoreLocal` in effect context: the stored value is popped afterwards
     /// (it stays rooted on the operand stack through the store, which can
@@ -130,6 +131,17 @@ pub(crate) enum Op {
     /// Exactly `LoadLocal` followed by `BinConst`. Operands: name (u16), slot
     /// hint (u16), binary op (u8), constant (u16).
     LocalBinConst = 76,
+    /// Open a block environment (child of the current one) and instantiate
+    /// its declarations (BlockDeclarationInstantiation): closures for block
+    /// function declarations, then `let`/`const`/class bindings in TDZ.
+    /// Operand: block scope index (u16).
+    PushEnv = 77,
+    /// Leave `n` block environments. Operand: count (u8).
+    PopEnv = 78,
+    /// CreatePerIterationEnvironment (sec-createperiterationenvironment):
+    /// replace the innermost block environment with a fresh sibling holding
+    /// copies of its bindings. No operands.
+    CopyIterEnv = 79,
 }
 
 impl Op {
@@ -212,6 +224,9 @@ impl Op {
             74 => Some(Op::BinConst),
             75 => Some(Op::CmpJumpIfFalse),
             76 => Some(Op::LocalBinConst),
+            77 => Some(Op::PushEnv),
+            78 => Some(Op::PopEnv),
+            79 => Some(Op::CopyIterEnv),
             _ => None,
         }
     }

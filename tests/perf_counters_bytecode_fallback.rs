@@ -128,6 +128,18 @@ fn natively_lowered_constructs_leave_no_fallback_nodes() {
         ("instanceof", "if (o instanceof Array) s = 1;"),
         ("in", "if ('t' in o) s = s | 0;"),
         ("bigint", "if (n < 0) s = Number(10n ** 3n);"),
+        (
+            "blocklet",
+            "if (n < 0) { let a = n; const b = a * 2; s = b; }",
+        ),
+        (
+            "forlet",
+            "for (let j = 0; j < 3; j++) { const t = j * 2; s = s + t; }",
+        ),
+        (
+            "switchlet",
+            "switch (n & 1) { case 0: { const z = 1; s = s + z; break; } default: let w = 2; s = s + w; }",
+        ),
     ] {
         let r = run(&kernel(extra, 2_000));
         assert!(
@@ -136,6 +148,31 @@ fn natively_lowered_constructs_leave_no_fallback_nodes() {
             r.fallbacks
         );
     }
+}
+
+/// A loop body that declares `let`/`const` runs in VM block environments
+/// every iteration, not as one tree-walker node (#958).
+#[test]
+fn block_scoped_loop_bodies_run_on_the_vm() {
+    let source = "function kernel(n) {\n\
+           var s = 0;\n\
+           for (let i = 0; i < n; i++) {\n\
+             const a = i * 2;\n\
+             let b = a + 1;\n\
+             if (b % 3 === 0) { const c = b >> 1; s += c; } else { s += b; }\n\
+           }\n\
+           return s;\n\
+         }\n\
+         kernel(5000);";
+    let r = run(source);
+    assert!(r.fallbacks.is_empty(), "fallbacks {:?}", r.fallbacks);
+    assert_eq!(r.perf["ast_fallback_execs"], 0);
+    assert!(
+        r.perf["ast_work_units"] < 100,
+        "the loop must not run on the tree-walker: {} units",
+        r.perf["ast_work_units"]
+    );
+    assert_eq!(r.perf["body_dispatch_compiled"], 1);
 }
 
 #[test]
