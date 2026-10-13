@@ -2705,6 +2705,10 @@ fn operand_layout(op: Op) -> &'static [usize] {
         Op::DupN => &[1],
         Op::BinConst | Op::CmpJumpIfFalse => &[1, 2],
         Op::LocalBinConst => &[2, 2, 1, 2],
+        Op::PushEnv | Op::EvalAst => &[2],
+        Op::PopEnv => &[1],
+        Op::ExecAst => &[2, 2],
+        Op::InitLexical => &[2, 1, 2],
         _ => &[],
     }
 }
@@ -3054,6 +3058,275 @@ fn block_scoped_lexical_stays_in_its_block() {
          for (let i = 0; i < 2; i++) { let x = i; } return x + typeof i; })();",
     );
     assert_eq!(shown, "outerundefined");
+}
+
+fn count_ops(chunk: &Chunk, wanted: Op) -> usize {
+    work_ops(chunk).iter().filter(|op| **op == wanted).count()
+}
+
+#[test]
+fn block_with_lexicals_runs_in_its_own_environment_without_a_hand_off() {
+    let chunk = compile_function_source("{ let a = n + 1; const b = a * 2; s += b; }", &["n", "s"]);
+    assert_eq!(count_ops(&chunk, Op::ExecAst), 0, "{:?}", work_ops(&chunk));
+    assert_eq!(count_ops(&chunk, Op::PushEnv), 1);
+    assert_eq!(count_ops(&chunk, Op::PopEnv), 1);
+    assert_eq!(count_ops(&chunk, Op::InitLexical), 2);
+    assert!(chunk.fallback_reasons.is_empty());
+}
+
+#[test]
+fn non_capturing_for_let_keeps_one_environment_for_every_iteration() {
+    let chunk = compile_function_source(
+        "for (let i = 0; i < n; i++) { const v = i * 2; s += v; }",
+        &["n", "s"],
+    );
+    assert_eq!(count_ops(&chunk, Op::ExecAst), 0, "{:?}", work_ops(&chunk));
+    assert_eq!(count_ops(&chunk, Op::PushEnv), 2, "head and body");
+    assert_eq!(count_ops(&chunk, Op::CopyIterEnv), 0);
+}
+
+#[test]
+fn capturing_for_let_copies_its_environment_before_the_test_and_the_update() {
+    let chunk = compile_function_source(
+        "for (let i = 0; i < n; i++) { fs.push(function () { return i; }); }",
+        &["n", "fs"],
+    );
+    assert_eq!(count_ops(&chunk, Op::ExecAst), 0, "{:?}", work_ops(&chunk));
+    assert_eq!(count_ops(&chunk, Op::CopyIterEnv), 2);
+    assert_eq!(count_ops(&chunk, Op::PushEnv), 1);
+}
+
+#[test]
+fn local_ops_address_block_bindings_and_still_hit_the_frame_for_outer_names() {
+    use super::chunk::BLOCK_SLOT_FLAG;
+    let chunk = compile_function_source(
+        "for (let i = 0; i < n; i++) { const v = i + 1; s = s + v; }",
+        &["n", "s"],
+    );
+    let slots: Vec<(String, u16)> = decode_ops(&chunk)
+        .into_iter()
+        .filter(|(op, _)| matches!(op, Op::LoadLocal | Op::StoreLocal | Op::StoreLocalPop))
+        .map(|(_, operands)| {
+            (
+                chunk.names[usize::from(operands[0])].to_string(),
+                operands[1],
+            )
+        })
+        .collect();
+    let slot_of = |name: &str| {
+        slots
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("no local op names {name}: {slots:?}"))
+            .1
+    };
+    assert_eq!(slot_of("s") & BLOCK_SLOT_FLAG, 0, "frame local stays frame");
+    assert_eq!(slot_of("v") & BLOCK_SLOT_FLAG, BLOCK_SLOT_FLAG);
+    assert_ne!(
+        slot_of("v") >> 8,
+        0x80,
+        "the body block is the second scope"
+    );
+}
+
+#[test]
+fn break_out_of_nested_blocks_leaves_their_environments_first() {
+    let chunk = compile_function_source(
+        "for (let i = 0; i < n; i++) { let a = i; { let b = a; if (b > 2) break; } }",
+        &["n"],
+    );
+    let pops: Vec<u16> = decode_ops(&chunk)
+        .into_iter()
+        .filter(|(op, _)| *op == Op::PopEnv)
+        .map(|(_, operands)| operands[0])
+        .collect();
+    assert!(
+        pops.contains(&2),
+        "the break leaves the two blocks it is nested in: {pops:?}"
+    );
+}
+
+#[test]
+fn block_function_declaration_hoists_at_block_entry() {
+    let chunk = compile_function_source("{ function g() { return 1; } r = g(); }", &["r"]);
+    assert_eq!(chunk.block_scopes.len(), 1);
+    assert_eq!(chunk.block_scopes[0].functions.len(), 1);
+}
+
+#[test]
+fn closures_capture_a_fresh_for_let_binding_per_iteration() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var fs = []; \
+         for (let i = 0; i < 3; i++) { fs.push(function () { return i; }); } \
+         return fs.map(function (f) { return f(); }).join(); })();",
+    );
+    assert_eq!(shown, "0,1,2");
+}
+
+#[test]
+fn closure_created_in_for_let_update_sees_the_next_iteration_copy() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var fs = []; \
+         for (let i = 0; i < 3; fs.push(function () { return i; }), i++) {} \
+         return fs.map(function (f) { return f(); }).join(); })();",
+    );
+    assert_eq!(shown, "1,2,3");
+}
+
+#[test]
+fn closure_created_in_for_let_initializer_keeps_the_head_binding() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var seen = []; \
+         for (let i = 0, g = function () { return i; }; i < 2; i++) { seen.push(g()); } \
+         return seen.join(); })();",
+    );
+    assert_eq!(shown, "0,0");
+}
+
+#[test]
+fn block_lexical_is_fresh_per_execution_and_closures_keep_their_own() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var fs = []; \
+         for (var i = 0; i < 3; i++) { let c = i * 10; fs.push(function () { return ++c; }); } \
+         return fs.map(function (f) { return f() + f(); }).join(); })();",
+    );
+    assert_eq!(shown, "3,23,43");
+}
+
+#[test]
+fn block_tdz_read_and_write_throw_reference_error() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var seen = []; { \
+         try { seen.push(x); } catch (e) { seen.push(e.name); } \
+         try { x = 1; } catch (e) { seen.push(e.name); } \
+         try { seen.push(typeof x); } catch (e) { seen.push(e.name); } \
+         let x = 2; seen.push(x); } return seen.join(); })();",
+    );
+    assert_eq!(shown, "ReferenceError,ReferenceError,ReferenceError,2");
+}
+
+#[test]
+fn for_let_head_initializer_reading_its_own_binding_throws() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ try { for (let i = i; ;) { break; } } \
+         catch (e) { return e.name; } return 'none'; })();",
+    );
+    assert_eq!(shown, "ReferenceError");
+}
+
+#[test]
+fn block_lexical_shadows_a_parameter_only_inside_the_block() {
+    let shown = assert_value_parity(
+        "var __r = (function(a){ var r = []; { let a = 10; a++; r.push(a); } \
+         for (let a = 0; a < 2; a++) { r.push(a); } r.push(a); return r.join(); })(7);",
+    );
+    assert_eq!(shown, "11,0,1,7");
+}
+
+#[test]
+fn labeled_break_and_continue_leave_nested_let_blocks() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var r = []; \
+         outer: for (let i = 0; i < 4; i++) { \
+           for (let j = 0; j < 4; j++) { let k = i * 10 + j; \
+             if (j == 1) continue outer; if (i == 3) break outer; r.push(k); } } \
+         return r.join(); })();",
+    );
+    assert_eq!(shown, "0,10,20");
+}
+
+#[test]
+fn hand_off_break_and_continue_unwind_block_environments() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var r = []; \
+         for (let i = 0; i < 5; i++) { let x = i; \
+           try { if (i == 1) continue; if (i == 3) break; r.push(x); } finally { r.push('f'); } } \
+         var late = 0; for (let k = 0; k < 2; k++) { late += k; } \
+         return r.join() + ':' + late; })();",
+    );
+    assert_eq!(shown, "0,f,f,2,f,f:1");
+}
+
+#[test]
+fn return_and_throw_from_inside_block_environments_leave_the_frame_clean() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ \
+         function f(n) { for (let i = 0; i < 5; i++) { let q = i + n; \
+           if (q > 3) { const z = q * 2; return z; } if (q < 0) throw new Error('neg' + q); } return -1; } \
+         var out = [f(0), f(1), f(10)]; \
+         try { f(-5); } catch (e) { out.push(e.message); } \
+         out.push(f(0)); return out.join(); })();",
+    );
+    assert_eq!(shown, "8,8,20,neg-5,8");
+}
+
+#[test]
+fn switch_case_block_scope_has_tdz_and_runs_selectors_inside_it() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var r = []; \
+         function pick(v) { switch (v) { \
+           case 1: let a = 'one'; r.push(a); \
+           case 2: try { r.push(a); } catch (e) { r.push(e.name); } break; \
+           case 3: { const b = 'three'; r.push(b); } } } \
+         pick(1); pick(2); pick(3); return r.join(); })();",
+    );
+    assert_eq!(shown, "one,one,ReferenceError,three");
+}
+
+#[test]
+fn block_class_and_destructuring_declarations_bind_in_the_block() {
+    let shown = assert_value_parity(
+        "var __r = (function(o){ var r = []; { class A { m() { return 'm'; } } \
+         const { p, q } = o; let [x, y] = [p + 1, q + 1]; r.push(new A().m(), x + y); } \
+         r.push(typeof A, typeof p); return r.join(); })({ p: 1, q: 2 });",
+    );
+    assert_eq!(shown, "m,5,undefined,undefined");
+}
+
+#[test]
+fn block_function_declarations_are_hoisted_and_annex_b_copied() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var r = []; \
+         { r.push(typeof g); function g() { return 1; } r.push(g()); } \
+         r.push(typeof g); return r.join(); })();",
+    );
+    assert_eq!(shown, "function,1,function");
+}
+
+#[test]
+fn block_scoped_const_assignment_throws_type_error() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ for (const i = 0; i < 1;) { try { i++; } \
+         catch (e) { return e.name; } } return 'none'; })();",
+    );
+    assert_eq!(shown, "TypeError");
+}
+
+#[test]
+fn deeply_nested_blocks_beyond_the_slot_encoding_still_resolve() {
+    let mut open = String::new();
+    let mut close = String::new();
+    for i in 0..140 {
+        open.push_str(&format!("{{ let v{i} = {i}; "));
+        close.push_str(" }");
+    }
+    let source = format!(
+        "var __r = (function(){{ var r = 0; {open} r = v0 + v139; {close} return r; }})();"
+    );
+    let shown = assert_value_parity(&source);
+    assert_eq!(shown, "139");
+}
+
+#[test]
+fn many_bindings_in_one_block_beyond_the_slot_encoding_still_resolve() {
+    let mut decls = String::new();
+    for i in 0..300 {
+        decls.push_str(&format!("let v{i} = {i}; "));
+    }
+    let source =
+        format!("var __r = (function(){{ {{ {decls} return v0 + v255 + v256 + v299; }} }})();");
+    let shown = assert_value_parity(&source);
+    assert_eq!(shown, "810");
 }
 
 #[test]

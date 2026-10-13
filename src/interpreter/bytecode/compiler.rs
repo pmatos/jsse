@@ -1,4 +1,7 @@
-use super::chunk::{AstNode, Chunk, Constant, EscapeEntry, NO_ESCAPE_TABLE};
+use super::chunk::{
+    AstNode, BLOCK_SLOT_FLAG, BLOCK_SLOT_MAX_INDEX, BLOCK_SLOT_MAX_SCOPES, BlockScope, Chunk,
+    Constant, EscapeEntry, NO_ESCAPE_TABLE, NO_INIT_SLOT,
+};
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, DoWhileStatement, Expression, ForInit, ForStatement, Literal,
@@ -62,13 +65,18 @@ struct LoopFrame {
     escape_continues: Vec<(usize, usize)>,
     /// A `switch` is a `break` target but not a `continue` target.
     is_switch: bool,
+    /// Block environments open at this frame's break/continue targets (the
+    /// loop head's own environment included). A jump from deeper inside
+    /// leaves the difference first.
+    scope_depth: usize,
 }
 
 impl LoopFrame {
-    fn new(labels: Vec<String>, continue_target: Option<usize>) -> Self {
+    fn new(labels: Vec<String>, continue_target: Option<usize>, scope_depth: usize) -> Self {
         Self {
             labels,
             continue_target,
+            scope_depth,
             continue_sites: Vec::new(),
             break_sites: Vec::new(),
             escape_breaks: Vec::new(),
@@ -90,6 +98,16 @@ struct Snapshot {
     ast_len: usize,
     tables_len: usize,
     native_ops: u32,
+    scopes_len: usize,
+    block_scopes_len: usize,
+}
+
+/// The declarations one block environment instantiates.
+#[derive(Default)]
+struct ScopeDecls {
+    functions: Vec<Statement>,
+    function_names: Vec<String>,
+    lexicals: Vec<(String, bool)>,
 }
 
 struct Compiler {
@@ -127,6 +145,11 @@ struct Compiler {
     /// would pay chunk-entry cost for nothing.
     native_ops: u32,
     fallback_reasons: Vec<&'static str>,
+    /// Names declared by each open block environment, outermost first. A name
+    /// found here shadows the frame's `locals`, and its position is the slot
+    /// hint `PushEnv`'s declaration order produces.
+    scopes: Vec<Vec<String>>,
+    block_scopes: Vec<BlockScope>,
     /// Set by the function top-level statement list for the statement about
     /// to be compiled; consumed on entry so nested statements see `false`.
     /// Only there may a `let`/`const` initialise its hoisted binding directly.
@@ -153,6 +176,8 @@ impl Compiler {
             escape_tables: Vec::new(),
             native_ops: 0,
             fallback_reasons: Vec::new(),
+            scopes: Vec::new(),
+            block_scopes: Vec::new(),
             at_function_top_level: false,
         }
     }
@@ -189,6 +214,9 @@ impl Compiler {
                 | Op::Jump
                 | Op::Return
                 | Op::ReturnUndefined
+                | Op::PushEnv
+                | Op::PopEnv
+                | Op::CopyIterEnv
         ) {
             self.native_ops += 1;
         }
@@ -315,11 +343,22 @@ impl Compiler {
         Ok(())
     }
 
+    /// The slot operand for a frame or block-environment binding of `name`
+    /// the local ops can address, nearest scope first. A name an open block
+    /// environment declares never resolves to the frame's, and one that does
+    /// not fit the operand encoding gets no hint (the by-name path finds it).
     fn local_slot(&self, name: &str) -> Option<u16> {
+        for (scope, names) in self.scopes.iter().enumerate().rev() {
+            if let Some(index) = names.iter().position(|n| n == name) {
+                return (scope < BLOCK_SLOT_MAX_SCOPES && index < BLOCK_SLOT_MAX_INDEX)
+                    .then_some(BLOCK_SLOT_FLAG | ((scope as u16) << 8) | index as u16);
+            }
+        }
         self.locals
             .iter()
             .position(|n| n == name)
             .and_then(|i| u16::try_from(i).ok())
+            .filter(|slot| slot & BLOCK_SLOT_FLAG == 0)
     }
 
     /// Stores the top of stack into a frame local; `discard` also pops it.
@@ -436,6 +475,8 @@ impl Compiler {
             ast_len: self.ast.len(),
             tables_len: self.escape_tables.len(),
             native_ops: self.native_ops,
+            scopes_len: self.scopes.len(),
+            block_scopes_len: self.block_scopes.len(),
         }
     }
 
@@ -457,6 +498,8 @@ impl Compiler {
         self.escape_tables.truncate(snap.tables_len);
         self.native_ops = snap.native_ops;
         self.fallback_reasons.truncate(snap.ast_len);
+        self.scopes.truncate(snap.scopes_len);
+        self.block_scopes.truncate(snap.block_scopes_len);
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
@@ -971,18 +1014,20 @@ impl Compiler {
         Ok(())
     }
 
-    /// `at_function_top_level` lets a `let`/`const` initialise the binding
-    /// that declaration instantiation hoisted (as uninitialised) into the
-    /// function environment. Anywhere else a lexical declaration owns a scope
-    /// the VM does not model, so the tree-walker runs the whole statement.
+    /// `owns_lexicals` lets a `let`/`const` initialise the binding its
+    /// enclosing environment already holds in its TDZ: declaration
+    /// instantiation hoisted it into the function environment, or `PushEnv`
+    /// into the block's. Anywhere else (the Script goal) a lexical
+    /// declaration owns a scope the VM does not model, so the tree-walker
+    /// runs the whole statement.
     fn compile_var_declaration(
         &mut self,
         decl: &VariableDeclaration,
-        at_function_top_level: bool,
+        owns_lexicals: bool,
     ) -> Result<(), CompileError> {
         if decl.kind != VarKind::Var {
             if self.goal != CompileGoal::Function
-                || !at_function_top_level
+                || !owns_lexicals
                 || !matches!(decl.kind, VarKind::Let | VarKind::Const)
             {
                 return Err(CompileError::Unsupported("lexical declaration"));
@@ -1035,12 +1080,111 @@ impl Compiler {
                     self.push_n(1);
                 }
             }
+            // The slot `PushEnv` declared this name at, when the innermost
+            // open block environment owns it.
+            let slot = self
+                .scopes
+                .last()
+                .and_then(|names| names.iter().position(|n| n == name))
+                .and_then(|i| u16::try_from(i).ok())
+                .filter(|&i| i != NO_INIT_SLOT)
+                .unwrap_or(NO_INIT_SLOT);
             self.emit(Op::InitLexical);
             self.emit_u16(idx);
             self.code.push(kind_byte);
+            self.emit_u16(slot);
             self.pop_n(1);
         }
         Ok(())
+    }
+
+    /// What BlockDeclarationInstantiation declares for the statement lists
+    /// of one block (or all `case` clauses of a `switch`): block-level
+    /// function declarations first, then `let`/`const`/class bindings in TDZ,
+    /// the order `exec_statements` instantiates them in. `None` when a list
+    /// holds a `using` declaration, whose environment owns a disposal stack
+    /// the VM does not model.
+    fn scope_declarations(&self, lists: &[&[Statement]]) -> Option<ScopeDecls> {
+        let mut decls = ScopeDecls::default();
+        for stmts in lists {
+            for stmt in *stmts {
+                if let Some(f) = crate::interpreter::hoisting::unwrap_labeled_function(stmt) {
+                    decls.functions.push(stmt.clone());
+                    decls.function_names.push(f.name.clone());
+                }
+            }
+        }
+        for stmts in lists {
+            for stmt in *stmts {
+                match stmt {
+                    Statement::Variable(decl) => match decl.kind {
+                        VarKind::Var => {}
+                        VarKind::Let | VarKind::Const => {
+                            let is_const = decl.kind == VarKind::Const;
+                            for declarator in &decl.declarations {
+                                let mut names = Vec::new();
+                                declarator.pattern.bound_names(&mut names);
+                                decls
+                                    .lexicals
+                                    .extend(names.into_iter().map(|name| (name, is_const)));
+                            }
+                        }
+                        VarKind::Using | VarKind::AwaitUsing => return None,
+                    },
+                    Statement::ClassDeclaration(class) if !class.name.is_empty() => {
+                        decls.lexicals.push((class.name.clone(), true));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(decls)
+    }
+
+    /// Emits `PushEnv` for `decls` and makes its names shadow the enclosing
+    /// scopes' for everything compiled until the matching `close_scope`.
+    fn open_scope(&mut self, decls: ScopeDecls) -> Result<(), CompileError> {
+        let index = self.block_scopes.len();
+        let operand = u16::try_from(index)
+            .map_err(|_| CompileError::Ineligible("block scope pool overflow"))?;
+        let mut names: Vec<String> = Vec::new();
+        for name in &decls.function_names {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        let mut lexicals = Vec::with_capacity(decls.lexicals.len());
+        for (name, is_const) in &decls.lexicals {
+            if !names.contains(name) {
+                names.push(name.clone());
+                lexicals.push((self.add_name(name)?, *is_const));
+            }
+        }
+        self.block_scopes.push(BlockScope {
+            functions: decls.functions,
+            lexicals,
+        });
+        self.emit(Op::PushEnv);
+        self.emit_u16(operand);
+        self.scopes.push(names);
+        Ok(())
+    }
+
+    fn close_scope(&mut self) {
+        self.emit_pop_env(1);
+        self.scopes.pop();
+    }
+
+    /// `PopEnv` for `count` environments, split to fit its u8 operand. The
+    /// compile-time scope stack is the caller's to maintain: a `break` or
+    /// `continue` leaves environments without closing them.
+    fn emit_pop_env(&mut self, mut count: usize) {
+        while count > 0 {
+            let n = count.min(usize::from(u8::MAX));
+            self.emit(Op::PopEnv);
+            self.code.push(n as u8);
+            count -= n;
+        }
     }
 
     fn compile_literal(&mut self, lit: &Literal) -> Result<(), CompileError> {
@@ -1095,15 +1239,19 @@ impl Compiler {
     /// its safepoint too — nothing could have been allocated since the prior
     /// one, so it would just be a wasted dispatch.
     fn compile_statement_list(&mut self, body: &[Statement]) -> Result<(), CompileError> {
-        self.compile_statements(body, false)
+        self.compile_statements(body, false, false)
     }
 
     /// `skip_hoisted` is the function top level: its function declarations
     /// are instantiated before the chunk runs, so they emit nothing.
+    /// `owns_lexicals` says the list's `let`/`const` initialise bindings the
+    /// current environment already holds in TDZ: the function top level, or
+    /// a block/`switch` body running in its own `PushEnv` environment.
     fn compile_statements(
         &mut self,
         body: &[Statement],
         skip_hoisted: bool,
+        owns_lexicals: bool,
     ) -> Result<(), CompileError> {
         for stmt in body {
             if skip_hoisted && matches!(stmt, Statement::FunctionDeclaration(_)) {
@@ -1114,7 +1262,7 @@ impl Compiler {
             let safepoint_at = self.code.len();
             let previous_op_at = self.last_op_at;
             self.emit(Op::Safepoint);
-            self.at_function_top_level = skip_hoisted;
+            self.at_function_top_level = owns_lexicals;
             self.compile_statement(stmt)?;
             if self.code.len() == safepoint_at + 1 {
                 self.code.truncate(safepoint_at);
@@ -1194,6 +1342,8 @@ impl Compiler {
                 targets.push((Some(label.clone()), true, !is_switch));
             }
             let continue_target = self.loop_frames[frame_idx].continue_target;
+            let scope_depth = u16::try_from(self.loop_frames[frame_idx].scope_depth)
+                .map_err(|_| CompileError::Ineligible("block scope depth overflow"))?;
             for (label, breaks, continues) in targets {
                 if breaks {
                     self.loop_frames[frame_idx]
@@ -1203,6 +1353,7 @@ impl Compiler {
                         is_continue: false,
                         label: label.clone(),
                         target: u32::MAX,
+                        scope_depth,
                     });
                 }
                 if continues {
@@ -1211,6 +1362,7 @@ impl Compiler {
                             is_continue: true,
                             label,
                             target: target as u32,
+                            scope_depth,
                         }),
                         None => {
                             self.loop_frames[frame_idx]
@@ -1220,6 +1372,7 @@ impl Compiler {
                                 is_continue: true,
                                 label,
                                 target: u32::MAX,
+                                scope_depth,
                             });
                         }
                     }
@@ -1255,14 +1408,20 @@ impl Compiler {
             }
             Statement::Block(body) => {
                 // A block is statement-level and net-zero on the stack; each
-                // contained statement balances itself. The VM has no block
-                // environments, so a block that declares a binding runs as
-                // one unit on the tree-walker (BlockDeclarationInstantiation,
+                // contained statement balances itself. A block that declares
+                // a binding runs in its own environment, instantiated by
+                // `PushEnv` (BlockDeclarationInstantiation,
                 // sec-blockdeclarationinstantiation).
-                if declares_lexical(body) {
-                    return Err(CompileError::Unsupported("block-scoped declaration"));
+                if !declares_lexical(body) {
+                    return self.compile_statement_list(body);
                 }
-                self.compile_statement_list(body)
+                let decls = self
+                    .scope_declarations(std::slice::from_ref(&body.as_slice()))
+                    .ok_or(CompileError::Unsupported("block-scoped declaration"))?;
+                self.open_scope(decls)?;
+                self.compile_statements(body, false, true)?;
+                self.close_scope();
+                Ok(())
             }
             Statement::Variable(decl) => self.compile_var_declaration(decl, at_top_level),
             Statement::If(if_stmt) => {
@@ -1403,6 +1562,7 @@ impl Compiler {
             .ok_or(CompileError::Ineligible("statement:Break"))?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
+        self.emit_pop_env(self.scopes.len() - self.loop_frames[idx].scope_depth);
         let site = self.emit_jump(Op::Jump);
         self.loop_frames[idx].break_sites.push(site);
         Ok(())
@@ -1414,6 +1574,7 @@ impl Compiler {
             .ok_or(CompileError::Ineligible("statement:Continue"))?;
         debug_assert_eq!(self.current_stack, 0);
         debug_assert_eq!(self.current_refs, 0);
+        self.emit_pop_env(self.scopes.len() - self.loop_frames[idx].scope_depth);
         match self.loop_frames[idx].continue_target {
             Some(target) => self.emit_jump_to(Op::Jump, target),
             None => {
@@ -1444,16 +1605,34 @@ impl Compiler {
         if self.goal != CompileGoal::Function {
             return Err(CompileError::Unsupported("statement:Switch"));
         }
-        // Case bodies share one block scope whose declarations (and hoisted
-        // function declarations) the VM does not model.
-        if switch
+        // Case bodies share one block scope, entered after the discriminant
+        // is evaluated; the selectors run inside it
+        // (sec-switch-statement-runtime-semantics-evaluation). The tree-walker
+        // hoists a case clause's function declarations as `var`-kind
+        // bindings with its own rules, so those keep the whole statement
+        // there.
+        let scoped = switch
             .cases
             .iter()
-            .any(|case| declares_lexical(&case.consequent))
-        {
-            return Err(CompileError::Unsupported("block-scoped declaration"));
-        }
+            .any(|case| declares_lexical(&case.consequent));
+        let decls = if scoped {
+            let lists: Vec<&[Statement]> = switch
+                .cases
+                .iter()
+                .map(|case| case.consequent.as_slice())
+                .collect();
+            Some(
+                self.scope_declarations(&lists)
+                    .filter(|decls| decls.functions.is_empty())
+                    .ok_or(CompileError::Unsupported("block-scoped declaration"))?,
+            )
+        } else {
+            None
+        };
         self.compile_expr(&switch.discriminant)?;
+        if let Some(decls) = decls {
+            self.open_scope(decls)?;
+        }
         let mut match_sites: Vec<Option<usize>> = Vec::with_capacity(switch.cases.len());
         for case in &switch.cases {
             match &case.test {
@@ -1485,13 +1664,13 @@ impl Compiler {
                 None => trampoline_sites.push(None),
             }
         }
-        let mut frame = LoopFrame::new(labels, None);
+        let mut frame = LoopFrame::new(labels, None, self.scopes.len());
         frame.is_switch = true;
         self.loop_frames.push(frame);
         let mut body_starts: Vec<usize> = Vec::with_capacity(switch.cases.len());
         for case in &switch.cases {
             body_starts.push(self.code.len());
-            self.compile_statement_list(&case.consequent)?;
+            self.compile_statements(&case.consequent, false, scoped)?;
         }
         let frame = self
             .loop_frames
@@ -1512,6 +1691,9 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         self.resolve_escape_targets(&frame.escape_breaks);
+        if scoped {
+            self.close_scope();
+        }
         Ok(())
     }
 
@@ -1525,7 +1707,7 @@ impl Compiler {
         self.reset_script_completion();
         let loop_start = self.code.len();
         self.loop_frames
-            .push(LoopFrame::new(labels, Some(loop_start)));
+            .push(LoopFrame::new(labels, Some(loop_start), self.scopes.len()));
         let exit = if Self::test_always_true(Some(&while_stmt.test)) {
             None
         } else {
@@ -1562,7 +1744,8 @@ impl Compiler {
         // only after the body, including after a matching continue.
         self.reset_script_completion();
         let loop_start = self.code.len();
-        self.loop_frames.push(LoopFrame::new(labels, None));
+        self.loop_frames
+            .push(LoopFrame::new(labels, None, self.scopes.len()));
         self.compile_statement(&do_while_stmt.body)?;
         let frame = self
             .loop_frames
@@ -1595,11 +1778,45 @@ impl Compiler {
         // Reset once before the initializer, not at the loop backedge, so
         // later empty iterations retain the prior V.
         self.reset_script_completion();
+        // A `let`/`const` head owns an environment around the whole loop
+        // (sec-for-statement-runtime-semantics-labelledevaluation). Its
+        // bindings are copied per iteration only when the loop can observe
+        // the identity of that environment (CreatePerIterationEnvironment,
+        // sec-createperiterationenvironment), the same test `exec_for` uses.
+        let mut scoped = false;
+        if let Some(ForInit::Variable(decl)) = &for_stmt.init
+            && decl.kind != VarKind::Var
+        {
+            if self.goal != CompileGoal::Function
+                || !matches!(decl.kind, VarKind::Let | VarKind::Const)
+            {
+                return Err(CompileError::Unsupported("lexical declaration"));
+            }
+            let lexicals = decl
+                .declarations
+                .iter()
+                .flat_map(|declarator| {
+                    let mut names = Vec::new();
+                    declarator.pattern.bound_names(&mut names);
+                    names
+                })
+                .map(|name| (name, decl.kind == VarKind::Const))
+                .collect();
+            self.open_scope(ScopeDecls {
+                lexicals,
+                ..ScopeDecls::default()
+            })?;
+            scoped = true;
+        }
+        let per_iteration = scoped && for_stmt.may_capture_iteration_scope();
         if let Some(init) = &for_stmt.init {
             match init {
-                ForInit::Variable(decl) => self.compile_var_declaration(decl, false)?,
+                ForInit::Variable(decl) => self.compile_var_declaration(decl, scoped)?,
                 ForInit::Expression(expr) => self.compile_effect(expr)?,
             }
+        }
+        if per_iteration {
+            self.emit(Op::CopyIterEnv);
         }
         let loop_start = self.code.len();
         let exit = if Self::test_always_true(for_stmt.test.as_ref()) {
@@ -1611,7 +1828,8 @@ impl Compiler {
                 .expect("test_always_true(None) is true");
             Some(self.compile_cond_jump(test)?)
         };
-        self.loop_frames.push(LoopFrame::new(labels, None));
+        self.loop_frames
+            .push(LoopFrame::new(labels, None, self.scopes.len()));
         self.compile_statement(&for_stmt.body)?;
         let frame = self
             .loop_frames
@@ -1621,6 +1839,9 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         self.resolve_escape_targets(&frame.escape_continues);
+        if per_iteration {
+            self.emit(Op::CopyIterEnv);
+        }
         if let Some(update) = &for_stmt.update {
             self.compile_effect(update)?;
         }
@@ -1634,6 +1855,9 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         self.resolve_escape_targets(&frame.escape_breaks);
+        if scoped {
+            self.close_scope();
+        }
         Ok(())
     }
 
@@ -1670,6 +1894,7 @@ impl Compiler {
             max_refs: self.max_refs,
             ast: self.ast,
             escape_tables: self.escape_tables,
+            block_scopes: self.block_scopes,
             needs_instantiation: false,
             fallback_reasons: self.fallback_reasons,
         }
@@ -1933,7 +2158,7 @@ fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chun
     }
     let mut c = Compiler::new(CompileGoal::Function);
     c.locals = locals;
-    c.compile_statements(body, true)?;
+    c.compile_statements(body, true, true)?;
     if !c.ast.is_empty() && c.native_ops == 0 {
         return Err(CompileError::Ineligible("fallback-only body"));
     }

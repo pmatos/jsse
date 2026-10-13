@@ -2288,6 +2288,25 @@ impl Interpreter {
         }
     }
 
+    /// A fresh block environment under `parent`, reusing a pooled one when
+    /// available. Block and function scopes share the pool: both are reset to
+    /// the full initial state on acquisition.
+    pub(crate) fn acquire_block_environment(
+        &mut self,
+        parent: EnvRef,
+        binding_capacity: usize,
+    ) -> EnvRef {
+        if let Some(env) = self.function_env_pool.pop() {
+            debug_assert_eq!(Rc::strong_count(&env), 1);
+            env.borrow_mut().reset_block_scope(parent, binding_capacity);
+            env
+        } else {
+            let env = Environment::new(Some(parent));
+            env.borrow_mut().bindings.reserve(binding_capacity);
+            env
+        }
+    }
+
     pub(crate) fn recycle_function_environment(&mut self, env: EnvRef) {
         if self.function_env_pool.len() >= MAX_POOLED_FUNCTION_ENVIRONMENTS
             || Rc::strong_count(&env) != 1
