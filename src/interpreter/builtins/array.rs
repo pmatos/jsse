@@ -3056,38 +3056,30 @@ impl Interpreter {
                     interp.with_gc_root_scope(|interp| {
                         interp.gc_root_value(&a);
 
-                        let iterator = match interp.call_function(&iter_method, &source, &[]) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            other => return other,
+                        let iterator = match interp.get_iterator_from_method(&iter_method, &source)
+                        {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
                         };
                         interp.gc_root_value(&iterator);
                         let mut k: usize = 0;
                         loop {
-                            let next = match interp.iterator_step(&iterator) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            let next = match next {
-                                Some(result) => result,
-                                None => {
+                            let value = match interp.iterator_step_value(&iterator) {
+                                Ok(Some(value)) => value,
+                                Ok(None) => {
                                     if let Err(e) = set_length_throw(interp, &a, k) {
                                         return Completion::Throw(e);
                                     }
                                     return Completion::Normal(a);
                                 }
+                                Err(e) => return Completion::Throw(e),
                             };
-                            // Nested scope: `next` only needs to stay rooted for this
-                            // one iteration's value/map/property-set, mirroring the
-                            // old gc_frame_next idiom without accumulating roots
-                            // across iterations.
+                            // Nested scope: `value` only needs to stay rooted for this
+                            // one iteration's map/property-set without accumulating
+                            // roots across iterations.
                             let abrupt =
                                 interp.with_gc_root_scope(|interp| -> Option<Completion> {
-                                    interp.gc_root_value(&next);
-                                    let value = match interp.iterator_value(&next) {
-                                        Ok(v) => v,
-                                        Err(e) => return Some(Completion::Throw(e)),
-                                    };
+                                    interp.gc_root_value(&value);
                                     let mapped_value = if mapping {
                                         match interp.call_function(
                                             map_fn.as_ref().unwrap(),

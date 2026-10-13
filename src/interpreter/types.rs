@@ -540,6 +540,26 @@ pub(crate) struct DelegatedIteratorInfo {
 
 pub(crate) type EnvRef = Rc<RefCell<Environment>>;
 
+/// Function ids of a realm's intrinsic iterator `next` methods, compared by
+/// identity to skip the iterator-result object. They are GC roots so a
+/// collected-and-recycled id can never match an unrelated function.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct IteratorNextIntrinsics {
+    pub(crate) array: Option<u64>,
+    pub(crate) string: Option<u64>,
+    pub(crate) map: Option<u64>,
+    pub(crate) set: Option<u64>,
+    pub(crate) generator: Option<u64>,
+}
+
+impl IteratorNextIntrinsics {
+    fn roots(&self) -> impl Iterator<Item = u64> {
+        [self.array, self.string, self.map, self.set, self.generator]
+            .into_iter()
+            .flatten()
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub(crate) struct Realm {
     pub(crate) global_env: EnvRef,
@@ -554,6 +574,7 @@ pub(crate) struct Realm {
     pub(crate) promise_constructor: Option<JsValue>,
     pub(crate) promise_then: Option<JsValue>,
     pub(crate) promise_species_getter: Option<JsValue>,
+    pub(crate) iterator_next_intrinsics: IteratorNextIntrinsics,
     pub(crate) template_cache: FxHashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
     pub(crate) object_prototype: Option<u64>,
@@ -663,6 +684,7 @@ impl Realm {
             promise_constructor: None,
             promise_then: None,
             promise_species_getter: None,
+            iterator_next_intrinsics: IteratorNextIntrinsics::default(),
             template_cache: FxHashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
@@ -879,6 +901,7 @@ impl Realm {
         {
             worklist.push(id);
         }
+        worklist.extend(self.iterator_next_intrinsics.roots());
         for intrinsic in [
             &self.promise_constructor,
             &self.promise_then,

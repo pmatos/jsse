@@ -1607,13 +1607,9 @@ impl Interpreter {
                     interp.gc_root_value(&result_val);
                     let mut k: u64 = 0;
                     loop {
-                        let next = match interp.iterator_step(&iterator) {
+                        let value = match interp.iterator_step_value(&iterator) {
                             Ok(Some(v)) => v,
                             Ok(None) => break,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let value = match interp.iterator_value(&next) {
-                            Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
                         let key_val = match interp.call_function(
@@ -2386,20 +2382,11 @@ impl Interpreter {
                     };
                     interp.gc_root_value(&iterator);
                     loop {
-                        let step = match interp.iterator_step(&iterator) {
-                            Ok(Some(result)) => result,
+                        let next_item = match interp.iterator_step_value(&iterator) {
+                            Ok(Some(v)) => v,
                             Ok(None) => break,
                             Err(e) => return Completion::Throw(e),
                         };
-                        interp.gc_root_value(&step);
-                        let next_item = match interp.iterator_value(&step) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                interp.gc_unroot_value(&step);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        interp.gc_unroot_value(&step);
                         interp.gc_root_value(&next_item);
                         // Step d: If Type(nextItem) is not Object, close and throw TypeError
                         let Some(item_id) = next_item.as_object_id() else {

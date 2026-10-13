@@ -616,6 +616,18 @@ impl Interpreter {
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
+        self.generator_next_state_machine_with(this, sent_value, false)
+    }
+
+    /// `raw` asks the resumption to park `(value, done)` in `raw_iter_step`
+    /// instead of building the iterator-result object (see
+    /// [`Self::generator_step_value`]).
+    fn generator_next_state_machine_with(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+        raw: bool,
+    ) -> Completion {
         let caller_realm = self.current_realm_id;
         if let Some(o) = (this)
             .as_object_id()
@@ -625,8 +637,8 @@ impl Interpreter {
         {
             self.current_realm_id = realm_id;
         }
-        let result =
-            self.with_iter_close_scope(|s| s.generator_next_state_machine_impl(this, sent_value));
+        let result = self
+            .with_iter_close_scope(|s| s.generator_next_state_machine_impl(this, sent_value, raw));
         self.current_realm_id = caller_realm;
         result
     }
@@ -642,10 +654,68 @@ impl Interpreter {
         }
     }
 
+    /// IteratorStepValue for a state-machine generator whose captured `next`
+    /// is `%GeneratorPrototype%.next`: resumes it exactly as that function
+    /// would, but asks the resumption to park `(value, done)` rather than
+    /// build the iterator-result object. `None` leaves anything else (a
+    /// non-state-machine generator, a foreign object) to the generic path.
+    /// With `read_value` false, a result object forwarded by `yield*` has
+    /// only its `done` read and a non-final step yields `undefined`.
+    pub(crate) fn generator_step_value(
+        &mut self,
+        iterator: &JsValue,
+        read_value: bool,
+    ) -> Option<Result<Option<JsValue>, JsValue>> {
+        let cell = self.get_object_cell(iterator.as_object_id()?)?;
+        if !matches!(
+            cell.borrow().iterator_state(),
+            Some(IteratorState::StateMachineGenerator { .. })
+        ) {
+            return None;
+        }
+        self.raw_iter_step = None;
+        // `%GeneratorPrototype%.next` is a native [[Call]]: the body it
+        // resumes sees no NewTarget, whatever constructor is running here.
+        let saved_new_target = self.new_target.take();
+        // The native `next` call this replaces counted one call level; keep
+        // that so recursion through generators stays bounded.
+        let completion = self.with_call_depth(|interp| {
+            interp.generator_next_state_machine_with(iterator, JsValue::UNDEFINED, true)
+        });
+        self.new_target = saved_new_target;
+        Some(match completion {
+            Completion::Normal(result) => match self.raw_iter_step.take() {
+                Some((value, false)) => Ok(Some(value)),
+                Some((_, true)) => Ok(None),
+                // Parked nothing: the resumption produced a result object of
+                // its own (`yield*` forwards the inner one verbatim).
+                None if result.is_object() && read_value => self.iterator_result_value(&result),
+                None if result.is_object() => self
+                    .iterator_complete(&result)
+                    .map(|done| (!done).then_some(JsValue::UNDEFINED)),
+                None => Err(self.create_type_error("Iterator result is not an object")),
+            },
+            Completion::Throw(e) => Err(e),
+            _ => Err(self.create_type_error("Iterator next failed")),
+        })
+    }
+
+    /// The `{ value, done }` object a resumption returns, or, when the caller
+    /// asked for a raw step, the pair parked in `raw_iter_step`.
+    fn generator_step_result(&mut self, raw: bool, value: JsValue, done: bool) -> Completion {
+        if raw {
+            self.raw_iter_step = Some((value, done));
+            Completion::Normal(JsValue::UNDEFINED)
+        } else {
+            Completion::Normal(self.create_iter_result_object(value, done))
+        }
+    }
+
     fn generator_next_state_machine_impl(
         &mut self,
         this: &JsValue,
         sent_value: JsValue,
+        raw: bool,
     ) -> Completion {
         use crate::interpreter::generator_transform::{ArrayPatternIterOp, StateTerminator};
 
@@ -744,7 +814,11 @@ impl Interpreter {
                                 pending_return: None,
                             },
                         );
-                        return self.generator_next_state_machine(this, JsValue::UNDEFINED);
+                        return self.generator_next_state_machine_with(
+                            this,
+                            JsValue::UNDEFINED,
+                            raw,
+                        );
                     } else {
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineGenerator {
@@ -799,9 +873,7 @@ impl Interpreter {
 
         let current_state_id = match &execution_state {
             StateMachineExecutionState::Completed => {
-                return Completion::Normal(
-                    self.create_iter_result_object(JsValue::UNDEFINED, true),
-                );
+                return self.generator_step_result(raw, JsValue::UNDEFINED, true);
             }
             StateMachineExecutionState::Executing => {
                 return Completion::Throw(self.create_type_error("Generator is already executing"));
@@ -1082,7 +1154,7 @@ impl Interpreter {
                         pending_return: pending_return.take(),
                     },
                 );
-                return Completion::Normal(self.create_iter_result_object(yield_val, false));
+                return self.generator_step_result(raw, yield_val, false);
             }
             if let Completion::Exit(code) = stmt_result {
                 // `__host_exit` (issue #242) is uncatchable and immediate:
@@ -1408,7 +1480,7 @@ impl Interpreter {
                             pending_return: pending_return.take(),
                         },
                     );
-                    return Completion::Normal(self.create_iter_result_object(yield_val, false));
+                    return self.generator_step_result(raw, yield_val, false);
                 }
 
                 StateTerminator::Return(expr) => {
@@ -1859,42 +1931,14 @@ impl Interpreter {
                         }
                     }
 
-                    let step_result = match self.iterator_next(&iterator) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.discard_failed_generator_for_of_loop(
-                                o.id,
-                                &mut for_of_stack,
-                                loop_pos,
-                                &iterator,
-                            );
-                            let e = route_exception!(e);
-                            self.retire_generator(o.id);
-                            return Completion::Throw(e);
-                        }
-                    };
-                    match self.iterator_complete(&step_result) {
-                        Ok(true) => {
+                    match self.iterator_step_value(&iterator) {
+                        Ok(None) => {
                             self.forget_for_of_iterator(&iterator);
                             for_of_stack.remove(loop_pos);
                             self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
                         }
-                        Ok(false) => {
-                            let val = match self.iterator_value(&step_result) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    self.discard_failed_generator_for_of_loop(
-                                        o.id,
-                                        &mut for_of_stack,
-                                        loop_pos,
-                                        &iterator,
-                                    );
-                                    let e = route_exception!(e);
-                                    self.retire_generator(o.id);
-                                    return Completion::Throw(e);
-                                }
-                            };
+                        Ok(Some(val)) => {
                             let needs_iteration_env = Self::for_of_head_lexical(left).is_some();
                             let outer_env = for_of_stack[loop_pos].outer_env.clone();
                             let bind_env = if needs_iteration_env {
@@ -2049,21 +2093,8 @@ impl Interpreter {
                                         .get(iter_var)
                                         .map(|b| b.value.clone())
                                         .unwrap_or(JsValue::UNDEFINED);
-                                    match self.iterator_step(&iterator) {
-                                        Ok(Some(result)) => match self.iterator_value(&result) {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                self.discard_failed_generator_for_of_loop(
-                                                    o.id,
-                                                    &mut for_of_stack,
-                                                    pos,
-                                                    &iterator,
-                                                );
-                                                let e = route_exception!(e);
-                                                self.retire_generator(o.id);
-                                                return Completion::Throw(e);
-                                            }
-                                        },
+                                    match self.iterator_step_value(&iterator) {
+                                        Ok(Some(v)) => v,
                                         Ok(None) => {
                                             self.forget_for_of_iterator(&iterator);
                                             for_of_stack.remove(pos);
@@ -2105,16 +2136,8 @@ impl Interpreter {
                                     let mut rest = Vec::new();
                                     let mut drain_err = None;
                                     loop {
-                                        match self.iterator_step(&iterator) {
-                                            Ok(Some(result)) => {
-                                                match self.iterator_value(&result) {
-                                                    Ok(v) => rest.push(v),
-                                                    Err(e) => {
-                                                        drain_err = Some(e);
-                                                        break;
-                                                    }
-                                                }
-                                            }
+                                        match self.iterator_step_value(&iterator) {
+                                            Ok(Some(v)) => rest.push(v),
                                             Ok(None) => break,
                                             Err(e) => {
                                                 drain_err = Some(e);
@@ -2278,7 +2301,7 @@ impl Interpreter {
                         _ => ret_val,
                     };
                     self.retire_generator(o.id);
-                    return Completion::Normal(self.create_iter_result_object(final_val, true));
+                    return self.generator_step_result(raw, final_val, true);
                 }
 
                 StateTerminator::Await { .. } => {
@@ -5660,22 +5683,8 @@ impl Interpreter {
                                         .get(iter_var)
                                         .map(|b| b.value.clone())
                                         .unwrap_or(JsValue::UNDEFINED);
-                                    match self.iterator_step(&iterator) {
-                                        Ok(Some(result)) => match self.iterator_value(&result) {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                self.discard_failed_generator_for_of_loop(
-                                                    o.id,
-                                                    &mut for_of_stack,
-                                                    pos,
-                                                    &iterator,
-                                                );
-                                                let e = route_exception!(e);
-                                                return self.reject_async_generator_request(
-                                                    o.id, promise, &reject_fn, e,
-                                                );
-                                            }
-                                        },
+                                    match self.iterator_step_value(&iterator) {
+                                        Ok(Some(v)) => v,
                                         Ok(None) => {
                                             self.forget_for_of_iterator(&iterator);
                                             for_of_stack.remove(pos);
@@ -5718,16 +5727,8 @@ impl Interpreter {
                                     let mut rest = Vec::new();
                                     let mut drain_err = None;
                                     loop {
-                                        match self.iterator_step(&iterator) {
-                                            Ok(Some(result)) => {
-                                                match self.iterator_value(&result) {
-                                                    Ok(v) => rest.push(v),
-                                                    Err(e) => {
-                                                        drain_err = Some(e);
-                                                        break;
-                                                    }
-                                                }
-                                            }
+                                        match self.iterator_step_value(&iterator) {
+                                            Ok(Some(v)) => rest.push(v),
                                             Ok(None) => break,
                                             Err(e) => {
                                                 drain_err = Some(e);
