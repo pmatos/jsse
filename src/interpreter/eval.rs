@@ -328,13 +328,26 @@ impl Interpreter {
         this_val: JsValue,
         constructor: &JsValue,
     ) -> Result<(), JsValue> {
+        let (Some(ctor_id), Some(this_obj_id)) =
+            (constructor.as_object_id(), this_val.as_object_id())
+        else {
+            return Ok(());
+        };
+        // A class with no instance elements (most of them) needs neither the
+        // root scope nor the NewTarget swap below.
+        let Some(func_obj) = self.get_object_cell(ctor_id) else {
+            return Ok(());
+        };
+        let Some(defs) = func_obj.borrow().instance_field_defs_shared() else {
+            return Ok(());
+        };
         // The initializers run user code, and a base class's new object is
         // reachable from nowhere else until its constructor body runs. They
         // are methods called with no NewTarget.
         self.with_gc_root_scope(|interp| {
             interp.gc_root_value(&this_val);
             interp.with_new_target_undefined(|interp| {
-                interp.define_instance_elements(this_val, constructor)
+                interp.define_instance_elements(&this_val, this_obj_id, ctor_id, &defs)
             })
         })
     }
@@ -352,54 +365,31 @@ impl Interpreter {
 
     fn define_instance_elements(
         &mut self,
-        this_val: JsValue,
-        constructor: &JsValue,
+        this_val: &JsValue,
+        this_obj_id: u64,
+        ctor_id: u64,
+        instance_field_defs: &[InstanceFieldDef],
     ) -> Result<(), JsValue> {
-        let (Some(ctor_id), Some(this_obj_id)) =
-            (constructor.as_object_id(), this_val.as_object_id())
-        else {
-            return Ok(());
-        };
-        let Some(func_obj) = self.get_object_cell(ctor_id) else {
-            return Ok(());
-        };
-        // Use the class constructor's closure (classEnv) so the class name
-        // binding is visible in field initializers (§15.7.14 step 3).
-        let (instance_field_defs, init_parent, class_pn) = {
-            let func = func_obj.borrow();
-            if func.instance_field_defs().is_empty() {
-                return Ok(());
-            }
-            let Some(JsFunction::User { closure, .. }) = func.callable.as_deref() else {
-                unreachable!("only class constructors have field definitions");
-            };
-            let class_pn = closure.borrow().class_private_names.clone();
-            (
-                func.instance_field_defs().to_vec(),
-                closure.clone(),
-                class_pn,
+        // Only an initializer expression is evaluated in the init environment;
+        // a class of private methods or uninitialised fields never builds one.
+        let needs_env = instance_field_defs.iter().any(|d| {
+            matches!(
+                d,
+                InstanceFieldDef::Public(_, Some(_))
+                    | InstanceFieldDef::Private(PrivateFieldDef::Field {
+                        initializer: Some(_),
+                        ..
+                    })
+                    | InstanceFieldDef::AutoAccessorStorage(_, Some(_))
             )
+        });
+        let init_env = if needs_env {
+            Some(self.make_field_init_env(this_val, ctor_id))
+        } else {
+            None
         };
-        let init_env = Environment::new(Some(init_parent));
-        init_env.borrow_mut().set_this(this_val.clone());
-        init_env.borrow_mut().class_private_names = class_pn;
-        init_env.borrow_mut().is_field_initializer = true;
-        // Set __home_object__ for super property access in field initializers.
-        // Instance field HomeObject = class prototype.
-        let proto_val = self.get_property_on_id(ctor_id, "prototype");
-        if proto_val.is_object() {
-            init_env.borrow_mut().bindings.insert(
-                "__home_object__",
-                Binding {
-                    value: proto_val,
-                    kind: BindingKind::Const,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
-        }
         // Pass 1: Install private methods and accessors before any field initializer runs.
-        for idef in &instance_field_defs {
+        for idef in instance_field_defs {
             match idef {
                 InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
@@ -442,24 +432,22 @@ impl Interpreter {
             }
         }
         // Pass 2: Run field initializers in source order.
-        for idef in &instance_field_defs {
+        for idef in instance_field_defs {
             match idef {
                 InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
-                    let source_name = name.split('#').next().unwrap_or(name);
-                    let display_name = format!("#{source_name}");
-                    let val = if let Some(init) = initializer {
-                        match self.eval_expr(init, &init_env) {
+                    let val = match (initializer, &init_env) {
+                        (Some(init), Some(env)) => match self.eval_expr(init, env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
-                                    self.set_function_name(&v, &display_name);
+                                    let source_name = name.split('#').next().unwrap_or(name);
+                                    self.set_function_name(&v, &format!("#{source_name}"));
                                 }
                                 v
                             }
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
-                        }
-                    } else {
-                        JsValue::UNDEFINED
+                        },
+                        _ => JsValue::UNDEFINED,
                     };
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         if !obj.borrow().extensible {
@@ -478,8 +466,8 @@ impl Interpreter {
                     }
                 }
                 InstanceFieldDef::Public(key, initializer) => {
-                    let val = if let Some(init) = initializer {
-                        match self.eval_expr(init, &init_env) {
+                    let val = match (initializer, &init_env) {
+                        (Some(init), Some(env)) => match self.eval_expr(init, env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
                                     self.set_function_name(&v, key);
@@ -488,23 +476,21 @@ impl Interpreter {
                             }
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
-                        }
-                    } else {
-                        JsValue::UNDEFINED
+                        },
+                        _ => JsValue::UNDEFINED,
                     };
                     crate::interpreter::builtins::array::create_data_property_or_throw(
-                        self, &this_val, key, val,
+                        self, this_val, key, val,
                     )?;
                 }
                 InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
-                    let val = if let Some(init) = initializer {
-                        match self.eval_expr(init, &init_env) {
+                    let val = match (initializer, &init_env) {
+                        (Some(init), Some(env)) => match self.eval_expr(init, env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
-                        }
-                    } else {
-                        JsValue::UNDEFINED
+                        },
+                        _ => JsValue::UNDEFINED,
                     };
                     if let Some(obj) = self.get_object_cell(this_obj_id) {
                         obj.borrow_mut()
@@ -516,6 +502,45 @@ impl Interpreter {
             }
         }
         Ok(())
+    }
+
+    /// The environment instance field initializers run in: the class
+    /// constructor's closure (classEnv, so the class name binding is visible,
+    /// §15.7.14 step 3) with `this` bound to the new object and the class
+    /// prototype as HomeObject.
+    fn make_field_init_env(&mut self, this_val: &JsValue, ctor_id: u64) -> EnvRef {
+        let (init_parent, class_pn) = {
+            let func_obj = self
+                .get_object_cell(ctor_id)
+                .expect("constructor checked by the caller");
+            let func = func_obj.borrow();
+            let Some(JsFunction::User { closure, .. }) = func.callable.as_deref() else {
+                unreachable!("only class constructors have field definitions");
+            };
+            let class_pn = closure.borrow().class_private_names.clone();
+            (closure.clone(), class_pn)
+        };
+        let init_env = Environment::new(Some(init_parent));
+        {
+            let mut env = init_env.borrow_mut();
+            env.set_this(this_val.clone());
+            env.class_private_names = class_pn;
+            env.is_field_initializer = true;
+        }
+        // Instance field HomeObject = class prototype.
+        let proto_val = self.get_property_on_id(ctor_id, &self.common_keys.prototype);
+        if proto_val.is_object() {
+            init_env.borrow_mut().bindings.insert(
+                "__home_object__",
+                Binding {
+                    value: proto_val,
+                    kind: BindingKind::Const,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
+        }
+        init_env
     }
 
     fn with_tail_position_suppressed<T>(&mut self, evaluate: impl FnOnce(&mut Self) -> T) -> T {
