@@ -2281,7 +2281,7 @@ pub(crate) enum DenseArraySet {
 /// Array-exotic internal data.
 ///
 /// `extra_string_property_order` mirrors only the subset of
-/// `JsObjectData::property_order` needed by the Node-compatible inspector.
+/// the property map's creation order needed by the Node-compatible inspector.
 /// Maintaining that subset as properties change lets inspection find named
 /// Array properties without scanning descriptor-backed element indices.
 #[derive(Clone, Default)]
@@ -2820,7 +2820,6 @@ impl JsObjectData {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
     }
 
-    /// Intl slot data (any of the Intl kinds).
     /// An engine-internal slot (a cached bound function, say) that script can
     /// neither enumerate, read nor overwrite. It lives with the private
     /// elements, which the collector already traces, so it is never an own
@@ -2837,6 +2836,7 @@ impl JsObjectData {
             .insert(name.to_string(), PrivateElement::Field(value));
     }
 
+    /// Intl slot data (any of the Intl kinds).
     pub(crate) fn intl_data(&self) -> Option<&IntlData> {
         if let ObjectKind::Intl(ref i) = self.kind {
             Some(i.as_ref())

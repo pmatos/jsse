@@ -22,13 +22,9 @@ const COMPACT_MIN_ENTRIES: usize = 32;
 
 type Entry = (JsPropertyKey, PropertyDescriptor);
 
-// Hasher of the spilled key index. Property names come from script, so the
-// index is keyed with foldhash's randomly seeded state rather than an
-// unkeyed hash: every map draws its own seed, so no input list collides in
-// all of them. foldhash is "minimally DoS-resistant" by its own description
-// (it does not defend against an attacker who can observe the seed); the
-// std SipHash it replaces was ~15% of the instructions of property-heavy
-// code (#911). Identifier/binding maps keep their stronger hashing (#393).
+// Property names come from script, so the index is keyed with foldhash's
+// randomly seeded state (minimally DoS-resistant, unlike the SipHash kept for
+// identifier maps by #393); see #911.
 type IndexState = foldhash::fast::RandomState;
 
 // Hybrid storage for `JsObjectData.properties`, in property creation order
@@ -164,12 +160,26 @@ impl PropertyMap {
                     return Some(std::mem::replace(&mut slot.1, value));
                 }
             }
-            PropertyMapInner::Spilled { entries, index, .. } => {
-                if let Some(&slot) = index.get(key.as_bytes())
-                    && let Some(entry) = entries[slot as usize].as_mut()
-                {
-                    return Some(std::mem::replace(&mut entry.1, value));
+            PropertyMapInner::Spilled {
+                entries,
+                index,
+                live,
+            } => {
+                match index.entry(key.clone()) {
+                    std::collections::hash_map::Entry::Occupied(e) => {
+                        let entry = entries[*e.get() as usize]
+                            .as_mut()
+                            .expect("indexed slot is live");
+                        return Some(std::mem::replace(&mut entry.1, value));
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(entries.len() as u32);
+                    }
                 }
+                self.digit_leading_keys += u32::from(Self::is_digit_leading(key.as_bytes()));
+                entries.push(Some((key, value)));
+                *live += 1;
+                return None;
             }
         }
         self.append(key, value);
@@ -288,13 +298,15 @@ impl PropertyMap {
                         entries.pop();
                     }
                 } else if entries.len() >= COMPACT_MIN_ENTRIES && entries.len() > 2 * *live {
+                    let mut remap = Vec::with_capacity(entries.len());
+                    let mut next = 0u32;
+                    for entry in entries.iter() {
+                        remap.push(next);
+                        next += u32::from(entry.is_some());
+                    }
                     entries.retain(Option::is_some);
-                    for (slot, entry) in entries.iter().enumerate() {
-                        if let Some((k, _)) = entry
-                            && let Some(s) = index.get_mut(k.as_bytes())
-                        {
-                            *s = slot as u32;
-                        }
+                    for slot in index.values_mut() {
+                        *slot = remap[*slot as usize];
                     }
                 }
                 removed

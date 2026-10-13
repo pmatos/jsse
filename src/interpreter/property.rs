@@ -1932,7 +1932,7 @@ impl Interpreter {
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             // Ordinary, Array and Arguments objects: keys come straight from
-            // the element vector and `property_order`.
+            // the element vector and the property map.
             let fast = obj
                 .borrow()
                 .ordinary_own_property_keys(crate::interpreter::types::OwnKeyFilter::AllKeys);

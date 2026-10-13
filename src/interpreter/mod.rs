@@ -2105,9 +2105,8 @@ impl Interpreter {
     /// Companion to `define_method` / `define_getter`; concentrates the
     /// `@@toStringTag` install "dance" that was otherwise open-coded at ~45
     /// builtin sites as a six-field `PropertyDescriptor` literal (some of which
-    /// bypassed `insert_property` with a raw `property_order.push` +
-    /// `properties.insert` pair). Routing through `insert_property` keeps
-    /// `property_order` and `properties` in sync in one place.
+    /// bypassed `insert_property`). Routing through `insert_property` keeps
+    /// the Array key tracking in sync in one place.
     ///
     /// This is the *data*-property tag only. The handful of prototypes whose
     /// `@@toStringTag` is an accessor (`%TypedArray%.prototype`,

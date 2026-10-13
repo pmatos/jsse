@@ -89,9 +89,7 @@ pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
         .unwrap_or_else(|_| key.to_js_string())
 }
 
-/// Hasher of the intern table. Keys are script-controlled text, so the table
-/// is keyed with foldhash's randomly seeded state, not an unkeyed hash; see
-/// `property_map.rs` for the DoS-resistance trade-off versus SipHash (#911).
+/// Randomly seeded hasher; see `IndexState` in `property_map.rs`.
 type InternState = foldhash::fast::RandomState;
 
 const CANONICAL_SLOTS: usize = 1024;
@@ -177,13 +175,20 @@ impl KeyCache {
         self.canonical[Self::canonical_slot(key)] = Some(key.clone());
     }
 
+    #[inline]
+    fn remember_if_new(&mut self, key: &JsPropertyKey) {
+        if !self.is_canonical(key) {
+            self.remember(key);
+        }
+    }
+
     fn intern(&mut self, key: JsPropertyKey) -> JsPropertyKey {
         if key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
             return key;
         }
         if let Some(existing) = self.map.get(key.as_bytes()) {
             let existing = existing.clone();
-            self.remember(&existing);
+            self.remember_if_new(&existing);
             return existing;
         }
         if self.map.len() >= MAX_CACHE_ENTRIES {
@@ -198,7 +203,7 @@ impl KeyCache {
     fn intern_str(&mut self, s: &str) -> JsPropertyKey {
         if let Some(existing) = self.map.get(s.as_bytes()) {
             let existing = existing.clone();
-            self.remember(&existing);
+            self.remember_if_new(&existing);
             return existing;
         }
         self.intern(JsPropertyKey::from_str(s))
