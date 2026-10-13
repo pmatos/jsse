@@ -752,6 +752,8 @@ pub(crate) struct DoWhileStatement {
 pub(crate) struct ForStatement {
     pub init: Option<ForInit>,
     pub test: Option<Expression>,
+    /// Boxed so the loop's `scope_capture` cell keeps `Statement` within its
+    /// size budget (`function_literal_cache_does_not_grow_ast_nodes`).
     pub update: Option<ExprBox>,
     pub body: Box<Statement>,
     pub scope_capture: ScopeCaptureCell,
@@ -764,11 +766,7 @@ impl ForStatement {
     pub(crate) fn may_capture_iteration_scope(&self) -> bool {
         self.scope_capture.get_or_compute(|| {
             let mut walk = CaptureWalk::default();
-            match &self.init {
-                Some(ForInit::Expression(e)) => walk.push_expr(e),
-                Some(ForInit::Variable(d)) => walk.push_decl(d),
-                None => {}
-            }
+            walk.push_for_init(self.init.as_ref());
             walk.push_opt_expr(self.test.as_ref());
             walk.push_opt_expr(self.update.as_deref());
             walk.push_stmt(&self.body);
@@ -814,7 +812,7 @@ impl ForInStatement {
     /// See [`ForStatement::may_capture_iteration_scope`].
     pub(crate) fn may_capture_iteration_scope(&self) -> bool {
         self.scope_capture
-            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.right, &self.body))
+            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.body))
     }
 }
 
@@ -835,7 +833,7 @@ impl ForOfStatement {
     /// See [`ForStatement::may_capture_iteration_scope`].
     pub(crate) fn may_capture_iteration_scope(&self) -> bool {
         self.scope_capture
-            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.right, &self.body))
+            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.body))
     }
 
     /// Whether this loop can suspend the enclosing async function/generator at its head,
@@ -879,14 +877,11 @@ impl ScopeCaptureCell {
     }
 }
 
-fn for_in_of_may_capture(left: &ForInOfLeft, right: &Expression, body: &Statement) -> bool {
+/// The loop's own iterable expression is deliberately not scanned: it runs in
+/// the head's TDZ environment (or the enclosing one), never in an iteration's.
+fn for_in_of_may_capture(left: &ForInOfLeft, body: &Statement) -> bool {
     let mut walk = CaptureWalk::default();
-    match left {
-        ForInOfLeft::Variable(d) => walk.push_decl(d),
-        ForInOfLeft::Pattern(p) => walk.push_pattern(p),
-        ForInOfLeft::Expression(e) => walk.push_expr(e),
-    }
-    walk.push_expr(right);
+    walk.push_for_in_of_left(left);
     walk.push_stmt(body);
     walk.run()
 }
@@ -932,6 +927,14 @@ impl<'a> CaptureWalk<'a> {
         for declarator in &d.declarations {
             self.push_pattern(&declarator.pattern);
             self.push_opt_expr(declarator.init.as_ref());
+        }
+    }
+
+    fn push_for_init(&mut self, init: Option<&'a ForInit>) {
+        match init {
+            Some(ForInit::Expression(e)) => self.push_expr(e),
+            Some(ForInit::Variable(d)) => self.push_decl(d),
+            None => {}
         }
     }
 
@@ -989,11 +992,7 @@ impl<'a> CaptureWalk<'a> {
                 self.push_stmt(&d.body);
             }
             Statement::For(f) => {
-                match &f.init {
-                    Some(ForInit::Expression(e)) => self.push_expr(e),
-                    Some(ForInit::Variable(d)) => self.push_decl(d),
-                    None => {}
-                }
+                self.push_for_init(f.init.as_ref());
                 self.push_opt_expr(f.test.as_ref());
                 self.push_opt_expr(f.update.as_deref());
                 self.push_stmt(&f.body);
@@ -3005,6 +3004,8 @@ mod scope_capture_tests {
             "for (let i = 0, j = 1; i < j; i++, j--) s += i + j;",
             "for (const k in o) { if (k) continue; s += o[k]; }",
             "for (const [a, b = 2] of xs) { s += a + b; }",
+            "for (const x of xs.map((v) => v + 1)) { s += x; }",
+            "for (const k in Object.keys(o).filter(function (n) { return n; })) { s += k; }",
             "for (const { a, [k]: b } of xs) { try { s += a; } catch ({ message }) { s += b; } }",
             "for (let i = 0; i < 3; i++) { for (const v of xs) { switch (v) { case 1: s++; } } }",
             "for (let i = 0; i < 3; i++) { `x${i}`; tag`y${i}`; new Foo(i, ...rest); }",
@@ -3034,6 +3035,7 @@ mod scope_capture_tests {
             "for (const k in o) { g = () => k; }",
             "for (const v of xs) { for (const w of ys) { g = async () => v + w; } }",
             "for (const { f = () => 1 } in o) {}",
+            "for (const a of xs) { for (const b of ys.map((v) => v + a)) { s += b; } }",
         ] {
             assert!(loop_may_capture(source), "{source}");
         }

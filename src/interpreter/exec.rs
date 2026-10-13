@@ -2250,13 +2250,7 @@ impl Interpreter {
                         continue;
                     }
                     let key_val = JsValue::string(key.to_js_string());
-                    let for_env = match &shared_env {
-                        Some(shared) => {
-                            shared.borrow_mut().bindings.clear();
-                            shared.clone()
-                        }
-                        None => Environment::new(Some(env.clone())),
-                    };
+                    let for_env = Self::iteration_env(shared_env.as_ref(), env);
                     match &fi.left {
                         ForInOfLeft::Variable(decl) => {
                             let kind = match decl.kind {
@@ -2467,6 +2461,18 @@ impl Interpreter {
         Some(Environment::new(Some(parent.clone())))
     }
 
+    /// The environment one for-in/for-of iteration runs in: the loop's shared
+    /// environment emptied of the previous iteration's bindings, or a fresh one.
+    fn iteration_env(shared: Option<&EnvRef>, parent: &EnvRef) -> EnvRef {
+        match shared {
+            Some(shared) => {
+                shared.borrow_mut().bindings.clear();
+                shared.clone()
+            }
+            None => Environment::new(Some(parent.clone())),
+        }
+    }
+
     /// For a loop sharing one iteration environment, the `let`/`const`
     /// identifier its head binds, interned once so each iteration installs it
     /// without hashing the name again.
@@ -2539,13 +2545,7 @@ impl Interpreter {
                 }
             };
 
-            let for_env = match shared_env {
-                Some(shared) => {
-                    shared.borrow_mut().bindings.clear();
-                    shared.clone()
-                }
-                None => Environment::new(Some(env.clone())),
-            };
+            let for_env = Self::iteration_env(shared_env, env);
             match &fo.left {
                 ForInOfLeft::Variable(decl) => {
                     let is_using = matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);

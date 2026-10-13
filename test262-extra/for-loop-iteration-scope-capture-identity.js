@@ -127,6 +127,18 @@ check(
 );
 
 check(
+  "closure in a for-of iterable expression does not disturb the loop",
+  "var seen = []; for (const v of [1, 2, 3].map((x) => x * 2)) { /*Y*/ seen.push(v); } return seen;",
+  [2, 4, 6]
+);
+
+check(
+  "closure in a for-in iterable expression does not disturb the loop",
+  "var seen = []; for (const k in Object.fromEntries([['a', 1], ['b', 2]].map((e) => e))) { /*Y*/ seen.push(k); } return seen;",
+  ["a", "b"]
+);
+
+check(
   "direct eval in a for-of body",
   "var fs = []; for (let v of [1, 2, 3]) { /*Y*/ fs.push(eval('() => v')); } return fs.map(f => f());",
   [1, 2, 3]
