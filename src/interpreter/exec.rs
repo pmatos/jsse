@@ -112,8 +112,15 @@ impl Interpreter {
                     {
                         self.perf.compile_ok += 1;
                         self.perf.body_non_function += 1;
+                        self.perf.record_fallbacks(&chunk.fallback_reasons);
+                        let label = self.perf.name_script_body.clone();
+                        self.perf.enter_ast_body(
+                            label,
+                            crate::interpreter::perf_counters::SYNTHETIC_BODY_ID,
+                            false,
+                        );
                     }
-                    return self.with_ic_body(body, |interp| {
+                    let result = self.with_ic_body(body, |interp| {
                         if let Some(err) =
                             interp.instantiate_body_declarations(body.as_slice(), env, None)
                         {
@@ -130,6 +137,9 @@ impl Interpreter {
                             result
                         }
                     });
+                    #[cfg(feature = "perf-counters")]
+                    self.perf.leave_ast_body();
+                    return result;
                 }
                 Err(_e) => {
                     #[cfg(feature = "perf-counters")]

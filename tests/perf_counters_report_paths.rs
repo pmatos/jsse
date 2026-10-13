@@ -275,11 +275,7 @@ fn script_body_records_its_compile_outcome_but_not_a_function_invocation() {
         "var s = 0; for (var i = 0; i < 5; i++) { s += i; } s;\n",
     )
     .expect("write eligible");
-    fs::write(
-        dir.join("bail.js"),
-        "function f(){ try { return 1; } catch(e) { return 0; } } f();\n",
-    )
-    .expect("write ineligible");
+    fs::write(dir.join("bail.js"), "var r = eval('1 + 1');\n").expect("write ineligible");
 
     let perf = |file: &str, key: &str| -> u64 {
         let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
@@ -482,9 +478,8 @@ fn compile_count_is_independent_of_closure_count() {
     let few = perf_value(&run_counted("closures-few", &program(5)), "compile_ok");
     let many = perf_value(&run_counted("closures-many", &program(100)), "compile_ok");
     assert_eq!(few, many, "compile_ok must not scale with closure count");
-    // `make`, the returned function literal and `v => v + 1`; the script body
-    // bails once (it declares a function).
-    assert_eq!(many, 3);
+    // `make`, the returned function literal, `v => v + 1` and the script body.
+    assert_eq!(many, 4);
 }
 
 /// Class field initialisers and static blocks are tree-walked, so evaluating
@@ -532,5 +527,36 @@ fn ineligible_literal_bails_once_across_many_closures() {
         many.lines()
             .any(|l| l.starts_with("BODY\tinner#") && !l.ends_with("\t-")),
         "`inner` must be among the bodies that bailed; stderr:\n{many}"
+    );
+}
+
+/// A Script falls back per node (#961): declarations the VM cannot own at
+/// Script top level are hand-offs, not a bail, and the tree-walker work they
+/// spend shows on the `<script body>` row.
+#[test]
+fn script_with_unsupported_nodes_compiles_with_fallback_rows() {
+    let stderr = run_counted(
+        "script-fallback",
+        "function f(x) { return x + 1; }\n\
+         class C { m() { return 1; } }\n\
+         let g = 2;\n\
+         var t = 0;\n\
+         for (var i = 0; i < 100; i++) { t += f(i) + g; }\n",
+    );
+    assert_eq!(
+        perf_value(&stderr, "compile_ok"),
+        2,
+        "f and the script body"
+    );
+    assert_eq!(perf_value(&stderr, "compile_bail"), 0, "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l == "FALLBACK\tstatement:ClassDeclaration\t1"),
+        "the class declaration is a hand-off; stderr:\n{stderr}"
+    );
+    assert!(
+        body_row(&stderr, "<script body>").is_some_and(|units| units > 0),
+        "hand-off work is attributed to the script body; stderr:\n{stderr}"
     );
 }

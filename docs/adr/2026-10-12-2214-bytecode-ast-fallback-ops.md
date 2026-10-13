@@ -21,7 +21,7 @@ clauses (AES `throw`, gbemu `switch`, crypto/richards member `++`).
    table` runs a statement node with `exec_statement` at a statement boundary.
    Nodes are deep clones held in `Chunk.ast`; nested function `Body`s remain
    `Rc`-shared, so body identity (bytecode memo, hoist cache, IC stores) is
-   unchanged. Function goal only: the Script goal keeps bailing whole.
+   unchanged. Function goal only: the Script goal keeps bailing whole (superseded by ADR-2026-10-13-1210, which extends the fallback to it).
 2. **Transactional wrappers.** `compile_expr` / `compile_statement` snapshot
    compiler state, and on `CompileError::Unsupported` roll back and emit one
    hand-off instead. `Super`, private names and `Spread` are not standalone
