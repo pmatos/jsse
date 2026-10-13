@@ -1,3 +1,4 @@
+use crate::types::JsBigInt;
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
 use std::fmt;
@@ -590,7 +591,7 @@ pub(crate) enum Literal {
     Boolean(bool),
     Number(f64),
     String(Vec<u16>),
-    BigInt(String),
+    BigInt(JsBigInt),
     RegExp(String, String),
 }
 
