@@ -2301,14 +2301,41 @@ pub(crate) enum DenseArraySet {
 /// the property map's creation order needed by the Node-compatible inspector.
 /// Maintaining that subset as properties change lets inspection find named
 /// Array properties without scanning descriptor-backed element indices.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct ArrayData {
     elements: Vec<JsValue>,
     /// Allocated on the first extra String key, so a plain Array pays one
     /// pointer.
     #[allow(clippy::box_collection)] // a pointer, not the 24-byte Vec, per Array
     extra_string_property_order: Option<Box<Vec<JsPropertyKey>>>,
+    /// Dirty-card bitmap for the generational collector: bit `c` is set when
+    /// elements `c * CARD_ELEMENTS ..` (one card) may reference a nursery
+    /// object. `None` means every element may, which is the safe state: a new
+    /// Array starts there and `ObjectKind::Array`'s only mutable accessor to
+    /// the vector (`JsObjectData::array_elements_mut`) returns to it, so an
+    /// operation that moves or rewrites elements without knowing which cards
+    /// it touched can never leave a stale bitmap behind. Only a minor
+    /// collection that has just scanned the whole vector replaces it with a
+    /// bitmap, and only a precise single-slot store marks a bit.
+    #[allow(clippy::box_collection)] // a pointer per Array, not the 24-byte Vec
+    dirty_cards: Option<Box<Vec<u64>>>,
 }
+
+impl Clone for ArrayData {
+    /// A copy is a new object that no collection has scanned, so it starts with
+    /// every card dirty rather than inheriting the original's bitmap.
+    fn clone(&self) -> Self {
+        Self {
+            elements: self.elements.clone(),
+            extra_string_property_order: self.extra_string_property_order.clone(),
+            dirty_cards: None,
+        }
+    }
+}
+
+/// Elements per card of an Array's dirty-card bitmap. Debug builds use tiny
+/// cards so that unit tests and stress runs cross card boundaries constantly.
+pub(crate) const CARD_ELEMENTS: usize = if cfg!(debug_assertions) { 4 } else { 512 };
 
 impl ArrayData {
     #[cfg(test)]
@@ -2316,6 +2343,7 @@ impl ArrayData {
         Self {
             elements,
             extra_string_property_order: None,
+            dirty_cards: None,
         }
     }
 }
@@ -2613,8 +2641,88 @@ impl JsObjectData {
         self.array_data().map(|data| &data.elements)
     }
 
+    /// The element vector for arbitrary mutation. The caller's writes are
+    /// unknown, so every card becomes dirty; precise single-slot stores use
+    /// [`Self::overwrite_array_element`] and [`Self::mark_element_card`].
     pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
-        self.array_data_mut().map(|data| &mut data.elements)
+        self.array_data_mut().map(|data| {
+            data.dirty_cards = None;
+            &mut data.elements
+        })
+    }
+
+    /// Record that element `index` may now reference a nursery object. A
+    /// no-op while every card is already dirty.
+    #[inline]
+    pub(crate) fn mark_element_card(&mut self, index: usize) {
+        let Some(bits) = self
+            .array_data_mut()
+            .and_then(|data| data.dirty_cards.as_deref_mut())
+        else {
+            return;
+        };
+        let card = index / CARD_ELEMENTS;
+        let word = card / 64;
+        if word >= bits.len() {
+            bits.resize(word + 1, 0);
+        }
+        bits[word] |= 1 << (card % 64);
+    }
+
+    /// Keeps the card bitmap: the caller ran `gc_write_barrier_element`.
+    #[inline]
+    pub(crate) fn overwrite_array_element(&mut self, index: usize, value: &JsValue) -> bool {
+        let Some(slot) = self
+            .array_data_mut()
+            .and_then(|data| data.elements.get_mut(index))
+        else {
+            return false;
+        };
+        *slot = value.clone();
+        true
+    }
+
+    /// Keeps the card bitmap: the caller ran `gc_write_barrier_element` per index.
+    pub(crate) fn extend_array_elements_precise(&mut self, values: &[JsValue]) {
+        if let Some(data) = self.array_data_mut() {
+            data.elements.extend_from_slice(values);
+        }
+    }
+
+    pub(crate) fn array_elements_and_cards(&self) -> Option<(&[JsValue], Option<&[u64]>)> {
+        self.array_data().map(|data| {
+            (
+                data.elements.as_slice(),
+                data.dirty_cards.as_deref().map(Vec::as_slice),
+            )
+        })
+    }
+
+    /// Called after a scan of every element: only `cards` still hold a young reference.
+    pub(crate) fn set_dirty_cards(&mut self, cards: &[usize]) {
+        if let Some(data) = self.array_data_mut() {
+            let words = data.elements.len().div_ceil(CARD_ELEMENTS).div_ceil(64);
+            let bits = data.dirty_cards.get_or_insert_with(Box::default);
+            bits.clear();
+            bits.resize(words, 0);
+            for &card in cards {
+                bits[card / 64] |= 1 << (card % 64);
+            }
+        }
+    }
+
+    pub(crate) fn mark_all_cards_dirty(&mut self) {
+        if let Some(data) = self.array_data_mut() {
+            data.dirty_cards = None;
+        }
+    }
+
+    /// After a major collection nothing is young, so a large Array's bitmap
+    /// starts empty. Smaller ones are not tracked by card.
+    pub(crate) fn reset_cards_after_major(&mut self) {
+        if let Some(data) = self.array_data_mut() {
+            data.dirty_cards = (data.elements.len() > CARD_ELEMENTS).then(Box::default);
+        }
     }
 
     /// Create a default data property at the end of a dense Array without
@@ -2642,6 +2750,16 @@ impl JsObjectData {
     /// Callers have already checked the value, extensibility and that no
     /// descriptor owns `index`.
     fn push_dense_array_element(&mut self, index: usize, value: &JsValue) -> bool {
+        let pushed = self.push_dense_array_element_raw(index, value);
+        if pushed {
+            self.mark_all_cards_dirty();
+        }
+        pushed
+    }
+
+    /// [`Self::push_dense_array_element`], leaving the card bitmap alone: the
+    /// caller has already marked the new element's card.
+    fn push_dense_array_element_raw(&mut self, index: usize, value: &JsValue) -> bool {
         if self
             .array_elements()
             .is_none_or(|elements| elements.len() != index)
@@ -2659,7 +2777,7 @@ impl JsObjectData {
             return false;
         }
 
-        self.array_elements_mut().unwrap().push(value.clone());
+        self.array_data_mut().unwrap().elements.push(value.clone());
         if index as f64 >= length {
             self.properties
                 .get_mut("length")
@@ -2758,7 +2876,9 @@ impl JsObjectData {
 
     /// Performs the write `plan` described. `dense_array_set_plan` must have
     /// returned `plan` for the same `index` and `value`, and for `Create` the
-    /// caller must have verified that no prototype owns `index`.
+    /// caller must have verified that no prototype owns `index`. The card
+    /// bitmap is left alone, so the caller must have run
+    /// `Interpreter::gc_write_barrier_element` for `index` and `value`.
     #[inline]
     pub(crate) fn apply_dense_array_set(
         &mut self,
@@ -2768,15 +2888,11 @@ impl JsObjectData {
     ) -> bool {
         let creating = plan == DenseArraySet::Create;
         if creating && self.array_elements().is_some_and(|e| e.len() == index) {
-            return self.push_dense_array_element(index, value);
+            return self.push_dense_array_element_raw(index, value);
         }
-        let Some(slot) = self
-            .array_elements_mut()
-            .and_then(|elements| elements.get_mut(index))
-        else {
+        if !self.overwrite_array_element(index, value) {
             return false;
-        };
-        *slot = value.clone();
+        }
         if creating {
             self.shape_id = fresh_shape_id();
         }

@@ -234,7 +234,7 @@ impl Interpreter {
         {
             return false;
         }
-        self.gc_write_barrier_value(obj_rc, value);
+        self.gc_write_barrier_element(obj_rc, idx, value);
         obj_rc
             .borrow_mut_untracked()
             .apply_dense_array_set(idx, value, plan)

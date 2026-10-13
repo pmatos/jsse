@@ -50,7 +50,7 @@ impl ObjectHandle {
                 generation: Cell::new(Generation::Young),
                 nursery_age: Cell::new(0),
                 young_mark: Cell::new(false),
-                remembered: Cell::new(false),
+                remembered: Cell::new(0),
                 storage: Rc::clone(storage),
                 value: RefCell::new(data),
             });
@@ -121,12 +121,27 @@ impl ObjectHandle {
         age >= promotion_age
     }
 
-    /// Promote a survivor and conservatively scan it at the next minor GC.
+    /// Promote a survivor. The collector decides whether it still needs to be
+    /// remembered, since only it knows whether the survivor holds nursery
+    /// edges.
     pub(crate) fn promote(&self) {
         self.allocation().generation.set(Generation::Old);
         self.allocation().nursery_age.set(0);
         self.allocation().young_mark.set(false);
-        self.remember_if_old();
+        // A promoted Array has never been scanned as an old object, so it
+        // has no card bitmap yet (a nursery Array never has one either).
+        if let Ok(mut data) = self.allocation().value.try_borrow_mut() {
+            data.mark_all_cards_dirty();
+        }
+    }
+
+    /// Reset an Array's card bitmap after a major collection, which leaves no
+    /// nursery object for it to describe. Skipped, harmlessly, while the object
+    /// is borrowed: any bitmap an Array holds then is still a sound superset.
+    pub(crate) fn reset_cards_after_major(&self) {
+        if let Ok(mut data) = self.allocation().value.try_borrow_mut() {
+            data.reset_cards_after_major();
+        }
     }
 
     /// Tenure a full-collection survivor and clear its stale remembered bit.
@@ -135,28 +150,83 @@ impl ObjectHandle {
         self.allocation().generation.set(Generation::Old);
         self.allocation().nursery_age.set(0);
         self.allocation().young_mark.set(false);
-        self.allocation().remembered.set(false);
+        self.allocation().remembered.set(0);
     }
 
-    pub(crate) fn remember_if_old(&self) {
-        let allocation = self.allocation();
-        if self.is_old() && !allocation.remembered.replace(true) {
-            allocation
-                .storage
-                .remembered_ids
-                .borrow_mut()
-                .push(allocation.id);
+    /// Mark element `index`'s card on an Array, returning false (the caller
+    /// then falls back to the conservative barrier) if the object is borrowed.
+    #[inline]
+    pub(crate) fn mark_element_card(&self, index: usize) -> bool {
+        match self.allocation().value.try_borrow_mut() {
+            Ok(mut data) => {
+                data.mark_element_card(index);
+                true
+            }
+            Err(_) => false,
         }
     }
 
-    fn clear_remembered(&self) {
-        self.allocation().remembered.set(false);
+    /// Conservative old-to-young barrier: the non-element fields are
+    /// re-scanned by the next minor collection. An Array's elements are
+    /// covered only through its dirty cards (see `remember_all_if_old`).
+    #[inline]
+    pub(crate) fn remember_if_old(&self) {
+        if self.is_old() {
+            self.remember(REMEMBERED_FIELDS);
+        }
+    }
+
+    /// Fully conservative barrier: the next minor collection re-scans every
+    /// field and every element, discarding any card bitmap.
+    #[inline]
+    pub(crate) fn remember_all_if_old(&self) {
+        if self.is_old() {
+            self.remember(REMEMBERED_FIELDS | REMEMBERED_ALL_ELEMENTS);
+        }
+    }
+
+    /// Queue an old Array whose dirty-card bitmap, and nothing else, records
+    /// a new old-to-young edge.
+    #[inline]
+    pub(crate) fn remember_elements_if_old(&self) {
+        if self.is_old() {
+            self.remember(REMEMBERED_QUEUED);
+        }
+    }
+
+    #[inline]
+    fn remember(&self, bits: u8) {
+        let allocation = self.allocation();
+        let state = allocation.remembered.get();
+        let wanted = state | bits | REMEMBERED_QUEUED;
+        if wanted != state {
+            allocation.remembered.set(wanted);
+            if state & REMEMBERED_QUEUED == 0 {
+                allocation
+                    .storage
+                    .remembered_ids
+                    .borrow_mut()
+                    .push(allocation.id);
+            }
+        }
+    }
+
+    /// Read and reset the remembered state: whether the object was queued and
+    /// whether its non-element fields (rather than only dirty cards) must be
+    /// re-scanned.
+    fn take_remembered_state(&self) -> RememberedState {
+        let bits = self.allocation().remembered.replace(0);
+        RememberedState {
+            queued: bits & REMEMBERED_QUEUED != 0,
+            fields: bits & REMEMBERED_FIELDS != 0,
+            all_elements: bits & REMEMBERED_ALL_ELEMENTS != 0,
+        }
     }
 
     fn retire(&self) {
         self.allocation().generation.set(Generation::Dead);
         self.allocation().young_mark.set(false);
-        self.allocation().remembered.set(false);
+        self.allocation().remembered.set(0);
     }
 
     #[cold]
@@ -212,13 +282,29 @@ impl Drop for ObjectHandle {
     }
 }
 
+/// The object is in the storage's remembered list.
+const REMEMBERED_QUEUED: u8 = 1;
+/// Its non-element fields may reference the nursery, so the whole object is
+/// re-scanned. Without it, only an Array's dirty cards are.
+const REMEMBERED_FIELDS: u8 = 2;
+/// An Array's card bitmap could not be updated, so every element is re-scanned.
+const REMEMBERED_ALL_ELEMENTS: u8 = 4;
+
+/// What a minor collection must re-scan of one remembered object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RememberedState {
+    pub(crate) queued: bool,
+    pub(crate) fields: bool,
+    pub(crate) all_elements: bool,
+}
+
 struct ObjectAllocation {
     strong: Cell<usize>,
     id: u64,
     generation: Cell<Generation>,
     nursery_age: Cell<u8>,
     young_mark: Cell<bool>,
-    remembered: Cell<bool>,
+    remembered: Cell<u8>,
     storage: Rc<ObjectStorage>,
     value: RefCell<JsObjectData>,
 }
@@ -376,14 +462,33 @@ impl ObjectArena {
 
     /// Drain the remembered set and reset its membership bits. Objects that
     /// still contain young edges are explicitly re-enqueued by the collector.
-    pub(crate) fn take_remembered(&self) -> Vec<u64> {
+    /// An id appears once: a slot recycled while queued is reported only for
+    /// the object that now owns it.
+    pub(crate) fn take_remembered(&self) -> Vec<(u64, RememberedState)> {
         let ids = std::mem::take(&mut *self.storage.remembered_ids.borrow_mut());
-        for &id in &ids {
+        let mut taken = Vec::with_capacity(ids.len());
+        for id in ids {
             if let Some(handle) = self.get_cell(id) {
-                handle.clear_remembered();
+                let state = handle.take_remembered_state();
+                if state.queued {
+                    taken.push((id, state));
+                }
             }
         }
-        ids
+        taken
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_remembered_ids(&self) -> Vec<u64> {
+        self.take_remembered()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Ids of every object currently in the nursery.
+    pub(crate) fn nursery_ids(&self) -> &[u64] {
+        &self.nursery
     }
 
     pub(crate) fn remembered_len(&self) -> usize {
@@ -398,7 +503,7 @@ impl ObjectArena {
         let remembered = std::mem::take(&mut *self.storage.remembered_ids.borrow_mut());
         for id in remembered {
             if let Some(handle) = self.get_cell(id) {
-                handle.clear_remembered();
+                handle.take_remembered_state();
             }
         }
     }
@@ -513,12 +618,12 @@ mod tests {
         let handle = arena.get_cell_expect(id);
         handle.promote();
 
-        // Promotion itself schedules one conservative scan.
-        assert_eq!(arena.take_remembered(), vec![id]);
+        // Promotion alone remembers nothing; the collector decides.
+        assert!(arena.take_remembered_ids().is_empty());
         handle.borrow_mut().extensible = false;
         handle.borrow_mut().extensible = true;
-        assert_eq!(arena.take_remembered(), vec![id]);
-        assert!(arena.take_remembered().is_empty());
+        assert_eq!(arena.take_remembered_ids(), vec![id]);
+        assert!(arena.take_remembered_ids().is_empty());
     }
 
     #[test]
@@ -527,10 +632,10 @@ mod tests {
         let (id, _) = arena.alloc(JsObjectData::new());
         let handle = arena.get_cell_expect(id);
         handle.promote();
-        arena.take_remembered();
+        arena.take_remembered_ids();
 
         assert!(handle.borrow().extensible);
-        assert!(arena.take_remembered().is_empty());
+        assert!(arena.take_remembered_ids().is_empty());
     }
 
     #[test]

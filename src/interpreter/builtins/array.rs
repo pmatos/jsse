@@ -1226,15 +1226,11 @@ impl Interpreter {
                 if fast_ok && !has_undefined_arg && !inherited {
                     let new_len = len + args.len();
                     {
-                        for arg in args {
-                            interp.gc_write_barrier_value(&cell, arg);
+                        for (offset, arg) in args.iter().enumerate() {
+                            interp.gc_write_barrier_element(&cell, len + offset, arg);
                         }
                         let mut b = cell.borrow_mut_untracked();
-                        let elements = b.array_elements_mut().unwrap();
-                        elements.reserve(args.len());
-                        for arg in args {
-                            elements.push(arg.clone());
-                        }
+                        b.extend_array_elements_precise(args);
                         if let Some(len_desc) = b.properties.get_mut("length") {
                             len_desc.set_value(Some(JsValue::number(new_len as f64)));
                         }
