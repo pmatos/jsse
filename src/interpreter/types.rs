@@ -2721,11 +2721,7 @@ impl JsObjectData {
     /// starts empty. Smaller ones are not tracked by card.
     pub(crate) fn reset_cards_after_major(&mut self) {
         if let Some(data) = self.array_data_mut() {
-            if data.elements.len() > CARD_ELEMENTS {
-                data.dirty_cards = Some(Box::default());
-            } else {
-                data.dirty_cards = None;
-            }
+            data.dirty_cards = (data.elements.len() > CARD_ELEMENTS).then(Box::default);
         }
     }
 

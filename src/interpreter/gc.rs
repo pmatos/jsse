@@ -694,6 +694,15 @@ impl Interpreter {
             )
     }
 
+    /// Kinds whose edges into the nursery the tracer cannot see, so a promoted
+    /// object of one must always be re-scanned.
+    fn has_untraceable_young_edges(
+        handle: &crate::interpreter::object_arena::ObjectHandle,
+    ) -> bool {
+        let obj = handle.borrow_untracked();
+        obj.is_weak_container() || Self::object_requires_persistent_minor_scan(&obj)
+    }
+
     fn object_has_young_weak_edge(&self, obj: &JsObjectData) -> bool {
         if obj.is_weak_map() {
             obj.map_data().is_some_and(|entries| {
@@ -947,13 +956,7 @@ impl Interpreter {
                 self.free_gc_object(id);
             } else if handle.age_survivor(GC_PROMOTION_AGE) {
                 handle.promote();
-                // An old object needs scanning only if it can still hold an
-                // edge into the nursery: a traced young child, or a kind
-                // whose edges the tracer cannot see.
-                if young.has_young_edge(id) || {
-                    let obj = handle.borrow_untracked();
-                    obj.is_weak_container() || Self::object_requires_persistent_minor_scan(&obj)
-                } {
+                if young.has_young_edge(id) || Self::has_untraceable_young_edges(&handle) {
                     handle.remember_if_old();
                 }
             } else {
