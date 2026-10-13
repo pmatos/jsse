@@ -153,8 +153,6 @@ impl ObjectHandle {
         self.allocation().remembered.set(0);
     }
 
-    /// Conservative old-to-young barrier: the whole object, element vector
-    /// included, must be re-scanned by the next minor collection.
     /// Mark element `index`'s card on an Array, returning false (the caller
     /// then falls back to the conservative barrier) if the object is borrowed.
     #[inline]
@@ -168,10 +166,22 @@ impl ObjectHandle {
         }
     }
 
+    /// Conservative old-to-young barrier: the non-element fields are
+    /// re-scanned by the next minor collection. An Array's elements are
+    /// covered only through its dirty cards (see `remember_all_if_old`).
     #[inline]
     pub(crate) fn remember_if_old(&self) {
         if self.is_old() {
             self.remember(REMEMBERED_FIELDS);
+        }
+    }
+
+    /// Fully conservative barrier: the next minor collection re-scans every
+    /// field and every element, discarding any card bitmap.
+    #[inline]
+    pub(crate) fn remember_all_if_old(&self) {
+        if self.is_old() {
+            self.remember(REMEMBERED_FIELDS | REMEMBERED_ALL_ELEMENTS);
         }
     }
 
@@ -209,6 +219,7 @@ impl ObjectHandle {
         RememberedState {
             queued: bits & REMEMBERED_QUEUED != 0,
             fields: bits & REMEMBERED_FIELDS != 0,
+            all_elements: bits & REMEMBERED_ALL_ELEMENTS != 0,
         }
     }
 
@@ -276,12 +287,15 @@ const REMEMBERED_QUEUED: u8 = 1;
 /// Its non-element fields may reference the nursery, so the whole object is
 /// re-scanned. Without it, only an Array's dirty cards are.
 const REMEMBERED_FIELDS: u8 = 2;
+/// An Array's card bitmap could not be updated, so every element is re-scanned.
+const REMEMBERED_ALL_ELEMENTS: u8 = 4;
 
 /// What a minor collection must re-scan of one remembered object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RememberedState {
     pub(crate) queued: bool,
     pub(crate) fields: bool,
+    pub(crate) all_elements: bool,
 }
 
 struct ObjectAllocation {

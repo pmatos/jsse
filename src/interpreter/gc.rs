@@ -441,7 +441,7 @@ impl Interpreter {
             if owner.mark_element_card(index) {
                 owner.remember_elements_if_old();
             } else {
-                owner.remember_if_old();
+                owner.remember_all_if_old();
             }
         }
     }
@@ -826,6 +826,9 @@ impl Interpreter {
             };
             if !handle.is_old() {
                 continue;
+            }
+            if state.all_elements {
+                handle.borrow_mut_untracked().mark_all_cards_dirty();
             }
             let obj = handle.borrow_untracked();
             // Everything but an Array's dirty cards is scanned unless the
@@ -2431,6 +2434,29 @@ mod tests {
         minor_gc(&mut interp);
         assert!(interp.objects.get_cell(child).is_some());
         assert_eq!(dirty_cards(&interp, array_id), Some(vec![]));
+    }
+
+    #[test]
+    fn element_barrier_while_the_array_is_borrowed_rescans_every_element() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, _) = tenured_array(&mut interp, 4);
+        let child = fresh_object(&mut interp);
+        let handle = interp.objects.get_cell_expect(array_id);
+
+        {
+            let _held = handle.borrow_mut_untracked();
+            interp.gc_write_barrier_element(&handle, 3 * CARD_ELEMENTS, &obj(child));
+        }
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![]));
+        assert!(
+            handle
+                .borrow_mut_untracked()
+                .overwrite_array_element(3 * CARD_ELEMENTS, &obj(child))
+        );
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
     }
 
     #[test]
