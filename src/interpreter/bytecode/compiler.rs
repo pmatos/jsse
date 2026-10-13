@@ -1782,14 +1782,8 @@ impl Compiler {
             {
                 return Err(CompileError::Unsupported("lexical declaration"));
             }
-            let lexicals = decl
-                .declarations
-                .iter()
-                .flat_map(|declarator| {
-                    let mut names = Vec::new();
-                    declarator.pattern.bound_names(&mut names);
-                    names
-                })
+            let lexicals = crate::interpreter::hoisting::declaration_bound_names(decl)
+                .into_iter()
                 .map(|name| (name, decl.kind == VarKind::Const))
                 .collect();
             self.open_scope(ScopeDecls {

@@ -1897,11 +1897,10 @@ impl Interpreter {
                 } else {
                     BindingKind::Const
                 };
-                let mut names = Vec::new();
-                for d in &decl.declarations {
-                    d.pattern.bound_names(&mut names);
-                }
-                names.into_iter().map(|n| (n, kind)).collect()
+                super::hoisting::declaration_bound_names(decl)
+                    .into_iter()
+                    .map(|n| (n, kind))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -1916,12 +1915,8 @@ impl Interpreter {
             } else {
                 BindingKind::Const
             };
-            let mut names = Vec::new();
-            for d in &decl.declarations {
-                d.pattern.bound_names(&mut names);
-            }
             let mut scope = for_env.borrow_mut();
-            for name in &names {
+            for name in &super::hoisting::declaration_bound_names(decl) {
                 scope.declare(name, kind);
             }
         }

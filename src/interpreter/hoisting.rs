@@ -8,7 +8,7 @@
 //! unit-testable in isolation. Distinct from the runtime per-body hoisting
 //! *cache* on `Interpreter` (#72), which memoises the output of this analysis.
 
-use crate::ast::{ForInOfLeft, ForInit, FunctionDecl, Statement, VarKind};
+use crate::ast::{ForInOfLeft, ForInit, FunctionDecl, Statement, VarKind, VariableDeclaration};
 use std::collections::HashSet;
 
 /// Unwrap a (possibly label-wrapped) function declaration. A `FunctionDeclaration`
@@ -33,17 +33,26 @@ pub(crate) fn collect_lexical_names(stmts: &[Statement]) -> Vec<(String, bool)> 
         match stmt {
             Statement::Variable(decl) if decl.kind != VarKind::Var => {
                 let is_const = decl.kind != VarKind::Let;
-                let mut bound = Vec::new();
-                for d in &decl.declarations {
-                    d.pattern.bound_names(&mut bound);
-                }
-                names.extend(bound.into_iter().map(|name| (name, is_const)));
+                names.extend(
+                    declaration_bound_names(decl)
+                        .into_iter()
+                        .map(|name| (name, is_const)),
+                );
             }
             Statement::ClassDeclaration(c) if !c.name.is_empty() => {
                 names.push((c.name.clone(), true));
             }
             _ => {}
         }
+    }
+    names
+}
+
+/// Every name the declarators of one variable declaration bind, in order.
+pub(crate) fn declaration_bound_names(decl: &VariableDeclaration) -> Vec<String> {
+    let mut names = Vec::new();
+    for d in &decl.declarations {
+        d.pattern.bound_names(&mut names);
     }
     names
 }
