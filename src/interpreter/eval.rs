@@ -1786,6 +1786,11 @@ impl Interpreter {
         right: &JsValue,
         left_first: bool,
     ) -> Result<Option<bool>, JsValue> {
+        // Both operands are already primitives, so ToPrimitive is the
+        // identity and `left_first` is unobservable.
+        if let Some(result) = bigint_relational_fast(left, right) {
+            return Ok(result);
+        }
         let (lprim, rprim) = if left_first {
             let l = self.to_primitive(left, "number")?;
             let r = self.to_primitive(right, "number")?;
@@ -2191,6 +2196,16 @@ impl Interpreter {
                 }
                 // In, Instanceof — fall through to general path
                 _ => self.eval_binary_slow(op, left, right),
+            };
+        }
+        if let Some(result) = left
+            .with_bigint(|a| right.with_bigint(|b| bigint_binary_op(op, a, b)))
+            .flatten()
+            .flatten()
+        {
+            return match result {
+                Ok(v) => Completion::Normal(v),
+                Err(message) => Completion::Throw(self.create_error("RangeError", message)),
             };
         }
         self.eval_binary_slow(op, left, right)
@@ -10083,6 +10098,62 @@ pub(super) fn is_primitive_string_concat(l: &JsValue, r: &JsValue) -> bool {
     !l.is_object() && !r.is_object() && (l.is_string() || r.is_string())
 }
 
+/// A binary operator over two BigInts, or `None` when the operator has no
+/// BigInt/BigInt fast form (`>>>` throws a TypeError, `in` and `instanceof`
+/// need an object). `Err` carries the RangeError message.
+fn bigint_binary_op(
+    op: BinaryOp,
+    a: &num_bigint::BigInt,
+    b: &num_bigint::BigInt,
+) -> Option<Result<JsValue, &'static str>> {
+    let big = |v: num_bigint::BigInt| Ok(JsValue::bigint(JsBigInt::new(v)));
+    Some(match op {
+        BinaryOp::Add => big(bigint_ops::add(a, b)),
+        BinaryOp::Sub => big(bigint_ops::subtract(a, b)),
+        BinaryOp::Mul => big(bigint_ops::multiply(a, b)),
+        BinaryOp::Div => match bigint_ops::divide(a, b) {
+            Ok(v) => big(v),
+            Err(_) => Err("Division by zero"),
+        },
+        BinaryOp::Mod => match bigint_ops::remainder(a, b) {
+            Ok(v) => big(v),
+            Err(_) => Err("Division by zero"),
+        },
+        BinaryOp::Exp => match bigint_ops::exponentiate(a, b) {
+            Ok(v) => big(v),
+            Err(_) => Err("Exponent must be positive"),
+        },
+        BinaryOp::LShift => big(bigint_ops::left_shift(a, b)),
+        BinaryOp::RShift => big(bigint_ops::signed_right_shift(a, b)),
+        BinaryOp::BitAnd => big(bigint_ops::bitwise_and(a, b)),
+        BinaryOp::BitOr => big(bigint_ops::bitwise_or(a, b)),
+        BinaryOp::BitXor => big(bigint_ops::bitwise_xor(a, b)),
+        BinaryOp::Lt => Ok(JsValue::boolean(a < b)),
+        BinaryOp::Gt => Ok(JsValue::boolean(a > b)),
+        BinaryOp::LtEq => Ok(JsValue::boolean(a <= b)),
+        BinaryOp::GtEq => Ok(JsValue::boolean(a >= b)),
+        BinaryOp::Eq | BinaryOp::StrictEq => Ok(JsValue::boolean(bigint_ops::equal(a, b))),
+        BinaryOp::NotEq | BinaryOp::StrictNotEq => Ok(JsValue::boolean(!bigint_ops::equal(a, b))),
+        _ => return None,
+    })
+}
+
+/// IsLessThan(x, y) when both are BigInts or one is a BigInt and the other a
+/// Number, the cases that need no ToPrimitive, StringToBigInt or Symbol check.
+fn bigint_relational_fast(left: &JsValue, right: &JsValue) -> Option<Option<bool>> {
+    if let Some(r) = left.with_bigint(|a| {
+        right
+            .with_bigint(|b| bigint_ops::less_than(a, b))
+            .or_else(|| right.as_number().map(|n| compare_bigint_number(a, n, true)))
+    }) {
+        return r;
+    }
+    if let (Some(n), true) = (left.as_number(), right.is_bigint()) {
+        return right.with_bigint(|b| compare_bigint_number(b, n, false));
+    }
+    None
+}
+
 /// §7.2.13 IsLessThan — the numeric comparison of a BigInt against a Number.
 ///
 /// Both the BigInt-vs-Number and Number-vs-BigInt arms of IsLessThan reduce to
@@ -10113,8 +10184,13 @@ fn compare_bigint_number(
         });
     }
     let trunc = number.trunc();
-    let integer_part = crate::interpreter::builtins::bigint::f64_to_bigint(trunc);
-    match bigint.cmp(&integer_part) {
+    // |trunc| < 2^63, so the integer part is an exact i64 and a machine-word
+    // BigInt compares without building a BigInt for it.
+    let ordering = match i64::try_from(bigint) {
+        Ok(small) if trunc.abs() < 9.0e18 => small.cmp(&(trunc as i64)),
+        _ => bigint.cmp(&crate::interpreter::builtins::bigint::f64_to_bigint(trunc)),
+    };
+    match ordering {
         std::cmp::Ordering::Less => Some(bigint_is_left),
         std::cmp::Ordering::Greater => Some(!bigint_is_left),
         std::cmp::Ordering::Equal => {
