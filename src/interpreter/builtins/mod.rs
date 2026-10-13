@@ -88,10 +88,10 @@ impl Interpreter {
             self.get_object_cell_expect(fp_id).borrow_mut().prototype_id =
                 self.realm().object_prototype;
             self.get_object_cell_expect(fp_id).borrow_mut().callable =
-                Some(JsFunction::native(String::new(), 0, |_, _, _| {
+                Some(Box::new(JsFunction::native(String::new(), 0, |_, _, _| {
                     Completion::Normal(JsValue::UNDEFINED)
-                }));
-            self.get_object_cell_expect(fp_id).borrow_mut().class_name = "Function".into();
+                })));
+            self.get_object_cell_expect(fp_id).borrow_mut().class_name = "Function";
             self.realm_mut().function_prototype = Some(fp_id);
         }
 

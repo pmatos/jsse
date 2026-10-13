@@ -12,7 +12,7 @@ fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue
             b.is_proxy_revoked(),
             b.is_proxy() || b.is_proxy_revoked(),
             b.proxy_target_id(),
-            b.class_name.clone(),
+            b.class_name,
         )
     });
     if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
@@ -50,7 +50,7 @@ fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, 
             b.array_elements()?;
             b.properties
                 .get("length")
-                .and_then(|d| d.value.as_ref())
+                .and_then(|d| d.value())
                 .and_then(JsValue::as_number)
         });
     let n = match array_length {
@@ -1139,7 +1139,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Array".into();
+            .class_name = "Array";
         self.get_object_cell_expect(proto_id).borrow_mut().kind =
             crate::interpreter::types::ObjectKind::Array(
                 crate::interpreter::types::ArrayData::default(),
@@ -1176,9 +1176,11 @@ impl Interpreter {
                 let (fast_ok, proto_id) = {
                     let b = cell.borrow();
                     let len_desc = b.properties.get("length");
-                    let len_writable = len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
+                    let len_writable = len_desc
+                        .map(|d| d.writable() != Some(false))
+                        .unwrap_or(false);
                     let desc_len = len_desc
-                        .and_then(|d| d.value.as_ref())
+                        .and_then(|d| d.value())
                         .and_then(|v| v.as_number())
                         .map(|n| n as usize);
                     let ok = b.class_name == "Array"
@@ -1234,7 +1236,7 @@ impl Interpreter {
                             elements.push(arg.clone());
                         }
                         if let Some(len_desc) = b.properties.get_mut("length") {
-                            len_desc.value = Some(JsValue::number(new_len as f64));
+                            len_desc.set_value(Some(JsValue::number(new_len as f64)));
                         }
                         b.shape_id = crate::interpreter::types::fresh_shape_id();
                     }
@@ -3574,7 +3576,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".into();
+        obj_data.class_name = "Array";
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -3605,7 +3607,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".into();
+        obj_data.class_name = "Array";
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -3638,7 +3640,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".into();
+        obj_data.class_name = "Array";
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );

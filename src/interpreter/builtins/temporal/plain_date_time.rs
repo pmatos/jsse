@@ -25,7 +25,7 @@ pub(super) fn create_plain_date_time_result(
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.PlainDateTime".into();
+        .class_name = "Temporal.PlainDateTime";
     if let Some(proto_id) = interp.realm().temporal_plain_date_time_prototype {
         interp
             .get_object_cell_expect(obj_id)
@@ -33,7 +33,7 @@ pub(super) fn create_plain_date_time_result(
             .prototype_id = Some(proto_id);
     }
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-        crate::interpreter::types::ObjectKind::Temporal(TemporalData::PlainDateTime {
+        crate::interpreter::types::ObjectKind::Temporal(Box::new(TemporalData::PlainDateTime {
             iso_year: y,
             iso_month: m,
             iso_day: d,
@@ -44,7 +44,7 @@ pub(super) fn create_plain_date_time_result(
             microsecond: us,
             nanosecond: ns,
             calendar: cal.to_string(),
-        });
+        }));
     let id = obj_id;
     Completion::Normal(JsValue::object(id))
 }
@@ -537,7 +537,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.PlainDateTime".into();
+            .class_name = "Temporal.PlainDateTime";
         self.define_to_string_tag(proto_id, "Temporal.PlainDateTime");
 
         // Getter: calendarId

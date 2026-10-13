@@ -170,7 +170,7 @@ impl Interpreter {
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.Segmenter".into();
+            .class_name = "Intl.Segmenter";
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.Segmenter");
@@ -204,7 +204,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(segments_obj_id)
                     .borrow_mut()
-                    .class_name = "Segmenter Segments".into();
+                    .class_name = "Segmenter Segments";
 
                 interp
                     .get_object_cell_expect(segments_obj_id)
@@ -292,17 +292,17 @@ impl Interpreter {
                                 let input_u16 = b
                                     .properties
                                     .get("[[SegmenterInput]]")
-                                    .and_then(|pd| pd.value.as_ref())
+                                    .and_then(|pd| pd.value())
                                     .and_then(|v| v.as_string());
                                 let granularity = b
                                     .properties
                                     .get("[[SegmenterGranularity]]")
-                                    .and_then(|pd| pd.value.as_ref())
+                                    .and_then(|pd| pd.value())
                                     .and_then(|v| v.as_string().map(|s| s.to_rust_string()));
                                 let breaks_val = b
                                     .properties
                                     .get("[[SegmenterBreaks]]")
-                                    .and_then(|pd| pd.value.clone());
+                                    .and_then(|pd| pd.value().cloned());
                                 drop(b);
 
                                 let mut break_points = Vec::new();
@@ -393,19 +393,19 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(iter_obj_id)
                             .borrow_mut()
-                            .class_name = "Segmenter String Iterator".into();
+                            .class_name = "Segmenter String Iterator";
 
                         let has_word_like = granularity_clone == "word";
 
-                        interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
-                            crate::interpreter::types::ObjectKind::Iterator(
-                                IteratorState::SegmentIterator {
-                                    segments: seg_data,
-                                    input: std::rc::Rc::new(input_clone.as_units().to_vec()),
-                                    position: 0,
-                                    done: false,
-                                },
-                            );
+                        interp
+                            .get_object_cell_expect(iter_obj_id)
+                            .borrow_mut()
+                            .set_iterator_state(IteratorState::SegmentIterator {
+                                segments: seg_data,
+                                input: std::rc::Rc::new(input_clone.as_units().to_vec()),
+                                position: 0,
+                                done: false,
+                            });
 
                         interp
                             .get_object_cell_expect(iter_obj_id)
@@ -445,7 +445,7 @@ impl Interpreter {
                                             .borrow()
                                             .properties
                                             .get("[[HasWordLike]]")
-                                            .and_then(|pd| pd.value.as_ref())
+                                            .and_then(|pd| pd.value())
                                             .map(|v| v.as_boolean() == Some(true))
                                             .unwrap_or(false);
                                         let mut b = cell.borrow_mut();
@@ -640,7 +640,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.Segmenter".into();
+                    .class_name = "Intl.Segmenter";
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Segmenter {
                         locale,

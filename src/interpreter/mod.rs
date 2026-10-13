@@ -56,7 +56,7 @@ pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
 mod root_stack;
-pub(crate) use property_map::PropertyMap;
+pub(crate) use property_map::{PropertyMap, PropertyRecord};
 mod scheduler;
 #[cfg(test)]
 mod tests;
@@ -1008,11 +1008,11 @@ impl Interpreter {
         let htmldda_obj_id = self.create_object_id();
         self.get_object_cell_expect(htmldda_obj_id)
             .borrow_mut()
-            .callable = Some(JsFunction::native(
+            .callable = Some(Box::new(JsFunction::native(
             "".to_string(),
             0,
             |_interp, _this, _args| Completion::Normal(JsValue::NULL),
-        ));
+        )));
         self.get_object_cell_expect(htmldda_obj_id)
             .borrow_mut()
             .is_htmldda = true;
@@ -1342,7 +1342,7 @@ impl Interpreter {
         {
             let mut obj = self.get_object_cell_expect(source_id).borrow_mut();
             obj.prototype_id = proto_id;
-            obj.class_name = "AbstractModuleSource".into();
+            obj.class_name = "AbstractModuleSource";
         }
         let source_val = JsValue::object(source_id);
 
@@ -1895,7 +1895,7 @@ impl Interpreter {
     #[inline]
     pub(crate) fn function_realm_of(&self, id: u64) -> Option<usize> {
         self.get_object_cell(id)
-            .and_then(|cell| cell.borrow().function_realm)
+            .and_then(|cell| cell.borrow().function_realm())
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
@@ -1961,8 +1961,8 @@ impl Interpreter {
         };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype_id = proto_id.or(self.realm().object_prototype);
-        obj_data.class_name = class_name.into();
-        obj_data.function_realm = Some(self.current_realm_id);
+        obj_data.class_name = class_name;
+        obj_data.set_function_realm(self.current_realm_id);
         // Annex B: sloppy non-arrow, non-generator, non-async, non-method
         // functions get own caller/arguments to shadow the ThrowTypeError
         // accessor.
@@ -1994,7 +1994,7 @@ impl Interpreter {
         obj_data
             .properties
             .reserve(2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype));
-        obj_data.callable = Some(func);
+        obj_data.callable = Some(Box::new(func));
 
         obj_data.push_fresh_property(
             &self.common_keys.length,
@@ -2263,7 +2263,7 @@ impl Interpreter {
                 return;
             }
             if let Some(prop) = obj_ref.properties.get("name")
-                && let Some(ref v) = prop.value
+                && let Some(v) = prop.value()
             {
                 if let Some(s) = (v).as_string() {
                     if !s.is_empty() {
@@ -2357,11 +2357,12 @@ impl Interpreter {
         };
 
         let params = if mapped {
-            self.get_object_cell(func_obj_id)
-                .and_then(|obj| match &obj.borrow().callable {
+            self.get_object_cell(func_obj_id).and_then(|obj| {
+                match obj.borrow().callable.as_deref() {
                     Some(JsFunction::User { params, .. }) => Some(params.clone()),
                     _ => None,
-                })
+                }
+            })
         } else {
             None
         };
@@ -2405,7 +2406,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "Arguments".into();
+            o.class_name = "Arguments";
             o.properties.reserve(args.len() + 3);
 
             o.insert_property(
@@ -2439,7 +2440,7 @@ impl Interpreter {
                     }
                 }
                 if !map.is_empty() {
-                    o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
+                    o.kind = crate::interpreter::types::ObjectKind::Arguments(Box::new(map));
                 }
             } else if let Some(thrower) = thrower {
                 o.insert_property(
@@ -3620,9 +3621,9 @@ impl Interpreter {
         let ab_obj_id = self.create_object_id();
         {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
-            ab.class_name = "ArrayBuffer".into();
+            ab.class_name = "ArrayBuffer";
             ab.prototype_id = self.realm().arraybuffer_prototype;
-            ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+            ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                 crate::interpreter::types::ArrayBufferData {
                     data: buf_rc.clone(),
                     detached: Some(detached.clone()),
@@ -3631,7 +3632,7 @@ impl Interpreter {
                     is_immutable: true,
                     sab_shared: None,
                 },
-            );
+            ));
         }
         self.gc_track_external_bytes(len);
         let ab_id = ab_obj_id;
@@ -5033,14 +5034,14 @@ impl Interpreter {
 
         // Set module namespace data for live bindings
         self.get_object_cell_expect(obj_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::ModuleNamespace(ModuleNamespaceData {
+            crate::interpreter::types::ObjectKind::ModuleNamespace(Box::new(ModuleNamespaceData {
                 env: env.clone(),
                 export_names: export_names.clone(),
                 export_to_binding: export_bindings,
                 module_path,
                 deferred: false,
-            });
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".into();
+            }));
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module";
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
@@ -5114,14 +5115,14 @@ impl Interpreter {
         };
 
         self.get_object_cell_expect(obj_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::ModuleNamespace(ModuleNamespaceData {
+            crate::interpreter::types::ObjectKind::ModuleNamespace(Box::new(ModuleNamespaceData {
                 env: env.clone(),
                 export_names: export_names.clone(),
                 export_to_binding: export_bindings,
                 module_path,
                 deferred: true,
-            });
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".into();
+            }));
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module";
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
@@ -5221,6 +5222,7 @@ impl Interpreter {
                 env.borrow_mut().declare(&f.name, BindingKind::Var);
                 let info = f.info();
                 let func = JsFunction::User {
+                    bytecode_cache: Default::default(),
                     name: Some(f.name.clone()),
                     params: info.params.clone(),
                     body: f.body.clone(),
@@ -5267,6 +5269,7 @@ impl Interpreter {
                 env.borrow_mut().declare(&name, BindingKind::Const);
                 let info = f.info();
                 let func = JsFunction::User {
+                    bytecode_cache: Default::default(),
                     name: Some(if f.name.is_empty() {
                         "default".to_string()
                     } else {
@@ -5453,6 +5456,7 @@ impl Interpreter {
                 let enclosing_strict = env.borrow().strict;
                 let info = func.info();
                 let js_func = JsFunction::User {
+                    bytecode_cache: Default::default(),
                     name: Some(name),
                     params: info.params.clone(),
                     body: func.body.clone(),
@@ -5879,9 +5883,9 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
-                        o.class_name = "SharedArrayBuffer".into();
+                        o.class_name = "SharedArrayBuffer";
                         o.prototype_id = sab_proto;
-                        o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                        o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                             crate::interpreter::types::ArrayBufferData {
                                 data: buf_rc,
                                 detached: None,
@@ -5890,7 +5894,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                                 is_immutable: false,
                                 sab_shared: Some(sab_inner),
                             },
-                        );
+                        ));
                     }
                     let sab_val = JsValue::object(sab_obj_id);
                     interp.agent_broadcast_rx = Some(rx);

@@ -311,7 +311,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "String".into();
+            .class_name = "String";
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .primitive_value = Some(JsValue::string(JsString::from_str("")));

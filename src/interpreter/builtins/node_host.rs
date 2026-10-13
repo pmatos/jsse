@@ -225,7 +225,7 @@ fn array_extra_keys(obj: &JsObjectData) -> Vec<JsValue> {
         if obj
             .properties
             .get(key)
-            .is_some_and(|desc| desc.enumerable != Some(false))
+            .is_some_and(|desc| desc.enumerable() != Some(false))
         {
             keys.push(JsValue::string(key.to_js_string()));
         }

@@ -334,7 +334,7 @@ impl Interpreter {
                         {
                             if let Some(obj) = interp.get_object(this_id) {
                                 let mut o = obj.borrow_mut();
-                                o.class_name = "Test262Error".into();
+                                o.class_name = "Test262Error";
                                 if let Some(ref ep) = error_proto_clone {
                                     o.prototype_id = Some(ep.borrow().id.unwrap());
                                 }
@@ -351,7 +351,7 @@ impl Interpreter {
                         let obj_id = interp.create_object_id();
                         {
                             let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                            o.class_name = "Test262Error".into();
+                            o.class_name = "Test262Error";
                             if let Some(ref ep) = error_proto_clone {
                                 o.prototype_id = Some(ep.borrow().id.unwrap());
                             }
@@ -418,6 +418,7 @@ impl Interpreter {
 
             let native_proto_clone_id = native_proto_id;
             let error_name_clone = error_name.clone();
+            let error_class_name: &'static str = name;
             self.register_global_fn(
                 name,
                 BindingKind::Var,
@@ -467,7 +468,7 @@ impl Interpreter {
 
                     macro_rules! init_native_error {
                         ($o:expr) => {
-                            $o.class_name = error_name_clone.clone().into();
+                            $o.class_name = error_class_name;
                             $o.prototype_id = Some(proto);
                             if let Some(ref ms) = msg_str {
                                 $o.insert_builtin("message".to_string(), ms.clone());
@@ -575,7 +576,7 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        o.class_name = "SuppressedError".into();
+                        o.class_name = "SuppressedError";
                         if let Some(p) = proto {
                             o.prototype_id = Some(p);
                         }

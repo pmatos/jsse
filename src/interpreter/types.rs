@@ -8,9 +8,9 @@ use crate::interpreter::generator_transform::{
 use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::interpreter::keyed_entries::KeyedEntries;
+use crate::interpreter::property_map::PropertyRecord;
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -1491,6 +1491,9 @@ pub(crate) enum JsFunction {
         /// identifiers (no rest/defaults/destructuring). Computed once at
         /// creation time from `params` so the hot call path need not rescan.
         has_simple_params: bool,
+        /// Compile verdict for `body`, filled on the first call and shared by
+        /// every closure of the literal (see `shared_bytecode_verdict`).
+        bytecode_cache: super::bytecode::BytecodeCacheState,
     },
     Native(
         String,
@@ -1535,6 +1538,7 @@ impl Clone for JsFunction {
                 captured_new_target,
                 uses_arguments,
                 has_simple_params,
+                bytecode_cache,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -1549,6 +1553,7 @@ impl Clone for JsFunction {
                 captured_new_target: captured_new_target.clone(),
                 uses_arguments: *uses_arguments,
                 has_simple_params: *has_simple_params,
+                bytecode_cache: bytecode_cache.clone(),
             },
             JsFunction::Native(name, arity, f, is_ctor) => {
                 JsFunction::Native(name.clone(), *arity, f.clone(), *is_ctor)
@@ -2176,6 +2181,19 @@ pub(crate) enum OwnKeyFilter {
     EnumerableStrings,
 }
 
+/// Sentinel for an unset realm slot on `JsObjectData`.
+const NO_REALM: u32 = u32::MAX;
+
+/// See [`JsObjectData::extras`].
+#[derive(Default)]
+pub(crate) struct ObjectExtras {
+    pub(crate) private_fields: HashMap<String, PrivateElement>,
+    pub(crate) class_instance_field_defs: Vec<InstanceFieldDef>,
+    /// Values the collector must keep alive on behalf of this object's native
+    /// closures (see `Interpreter::pin_native_root`).
+    pub(crate) gc_native_roots: Vec<JsValue>,
+}
+
 pub(crate) struct JsObjectData {
     /// Slab index of this object. Set exactly once by
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
@@ -2183,22 +2201,23 @@ pub(crate) struct JsObjectData {
     /// Own properties in creation order.
     pub properties: PropertyMap,
     pub prototype_id: Option<u64>,
-    pub callable: Option<JsFunction>,
-    pub class_name: Cow<'static, str>,
+    pub callable: Option<Box<JsFunction>>,
+    pub class_name: &'static str,
     /// Realm the function object was created in; `None` when it was not
     /// built by `create_function` (the call path then keeps the caller's realm).
-    pub function_realm: Option<usize>,
+    function_realm: u32,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
-    pub private_fields: HashMap<String, PrivateElement>,
-    pub class_instance_field_defs: Vec<InstanceFieldDef>,
+    /// Rarely-used slots (class private elements, instance field
+    /// definitions, native GC roots), allocated on first write so an ordinary
+    /// object carries one pointer instead of the three containers.
+    pub(crate) extras: Option<Box<ObjectExtras>>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
-    pub(crate) generator_realm_id: Option<usize>,
+    generator_realm: u32,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
     pub(crate) deferred_construct: bool,
-    pub(crate) gc_native_roots: Option<Vec<JsValue>>,
     /// Per-object shape id. Bumped by `Interpreter::mutate_object_shape` on
     /// every structural mutation (property add/delete/attribute change,
     /// prototype mutation, proxy install). Pure value reassignment does NOT
@@ -2207,8 +2226,6 @@ pub(crate) struct JsObjectData {
     /// global counter starts at `1`, so an IC slot can never legitimately
     /// hold `obj_shape_id == 0`. See issue #71.
     pub shape_id: u64,
-    pub(crate) bytecode_cache: super::bytecode::BytecodeCacheState,
-
     /// Strict kind discriminator. Populated alongside the legacy `Option<XData>`
     /// fields during Phase B1; subsequent slices migrate dispatch off the old
     /// fields and onto this enum. Defaults to `Ordinary` for plain objects.
@@ -2287,7 +2304,10 @@ pub(crate) enum DenseArraySet {
 #[derive(Clone, Default)]
 pub(crate) struct ArrayData {
     elements: Vec<JsValue>,
-    extra_string_property_order: Vec<JsPropertyKey>,
+    /// Allocated on the first extra String key, so a plain Array pays one
+    /// pointer.
+    #[allow(clippy::box_collection)] // a pointer, not the 24-byte Vec, per Array
+    extra_string_property_order: Option<Box<Vec<JsPropertyKey>>>,
 }
 
 impl ArrayData {
@@ -2295,7 +2315,7 @@ impl ArrayData {
     pub(crate) fn new(elements: Vec<JsValue>) -> Self {
         Self {
             elements,
-            extra_string_property_order: Vec::new(),
+            extra_string_property_order: None,
         }
     }
 }
@@ -2318,42 +2338,47 @@ impl ArrayData {
 pub(crate) enum ObjectKind {
     #[default]
     Ordinary,
-    Proxy(ProxyData),
+    Proxy(Box<ProxyData>),
     RegExp(RegExpData),
-    BoundFunction(BoundFunctionData),
+    BoundFunction(Box<BoundFunctionData>),
     WrappedFunction(WrappedFunctionData),
     IterHelper(IterHelperData),
-    ArrayBuffer(ArrayBufferData),
-    TypedArray(TypedArrayInfo),
-    DataView(DataViewInfo),
-    Promise(PromiseData),
+    ArrayBuffer(Box<ArrayBufferData>),
+    TypedArray(Box<TypedArrayInfo>),
+    DataView(Box<DataViewInfo>),
+    Promise(Box<PromiseData>),
     /// [[MapData]]; see [`KeyedEntries`].
-    Map(KeyedEntries<(JsValue, JsValue)>),
+    Map(Box<KeyedEntries<(JsValue, JsValue)>>),
     /// [[SetData]]; see [`KeyedEntries`].
-    Set(KeyedEntries<JsValue>),
+    Set(Box<KeyedEntries<JsValue>>),
     /// FinalizationRegistry cells. Two parallel slot lists:
     ///   `cells[i]`  = Some((target, heldValue)) or None (tombstone)
     ///   `tokens[i]` = Some(unregisterToken) or None
-    FinalizationRegistry {
-        cells: Vec<Option<(JsValue, JsValue)>>,
-        tokens: Vec<Option<JsValue>>,
-    },
-    Iterator(IteratorState),
+    FinalizationRegistry(Box<FinalizationRegistryData>),
+    Iterator(Box<IteratorState>),
     /// `parameter_map` for an Arguments exotic object.
-    Arguments(HashMap<String, (EnvRef, String)>),
+    #[allow(clippy::box_collection)] // keeps `ObjectKind` small
+    Arguments(Box<HashMap<String, (EnvRef, String)>>),
     /// Element storage and bounded named-property metadata for an Array exotic object.
     Array(ArrayData),
     /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
     PrimitiveWrapper(JsValue),
-    ModuleNamespace(ModuleNamespaceData),
+    ModuleNamespace(Box<ModuleNamespaceData>),
     DisposableStack(DisposableStackData),
-    Temporal(TemporalData),
+    Temporal(Box<TemporalData>),
     /// Boxed because `IntlData` is the largest variant (~560 bytes). Boxing keeps
     /// `JsObjectData::kind` compact for the common Ordinary case at the cost of one
     /// indirection on rare Intl-instance access. See clippy `large_enum_variant`.
     Intl(Box<IntlData>),
     /// ShadowRealm instance — carries the realm id of the shadow realm itself.
     ShadowRealm(usize),
+}
+
+/// See [`ObjectKind::FinalizationRegistry`].
+#[derive(Clone, Default)]
+pub(crate) struct FinalizationRegistryData {
+    pub(crate) cells: Vec<Option<(JsValue, JsValue)>>,
+    pub(crate) tokens: Vec<Option<JsValue>>,
 }
 
 /// Iterator-helper or wrap-delegation slot data. The two cases are mutually
@@ -2499,6 +2524,33 @@ macro_rules! kind_accessor {
             }
         }
     };
+    // Boxed payload: immutable + mutable pair.
+    (boxed $name:ident, $mut_name:ident, $variant:ident, $ty:ty) => {
+        pub(crate) fn $name(&self) -> Option<&$ty> {
+            if let ObjectKind::$variant(ref x) = self.kind {
+                Some(&**x)
+            } else {
+                None
+            }
+        }
+        pub(crate) fn $mut_name(&mut self) -> Option<&mut $ty> {
+            if let ObjectKind::$variant(ref mut x) = self.kind {
+                Some(&mut **x)
+            } else {
+                None
+            }
+        }
+    };
+    // Boxed payload: immutable-only.
+    (boxed $name:ident, $variant:ident, $ty:ty) => {
+        pub(crate) fn $name(&self) -> Option<&$ty> {
+            if let ObjectKind::$variant(ref x) = self.kind {
+                Some(&**x)
+            } else {
+                None
+            }
+        }
+    };
 }
 
 impl JsObjectData {
@@ -2508,47 +2560,44 @@ impl JsObjectData {
             properties: PropertyMap::new(),
             prototype_id: None,
             callable: None,
-            class_name: Cow::Borrowed("Object"),
-            function_realm: None,
+            class_name: "Object",
+            function_realm: NO_REALM,
             extensible: true,
             primitive_value: None,
-            private_fields: HashMap::new(),
-            class_instance_field_defs: Vec::new(),
+            extras: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
-            generator_realm_id: None,
+            generator_realm: NO_REALM,
             is_htmldda: false,
             is_immutable_prototype: false,
             deferred_construct: false,
-            gc_native_roots: None,
             shape_id: 0,
-            bytecode_cache: super::bytecode::BytecodeCacheState::Untried,
             kind: ObjectKind::Ordinary,
         }
     }
 
-    kind_accessor!(proxy, Proxy, ProxyData);
-    kind_accessor!(arraybuffer, arraybuffer_mut, ArrayBuffer, ArrayBufferData);
-    kind_accessor!(data_view_info, DataView, DataViewInfo);
-    kind_accessor!(typed_array_info, TypedArray, TypedArrayInfo);
-    kind_accessor!(iterator_state, iterator_state_mut, Iterator, IteratorState);
-    kind_accessor!(promise_data, promise_data_mut, Promise, PromiseData);
-    kind_accessor!(parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
+    kind_accessor!(boxed proxy, Proxy, ProxyData);
+    kind_accessor!(boxed arraybuffer, arraybuffer_mut, ArrayBuffer, ArrayBufferData);
+    kind_accessor!(boxed data_view_info, DataView, DataViewInfo);
+    kind_accessor!(boxed typed_array_info, TypedArray, TypedArrayInfo);
+    kind_accessor!(boxed iterator_state, iterator_state_mut, Iterator, IteratorState);
+    kind_accessor!(boxed promise_data, promise_data_mut, Promise, PromiseData);
+    kind_accessor!(boxed parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
     kind_accessor!(array_data, array_data_mut, Array, ArrayData);
     kind_accessor!(
-        map_data,
+        boxed map_data,
         map_data_mut,
         Map,
         KeyedEntries<(JsValue, JsValue)>
     );
-    kind_accessor!(set_data, set_data_mut, Set, KeyedEntries<JsValue>);
-    kind_accessor!(temporal_data, Temporal, TemporalData);
+    kind_accessor!(boxed set_data, set_data_mut, Set, KeyedEntries<JsValue>);
+    kind_accessor!(boxed temporal_data, Temporal, TemporalData);
     kind_accessor!(regexp, RegExp, RegExpData);
     kind_accessor!(wrapped, WrappedFunction, WrappedFunctionData);
-    kind_accessor!(bound, BoundFunction, BoundFunctionData);
+    kind_accessor!(boxed bound, BoundFunction, BoundFunctionData);
     kind_accessor!(iter_helper, IterHelper, IterHelperData);
     kind_accessor!(
-        module_namespace,
+        boxed module_namespace,
         module_namespace_mut,
         ModuleNamespace,
         ModuleNamespaceData
@@ -2603,18 +2652,19 @@ impl JsObjectData {
             return false;
         };
         let length = length_desc
-            .value
-            .as_ref()
+            .value()
             .and_then(JsValue::as_number)
             .unwrap_or(0.0);
-        if index as f64 >= length && length_desc.writable == Some(false) {
+        if index as f64 >= length && length_desc.writable() == Some(false) {
             return false;
         }
 
         self.array_elements_mut().unwrap().push(value.clone());
         if index as f64 >= length {
-            self.properties.get_mut("length").unwrap().value =
-                Some(JsValue::number((index + 1) as f64));
+            self.properties
+                .get_mut("length")
+                .unwrap()
+                .set_value(Some(JsValue::number((index + 1) as f64)));
         }
         self.shape_id = fresh_shape_id();
         true
@@ -2638,8 +2688,8 @@ impl JsObjectData {
     #[inline]
     pub(crate) fn has_writable_array_length(&self, len: usize) -> bool {
         self.properties.get("length").is_some_and(|d| {
-            d.writable != Some(false)
-                && d.value.as_ref().and_then(JsValue::as_number) == Some(len as f64)
+            d.writable() != Some(false)
+                && d.value().and_then(JsValue::as_number) == Some(len as f64)
         })
     }
 
@@ -2648,7 +2698,7 @@ impl JsObjectData {
     #[inline]
     pub(crate) fn set_dense_array_length(&mut self, len: usize) {
         if let Some(d) = self.properties.get_mut("length") {
-            d.value = Some(JsValue::number(len as f64));
+            d.set_value(Some(JsValue::number(len as f64)));
         }
         self.shape_id = fresh_shape_id();
     }
@@ -2694,8 +2744,7 @@ impl JsObjectData {
                 let length = self
                     .properties
                     .get("length")?
-                    .value
-                    .as_ref()
+                    .value()
                     .and_then(JsValue::as_number)?;
                 // A hole inside the vector must already be below `length`;
                 // an append may grow it, which a read-only `length` forbids.
@@ -2735,8 +2784,11 @@ impl JsObjectData {
     }
 
     pub(crate) fn array_extra_string_property_order(&self) -> Option<&[JsPropertyKey]> {
-        self.array_data()
-            .map(|data| data.extra_string_property_order.as_slice())
+        self.array_data().map(|data| {
+            data.extra_string_property_order
+                .as_deref()
+                .map_or(&[][..], Vec::as_slice)
+        })
     }
 
     /// Whether property creation must be mirrored into the Array's
@@ -2757,7 +2809,9 @@ impl JsObjectData {
             return;
         }
         if let Some(data) = self.array_data_mut() {
-            data.extra_string_property_order.push(key.clone());
+            data.extra_string_property_order
+                .get_or_insert_with(Box::default)
+                .push(key.clone());
         }
     }
 
@@ -2793,6 +2847,48 @@ impl JsObjectData {
     }
 
     /// True iff this object has been revoked.
+    /// Replace this object's iterator state, reusing the existing allocation
+    /// when it already is an iterator (generators swap their state on every
+    /// resumption).
+    pub(crate) fn set_iterator_state(&mut self, state: IteratorState) {
+        match &mut self.kind {
+            ObjectKind::Iterator(slot) => **slot = state,
+            kind => *kind = ObjectKind::Iterator(Box::new(state)),
+        }
+    }
+
+    /// The compile verdict cached on a user function (`Untried` for anything
+    /// else).
+    pub(crate) fn bytecode_cache(&self) -> super::bytecode::BytecodeCacheState {
+        match self.callable.as_deref() {
+            Some(JsFunction::User { bytecode_cache, .. }) => bytecode_cache.clone(),
+            _ => super::bytecode::BytecodeCacheState::Untried,
+        }
+    }
+
+    pub(crate) fn set_bytecode_cache(&mut self, state: &super::bytecode::BytecodeCacheState) {
+        if let Some(JsFunction::User { bytecode_cache, .. }) = self.callable.as_deref_mut() {
+            *bytecode_cache = state.clone();
+        }
+    }
+
+    /// A WeakMap instance (as opposed to `WeakMap.prototype`, which shares the
+    /// brand but holds no entries).
+    #[inline]
+    pub(crate) fn is_weak_map(&self) -> bool {
+        matches!(self.kind, ObjectKind::Map(_)) && self.class_name == "WeakMap"
+    }
+
+    #[inline]
+    pub(crate) fn is_weak_set(&self) -> bool {
+        matches!(self.kind, ObjectKind::Set(_)) && self.class_name == "WeakSet"
+    }
+
+    #[inline]
+    pub(crate) fn is_weak_container(&self) -> bool {
+        self.is_weak_map() || self.is_weak_set()
+    }
+
     pub(crate) fn is_proxy_revoked(&self) -> bool {
         self.proxy().is_some_and(|p| p.revoked)
     }
@@ -2825,15 +2921,82 @@ impl JsObjectData {
     /// elements, which the collector already traces, so it is never an own
     /// property of the object.
     pub(crate) fn hidden_slot(&self, name: &str) -> Option<JsValue> {
-        match self.private_fields.get(name) {
+        match self.private_field(name) {
             Some(PrivateElement::Field(v)) => Some(v.clone()),
             _ => None,
         }
     }
 
     pub(crate) fn set_hidden_slot(&mut self, name: &str, value: JsValue) {
-        self.private_fields
+        self.private_fields_mut()
             .insert(name.to_string(), PrivateElement::Field(value));
+    }
+
+    #[inline]
+    pub(crate) fn function_realm(&self) -> Option<usize> {
+        (self.function_realm != NO_REALM).then_some(self.function_realm as usize)
+    }
+
+    #[inline]
+    pub(crate) fn set_function_realm(&mut self, realm_id: usize) {
+        self.function_realm = realm_id as u32;
+    }
+
+    #[inline]
+    pub(crate) fn generator_realm_id(&self) -> Option<usize> {
+        (self.generator_realm != NO_REALM).then_some(self.generator_realm as usize)
+    }
+
+    #[inline]
+    pub(crate) fn set_generator_realm_id(&mut self, realm_id: usize) {
+        self.generator_realm = realm_id as u32;
+    }
+
+    #[inline]
+    pub(crate) fn extras_mut(&mut self) -> &mut ObjectExtras {
+        self.extras.get_or_insert_with(Box::default)
+    }
+
+    #[inline]
+    pub(crate) fn private_field(&self, name: &str) -> Option<&PrivateElement> {
+        self.extras.as_ref()?.private_fields.get(name)
+    }
+
+    #[inline]
+    pub(crate) fn has_private_field(&self, name: &str) -> bool {
+        self.private_field(name).is_some()
+    }
+
+    pub(crate) fn private_fields_mut(&mut self) -> &mut HashMap<String, PrivateElement> {
+        &mut self.extras_mut().private_fields
+    }
+
+    pub(crate) fn private_field_values(&self) -> impl Iterator<Item = &PrivateElement> {
+        self.extras
+            .iter()
+            .flat_map(|extras| extras.private_fields.values())
+    }
+
+    #[inline]
+    pub(crate) fn instance_field_defs(&self) -> &[InstanceFieldDef] {
+        self.extras
+            .as_ref()
+            .map_or(&[], |extras| &extras.class_instance_field_defs)
+    }
+
+    pub(crate) fn instance_field_defs_mut(&mut self) -> &mut Vec<InstanceFieldDef> {
+        &mut self.extras_mut().class_instance_field_defs
+    }
+
+    #[inline]
+    pub(crate) fn gc_native_roots(&self) -> &[JsValue] {
+        self.extras
+            .as_ref()
+            .map_or(&[], |extras| &extras.gc_native_roots)
+    }
+
+    pub(crate) fn gc_native_roots_mut(&mut self) -> &mut Vec<JsValue> {
+        &mut self.extras_mut().gc_native_roots
     }
 
     /// Intl slot data (any of the Intl kinds).
@@ -2849,12 +3012,8 @@ impl JsObjectData {
     pub(crate) fn finalization_registry(
         &self,
     ) -> Option<(&Vec<Option<(JsValue, JsValue)>>, &Vec<Option<JsValue>>)> {
-        if let ObjectKind::FinalizationRegistry {
-            ref cells,
-            ref tokens,
-        } = self.kind
-        {
-            Some((cells, tokens))
+        if let ObjectKind::FinalizationRegistry(ref data) = self.kind {
+            Some((&data.cells, &data.tokens))
         } else {
             None
         }
@@ -2867,12 +3026,9 @@ impl JsObjectData {
         &mut Vec<Option<(JsValue, JsValue)>>,
         &mut Vec<Option<JsValue>>,
     )> {
-        if let ObjectKind::FinalizationRegistry {
-            ref mut cells,
-            ref mut tokens,
-        } = self.kind
-        {
-            Some((cells, tokens))
+        if let ObjectKind::FinalizationRegistry(ref mut data) = self.kind {
+            let data = &mut **data;
+            Some((&mut data.cells, &mut data.tokens))
         } else {
             None
         }
@@ -2956,7 +3112,7 @@ impl JsObjectData {
         key: &K,
     ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
-            let mut d = desc.clone();
+            let mut d = desc.to_descriptor();
             if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
@@ -3054,11 +3210,11 @@ impl JsObjectData {
                 });
             }
             // Not an export and not a symbol - check properties (@@toStringTag etc.)
-            return self.properties.get(key).cloned();
+            return self.properties.get(key).map(PropertyRecord::to_descriptor);
         }
         // Symbol keys: fall through to ordinary
         if let Some(desc) = self.properties.get(key) {
-            let mut d = desc.clone();
+            let mut d = desc.to_descriptor();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
             if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_property_key_str()
@@ -3274,6 +3430,25 @@ impl JsObjectData {
             }
             return true;
         }
+        // [[Set]] on an existing writable data property redefines it with a
+        // bare `{ [[Value]] }`: ValidateAndApplyPropertyDescriptor then only
+        // replaces the value, so do that in place (a mapped arguments object
+        // also updates its live binding, which the general path handles).
+        if desc.writable.is_none()
+            && desc.get.is_none()
+            && desc.set.is_none()
+            && desc.enumerable.is_none()
+            && desc.configurable.is_none()
+            && desc.value.is_some()
+            && self.parameter_map().is_none()
+            && let Some(record) = self.properties.get_mut(&key)
+            && record.writable() == Some(true)
+            && !record.is_accessor_descriptor()
+        {
+            record.set_value(desc.value);
+            self.shape_id = fresh_shape_id();
+            return true;
+        }
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
             if let Some(elems) = self.array_elements()
@@ -3296,7 +3471,12 @@ impl JsObjectData {
             None
         };
 
-        if let Some(current) = self.properties.get(&key).cloned().or(current_from_array) {
+        if let Some(current) = self
+            .properties
+            .get(&key)
+            .cloned()
+            .or(current_from_array.map(PropertyRecord::from))
+        {
             // §10.1.6.3 step 2: if every field of desc is absent, return true
             if desc.value.is_none()
                 && desc.writable.is_none()
@@ -3308,11 +3488,11 @@ impl JsObjectData {
                 return true;
             }
 
-            if current.configurable == Some(false) {
+            if current.configurable() == Some(false) {
                 if desc.configurable == Some(true) {
                     return false;
                 }
-                if desc.enumerable.is_some() && desc.enumerable != current.enumerable {
+                if desc.enumerable.is_some() && desc.enumerable != current.enumerable() {
                     return false;
                 }
 
@@ -3331,12 +3511,12 @@ impl JsObjectData {
 
                 if current_is_data && !current_is_accessor {
                     // Non-configurable data property
-                    if current.writable == Some(false) {
+                    if current.writable() == Some(false) {
                         if desc.writable == Some(true) {
                             return false;
                         }
                         if let Some(ref new_val) = desc.value {
-                            if let Some(ref cur_val) = current.value {
+                            if let Some(cur_val) = current.value() {
                                 if !same_value(new_val, cur_val) {
                                     return false;
                                 }
@@ -3348,13 +3528,13 @@ impl JsObjectData {
                 } else if current_is_accessor {
                     // Non-configurable accessor property
                     if let Some(ref new_get) = desc.get {
-                        let cur_get = current.get.as_ref().unwrap_or(JsValue::undefined_ref());
+                        let cur_get = current.getter().unwrap_or(JsValue::undefined_ref());
                         if !same_value(new_get, cur_get) {
                             return false;
                         }
                     }
                     if let Some(ref new_set) = desc.set {
-                        let cur_set = current.set.as_ref().unwrap_or(JsValue::undefined_ref());
+                        let cur_set = current.setter().unwrap_or(JsValue::undefined_ref());
                         if !same_value(new_set, cur_set) {
                             return false;
                         }
@@ -3406,8 +3586,8 @@ impl JsObjectData {
                     writable: desc.writable.or(Some(false)),
                     get: None,
                     set: None,
-                    enumerable: desc.enumerable.or(current.enumerable),
-                    configurable: desc.configurable.or(current.configurable),
+                    enumerable: desc.enumerable.or(current.enumerable()),
+                    configurable: desc.configurable.or(current.configurable()),
                 }
             } else if desc_is_accessor && !desc_is_data && current_is_data && !current_is_accessor {
                 // Changing from data to accessor
@@ -3416,8 +3596,8 @@ impl JsObjectData {
                     writable: None,
                     get: desc.get.or(Some(JsValue::UNDEFINED)),
                     set: desc.set.or(Some(JsValue::UNDEFINED)),
-                    enumerable: desc.enumerable.or(current.enumerable),
-                    configurable: desc.configurable.or(current.configurable),
+                    enumerable: desc.enumerable.or(current.enumerable()),
+                    configurable: desc.configurable.or(current.configurable()),
                 }
             } else {
                 // Normal merge: unspecified fields retain current values
@@ -3433,19 +3613,19 @@ impl JsObjectData {
                     PropertyDescriptor {
                         value: None,
                         writable: None,
-                        get: desc.get.or(current.get),
-                        set: desc.set.or(current.set),
-                        enumerable: desc.enumerable.or(current.enumerable),
-                        configurable: desc.configurable.or(current.configurable),
+                        get: desc.get.or(current.getter().cloned()),
+                        set: desc.set.or(current.setter().cloned()),
+                        enumerable: desc.enumerable.or(current.enumerable()),
+                        configurable: desc.configurable.or(current.configurable()),
                     }
                 } else {
                     PropertyDescriptor {
-                        value: desc.value.or(current.value),
-                        writable: desc.writable.or(current.writable),
+                        value: desc.value.or(current.value().cloned()),
+                        writable: desc.writable.or(current.writable()),
                         get: None,
                         set: None,
-                        enumerable: desc.enumerable.or(current.enumerable),
-                        configurable: desc.configurable.or(current.configurable),
+                        enumerable: desc.enumerable.or(current.enumerable()),
+                        configurable: desc.configurable.or(current.configurable()),
                     }
                 }
             };
@@ -3549,7 +3729,7 @@ impl JsObjectData {
             let len_writable = self
                 .properties
                 .get("length")
-                .map(|d| d.writable != Some(false))
+                .map(|d| d.writable() != Some(false))
                 .unwrap_or(true);
             if !len_writable {
                 return false;
@@ -3564,7 +3744,7 @@ impl JsObjectData {
                 let old_len = self
                     .properties
                     .get("length")
-                    .and_then(|d| d.value.as_ref())
+                    .and_then(|d| d.value())
                     .and_then(JsValue::as_number)
                     .map(|n| n as u32);
                 if let Some(old_len) = old_len
@@ -3589,7 +3769,7 @@ impl JsObjectData {
                         let is_non_configurable = self
                             .properties
                             .get(k.as_str())
-                            .is_some_and(|d| d.configurable == Some(false));
+                            .is_some_and(|d| d.configurable() == Some(false));
                         if is_non_configurable {
                             actual_new_len = idx + 1;
                             break;
@@ -3612,7 +3792,7 @@ impl JsObjectData {
                     }
                 }
                 if let Some(desc) = self.properties.get_mut("length") {
-                    desc.value = Some(JsValue::number(actual_new_len as f64));
+                    desc.set_value(Some(JsValue::number(actual_new_len as f64)));
                     return true;
                 }
             }
@@ -3633,14 +3813,14 @@ impl JsObjectData {
             let old_len = self
                 .properties
                 .get("length")
-                .and_then(|d| d.value.as_ref())
+                .and_then(|d| d.value())
                 .and_then(JsValue::as_number)
                 .map(|n| n as u32)
                 .unwrap_or(0);
             let length_writable = self
                 .properties
                 .get("length")
-                .map(|d| d.writable != Some(false))
+                .map(|d| d.writable() != Some(false))
                 .unwrap_or(true);
             let extensible = self.extensible;
             let elements = self.array_elements_mut().unwrap();
@@ -3663,7 +3843,7 @@ impl JsObjectData {
                 if idx_u32 >= old_len
                     && let Some(len_desc) = self.properties.get_mut("length")
                 {
-                    len_desc.value = Some(JsValue::number((idx_u32 + 1) as f64));
+                    len_desc.set_value(Some(JsValue::number((idx_u32 + 1) as f64)));
                 }
                 if !existed {
                     self.shape_id = fresh_shape_id();
@@ -3680,7 +3860,7 @@ impl JsObjectData {
             && let Some(idx) = array_element_index(key)
         {
             if let Some(desc) = self.properties.get(key) {
-                if desc.writable == Some(false) {
+                if desc.writable() == Some(false) {
                     return false;
                 }
             } else {
@@ -3693,10 +3873,9 @@ impl JsObjectData {
                         return false;
                     }
                     if let Some(length) = self.properties.get("length")
-                        && length.writable == Some(false)
+                        && length.writable() == Some(false)
                         && length
-                            .value
-                            .as_ref()
+                            .value()
                             .and_then(JsValue::as_number)
                             .is_none_or(|len| idx as f64 >= len)
                     {
@@ -3724,28 +3903,28 @@ impl JsObjectData {
                 // Only update length if idx+1 exceeds the current property length
                 let new_idx_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
-                    && let Some(cur_len) = len_desc.value.as_ref().and_then(JsValue::as_number)
+                    && let Some(cur_len) = len_desc.value().and_then(JsValue::as_number)
                     && new_idx_len > cur_len
                 {
-                    len_desc.value = Some(JsValue::number(new_idx_len));
+                    len_desc.set_value(Some(JsValue::number(new_idx_len)));
                 }
             } else if idx < 0xFFFF_FFFF {
                 // Valid array index but too sparse for array_elements — update length
                 let new_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
-                    && let Some(cur_len) = len_desc.value.as_ref().and_then(JsValue::as_number)
+                    && let Some(cur_len) = len_desc.value().and_then(JsValue::as_number)
                     && new_len > cur_len
                 {
-                    len_desc.value = Some(JsValue::number(new_len));
+                    len_desc.set_value(Some(JsValue::number(new_len)));
                 }
             }
             // idx >= 0xFFFFFFFF: not a valid array index, stored as named property
         }
         if let Some(desc) = self.properties.get_mut(key) {
-            if desc.writable == Some(false) {
+            if desc.writable() == Some(false) {
                 return false;
             }
-            desc.value = Some(value);
+            desc.set_value(Some(value));
             true
         } else {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
@@ -3834,9 +4013,9 @@ impl JsObjectData {
         let removed = self.properties.remove(key);
         if removed.is_some()
             && let Some(data) = self.array_data_mut()
+            && let Some(order) = data.extra_string_property_order.as_mut()
         {
-            data.extra_string_property_order
-                .retain(|k| k.as_bytes() != key.as_property_key_bytes());
+            order.retain(|k| k.as_bytes() != key.as_property_key_bytes());
         }
         removed
     }
@@ -3845,7 +4024,7 @@ impl JsObjectData {
         &self,
         key: &K,
     ) -> Option<JsValue> {
-        self.properties.get(key).and_then(|d| d.value.clone())
+        self.properties.get(key).and_then(|d| d.value().cloned())
     }
 
     /// Own-property path of `get_property` with no prototype traversal.
@@ -3877,7 +4056,7 @@ impl JsObjectData {
             return Some(val);
         }
         if let Some(desc) = self.properties.get(key) {
-            if let Some(ref val) = desc.value {
+            if let Some(val) = desc.value() {
                 return Some(val.clone());
             }
             return Some(JsValue::UNDEFINED);
@@ -3913,7 +4092,7 @@ impl JsObjectData {
         key: &K,
     ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
-            let mut d = desc.clone();
+            let mut d = desc.to_descriptor();
             if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
@@ -4032,7 +4211,7 @@ impl JsObjectData {
         Some(
             self.properties
                 .iter()
-                .any(|(k, d)| !k.is_symbol() && d.enumerable != Some(false)),
+                .any(|(k, d)| !k.is_symbol() && d.enumerable() != Some(false)),
         )
     }
 
@@ -4090,7 +4269,7 @@ impl JsObjectData {
                 }
                 continue;
             }
-            if enumerable_only && d.enumerable == Some(false) {
+            if enumerable_only && d.enumerable() == Some(false) {
                 continue;
             }
             if let Some(n) = parse_array_index(k) {
@@ -4122,7 +4301,7 @@ impl JsObjectData {
         if self.module_namespace().is_none()
             && let Some(d) = self.properties.get(key)
         {
-            return Some(d.enumerable != Some(false));
+            return Some(d.enumerable() != Some(false));
         }
         self.get_own_property(key)
             .map(|d| d.enumerable != Some(false))
@@ -4181,7 +4360,7 @@ impl JsObjectData {
             if k.is_symbol() {
                 continue;
             }
-            let is_enumerable = desc.enumerable != Some(false);
+            let is_enumerable = desc.enumerable() != Some(false);
             if seen.insert(k.clone()) && is_enumerable {
                 if let Some(idx) = parse_array_index(k) {
                     index_keys.push((idx, k.clone()));
@@ -4823,12 +5002,11 @@ mod kind_accessor_tests {
         for index in 0..1024 {
             obj.insert_value(index.to_string(), JsValue::number(index as f64));
         }
-        assert_eq!(
+        assert!(
             obj.array_data()
                 .unwrap()
                 .extra_string_property_order
-                .capacity(),
-            0
+                .is_none()
         );
         obj.insert_value("+1", JsValue::number(1.0));
         obj.insert_value("z", JsValue::number(2.0));
@@ -4931,7 +5109,11 @@ mod kind_accessor_tests {
         );
 
         let mut frozen_length = dense_array_with(two, 2);
-        frozen_length.properties.get_mut("length").unwrap().writable = Some(false);
+        frozen_length
+            .properties
+            .get_mut("length")
+            .unwrap()
+            .set_writable(Some(false));
         assert!(!frozen_length.is_plain_dense_array(2), "read-only length");
 
         assert!(!JsObjectData::new().is_plain_dense_array(0), "not an Array");
@@ -4974,7 +5156,11 @@ mod kind_accessor_tests {
         );
 
         let mut readonly = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 2);
-        readonly.properties.get_mut("length").unwrap().writable = Some(false);
+        readonly
+            .properties
+            .get_mut("length")
+            .unwrap()
+            .set_writable(Some(false));
         assert_eq!(readonly.dense_array_set_plan(1, &v), Some(Create));
         // The plan is advisory: the append itself re-checks the read-only length.
         assert!(!readonly.apply_dense_array_set(2, &v, Create));
@@ -5021,14 +5207,17 @@ mod kind_accessor_tests {
         assert_eq!(
             obj.properties
                 .get("length")
-                .and_then(|d| d.value.as_ref())
+                .and_then(|d| d.value())
                 .and_then(JsValue::as_number),
             Some(2.0)
         );
         obj.extensible = false;
         assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));
         obj.extensible = true;
-        obj.properties.get_mut("length").unwrap().writable = Some(false);
+        obj.properties
+            .get_mut("length")
+            .unwrap()
+            .set_writable(Some(false));
         assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));
     }
 
@@ -5080,7 +5269,7 @@ mod kind_accessor_tests {
     fn set_data_some_for_set_kind() {
         let mut entries = KeyedEntries::default();
         entries.upsert(JsValue::number(1.0), |_, _| {});
-        let obj = obj_with_kind(ObjectKind::Set(entries));
+        let obj = obj_with_kind(ObjectKind::Set(Box::new(entries)));
         assert!(obj.set_data().is_some());
         assert_eq!(obj.set_data().unwrap().live_len(), 1);
     }
@@ -5093,7 +5282,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Set(KeyedEntries::default()));
+        let mut obj = obj_with_kind(ObjectKind::Set(Box::new(KeyedEntries::default())));
         obj.set_data_mut()
             .unwrap()
             .upsert(JsValue::number(1.0), |_, _| {});
@@ -5106,7 +5295,7 @@ mod kind_accessor_tests {
     fn map_data_some_for_map_kind() {
         let mut entries = KeyedEntries::default();
         entries.upsert((JsValue::number(1.0), JsValue::FALSE), |_, _| {});
-        let obj = obj_with_kind(ObjectKind::Map(entries));
+        let obj = obj_with_kind(ObjectKind::Map(Box::new(entries)));
         assert!(obj.map_data().is_some());
         assert_eq!(obj.map_data().unwrap().live_len(), 1);
     }
@@ -5119,7 +5308,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn map_data_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Map(KeyedEntries::default()));
+        let mut obj = obj_with_kind(ObjectKind::Map(Box::new(KeyedEntries::default())));
         obj.map_data_mut()
             .unwrap()
             .upsert((JsValue::number(0.0), JsValue::UNDEFINED), |_, _| {});
@@ -5135,7 +5324,7 @@ mod kind_accessor_tests {
             this: JsValue::UNDEFINED,
             args: vec![],
         };
-        let obj = obj_with_kind(ObjectKind::BoundFunction(data));
+        let obj = obj_with_kind(ObjectKind::BoundFunction(Box::new(data)));
         assert!(obj.bound().is_some());
     }
 
@@ -5164,14 +5353,14 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_none_when_map_kind_is_set() {
-        let obj = obj_with_kind(ObjectKind::Map(KeyedEntries::default()));
+        let obj = obj_with_kind(ObjectKind::Map(Box::new(KeyedEntries::default())));
         assert!(obj.set_data().is_none());
         assert!(obj.map_data().is_some());
     }
 
     #[test]
     fn array_elements_none_when_set_kind_is_set() {
-        let obj = obj_with_kind(ObjectKind::Set(KeyedEntries::default()));
+        let obj = obj_with_kind(ObjectKind::Set(Box::new(KeyedEntries::default())));
         assert!(obj.array_elements().is_none());
         assert!(obj.set_data().is_some());
     }

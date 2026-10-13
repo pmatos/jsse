@@ -632,11 +632,13 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(func_obj_id).borrow_mut();
             o.prototype_id = fp_id;
-            o.class_name = "Function".into();
-            o.function_realm = Some(caller_realm_id);
-            o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
-                Completion::Normal(JsValue::UNDEFINED)
-            }));
+            o.class_name = "Function";
+            o.set_function_realm(caller_realm_id);
+            o.callable = Some(Box::new(JsFunction::native(
+                "".to_string(),
+                0,
+                |_, _, _| Completion::Normal(JsValue::UNDEFINED),
+            )));
             if let Some(tf) = (target_func)
                 .as_object_id()
                 .map(|id| crate::types::JsObject { id })

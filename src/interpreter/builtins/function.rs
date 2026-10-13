@@ -225,11 +225,11 @@ impl Interpreter {
                     // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                     obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::BoundFunction(
-                        crate::interpreter::types::BoundFunctionData {
+                        Box::new(crate::interpreter::types::BoundFunctionData {
                             target: this_val.clone(),
                             this: bind_this.clone(),
                             args: stored_bound_args,
-                        },
+                        }),
                     );
                     // Overwrite length with correct f64 value (handles Infinity)
                     obj.borrow_mut().insert_property(
@@ -278,7 +278,7 @@ impl Interpreter {
                     } else {
                         drop(b);
                     }
-                    if let Some(ref func) = obj.borrow().callable {
+                    if let Some(func) = obj.borrow().callable.as_deref() {
                         let s = match func {
                             JsFunction::User {
                                 source_text: Some(text),

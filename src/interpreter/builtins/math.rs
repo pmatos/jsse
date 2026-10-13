@@ -308,7 +308,7 @@ impl Interpreter {
         let math_id = math_obj_id;
         {
             let mut m = self.get_object_cell_expect(math_obj_id).borrow_mut();
-            m.class_name = "Math".into();
+            m.class_name = "Math";
             let math_consts: &[(&str, f64)] = &[
                 ("PI", std::f64::consts::PI),
                 ("E", std::f64::consts::E),

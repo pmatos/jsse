@@ -325,7 +325,7 @@ impl Interpreter {
             let mut g = go.borrow_mut();
             let existing = g.properties.get(name);
             let need_full_desc =
-                existing.is_none() || existing.is_some_and(|d| d.configurable == Some(true));
+                existing.is_none() || existing.is_some_and(|d| d.configurable() == Some(true));
             if need_full_desc {
                 let desc = PropertyDescriptor::data(value, true, true, configurable);
                 let key = crate::interpreter::key_intern::intern_key(name);

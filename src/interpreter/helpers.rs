@@ -509,12 +509,7 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
         } else {
             None
         };
-        (
-            b.is_proxy_revoked(),
-            b.is_proxy(),
-            tid,
-            b.class_name.clone(),
-        )
+        (b.is_proxy_revoked(), b.is_proxy(), tid, b.class_name)
     });
     if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
         if is_revoked {
@@ -600,7 +595,7 @@ pub(crate) fn json_stringify_full(
                     Some(JsPropertyKey::from(number_ops::to_string(n)))
                 } else if let Some(item_id) = item.as_object_id() {
                     if let Some(inner) = interp.get_object_cell(item_id) {
-                        let cn = inner.borrow().class_name.clone();
+                        let cn = inner.borrow().class_name;
                         if cn == "String" || cn == "Number" {
                             let s = interp.to_string_value(&item)?;
                             Some(JsPropertyKey::from(s))
@@ -712,11 +707,11 @@ fn json_stringify_internal(
     // Step 4: Unwrap wrapper objects per spec (ToNumber/ToString trigger valueOf/toString)
     if let Some(value_id) = value.as_object_id() {
         let class = if let Some(cell) = interp.get_object_cell(value_id) {
-            cell.borrow().class_name.clone()
+            cell.borrow().class_name
         } else {
-            "".into()
+            ""
         };
-        match &*class {
+        match class {
             "Number" => {
                 let n = interp.to_number_value(&value)?;
                 value = JsValue::number(n)
@@ -1219,7 +1214,7 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
             .borrow()
             .properties
             .get(key)
-            .and_then(|d| d.configurable)
+            .and_then(|d| d.configurable())
             .unwrap_or(true);
         if !configurable {
             return Ok(());

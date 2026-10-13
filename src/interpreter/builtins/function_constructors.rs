@@ -143,6 +143,7 @@ impl Interpreter {
                         let dynamic_fn_env = Environment::new(Some(global_env));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
+                            bytecode_cache: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
@@ -230,11 +231,11 @@ impl Interpreter {
                     if let Some(proto_id) = pv.as_object_id()
                         && let Some(proto_obj) = self.get_object_cell(proto_id)
                     {
-                        proto_obj.borrow_mut().callable = Some(JsFunction::native(
+                        proto_obj.borrow_mut().callable = Some(Box::new(JsFunction::native(
                             "".to_string(),
                             0,
                             |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
-                        ));
+                        )));
                         proto_obj.borrow_mut().insert_property(
                             "length".to_string(),
                             PropertyDescriptor::data(JsValue::number(0.0), false, false, true),
@@ -383,7 +384,7 @@ impl Interpreter {
                                     // Check if the caller is strict — return null for strict callers
                                     if let Some(obj) = interp.get_object(frame.func_obj_id)
                                         && let Some(JsFunction::User { is_strict, .. }) =
-                                            &obj.borrow().callable
+                                            obj.borrow().callable.as_deref()
                                         && *is_strict
                                     {
                                         return Completion::Normal(JsValue::NULL);
@@ -433,18 +434,12 @@ impl Interpreter {
                     };
 
                     // Collect all JsValue objects from a property descriptor (value + accessors)
-                    fn collect_pd_objects(pd: &PropertyDescriptor) -> Vec<JsValue> {
-                        let mut out = Vec::new();
-                        if let Some(ref v) = pd.value {
-                            out.push(v.clone());
-                        }
-                        if let Some(ref g) = pd.get {
-                            out.push(g.clone());
-                        }
-                        if let Some(ref s) = pd.set {
-                            out.push(s.clone());
-                        }
-                        out
+                    fn collect_pd_objects(pd: &PropertyRecord) -> Vec<JsValue> {
+                        [pd.value(), pd.getter(), pd.setter()]
+                            .into_iter()
+                            .flatten()
+                            .cloned()
+                            .collect()
                     }
 
                     let bindings: Vec<JsValue> = self
@@ -612,7 +607,7 @@ impl Interpreter {
             let af_proto_id = self.create_object_id();
             self.get_object_cell_expect(af_proto_id)
                 .borrow_mut()
-                .class_name = "AsyncFunction".into();
+                .class_name = "AsyncFunction";
 
             // [[Prototype]] = Function.prototype_id
             if let Some(func_val) = self.get_global_var("Function")
@@ -723,6 +718,7 @@ impl Interpreter {
                             Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
+                            bytecode_cache: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
@@ -878,6 +874,7 @@ impl Interpreter {
                             Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
+                            bytecode_cache: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
@@ -1035,6 +1032,7 @@ impl Interpreter {
                             Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
+                            bytecode_cache: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
