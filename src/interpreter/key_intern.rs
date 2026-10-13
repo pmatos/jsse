@@ -172,13 +172,8 @@ impl KeyCache {
 
     #[inline]
     fn remember(&mut self, key: &JsPropertyKey) {
-        self.canonical[Self::canonical_slot(key)] = Some(key.clone());
-    }
-
-    #[inline]
-    fn remember_if_new(&mut self, key: &JsPropertyKey) {
         if !self.is_canonical(key) {
-            self.remember(key);
+            self.canonical[Self::canonical_slot(key)] = Some(key.clone());
         }
     }
 
@@ -188,7 +183,7 @@ impl KeyCache {
         }
         if let Some(existing) = self.map.get(key.as_bytes()) {
             let existing = existing.clone();
-            self.remember_if_new(&existing);
+            self.remember(&existing);
             return existing;
         }
         if self.map.len() >= MAX_CACHE_ENTRIES {
@@ -203,7 +198,7 @@ impl KeyCache {
     fn intern_str(&mut self, s: &str) -> JsPropertyKey {
         if let Some(existing) = self.map.get(s.as_bytes()) {
             let existing = existing.clone();
-            self.remember_if_new(&existing);
+            self.remember(&existing);
             return existing;
         }
         self.intern(JsPropertyKey::from_str(s))

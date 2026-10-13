@@ -38,22 +38,17 @@ pub(crate) fn regexp_literal_source(pattern: &str) -> JsString {
 
 /// The property key of a statically named literal property, `None` for a
 /// computed or private one.
+/// The key of a statically named property, in the interner's canonical
+/// storage. An identifier key already in the interner builds no key at all.
 pub(crate) fn static_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
+    use crate::interpreter::key_intern::{intern_js_key, intern_key};
     match key {
-        PropertyKey::Identifier(name) => Some(JsPropertyKey::from(name.clone())),
-        PropertyKey::String(units) => Some(literal_string_property_key(units)),
-        PropertyKey::Number(n) => Some(JsPropertyKey::from(number_ops::to_string(*n))),
+        PropertyKey::Identifier(name) => Some(intern_key(name)),
+        PropertyKey::String(units) => Some(intern_js_key(literal_string_property_key(units))),
+        PropertyKey::Number(n) => Some(intern_js_key(JsPropertyKey::from(number_ops::to_string(
+            *n,
+        )))),
         PropertyKey::Computed(_) | PropertyKey::Private(_) => None,
-    }
-}
-
-/// [`static_property_key`] in the interner's canonical storage. An identifier
-/// key already in the interner builds no key at all, so the tree-walker's
-/// per-evaluation cost is one hash and no allocation.
-pub(crate) fn static_interned_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
-    match key {
-        PropertyKey::Identifier(name) => Some(crate::interpreter::key_intern::intern_key(name)),
-        other => static_property_key(other).map(crate::interpreter::key_intern::intern_js_key),
     }
 }
 
@@ -1338,7 +1333,7 @@ impl Interpreter {
             obj_data.prototype_id = self.realm().object_prototype;
             let mut method_values: Vec<JsValue> = Vec::new();
             for prop in props {
-                let (key, fn_name_for_key) = match static_interned_property_key(&prop.key) {
+                let (key, fn_name_for_key) = match static_property_key(&prop.key) {
                     Some(key) => (key.clone(), key),
                     None => match &prop.key {
                         PropertyKey::Computed(expr) => {

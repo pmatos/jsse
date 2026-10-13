@@ -1108,7 +1108,6 @@ impl Compiler {
     fn compile_shape_property(&mut self, prop: &Property) -> Result<ShapeProperty, CompileError> {
         let key = crate::interpreter::eval::static_property_key(&prop.key)
             .expect("compile_object_literal rejects computed and private keys");
-        let key = crate::interpreter::key_intern::intern_js_key(key);
         let mut spec = LiteralPropertySpec {
             kind: prop.kind,
             plain_init: !prop.computed && !prop.shorthand && !prop.method,
