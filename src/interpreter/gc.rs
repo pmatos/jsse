@@ -289,6 +289,45 @@ impl RootedSlots {
     }
 }
 
+/// The nursery as a bitmap indexed by object id, built once per minor
+/// collection. Scanning a large remembered Array then asks one cache-resident
+/// bit per element whether it references a young object, instead of loading
+/// each referent's header.
+struct YoungIds {
+    bits: Vec<u64>,
+    /// Nursery objects whose traced fields referenced a nursery object.
+    edge_bits: Vec<u64>,
+}
+
+impl YoungIds {
+    fn new(nursery: &[u64], capacity: u64) -> Self {
+        let mut bits = vec![0u64; (capacity as usize).div_ceil(64)];
+        for &id in nursery {
+            bits[(id / 64) as usize] |= 1 << (id % 64);
+        }
+        let edge_bits = vec![0u64; bits.len()];
+        Self { bits, edge_bits }
+    }
+
+    /// Record that the nursery object `id` references a nursery object.
+    #[inline]
+    fn note_young_edge(&mut self, id: u64) {
+        self.edge_bits[(id / 64) as usize] |= 1 << (id % 64);
+    }
+
+    #[inline]
+    fn has_young_edge(&self, id: u64) -> bool {
+        self.edge_bits[(id / 64) as usize] & (1 << (id % 64)) != 0
+    }
+
+    #[inline]
+    fn contains(&self, id: u64) -> bool {
+        self.bits
+            .get((id / 64) as usize)
+            .is_some_and(|word| word & (1 << (id % 64)) != 0)
+    }
+}
+
 impl Interpreter {
     /// Make an object reference that only exists as a native-closure capture
     /// visible to the tracer, by pinning it on `anchor`'s `gc_native_roots`.
@@ -364,6 +403,31 @@ impl Interpreter {
         }
     }
 
+    /// Barrier for a single-slot store of `value` into element `index` of an
+    /// Array, run before the store. Unlike [`Self::gc_write_barrier_value`] it
+    /// remembers only the card holding `index`, so a minor collection
+    /// re-scans that card instead of the whole element vector. The store
+    /// itself must not go through `array_elements_mut` (which would dirty
+    /// every card again); use `JsObjectData::overwrite_array_element` or
+    /// `apply_dense_array_set`.
+    pub(crate) fn gc_write_barrier_element(
+        &self,
+        owner: &crate::interpreter::object_arena::ObjectHandle,
+        index: usize,
+        value: &JsValue,
+    ) {
+        if let Some(object_id) = value.as_object_id()
+            && owner.is_old()
+            && self
+                .objects
+                .get_cell(object_id)
+                .is_some_and(crate::interpreter::object_arena::ObjectHandle::is_young)
+        {
+            owner.borrow_mut_untracked().mark_element_card(index);
+            owner.remember_elements_if_old();
+        }
+    }
+
     fn enqueue_unmarked<I>(candidates: I, worklist: &mut Vec<u64>, marks: &mut [bool])
     where
         I: IntoIterator<Item = u64>,
@@ -413,8 +477,17 @@ impl Interpreter {
                 self.gc_collect_minor();
                 #[cfg(feature = "perf-counters")]
                 {
+                    let nanos = start.elapsed().as_nanos();
+                    eprintln!(
+                        "MINOR {} us live={} nursery_after={} remembered_after={}",
+                        nanos / 1000,
+                        self.objects.live_count(),
+                        self.objects.nursery_ids().len(),
+                        self.objects.remembered_len()
+                    );
                     self.perf.gc_minor += 1;
-                    self.perf.gc_nanos += start.elapsed().as_nanos();
+                    self.perf.gc_nanos += nanos;
+                    self.perf.gc_minor_nanos += nanos;
                 }
             }
             Some(CollectionKind::Major) => {
@@ -547,19 +620,33 @@ impl Interpreter {
         (roots, seen_envs)
     }
 
-    fn enqueue_young<I>(&self, candidates: I, worklist: &mut Vec<u64>)
+    /// Mark and queue every nursery object among `candidates`. Returns
+    /// whether there was one. The nursery bitmap answers "is it young?"
+    /// without loading the referent, which for an old child (every object's
+    /// prototype, say) would be a wasted cache line.
+    fn enqueue_young<I>(&self, candidates: I, worklist: &mut Vec<u64>, young: &YoungIds) -> bool
     where
         I: IntoIterator<Item = u64>,
     {
+        let mut any_young = false;
         for id in candidates {
-            if self
-                .objects
-                .get_cell(id)
-                .is_some_and(crate::interpreter::object_arena::ObjectHandle::mark_young)
-            {
-                worklist.push(id);
+            if young.contains(id) {
+                any_young = true;
+                if let Some(handle) = self.objects.get_cell(id)
+                    && handle.mark_young()
+                {
+                    worklist.push(id);
+                }
+            } else {
+                debug_assert!(
+                    self.objects
+                        .get_cell(id)
+                        .is_none_or(|handle| !handle.is_young()),
+                    "young object {id} missing from the nursery list"
+                );
             }
         }
+        any_young
     }
 
     fn trace_young_worklist(
@@ -567,6 +654,7 @@ impl Interpreter {
         worklist: &mut Vec<u64>,
         seen_envs: &mut HashSet<usize>,
         weak_containers: &mut Vec<u64>,
+        young: &mut YoungIds,
     ) {
         let mut children = Vec::new();
         while let Some(id) = worklist.pop() {
@@ -580,7 +668,9 @@ impl Interpreter {
             children.clear();
             Self::trace_object_fields(&obj, &mut children, seen_envs);
             drop(obj);
-            self.enqueue_young(children.drain(..), worklist);
+            if self.enqueue_young(children.drain(..), worklist, young) {
+                young.note_young_edge(id);
+            }
         }
     }
 
@@ -623,6 +713,73 @@ impl Interpreter {
         }
     }
 
+    /// Re-scan the elements of a remembered Array: its dirty cards, or all of
+    /// them while the bitmap is absent. Marks every nursery object found and
+    /// reports whether any element still references one, plus whether the
+    /// Array is large enough to track by card, in which case `retained_cards`
+    /// lists the cards that must stay dirty.
+    fn scan_remembered_elements(
+        &self,
+        obj: &JsObjectData,
+        young: &YoungIds,
+        worklist: &mut Vec<u64>,
+        retained_cards: &mut Vec<usize>,
+    ) -> (bool, bool) {
+        use crate::interpreter::types::CARD_ELEMENTS;
+        let Some((elements, cards)) = obj.array_elements_and_cards() else {
+            return (false, false);
+        };
+        if elements.len() <= CARD_ELEMENTS {
+            return (self.scan_element_range(elements, young, worklist), false);
+        }
+        let card_count = elements.len().div_ceil(CARD_ELEMENTS);
+        let mut scan_card = |card: usize| {
+            let start = card * CARD_ELEMENTS;
+            let end = (start + CARD_ELEMENTS).min(elements.len());
+            if self.scan_element_range(&elements[start..end], young, worklist) {
+                retained_cards.push(card);
+            }
+        };
+        match cards {
+            None => (0..card_count).for_each(&mut scan_card),
+            Some(bits) => {
+                for (word_idx, &word) in bits.iter().enumerate() {
+                    let mut word = word;
+                    while word != 0 {
+                        let card = word_idx * 64 + word.trailing_zeros() as usize;
+                        word &= word - 1;
+                        if card < card_count {
+                            scan_card(card);
+                        }
+                    }
+                }
+            }
+        }
+        (false, true)
+    }
+
+    fn scan_element_range(
+        &self,
+        range: &[JsValue],
+        young: &YoungIds,
+        worklist: &mut Vec<u64>,
+    ) -> bool {
+        let mut any_young = false;
+        for value in range {
+            if let Some(id) = value.as_object_id()
+                && young.contains(id)
+            {
+                any_young = true;
+                if let Some(handle) = self.objects.get_cell(id)
+                    && handle.mark_young()
+                {
+                    worklist.push(id);
+                }
+            }
+        }
+        any_young
+    }
+
     fn minor_value_is_live(&self, id: u64) -> bool {
         self.objects
             .get_cell(id)
@@ -652,14 +809,16 @@ impl Interpreter {
 
         let (roots, mut seen_envs) = self.collect_gc_roots();
         let remembered = self.objects.take_remembered();
+        let mut young = YoungIds::new(self.objects.nursery_ids(), self.objects.capacity());
         let mut worklist = Vec::new();
         let mut weak_containers = Vec::new();
         let mut children = Vec::new();
+        let mut retained_cards = Vec::new();
 
         // Old roots are already known to survive a minor collection. Only
         // young roots and old objects admitted by the write barrier need work.
-        self.enqueue_young(roots, &mut worklist);
-        for id in remembered {
+        self.enqueue_young(roots, &mut worklist, &young);
+        for (id, state) in remembered {
             let Some(handle) = self.objects.get_cell(id) else {
                 continue;
             };
@@ -667,25 +826,42 @@ impl Interpreter {
                 continue;
             }
             let obj = handle.borrow_untracked();
+            // Everything but an Array's dirty cards is scanned unless the
+            // barrier knew only a card changed.
+            let scan_fields = state.fields || obj.array_data().is_none();
             if obj.is_weak_container() {
                 weak_containers.push(id);
             }
             children.clear();
-            Self::trace_object_fields(&obj, &mut children, &mut seen_envs);
-            let retain = Self::object_requires_persistent_minor_scan(&obj)
-                || self.object_has_young_weak_edge(&obj)
-                || children.iter().any(|&child| {
-                    self.objects
-                        .get_cell(child)
-                        .is_some_and(|child_handle| child_handle.is_young())
-                });
+            let mut retain = false;
+            if scan_fields {
+                Self::trace_object_fields_in(&obj, &mut children, &mut seen_envs, false);
+                retain = Self::object_requires_persistent_minor_scan(&obj)
+                    || self.object_has_young_weak_edge(&obj);
+            }
+            retained_cards.clear();
+            let (elements_young, card_mode) =
+                self.scan_remembered_elements(&obj, &young, &mut worklist, &mut retained_cards);
             drop(obj);
-            self.enqueue_young(children.drain(..), &mut worklist);
+            retain |= self.enqueue_young(children.drain(..), &mut worklist, &young);
             if retain {
                 handle.remember_if_old();
             }
+            if card_mode {
+                handle
+                    .borrow_mut_untracked()
+                    .set_dirty_cards(&retained_cards);
+            }
+            if elements_young || !retained_cards.is_empty() {
+                handle.remember_elements_if_old();
+            }
         }
-        self.trace_young_worklist(&mut worklist, &mut seen_envs, &mut weak_containers);
+        self.trace_young_worklist(
+            &mut worklist,
+            &mut seen_envs,
+            &mut weak_containers,
+            &mut young,
+        );
 
         // Minor ephemeron fixpoint. Old keys are conservatively live until a
         // major collection; young keys must be marked through a strong path.
@@ -720,7 +896,12 @@ impl Interpreter {
                     }
                 }
             }
-            self.trace_young_worklist(&mut worklist, &mut seen_envs, &mut weak_containers);
+            self.trace_young_worklist(
+                &mut worklist,
+                &mut seen_envs,
+                &mut weak_containers,
+                &mut young,
+            );
             if !new_marks {
                 break;
             }
@@ -756,6 +937,9 @@ impl Interpreter {
             }
         }
 
+        #[cfg(debug_assertions)]
+        self.debug_assert_old_arrays_reach_only_marked_young();
+
         let nursery = self.objects.take_nursery();
         let mut survivors = Vec::with_capacity(nursery.len());
         for id in nursery {
@@ -766,6 +950,15 @@ impl Interpreter {
                 self.free_gc_object(id);
             } else if handle.age_survivor(GC_PROMOTION_AGE) {
                 handle.promote();
+                // An old object needs scanning only if it can still hold an
+                // edge into the nursery: a traced young child, or a kind
+                // whose edges the tracer cannot see.
+                if young.has_young_edge(id) || {
+                    let obj = handle.borrow_untracked();
+                    obj.is_weak_container() || Self::object_requires_persistent_minor_scan(&obj)
+                } {
+                    handle.remember_if_old();
+                }
             } else {
                 handle.clear_young_mark();
                 survivors.push(id);
@@ -773,6 +966,37 @@ impl Interpreter {
         }
         self.objects.replace_nursery(survivors);
         self.gc.end_minor_collection();
+    }
+
+    /// Barrier check for the minor collector, run once marking is complete: a
+    /// nursery object that an old Array's element still references but that
+    /// nothing marked is about to be freed under it. That means a store
+    /// reached the elements without remembering their card.
+    #[cfg(debug_assertions)]
+    fn debug_assert_old_arrays_reach_only_marked_young(&self) {
+        for id in 0..self.objects.capacity() {
+            let Some(handle) = self.objects.get_cell(id) else {
+                continue;
+            };
+            if !handle.is_old() {
+                continue;
+            }
+            let obj = handle.borrow_untracked();
+            let Some(elements) = obj.array_elements() else {
+                continue;
+            };
+            for (index, value) in elements.iter().enumerate() {
+                if let Some(child) = value.as_object_id()
+                    && let Some(child_handle) = self.objects.get_cell(child)
+                {
+                    assert!(
+                        !child_handle.is_young() || child_handle.is_young_marked(),
+                        "old Array {id} element {index} references unmarked nursery object \
+                         {child}: a store skipped the write barrier"
+                    );
+                }
+            }
+        }
     }
 
     fn free_gc_object(&mut self, id: u64) {
@@ -879,6 +1103,7 @@ impl Interpreter {
                 continue;
             }
             obj_rc.tenure_after_major();
+            obj_rc.reset_cards_after_major();
             if obj_rc.borrow_untracked().is_weak_container() {
                 let mut obj = obj_rc.borrow_mut_untracked();
                 if obj.is_weak_map() {
@@ -918,6 +1143,17 @@ impl Interpreter {
         worklist: &mut Vec<u64>,
         seen_envs: &mut HashSet<usize>,
     ) {
+        Self::trace_object_fields_in(obj, worklist, seen_envs, true);
+    }
+
+    /// `trace_object_fields`, optionally leaving out an Array's element
+    /// vector, which a minor collection scans card by card instead.
+    fn trace_object_fields_in(
+        obj: &JsObjectData,
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+        elements: bool,
+    ) {
         if let Some(pid) = obj.prototype_id {
             worklist.push(pid);
         }
@@ -932,7 +1168,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(elems) = obj.array_elements() {
+        if elements && let Some(elems) = obj.array_elements() {
             for v in elems {
                 Self::collect_value_roots(v, worklist);
             }
@@ -1666,14 +1902,14 @@ mod tests {
         let young = interp.alloc_object(JsObjectData::new());
         let owner_handle = interp.objects.get(owner).unwrap();
         assert!(owner_handle.is_old());
-        assert!(interp.objects.take_remembered().is_empty());
+        assert!(interp.objects.take_remembered_ids().is_empty());
 
         interp.gc_write_barrier_value(&owner_handle, &JsValue::number(1.0));
         interp.gc_write_barrier_value(&owner_handle, &obj(owner));
-        assert!(interp.objects.take_remembered().is_empty());
+        assert!(interp.objects.take_remembered_ids().is_empty());
 
         interp.gc_write_barrier_value(&owner_handle, &obj(young));
-        assert_eq!(interp.objects.take_remembered(), vec![owner]);
+        assert_eq!(interp.objects.take_remembered_ids(), vec![owner]);
     }
 
     #[test]
@@ -2045,12 +2281,12 @@ mod tests {
         major_gc(&mut interp);
         let container = slots.root().as_object_id().unwrap();
         assert!(interp.objects.get_cell_expect(container).is_old());
-        interp.objects.take_remembered();
+        interp.objects.take_remembered_ids();
 
         let young = fresh_object(&mut interp);
         slots.set(&interp, 0, obj(young));
 
-        assert_eq!(interp.objects.take_remembered(), vec![container]);
+        assert_eq!(interp.objects.take_remembered_ids(), vec![container]);
     }
 
     #[test]
@@ -2071,5 +2307,180 @@ mod tests {
 
         assert!(interp.objects.get_cell(young).is_some());
         assert!(interp.objects.get_cell(pushed).is_some());
+    }
+
+    use crate::interpreter::types::CARD_ELEMENTS;
+
+    fn minor_gc(interp: &mut Interpreter) {
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+    }
+
+    /// An old, rooted Array of `cards` cards that a major collection has put
+    /// into card tracking with every card clean.
+    fn tenured_array(interp: &mut Interpreter, cards: usize) -> (u64, JsValue) {
+        let array = interp.create_array(vec![JsValue::number(0.0); cards * CARD_ELEMENTS]);
+        let id = array.as_object_id().unwrap();
+        interp.gc_root_id(id);
+        major_gc(interp);
+        assert!(interp.objects.get_cell_expect(id).is_old());
+        assert_eq!(dirty_cards(interp, id), Some(vec![]));
+        (id, array)
+    }
+
+    /// The set cards of an Array's bitmap, or `None` while every card is dirty.
+    fn dirty_cards(interp: &Interpreter, array: u64) -> Option<Vec<usize>> {
+        let handle = interp.objects.get_cell_expect(array);
+        let obj = handle.borrow_untracked();
+        let (_, bits) = obj.array_elements_and_cards().unwrap();
+        bits.map(|bits| {
+            (0..bits.len() * 64)
+                .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
+                .collect()
+        })
+    }
+
+    #[test]
+    fn element_store_marks_only_its_card_and_keeps_the_young_value_alive() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, array) = tenured_array(&mut interp, 8);
+        let child = fresh_object(&mut interp);
+
+        assert!(interp.numeric_index_fast_set(&array, (6 * CARD_ELEMENTS + 1) as f64, &obj(child)));
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![6]));
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![6]));
+
+        // The child promotes after the second survival, the third scan finds
+        // the card clean, and the array stops being remembered.
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(child).is_old());
+        minor_gc(&mut interp);
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![]));
+        assert_eq!(interp.objects.remembered_len(), 0);
+        assert!(interp.objects.get_cell(child).is_some());
+    }
+
+    #[test]
+    fn element_store_of_an_old_value_dirties_no_card() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, array) = tenured_array(&mut interp, 4);
+        let old = fresh_object(&mut interp);
+        interp.gc_root_id(old);
+        major_gc(&mut interp);
+
+        assert!(interp.numeric_index_fast_set(&array, 3.0, &obj(old)));
+        assert!(interp.numeric_index_fast_set(&array, 5.0, &JsValue::number(1.0)));
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![]));
+        assert_eq!(interp.objects.remembered_len(), 0);
+    }
+
+    #[test]
+    fn append_past_the_card_bitmap_marks_a_new_card() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, array) = tenured_array(&mut interp, 2);
+        let child = fresh_object(&mut interp);
+
+        assert!(interp.numeric_index_fast_set(&array, (2 * CARD_ELEMENTS) as f64, &obj(child)));
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![2]));
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+    }
+
+    #[test]
+    fn moving_a_young_element_to_another_card_keeps_it_reachable() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, array) = tenured_array(&mut interp, 8);
+        let child = fresh_object(&mut interp);
+        assert!(interp.numeric_index_fast_set(&array, 1.0, &obj(child)));
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![0]));
+
+        // A shift, splice or sort moves elements without naming their cards,
+        // so the bitmap must give way to a full scan.
+        interp.with_array_elements_mut(&array, |elements| {
+            elements.swap(1, 7 * CARD_ELEMENTS);
+        });
+        assert_eq!(dirty_cards(&interp, array_id), None);
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![7]));
+    }
+
+    #[test]
+    fn named_property_write_on_a_card_tracked_array_is_scanned() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, _) = tenured_array(&mut interp, 4);
+        let child = fresh_object(&mut interp);
+
+        interp
+            .objects
+            .get_cell_expect(array_id)
+            .borrow_mut()
+            .insert_value("tag".to_string(), obj(child));
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+        assert_eq!(dirty_cards(&interp, array_id), Some(vec![]));
+    }
+
+    #[test]
+    fn card_write_after_a_coarse_write_keeps_both_edges() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let (array_id, array) = tenured_array(&mut interp, 4);
+        let by_card = fresh_object(&mut interp);
+        let by_property = fresh_object(&mut interp);
+
+        assert!(interp.numeric_index_fast_set(&array, 2.0, &obj(by_card)));
+        interp
+            .objects
+            .get_cell_expect(array_id)
+            .borrow_mut()
+            .insert_value("tag".to_string(), obj(by_property));
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(by_card).is_some());
+        assert!(interp.objects.get_cell(by_property).is_some());
+    }
+
+    #[test]
+    fn promoted_object_without_a_young_edge_is_not_remembered() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let lone = fresh_object(&mut interp);
+        interp.gc_root_id(lone);
+
+        minor_gc(&mut interp);
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(lone).is_old());
+        assert_eq!(interp.objects.remembered_len(), 0);
+    }
+
+    #[test]
+    fn promoted_object_with_a_young_edge_is_remembered() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let parent = fresh_object(&mut interp);
+        interp.gc_root_id(parent);
+        minor_gc(&mut interp);
+
+        let child = fresh_object(&mut interp);
+        interp
+            .objects
+            .get_cell_expect(parent)
+            .borrow_mut()
+            .insert_value("child".to_string(), obj(child));
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(parent).is_old());
+        assert!(interp.objects.get_cell_expect(child).is_young());
+        assert_eq!(interp.objects.remembered_len(), 1);
     }
 }

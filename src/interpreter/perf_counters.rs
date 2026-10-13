@@ -70,6 +70,8 @@ pub(crate) struct PerfCounters {
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
     pub(crate) gc_nanos: u128,
+    /// The share of `gc_nanos` spent in minor collections.
+    pub(crate) gc_minor_nanos: u128,
     /// Local-slot ops (`LoadLocal`/`StoreLocal`/`StoreLocalPop`/`UpdateLocal`/
     /// `LocalBinConst`) whose slot hint matched, and those that fell back to
     /// by-name resolution (#898).
@@ -126,6 +128,7 @@ impl Default for PerfCounters {
             gc_minor: 0,
             gc_major: 0,
             gc_nanos: 0,
+            gc_minor_nanos: 0,
             local_slot_hits: 0,
             local_slot_misses: 0,
             global_prop_fast_hits: 0,
@@ -252,6 +255,7 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tgc_minor\t{}", self.gc_minor);
         let _ = writeln!(out, "PERF\tgc_major\t{}", self.gc_major);
         let _ = writeln!(out, "PERF\tgc_ms\t{}", self.gc_nanos / 1_000_000);
+        let _ = writeln!(out, "PERF\tgc_minor_us\t{}", self.gc_minor_nanos / 1_000);
         let _ = writeln!(out, "PERF\tlocal_slot_hits\t{}", self.local_slot_hits);
         let _ = writeln!(out, "PERF\tlocal_slot_misses\t{}", self.local_slot_misses);
         let _ = writeln!(out, "PERF\tast_fallback_execs\t{}", self.ast_fallback_execs);

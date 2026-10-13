@@ -3309,8 +3309,9 @@ impl Interpreter {
                             if idx < elems_len && !slot_is_hole {
                                 // In-bounds overwrite of a live slot: no length /
                                 // extensible / shape / prototype involvement.
-                                obj.borrow_mut().array_elements_mut().unwrap()[idx] =
-                                    final_val.clone();
+                                interp.gc_write_barrier_element(&obj, idx, &final_val);
+                                obj.borrow_mut_untracked()
+                                    .overwrite_array_element(idx, &final_val);
                                 return Completion::Normal(final_val);
                             } else if idx == elems_len
                             && idx_u32 >= cur_len
@@ -3330,8 +3331,9 @@ impl Interpreter {
                                     || interp.get_property_descriptor_on_id(pid, &key).is_some()
                             }) {
                                 // Append at end: push and bump length + shape.
-                                let mut b = obj.borrow_mut();
-                                b.array_elements_mut().unwrap().push(final_val.clone());
+                                interp.gc_write_barrier_element(&obj, idx, &final_val);
+                                let mut b = obj.borrow_mut_untracked();
+                                b.extend_array_elements_precise(std::slice::from_ref(&final_val));
                                 if let Some(len_desc) = b.properties.get_mut("length") {
                                     len_desc.set_value(Some(JsValue::number((idx_u32 + 1) as f64)));
                                 }
