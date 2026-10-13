@@ -1,4 +1,4 @@
-use super::chunk::{BLOCK_SLOT_FLAG, Chunk, Constant};
+use super::chunk::{ArrayTemplate, BLOCK_SLOT_FLAG, Chunk, Constant};
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
@@ -348,6 +348,22 @@ fn release_call_operands(
     }
     unroot_stack_value(interp, this_value);
     unroot_stack_value(interp, callee);
+}
+
+/// Takes the top `count` operands as the elements of an array literal and
+/// unroots them (innermost first, LIFO with the pushes). Nothing can collect
+/// before the caller has allocated the array from them.
+fn take_literal_values(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    count: usize,
+) -> Vec<JsValue> {
+    assert!(stack.len() >= count, "stack underflow on array literal");
+    let values = stack.split_off(stack.len() - count);
+    for value in values.iter().rev() {
+        unroot_stack_value(interp, value);
+    }
+    values
 }
 
 /// Pops and unroots `count` operands, innermost first (LIFO with the pushes).
@@ -1604,6 +1620,68 @@ fn run_chunk_inner(
                 interp.call_stack_envs[envs_base + top] = fresh.clone();
                 let replaced = std::mem::replace(&mut scopes[top], fresh);
                 interp.recycle_block_environment(replaced);
+            }
+            Op::MakeClosure => {
+                let idx = decode_u16(chunk, pc);
+                let is_method = chunk.code[pc + 2] != 0;
+                pc += 3;
+                let template = &chunk.functions[idx as usize];
+                let closure = interp.make_closure(
+                    &template.spec(),
+                    cur_env!(),
+                    is_method,
+                    template.inferred_name.as_ref(),
+                );
+                push_value(interp, stack, closure);
+            }
+            Op::NewArrayConst => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let array = match &chunk.array_templates[idx as usize] {
+                    ArrayTemplate::Dense(values) => interp.create_array(values.clone()),
+                    ArrayTemplate::Holey(items) => interp.create_array_with_holes(items.clone()),
+                };
+                push_value(interp, stack, array);
+            }
+            Op::NewArray => {
+                let count = usize::from(decode_u16(chunk, pc));
+                pc += 2;
+                let values = take_literal_values(interp, stack, count);
+                let array = interp.create_array(values);
+                push_value(interp, stack, array);
+            }
+            Op::ArrayAppend => {
+                let count = usize::from(decode_u16(chunk, pc));
+                pc += 2;
+                let values = take_literal_values(interp, stack, count);
+                let array = stack.last().expect("stack underflow on ArrayAppend");
+                interp.array_literal_append(array, values);
+            }
+            Op::NewObject => {
+                let shape = &chunk.object_shapes[decode_u16(chunk, pc) as usize];
+                pc += 2;
+                let count = shape.props.len();
+                assert!(stack.len() >= count, "stack underflow on NewObject");
+                let object = interp.build_object_literal(shape, &stack[stack.len() - count..]);
+                pop_operands(interp, stack, count);
+                push_value(interp, stack, object);
+            }
+            Op::ObjectAppend => {
+                let shape = &chunk.object_shapes[decode_u16(chunk, pc) as usize];
+                pc += 2;
+                let count = shape.props.len();
+                assert!(stack.len() > count, "stack underflow on ObjectAppend");
+                let base = stack.len() - count;
+                let object = stack[base - 1].clone();
+                interp.extend_object_literal(&object, shape, &stack[base..]);
+                pop_operands(interp, stack, count);
+            }
+            Op::NewRegExp => {
+                let template = &chunk.regexps[decode_u16(chunk, pc) as usize];
+                pc += 2;
+                let regexp =
+                    interp.alloc_regexp_literal(template.source.clone(), template.flags.clone());
+                push_value(interp, stack, regexp);
             }
             Op::Safepoint => {
                 safepoint_with_empty_stacks(interp, stack, refs, "statement boundary");

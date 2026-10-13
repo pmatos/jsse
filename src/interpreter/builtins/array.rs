@@ -3610,8 +3610,8 @@ impl Interpreter {
                 }
             }
         }
-        obj_data.insert_property(
-            "length".to_string(),
+        obj_data.push_fresh_array_length(
+            &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(len as f64), true, false, false),
         );
         *obj_data.array_elements_mut().unwrap() = array_elements;

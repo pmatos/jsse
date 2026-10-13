@@ -7,6 +7,9 @@ use crate::interpreter::property::SetOutcome;
 mod access;
 mod generator_runtime;
 mod literals;
+pub(crate) use literals::{
+    LiteralPropertySpec, literal_string_property_key, prefixed_function_name, regexp_literal_source,
+};
 mod modules;
 mod operand;
 
@@ -84,7 +87,91 @@ enum MemberLhsRef {
     Suspended(JsValue),
 }
 
+/// Everything a closure of a function or arrow literal needs besides the
+/// environment it closes over. The tree-walker borrows it from the AST node;
+/// the bytecode compiler stores it in a `FunctionTemplate`.
+pub(crate) struct ClosureSpec<'a> {
+    pub(crate) name: Option<&'a str>,
+    pub(crate) info: &'a FunctionLiteralInfo,
+    pub(crate) body: &'a Body,
+    pub(crate) is_arrow: bool,
+    pub(crate) is_async: bool,
+    pub(crate) is_generator: bool,
+    pub(crate) body_is_strict: bool,
+    pub(crate) source_text: &'a Option<SourceText>,
+}
+
 impl Interpreter {
+    /// Evaluates a function or arrow literal (sec-function-definitions-
+    /// runtime-semantics-evaluation, sec-arrow-function-definitions-runtime-
+    /// semantics-evaluation) in `env`. `inferred_name` is the name
+    /// NamedEvaluation gives an anonymous function definition.
+    pub(crate) fn make_closure(
+        &mut self,
+        spec: &ClosureSpec<'_>,
+        env: &EnvRef,
+        is_method: bool,
+        inferred_name: Option<&JsString>,
+    ) -> JsValue {
+        let own_name = if spec.is_arrow { None } else { spec.name };
+        let closure_env = if let Some(name) = own_name {
+            let func_env = Rc::new(RefCell::new(Environment {
+                bindings: Default::default(),
+                this_binding: None,
+                parent: Some(env.clone()),
+                strict: env.borrow().strict || spec.body_is_strict,
+                is_function_scope: false,
+                is_arrow_scope: false,
+                with_object: None,
+                dispose_stack: None,
+                global_object_id: None,
+                annexb_function_names: None,
+                class_private_names: None,
+                is_field_initializer: false,
+                arguments_immutable: false,
+                has_parameter_expressions: false,
+                has_simple_params: true,
+                is_simple_catch_scope: false,
+                is_derived_constructor_scope: false,
+                indirect_bindings: None,
+                module_path: None,
+            }));
+            func_env
+                .borrow_mut()
+                .declare(name, BindingKind::FunctionName);
+            func_env
+        } else {
+            env.clone()
+        };
+        let enclosing_strict = env.borrow().strict;
+        let func = JsFunction::User {
+            name: own_name.map(str::to_string),
+            params: spec.info.params.clone(),
+            body: spec.body.clone(),
+            closure: closure_env.clone(),
+            is_arrow: spec.is_arrow,
+            is_strict: spec.body_is_strict || enclosing_strict,
+            is_generator: spec.is_generator,
+            is_async: spec.is_async,
+            is_method,
+            source_text: spec.source_text.clone(),
+            captured_new_target: if spec.is_arrow {
+                self.new_target.clone()
+            } else {
+                None
+            },
+            // Arrows never have their own `arguments`; their literal info
+            // records `false`.
+            uses_arguments: spec.info.uses_arguments,
+            has_simple_params: spec.info.has_simple_params,
+        };
+        let func_val = self.create_function_with_name(func, FunctionInit::Default, inferred_name);
+        if let Some(name) = own_name {
+            let _ = self.env_set(&closure_env, name, func_val.clone());
+        }
+        func_val
+    }
+
     /// §2.1.1.1 EvaluateImportCall: evaluate an import call's options expression
     /// without inspecting the resulting value. The raw value must survive the
     /// specifier's observable ToString; only after that succeeds may the caller
@@ -590,78 +677,41 @@ impl Interpreter {
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
             Expression::Object(props, _) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
-                let closure_env = if let Some(ref name) = f.name {
-                    let func_env = Rc::new(RefCell::new(Environment {
-                        bindings: Default::default(),
-                        this_binding: None,
-                        parent: Some(env.clone()),
-                        strict: env.borrow().strict || f.body_is_strict,
-                        is_function_scope: false,
-                        is_arrow_scope: false,
-                        with_object: None,
-                        dispose_stack: None,
-                        global_object_id: None,
-                        annexb_function_names: None,
-                        class_private_names: None,
-                        is_field_initializer: false,
-                        arguments_immutable: false,
-                        has_parameter_expressions: false,
-                        has_simple_params: true,
-                        is_simple_catch_scope: false,
-                        is_derived_constructor_scope: false,
-                        indirect_bindings: None,
-                        module_path: None,
-                    }));
-                    func_env
-                        .borrow_mut()
-                        .declare(name, BindingKind::FunctionName);
-                    func_env
-                } else {
-                    env.clone()
-                };
-                let enclosing_strict = env.borrow().strict;
-                let force_method = self.next_function_is_method;
                 let info = f.info();
-                let func = JsFunction::User {
-                    name: f.name.clone(),
-                    params: info.params.clone(),
-                    body: f.body.clone(),
-                    closure: closure_env.clone(),
-                    is_arrow: false,
-                    is_strict: f.body_is_strict || enclosing_strict,
-                    is_generator: f.is_generator,
-                    is_async: f.is_async,
-                    is_method: force_method,
-                    source_text: f.source_text.clone(),
-                    captured_new_target: None,
-                    uses_arguments: info.uses_arguments,
-                    has_simple_params: info.has_simple_params,
-                };
-                let func_val = self.create_function(func);
-                if let Some(name) = &f.name {
-                    let _ = self.env_set(&closure_env, name, func_val.clone());
-                }
-                Completion::Normal(func_val)
+                let force_method = self.next_function_is_method;
+                Completion::Normal(self.make_closure(
+                    &ClosureSpec {
+                        name: f.name.as_deref(),
+                        info: &info,
+                        body: &f.body,
+                        is_arrow: false,
+                        is_async: f.is_async,
+                        is_generator: f.is_generator,
+                        body_is_strict: f.body_is_strict,
+                        source_text: &f.source_text,
+                    },
+                    env,
+                    force_method,
+                    None,
+                ))
             }
             Expression::ArrowFunction(af) => {
-                let enclosing_strict = env.borrow().strict;
                 let info = af.info();
-                let func = JsFunction::User {
-                    name: None,
-                    params: info.params.clone(),
-                    body: af.body.body().clone(),
-                    closure: env.clone(),
-                    is_arrow: true,
-                    is_strict: af.body_is_strict || enclosing_strict,
-                    is_generator: false,
-                    is_async: af.is_async,
-                    is_method: false,
-                    source_text: af.source_text.clone(),
-                    captured_new_target: self.new_target.clone(),
-                    uses_arguments: false, // arrows never have own arguments
-                    has_simple_params: info.has_simple_params,
-                };
-                Completion::Normal(self.create_function(func))
+                Completion::Normal(self.make_closure(
+                    &ClosureSpec {
+                        name: None,
+                        info: &info,
+                        body: af.body.body(),
+                        is_arrow: true,
+                        is_async: af.is_async,
+                        is_generator: false,
+                        body_is_strict: af.body_is_strict,
+                        source_text: &af.source_text,
+                    },
+                    env,
+                    false,
+                    None,
+                ))
             }
             Expression::Class(ce) => {
                 let name = ce.name.clone().unwrap_or_default();

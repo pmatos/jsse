@@ -1304,8 +1304,8 @@ fn optional_member_access_bails_to_unsupported() {
     let source = "var __r = (function(a){ return a?.x; })({x: 3});";
     let (v, count) = eval_with_mode(source, true);
     assert_eq!(
-        count, 0,
-        "optional member access must bail to the tree-walker"
+        count, 1,
+        "optional member access must bail to the tree-walker (only the script runs on the VM)"
     );
     assert_eq!(v.as_number(), Some(3.0));
 }
@@ -1568,13 +1568,17 @@ fn top_level_bytecode_var_redeclaration_preserves_existing_global_property() {
         let mut redeclaration = Parser::new("var existingBytecodeGlobal; existingBytecodeGlobal;")
             .expect("redeclaration parser init");
         let redeclaration_program = redeclaration.parse_program().expect("parse redeclaration");
+        let chunks_before = interp.bytecode_chunks_executed;
         let completion = interp.run(&redeclaration_program);
 
         let Completion::Normal(value) = completion else {
             panic!("expected normal Script completion, got {completion:?}");
         };
         assert_eq!(value.as_number(), Some(17.0));
-        assert_eq!(interp.bytecode_chunks_executed, usize::from(bytecode));
+        assert_eq!(
+            interp.bytecode_chunks_executed - chunks_before,
+            usize::from(bytecode)
+        );
     }
 }
 
@@ -1891,7 +1895,10 @@ fn direct_native_call_takes_bytecode_path() {
     let (ast, ast_count) = eval_with_mode(source, false);
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
-    assert_eq!(bytecode_count, 1, "native callee has no bytecode Body");
+    assert_eq!(
+        bytecode_count, 2,
+        "the script's immediately invoked function and its body compile; the native callee has no Body"
+    );
     assert_eq!(ast.as_number(), Some(42.0));
     assert_eq!(bytecode.as_number(), Some(42.0));
 }
@@ -2709,6 +2716,13 @@ fn operand_layout(op: Op) -> &'static [usize] {
         Op::PopEnv => &[1],
         Op::ExecAst => &[2, 2],
         Op::InitLexical => &[2, 1, 2],
+        Op::NewArrayConst
+        | Op::NewArray
+        | Op::ArrayAppend
+        | Op::NewObject
+        | Op::ObjectAppend
+        | Op::NewRegExp => &[2],
+        Op::MakeClosure => &[2, 1],
         _ => &[],
     }
 }
@@ -3660,4 +3674,256 @@ fn wide_operand_final_statement_still_ends_in_return() {
             "name {target}"
         );
     }
+}
+
+/// Evaluates `source` in both modes and requires the same string result, with
+/// the bytecode run executing at least one chunk.
+fn assert_parity_string(source: &str, expected: &str) {
+    let (ast_v, ast_count) = eval_with_mode(source, false);
+    let (bc_v, bc_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0, "{source}: AST mode must not run chunks");
+    assert!(bc_count >= 1, "{source}: bytecode path must run a chunk");
+    let text = |v: &JsValue| v.as_string().map(|s| s.to_string());
+    assert_eq!(text(&ast_v).as_deref(), Some(expected), "{source}: AST");
+    assert_eq!(text(&bc_v).as_deref(), Some(expected), "{source}: bytecode");
+}
+
+#[test]
+fn literals_and_closures_compile_without_tree_walker_hand_offs() {
+    let chunk = compile_function_source(
+        "var a = [1, 2, 3]; var b = [x, y + 1]; var o = { p: x, q: 2, r: function () {} };
+         var f = function () { return x; }; var g = () => y; var re = /ab/g; var h = [1, , 3];
+         [a, b, o, f, g, re, h];",
+        &["x", "y"],
+    );
+    assert!(chunk.ast.is_empty(), "no node left on the tree-walker");
+    let ops = work_ops(&chunk);
+    for op in [
+        Op::NewArrayConst,
+        Op::NewArray,
+        Op::NewObject,
+        Op::MakeClosure,
+        Op::NewRegExp,
+    ] {
+        assert!(ops.contains(&op), "missing {op:?} in {ops:?}");
+    }
+    assert!(!ops.contains(&Op::EvalAst) && !ops.contains(&Op::ExecAst));
+}
+
+#[test]
+fn unsupported_literal_forms_hand_off_the_whole_literal() {
+    for (source, reason) in [
+        ("[...x];", "array literal: spread"),
+        ("[x, , y];", "array literal: elision"),
+        ("({ ...x });", "object literal: spread"),
+        ("({ [x]: 1 });", "object literal: computed key"),
+        ("(class {});", "expression:Class"),
+    ] {
+        let chunk = compile_function_source(&format!("var pad = 0; {source}"), &["x", "y"]);
+        assert_eq!(chunk.fallback_reasons, vec![reason], "{source}");
+    }
+}
+
+#[test]
+fn array_literal_forms_match_tree_walker() {
+    assert_parity_string(
+        "var __r = (function (v) {
+            var u = [undefined, v]; var h = [1, , 3]; var n = [-1, -0, 1.5, 'a', true, null, 7n];
+            var m = [v, [v], { a: v }];
+            return [0 in [undefined], 0 in [,], 1 in h, h.length, Object.keys(u).join(), 1 / n[1],
+                    typeof n[6], m[1][0], m[2].a, [].length, [,].length].join();
+        })(9);",
+        "true,false,false,3,0,1,-Infinity,bigint,9,9,0,1",
+    );
+}
+
+#[test]
+fn array_literal_is_fresh_per_evaluation() {
+    assert_parity_string(
+        "var __r = (function () {
+            var seen = [];
+            for (var i = 0; i < 3; i++) { var c = [1, 2]; var d = [i, i + 1]; var o = { k: i };
+                seen.push(c, d, o, function () {}); }
+            var distinct = 0;
+            for (var a = 0; a < seen.length; a++)
+                for (var b = a + 1; b < seen.length; b++) if (seen[a] === seen[b]) distinct++;
+            return String(distinct) + seen[0].length + (seen[0] !== seen[4]);
+        })();",
+        "02true",
+    );
+}
+
+#[test]
+fn large_array_literal_chunks_match_tree_walker() {
+    let mut items = String::new();
+    for i in 0..700 {
+        items.push_str(&format!("v + {i}, "));
+    }
+    let source = format!(
+        "var __r = (function (v) {{ var a = [{items} undefined, v]; \
+         return a.length + ',' + a[0] + ',' + a[699] + ',' + a[700] + ',' + (700 in a) + ',' + a[701]; }})(1);"
+    );
+    assert_parity_string(&source, "702,1,700,undefined,true,1");
+}
+
+#[test]
+fn large_object_literal_chunks_match_tree_walker() {
+    let mut props = String::new();
+    for i in 0..600 {
+        props.push_str(&format!("k{i}: v + {i}, "));
+    }
+    let source = format!(
+        "var __r = (function (v) {{ var o = {{ {props} m() {{ return super.x; }}, get g() {{ return 7; }}, \
+         __proto__: {{ x: 'px' }}, dup: 1, dup: 2 }};
+         return Object.keys(o).length + ',' + o.k0 + ',' + o.k599 + ',' + o.m() + ',' + o.g + ',' + o.dup; }})(1);"
+    );
+    assert_parity_string(&source, "603,1,600,px,7,2");
+}
+
+#[test]
+fn object_literal_forms_match_tree_walker() {
+    assert_parity_string(
+        "var __r = (function (v) {
+            var base = { greet() { return 'base'; } };
+            var o = { a: 1, 'b c': 2, 3: 'three', v, f: function () {}, g: () => {}, h: function named() {},
+                      m() { return super.greet() + v; }, get x() { return 'gx'; }, set x(y) { this._x = y; },
+                      get dup() { return 1; }, dup: 5, __proto__: base };
+            var p = { __proto__: null, '__proto__x': 1 }; var q = { __proto__() { return 1; } };
+            var s = { get a() { return 1; }, set a(v) {} };
+            var d = Object.getOwnPropertyDescriptor(s, 'a');
+            return [Object.keys(o).join('|'), o.f.name, o.g.name, o.h.name, o.m.name, o.m(),
+                    Object.getOwnPropertyDescriptor(o, 'x').get.name, Object.getOwnPropertyDescriptor(o, 'x').set.name,
+                    Object.getPrototypeOf(o) === base, Object.getPrototypeOf(p), typeof q.__proto__,
+                    typeof d.get + typeof d.set, o.dup, new (function () {}).constructor === Object].join();
+        })('V');",
+        "3|a|b c|v|f|g|h|m|x|dup,f,g,named,m,baseV,get x,set x,true,,function,functionfunction,5,false",
+    );
+}
+
+#[test]
+fn named_evaluation_matches_tree_walker() {
+    assert_parity_string(
+        "var __r = (function () {
+            var a = function () {}; let b = () => {}; const c = async function () {};
+            var d; d = function () {}; var e; e = (0, function () {});
+            var o = { m: function () {}, n: () => {} }; o.p = function () {};
+            var cls = class {}; var f = function inner() {}; var g = function () {}; g += 1;
+            d ||= 1;
+            return [a.name, b.name, c.name, d.name, e.name === '', o.m.name, o.n.name, o.p.name === '',
+                    cls.name, f.name].join();
+        })();",
+        "a,b,c,d,true,m,n,true,cls,inner",
+    );
+}
+
+#[test]
+fn closures_capture_the_current_block_environment() {
+    assert_parity_string(
+        "var __r = (function () {
+            var fs = [];
+            for (let i = 0; i < 3; i++) { let j = i * 10; fs.push(function () { return i + j; }); fs.push(() => i - j); }
+            { const k = 'k'; fs.push(() => k); }
+            return fs.map(function (f) { return f(); }).join();
+        })();",
+        "0,0,11,-9,22,-18,k",
+    );
+}
+
+#[test]
+fn closure_flavours_match_tree_walker() {
+    assert_parity_string(
+        "var __r = (function (arg) {
+            var gen = function* () { yield 1; yield arg; };
+            var asyncFn = async function () {}; var arrow = async (x) => x;
+            var strictFn = function () { 'use strict'; return this; };
+            var sloppy = function () { return typeof this; };
+            var usesArgs = function () { return arguments.length; };
+            var viaNewTarget = function () { return new.target === undefined; };
+            var outer = function () { return () => new.target === undefined; };
+            var it = gen();
+            return [it.next().value, it.next().value, Object.getPrototypeOf(asyncFn) === Object.getPrototypeOf(async function () {}),
+                    typeof arrow, typeof strictFn(), sloppy(), usesArgs(1, 2, 3), viaNewTarget(), outer()(),
+                    typeof new (function () { this.a = 1; })().a, gen.prototype !== undefined,
+                    arrow.hasOwnProperty('prototype'), (function f(n) { return n ? f(n - 1) + 1 : 0; })(4)].join();
+        })(5);",
+        "1,5,true,function,undefined,object,3,true,true,number,true,false,4",
+    );
+}
+
+#[test]
+fn literal_values_survive_gc_during_later_element_evaluation() {
+    let source = "
+        function make() { return { tag: 'fresh' }; }
+        var __r = (function () {
+            var a = [make(), [make()], function () { return 1; }, ($262.gc(), make()), { k: make() }];
+            var o = { first: make(), second: [make()], third: ($262.gc(), make()), fn: function () {} };
+            var big = [make(), make(), make(), make()];
+            return [a[0].tag, a[1][0].tag, a[2](), a[3].tag, a[4].k.tag, o.first.tag, o.second[0].tag,
+                    o.third.tag, typeof o.fn, big.length].join();
+        })();
+    ";
+    assert_parity_string(
+        source,
+        "fresh,fresh,1,fresh,fresh,fresh,fresh,fresh,function,4",
+    );
+}
+
+#[test]
+fn literal_operands_are_released_after_the_literal() {
+    let source = "(function () { var s = 0; for (var i = 0; i < 6; i++) {
+            var a = [i, { v: i }, function () {}, [i, i]]; var o = { a: a, b: { c: [i] } }; s += o.b.c[0] + a.length; } return s; })();";
+    let (completion, interp) = run_bytecode_script(source);
+    assert!(
+        matches!(completion, Completion::Normal(_)),
+        "unexpected completion: {completion:?}"
+    );
+    assert!(interp.bytecode_chunks_executed >= 1);
+    assert!(interp.gc_bytecode_roots.is_empty());
+}
+
+#[test]
+fn regexp_literal_creates_a_fresh_object_each_evaluation() {
+    assert_parity_string(
+        "var __r = (function () {
+            var make = function () { return /a(b)/gi; };
+            var x = make(), y = make();
+            x.lastIndex = 3;
+            return [x === y, y.lastIndex, x.source, x.flags, make().test('xAB'), /(?:)/.source, new RegExp('').source].join();
+        })();",
+        "false,0,a(b),gi,true,(?:),(?:)",
+    );
+}
+
+#[test]
+fn super_property_in_object_literal_method_uses_the_literal_as_home_object() {
+    assert_parity_string(
+        "var __r = (function () {
+            var proto = { who() { return 'proto'; } };
+            var o = { __proto__: proto, who() { return 'o>' + super.who(); } };
+            var p = { __proto__: proto, get w() { return super.who(); } };
+            return o.who() + ',' + p.w;
+        })();",
+        "o>proto,proto",
+    );
+}
+
+#[test]
+fn immediately_invoked_closures_compile_natively_and_call_with_undefined_this() {
+    let chunk = compile_function_source(
+        "(function (a) { return a; })(1); (() => 2)(); (0, o.m)(); f()();",
+        &["o"],
+    );
+    assert!(
+        chunk.ast.is_empty(),
+        "no call callee left on the tree-walker"
+    );
+    assert_parity_string(
+        "var __r = (function () {
+            var o = { m: function () { return this === o; } };
+            return [(function (a) { return a + 1; })(2), (() => 7)(), (0, o.m)(), (o.m)(), (o?.m)(),
+                    (function () { return function () { return 9; }; })()(),
+                    (function () { 'use strict'; return typeof this; })()].join();
+        })();",
+        "3,7,false,true,true,9,undefined",
+    );
 }
