@@ -2957,8 +2957,8 @@ impl JsObjectData {
     ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(key_str) = key.as_property_key_str()
-                && let Some(map) = self.parameter_map()
+            if let Some(map) = self.parameter_map()
+                && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -2966,8 +2966,8 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elems) = self.array_elements()
+        if let Some(elems) = self.array_elements()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
@@ -3000,7 +3000,7 @@ impl JsObjectData {
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = s.as_units();
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
@@ -3031,8 +3031,8 @@ impl JsObjectData {
         key: &K,
     ) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(ns_data) = self.module_namespace()
+        if let Some(ns_data) = self.module_namespace()
+            && let Some(key_str) = key.as_property_key_str()
         {
             if ns_data.export_names.contains(&key_str.to_string()) {
                 let val = if let Some(binding_name) = ns_data.export_to_binding.get(key_str) {
@@ -3060,8 +3060,8 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
-            if let Some(key_str) = key.as_property_key_str()
-                && let Some(map) = self.parameter_map()
+            if let Some(map) = self.parameter_map()
+                && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -3112,7 +3112,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor::data(
                     JsValue::number(s.len() as f64),
                     false,
@@ -3134,8 +3134,8 @@ impl JsObjectData {
 
     pub(crate) fn has_own_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(ns_data) = self.module_namespace()
+        if let Some(ns_data) = self.module_namespace()
+            && let Some(key_str) = key.as_property_key_str()
         {
             return ns_data.export_names.contains(&key_str.to_string());
         }
@@ -3158,7 +3158,7 @@ impl JsObjectData {
         if self.class_name == "String"
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return true;
             }
             return string_exotic_index(key, s.len()).is_some();
@@ -3492,8 +3492,8 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(key_str) = key.as_str()
-                && let Some(map) = self.parameter_map_mut()
+            if let Some(map) = self.parameter_map_mut()
+                && let Some(key_str) = key.as_str()
                 && map.contains_key(key_str)
                 && let Some(ref val) = desc.value
                 && let Some((env_ref, param_name)) = map.get(key_str)
@@ -3544,7 +3544,7 @@ impl JsObjectData {
             return false;
         }
         // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
-        if self.class_name == "Array" && key.as_property_key_str() == Some("length") {
+        if self.class_name == "Array" && key.as_property_key_bytes() == b"length" {
             // Check if length is writable before allowing set
             let len_writable = self
                 .properties
@@ -3617,8 +3617,8 @@ impl JsObjectData {
                 }
             }
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(map) = self.parameter_map()
+        if let Some(map) = self.parameter_map()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some((env_ref, param_name)) = map.get(key_str)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
@@ -3706,8 +3706,8 @@ impl JsObjectData {
             }
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elements) = self.array_elements_mut()
+        if let Some(elements) = self.array_elements_mut()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
@@ -3751,7 +3751,7 @@ impl JsObjectData {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
             if self.class_name == "String"
                 && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
-                && (key.as_property_key_str() == Some("length")
+                && (key.as_property_key_bytes() == b"length"
                     || string_exotic_index(key, s.len()).is_some())
             {
                 return false;
@@ -3857,8 +3857,8 @@ impl JsObjectData {
         &self,
         key: &K,
     ) -> Option<JsValue> {
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(ns_data) = self.module_namespace()
+        if let Some(ns_data) = self.module_namespace()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
         {
             return Some(
@@ -3869,8 +3869,8 @@ impl JsObjectData {
                     .unwrap_or(JsValue::UNDEFINED),
             );
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(map) = self.parameter_map()
+        if let Some(map) = self.parameter_map()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some((env_ref, param_name)) = map.get(key_str)
             && let Some(val) = env_ref.borrow().get(param_name)
         {
@@ -3882,8 +3882,8 @@ impl JsObjectData {
             }
             return Some(JsValue::UNDEFINED);
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elems) = self.array_elements()
+        if let Some(elems) = self.array_elements()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
@@ -3914,8 +3914,8 @@ impl JsObjectData {
     ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(key_str) = key.as_property_key_str()
-                && let Some(map) = self.parameter_map()
+            if let Some(map) = self.parameter_map()
+                && let Some(key_str) = key.as_property_key_str()
                 && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -3931,8 +3931,8 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(key_str) = key.as_property_key_str()
-            && let Some(elems) = self.array_elements()
+        if let Some(elems) = self.array_elements()
+            && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
             && idx < elems.len()
             && !elems[idx].is_undefined()
@@ -3965,7 +3965,7 @@ impl JsObjectData {
             && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = s.as_units();
-            if key.as_property_key_str() == Some("length") {
+            if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
