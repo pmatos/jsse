@@ -37,18 +37,17 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "BigInt";
 
-        fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
-            if let Some(bigint) = this.with_bigint(Clone::clone) {
+        // thisBigIntValue (§21.2.3.4.1): a reference-counted handle on the
+        // BigInt, not a deep copy of its digits.
+        fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<JsBigInt> {
+            if let Some(bigint) = this.as_bigint() {
                 return Some(bigint);
             }
             let object_id = this.as_object_id()?;
             interp.get_object_cell(object_id).and_then(|cell| {
                 let object = cell.borrow();
                 if object.class_name == "BigInt" {
-                    object
-                        .primitive_value
-                        .as_ref()
-                        .and_then(|value| value.with_bigint(Clone::clone))
+                    object.primitive_value.as_ref().and_then(JsValue::as_bigint)
                 } else {
                     None
                 }
@@ -88,12 +87,12 @@ impl Interpreter {
                             }
                             _ => 10,
                         };
-                    let s = if radix == 10 {
-                        n.to_string()
-                    } else {
-                        bigint_to_string_radix(&n, radix)
-                    };
-                    Completion::Normal(JsValue::from_str(&s))
+                    match bigint_to_js_string(&n.value, radix) {
+                        Some(s) => Completion::Normal(JsValue::string(s)),
+                        None => Completion::Throw(
+                            interp.create_error("RangeError", "Invalid string length"),
+                        ),
+                    }
                 }),
             ),
             (
@@ -105,7 +104,7 @@ impl Interpreter {
                             interp.create_type_error("BigInt.prototype.valueOf requires a BigInt"),
                         );
                     };
-                    Completion::Normal(JsValue::bigint(JsBigInt::new(n)))
+                    Completion::Normal(JsValue::bigint(n))
                 }),
             ),
             (
@@ -123,8 +122,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let bigint_val = JsValue::bigint(JsBigInt::new(n));
-                    interp.intl_number_format_format(&nf, &bigint_val)
+                    interp.intl_number_format_format(&nf, &JsValue::bigint(n))
                 }),
             ),
         ];
@@ -312,18 +310,88 @@ impl Interpreter {
     }
 }
 
+use num_bigint::Sign;
+
+const RADIX_DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+/// BigInt::toString for a Number-sized value (`Number.prototype.toString`'s
+/// integer part), sharing the renderer with `BigInt.prototype.toString`.
 pub(crate) fn bigint_to_string_radix(n: &num_bigint::BigInt, radix: u32) -> String {
-    use num_bigint::Sign;
-    let (sign, digits) = n.to_radix_be(radix);
-    if digits.is_empty() || (digits.len() == 1 && digits[0] == 0) {
-        return "0".to_string();
+    let units = bigint_radix_units(n, radix);
+    String::from_utf16_lossy(&units)
+}
+
+/// BigInt::toString (`radix` in 2..=36) as a String value, rendered straight
+/// into the result's UTF-16 buffer. `None` when the result would exceed
+/// `MAX_STRING_LENGTH`; that is checked before the buffer is allocated.
+pub(crate) fn bigint_to_js_string(n: &num_bigint::BigInt, radix: u32) -> Option<JsString> {
+    // Exact for power-of-two radices; otherwise a lower bound (a digit carries
+    // fewer than 6 bits), so a representable result is never rejected here.
+    let bits = n.magnitude().bits();
+    let min_digits = if radix.is_power_of_two() {
+        bits.div_ceil(u64::from(radix.trailing_zeros()))
+    } else {
+        bits / 6
+    };
+    if min_digits.saturating_add(u64::from(n.sign() == Sign::Minus)) > MAX_STRING_LENGTH as u64 {
+        return None;
     }
-    let mut s = String::new();
-    if sign == Sign::Minus {
-        s.push('-');
+    let units = bigint_radix_units(n, radix);
+    (units.len() <= MAX_STRING_LENGTH).then(|| JsString::from_vec(units))
+}
+
+fn bigint_radix_units(n: &num_bigint::BigInt, radix: u32) -> Vec<u16> {
+    let negative = match n.sign() {
+        Sign::NoSign => return vec![u16::from(b'0')],
+        Sign::Minus => true,
+        Sign::Plus => false,
+    };
+    if radix.is_power_of_two() {
+        pow2_radix_units(n.magnitude(), radix.trailing_zeros(), negative)
+    } else {
+        let digits = n.magnitude().to_radix_be(radix);
+        let mut units = Vec::with_capacity(usize::from(negative) + digits.len());
+        if negative {
+            units.push(u16::from(b'-'));
+        }
+        units.extend(
+            digits
+                .iter()
+                .map(|&d| u16::from(RADIX_DIGITS[usize::from(d)])),
+        );
+        units
     }
-    for d in digits {
-        s.push(char::from_digit(d as u32, radix).unwrap_or('?'));
+}
+
+/// Radix `2^bits_per_digit`: digits are bit groups of the magnitude, streamed
+/// from the least significant limb and written back to front into a buffer
+/// sized from `bits()`.
+fn pow2_radix_units(
+    magnitude: &num_bigint::BigUint,
+    bits_per_digit: u32,
+    negative: bool,
+) -> Vec<u16> {
+    let digit_count = magnitude.bits().div_ceil(u64::from(bits_per_digit)) as usize;
+    let sign_len = usize::from(negative);
+    let mut units = vec![u16::from(b'-'); sign_len + digit_count];
+    let mask = (1u128 << bits_per_digit) - 1;
+    let mut acc: u128 = 0;
+    let mut acc_bits: u32 = 0;
+    let mut pos = units.len();
+    for limb in magnitude.iter_u64_digits() {
+        acc |= u128::from(limb) << acc_bits;
+        acc_bits += 64;
+        while acc_bits >= bits_per_digit && pos > sign_len {
+            pos -= 1;
+            units[pos] = u16::from(RADIX_DIGITS[(acc & mask) as usize]);
+            acc >>= bits_per_digit;
+            acc_bits -= bits_per_digit;
+        }
     }
-    s
+    if pos > sign_len {
+        pos -= 1;
+        units[pos] = u16::from(RADIX_DIGITS[(acc & mask) as usize]);
+    }
+    debug_assert_eq!(pos, sign_len);
+    units
 }
