@@ -1333,9 +1333,10 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Literal(Literal::String(s)))
             }
             Token::BigIntLiteral(s) => {
-                let s = s.clone();
+                let value =
+                    crate::types::JsBigInt::new(crate::interpreter::parse_bigint_literal(s));
                 self.advance()?;
-                Ok(Expression::Literal(Literal::BigInt(s)))
+                Ok(Expression::Literal(Literal::BigInt(value)))
             }
             Token::RegExpLiteral { pattern, flags } => {
                 let p = pattern.clone();

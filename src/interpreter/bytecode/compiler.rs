@@ -14,7 +14,7 @@ use crate::ast::{
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
 use crate::interpreter::types::BindingKind;
-use crate::types::{JsBigInt, JsString, JsValue};
+use crate::types::{JsString, JsValue};
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
@@ -1593,9 +1593,8 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
-            Literal::BigInt(text) => {
-                let value = crate::interpreter::helpers::parse_bigint_literal(text);
-                let idx = self.add_constant(Constant::BigInt(JsBigInt::new(value)))?;
+            Literal::BigInt(value) => {
+                let idx = self.add_constant(Constant::BigInt(value.clone()))?;
                 self.emit(Op::LoadConst);
                 self.emit_u16(idx);
                 self.push_n(1);
@@ -3105,10 +3104,7 @@ fn constant_element(expr: &Expression) -> Option<JsValue> {
         }
         Expression::Literal(Literal::Boolean(b)) => Some(JsValue::boolean(*b)),
         Expression::Literal(Literal::Null) => Some(JsValue::NULL),
-        Expression::Literal(Literal::BigInt(text)) => {
-            let value = crate::interpreter::helpers::parse_bigint_literal(text);
-            Some(JsValue::bigint(JsBigInt::new(value)))
-        }
+        Expression::Literal(Literal::BigInt(value)) => Some(JsValue::bigint(value.clone())),
         Expression::Unary(UnaryOp::Minus, operand) => match operand.as_ref() {
             Expression::Literal(Literal::Number(n)) => Some(JsValue::number(-*n)),
             _ => None,

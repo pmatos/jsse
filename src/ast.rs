@@ -4,6 +4,8 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::types::JsBigInt;
+
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn next_template_id() -> u64 {
@@ -590,7 +592,7 @@ pub(crate) enum Literal {
     Boolean(bool),
     Number(f64),
     String(Vec<u16>),
-    BigInt(String),
+    BigInt(JsBigInt),
     RegExp(String, String),
 }
 

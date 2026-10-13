@@ -138,9 +138,7 @@ impl Interpreter {
             Literal::Boolean(b) => JsValue::boolean(*b),
             Literal::Number(n) => JsValue::number(*n),
             Literal::String(s) => JsValue::string(JsString::from_vec(s.clone())),
-            Literal::BigInt(s) => JsValue::bigint(JsBigInt::new(
-                crate::interpreter::helpers::parse_bigint_literal(s),
-            )),
+            Literal::BigInt(b) => JsValue::bigint(b.clone()),
             Literal::RegExp(pattern, flags) => {
                 let source_js = regexp_literal_source(pattern);
                 self.alloc_regexp_literal(source_js, JsString::from_str(flags))
