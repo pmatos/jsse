@@ -1,9 +1,10 @@
-use crate::types::JsBigInt;
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
 use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::types::JsBigInt;
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 

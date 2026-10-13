@@ -93,6 +93,17 @@ var o = { 0x10n: 'a', 1_0n: 'b' };
 assert.sameValue(o['16'], 'a', 'hex BigInt property key');
 assert.sameValue(o['10'], 'b', 'separator BigInt property key');
 
+// Destructuring pattern keys written as BigInt literals use the same value.
+var { 0x10n: patA, 0b1_0n: patB } = { 16: 'a', 2: 'b' };
+assert.sameValue(patA, 'a', 'hex BigInt pattern key');
+assert.sameValue(patB, 'b', 'binary BigInt pattern key');
+
+// Zero-valued prefixed forms.
+assert.sameValue(0x0n, 0n, '0x0n');
+assert.sameValue(0b0n, 0n, '0b0n');
+assert.sameValue(0o0n, 0n, '0o0n');
+assert.sameValue(-0n, 0n, '-0n');
+
 // Each evaluation of the literal is a BigInt primitive: mutating a variable
 // that held it does not change later evaluations.
 function fresh() { var v = 5n; v += 1n; return v; }

@@ -1,17 +1,7 @@
 use super::*;
 
 fn bigint_literal_to_decimal(s: &str) -> String {
-    use num_bigint::BigInt;
-    let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
-    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
-        BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
-    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-        BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
-    } else {
-        s.parse::<BigInt>().unwrap_or_default()
-    };
-    value.to_string()
+    crate::interpreter::parse_bigint_literal(s).to_string()
 }
 
 impl<'a> Parser<'a> {
