@@ -378,11 +378,9 @@ pub(crate) struct Interpreter {
         std::sync::Condvar,
     )>,
     pub(crate) iterator_next_cache: FxHashMap<u64, JsValue>,
-    /// Set by `generator_step_value` right before it resumes a generator, and
-    /// taken by the resumption's entry before any user code runs: the step
-    /// then parks its `(value, done)` in `raw_iter_step` instead of building
-    /// the iterator-result object.
-    pub(crate) raw_iter_step_requested: bool,
+    /// The `(value, done)` a raw generator resumption (see
+    /// `generator_step_value`) parks instead of building the
+    /// iterator-result object.
     pub(crate) raw_iter_step: Option<(JsValue, bool)>,
     last_identifier_with_base: Option<u64>,
     /// Address of the `await using` block that the running async-function
@@ -827,7 +825,6 @@ impl Interpreter {
                 std::sync::Condvar::new(),
             )),
             iterator_next_cache: FxHashMap::default(),
-            raw_iter_step_requested: false,
             raw_iter_step: None,
             last_identifier_with_base: None,
             suspendable_dispose_block: None,

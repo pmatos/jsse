@@ -4718,7 +4718,7 @@ impl Interpreter {
         &mut self,
         iterator: &JsValue,
     ) -> Result<Option<JsValue>, JsValue> {
-        if let Some(step) = self.intrinsic_iterator_step(iterator) {
+        if let Some(step) = self.intrinsic_iterator_step(iterator, true) {
             return step;
         }
         let result = self.iterator_next(iterator)?;
@@ -4729,7 +4729,7 @@ impl Interpreter {
     /// `true` once `iterator` is exhausted. Reads no `value`, as the spec's
     /// IteratorStep does not.
     pub(crate) fn iterator_skip(&mut self, iterator: &JsValue) -> Result<bool, JsValue> {
-        if let Some(step) = self.intrinsic_iterator_step(iterator) {
+        if let Some(step) = self.intrinsic_iterator_step(iterator, false) {
             return step.map(|value| value.is_none());
         }
         Ok(self.iterator_step(iterator)?.is_none())
@@ -4756,10 +4756,13 @@ impl Interpreter {
     /// The bypass of [`Self::iterator_step_value`]; `None` when `iterator`'s
     /// captured `next` is not an intrinsic of the current realm (or the
     /// iterator is not of the kind that `next` serves, which the generic path
-    /// must then reject by calling it).
+    /// must then reject by calling it). `read_value` is false for a caller
+    /// that discards the value: a result object a generator forwards from a
+    /// `yield*` then has only its `done` read.
     fn intrinsic_iterator_step(
         &mut self,
         iterator: &JsValue,
+        read_value: bool,
     ) -> Option<Result<Option<JsValue>, JsValue>> {
         let iter_id = iterator.as_object_id()?;
         let next_id = self.iterator_next_cache.get(&iter_id)?.as_object_id()?;
@@ -4773,7 +4776,7 @@ impl Interpreter {
         } else if Some(next_id) == intrinsics.string {
             self.string_iterator_step(iter_id)
         } else if Some(next_id) == intrinsics.generator {
-            return self.generator_step_value(iterator);
+            return self.generator_step_value(iterator, read_value);
         } else {
             return None;
         };

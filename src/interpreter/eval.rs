@@ -9189,77 +9189,79 @@ impl Interpreter {
                             }
                         }
                     };
-                    let done = step.is_none();
-                    if done {
-                        let iterator = func_env
-                            .borrow()
-                            .get(iter_var)
-                            .unwrap_or(JsValue::UNDEFINED);
-                        self.forget_for_of_iterator(&iterator);
-                        for_of_stack.remove(loop_pos);
-                        current_id = after_state;
-                    } else {
-                        let Some(value) = step else {
-                            unreachable!("a step that is not done carries a value")
-                        };
-                        let needs_iter_env = Self::for_of_head_lexical(left).is_some();
-                        let outer_env = for_of_stack[loop_pos].outer_env.clone();
-                        let bind_env = if needs_iter_env {
-                            let ie = Environment::new(Some(outer_env));
-                            for_of_stack[loop_pos].iteration_env = Some(ie.clone());
-                            ie
-                        } else {
-                            outer_env
-                        };
-                        let bind_result = match left {
-                            ForInOfLeft::Variable(decl) => {
-                                let is_using =
-                                    matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
-                                if is_using {
-                                    let hint = crate::interpreter::types::DisposeHint::for_var_kind(
-                                        decl.kind,
-                                    );
-                                    if let Err(e) =
-                                        self.add_disposable_resource(&bind_env, &value, hint)
-                                    {
-                                        pending_exception = Some(e);
-                                        continue;
+                    match step {
+                        None => {
+                            let iterator = func_env
+                                .borrow()
+                                .get(iter_var)
+                                .unwrap_or(JsValue::UNDEFINED);
+                            self.forget_for_of_iterator(&iterator);
+                            for_of_stack.remove(loop_pos);
+                            current_id = after_state;
+                        }
+                        Some(value) => {
+                            let needs_iter_env = Self::for_of_head_lexical(left).is_some();
+                            let outer_env = for_of_stack[loop_pos].outer_env.clone();
+                            let bind_env = if needs_iter_env {
+                                let ie = Environment::new(Some(outer_env));
+                                for_of_stack[loop_pos].iteration_env = Some(ie.clone());
+                                ie
+                            } else {
+                                outer_env
+                            };
+                            let bind_result = match left {
+                                ForInOfLeft::Variable(decl) => {
+                                    let is_using =
+                                        matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
+                                    if is_using {
+                                        let hint =
+                                            crate::interpreter::types::DisposeHint::for_var_kind(
+                                                decl.kind,
+                                            );
+                                        if let Err(e) =
+                                            self.add_disposable_resource(&bind_env, &value, hint)
+                                        {
+                                            pending_exception = Some(e);
+                                            continue;
+                                        }
+                                    }
+                                    if let Some(d) = decl.declarations.first() {
+                                        match self.bind_pattern(
+                                            &d.pattern,
+                                            value,
+                                            match decl.kind {
+                                                VarKind::Var => BindingKind::Var,
+                                                VarKind::Let => BindingKind::Let,
+                                                VarKind::Const
+                                                | VarKind::Using
+                                                | VarKind::AwaitUsing => BindingKind::Const,
+                                            },
+                                            &bind_env,
+                                        ) {
+                                            Completion::Throw(e) => Err(e),
+                                            _ => Ok(()),
+                                        }
+                                    } else {
+                                        Ok(())
                                     }
                                 }
-                                if let Some(d) = decl.declarations.first() {
-                                    match self.bind_pattern(
-                                        &d.pattern,
-                                        value,
-                                        match decl.kind {
-                                            VarKind::Var => BindingKind::Var,
-                                            VarKind::Let => BindingKind::Let,
-                                            VarKind::Const
-                                            | VarKind::Using
-                                            | VarKind::AwaitUsing => BindingKind::Const,
-                                        },
-                                        &bind_env,
-                                    ) {
+                                ForInOfLeft::Pattern(p) => {
+                                    match self.assign_to_for_pattern(p, value, &bind_env) {
+                                        Completion::Normal(_) | Completion::Empty => Ok(()),
                                         Completion::Throw(e) => Err(e),
                                         _ => Ok(()),
                                     }
-                                } else {
-                                    Ok(())
                                 }
-                            }
-                            ForInOfLeft::Pattern(p) => {
-                                match self.assign_to_for_pattern(p, value, &bind_env) {
-                                    Completion::Normal(_) | Completion::Empty => Ok(()),
-                                    Completion::Throw(e) => Err(e),
-                                    _ => Ok(()),
+                                ForInOfLeft::Expression(e) => {
+                                    self.assign_to_expr(e, value, &bind_env)
                                 }
+                            };
+                            if let Err(e) = bind_result {
+                                pending_exception = Some(e);
+                                continue;
                             }
-                            ForInOfLeft::Expression(e) => self.assign_to_expr(e, value, &bind_env),
-                        };
-                        if let Err(e) = bind_result {
-                            pending_exception = Some(e);
-                            continue;
+                            current_id = body_state;
                         }
-                        current_id = body_state;
                     }
                 }
 

@@ -616,6 +616,18 @@ impl Interpreter {
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
+        self.generator_next_state_machine_with(this, sent_value, false)
+    }
+
+    /// `raw` asks the resumption to park `(value, done)` in `raw_iter_step`
+    /// instead of building the iterator-result object (see
+    /// [`Self::generator_step_value`]).
+    fn generator_next_state_machine_with(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+        raw: bool,
+    ) -> Completion {
         let caller_realm = self.current_realm_id;
         if let Some(o) = (this)
             .as_object_id()
@@ -625,8 +637,8 @@ impl Interpreter {
         {
             self.current_realm_id = realm_id;
         }
-        let result =
-            self.with_iter_close_scope(|s| s.generator_next_state_machine_impl(this, sent_value));
+        let result = self
+            .with_iter_close_scope(|s| s.generator_next_state_machine_impl(this, sent_value, raw));
         self.current_realm_id = caller_realm;
         result
     }
@@ -647,9 +659,12 @@ impl Interpreter {
     /// would, but asks the resumption to park `(value, done)` rather than
     /// build the iterator-result object. `None` leaves anything else (a
     /// non-state-machine generator, a foreign object) to the generic path.
+    /// With `read_value` false, a result object forwarded by `yield*` has
+    /// only its `done` read and a non-final step yields `undefined`.
     pub(crate) fn generator_step_value(
         &mut self,
         iterator: &JsValue,
+        read_value: bool,
     ) -> Option<Result<Option<JsValue>, JsValue>> {
         let cell = self.get_object_cell(iterator.as_object_id()?)?;
         if !matches!(
@@ -659,20 +674,25 @@ impl Interpreter {
             return None;
         }
         self.raw_iter_step = None;
-        self.raw_iter_step_requested = true;
+        // `%GeneratorPrototype%.next` is a native [[Call]]: the body it
+        // resumes sees no NewTarget, whatever constructor is running here.
+        let saved_new_target = self.new_target.take();
         // The native `next` call this replaces counted one call level; keep
         // that so recursion through generators stays bounded.
         let completion = self.with_call_depth(|interp| {
-            interp.generator_next_state_machine(iterator, JsValue::UNDEFINED)
+            interp.generator_next_state_machine_with(iterator, JsValue::UNDEFINED, true)
         });
-        self.raw_iter_step_requested = false;
+        self.new_target = saved_new_target;
         Some(match completion {
             Completion::Normal(result) => match self.raw_iter_step.take() {
                 Some((value, false)) => Ok(Some(value)),
                 Some((_, true)) => Ok(None),
                 // Parked nothing: the resumption produced a result object of
                 // its own (`yield*` forwards the inner one verbatim).
-                None if result.is_object() => self.iterator_result_value(&result),
+                None if result.is_object() && read_value => self.iterator_result_value(&result),
+                None if result.is_object() => self
+                    .iterator_complete(&result)
+                    .map(|done| (!done).then_some(JsValue::UNDEFINED)),
                 None => Err(self.create_type_error("Iterator result is not an object")),
             },
             Completion::Throw(e) => Err(e),
@@ -695,12 +715,9 @@ impl Interpreter {
         &mut self,
         this: &JsValue,
         sent_value: JsValue,
+        raw: bool,
     ) -> Completion {
         use crate::interpreter::generator_transform::{ArrayPatternIterOp, StateTerminator};
-
-        // Taken before any user code can run, so only this resumption's own
-        // result sites see the request, never a nested `next` call.
-        let raw = std::mem::take(&mut self.raw_iter_step_requested);
 
         let Some(o) = (this)
             .as_object_id()
@@ -797,8 +814,11 @@ impl Interpreter {
                                 pending_return: None,
                             },
                         );
-                        self.raw_iter_step_requested = raw;
-                        return self.generator_next_state_machine(this, JsValue::UNDEFINED);
+                        return self.generator_next_state_machine_with(
+                            this,
+                            JsValue::UNDEFINED,
+                            raw,
+                        );
                     } else {
                         obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                             IteratorState::StateMachineGenerator {

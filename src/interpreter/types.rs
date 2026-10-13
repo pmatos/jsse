@@ -540,14 +540,9 @@ pub(crate) struct DelegatedIteratorInfo {
 
 pub(crate) type EnvRef = Rc<RefCell<Environment>>;
 
-/// Function-object ids of a realm's intrinsic iterator `next` methods.
-///
-/// An iterator step whose captured `[[NextMethod]]` is one of these (and
-/// whose iterator carries the matching state) runs a function that only
-/// builds a fresh `{ value, done }` object whose own data properties the
-/// caller reads straight back, so the step can hand `value` over without
-/// the object. The ids are GC roots: a collected-and-recycled id would
-/// otherwise identity-match an unrelated function.
+/// Function ids of a realm's intrinsic iterator `next` methods, compared by
+/// identity to skip the iterator-result object. They are GC roots so a
+/// collected-and-recycled id can never match an unrelated function.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct IteratorNextIntrinsics {
     pub(crate) array: Option<u64>,
@@ -579,8 +574,6 @@ pub(crate) struct Realm {
     pub(crate) promise_constructor: Option<JsValue>,
     pub(crate) promise_then: Option<JsValue>,
     pub(crate) promise_species_getter: Option<JsValue>,
-    /// The realm's intrinsic iterator `next` functions; see
-    /// [`IteratorNextIntrinsics`].
     pub(crate) iterator_next_intrinsics: IteratorNextIntrinsics,
     pub(crate) template_cache: FxHashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
