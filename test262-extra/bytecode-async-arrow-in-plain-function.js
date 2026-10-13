@@ -75,6 +75,12 @@ function classPositions(base) {
   return viaExtends;
 }
 
+function inheritsNewTarget() {
+  var probe = async () => { await null; return new.target; };
+  this.probe = probe;
+  return new.target ? undefined : probe;
+}
+
 function awaitAsIdentifier() {
   var await = 7;
   var yield = 8;
@@ -107,6 +113,10 @@ asyncTest(async function () {
 
   assert.sameValue(await arrowOwner("from-arrow")(), "from-arrow", "async arrow inside a plain arrow");
   assert.sameValue(await classPositions(class {}), 1, "async arrow beside a class with computed key and extends");
+
+  var constructed = new inheritsNewTarget();
+  assert.sameValue(await constructed.probe(), inheritsNewTarget, "the arrow inherits new.target from the constructing frame");
+  assert.sameValue(await inheritsNewTarget.call({})(), undefined, "and undefined from a plain call");
 
   assert.sameValue(await tryCatchInside(false), "ok");
   assert.sameValue(await tryCatchInside(true), "boom");
