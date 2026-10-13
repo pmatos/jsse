@@ -32,7 +32,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
             values.push(padding_values.get(i).cloned().unwrap_or(JsValue::UNDEFINED));
             continue;
         }
-        match iterator_step_value_getter(interp, it, nm) {
+        match interp.iterator_step_value_direct(it, nm) {
             Ok(Some(v)) => {
                 interp.gc_root_value(&v);
                 values.push(v);
@@ -72,7 +72,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                         if new_exhausted[k] {
                             continue;
                         }
-                        match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
+                        match interp.iterator_step_value_direct(&iters[k].0, &iters[k].1) {
                             Ok(None) => {
                                 new_exhausted[k] = true;
                             }
@@ -179,7 +179,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
             ));
             continue;
         }
-        match iterator_step_value_getter(interp, it, nm) {
+        match interp.iterator_step_value_direct(it, nm) {
             Ok(Some(v)) => {
                 interp.gc_root_value(&v);
                 values.push((keys[i].clone(), v));
@@ -219,7 +219,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                         if new_exhausted[k] {
                             continue;
                         }
-                        match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
+                        match interp.iterator_step_value_direct(&iters[k].0, &iters[k].1) {
                             Ok(None) => {
                                 new_exhausted[k] = true;
                             }
@@ -576,45 +576,6 @@ fn get_iterator_getter(
         return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
     }
     get_iterator_direct_getter(interp, &iterator)
-}
-
-// IteratorStepValue using getter-aware property access for .done and .value
-// Returns Ok(Some(value)) if iterator produced a value, Ok(None) if done
-fn iterator_step_value_getter(
-    interp: &mut Interpreter,
-    iterator: &JsValue,
-    next_method: &JsValue,
-) -> Result<Option<JsValue>, JsValue> {
-    let result = match interp.call_function(next_method, iterator, &[]) {
-        Completion::Normal(v) => v,
-        Completion::Throw(e) => return Err(e),
-        _ => return Err(interp.create_type_error("Iterator next failed")),
-    };
-    let frame = interp.gc_root_frame();
-    interp.gc_root_value(&result);
-    let outcome = 'step: {
-        let Some(result_id) = result.as_object_id() else {
-            break 'step Err(interp.create_type_error("Iterator result is not an object"));
-        };
-        // Read .done via getter
-        let done = match interp.get_object_property(result_id, "done", &result) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => break 'step Err(e),
-            _ => JsValue::UNDEFINED,
-        };
-        if interp.to_boolean_val(&done) {
-            break 'step Ok(None);
-        }
-        // Read .value via getter
-        let value = match interp.get_object_property(result_id, "value", &result) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => break 'step Err(e),
-            _ => JsValue::UNDEFINED,
-        };
-        Ok(Some(value))
-    };
-    interp.gc_unroot_frame(frame);
-    outcome
 }
 
 // IteratorClose per spec, taking a completion and returning updated completion.
@@ -1206,18 +1167,10 @@ impl Interpreter {
             interp.gc_root_value(&next_method);
             let mut values = Vec::new();
             let outcome = loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        interp.gc_root_value(&result);
-                        let value = interp.iterator_value(&result);
-                        interp.gc_unroot_value(&result);
-                        match value {
-                            Ok(v) => {
-                                interp.gc_root_value(&v);
-                                values.push(v);
-                            }
-                            Err(e) => break Completion::Throw(e),
-                        }
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
+                        interp.gc_root_value(&value);
+                        values.push(value);
                     }
                     Ok(None) => {
                         break Completion::Normal(interp.create_array(values));
@@ -1242,15 +1195,8 @@ impl Interpreter {
             interp.gc_root_value(&next_method);
             let mut counter = 0.0;
             let outcome = loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        interp.gc_root_value(&result);
-                        let value = interp.iterator_value(&result);
-                        interp.gc_unroot_value(&result);
-                        let value = match value {
-                            Ok(v) => v,
-                            Err(e) => break Completion::Throw(e),
-                        };
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
                         if let Completion::Throw(e) = interp.call_function(
                             &callback,
                             &JsValue::UNDEFINED,
@@ -1282,15 +1228,8 @@ impl Interpreter {
             interp.gc_root_value(&next_method);
             let mut counter = 0.0;
             let outcome = loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        interp.gc_root_value(&result);
-                        let value = interp.iterator_value(&result);
-                        interp.gc_unroot_value(&result);
-                        let value = match value {
-                            Ok(v) => v,
-                            Err(e) => break Completion::Throw(e),
-                        };
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
                         match interp.call_function(
                             &predicate,
                             &JsValue::UNDEFINED,
@@ -1333,15 +1272,8 @@ impl Interpreter {
             interp.gc_root_value(&next_method);
             let mut counter = 0.0;
             let outcome = loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        interp.gc_root_value(&result);
-                        let value = interp.iterator_value(&result);
-                        interp.gc_unroot_value(&result);
-                        let value = match value {
-                            Ok(v) => v,
-                            Err(e) => break Completion::Throw(e),
-                        };
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
                         match interp.call_function(
                             &predicate,
                             &JsValue::UNDEFINED,
@@ -1383,15 +1315,8 @@ impl Interpreter {
             interp.gc_root_value(&next_method);
             let mut counter = 0.0;
             let outcome = loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        interp.gc_root_value(&result);
-                        let value = interp.iterator_value(&result);
-                        interp.gc_unroot_value(&result);
-                        let value = match value {
-                            Ok(v) => v,
-                            Err(e) => break Completion::Throw(e),
-                        };
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
                         match interp.call_function(
                             &predicate,
                             &JsValue::UNDEFINED,
@@ -1485,17 +1410,8 @@ impl Interpreter {
             interp.gc_root_value(&next_method);
             let mut skipped = 0.0;
             let outcome = loop {
-                match interp.iterator_step_direct(&iter, &next_method) {
-                    Ok(Some(result)) => {
-                        // `result` is likewise only held here while its own
-                        // `value` getter runs.
-                        interp.gc_root_value(&result);
-                        let value = interp.iterator_value(&result);
-                        interp.gc_unroot_value(&result);
-                        let value = match value {
-                            Ok(value) => value,
-                            Err(err) => break Completion::Throw(err),
-                        };
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
                         if skipped < to_skip {
                             skipped += 1.0;
                             continue;
@@ -1533,15 +1449,9 @@ impl Interpreter {
                     accumulator = args[1].clone();
                     counter = 0.0;
                 } else {
-                    match interp.iterator_step_direct(&iter, &next_method) {
-                        Ok(Some(result)) => {
-                            interp.gc_root_value(&result);
-                            let value = interp.iterator_value(&result);
-                            interp.gc_unroot_value(&result);
-                            accumulator = match value {
-                                Ok(v) => v,
-                                Err(e) => break 'reduce Completion::Throw(e),
-                            };
+                    match interp.iterator_step_value_direct(&iter, &next_method) {
+                        Ok(Some(value)) => {
+                            accumulator = value;
                             counter = 1.0;
                         }
                         Ok(None) => {
@@ -1554,15 +1464,8 @@ impl Interpreter {
                     }
                 }
                 loop {
-                    match interp.iterator_step_direct(&iter, &next_method) {
-                        Ok(Some(result)) => {
-                            interp.gc_root_value(&result);
-                            let value = interp.iterator_value(&result);
-                            interp.gc_unroot_value(&result);
-                            let value = match value {
-                                Ok(v) => v,
-                                Err(e) => break 'reduce Completion::Throw(e),
-                            };
+                    match interp.iterator_step_value_direct(&iter, &next_method) {
+                        Ok(Some(value)) => {
                             match interp.call_function(
                                 &reducer,
                                 &JsValue::UNDEFINED,
@@ -1618,7 +1521,7 @@ impl Interpreter {
             let mut first = true;
 
             let outcome = loop {
-                let value = match iterator_step_value_getter(interp, &iterator, &next_method) {
+                let value = match interp.iterator_step_value_direct(&iterator, &next_method) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
                         break Completion::Normal(JsValue::string(JsString::from_vec(result)));
@@ -2288,7 +2191,7 @@ impl Interpreter {
                     }
 
                     loop {
-                        match iterator_step_value_getter(interp, &iter, &next_method) {
+                        match interp.iterator_step_value_direct(&iter, &next_method) {
                             Ok(Some(value)) => {
                                 let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     elements.push(value);
@@ -2417,7 +2320,7 @@ impl Interpreter {
                     }
 
                     loop {
-                        match iterator_step_value_getter(interp, &iter, &next_method) {
+                        match interp.iterator_step_value_direct(&iter, &next_method) {
                             Ok(Some(value)) => {
                                 let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     if elements.len() == window_size {
@@ -3122,7 +3025,7 @@ impl Interpreter {
                     let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
 
                     loop {
-                        match iterator_step_value_getter(interp, &input_iter, &input_next) {
+                        match interp.iterator_step_value_direct(&input_iter, &input_next) {
                             Ok(Some(next_val)) => {
                                 interp.gc_root_value(&next_val);
                                 match get_iterator_flattenable(interp, &next_val, true) {
@@ -3168,7 +3071,7 @@ impl Interpreter {
                             let mut using_iterator = true;
                             for _ in 0..iter_count {
                                 if using_iterator {
-                                    match iterator_step_value_getter(interp, &pi, &pn) {
+                                    match interp.iterator_step_value_direct(&pi, &pn) {
                                         Ok(Some(v)) => {
                                             interp.gc_root_value(&v);
                                             pads.push(v);
@@ -4746,15 +4649,14 @@ impl Interpreter {
         &mut self,
         result: &JsValue,
     ) -> Result<Option<JsValue>, JsValue> {
-        let gc_frame = self.gc_root_frame();
-        self.gc_root_value(result);
-        let step = match self.iterator_complete(result) {
-            Ok(true) => Ok(None),
-            Ok(false) => self.iterator_value(result).map(Some),
-            Err(e) => Err(e),
-        };
-        self.gc_unroot_frame(gc_frame);
-        step
+        self.with_gc_root_scope(|interp| {
+            interp.gc_root_value(result);
+            if interp.iterator_complete(result)? {
+                Ok(None)
+            } else {
+                interp.iterator_value(result).map(Some)
+            }
+        })
     }
 
     /// The bypass of [`Self::iterator_step_value`]; `None` when `iterator`'s
@@ -5018,6 +4920,27 @@ impl Interpreter {
         }
     }
 
+    /// IteratorStepValue for an explicitly captured next method. Unlike
+    /// `iterator_step_value`, this never consults the next cache or intrinsic
+    /// fast path. The result stays rooted through the ordered done/value reads;
+    /// step failures propagate without closing the iterator. A caller retaining
+    /// the returned value across later user code must root it itself.
+    fn iterator_step_value_direct(
+        &mut self,
+        iterator: &JsValue,
+        next_method: &JsValue,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let result = match self.call_function(next_method, iterator, &[]) {
+            Completion::Normal(value) => value,
+            Completion::Throw(error) => return Err(error),
+            _ => return Err(self.create_type_error("Iterator next failed")),
+        };
+        if !result.is_object() {
+            return Err(self.create_type_error("Iterator result is not an object"));
+        }
+        self.iterator_result_value(&result)
+    }
+
     fn iterator_step_direct(
         &mut self,
         iterator: &JsValue,
@@ -5086,6 +5009,159 @@ impl Interpreter {
             list.push(next);
         }
         Ok(list)
+    }
+}
+
+#[cfg(test)]
+mod direct_step_value_tests {
+    use crate::interpreter::{Completion, Interpreter};
+    use crate::parser::Parser;
+    use crate::types::JsValue;
+
+    fn interp_with(source: &str) -> Interpreter {
+        let program = Parser::new(source)
+            .expect("parser init")
+            .parse_program()
+            .expect("parse program");
+        let mut interp = Interpreter::new();
+        let result = interp.run(&program);
+        assert!(matches!(result, Completion::Normal(_) | Completion::Empty));
+        interp
+    }
+
+    fn global(interp: &Interpreter, name: &str) -> JsValue {
+        interp.get_global_var_ref(name).expect("global fixture")
+    }
+
+    #[test]
+    fn captured_next_and_getter_order_survive_collection() {
+        let mut interp = interp_with(
+            "
+            var events = '';
+            var calls = 0;
+            var iter = {
+                next: function () {
+                    if (this !== iter || arguments.length !== 0) throw 'receiver';
+                    calls++;
+                    events += 'next;';
+                    return {
+                        get done() {
+                            events += 'done;';
+                            iter.next = function () { throw 'replacement'; };
+                            $262.gc();
+                            return false;
+                        },
+                        get value() {
+                            events += 'value;';
+                            $262.gc();
+                            return undefined;
+                        }
+                    };
+                }
+            };
+            var next = iter.next;
+            ",
+        );
+        let iter = global(&interp, "iter");
+        let next = global(&interp, "next");
+        // A nonempty parent scope must survive each nested step intact.
+        interp.gc_root_value(&iter);
+        let depth = interp.gc_root_frame();
+        for _ in 0..2 {
+            let value = interp
+                .iterator_step_value_direct(&iter, &next)
+                .expect("captured next succeeds")
+                .expect("undefined is a value, not exhaustion");
+            assert!(value.is_undefined());
+            assert_eq!(interp.gc_root_frame(), depth);
+        }
+        assert_eq!(global(&interp, "calls").as_number(), Some(2.0));
+        assert_eq!(
+            interp.format_value(&global(&interp, "events")),
+            "next;done;value;next;done;value;"
+        );
+        interp.gc_unroot_value(&iter);
+    }
+
+    #[test]
+    fn truthy_done_skips_value_access() {
+        let mut interp = interp_with(
+            "
+            var iter = { next: function () {
+                return {
+                    get done() { $262.gc(); return 'finished'; },
+                    get value() { throw 'value must not be read'; }
+                };
+            }};
+            var next = iter.next;
+            ",
+        );
+        let iter = global(&interp, "iter");
+        let next = global(&interp, "next");
+        let depth = interp.gc_root_frame();
+        assert!(
+            interp
+                .iterator_step_value_direct(&iter, &next)
+                .expect("exhaustion succeeds")
+                .is_none()
+        );
+        assert_eq!(interp.gc_root_frame(), depth);
+    }
+
+    #[test]
+    fn abrupt_steps_preserve_error_identity_without_closing() {
+        for source in [
+            "throw marker;",
+            "return { get done() { $262.gc(); throw marker; } };",
+            "return { done: false, get value() { $262.gc(); throw marker; } };",
+        ] {
+            let mut interp = interp_with(&format!(
+                "
+                var marker = {{}};
+                var closed = false;
+                var iter = {{
+                    next: function () {{ {source} }},
+                    return: function () {{ closed = true; return {{}}; }}
+                }};
+                var next = iter.next;
+                "
+            ));
+            let iter = global(&interp, "iter");
+            let next = global(&interp, "next");
+            interp.gc_root_value(&iter);
+            let depth = interp.gc_root_frame();
+            let error = interp
+                .iterator_step_value_direct(&iter, &next)
+                .expect_err("abrupt step");
+            assert_eq!(
+                error.as_object_id(),
+                global(&interp, "marker").as_object_id()
+            );
+            assert_eq!(global(&interp, "closed").as_boolean(), Some(false));
+            assert_eq!(interp.gc_root_frame(), depth);
+            interp.gc_unroot_value(&iter);
+        }
+    }
+
+    #[test]
+    fn nonobject_results_are_rejected_before_property_access() {
+        for result in ["null", "undefined", "1", "'result'"] {
+            let mut interp = interp_with(&format!(
+                "var iter = {{ next: function () {{ return {result}; }} }}; var next = iter.next;"
+            ));
+            let iter = global(&interp, "iter");
+            let next = global(&interp, "next");
+            let depth = interp.gc_root_frame();
+            let error = interp
+                .iterator_step_value_direct(&iter, &next)
+                .expect_err("non-object result");
+            assert!(
+                interp
+                    .format_value(&error)
+                    .contains("Iterator result is not an object")
+            );
+            assert_eq!(interp.gc_root_frame(), depth);
+        }
     }
 }
 
