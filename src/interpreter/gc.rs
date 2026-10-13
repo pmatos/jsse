@@ -833,7 +833,7 @@ impl Interpreter {
         while !weak_maps.is_empty() {
             let mut new_marks = false;
             let scanned = weak_maps.len();
-            for &weak_map_id in weak_maps.iter().take(scanned) {
+            for &weak_map_id in &weak_maps {
                 let Some(obj_rc) = self.objects.get_cell(weak_map_id) else {
                     continue;
                 };
@@ -879,29 +879,24 @@ impl Interpreter {
                 continue;
             }
             obj_rc.tenure_after_major();
-            let requires_persistent_scan = {
-                let obj = obj_rc.borrow_untracked();
-                if obj.is_weak_container() {
-                    drop(obj);
-                    let mut obj = obj_rc.borrow_mut_untracked();
-                    if obj.is_weak_map() {
-                        if let Some(entries) = obj.map_data_mut() {
-                            entries.retain(|(key, _)| match key.as_object_id() {
-                                Some(kid) => (kid as usize) < obj_count && marks[kid as usize],
-                                None => true,
-                            });
-                        }
-                    } else if let Some(entries) = obj.set_data_mut() {
-                        entries.retain(|value| match value.as_object_id() {
-                            Some(vid) => (vid as usize) < obj_count && marks[vid as usize],
+            if obj_rc.borrow_untracked().is_weak_container() {
+                let mut obj = obj_rc.borrow_mut_untracked();
+                if obj.is_weak_map() {
+                    if let Some(entries) = obj.map_data_mut() {
+                        entries.retain(|(key, _)| match key.as_object_id() {
+                            Some(kid) => (kid as usize) < obj_count && marks[kid as usize],
                             None => true,
                         });
                     }
-                    Self::object_requires_persistent_minor_scan(&obj)
-                } else {
-                    Self::object_requires_persistent_minor_scan(&obj)
+                } else if let Some(entries) = obj.set_data_mut() {
+                    entries.retain(|value| match value.as_object_id() {
+                        Some(vid) => (vid as usize) < obj_count && marks[vid as usize],
+                        None => true,
+                    });
                 }
-            };
+            }
+            let requires_persistent_scan =
+                Self::object_requires_persistent_minor_scan(&obj_rc.borrow_untracked());
             if requires_persistent_scan {
                 obj_rc.remember_if_old();
             }
