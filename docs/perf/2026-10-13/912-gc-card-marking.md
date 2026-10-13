@@ -1,11 +1,13 @@
 # #912 — per-card dirty tracking for large old Arrays
 
-`before` is `main` at `0d41f4f0`; `after` is this branch. Release builds, `boa`
-is boa 0.22 (`~/.cargo/bin/boa`). The host ran at load average 20-28 on 24
-cores while measuring, so figures are medians of interleaved runs (wall and
-user+sys CPU, 5 runs unless stated) and differences under ~10% are noise. Minor
-averages come from the `perf-counters` build (`PERF gc_minor_us / gc_minor`,
-new in this change), wall times from the default build.
+`before` is `main` at `0d41f4f0`; `after` is this branch. Release builds. Minor
+averages come from the `perf-counters` build (`PERF gc_minor_us / gc_minor`, new
+in this change; the before build carries only that counter patch); CPU times
+(user+sys) come from the default builds. Primary numbers are from buildbox3
+(AMD EPYC 7501, load average 2-5 while measuring), medians of 5 interleaved
+runs (7 for the minor average); boa is boa 0.22.0
+(`~/dev/bench-workspace/boa-0.22.0/boa`). A laptop run at load average 20-28
+is kept as a cross-check. Differences under ~10% are noise.
 
 ## What changed
 
@@ -32,35 +34,44 @@ new in this change), wall times from the default build.
 
 ## retain_grow (the issue's acceptance criterion)
 
+buildbox3, 67 minor collections in both builds:
+
 | | before | after |
 |---|---:|---:|
-| minor collections | 67 | 67 |
-| minor average (median of 9) | 5.60 ms | 2.84 ms |
-| CPU time | 1.861 s | 1.287 s |
-| boa 0.22 CPU time | 2.402 s | |
-| after / boa | | 0.54x |
+| minor average (median of 7) | 9.06 ms | 3.04 ms |
+| same script with a 2,000-slot table (normal nursery, no large array) | 0.76 ms | 0.80 ms |
+| CPU time | 2.066 s | 1.740 s |
+| boa 0.22 CPU time | 2.995 s | |
+| after / boa | | 0.58x |
 
-Acceptance is a minor average at or under 4 ms: met (the 15 ms in the issue is
-the slower reference box; the same run on this host measured 5.6 ms before).
-Intermediate steps on the same repro, measured under heavier load (average
-minor): 9.9 ms before, 8.4 ms with cards plus the young bitmap, 4.9 ms with the
-promotion change as well.
+The acceptance bar is a minor average at or under 4 ms: met on the reference box
+(3.04 ms). The remaining time is mostly tracing the ~16k surviving young
+objects per minor (a scan of the table itself is now a small part), which is
+the cost of the workload's ~95% nursery survival, not of the remembered set.
+(The 15 ms in the issue was measured on an older HEAD; before is 9.06 ms at
+`0d41f4f0`.) On the laptop, load 20-28: 5.60 ms before, 2.84 ms after. The
+intermediate steps there, measured under heavier load (average minor): 9.9 ms
+before, 8.4 ms with cards plus the young bitmap, 4.9 ms with the promotion change
+as well.
 
-## No regression
+## No regression (buildbox3, CPU time, median of 5)
 
-| repro | before | after | after / before |
-|---|---:|---:|---:|
-| splay_mini (CPU) | 0.455 s | 0.451 s | 0.99 |
-| Octane splay score (median of 11, spread 729-1468) | 1236 | 1180 | noise |
-| Octane richards score (median of 11) | 146 | 145 | 0.99 |
-| bench_alloc-gc_liveset (wall) | 0.797 s | 0.797 s | 1.00 |
-| bench_alloc-gc_map_rolling | 0.059 s | 0.053 s | 0.90 |
-| bench_alloc-gc_hashmap_js | 0.877 s | 0.734 s | 0.84 |
-| bench_alloc-gc_objlit_churn (median of 9) | 0.529 s | 0.555 s | 1.05 (noise) |
-| bench_alloc-gc_ctor_churn (median of 9) | 0.614 s | 0.594 s | 0.97 |
-| bench_alloc-gc_array_literal | 0.136 s | 0.124 s | 0.91 |
+| repro | before | after | after / before | boa |
+|---|---:|---:|---:|---:|
+| splay_mini | 0.785 s | 0.795 s | 1.01 | 0.653 s |
+| Octane splay, fixed work (SplaySetup, 150 x SplayRun, SplayTearDown) | 6.120 s | 6.132 s | 1.00 | fails |
+| Octane richards, fixed work (200 x runRichards) | 15.279 s | 15.529 s | 1.02 | fails |
+| bench_alloc-gc_liveset | 2.088 s | 2.072 s | 0.99 | 3.293 s |
 
-Every checksum matched across before, after and boa.
+boa 0.22 throws on the two Octane drivers, so there is no boa figure for them.
+The retain_grow, splay_mini and liveset checksums matched across before, after
+and boa. Splay is unchanged because its nodes are objects, not Array elements;
+what helps it is the promotion change, whose effect is below the noise floor.
+
+Laptop cross-check (wall, load 20-28): liveset 1.00, map_rolling 0.90, hashmap_js
+0.84, objlit_churn 1.05 (noise), ctor_churn 0.97, array_literal 0.91, Octane
+splay score median of 11 1236 vs 1180 (spread 729-1468, uninformative), richards
+146 vs 145.
 
 ## Not done
 
