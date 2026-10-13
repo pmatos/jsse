@@ -938,6 +938,14 @@ impl<'a> CaptureWalk<'a> {
         }
     }
 
+    fn push_for_in_of_left(&mut self, left: &'a ForInOfLeft) {
+        match left {
+            ForInOfLeft::Variable(d) => self.push_decl(d),
+            ForInOfLeft::Pattern(p) => self.push_pattern(p),
+            ForInOfLeft::Expression(e) => self.push_expr(e),
+        }
+    }
+
     fn push_key(&mut self, key: &'a PropertyKey) {
         if let PropertyKey::Computed(e) = key {
             self.push_expr(e);
@@ -1029,14 +1037,6 @@ impl<'a> CaptureWalk<'a> {
             Statement::Labeled(_, inner) => self.push_stmt(inner),
         }
         false
-    }
-
-    fn push_for_in_of_left(&mut self, left: &'a ForInOfLeft) {
-        match left {
-            ForInOfLeft::Variable(d) => self.push_decl(d),
-            ForInOfLeft::Pattern(p) => self.push_pattern(p),
-            ForInOfLeft::Expression(e) => self.push_expr(e),
-        }
     }
 
     fn visit_pattern(&mut self, pattern: &'a Pattern) {
