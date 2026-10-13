@@ -421,8 +421,9 @@ impl Interpreter {
             match idef {
                 InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
                     let val = if let Some(init) = initializer {
-                        let env = self.field_init_env(&mut init_env, this_val, ctor_id);
-                        match self.eval_expr(init, &env) {
+                        let env = init_env
+                            .get_or_insert_with(|| self.make_field_init_env(this_val, ctor_id));
+                        match self.eval_expr(init, env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
                                     let source_name = name.split('#').next().unwrap_or(name);
@@ -454,8 +455,9 @@ impl Interpreter {
                 }
                 InstanceFieldDef::Public(key, initializer) => {
                     let val = if let Some(init) = initializer {
-                        let env = self.field_init_env(&mut init_env, this_val, ctor_id);
-                        match self.eval_expr(init, &env) {
+                        let env = init_env
+                            .get_or_insert_with(|| self.make_field_init_env(this_val, ctor_id));
+                        match self.eval_expr(init, env) {
                             Completion::Normal(v) => {
                                 if init.is_anonymous_function_definition() {
                                     self.set_function_name(&v, key);
@@ -474,8 +476,9 @@ impl Interpreter {
                 }
                 InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
                     let val = if let Some(init) = initializer {
-                        let env = self.field_init_env(&mut init_env, this_val, ctor_id);
-                        match self.eval_expr(init, &env) {
+                        let env = init_env
+                            .get_or_insert_with(|| self.make_field_init_env(this_val, ctor_id));
+                        match self.eval_expr(init, env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
@@ -493,20 +496,6 @@ impl Interpreter {
             }
         }
         Ok(())
-    }
-
-    fn field_init_env(
-        &mut self,
-        slot: &mut Option<EnvRef>,
-        this_val: &JsValue,
-        ctor_id: u64,
-    ) -> EnvRef {
-        if let Some(env) = slot {
-            return env.clone();
-        }
-        let env = self.make_field_init_env(this_val, ctor_id);
-        *slot = Some(env.clone());
-        env
     }
 
     /// The environment instance field initializers run in: the class
