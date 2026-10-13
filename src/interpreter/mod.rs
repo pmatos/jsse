@@ -4192,7 +4192,7 @@ impl Interpreter {
                             .any(|d| d.init.as_ref().is_some_and(Self::expr_has_await))
                     }
                 }) || for_stmt.test.as_ref().is_some_and(Self::expr_has_await)
-                    || for_stmt.update.as_ref().is_some_and(Self::expr_has_await)
+                    || for_stmt.update.as_deref().is_some_and(Self::expr_has_await)
                     || Self::stmt_has_tla(&for_stmt.body)
             }
             Statement::ForIn(fi) => Self::expr_has_await(&fi.right) || Self::stmt_has_tla(&fi.body),

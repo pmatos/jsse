@@ -747,7 +747,7 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
                     .any(|d| d.init.as_ref().is_some_and(expr_contains_yield)),
                 ForInit::Expression(e) => expr_contains_yield(e),
             }) || f.test.as_ref().is_some_and(expr_contains_yield)
-                || f.update.as_ref().is_some_and(expr_contains_yield)
+                || f.update.as_deref().is_some_and(expr_contains_yield)
                 || contains_yield(&f.body)
         }
         Statement::ForIn(f) => {
@@ -1100,6 +1100,7 @@ pub(crate) fn disposing_for_head_scope(
         test: f.test.clone(),
         update: f.update.clone(),
         body: f.body.clone(),
+        scope_capture: Default::default(),
     });
     let labeled_loop = labels.iter().rev().fold(inner_loop, |stmt, label| {
         Statement::Labeled(label.clone(), Box::new(stmt))
@@ -1438,7 +1439,7 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
                 }),
                 ForInit::Expression(e) => expr_contains_suspension(e),
             }) || f.test.as_ref().is_some_and(expr_contains_suspension)
-                || f.update.as_ref().is_some_and(expr_contains_suspension)
+                || f.update.as_deref().is_some_and(expr_contains_suspension)
                 || contains_suspension(&f.body)
         }
         Statement::ForIn(f) => {
