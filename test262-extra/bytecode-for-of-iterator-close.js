@@ -260,3 +260,120 @@ assert.compareArray(
   ["iterator", "next", "iterator", "next", "return", "return", "0,0"],
   "return closes the inner then the outer iterator"
 );
+
+function closing(log, name, throwOnReturn) {
+  return {
+    [Symbol.iterator]() {
+      return {
+        next() { return { value: 1, done: false }; },
+        return() {
+          log.push(name + ":return");
+          if (throwOnReturn) throw name + " threw";
+          return {};
+        },
+      };
+    },
+  };
+}
+
+function returnErrorIsNotCaughtByTheLoopItClosed() {
+  var log = [];
+  var it = closing(log, "it", true);
+  try { (function () { for (var x of it) { return 1; } })(); } catch (e) { log.push("caught " + e); }
+  return log;
+}
+assert.compareArray(
+  returnErrorIsNotCaughtByTheLoopItClosed(),
+  ["it:return", "caught it threw"],
+  "a return() error on a return exit closes the iterator once, and is not closed again"
+);
+
+function breakReturnErrorClosesOnce() {
+  var log = [];
+  var it = closing(log, "it", true);
+  try { for (var i = 0; i < 2; i++) { for (var x of it) { break; } } } catch (e) { log.push("caught " + e); }
+  return log;
+}
+assert.compareArray(
+  breakReturnErrorClosesOnce(),
+  ["it:return", "caught it threw"],
+  "a return() error on a break exit closes once"
+);
+
+function outerCloseErrorSkipsTheInnerTry() {
+  var log = [];
+  var outer = closing(log, "outer", true), inner = closing(log, "inner", false);
+  function f() {
+    for (var o of outer) {
+      try { for (var i of inner) { return 1; } } catch (e) { log.push("inner catch " + e); }
+      break;
+    }
+  }
+  try { f(); } catch (e) { log.push("caught " + e); }
+  return log;
+}
+assert.compareArray(
+  outerCloseErrorSkipsTheInnerTry(),
+  ["inner:return", "outer:return", "caught outer threw"],
+  "the return completion has left the try before the outer iterator is closed"
+);
+
+function innerCloseErrorIsCaughtByTheEnclosingTry() {
+  var log = [];
+  var inner = closing(log, "inner", true);
+  function f() {
+    try { for (var i of inner) { return 1; } } catch (e) { log.push("catch " + e); return 2; }
+  }
+  log.push(f());
+  return log;
+}
+assert.compareArray(
+  innerCloseErrorIsCaughtByTheEnclosingTry(),
+  ["inner:return", "catch inner threw", 2],
+  "closing the iterator happens inside the try that encloses the loop"
+);
+
+function finallyRunsBeforeTheCloseAndTheErrorEscapes() {
+  var log = [];
+  var outer = closing(log, "outer", true), inner = closing(log, "inner", false);
+  var n = 0;
+  function f() {
+    outer1: for (var o of outer) {
+      try { for (var i of inner) { if (n++ === 0) continue outer1; break outer1; } }
+      finally { log.push("fin"); }
+    }
+  }
+  try { f(); } catch (e) { log.push("caught " + e); }
+  return log;
+}
+assert.compareArray(
+  finallyRunsBeforeTheCloseAndTheErrorEscapes(),
+  ["inner:return", "fin", "inner:return", "fin", "outer:return", "caught outer threw"],
+  "labelled continue and break through finalizers"
+);
+
+function swallowingCatchDoesNotSeeTheOuterCloseError() {
+  var log = [];
+  var outer = closing(log, "outer", true);
+  function f() { for (var o of outer) { try { return 2; } catch (e) { log.push("swallowed"); } } }
+  try { f(); } catch (e) { log.push("caught " + e); }
+  return log;
+}
+assert.compareArray(
+  swallowingCatchDoesNotSeeTheOuterCloseError(),
+  ["outer:return", "caught outer threw"],
+  "a return inside try/catch inside for-of"
+);
+
+function finallyThenCloseError() {
+  var log = [];
+  var it = closing(log, "it", true);
+  function f() { for (var o of it) { try { return 2; } finally { log.push("fin"); } } }
+  try { f(); } catch (e) { log.push("caught " + e); }
+  return log;
+}
+assert.compareArray(
+  finallyThenCloseError(),
+  ["fin", "it:return", "caught it threw"],
+  "the finalizer runs, then the close error propagates"
+);

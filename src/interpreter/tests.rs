@@ -4600,6 +4600,46 @@ mod node_host_tests {
     }
 
     #[test]
+    fn host_exit_from_iterator_return_on_a_native_exit_path_is_uncatchable() {
+        // `return()` calls `__host_exit` while a `return` or `break` closes the
+        // loop's iterator: the latched exit must skip every enclosing
+        // `finally` and the statements after the call, in both execution modes.
+        for bytecode in [true, false] {
+            let program = parse_program(
+                r#"
+                globalThis.log = "";
+                const iter = {
+                  [Symbol.iterator]() { return this; },
+                  next() { return { value: 1, done: false }; },
+                  return() { __host_exit(5); return {}; },
+                };
+                function viaReturn() {
+                  try { for (const x of iter) { return 1; } } finally { globalThis.log += "finally;"; }
+                }
+                function viaBreak() {
+                  try { for (const x of iter) { break; } globalThis.log += "after;"; }
+                  catch (e) { globalThis.log += "catch;"; }
+                  finally { globalThis.log += "finally;"; }
+                }
+                viaReturn();
+                globalThis.log += "next;";
+                viaBreak();
+                "#,
+            );
+            let mut interp = Interpreter::new();
+            interp.bytecode_enabled = bytecode;
+            interp.enable_node_host();
+            let c = interp.run(&program);
+            assert_eq!(interp.pending_exit, Some(5), "bytecode={bytecode}");
+            assert_eq!(global_string(&interp, "log"), "", "bytecode={bytecode}");
+            assert!(
+                matches!(c, Completion::Exit(5)),
+                "bytecode={bytecode}: {c:?}"
+            );
+        }
+    }
+
+    #[test]
     fn host_exit_in_async_function_terminator_expressions_is_not_swallowed() {
         for (expression, code) in [
             ("await __host_exit(3);", 3),

@@ -5447,28 +5447,18 @@ impl Interpreter {
                     has_simple_params,
                     captured_new_target,
                     ..
-                }) => {
-                    let mut flags = 0u8;
-                    for (set, bit) in [
-                        (*is_arrow, CALL_ARROW),
-                        (*is_strict, CALL_STRICT),
-                        (*is_generator, CALL_GENERATOR),
-                        (*is_async, CALL_ASYNC),
-                        (*uses_arguments, CALL_USES_ARGUMENTS),
-                        (*has_simple_params, CALL_SIMPLE_PARAMS),
-                    ] {
-                        if set {
-                            flags |= bit;
-                        }
-                    }
-                    Some(CallTarget::User {
-                        params: params.clone(),
-                        body: body.clone(),
-                        closure: closure.clone(),
-                        flags,
-                        captured_new_target: captured_new_target.clone(),
-                    })
-                }
+                }) => Some(CallTarget::User {
+                    params: params.clone(),
+                    body: body.clone(),
+                    closure: closure.clone(),
+                    flags: (u8::from(*is_arrow) * CALL_ARROW)
+                        | (u8::from(*is_strict) * CALL_STRICT)
+                        | (u8::from(*is_generator) * CALL_GENERATOR)
+                        | (u8::from(*is_async) * CALL_ASYNC)
+                        | (u8::from(*uses_arguments) * CALL_USES_ARGUMENTS)
+                        | (u8::from(*has_simple_params) * CALL_SIMPLE_PARAMS),
+                    captured_new_target: captured_new_target.clone(),
+                }),
                 Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
                 None => None,
             };

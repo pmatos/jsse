@@ -133,6 +133,7 @@ struct Snapshot {
     head_bindings_len: usize,
     stack_base: u16,
     no_tail: u32,
+    unwind_segments_len: usize,
 }
 
 #[derive(Default)]
@@ -244,6 +245,12 @@ struct Compiler {
     no_tail: u32,
     /// Constant-pool index of each finalizer completion kind used so far.
     kind_constants: Vec<(u16, u16)>,
+    /// Code ranges `[start, end)` of the `IterClose` an exit emits for the
+    /// cleanup at the given index. An exit is logically a completion leaving
+    /// the construct, so a `return()` error it raises belongs to the code
+    /// *around* that construct, and handlers of the constructs it just left
+    /// must not see it (see `push_handler`).
+    unwind_segments: Vec<(usize, usize, usize)>,
 }
 
 impl Compiler {
@@ -282,6 +289,7 @@ impl Compiler {
             max_persistent: 0,
             no_tail: 0,
             kind_constants: Vec::new(),
+            unwind_segments: Vec::new(),
         }
     }
 
@@ -597,6 +605,7 @@ impl Compiler {
             head_bindings_len: self.head_bindings.len(),
             stack_base: self.stack_base,
             no_tail: self.no_tail,
+            unwind_segments_len: self.unwind_segments.len(),
         }
     }
 
@@ -635,6 +644,7 @@ impl Compiler {
         self.head_bindings.truncate(snap.head_bindings_len);
         self.stack_base = snap.stack_base;
         self.no_tail = snap.no_tail;
+        self.unwind_segments.truncate(snap.unwind_segments_len);
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
@@ -2060,8 +2070,10 @@ impl Compiler {
                 Cleanup::Iter { close, scope_depth } => {
                     self.emit_pop_env_to(&mut cur_scope, scope_depth);
                     if close {
+                        let start = self.code.len();
                         self.emit(Op::IterClose);
                         self.code.push(u8::from(has_value));
+                        self.unwind_segments.push((start, self.code.len(), i));
                     } else {
                         self.emit_drop_below(has_value, 1);
                     }
@@ -2288,6 +2300,7 @@ impl Compiler {
         let base = self.stack_base;
         let scope_depth = self.scopes.len();
         let has_finally = t.finalizer.is_some();
+        let inner_from = self.cleanups.len() + usize::from(has_finally);
         let ctx = if has_finally {
             let ctx = self.finally_ctxs.len();
             self.finally_ctxs.push(FinallyCtx::default());
@@ -2309,14 +2322,13 @@ impl Compiler {
         if let Some(handler) = &t.handler {
             let past_catch = self.emit_jump(Op::Jump);
             let catch_start = self.code.len();
-            self.handlers.push(Handler {
-                start: try_start as u32,
-                end: try_end as u32,
-                target: catch_start as u32,
-                stack_height: height,
-                scope_depth: depth,
-                checks_exit: true,
-            });
+            self.push_handler(
+                (try_start, try_end),
+                catch_start,
+                (height, depth),
+                true,
+                inner_from,
+            );
             self.push_n(1);
             self.compile_catch(handler, has_finally)?;
             self.patch_jump(past_catch)?;
@@ -2335,14 +2347,13 @@ impl Compiler {
         let to_finalizer = self.emit_jump(Op::Jump);
         // A throw out of either arrives with the thrown value on the stack.
         let throw_pad = self.code.len();
-        self.handlers.push(Handler {
-            start: try_start as u32,
-            end: protected_end as u32,
-            target: throw_pad as u32,
-            stack_height: height,
-            scope_depth: depth,
-            checks_exit: true,
-        });
+        self.push_handler(
+            (try_start, protected_end),
+            throw_pad,
+            (height, depth),
+            true,
+            inner_from,
+        );
         self.current_stack = base + 1;
         self.emit_load_kind(1)?;
         self.push_n(1);
@@ -2392,6 +2403,54 @@ impl Compiler {
         self.finally_ctxs.pop();
         debug_assert_eq!(self.current_stack, self.stack_base);
         Ok(())
+    }
+
+    /// Registers a handler over `[start, end)` except for the `IterClose`
+    /// exits emitted inside it for cleanups below `inner_from` (the first
+    /// cleanup index lying inside the construct the handler belongs to):
+    /// those close iterators of the construct itself or of enclosing ones,
+    /// after the completion has left the protected code, so an error from
+    /// their `return()` must reach the enclosing handlers instead.
+    fn push_handler(
+        &mut self,
+        range: (usize, usize),
+        target: usize,
+        state: (u16, u16),
+        checks_exit: bool,
+        inner_from: usize,
+    ) {
+        let (start, end) = range;
+        let mut holes: Vec<(usize, usize)> = self
+            .unwind_segments
+            .iter()
+            .filter(|&&(s, e, cleanup)| s >= start && e <= end && cleanup < inner_from)
+            .map(|&(s, e, _)| (s, e))
+            .collect();
+        holes.sort_unstable();
+        let mut from = start;
+        for (hole_start, hole_end) in holes {
+            if hole_start > from {
+                self.handlers.push(Handler {
+                    start: from as u32,
+                    end: hole_start as u32,
+                    target: target as u32,
+                    stack_height: state.0,
+                    scope_depth: state.1,
+                    checks_exit,
+                });
+            }
+            from = hole_end;
+        }
+        if end > from {
+            self.handlers.push(Handler {
+                start: from as u32,
+                end: end as u32,
+                target: target as u32,
+                stack_height: state.0,
+                scope_depth: state.1,
+                checks_exit,
+            });
+        }
     }
 
     /// The `catch` clause, entered with the thrown value on the operand stack.
@@ -2697,14 +2756,13 @@ impl Compiler {
         );
         if is_of {
             let pad = self.code.len();
-            self.handlers.push(Handler {
-                start: range_start as u32,
-                end: range_end as u32,
-                target: pad as u32,
-                stack_height: u16_state(self.stack_base)?,
-                scope_depth: u16_state(frame.scope_depth)?,
-                checks_exit: false,
-            });
+            self.push_handler(
+                (range_start, range_end),
+                pad,
+                (u16_state(self.stack_base)?, u16_state(frame.scope_depth)?),
+                false,
+                self.cleanups.len(),
+            );
             self.emit(Op::IterCloseThrow);
         }
         for site in frame.break_sites {

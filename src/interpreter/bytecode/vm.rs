@@ -1982,9 +1982,18 @@ fn run_chunk_inner(
                     if let Err(e) = iteration_close(interp, stack, depth) {
                         throw!('dispatch, e);
                     }
+                    // A `return()` that called `__host_exit` latched it (the
+                    // close cannot carry the exit itself): it must stay
+                    // uncatchable and skip every finalizer on the way out.
+                    if let Some(code) = interp.pending_exit {
+                        return Completion::Exit(code);
+                    }
                 }
                 Op::IterCloseThrow => {
                     let thrown = iteration_close_throw(interp, stack);
+                    if let Some(code) = interp.pending_exit {
+                        return Completion::Exit(code);
+                    }
                     throw!('dispatch, thrown);
                 }
                 Op::DropBelow => {
