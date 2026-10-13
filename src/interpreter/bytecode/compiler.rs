@@ -963,7 +963,7 @@ impl Compiler {
             let distinct_data = shape.iter().enumerate().all(|(i, prop)| {
                 prop.spec.kind == PropertyKind::Init
                     && !prop.spec.is_method
-                    && !(prop.spec.plain_init && prop.key.eq_str("__proto__"))
+                    && !prop.spec.sets_prototype(&prop.key)
                     && !shape[..i].iter().any(|earlier| earlier.key == prop.key)
             });
             self.object_shapes.push(ObjectShape {
@@ -993,15 +993,15 @@ impl Compiler {
         let key = crate::interpreter::eval::static_property_key(&prop.key)
             .expect("compile_object_literal rejects computed and private keys");
         let key = crate::interpreter::key_intern::intern_js_key(key);
-        let plain_init = !prop.computed && !prop.shorthand && !prop.method;
-        // `__proto__: v` sets the prototype and is not a NamedEvaluation
-        // position (sec-runtime-semantics-propertydefinitionevaluation).
-        let is_proto_setter =
-            prop.kind == PropertyKind::Init && plain_init && key.eq_str("__proto__");
-        let mut name_value = false;
+        let mut spec = LiteralPropertySpec {
+            kind: prop.kind,
+            plain_init: !prop.computed && !prop.shorthand && !prop.method,
+            is_method: prop.method,
+            name_value: false,
+        };
         if is_anonymous_closure(&prop.value) {
             let fn_name = match prop.kind {
-                _ if is_proto_setter => None,
+                _ if spec.sets_prototype(&key) => None,
                 PropertyKind::Init => Some(key.to_js_string()),
                 PropertyKind::Get => Some(
                     crate::interpreter::eval::prefixed_function_name("get ", &key).to_js_string(),
@@ -1014,18 +1014,10 @@ impl Compiler {
         } else {
             self.compile_expr(&prop.value)?;
             // An anonymous class is named by the literal after the fact.
-            name_value =
+            spec.name_value =
                 prop.kind == PropertyKind::Init && prop.value.is_anonymous_function_definition();
         }
-        Ok(ShapeProperty {
-            key,
-            spec: LiteralPropertySpec {
-                kind: prop.kind,
-                plain_init,
-                is_method: prop.method,
-                name_value,
-            },
-        })
+        Ok(ShapeProperty { key, spec })
     }
 
     /// Compiles `expr` for its effects only: the operand stack is unchanged

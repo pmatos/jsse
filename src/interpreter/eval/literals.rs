@@ -1357,10 +1357,7 @@ impl Interpreter {
                             };
                             (pk, name)
                         }
-                        PropertyKey::Identifier(_)
-                        | PropertyKey::String(_)
-                        | PropertyKey::Number(_) => unreachable!("static key"),
-                        PropertyKey::Private(_) => {
+                        _ => {
                             return Completion::Throw(self.create_type_error(
                                 "Private names are not valid in object literals",
                             ));
@@ -1484,7 +1481,7 @@ impl Interpreter {
             PropertyKind::Init => {
                 // __proto__: value sets [[Prototype]] per spec §13.2.5.5
                 // Only plain property init, not methods, computed, or shorthand
-                if spec.plain_init && key.eq_str("__proto__") {
+                if spec.sets_prototype(&key) {
                     if let Some(id) = value.as_object_id() {
                         obj_data.prototype_id = Some(id);
                     } else if value.is_null() {
@@ -1647,4 +1644,12 @@ pub(crate) struct LiteralPropertySpec {
     /// The value is an anonymous function definition the literal must still
     /// name after the key (the VM names its closures when it creates them).
     pub(crate) name_value: bool,
+}
+
+impl LiteralPropertySpec {
+    /// `__proto__: v` in its plain form, which sets the prototype instead of
+    /// defining a property (and is not a NamedEvaluation position).
+    pub(crate) fn sets_prototype(&self, key: &JsPropertyKey) -> bool {
+        self.kind == PropertyKind::Init && self.plain_init && key.eq_str("__proto__")
+    }
 }
