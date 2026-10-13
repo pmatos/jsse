@@ -1,15 +1,21 @@
 use super::chunk::{
-    AstNode, BLOCK_SLOT_FLAG, BLOCK_SLOT_MAX_INDEX, BLOCK_SLOT_MAX_SCOPES, BlockScope, Chunk,
-    Constant, EscapeEntry, NO_ESCAPE_TABLE, NO_INIT_SLOT,
+    ArrayTemplate, AstNode, BLOCK_SLOT_FLAG, BLOCK_SLOT_MAX_INDEX, BLOCK_SLOT_MAX_SCOPES,
+    BlockScope, Chunk, Constant, EscapeEntry, FunctionTemplate, NO_ESCAPE_TABLE, NO_INIT_SLOT,
+    ObjectShape, RegExpTemplate, ShapeProperty,
 };
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, DoWhileStatement, Expression, ForInit, ForStatement, Literal,
-    LogicalOp, MemberProperty, Pattern, Statement, SwitchStatement, UnaryOp, UpdateOp, VarKind,
-    VariableDeclaration, WhileStatement,
+    LogicalOp, MemberProperty, Pattern, Property, PropertyKey, PropertyKind, Statement,
+    SwitchStatement, UnaryOp, UpdateOp, VarKind, VariableDeclaration, WhileStatement,
 };
 use crate::interpreter::GlobalHint;
-use crate::types::{JsBigInt, JsString};
+use crate::interpreter::eval::LiteralPropertySpec;
+use crate::types::{JsBigInt, JsString, JsValue};
+
+/// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
+/// keeps on the operand stack at once: larger literals are built in chunks.
+const LITERAL_VALUE_CHUNK: usize = 256;
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
@@ -100,6 +106,10 @@ struct Snapshot {
     native_ops: u32,
     scopes_len: usize,
     block_scopes_len: usize,
+    functions_len: usize,
+    array_templates_len: usize,
+    object_shapes_len: usize,
+    regexps_len: usize,
 }
 
 #[derive(Default)]
@@ -149,6 +159,10 @@ struct Compiler {
     /// hint `PushEnv`'s declaration order produces.
     scopes: Vec<Vec<String>>,
     block_scopes: Vec<BlockScope>,
+    functions: Vec<FunctionTemplate>,
+    array_templates: Vec<ArrayTemplate>,
+    object_shapes: Vec<ObjectShape>,
+    regexps: Vec<RegExpTemplate>,
     /// Set by the function top-level statement list for the statement about
     /// to be compiled; consumed on entry so nested statements see `false`.
     /// Only there may a `let`/`const` initialise its hoisted binding directly.
@@ -177,6 +191,10 @@ impl Compiler {
             fallback_reasons: Vec::new(),
             scopes: Vec::new(),
             block_scopes: Vec::new(),
+            functions: Vec::new(),
+            array_templates: Vec::new(),
+            object_shapes: Vec::new(),
+            regexps: Vec::new(),
             at_function_top_level: false,
         }
     }
@@ -476,6 +494,10 @@ impl Compiler {
             native_ops: self.native_ops,
             scopes_len: self.scopes.len(),
             block_scopes_len: self.block_scopes.len(),
+            functions_len: self.functions.len(),
+            array_templates_len: self.array_templates.len(),
+            object_shapes_len: self.object_shapes.len(),
+            regexps_len: self.regexps.len(),
         }
     }
 
@@ -499,6 +521,10 @@ impl Compiler {
         self.fallback_reasons.truncate(snap.ast_len);
         self.scopes.truncate(snap.scopes_len);
         self.block_scopes.truncate(snap.block_scopes_len);
+        self.functions.truncate(snap.functions_len);
+        self.array_templates.truncate(snap.array_templates_len);
+        self.object_shapes.truncate(snap.object_shapes_len);
+        self.regexps.truncate(snap.regexps_len);
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
@@ -585,13 +611,14 @@ impl Compiler {
                 Ok(())
             }
             // NamedEvaluation (sec-runtime-semantics-namedevaluation) is applied
-            // by the assignment, not by the function expression, so an
-            // anonymous function/class value needs the tree-walker's logic.
+            // by the assignment, not by the function expression. A function
+            // or arrow literal is named as its closure is created; an
+            // anonymous class needs the tree-walker's logic.
             Expression::Assign(_, target, value)
                 if matches!(target.as_ref(), Expression::Identifier(_))
-                    && value.is_anonymous_function_definition() =>
+                    && is_anonymous_class(value) =>
             {
-                Err(CompileError::Unsupported("anonymous function assignment"))
+                Err(CompileError::Unsupported("anonymous class assignment"))
             }
             Expression::Assign(op, target, value) => match target.as_ref() {
                 Expression::Identifier(name) => {
@@ -769,8 +796,228 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
+            Expression::Array(elements, _) => self.compile_array_literal(elements),
+            Expression::Object(props, _) => self.compile_object_literal(props),
+            Expression::Function(_) | Expression::ArrowFunction(_) => {
+                self.compile_closure(expr, None, false)
+            }
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
+    }
+
+    /// `MakeClosure` for a function or arrow literal. `inferred_name` is the
+    /// name NamedEvaluation gives it; `is_method` marks an object-literal
+    /// method (not constructable, has a home object).
+    fn compile_closure(
+        &mut self,
+        expr: &Expression,
+        inferred_name: Option<JsString>,
+        is_method: bool,
+    ) -> Result<(), CompileError> {
+        let template = match expr {
+            Expression::Function(f) => FunctionTemplate {
+                name: f.name.clone(),
+                info: f.info(),
+                body: f.body.clone(),
+                is_arrow: false,
+                is_async: f.is_async,
+                is_generator: f.is_generator,
+                body_is_strict: f.body_is_strict,
+                source_text: f.source_text.clone(),
+                inferred_name,
+            },
+            Expression::ArrowFunction(af) => FunctionTemplate {
+                name: None,
+                info: af.info(),
+                body: af.body.body().clone(),
+                is_arrow: true,
+                is_async: af.is_async,
+                is_generator: false,
+                body_is_strict: af.body_is_strict,
+                source_text: af.source_text.clone(),
+                inferred_name,
+            },
+            _ => return Err(CompileError::Unsupported("closure literal")),
+        };
+        let idx = u16::try_from(self.functions.len())
+            .map_err(|_| CompileError::Ineligible("function template pool overflow"))?;
+        self.functions.push(template);
+        self.emit(Op::MakeClosure);
+        self.emit_u16(idx);
+        self.code.push(u8::from(is_method));
+        self.push_n(1);
+        Ok(())
+    }
+
+    /// Compiles the value of a NamedEvaluation position (`name = value`,
+    /// `var name = value`): a function or arrow literal is created with
+    /// `name`; anything else compiles as usual.
+    fn compile_named_value(&mut self, value: &Expression, name: &str) -> Result<(), CompileError> {
+        if is_anonymous_closure(value) {
+            self.compile_closure(value, Some(JsString::from_str(name)), false)
+        } else {
+            self.compile_expr(value)
+        }
+    }
+
+    /// A literal keeps up to one chunk of pending values on the operand
+    /// stack; one too deep to take another chunk stays on the tree-walker.
+    fn check_literal_stack(&self) -> Result<(), CompileError> {
+        if usize::from(self.current_stack) + LITERAL_VALUE_CHUNK + 2 > usize::from(u16::MAX) {
+            return Err(CompileError::Unsupported("literal operand stack"));
+        }
+        Ok(())
+    }
+
+    fn compile_array_literal(
+        &mut self,
+        elements: &[Option<Expression>],
+    ) -> Result<(), CompileError> {
+        self.check_literal_stack()?;
+        if let Some(template) = constant_array_template(elements) {
+            let idx = u16::try_from(self.array_templates.len())
+                .map_err(|_| CompileError::Ineligible("array template pool overflow"))?;
+            self.array_templates.push(template);
+            self.emit(Op::NewArrayConst);
+            self.emit_u16(idx);
+            self.push_n(1);
+            return Ok(());
+        }
+        if elements.iter().any(Option::is_none) {
+            return Err(CompileError::Unsupported("array literal: elision"));
+        }
+        if elements
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, Expression::Spread(_)))
+        {
+            return Err(CompileError::Unsupported("array literal: spread"));
+        }
+        // The first chunk of values becomes the array; later chunks are
+        // appended to it, so the operand stack never holds more than one
+        // chunk of pending elements above the array.
+        let mut created = false;
+        let mut pending: u16 = 0;
+        for element in elements.iter().flatten() {
+            self.compile_expr(element)?;
+            pending += 1;
+            if usize::from(pending) == LITERAL_VALUE_CHUNK {
+                self.flush_array_values(created, pending);
+                created = true;
+                pending = 0;
+            }
+        }
+        if pending > 0 || !created {
+            self.flush_array_values(created, pending);
+        }
+        Ok(())
+    }
+
+    /// `NewArray`/`ArrayAppend` for the `count` values on top of the stack.
+    fn flush_array_values(&mut self, created: bool, count: u16) {
+        self.emit(if created {
+            Op::ArrayAppend
+        } else {
+            Op::NewArray
+        });
+        self.emit_u16(count);
+        self.pop_n(count);
+        if !created {
+            self.push_n(1);
+        }
+    }
+
+    fn compile_object_literal(&mut self, props: &[Property]) -> Result<(), CompileError> {
+        self.check_literal_stack()?;
+        // Everything that cannot be a static key with a value on the stack is
+        // rejected before anything is emitted.
+        for prop in props {
+            if matches!(prop.key, PropertyKey::Computed(_)) {
+                return Err(CompileError::Unsupported("object literal: computed key"));
+            }
+            if matches!(prop.key, PropertyKey::Private(_)) {
+                return Err(CompileError::Unsupported("object literal: private name"));
+            }
+            if matches!(prop.value, Expression::Spread(_)) {
+                return Err(CompileError::Unsupported("object literal: spread"));
+            }
+            let function_value = matches!(prop.value, Expression::Function(_));
+            if (prop.method || prop.kind != PropertyKind::Init) && !function_value {
+                return Err(CompileError::Unsupported("object literal: method value"));
+            }
+        }
+        // The first chunk of properties allocates the object; later chunks
+        // define theirs on it, so the operand stack holds at most one chunk
+        // of pending values above the object.
+        let mut created = false;
+        let mut chunks = props.chunks(LITERAL_VALUE_CHUNK);
+        loop {
+            let chunk = chunks.next().unwrap_or(&[]);
+            let mut shape = Vec::with_capacity(chunk.len());
+            for prop in chunk {
+                shape.push(self.compile_shape_property(prop)?);
+            }
+            let idx = u16::try_from(self.object_shapes.len())
+                .map_err(|_| CompileError::Ineligible("object shape pool overflow"))?;
+            let count = shape.len() as u16;
+            let distinct_data = shape.iter().enumerate().all(|(i, prop)| {
+                prop.spec.kind == PropertyKind::Init
+                    && !prop.spec.is_method
+                    && !prop.spec.sets_prototype(&prop.key)
+                    && !shape[..i].iter().any(|earlier| earlier.key == prop.key)
+            });
+            self.object_shapes.push(ObjectShape {
+                props: shape,
+                distinct_data,
+            });
+            self.emit(if created {
+                Op::ObjectAppend
+            } else {
+                Op::NewObject
+            });
+            self.emit_u16(idx);
+            self.pop_n(count);
+            if !created {
+                self.push_n(1);
+                created = true;
+            }
+            if chunks.len() == 0 {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Compiles one statically keyed property's value onto the operand stack
+    /// and returns its shape entry.
+    fn compile_shape_property(&mut self, prop: &Property) -> Result<ShapeProperty, CompileError> {
+        let key = crate::interpreter::eval::static_property_key(&prop.key)
+            .expect("compile_object_literal rejects computed and private keys");
+        let key = crate::interpreter::key_intern::intern_js_key(key);
+        let mut spec = LiteralPropertySpec {
+            kind: prop.kind,
+            plain_init: !prop.computed && !prop.shorthand && !prop.method,
+            is_method: prop.method,
+            name_value: false,
+        };
+        if is_anonymous_closure(&prop.value) {
+            let fn_name = match prop.kind {
+                _ if spec.sets_prototype(&key) => None,
+                PropertyKind::Init => Some(key.to_js_string()),
+                PropertyKind::Get => Some(
+                    crate::interpreter::eval::prefixed_function_name("get ", &key).to_js_string(),
+                ),
+                PropertyKind::Set => Some(
+                    crate::interpreter::eval::prefixed_function_name("set ", &key).to_js_string(),
+                ),
+            };
+            self.compile_closure(&prop.value, fn_name, prop.method)?;
+        } else {
+            self.compile_expr(&prop.value)?;
+            // An anonymous class is named by the literal after the fact.
+            spec.name_value =
+                prop.kind == PropertyKind::Init && prop.value.is_anonymous_function_definition();
+        }
+        Ok(ShapeProperty { key, spec })
     }
 
     /// Compiles `expr` for its effects only: the operand stack is unchanged
@@ -779,10 +1026,10 @@ impl Compiler {
     fn compile_effect(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
             Expression::Assign(op, target, value) => {
-                // An anonymous function value needs NamedEvaluation, which
+                // An anonymous class value needs NamedEvaluation, which
                 // `compile_expr` hands to the tree-walker.
                 if let Expression::Identifier(name) = target.as_ref()
-                    && !value.is_anonymous_function_definition()
+                    && !is_anonymous_class(value)
                 {
                     return self.compile_identifier_assign(*op, name, value, true);
                 }
@@ -821,7 +1068,7 @@ impl Compiler {
             // change what the name resolves to while the right-hand side
             // runs, so the reference needs no early resolution.
             if op == AssignOp::Assign {
-                self.compile_expr(value)?;
+                self.compile_named_value(value, name)?;
             } else if let Expression::Literal(Literal::Number(k)) = value {
                 self.emit_local_bin_const(name, slot, Self::compound_binary_op(op)?, *k)?;
             } else {
@@ -835,7 +1082,7 @@ impl Compiler {
         } else {
             self.emit_resolve_name(idx);
             if op == AssignOp::Assign {
-                self.compile_expr(value)?;
+                self.compile_named_value(value, name)?;
             } else {
                 self.emit(Op::LoadResolvedName);
                 self.emit_u16(idx);
@@ -998,7 +1245,21 @@ impl Compiler {
                 // base + key on the stack become callee + this in place.
                 self.emit(Op::LoadMethodElement);
             }
-            _ => return Err(CompileError::Unsupported("call callee")),
+            // `super(...)`, a private method and a parenthesised optional
+            // chain pick their `this` from the callee reference.
+            Expression::Super
+            | Expression::OptionalChain(..)
+            | Expression::Member(_, MemberProperty::Private(_), _) => {
+                return Err(CompileError::Unsupported("call callee"));
+            }
+            // Any other callee (an immediately invoked function, `f()()`,
+            // `(0, o.m)()`, ...) is not a reference: `this` is undefined
+            // (EvaluateCall, sec-evaluatecall).
+            other => {
+                self.compile_expr(other)?;
+                self.emit(Op::LoadUndefined);
+                self.push_n(1);
+            }
         }
         for arg in args {
             self.compile_expr(arg)?;
@@ -1039,15 +1300,15 @@ impl Compiler {
             };
             let idx = self.add_var_name(name)?;
             if let Some(init) = &declarator.init {
-                if init.is_anonymous_function_definition() {
-                    return Err(CompileError::Unsupported("anonymous function initializer"));
+                if is_anonymous_class(init) {
+                    return Err(CompileError::Unsupported("anonymous class initializer"));
                 }
                 if let Some(slot) = self.local_slot(name) {
-                    self.compile_expr(init)?;
+                    self.compile_named_value(init, name)?;
                     self.emit_store_local(idx, slot, true);
                 } else {
                     self.emit_resolve_name(idx);
-                    self.compile_expr(init)?;
+                    self.compile_named_value(init, name)?;
                     self.emit_store_resolved_name(idx, true);
                 }
             }
@@ -1064,16 +1325,12 @@ impl Compiler {
             let Pattern::Identifier(name) = &declarator.pattern else {
                 return Err(CompileError::Unsupported("lexical binding pattern"));
             };
-            if declarator
-                .init
-                .as_ref()
-                .is_some_and(Expression::is_anonymous_function_definition)
-            {
-                return Err(CompileError::Unsupported("anonymous function initializer"));
+            if declarator.init.as_ref().is_some_and(is_anonymous_class) {
+                return Err(CompileError::Unsupported("anonymous class initializer"));
             }
             let idx = self.add_name(name)?;
             match &declarator.init {
-                Some(init) => self.compile_expr(init)?,
+                Some(init) => self.compile_named_value(init, name)?,
                 None => {
                     self.emit(Op::LoadUndefined);
                     self.push_n(1);
@@ -1216,7 +1473,18 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
-            _ => Err(CompileError::Unsupported("literal")),
+            Literal::RegExp(pattern, flags) => {
+                let idx = u16::try_from(self.regexps.len())
+                    .map_err(|_| CompileError::Ineligible("regexp pool overflow"))?;
+                self.regexps.push(RegExpTemplate {
+                    source: crate::interpreter::eval::regexp_literal_source(pattern),
+                    flags: JsString::from_str(flags),
+                });
+                self.emit(Op::NewRegExp);
+                self.emit_u16(idx);
+                self.push_n(1);
+                Ok(())
+            }
         }
     }
 
@@ -1879,9 +2147,65 @@ impl Compiler {
             ast: self.ast,
             escape_tables: self.escape_tables,
             block_scopes: self.block_scopes,
+            functions: self.functions,
+            array_templates: self.array_templates,
+            object_shapes: self.object_shapes,
+            regexps: self.regexps,
             needs_instantiation: false,
             fallback_reasons: self.fallback_reasons,
         }
+    }
+}
+
+/// A function or arrow literal without a name of its own: the only
+/// NamedEvaluation values the VM names as it creates them.
+fn is_anonymous_closure(expr: &Expression) -> bool {
+    matches!(expr, Expression::Function(_) | Expression::ArrowFunction(_))
+        && expr.is_anonymous_function_definition()
+}
+
+/// An anonymous class expression, whose NamedEvaluation stays on the
+/// tree-walker.
+fn is_anonymous_class(expr: &Expression) -> bool {
+    matches!(expr, Expression::Class(_)) && expr.is_anonymous_function_definition()
+}
+
+/// The primitive a literal element stands for, if it is one: numbers
+/// (including a negated number), strings, booleans, `null` and BigInts.
+fn constant_element(expr: &Expression) -> Option<JsValue> {
+    match expr {
+        Expression::Literal(Literal::Number(n)) => Some(JsValue::number(*n)),
+        Expression::Literal(Literal::String(units)) => {
+            Some(JsValue::string(JsString::from_vec(units.clone())))
+        }
+        Expression::Literal(Literal::Boolean(b)) => Some(JsValue::boolean(*b)),
+        Expression::Literal(Literal::Null) => Some(JsValue::NULL),
+        Expression::Literal(Literal::BigInt(text)) => {
+            let value = crate::interpreter::helpers::parse_bigint_literal(text);
+            Some(JsValue::bigint(JsBigInt::new(value)))
+        }
+        Expression::Unary(UnaryOp::Minus, operand) => match operand.as_ref() {
+            Expression::Literal(Literal::Number(n)) => Some(JsValue::number(-*n)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// An array literal made only of primitive constants and holes can be built
+/// from a template, one fresh array per evaluation.
+fn constant_array_template(elements: &[Option<Expression>]) -> Option<ArrayTemplate> {
+    let mut values: Vec<Option<JsValue>> = Vec::with_capacity(elements.len());
+    for element in elements {
+        match element {
+            Some(expr) => values.push(Some(constant_element(expr)?)),
+            None => values.push(None),
+        }
+    }
+    if values.iter().all(Option::is_some) {
+        Some(ArrayTemplate::Dense(values.into_iter().flatten().collect()))
+    } else {
+        Some(ArrayTemplate::Holey(values))
     }
 }
 

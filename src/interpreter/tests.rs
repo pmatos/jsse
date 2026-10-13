@@ -2877,7 +2877,7 @@ fn ic_records_after_repeated_dot_access() {
     // not falling to the slow path on every read. This is the Phase-2 tracer
     // bullet: it asserts both correctness (sum=4200) and that the IC counter
     // advanced (proves the probe fired on cache hits, not just misses).
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var o = {x: 42};
         var sum = 0;
@@ -2939,7 +2939,7 @@ fn ic_records_proto_data_after_repeated_dot_access() {
     // data property, not on `o` itself. After warmup the depth-1 ProtoData IC
     // must be hitting (proves the probe serves the value directly from the
     // prototype without re-walking the chain on every read).
-    let interp = run_script(
+    let interp = run_script_tree_walker(
         r#"
         var proto = {x: 42};
         var o = Object.create(proto);

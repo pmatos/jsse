@@ -1906,6 +1906,18 @@ impl Interpreter {
     /// create-then-strip (bound functions, `Proxy`, class constructors) ask for
     /// the final own-property shape directly.
     fn create_function_with(&mut self, func: JsFunction, init: FunctionInit) -> JsValue {
+        self.create_function_with_name(func, init, None)
+    }
+
+    /// `create_function_with` for a function whose `name` property is already
+    /// known: `name_override` is what SetFunctionName would have stored after
+    /// the fact (NamedEvaluation of an anonymous function definition).
+    fn create_function_with_name(
+        &mut self,
+        func: JsFunction,
+        init: FunctionInit,
+        name_override: Option<&JsString>,
+    ) -> JsValue {
         let (is_gen, is_async) = match &func {
             JsFunction::User {
                 is_generator,
@@ -1925,7 +1937,9 @@ impl Interpreter {
             }
             JsFunction::Native(name, arity, _, _) => (name.as_str(), *arity),
         };
-        let name_val = if name.is_empty() {
+        let name_val = if let Some(inferred) = name_override {
+            inferred.clone()
+        } else if name.is_empty() {
             self.common_keys.empty_name.clone()
         } else {
             JsString::from_str(name)

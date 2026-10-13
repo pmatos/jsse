@@ -1,6 +1,8 @@
-use crate::ast::{Expression, Statement};
+use crate::ast::{Body, Expression, FunctionLiteralInfo, SourceText, Statement};
+use crate::interpreter::eval::{ClosureSpec, LiteralPropertySpec};
 use crate::interpreter::{Atom, GlobalHint};
-use crate::types::{JsBigInt, JsString, JsValue};
+use crate::types::{JsBigInt, JsPropertyKey, JsString, JsValue};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Constant {
@@ -63,6 +65,71 @@ pub(crate) const NO_INIT_SLOT: u16 = u16::MAX;
 pub(crate) const BLOCK_SLOT_MAX_SCOPES: usize = 0x80;
 pub(crate) const BLOCK_SLOT_MAX_INDEX: usize = 0x100;
 
+/// A function or arrow literal compiled to `MakeClosure`: what a closure of
+/// it needs besides the environment, computed once at compile time so
+/// creating a closure never re-reads the AST.
+#[derive(Debug)]
+pub(crate) struct FunctionTemplate {
+    pub(crate) name: Option<String>,
+    pub(crate) info: Rc<FunctionLiteralInfo>,
+    pub(crate) body: Body,
+    pub(crate) is_arrow: bool,
+    pub(crate) is_async: bool,
+    pub(crate) is_generator: bool,
+    pub(crate) body_is_strict: bool,
+    pub(crate) source_text: Option<SourceText>,
+    /// The `name` NamedEvaluation gives the closure (the binding or property
+    /// it is assigned to); `None` leaves the literal's own name.
+    pub(crate) inferred_name: Option<JsString>,
+}
+
+impl FunctionTemplate {
+    #[inline]
+    pub(crate) fn spec(&self) -> ClosureSpec<'_> {
+        ClosureSpec {
+            name: self.name.as_deref(),
+            info: &self.info,
+            body: &self.body,
+            is_arrow: self.is_arrow,
+            is_async: self.is_async,
+            is_generator: self.is_generator,
+            body_is_strict: self.body_is_strict,
+            source_text: &self.source_text,
+        }
+    }
+}
+
+/// An array literal whose elements are all primitive constants (or holes).
+/// Each evaluation builds a fresh array from it.
+#[derive(Debug)]
+pub(crate) enum ArrayTemplate {
+    Dense(Vec<JsValue>),
+    Holey(Vec<Option<JsValue>>),
+}
+
+#[derive(Debug)]
+pub(crate) struct RegExpTemplate {
+    pub(crate) source: JsString,
+    pub(crate) flags: JsString,
+}
+
+#[derive(Debug)]
+pub(crate) struct ShapeProperty {
+    pub(crate) key: JsPropertyKey,
+    pub(crate) spec: LiteralPropertySpec,
+}
+
+/// An object literal's property list, in source order. `NewObject` pops one
+/// value per entry.
+#[derive(Debug)]
+pub(crate) struct ObjectShape {
+    pub(crate) props: Vec<ShapeProperty>,
+    /// Every entry is a plain data property under its own key, so a fresh
+    /// object can take them without checking for earlier definitions: no
+    /// accessors, methods, `__proto__` setters or repeated keys.
+    pub(crate) distinct_data: bool,
+}
+
 /// `ExecAst` operand meaning "no break/continue can leave this statement".
 pub(crate) const NO_ESCAPE_TABLE: u16 = u16::MAX;
 
@@ -83,6 +150,10 @@ pub(crate) struct Chunk {
     pub(crate) ast: Vec<AstNode>,
     pub(crate) escape_tables: Vec<Vec<EscapeEntry>>,
     pub(crate) block_scopes: Vec<BlockScope>,
+    pub(crate) functions: Vec<FunctionTemplate>,
+    pub(crate) array_templates: Vec<ArrayTemplate>,
+    pub(crate) object_shapes: Vec<ObjectShape>,
+    pub(crate) regexps: Vec<RegExpTemplate>,
     /// The body declares functions or lexical bindings that the tree-walker's
     /// declaration instantiation must establish before the chunk runs.
     pub(crate) needs_instantiation: bool,

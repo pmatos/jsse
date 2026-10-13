@@ -24,11 +24,30 @@ thread_local! {
         (Rc::new(Vec::new()), Body::new(Vec::new()));
 }
 
-fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
+pub(crate) fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units.to_vec()))
 }
 
-fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
+pub(crate) fn regexp_literal_source(pattern: &str) -> JsString {
+    if pattern.is_empty() {
+        JsString::from_str("(?:)")
+    } else {
+        crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
+    }
+}
+
+/// The property key of a statically named literal property, `None` for a
+/// computed or private one.
+pub(crate) fn static_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
+    match key {
+        PropertyKey::Identifier(name) => Some(JsPropertyKey::from(name.clone())),
+        PropertyKey::String(units) => Some(literal_string_property_key(units)),
+        PropertyKey::Number(n) => Some(JsPropertyKey::from(number_ops::to_string(*n))),
+        PropertyKey::Computed(_) | PropertyKey::Private(_) => None,
+    }
+}
+
+pub(crate) fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
     let mut code_units: Vec<u16> = prefix.encode_utf16().collect();
     code_units.extend_from_slice(key.to_js_string().as_units());
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units))
@@ -118,31 +137,31 @@ impl Interpreter {
                 crate::interpreter::helpers::parse_bigint_literal(s),
             )),
             Literal::RegExp(pattern, flags) => {
-                let mut obj = JsObjectData::new();
-                obj.prototype_id = self
-                    .realm()
-                    .regexp_prototype
-                    .or(self.realm().object_prototype);
-                obj.class_name = "RegExp".into();
-                let source_js = if pattern.is_empty() {
-                    JsString::from_str("(?:)")
-                } else {
-                    crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
-                };
-                obj.kind = crate::interpreter::types::ObjectKind::RegExp(
-                    crate::interpreter::types::RegExpData::new(
-                        source_js,
-                        JsString::from_str(flags),
-                    ),
-                );
-                obj.insert_property(
-                    "lastIndex".to_string(),
-                    PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
-                );
-                let id = self.alloc_object(obj);
-                JsValue::object(id)
+                let source_js = regexp_literal_source(pattern);
+                self.alloc_regexp_literal(source_js, JsString::from_str(flags))
             }
         }
+    }
+
+    /// A fresh RegExp object for a literal (each evaluation of a regular
+    /// expression literal creates a new object, sec-regular-expression-
+    /// literals-runtime-semantics-evaluation).
+    pub(crate) fn alloc_regexp_literal(&mut self, source: JsString, flags: JsString) -> JsValue {
+        let mut obj = JsObjectData::new();
+        obj.prototype_id = self
+            .realm()
+            .regexp_prototype
+            .or(self.realm().object_prototype);
+        obj.class_name = "RegExp".into();
+        obj.kind = crate::interpreter::types::ObjectKind::RegExp(
+            crate::interpreter::types::RegExpData::new(source, flags),
+        );
+        obj.insert_property(
+            "lastIndex".to_string(),
+            PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
+        );
+        let id = self.alloc_object(obj);
+        JsValue::object(id)
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -1304,25 +1323,14 @@ impl Interpreter {
 
     pub(super) fn eval_object_literal(&mut self, props: &[Property], env: &EnvRef) -> Completion {
         let gc_frame = self.gc_root_frame();
-        let result =
-            (|| {
-                let mut obj_data = JsObjectData::new();
-                obj_data.prototype_id = self.realm().object_prototype;
-                let mut method_values: Vec<JsValue> = Vec::new();
-                for prop in props {
-                    let (key, fn_name_for_key) = match &prop.key {
-                        PropertyKey::Identifier(n) => {
-                            let key = JsPropertyKey::from(n.clone());
-                            (key.clone(), key)
-                        }
-                        PropertyKey::String(s) => {
-                            let key = literal_string_property_key(s);
-                            (key.clone(), key)
-                        }
-                        PropertyKey::Number(n) => {
-                            let key = JsPropertyKey::from(number_ops::to_string(*n));
-                            (key.clone(), key)
-                        }
+        let result = (|| {
+            let mut obj_data = JsObjectData::new();
+            obj_data.prototype_id = self.realm().object_prototype;
+            let mut method_values: Vec<JsValue> = Vec::new();
+            for prop in props {
+                let (key, fn_name_for_key) = match static_property_key(&prop.key) {
+                    Some(key) => (key.clone(), key),
+                    None => match &prop.key {
                         PropertyKey::Computed(expr) => {
                             let v = match self.eval_expr(expr, env) {
                                 Completion::Normal(v) => v,
@@ -1349,157 +1357,299 @@ impl Interpreter {
                             };
                             (pk, name)
                         }
-                        PropertyKey::Private(_) => {
+                        _ => {
                             return Completion::Throw(self.create_type_error(
                                 "Private names are not valid in object literals",
                             ));
                         }
-                    };
-                    if prop.method {
-                        self.next_function_is_method = true;
+                    },
+                };
+                if prop.method {
+                    self.next_function_is_method = true;
+                }
+                let value = match self.eval_expr(&prop.value, env) {
+                    Completion::Normal(v) => v,
+                    other => {
+                        self.next_function_is_method = false;
+                        return other;
                     }
-                    let value = match self.eval_expr(&prop.value, env) {
+                };
+                self.gc_root_value(&value);
+                self.next_function_is_method = false;
+                // Handle spread — CopyDataProperties (§7.3.26)
+                if let Expression::Spread(inner) = &prop.value {
+                    let spread_val = match self.eval_expr(inner, env) {
                         Completion::Normal(v) => v,
-                        other => {
-                            self.next_function_is_method = false;
-                            return other;
-                        }
+                        other => return other,
                     };
-                    self.gc_root_value(&value);
-                    self.next_function_is_method = false;
-                    // Handle spread — CopyDataProperties (§7.3.26)
-                    if let Expression::Spread(inner) = &prop.value {
-                        let spread_val = match self.eval_expr(inner, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        self.gc_root_value(&spread_val);
-                        if let Some(o) = (spread_val)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                        {
-                            let src_id = o.id;
-                            match self.copy_data_properties(src_id, &spread_val, &[]) {
-                                Ok(pairs) => {
-                                    obj_data.properties.reserve(pairs.len());
-                                    obj_data.property_order.reserve(pairs.len());
-                                    for (k, v) in pairs {
-                                        self.gc_root_value(&v);
-                                        obj_data.insert_value_prekeyed(k, v);
-                                    }
+                    self.gc_root_value(&spread_val);
+                    if let Some(o) = (spread_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                    {
+                        let src_id = o.id;
+                        match self.copy_data_properties(src_id, &spread_val, &[]) {
+                            Ok(pairs) => {
+                                obj_data.properties.reserve(pairs.len());
+                                obj_data.property_order.reserve(pairs.len());
+                                for (k, v) in pairs {
+                                    self.gc_root_value(&v);
+                                    obj_data.insert_value_prekeyed(k, v);
                                 }
-                                Err(e) => return Completion::Throw(e),
                             }
-                        }
-                        continue;
-                    }
-                    match prop.kind {
-                        PropertyKind::Get => {
-                            self.set_function_name(
-                                &value,
-                                &prefixed_function_name("get ", &fn_name_for_key),
-                            );
-                            method_values.push(value.clone());
-                            let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(
-                                PropertyDescriptor {
-                                    value: None,
-                                    writable: None,
-                                    get: None,
-                                    set: None,
-                                    enumerable: Some(true),
-                                    configurable: Some(true),
-                                },
-                            );
-                            desc.get = Some(value);
-                            desc.value = None;
-                            desc.writable = None;
-                            obj_data.insert_property(key, desc);
-                        }
-                        PropertyKind::Set => {
-                            self.set_function_name(
-                                &value,
-                                &prefixed_function_name("set ", &fn_name_for_key),
-                            );
-                            method_values.push(value.clone());
-                            let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(
-                                PropertyDescriptor {
-                                    value: None,
-                                    writable: None,
-                                    get: None,
-                                    set: None,
-                                    enumerable: Some(true),
-                                    configurable: Some(true),
-                                },
-                            );
-                            desc.set = Some(value);
-                            desc.value = None;
-                            desc.writable = None;
-                            obj_data.insert_property(key, desc);
-                        }
-                        _ => {
-                            // __proto__: value sets [[Prototype]] per spec §13.2.5.5
-                            // Only plain property init, not methods, computed, or shorthand
-                            if key.eq_str("__proto__")
-                                && !prop.computed
-                                && !prop.shorthand
-                                && !prop.method
-                            {
-                                if let Some(id) = value.as_object_id() {
-                                    obj_data.prototype_id = Some(id);
-                                } else if value.is_null() {
-                                    obj_data.prototype_id = None;
-                                }
-                            } else {
-                                if prop.value.is_anonymous_function_definition() {
-                                    self.set_function_name(&value, &fn_name_for_key);
-                                }
-                                if prop.method {
-                                    method_values.push(value.clone());
-                                }
-                                obj_data.insert_value(key, value);
-                            }
+                            Err(e) => return Completion::Throw(e),
                         }
                     }
+                    continue;
                 }
-                let id = self.alloc_object(obj_data);
-                // Set __home_object__ for concise methods, getters, and setters
-                let obj_val = JsValue::object(id);
-                self.gc_root_value(&obj_val);
-                {
-                    for val in &method_values {
-                        if let Some(fo) =
-                            (val).as_object_id().map(|id| crate::types::JsObject { id })
-                            && let Some(func_obj) = self.get_object_cell(fo.id)
-                        {
-                            let old_closure =
-                                if let Some(JsFunction::User { ref closure, .. }) =
-                                    func_obj.borrow().callable
-                                {
-                                    Some(closure.clone())
-                                } else {
-                                    None
-                                };
-                            if let Some(old_closure) = old_closure {
-                                let wrapper = Environment::new(Some(old_closure));
-                                wrapper
-                                    .borrow_mut()
-                                    .declare("__home_object__", BindingKind::Const);
-                                wrapper
-                                    .borrow_mut()
-                                    .initialize_binding("__home_object__", obj_val.clone());
-                                if let Some(JsFunction::User {
-                                    ref mut closure, ..
-                                }) = func_obj.borrow_mut().callable
-                                {
-                                    *closure = wrapper;
-                                }
-                            }
-                        }
-                    }
-                }
-                Completion::Normal(obj_val)
-            })();
+                let spec = LiteralPropertySpec {
+                    kind: prop.kind,
+                    plain_init: !prop.computed && !prop.shorthand && !prop.method,
+                    is_method: prop.method,
+                    name_value: match prop.kind {
+                        PropertyKind::Init => prop.value.is_anonymous_function_definition(),
+                        PropertyKind::Get | PropertyKind::Set => true,
+                    },
+                };
+                self.define_literal_property(
+                    &mut obj_data,
+                    crate::interpreter::key_intern::intern_js_key(key),
+                    &fn_name_for_key,
+                    spec,
+                    value,
+                    &mut method_values,
+                );
+            }
+            let obj_val = self.finish_object_literal(obj_data, &method_values);
+            self.gc_root_value(&obj_val);
+            Completion::Normal(obj_val)
+        })();
         self.gc_unroot_frame(gc_frame);
         result
+    }
+
+    /// Defines one property of an object literal on the object under
+    /// construction (PropertyDefinitionEvaluation, sec-runtime-semantics-
+    /// propertydefinitionevaluation): data properties, accessors (merged with
+    /// an earlier half of the same pair), `__proto__: v` and methods. `key`
+    /// must already be interned. Shared by the tree-walker and the VM's
+    /// `NewObject`, so both keep one set of rules.
+    pub(crate) fn define_literal_property(
+        &self,
+        obj_data: &mut JsObjectData,
+        key: JsPropertyKey,
+        fn_name_for_key: &JsPropertyKey,
+        spec: LiteralPropertySpec,
+        value: JsValue,
+        method_values: &mut Vec<JsValue>,
+    ) {
+        match spec.kind {
+            PropertyKind::Get | PropertyKind::Set => {
+                let is_get = spec.kind == PropertyKind::Get;
+                if spec.name_value {
+                    self.set_function_name(
+                        &value,
+                        &prefixed_function_name(
+                            if is_get { "get " } else { "set " },
+                            fn_name_for_key,
+                        ),
+                    );
+                }
+                method_values.push(value.clone());
+                let mut desc =
+                    obj_data
+                        .properties
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or(PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            get: None,
+                            set: None,
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                        });
+                if is_get {
+                    desc.get = Some(value);
+                } else {
+                    desc.set = Some(value);
+                }
+                desc.value = None;
+                desc.writable = None;
+                obj_data.insert_property(key, desc);
+            }
+            PropertyKind::Init => {
+                // __proto__: value sets [[Prototype]] per spec §13.2.5.5
+                // Only plain property init, not methods, computed, or shorthand
+                if spec.sets_prototype(&key) {
+                    if let Some(id) = value.as_object_id() {
+                        obj_data.prototype_id = Some(id);
+                    } else if value.is_null() {
+                        obj_data.prototype_id = None;
+                    }
+                } else {
+                    if spec.name_value {
+                        self.set_function_name(&value, fn_name_for_key);
+                    }
+                    if spec.is_method {
+                        method_values.push(value.clone());
+                    }
+                    obj_data.insert_value_prekeyed(key, value);
+                }
+            }
+        }
+    }
+
+    /// Allocates the finished literal and gives each concise method, getter
+    /// and setter its [[HomeObject]].
+    pub(crate) fn finish_object_literal(
+        &mut self,
+        obj_data: JsObjectData,
+        method_values: &[JsValue],
+    ) -> JsValue {
+        let id = self.alloc_object(obj_data);
+        let obj_val = JsValue::object(id);
+        self.install_home_object(&obj_val, method_values);
+        obj_val
+    }
+
+    /// Wraps each method's closure environment in one binding
+    /// `__home_object__` to `home`, which is how `super` property accesses
+    /// find the object the method was defined on.
+    fn install_home_object(&self, home: &JsValue, method_values: &[JsValue]) {
+        for val in method_values {
+            let Some(fo) = val.as_object_id() else {
+                continue;
+            };
+            let Some(func_obj) = self.get_object_cell(fo) else {
+                continue;
+            };
+            let old_closure =
+                if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
+                    Some(closure.clone())
+                } else {
+                    None
+                };
+            if let Some(old_closure) = old_closure {
+                let wrapper = Environment::new(Some(old_closure));
+                wrapper
+                    .borrow_mut()
+                    .declare("__home_object__", BindingKind::Const);
+                wrapper
+                    .borrow_mut()
+                    .initialize_binding("__home_object__", home.clone());
+                if let Some(JsFunction::User {
+                    ref mut closure, ..
+                }) = func_obj.borrow_mut().callable
+                {
+                    *closure = wrapper;
+                }
+            }
+        }
+    }
+
+    /// `ArrayAppend`: appends literal elements to an array under
+    /// construction.
+    pub(crate) fn array_literal_append(&mut self, array: &JsValue, values: Vec<JsValue>) {
+        let id = array
+            .as_object_id()
+            .expect("ArrayAppend target is an array literal");
+        let cell = self.get_object_cell_expect(id);
+        let mut obj = cell.borrow_mut();
+        let start = obj.array_elements().map_or(0, Vec::len);
+        for (offset, value) in values.iter().enumerate() {
+            if value.is_undefined() {
+                obj.insert_value((start + offset).to_string(), value.clone());
+            }
+        }
+        let elements = obj
+            .array_elements_mut()
+            .expect("ArrayAppend target is an array literal");
+        elements.extend(values);
+        let len = elements.len();
+        obj.set_dense_array_length(len);
+    }
+
+    /// `ObjectAppend`: defines the next chunk of a large object literal's
+    /// properties on the object `NewObject` allocated.
+    pub(crate) fn extend_object_literal(
+        &self,
+        object: &JsValue,
+        shape: &crate::interpreter::bytecode::chunk::ObjectShape,
+        values: &[JsValue],
+    ) {
+        debug_assert_eq!(shape.props.len(), values.len());
+        let id = object
+            .as_object_id()
+            .expect("ObjectAppend target is an object literal");
+        let mut method_values: Vec<JsValue> = Vec::new();
+        {
+            let mut obj_data = self.get_object_cell_expect(id).borrow_mut();
+            obj_data.property_order.reserve(values.len());
+            for (prop, value) in shape.props.iter().zip(values) {
+                self.define_literal_property(
+                    &mut obj_data,
+                    prop.key.clone(),
+                    &prop.key,
+                    prop.spec,
+                    value.clone(),
+                    &mut method_values,
+                );
+            }
+            // A later `__proto__: v` changes the prototype of an object that
+            // already has a shape id.
+            obj_data.shape_id = crate::interpreter::types::fresh_shape_id();
+        }
+        self.install_home_object(object, &method_values);
+    }
+
+    /// `NewObject`: builds a literal whose properties are all statically
+    /// keyed from the operand values, in source order.
+    pub(crate) fn build_object_literal(
+        &mut self,
+        shape: &crate::interpreter::bytecode::chunk::ObjectShape,
+        values: &[JsValue],
+    ) -> JsValue {
+        debug_assert_eq!(shape.props.len(), values.len());
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype_id = self.realm().object_prototype;
+        obj_data.property_order.reserve(values.len());
+        let mut method_values: Vec<JsValue> = Vec::new();
+        for (prop, value) in shape.props.iter().zip(values) {
+            if shape.distinct_data && !prop.spec.name_value {
+                obj_data.push_fresh_value(prop.key.clone(), value.clone());
+                continue;
+            }
+            self.define_literal_property(
+                &mut obj_data,
+                prop.key.clone(),
+                &prop.key,
+                prop.spec,
+                value.clone(),
+                &mut method_values,
+            );
+        }
+        self.finish_object_literal(obj_data, &method_values)
+    }
+}
+
+/// How one statically keyed property of an object literal is defined.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LiteralPropertySpec {
+    pub(crate) kind: PropertyKind,
+    /// Not computed, shorthand or a method: the only form in which
+    /// `__proto__: v` sets the prototype.
+    pub(crate) plain_init: bool,
+    pub(crate) is_method: bool,
+    /// The value is an anonymous function definition the literal must still
+    /// name after the key (the VM names its closures when it creates them).
+    pub(crate) name_value: bool,
+}
+
+impl LiteralPropertySpec {
+    /// `__proto__: v` in its plain form, which sets the prototype instead of
+    /// defining a property (and is not a NamedEvaluation position).
+    pub(crate) fn sets_prototype(&self, key: &JsPropertyKey) -> bool {
+        self.kind == PropertyKind::Init && self.plain_init && key.eq_str("__proto__")
     }
 }

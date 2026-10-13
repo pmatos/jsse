@@ -142,6 +142,33 @@ pub(crate) enum Op {
     /// replace the innermost block environment with a fresh sibling holding
     /// copies of its bindings. No operands.
     CopyIterEnv = 79,
+    /// `[...]` → `[..., array]`: a fresh array from the constant template
+    /// `array_templates[idx]` (primitive elements and holes only). Operand:
+    /// template index (u16).
+    NewArrayConst = 80,
+    /// `[..., v0, ..., vn-1]` → `[..., array]`: a fresh array of the `n`
+    /// operand values. Operand: n (u16).
+    NewArray = 81,
+    /// `[..., array, v0, ..., vn-1]` → `[..., array]`: appends `n` values to
+    /// an array literal under construction (literals longer than one operand
+    /// chunk). Operand: n (u16).
+    ArrayAppend = 82,
+    /// `[..., v0, ..., vn-1]` → `[..., object]`: a fresh object literal whose
+    /// `n` statically keyed properties take the operand values in order.
+    /// Operand: object shape index (u16).
+    NewObject = 83,
+    /// `[...]` → `[..., closure]`: a closure of the function or arrow literal
+    /// `functions[idx]` over the current environment. Operands: template index
+    /// (u16), flags (u8: bit 0 = object-literal method).
+    MakeClosure = 84,
+    /// `[...]` → `[..., regexp]`: a fresh RegExp object for the literal
+    /// `regexps[idx]`. Operand: index (u16).
+    NewRegExp = 85,
+    /// `[..., object, v0, ..., vn-1]` → `[..., object]`: defines the next `n`
+    /// statically keyed properties of an object literal under construction
+    /// (literals longer than one operand chunk). Operand: object shape index
+    /// (u16).
+    ObjectAppend = 86,
 }
 
 impl Op {
@@ -227,6 +254,13 @@ impl Op {
             77 => Some(Op::PushEnv),
             78 => Some(Op::PopEnv),
             79 => Some(Op::CopyIterEnv),
+            80 => Some(Op::NewArrayConst),
+            81 => Some(Op::NewArray),
+            82 => Some(Op::ArrayAppend),
+            83 => Some(Op::NewObject),
+            84 => Some(Op::MakeClosure),
+            85 => Some(Op::NewRegExp),
+            86 => Some(Op::ObjectAppend),
             _ => None,
         }
     }
