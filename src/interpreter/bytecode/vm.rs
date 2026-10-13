@@ -539,6 +539,190 @@ pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
     }
 }
 
+/// `GetIterator` / the for-in head: `[value]` -> `[iterator]`.
+#[inline(never)]
+fn iteration_head(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    is_for_in: bool,
+) -> Result<(), JsValue> {
+    let value = stack.pop().expect("stack underflow on GetIterator");
+    let result = if is_for_in {
+        interp.for_in_head_iterator(&value)
+    } else {
+        interp.get_iterator(&value)
+    };
+    unroot_stack_value(interp, &value);
+    let iterator = result?;
+    push_value(interp, stack, iterator);
+    Ok(())
+}
+
+/// `IterStep`/`ForInStep`: `[it]` -> `[it, value]` (true), or the iterator is
+/// dropped (false) when it is exhausted.
+#[inline(never)]
+fn iteration_step(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    is_for_in: bool,
+) -> Result<bool, JsValue> {
+    let iterator = stack.last().expect("stack underflow on IterStep").clone();
+    let step = if is_for_in {
+        match iterator.as_object_id() {
+            Some(id) => interp.for_in_enumerator_step(id),
+            None => Ok(None),
+        }
+    } else {
+        interp.iterator_step_value(&iterator)
+    };
+    match step? {
+        Some(value) => {
+            push_value(interp, stack, value);
+            Ok(true)
+        }
+        None => {
+            pop_value(interp, stack, "stack underflow on IterStep");
+            Ok(false)
+        }
+    }
+}
+
+/// `IterClose`: IteratorClose with a normal completion for the iterator
+/// `depth` values below the top, which is removed.
+#[inline(never)]
+fn iteration_close(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    depth: usize,
+) -> Result<(), JsValue> {
+    let index = stack
+        .len()
+        .checked_sub(1 + depth)
+        .expect("stack underflow on IterClose");
+    // The iterator and any pending value above it stay rooted while
+    // `return()` runs.
+    let iterator = stack[index].clone();
+    interp.iterator_close_result(&iterator)?;
+    let mut held: SmallVec<[JsValue; 1]> = SmallVec::new();
+    for _ in 0..depth {
+        held.push(pop_value(interp, stack, "stack underflow on IterClose"));
+    }
+    pop_value(interp, stack, "stack underflow on IterClose");
+    for value in held.into_iter().rev() {
+        push_value(interp, stack, value);
+    }
+    Ok(())
+}
+
+/// `IterCloseThrow`: `[it, thrown]`; closes the iterator without letting its
+/// `return()` replace the throw, and yields the throw to rethrow.
+#[inline(never)]
+fn iteration_close_throw(interp: &mut Interpreter, stack: &mut Vec<JsValue>) -> JsValue {
+    let thrown = stack
+        .last()
+        .expect("stack underflow on IterCloseThrow")
+        .clone();
+    let iterator = stack[stack.len() - 2].clone();
+    interp.iterator_close(&iterator, thrown.clone());
+    pop_value(interp, stack, "stack underflow on IterCloseThrow");
+    pop_value(interp, stack, "stack underflow on IterCloseThrow");
+    thrown
+}
+
+#[inline(never)]
+fn drop_below(interp: &mut Interpreter, stack: &mut Vec<JsValue>, has_value: bool, count: usize) {
+    let held = if has_value {
+        Some(pop_value(interp, stack, "stack underflow on DropBelow"))
+    } else {
+        None
+    };
+    for _ in 0..count {
+        pop_value(interp, stack, "stack underflow on DropBelow");
+    }
+    if let Some(value) = held {
+        push_value(interp, stack, value);
+    }
+}
+
+/// `EndFinally`: pops `[value, kind]`. Kind 0 is a normal completion (`None`),
+/// 1 rethrows `value` (`Err`), and `n >= 2` resumes at the finalizer's exit
+/// `n - 2` (`Some(target)`), pushing `value` back when it carries one.
+#[inline(never)]
+fn end_finally(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    stack: &mut Vec<JsValue>,
+    table: usize,
+) -> Result<Option<usize>, JsValue> {
+    let kind = pop_value(interp, stack, "stack underflow on EndFinally kind");
+    let value = pop_value(interp, stack, "stack underflow on EndFinally value");
+    let kind = kind.as_number().expect("finalizer completion kind") as usize;
+    match kind {
+        0 => Ok(None),
+        1 => Err(value),
+        n => {
+            let exit = chunk.finally_tables[table][n - 2];
+            if exit.keep_value {
+                push_value(interp, stack, value);
+            }
+            Ok(Some(exit.target as usize))
+        }
+    }
+}
+
+#[inline(never)]
+fn bind_head_op(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    head: &HeadBinding,
+    env: &EnvRef,
+) -> Result<(), Completion> {
+    let value = stack.last().expect("stack underflow on BindHead").clone();
+    let result = bind_head(interp, head, value, env);
+    pop_value(interp, stack, "stack underflow on BindHead");
+    match result {
+        Completion::Normal(_) | Completion::Empty => Ok(()),
+        abrupt => Err(abrupt),
+    }
+}
+
+/// Where a `Throw` raised at code offset `at` resumes: the innermost handler
+/// covering it (the compiler lists inner ranges first). The operand stack and
+/// block environments are cut back to the handler's depth and the thrown
+/// value is pushed. `Err` is the completion the chunk leaves with instead.
+#[allow(clippy::too_many_arguments)]
+#[cold]
+#[inline(never)]
+fn resume_at_handler(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    stack: &mut Vec<JsValue>,
+    refs: &mut Vec<IdentifierRef>,
+    scopes: &mut SmallVec<[EnvRef; 4]>,
+    envs_base: usize,
+    roots_base: usize,
+    at: u32,
+    thrown: JsValue,
+) -> Result<usize, Completion> {
+    let Some(handler) = chunk.handlers.iter().find(|h| h.start <= at && at < h.end) else {
+        return Err(Completion::Throw(thrown));
+    };
+    if handler.checks_exit
+        && let Some(code) = interp.pending_exit
+    {
+        return Err(Completion::Exit(code));
+    }
+    stack.truncate(usize::from(handler.stack_height));
+    let kept_roots = roots_base + stack.iter().filter(|v| v.as_object_id().is_some()).count();
+    if interp.gc_bytecode_roots.len() > kept_roots {
+        interp.gc_bytecode_roots.truncate(kept_roots);
+    }
+    refs.clear();
+    unwind_scopes(interp, scopes, envs_base, usize::from(handler.scope_depth));
+    push_value(interp, stack, thrown);
+    Ok(handler.target as usize)
+}
+
 pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -668,10 +852,21 @@ fn run_chunk_inner(
     macro_rules! bail {
         ($l:lifetime, $completion:expr) => {
             match $completion {
-                Completion::Throw(e) => break $l e,
+                Completion::Throw(e) => throw!($l, e),
                 other => return other,
             }
         };
+    }
+    // A chunk without `try`/for-of ranges has nobody to resume: leave at
+    // once, exactly as before handlers existed.
+    macro_rules! throw {
+        ($l:lifetime, $e:expr) => {{
+            let thrown = $e;
+            if chunk.handlers.is_empty() {
+                return Completion::Throw(thrown);
+            }
+            break $l thrown;
+        }};
     }
     // One arm per binary op, so the Number-pair fast path is specialised to
     // the op instead of re-dispatching on it.
@@ -763,7 +958,7 @@ fn run_chunk_inner(
                         value,
                         chunk.global_hint(idx),
                     ) {
-                        break 'dispatch e;
+                        throw!('dispatch, e);
                     }
                     if op == Op::StoreLocalPop {
                         pop_value(interp, stack, "stack underflow on StoreLocalPop");
@@ -882,7 +1077,7 @@ fn run_chunk_inner(
                             chunk.global_hint(idx),
                         ) {
                             Ok(id_ref) => refs.push(id_ref),
-                            Err(e) => break 'dispatch e,
+                            Err(e) => throw!('dispatch, e),
                         }
                     }
                 }
@@ -919,7 +1114,7 @@ fn run_chunk_inner(
                         value,
                         chunk.global_hint(idx),
                     ) {
-                        break 'dispatch e;
+                        throw!('dispatch, e);
                     }
                     if op == Op::StoreResolvedNamePop {
                         pop_value(interp, stack, "stack underflow on StoreResolvedNamePop");
@@ -1041,7 +1236,7 @@ fn run_chunk_inner(
                     interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(()) => push_value(interp, stack, rhs),
-                        Err(e) => break 'dispatch e,
+                        Err(e) => throw!('dispatch, e),
                     }
                 }
                 Op::SetElement => {
@@ -1069,7 +1264,7 @@ fn run_chunk_inner(
                     interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(()) => push_value(interp, stack, rhs),
-                        Err(e) => break 'dispatch e,
+                        Err(e) => throw!('dispatch, e),
                     }
                 }
                 Op::LoadUndefined => {
@@ -1481,7 +1676,7 @@ fn run_chunk_inner(
                 }
                 Op::Throw => {
                     let value = pop_value(interp, stack, "stack underflow on Throw");
-                    break 'dispatch value;
+                    throw!('dispatch, value);
                 }
                 Op::Typeof => {
                     let value = pop_value(interp, stack, "stack underflow on Typeof");
@@ -1605,8 +1800,9 @@ fn run_chunk_inner(
                         .expect("stack underflow on ToPrimitiveKey base");
                     if stack[base_index].is_nullish() {
                         let base = stack[base_index].clone();
-                        break 'dispatch interp
-                            .create_type_error(&format!("Cannot read properties of {base}"));
+                        let error =
+                            interp.create_type_error(&format!("Cannot read properties of {base}"));
+                        throw!('dispatch, error);
                     }
                     let gc_frame = root_operand_stack(interp, stack);
                     let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
@@ -1615,7 +1811,7 @@ fn run_chunk_inner(
                     interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(v) => push_value(interp, stack, v),
-                        Err(e) => break 'dispatch e,
+                        Err(e) => throw!('dispatch, e),
                     }
                 }
                 Op::JumpIfNotNullishKeep => {
@@ -1766,121 +1962,51 @@ fn run_chunk_inner(
                         .alloc_regexp_literal(template.source.clone(), template.flags.clone());
                     push_value(interp, stack, regexp);
                 }
-                Op::GetIterator => {
-                    let iterable = stack.pop().expect("stack underflow on GetIterator");
-                    let result = interp.get_iterator(&iterable);
-                    unroot_stack_value(interp, &iterable);
-                    match result {
-                        Ok(iterator) => push_value(interp, stack, iterator),
-                        Err(e) => break 'dispatch e,
-                    }
-                }
-                Op::ForInHead => {
-                    let value = stack.pop().expect("stack underflow on ForInHead");
-                    let result = interp.for_in_head_iterator(&value);
-                    unroot_stack_value(interp, &value);
-                    match result {
-                        Ok(enumerator) => push_value(interp, stack, enumerator),
-                        Err(e) => break 'dispatch e,
+                Op::GetIterator | Op::ForInHead => {
+                    if let Err(e) = iteration_head(interp, stack, op == Op::ForInHead) {
+                        throw!('dispatch, e);
                     }
                 }
                 Op::IterStep | Op::ForInStep => {
                     let offset = decode_i16(chunk, pc) as i32;
                     pc += 2;
-                    let iterator = stack.last().expect("stack underflow on IterStep").clone();
-                    let step = if op == Op::IterStep {
-                        interp.iterator_step_value(&iterator)
-                    } else {
-                        match iterator.as_object_id() {
-                            Some(id) => interp.for_in_enumerator_step(id),
-                            None => Ok(None),
-                        }
-                    };
-                    match step {
-                        Ok(Some(value)) => push_value(interp, stack, value),
-                        Ok(None) => {
-                            pop_value(interp, stack, "stack underflow on IterStep");
-                            pc = (pc as i32 + offset) as usize;
-                        }
-                        Err(e) => break 'dispatch e,
+                    match iteration_step(interp, stack, op == Op::ForInStep) {
+                        Ok(true) => {}
+                        Ok(false) => pc = (pc as i32 + offset) as usize,
+                        Err(e) => throw!('dispatch, e),
                     }
                 }
                 Op::IterClose => {
                     let depth = usize::from(chunk.code[pc]);
                     pc += 1;
-                    let index = stack
-                        .len()
-                        .checked_sub(1 + depth)
-                        .expect("stack underflow on IterClose");
-                    // The iterator and any pending value above it stay rooted
-                    // while `return()` runs.
-                    let iterator = stack[index].clone();
-                    if let Err(e) = interp.iterator_close_result(&iterator) {
-                        break 'dispatch e;
-                    }
-                    let mut held: SmallVec<[JsValue; 1]> = SmallVec::new();
-                    for _ in 0..depth {
-                        held.push(pop_value(interp, stack, "stack underflow on IterClose"));
-                    }
-                    pop_value(interp, stack, "stack underflow on IterClose");
-                    for value in held.into_iter().rev() {
-                        push_value(interp, stack, value);
+                    if let Err(e) = iteration_close(interp, stack, depth) {
+                        throw!('dispatch, e);
                     }
                 }
                 Op::IterCloseThrow => {
-                    let thrown = stack
-                        .last()
-                        .expect("stack underflow on IterCloseThrow")
-                        .clone();
-                    let iterator = stack[stack.len() - 2].clone();
-                    interp.iterator_close(&iterator, thrown.clone());
-                    pop_value(interp, stack, "stack underflow on IterCloseThrow");
-                    pop_value(interp, stack, "stack underflow on IterCloseThrow");
-                    break 'dispatch thrown;
+                    let thrown = iteration_close_throw(interp, stack);
+                    throw!('dispatch, thrown);
                 }
                 Op::DropBelow => {
                     let has_value = chunk.code[pc] != 0;
                     let count = usize::from(chunk.code[pc + 1]);
                     pc += 2;
-                    let held = if has_value {
-                        Some(pop_value(interp, stack, "stack underflow on DropBelow"))
-                    } else {
-                        None
-                    };
-                    for _ in 0..count {
-                        pop_value(interp, stack, "stack underflow on DropBelow");
-                    }
-                    if let Some(value) = held {
-                        push_value(interp, stack, value);
-                    }
+                    drop_below(interp, stack, has_value, count);
                 }
                 Op::EndFinally => {
                     let table = usize::from(decode_u16(chunk, pc));
                     pc += 2;
-                    let kind = pop_value(interp, stack, "stack underflow on EndFinally kind");
-                    let value = pop_value(interp, stack, "stack underflow on EndFinally value");
-                    let kind = kind.as_number().expect("finalizer completion kind") as usize;
-                    match kind {
-                        0 => {}
-                        1 => break 'dispatch value,
-                        n => {
-                            let exit = chunk.finally_tables[table][n - 2];
-                            if exit.keep_value {
-                                push_value(interp, stack, value);
-                            }
-                            pc = exit.target as usize;
-                        }
+                    match end_finally(interp, chunk, stack, table) {
+                        Ok(Some(target)) => pc = target,
+                        Ok(None) => {}
+                        Err(value) => throw!('dispatch, value),
                     }
                 }
                 Op::BindHead => {
                     let head = &chunk.head_bindings[usize::from(decode_u16(chunk, pc))];
                     pc += 2;
-                    let value = stack.last().expect("stack underflow on BindHead").clone();
-                    let result = bind_head(interp, head, value, cur_env!());
-                    pop_value(interp, stack, "stack underflow on BindHead");
-                    match result {
-                        Completion::Normal(_) | Completion::Empty => {}
-                        abrupt => bail!('dispatch, abrupt),
+                    if let Err(e) = bind_head_op(interp, stack, head, cur_env!()) {
+                        bail!('dispatch, e);
                     }
                 }
                 Op::CheckExit => {
@@ -1899,32 +2025,21 @@ fn run_chunk_inner(
                 }
             }
         };
-        // A `Throw` from an op of the protected range resumes at its handler
-        // (the innermost entry, which the compiler lists first): the operand
-        // stack and block environments are cut back to the handler's depth and
-        // the thrown value is pushed. `pc - 1` lies inside the faulting op.
-        let at = (pc - 1) as u32;
-        let Some(handler) = chunk.handlers.iter().find(|h| h.start <= at && at < h.end) else {
-            return Completion::Throw(thrown);
-        };
-        if handler.checks_exit
-            && let Some(code) = interp.pending_exit
-        {
-            return Completion::Exit(code);
-        }
-        stack.truncate(usize::from(handler.stack_height));
-        let kept_roots = roots_base + stack.iter().filter(|v| v.as_object_id().is_some()).count();
-        if interp.gc_bytecode_roots.len() > kept_roots {
-            interp.gc_bytecode_roots.truncate(kept_roots);
-        }
-        refs.clear();
-        unwind_scopes(
+        // A `Throw` from an op of the protected range resumes at its handler.
+        // `pc - 1` lies inside the faulting op.
+        match resume_at_handler(
             interp,
+            chunk,
+            stack,
+            refs,
             &mut scopes,
             envs_base,
-            usize::from(handler.scope_depth),
-        );
-        push_value(interp, stack, thrown);
-        pc = handler.target as usize;
+            roots_base,
+            (pc - 1) as u32,
+            thrown,
+        ) {
+            Ok(target) => pc = target,
+            Err(completion) => return completion,
+        }
     }
 }
