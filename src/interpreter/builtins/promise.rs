@@ -93,7 +93,7 @@ impl Interpreter {
         };
         let key = JsPropertyKey::well_known_symbol("species");
         let ctor = ctor.borrow();
-        let getter = ctor.properties.get(&key).and_then(|desc| desc.get.as_ref());
+        let getter = ctor.properties.get(&key).and_then(|desc| desc.getter());
         match getter {
             Some(getter) => is_same_object(self.realm().promise_species_getter.as_ref(), getter),
             None => false,
@@ -843,8 +843,8 @@ impl Interpreter {
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
         let mut data = JsObjectData::new();
         data.prototype_id = self.realm().promise_prototype;
-        data.class_name = "Promise".into();
-        data.kind = crate::interpreter::types::ObjectKind::Promise(PromiseData::new());
+        data.class_name = "Promise";
+        data.kind = crate::interpreter::types::ObjectKind::Promise(Box::default());
         let id = self.alloc_object(data);
         JsValue::object(id)
     }
@@ -2129,7 +2129,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "AggregateError".into();
+            o.class_name = "AggregateError";
             if let Some(proto_id) = self.realm().aggregate_error_prototype {
                 o.prototype_id = Some(proto_id);
             }
@@ -2166,7 +2166,7 @@ impl Interpreter {
         if let Some(o) = val.as_object_id()
             && let Some(obj) = self.get_object_cell(o)
         {
-            if let Some(ref func) = obj.borrow().callable {
+            if let Some(func) = obj.borrow().callable.as_deref() {
                 return match func {
                     JsFunction::Native(_, _, _, is_ctor) => *is_ctor,
                     JsFunction::User {

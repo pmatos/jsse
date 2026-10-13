@@ -93,7 +93,7 @@ fn assign_from_ordinary_source(
             let s = src.borrow();
             s.properties
                 .iter()
-                .filter(|(_, d)| d.enumerable != Some(false))
+                .filter(|(_, d)| d.enumerable() != Some(false))
                 .count()
                 + s.array_elements().map_or(0, Vec::len)
         };
@@ -1275,7 +1275,7 @@ impl Interpreter {
                                 let b = obj.borrow();
                                 b.properties
                                     .iter()
-                                    .map(|(k, d)| (k.clone(), d.clone()))
+                                    .map(|(k, d)| (k.clone(), d.to_descriptor()))
                                     .collect()
                             };
                             for (key, desc) in keys_and_descs {

@@ -653,7 +653,7 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.ZonedDateTime".into();
+        .class_name = "Temporal.ZonedDateTime";
     if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
         interp
             .get_object_cell_expect(obj_id)
@@ -661,11 +661,11 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
             .prototype_id = Some(proto_id);
     }
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-        crate::interpreter::types::ObjectKind::Temporal(TemporalData::ZonedDateTime {
+        crate::interpreter::types::ObjectKind::Temporal(Box::new(TemporalData::ZonedDateTime {
             epoch_nanoseconds: ns,
             time_zone: tz,
             calendar: cal,
-        });
+        }));
     let id = obj_id;
     Completion::Normal(JsValue::object(id))
 }
@@ -1763,7 +1763,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.ZonedDateTime".into();
+            .class_name = "Temporal.ZonedDateTime";
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Temporal.ZonedDateTime");
@@ -2217,17 +2217,17 @@ impl Interpreter {
                             ]
                             .iter()
                             .any(|k| {
-                                b.properties.get(k).is_some_and(|pd| {
-                                    pd.value.as_ref().is_some_and(|v| !v.is_undefined())
-                                })
+                                b.properties
+                                    .get(k)
+                                    .is_some_and(|pd| pd.value().is_some_and(|v| !v.is_undefined()))
                             })
                         };
                         if !has_explicit {
                             let has_tz_name = {
                                 let b = interp.get_object_cell_expect(opts_obj_id).borrow();
-                                b.properties.get("timeZoneName").is_some_and(|pd| {
-                                    pd.value.as_ref().is_some_and(|v| !v.is_undefined())
-                                })
+                                b.properties
+                                    .get("timeZoneName")
+                                    .is_some_and(|pd| pd.value().is_some_and(|v| !v.is_undefined()))
                             };
                             for (k, v) in [
                                 ("year", "numeric"),
@@ -2353,7 +2353,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .class_name = "Temporal.Instant".into();
+                        .class_name = "Temporal.Instant";
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                         interp
                             .get_object_cell_expect(obj_id)
@@ -2361,9 +2361,11 @@ impl Interpreter {
                             .prototype_id = Some(proto_id);
                     }
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                        crate::interpreter::types::ObjectKind::Temporal(TemporalData::Instant {
-                            epoch_nanoseconds: ns,
-                        });
+                        crate::interpreter::types::ObjectKind::Temporal(Box::new(
+                            TemporalData::Instant {
+                                epoch_nanoseconds: ns,
+                            },
+                        ));
                     let id = obj_id;
                     Completion::Normal(JsValue::object(id))
                 },

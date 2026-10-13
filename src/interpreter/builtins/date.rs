@@ -1,4 +1,5 @@
 use super::super::*;
+use super::errors::error_class_name;
 
 /// The pure core shared by every `Date.prototype.get*` component accessor: given
 /// a Date's time value `t`, an invalid Date (`t` is NaN) yields NaN without ever
@@ -76,7 +77,7 @@ fn date_to_locale_string(
                             .borrow()
                             .properties
                             .iter()
-                            .map(|(k, pd)| (k.clone(), pd.clone()))
+                            .map(|(k, pd)| (k.clone(), pd.to_descriptor()))
                             .collect();
                         let new_obj_id = interp.create_object_id();
                         for (k, pd) in pds {
@@ -236,7 +237,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Date".into();
+            .class_name = "Date";
         // Date.prototype does NOT have [[DateValue]] per spec
 
         // Guard wrapper around `date_field_value`: brand-check `this` as a Date
@@ -1008,7 +1009,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .class_name = "Temporal.Instant".into();
+                        .class_name = "Temporal.Instant";
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                         interp
                             .get_object_cell_expect(obj_id)
@@ -1016,11 +1017,11 @@ impl Interpreter {
                             .prototype_id = Some(proto_id);
                     }
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                        crate::interpreter::types::ObjectKind::Temporal(
+                        crate::interpreter::types::ObjectKind::Temporal(Box::new(
                             crate::interpreter::types::TemporalData::Instant {
                                 epoch_nanoseconds: ns,
                             },
-                        );
+                        ));
                     let id = obj_id;
                     Completion::Normal(JsValue::object(id))
                 }),
@@ -1220,7 +1221,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let mut b = interp.get_object_cell_expect(object_id).borrow_mut();
-                    b.class_name = "Date".into();
+                    b.class_name = "Date";
                     b.primitive_value = Some(JsValue::number(time_val));
                     b.prototype_id = Some(proto);
                 }
@@ -1430,7 +1431,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = name.to_string().into();
+            o.class_name = error_class_name(name);
             if let Some(proto_id) = error_proto_id {
                 o.prototype_id = Some(proto_id);
             }

@@ -251,7 +251,7 @@ impl Interpreter {
                     }
                     let mut obj_mut = obj.borrow_mut();
                     if let Some(desc) = obj_mut.properties.get(&key)
-                        && desc.configurable == Some(false)
+                        && desc.configurable() == Some(false)
                     {
                         return Completion::Normal(JsValue::boolean(false));
                     }

@@ -135,10 +135,10 @@ impl Interpreter {
         }
         let slot = locate(&obj.properties, name, hint)?;
         let (_, desc) = obj.properties.entry_at(slot)?;
-        if desc.get.is_some() || desc.set.is_some() {
+        if desc.getter().is_some() || desc.setter().is_some() {
             return None;
         }
-        Some(desc.value.clone().unwrap_or(JsValue::UNDEFINED))
+        Some(desc.value().cloned().unwrap_or(JsValue::UNDEFINED))
     }
 
     /// Store `value` into the existing own, writable data property `name` of
@@ -168,7 +168,9 @@ impl Interpreter {
             };
             match obj.properties.entry_at(slot) {
                 Some((_, desc))
-                    if desc.get.is_none() && desc.set.is_none() && desc.writable != Some(false) =>
+                    if desc.getter().is_none()
+                        && desc.setter().is_none()
+                        && desc.writable() != Some(false) =>
                 {
                     slot
                 }
@@ -179,7 +181,7 @@ impl Interpreter {
         let mut obj = cell.borrow_mut_untracked();
         match obj.properties.entry_at_mut(slot) {
             Some(desc) => {
-                desc.value = Some(value.clone());
+                desc.set_value(Some(value.clone()));
                 true
             }
             None => false,

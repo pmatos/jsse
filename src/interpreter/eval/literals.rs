@@ -112,7 +112,7 @@ impl Interpreter {
             .realm()
             .array_prototype
             .or(self.realm().object_prototype);
-        obj_data.class_name = "Array".into();
+        obj_data.class_name = "Array";
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(
             crate::interpreter::types::ArrayData::default(),
         );
@@ -157,7 +157,7 @@ impl Interpreter {
             .realm()
             .regexp_prototype
             .or(self.realm().object_prototype);
-        obj.class_name = "RegExp".into();
+        obj.class_name = "RegExp";
         obj.kind = crate::interpreter::types::ObjectKind::RegExp(
             crate::interpreter::types::RegExpData::new(source, flags),
         );
@@ -216,7 +216,7 @@ impl Interpreter {
             .realm()
             .regexp_prototype
             .or(self.realm().object_prototype);
-        obj.class_name = "RegExp".into();
+        obj.class_name = "RegExp";
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
         obj.kind = crate::interpreter::types::ObjectKind::RegExp(
             crate::interpreter::types::RegExpData::new(
@@ -406,6 +406,7 @@ impl Interpreter {
                 (params, body, false, true)
             };
         let ctor_func = JsFunction::User {
+            bytecode_cache: Default::default(),
             name: Some(name.to_string()),
             params: ctor_params,
             body: ctor_body,
@@ -625,6 +626,7 @@ impl Interpreter {
                                 .initialize_binding("__home_object__", priv_home_target);
                             let info = m.value.info();
                             let method_func = JsFunction::User {
+                                bytecode_cache: Default::default(),
                                 name: Some(format!("#{name}")),
                                 params: info.params.clone(),
                                 body: m.value.body.clone(),
@@ -649,11 +651,8 @@ impl Interpreter {
                                 {
                                     match m.kind {
                                         ClassMethodKind::Get => {
-                                            let existing = func_obj
-                                                .borrow()
-                                                .private_fields
-                                                .get(&branded)
-                                                .cloned();
+                                            let existing =
+                                                func_obj.borrow().private_field(&branded).cloned();
                                             let elem = if let Some(PrivateElement::Accessor {
                                                 get: _,
                                                 set,
@@ -671,15 +670,12 @@ impl Interpreter {
                                             };
                                             func_obj
                                                 .borrow_mut()
-                                                .private_fields
+                                                .private_fields_mut()
                                                 .insert(branded.clone(), elem);
                                         }
                                         ClassMethodKind::Set => {
-                                            let existing = func_obj
-                                                .borrow()
-                                                .private_fields
-                                                .get(&branded)
-                                                .cloned();
+                                            let existing =
+                                                func_obj.borrow().private_field(&branded).cloned();
                                             let elem = if let Some(PrivateElement::Accessor {
                                                 get,
                                                 set: _,
@@ -697,11 +693,11 @@ impl Interpreter {
                                             };
                                             func_obj
                                                 .borrow_mut()
-                                                .private_fields
+                                                .private_fields_mut()
                                                 .insert(branded.clone(), elem);
                                         }
                                         _ => {
-                                            func_obj.borrow_mut().private_fields.insert(
+                                            func_obj.borrow_mut().private_fields_mut().insert(
                                                 branded.clone(),
                                                 PrivateElement::Method(method_val),
                                             );
@@ -717,7 +713,7 @@ impl Interpreter {
                                     ClassMethodKind::Get => {
                                         let mut b = func_obj.borrow_mut();
                                         let mut found = false;
-                                        for idef in b.class_instance_field_defs.iter_mut() {
+                                        for idef in b.instance_field_defs_mut().iter_mut() {
                                             if let InstanceFieldDef::Private(
                                                 PrivateFieldDef::Accessor {
                                                     name: n, get: g, ..
@@ -731,7 +727,7 @@ impl Interpreter {
                                             }
                                         }
                                         if !found {
-                                            b.class_instance_field_defs.push(
+                                            b.instance_field_defs_mut().push(
                                                 InstanceFieldDef::Private(
                                                     PrivateFieldDef::Accessor {
                                                         name: branded.clone(),
@@ -745,7 +741,7 @@ impl Interpreter {
                                     ClassMethodKind::Set => {
                                         let mut b = func_obj.borrow_mut();
                                         let mut found = false;
-                                        for idef in b.class_instance_field_defs.iter_mut() {
+                                        for idef in b.instance_field_defs_mut().iter_mut() {
                                             if let InstanceFieldDef::Private(
                                                 PrivateFieldDef::Accessor {
                                                     name: n, set: s, ..
@@ -759,7 +755,7 @@ impl Interpreter {
                                             }
                                         }
                                         if !found {
-                                            b.class_instance_field_defs.push(
+                                            b.instance_field_defs_mut().push(
                                                 InstanceFieldDef::Private(
                                                     PrivateFieldDef::Accessor {
                                                         name: branded.clone(),
@@ -771,7 +767,7 @@ impl Interpreter {
                                         }
                                     }
                                     _ => {
-                                        func_obj.borrow_mut().class_instance_field_defs.push(
+                                        func_obj.borrow_mut().instance_field_defs_mut().push(
                                             InstanceFieldDef::Private(PrivateFieldDef::Method {
                                                 name: branded.clone(),
                                                 value: method_val,
@@ -805,6 +801,7 @@ impl Interpreter {
                         .initialize_binding("__home_object__", home_target);
                     let info = m.value.info();
                     let method_func = JsFunction::User {
+                        bytecode_cache: Default::default(),
                         // create_function installs an empty configurable name, then
                         // SetFunctionName below replaces it without a lossy Rust String seam.
                         name: Some(String::new()),
@@ -839,32 +836,38 @@ impl Interpreter {
                     if let Some(ref t) = target {
                         let ok = match m.kind {
                             ClassMethodKind::Get => {
-                                let mut desc = t.borrow().properties.get(&key).cloned().unwrap_or(
-                                    PropertyDescriptor {
+                                let mut desc = t
+                                    .borrow()
+                                    .properties
+                                    .get(&key)
+                                    .map(PropertyRecord::to_descriptor)
+                                    .unwrap_or(PropertyDescriptor {
                                         value: None,
                                         writable: None,
                                         get: None,
                                         set: None,
                                         enumerable: Some(false),
                                         configurable: Some(true),
-                                    },
-                                );
+                                    });
                                 desc.get = Some(method_val);
                                 desc.value = None;
                                 desc.writable = None;
                                 t.borrow_mut().define_own_property(key, desc)
                             }
                             ClassMethodKind::Set => {
-                                let mut desc = t.borrow().properties.get(&key).cloned().unwrap_or(
-                                    PropertyDescriptor {
+                                let mut desc = t
+                                    .borrow()
+                                    .properties
+                                    .get(&key)
+                                    .map(PropertyRecord::to_descriptor)
+                                    .unwrap_or(PropertyDescriptor {
                                         value: None,
                                         writable: None,
                                         get: None,
                                         set: None,
                                         enumerable: Some(false),
                                         configurable: Some(true),
-                                    },
-                                );
+                                    });
                                 desc.set = Some(method_val);
                                 desc.value = None;
                                 desc.writable = None;
@@ -893,7 +896,7 @@ impl Interpreter {
                                 .map(|id| crate::types::JsObject { id })
                                 && let Some(func_obj) = self.get_object(o.id)
                             {
-                                func_obj.borrow_mut().class_instance_field_defs.push(
+                                func_obj.borrow_mut().instance_field_defs_mut().push(
                                     InstanceFieldDef::Private(PrivateFieldDef::Field {
                                         name: branded,
                                         initializer: p.value.clone(),
@@ -957,7 +960,7 @@ impl Interpreter {
                         {
                             func_obj
                                 .borrow_mut()
-                                .class_instance_field_defs
+                                .instance_field_defs_mut()
                                 .push(InstanceFieldDef::Public(key, p.value.clone()));
                         }
                     }
@@ -972,7 +975,7 @@ impl Interpreter {
                                 .map(|id| crate::types::JsObject { id })
                                 && let Some(func_obj) = self.get_object(o.id)
                             {
-                                func_obj.borrow_mut().class_instance_field_defs.push(
+                                func_obj.borrow_mut().instance_field_defs_mut().push(
                                     InstanceFieldDef::Private(PrivateFieldDef::Field {
                                         name: branded,
                                         initializer: p.value.clone(),
@@ -1019,7 +1022,7 @@ impl Interpreter {
                             };
                             if let Some(obj) = interp.get_object_cell(obj_id)
                                 && let Some(PrivateElement::Field(v)) =
-                                    obj.borrow().private_fields.get(&getter_slot)
+                                    obj.borrow().private_field(&getter_slot)
                             {
                                 return Completion::Normal(v.clone());
                             }
@@ -1043,10 +1046,10 @@ impl Interpreter {
                             };
                             let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             if let Some(obj) = interp.get_object_cell(obj_id)
-                                && obj.borrow().private_fields.contains_key(&setter_slot)
+                                && obj.borrow().has_private_field(&setter_slot)
                             {
                                 obj.borrow_mut()
-                                    .private_fields
+                                    .private_fields_mut()
                                     .insert(setter_slot.clone(), PrivateElement::Field(val));
                                 return Completion::Normal(JsValue::UNDEFINED);
                             }
@@ -1093,7 +1096,7 @@ impl Interpreter {
                         .map(|id| crate::types::JsObject { id })
                         && let Some(func_obj) = self.get_object_cell(o.id)
                     {
-                        func_obj.borrow_mut().class_instance_field_defs.push(
+                        func_obj.borrow_mut().instance_field_defs_mut().push(
                             InstanceFieldDef::AutoAccessorStorage(storage_slot, p.value.clone()),
                         );
                     }
@@ -1164,14 +1167,14 @@ impl Interpreter {
                                     "Cannot add private field to non-extensible object",
                                 ));
                             }
-                            if func_obj.borrow().private_fields.contains_key(&branded) {
+                            if func_obj.borrow().has_private_field(&branded) {
                                 return Completion::Throw(interp.create_type_error(
                                     "Cannot initialize private field twice on the same object",
                                 ));
                             }
                             func_obj
                                 .borrow_mut()
-                                .private_fields
+                                .private_fields_mut()
                                 .insert(branded, PrivateElement::Field(val));
                         }
                     }
@@ -1191,7 +1194,7 @@ impl Interpreter {
                         {
                             func_obj
                                 .borrow_mut()
-                                .private_fields
+                                .private_fields_mut()
                                 .insert(storage_slot, PrivateElement::Field(val));
                         }
                     }
@@ -1460,19 +1463,18 @@ impl Interpreter {
                     );
                 }
                 method_values.push(value.clone());
-                let mut desc =
-                    obj_data
-                        .properties
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or(PropertyDescriptor {
-                            value: None,
-                            writable: None,
-                            get: None,
-                            set: None,
-                            enumerable: Some(true),
-                            configurable: Some(true),
-                        });
+                let mut desc = obj_data
+                    .properties
+                    .get(&key)
+                    .map(PropertyRecord::to_descriptor)
+                    .unwrap_or(PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: None,
+                        set: None,
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                    });
                 if is_get {
                     desc.get = Some(value);
                 } else {
@@ -1528,12 +1530,13 @@ impl Interpreter {
             let Some(func_obj) = self.get_object_cell(fo) else {
                 continue;
             };
-            let old_closure =
-                if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                    Some(closure.clone())
-                } else {
-                    None
-                };
+            let old_closure = if let Some(JsFunction::User { closure, .. }) =
+                func_obj.borrow().callable.as_deref()
+            {
+                Some(closure.clone())
+            } else {
+                None
+            };
             if let Some(old_closure) = old_closure {
                 let wrapper = Environment::new(Some(old_closure));
                 wrapper
@@ -1542,9 +1545,8 @@ impl Interpreter {
                 wrapper
                     .borrow_mut()
                     .initialize_binding("__home_object__", home.clone());
-                if let Some(JsFunction::User {
-                    ref mut closure, ..
-                }) = func_obj.borrow_mut().callable
+                if let Some(JsFunction::User { closure, .. }) =
+                    func_obj.borrow_mut().callable.as_deref_mut()
                 {
                     *closure = wrapper;
                 }

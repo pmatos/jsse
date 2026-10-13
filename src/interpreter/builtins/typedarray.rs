@@ -35,7 +35,7 @@ impl Interpreter {
         let ab_proto_id = self.create_object_id();
         self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
-            .class_name = "ArrayBuffer".into();
+            .class_name = "ArrayBuffer";
         self.realm_mut().arraybuffer_prototype = Some(ab_proto_id);
 
         // byteLength getter — 0 when detached, else the byte length.
@@ -779,9 +779,9 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                    o.class_name = "ArrayBuffer".into();
+                    o.class_name = "ArrayBuffer";
                     o.prototype_id = proto;
-                    o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                    o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: buf_rc,
                             detached: Some(detached),
@@ -790,7 +790,7 @@ impl Interpreter {
                             is_immutable: false,
                             sab_shared: None,
                         },
-                    );
+                    ));
                 }
                 interp.gc_track_external_bytes(buf_len);
                 let id = obj_id;
@@ -891,9 +891,9 @@ impl Interpreter {
         let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "ArrayBuffer".into();
+            o.class_name = "ArrayBuffer";
             o.prototype_id = ab_proto;
-            o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+            o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                 crate::interpreter::types::ArrayBufferData {
                     data: buf_rc,
                     detached: Some(detached),
@@ -902,7 +902,7 @@ impl Interpreter {
                     is_immutable: false,
                     sab_shared: None,
                 },
-            );
+            ));
         }
         self.gc_track_external_bytes(data_len);
         obj_id
@@ -954,7 +954,7 @@ impl Interpreter {
         let sab_proto_id = self.create_object_id();
         self.get_object_cell_expect(sab_proto_id)
             .borrow_mut()
-            .class_name = "SharedArrayBuffer".into();
+            .class_name = "SharedArrayBuffer";
         self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto_id);
 
         // byteLength getter
@@ -1227,9 +1227,9 @@ impl Interpreter {
                     let inner = Arc::new(SharedBufferInner::new(buf, sab_id));
                     let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                    o.class_name = "SharedArrayBuffer".into();
+                    o.class_name = "SharedArrayBuffer";
                     o.prototype_id = proto;
-                    o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                    o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: buf_rc,
                             detached: None,
@@ -1238,7 +1238,7 @@ impl Interpreter {
                             is_immutable: false,
                             sab_shared: Some(inner),
                         },
-                    );
+                    ));
                 }
                 let id = obj_id;
                 Completion::Normal(JsValue::object(id))
@@ -1306,7 +1306,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "TypedArray".into();
+            .class_name = "TypedArray";
         self.realm_mut().typed_array_prototype = Some(proto_id);
 
         // byteOffset getter
@@ -2135,9 +2135,9 @@ impl Interpreter {
                 let ab_proto = interp.realm().arraybuffer_prototype;
                 {
                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                    ab.class_name = "ArrayBuffer".into();
+                    ab.class_name = "ArrayBuffer";
                     ab.prototype_id = ab_proto;
-                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: new_buf_rc,
                             detached: Some(new_detached),
@@ -2146,7 +2146,7 @@ impl Interpreter {
                             is_immutable: false,
                             sab_shared: None,
                         },
-                    );
+                    ));
                 }
                 interp.gc_track_external_bytes(buf_byte_len);
                 let ab_id = ab_obj_id;
@@ -2380,9 +2380,9 @@ impl Interpreter {
                 let ab_proto = interp.realm().arraybuffer_prototype;
                 {
                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                    ab.class_name = "ArrayBuffer".into();
+                    ab.class_name = "ArrayBuffer";
                     ab.prototype_id = ab_proto;
-                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: new_buf_rc,
                             detached: Some(new_detached),
@@ -2391,7 +2391,7 @@ impl Interpreter {
                             is_immutable: false,
                             sab_shared: None,
                         },
-                    );
+                    ));
                 }
                 interp.gc_track_external_bytes(buf_byte_len);
                 let ab_id = ab_obj_id;
@@ -3301,7 +3301,7 @@ impl Interpreter {
             {
                 let mut p = self.get_object_cell_expect(type_proto_id).borrow_mut();
                 p.prototype_id = Some(ta_proto_clone_id);
-                p.class_name = name.clone().into();
+                p.class_name = kind.name();
                 p.insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
                     PropertyDescriptor::data(JsValue::number(bpe as f64), false, false, false),
@@ -3478,16 +3478,16 @@ impl Interpreter {
                                     let ab_proto = interp.realm().arraybuffer_prototype;
                                     {
                                         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                                        ab.class_name = "ArrayBuffer".into();
+                                        ab.class_name = "ArrayBuffer";
                                         ab.prototype_id = ab_proto;
-                                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(crate::interpreter::types::ArrayBufferData {
+                                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(crate::interpreter::types::ArrayBufferData {
                                             data: new_buf_rc,
                                             detached: Some(new_detached),
                                             max_byte_length: None,
                                             is_shared: false,
                                             is_immutable: false,
                                             sab_shared: None,
-                                        });
+                                        }));
                                     }
                                     interp.gc_track_external_bytes(buf_byte_len);
                                     let proto = match get_proto(interp) {
@@ -3532,16 +3532,16 @@ impl Interpreter {
                                 let ab_proto = interp.realm().arraybuffer_prototype;
                                 {
                                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-                                    ab.class_name = "ArrayBuffer".into();
+                                    ab.class_name = "ArrayBuffer";
                                     ab.prototype_id = ab_proto;
-                                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(crate::interpreter::types::ArrayBufferData {
+                                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(crate::interpreter::types::ArrayBufferData {
                                         data: new_buf_rc,
                                         detached: Some(new_detached),
                                         max_byte_length: None,
                                         is_shared: false,
                                         is_immutable: false,
                                         sab_shared: None,
-                                    });
+                                    }));
                                 }
                                 interp.gc_track_external_bytes(buf_byte_len);
                                 let proto = match get_proto(interp) {
@@ -4014,9 +4014,9 @@ impl Interpreter {
         let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
-            ab.class_name = "ArrayBuffer".into();
+            ab.class_name = "ArrayBuffer";
             ab.prototype_id = ab_proto;
-            ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+            ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                 crate::interpreter::types::ArrayBufferData {
                     data: buf_rc,
                     detached: Some(detached),
@@ -4025,7 +4025,7 @@ impl Interpreter {
                     is_immutable: false,
                     sab_shared: None,
                 },
-            );
+            ));
         }
         self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj_id;
@@ -4046,9 +4046,9 @@ impl Interpreter {
         }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = info.kind.name().into();
+            o.class_name = info.kind.name();
             o.prototype_id = proto;
-            o.kind = crate::interpreter::types::ObjectKind::TypedArray(info);
+            o.kind = crate::interpreter::types::ObjectKind::TypedArray(Box::new(info));
         }
         obj_id
     }
@@ -4065,9 +4065,9 @@ impl Interpreter {
         }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = info.kind.name().into();
+            o.class_name = info.kind.name();
             o.prototype_id = Some(proto_id);
-            o.kind = crate::interpreter::types::ObjectKind::TypedArray(info);
+            o.kind = crate::interpreter::types::ObjectKind::TypedArray(Box::new(info));
         }
         obj_id
     }
@@ -4098,7 +4098,7 @@ impl Interpreter {
         {
             let name = {
                 let obj_ref = obj.borrow();
-                if let Some(ref func) = obj_ref.callable {
+                if let Some(func) = obj_ref.callable.as_deref() {
                     match func {
                         JsFunction::Native(n, _, _, _) => Some(n.clone()),
                         _ => None,
@@ -4140,9 +4140,9 @@ impl Interpreter {
                     let ab_proto = self.realm().arraybuffer_prototype;
                     {
                         let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
-                        ab.class_name = "ArrayBuffer".into();
+                        ab.class_name = "ArrayBuffer";
                         ab.prototype_id = ab_proto;
-                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                             crate::interpreter::types::ArrayBufferData {
                                 data: new_buf_rc.clone(),
                                 detached: Some(new_detached.clone()),
@@ -4151,7 +4151,7 @@ impl Interpreter {
                                 is_immutable: false,
                                 sab_shared: None,
                             },
-                        );
+                        ));
                     }
                     self.gc_track_external_bytes(buf_byte_len);
                     let ta = TypedArrayInfo {
@@ -4167,9 +4167,9 @@ impl Interpreter {
                     let result_id = self.create_object_id();
                     {
                         let mut r = self.get_object_cell_expect(result_id).borrow_mut();
-                        r.class_name = kind.name().into();
+                        r.class_name = kind.name();
                         r.prototype_id = proto;
-                        r.kind = crate::interpreter::types::ObjectKind::TypedArray(ta);
+                        r.kind = crate::interpreter::types::ObjectKind::TypedArray(Box::new(ta));
                     }
                     let id = result_id;
                     return Completion::Normal(JsValue::object(id));
@@ -4389,7 +4389,7 @@ impl Interpreter {
         let dv_proto_id = self.create_object_id();
         self.get_object_cell_expect(dv_proto_id)
             .borrow_mut()
-            .class_name = "DataView".into();
+            .class_name = "DataView";
         self.realm_mut().dataview_prototype = Some(dv_proto_id);
 
         // Getters: buffer, byteOffset, byteLength
@@ -5059,9 +5059,9 @@ impl Interpreter {
                     let result_id = interp.create_object_id();
                     {
                         let mut r = interp.get_object_cell_expect(result_id).borrow_mut();
-                        r.class_name = "DataView".into();
+                        r.class_name = "DataView";
                         r.prototype_id = Some(dv_proto);
-                        r.kind = crate::interpreter::types::ObjectKind::DataView(dv_info);
+                        r.kind = crate::interpreter::types::ObjectKind::DataView(Box::new(dv_info));
                     }
                     let id = result_id;
                     return Completion::Normal(JsValue::object(id));
@@ -6094,9 +6094,9 @@ pub(crate) fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8
     let ab_proto = interp.realm().arraybuffer_prototype;
     {
         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
-        ab.class_name = "ArrayBuffer".into();
+        ab.class_name = "ArrayBuffer";
         ab.prototype_id = ab_proto;
-        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
             crate::interpreter::types::ArrayBufferData {
                 data: buf_rc,
                 detached: Some(detached),
@@ -6105,7 +6105,7 @@ pub(crate) fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8
                 is_immutable: false,
                 sab_shared: None,
             },
-        );
+        ));
     }
     interp.gc_track_external_bytes(len);
     let ab_id = ab_obj_id;

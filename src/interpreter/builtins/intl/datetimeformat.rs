@@ -5616,7 +5616,7 @@ impl Interpreter {
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.DateTimeFormat".into();
+            .class_name = "Intl.DateTimeFormat";
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.DateTimeFormat");
@@ -6595,7 +6595,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.DateTimeFormat".into();
+                    .class_name = "Intl.DateTimeFormat";
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(
                         IntlData::DateTimeFormat {

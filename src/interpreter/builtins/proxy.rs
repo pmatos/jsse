@@ -28,7 +28,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(proxy_obj_id)
                     .borrow_mut()
-                    .class_name = "Proxy".into();
+                    .class_name = "Proxy";
                 if let Some(target_id) = target.as_object_id()
                     && let Some(handler_id) = handler.as_object_id()
                     && let Some(target_rc) = interp.get_object_cell(target_id)
@@ -38,9 +38,9 @@ impl Interpreter {
                     if callable.is_some() {
                         proxy.callable = callable;
                     }
-                    proxy.kind = crate::interpreter::types::ObjectKind::Proxy(
+                    proxy.kind = crate::interpreter::types::ObjectKind::Proxy(Box::new(
                         crate::interpreter::types::ProxyData::active(target_id, handler_id),
-                    );
+                    ));
                 }
                 let proxy_id = proxy_obj_id;
                 Completion::Normal(JsValue::object(proxy_id))
@@ -77,7 +77,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(proxy_obj_id)
                         .borrow_mut()
-                        .class_name = "Proxy".into();
+                        .class_name = "Proxy";
                     if let Some(target_id) = target.as_object_id()
                         && let Some(handler_id) = handler.as_object_id()
                         && let Some(target_rc) = interp.get_object_cell(target_id)
@@ -87,9 +87,9 @@ impl Interpreter {
                         if callable.is_some() {
                             obj.callable = callable;
                         }
-                        obj.kind = crate::interpreter::types::ObjectKind::Proxy(
+                        obj.kind = crate::interpreter::types::ObjectKind::Proxy(Box::new(
                             crate::interpreter::types::ProxyData::active(target_id, handler_id),
-                        );
+                        ));
                     }
                     let proxy_id = proxy_obj_id;
                     let proxy_val = JsValue::object(proxy_id);

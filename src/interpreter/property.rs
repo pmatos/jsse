@@ -272,19 +272,23 @@ impl Interpreter {
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
 
-                // Check own property
-                let own_desc = b.get_own_property_full(key);
-                match own_desc {
-                    Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
-                        let getter = d.get.clone().unwrap();
+                let own = match b.parameter_map() {
+                    None => b.properties.get(key),
+                    Some(_) => None,
+                }
+                .map(|record| (record.getter().cloned(), record.value().cloned()))
+                .or_else(|| {
+                    b.get_own_property_full(key)
+                        .map(|desc| (desc.get, desc.value))
+                });
+                match own {
+                    Some((Some(getter), _)) if !getter.is_undefined() => {
                         drop(b);
                         return self.call_function(&getter, this_val, &[]);
                     }
-                    Some(ref d) if d.get.is_some() => {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                    Some(ref d) => {
-                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED));
+                    Some((Some(_), _)) => return Completion::Normal(JsValue::UNDEFINED),
+                    Some((None, value)) => {
+                        return Completion::Normal(value.unwrap_or(JsValue::UNDEFINED));
                     }
                     None => {}
                 }
@@ -750,12 +754,11 @@ impl Interpreter {
             match old_len_desc {
                 Some(ref d) => {
                     let ol = d
-                        .value
-                        .as_ref()
+                        .value()
                         .and_then(JsValue::as_number)
                         .map(|n| n as u32)
                         .unwrap_or(0);
-                    let w = d.writable.unwrap_or(true);
+                    let w = d.writable().unwrap_or(true);
                     (ol, w)
                 }
                 None => (0, true),
@@ -823,7 +826,7 @@ impl Interpreter {
                 let is_non_configurable = obj
                     .properties
                     .get(k.as_str())
-                    .is_some_and(|d| d.configurable == Some(false));
+                    .is_some_and(|d| d.configurable() == Some(false));
                 if is_non_configurable {
                     // 13.d.iii. Set newLenDesc.[[Value]] to index + 1.
                     actual_new_len = idx + 1;
@@ -844,11 +847,11 @@ impl Interpreter {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.value = Some(JsValue::number(actual_new_len as f64));
+                len_desc.set_value(Some(JsValue::number(actual_new_len as f64)));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
             if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.writable = Some(false);
+                len_desc.set_writable(Some(false));
             }
             return Ok(false);
         }
@@ -858,7 +861,7 @@ impl Interpreter {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.writable = Some(false);
+                len_desc.set_writable(Some(false));
             }
         }
 
@@ -891,11 +894,11 @@ impl Interpreter {
                 let obj = obj_rc.borrow();
                 let len_desc = obj.properties.get("length");
                 let ol = len_desc
-                    .and_then(|d| d.value.as_ref())
+                    .and_then(|d| d.value())
                     .and_then(JsValue::as_number)
                     .map(|n| n as u32)
                     .unwrap_or(0);
-                let w = len_desc.and_then(|d| d.writable).unwrap_or(true);
+                let w = len_desc.and_then(|d| d.writable()).unwrap_or(true);
                 (ol, w)
             };
 
@@ -923,7 +926,7 @@ impl Interpreter {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.value = Some(JsValue::number(new_len as f64));
+                    len_desc.set_value(Some(JsValue::number(new_len as f64)));
                 }
                 if let Some(elems) = obj.array_elements_mut() {
                     let val = desc.value.unwrap_or(JsValue::UNDEFINED);
@@ -1388,7 +1391,7 @@ impl Interpreter {
             }
             let mut m = obj.borrow_mut();
             if let Some(desc) = m.properties.get(key)
-                && desc.configurable == Some(false)
+                && desc.configurable() == Some(false)
             {
                 return Ok(false);
             }

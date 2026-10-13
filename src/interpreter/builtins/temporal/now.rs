@@ -33,7 +33,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Temporal.Instant".into();
+                    .class_name = "Temporal.Instant";
                 if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                     interp
                         .get_object_cell_expect(obj_id)
@@ -41,9 +41,11 @@ impl Interpreter {
                         .prototype_id = Some(proto_id);
                 }
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Temporal(TemporalData::Instant {
-                        epoch_nanoseconds: ns,
-                    });
+                    crate::interpreter::types::ObjectKind::Temporal(Box::new(
+                        TemporalData::Instant {
+                            epoch_nanoseconds: ns,
+                        },
+                    ));
                 let id = obj_id;
                 Completion::Normal(JsValue::object(id))
             },
@@ -127,7 +129,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Temporal.ZonedDateTime".into();
+                    .class_name = "Temporal.ZonedDateTime";
                 if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
                     interp
                         .get_object_cell_expect(obj_id)
@@ -135,11 +137,13 @@ impl Interpreter {
                         .prototype_id = Some(proto_id);
                 }
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Temporal(TemporalData::ZonedDateTime {
-                        epoch_nanoseconds: ns,
-                        time_zone: tz,
-                        calendar: "iso8601".to_string(),
-                    });
+                    crate::interpreter::types::ObjectKind::Temporal(Box::new(
+                        TemporalData::ZonedDateTime {
+                            epoch_nanoseconds: ns,
+                            time_zone: tz,
+                            calendar: "iso8601".to_string(),
+                        },
+                    ));
                 let id = obj_id;
                 Completion::Normal(JsValue::object(id))
             },

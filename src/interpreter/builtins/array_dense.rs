@@ -300,7 +300,7 @@ pub(super) fn try_concat_item(
             || ab
                 .properties
                 .get("length")
-                .is_none_or(|d| d.writable == Some(false))
+                .is_none_or(|d| d.writable() == Some(false))
         {
             return false;
         }
@@ -329,7 +329,7 @@ pub(super) fn try_concat_item(
     let old_len = ab
         .properties
         .get("length")
-        .and_then(|d| d.value.as_ref())
+        .and_then(|d| d.value())
         .and_then(JsValue::as_number)
         .unwrap_or(0.0);
     if ((n + len) as f64) > old_len {

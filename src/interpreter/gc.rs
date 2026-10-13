@@ -322,10 +322,7 @@ impl Interpreter {
         if let Some(anchor_id) = anchor.as_object_id()
             && let Some(cell) = self.get_object_cell(anchor_id)
         {
-            cell.borrow_mut()
-                .gc_native_roots
-                .get_or_insert_with(Vec::new)
-                .push(value.clone());
+            cell.borrow_mut().gc_native_roots_mut().push(value.clone());
         }
     }
 
@@ -385,13 +382,17 @@ impl Interpreter {
         worklist: &mut Vec<u64>,
         marks: &mut [bool],
         seen_envs: &mut HashSet<usize>,
+        weak_maps: &mut Vec<u64>,
     ) {
         let mut children = Vec::new();
         while let Some(id) = worklist.pop() {
-            let Some(obj_rc) = self.objects.get(id) else {
+            let Some(obj_rc) = self.objects.get_cell(id) else {
                 continue;
             };
             let obj = obj_rc.borrow();
+            if obj.is_weak_map() {
+                weak_maps.push(id);
+            }
             children.clear();
             Self::trace_object_fields(&obj, &mut children, seen_envs);
             Self::enqueue_unmarked(children.drain(..), worklist, marks);
@@ -573,7 +574,7 @@ impl Interpreter {
                 continue;
             };
             let obj = handle.borrow_untracked();
-            if obj.class_name == "WeakMap" || obj.class_name == "WeakSet" {
+            if obj.is_weak_container() {
                 weak_containers.push(id);
             }
             children.clear();
@@ -584,7 +585,7 @@ impl Interpreter {
     }
 
     fn object_requires_persistent_minor_scan(obj: &JsObjectData) -> bool {
-        let has_closure_env = matches!(obj.callable, Some(JsFunction::User { .. }));
+        let has_closure_env = matches!(obj.callable.as_deref(), Some(JsFunction::User { .. }));
         has_closure_env
             || matches!(
                 obj.kind,
@@ -593,7 +594,7 @@ impl Interpreter {
     }
 
     fn object_has_young_weak_edge(&self, obj: &JsObjectData) -> bool {
-        if obj.class_name == "WeakMap" {
+        if obj.is_weak_map() {
             obj.map_data().is_some_and(|entries| {
                 entries.iter().any(|(key, value)| {
                     [key, value].iter().any(|candidate| {
@@ -606,7 +607,7 @@ impl Interpreter {
                     })
                 })
             })
-        } else if obj.class_name == "WeakSet" {
+        } else if obj.is_weak_set() {
             obj.set_data().is_some_and(|entries| {
                 entries.iter().any(|value| {
                     let Some(object_id) = value.as_object_id() else {
@@ -666,7 +667,7 @@ impl Interpreter {
                 continue;
             }
             let obj = handle.borrow_untracked();
-            if obj.class_name == "WeakMap" || obj.class_name == "WeakSet" {
+            if obj.is_weak_container() {
                 weak_containers.push(id);
             }
             children.clear();
@@ -700,7 +701,7 @@ impl Interpreter {
                     continue;
                 }
                 let obj = handle.borrow_untracked();
-                if obj.class_name != "WeakMap" {
+                if !obj.is_weak_map() {
                     continue;
                 }
                 if let Some(entries) = obj.map_data() {
@@ -737,14 +738,14 @@ impl Interpreter {
                 continue;
             }
             let mut obj = handle.borrow_mut_untracked();
-            if obj.class_name == "WeakMap" {
+            if obj.is_weak_map() {
                 if let Some(entries) = obj.map_data_mut() {
                     entries.retain(|(key, _)| {
                         key.as_object_id()
                             .is_none_or(|id| self.minor_value_is_live(id))
                     });
                 }
-            } else if obj.class_name == "WeakSet"
+            } else if obj.is_weak_set()
                 && let Some(entries) = obj.set_data_mut()
             {
                 entries.retain(|value| {
@@ -790,12 +791,22 @@ impl Interpreter {
             }
         }
         self.objects.free(id);
-        self.iterator_next_cache.remove(&id);
-        self.generator_inline_iters.remove(&id);
-        self.generator_for_of_stacks.remove(&id);
-        self.generator_scope_stacks.remove(&id);
+        if !self.iterator_next_cache.is_empty() {
+            self.iterator_next_cache.remove(&id);
+        }
+        if !self.generator_inline_iters.is_empty() {
+            self.generator_inline_iters.remove(&id);
+        }
+        if !self.generator_for_of_stacks.is_empty() {
+            self.generator_for_of_stacks.remove(&id);
+        }
+        if !self.generator_scope_stacks.is_empty() {
+            self.generator_scope_stacks.remove(&id);
+        }
         self.scheduler.remove_async_gen_queue(id);
-        self.generator_pending_dispose.remove(&id);
+        if !self.generator_pending_dispose.is_empty() {
+            self.generator_pending_dispose.remove(&id);
+        }
     }
 
     fn gc_collect_major(&mut self) {
@@ -814,27 +825,22 @@ impl Interpreter {
         // edges; admitting each id once keeps the worklist linear in the live
         // object graph instead of filling it with duplicate entries.
         let mut worklist = Vec::with_capacity(roots.len());
+        let mut weak_maps = Vec::new();
         Self::enqueue_unmarked(roots, &mut worklist, &mut marks);
-        self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs);
+        self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs, &mut weak_maps);
 
-        // Ephemeron fixpoint: mark WeakMap values whose keys are reachable
-        loop {
+        // Ephemeron fixpoint over the WeakMaps the mark phase reached.
+        while !weak_maps.is_empty() {
             let mut new_marks = false;
-            for i in 0..obj_count {
-                if !marks[i] {
+            let scanned = weak_maps.len();
+            for &weak_map_id in &weak_maps {
+                let Some(obj_rc) = self.objects.get_cell(weak_map_id) else {
                     continue;
-                }
-                let obj_rc = match self.objects.get(i as u64) {
-                    Some(rc) => rc,
-                    None => continue,
                 };
                 let obj = obj_rc.borrow_untracked();
-                if obj.class_name != "WeakMap" {
-                    continue;
-                }
                 if let Some(entries) = obj.map_data() {
                     for entry in entries.iter() {
-                        // Key is reachable — mark the value
+                        // Key is reachable: mark the value
                         if let Some(key_id) = entry.0.as_object_id()
                             && (key_id as usize) < obj_count
                             && marks[key_id as usize]
@@ -850,56 +856,47 @@ impl Interpreter {
                     }
                 }
             }
-            // Trace through any newly reachable WeakMap values using the same
-            // deduplicated worklist as the main mark phase.
-            self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs);
-            if !new_marks {
+            // Tracing can reach further WeakMaps, which the next round scans.
+            self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs, &mut weak_maps);
+            if !new_marks && scanned == weak_maps.len() {
                 break;
             }
         }
 
-        // Sweep phase
-        for (i, mark) in marks.iter().enumerate().take(obj_count) {
-            let id = i as u64;
-            let live = self.objects.slot_at(id).is_some_and(|s| s.is_some());
-            if !mark && live {
-                self.free_gc_object(id);
-            }
-        }
-        // The major sweep leaves no young objects, so discard stale
-        // generational tracking before rebuilding the persistent subset.
+        // Before the sweep, so its `remember_if_old` calls are kept.
         self.objects.reset_generations_after_major();
 
-        // Post-sweep: tenure survivors, clear dead weak entries, and keep
-        // environment owners visible to future minor collections. Their
-        // shared EnvRefs can be mutated without borrowing the owner again.
+        // One pass: free the unmarked; tenure survivors, drop their dead weak
+        // entries and keep environment owners visible to minor collections.
         for i in 0..obj_count {
+            let id = i as u64;
+            let Some(obj_rc) = self.objects.get(id) else {
+                continue;
+            };
             if !marks[i] {
+                drop(obj_rc);
+                self.free_gc_object(id);
                 continue;
             }
-            let obj_rc = match self.objects.get(i as u64) {
-                Some(rc) => rc,
-                None => continue,
-            };
             obj_rc.tenure_after_major();
-            let mut obj = obj_rc.borrow_mut_untracked();
-            if obj.class_name == "WeakMap" {
-                if let Some(entries) = obj.map_data_mut() {
-                    entries.retain(|(key, _)| match key.as_object_id() {
-                        Some(kid) => (kid as usize) < obj_count && marks[kid as usize],
+            if obj_rc.borrow_untracked().is_weak_container() {
+                let mut obj = obj_rc.borrow_mut_untracked();
+                if obj.is_weak_map() {
+                    if let Some(entries) = obj.map_data_mut() {
+                        entries.retain(|(key, _)| match key.as_object_id() {
+                            Some(kid) => (kid as usize) < obj_count && marks[kid as usize],
+                            None => true,
+                        });
+                    }
+                } else if let Some(entries) = obj.set_data_mut() {
+                    entries.retain(|value| match value.as_object_id() {
+                        Some(vid) => (vid as usize) < obj_count && marks[vid as usize],
                         None => true,
                     });
                 }
-            } else if obj.class_name == "WeakSet"
-                && let Some(entries) = obj.set_data_mut()
-            {
-                entries.retain(|value| match value.as_object_id() {
-                    Some(vid) => (vid as usize) < obj_count && marks[vid as usize],
-                    None => true,
-                });
             }
-            let requires_persistent_scan = Self::object_requires_persistent_minor_scan(&obj);
-            drop(obj);
+            let requires_persistent_scan =
+                Self::object_requires_persistent_minor_scan(&obj_rc.borrow_untracked());
             if requires_persistent_scan {
                 obj_rc.remember_if_old();
             }
@@ -925,13 +922,13 @@ impl Interpreter {
             worklist.push(pid);
         }
         for desc in obj.properties.values() {
-            if let Some(ref v) = desc.value {
+            if let Some(v) = desc.value() {
                 Self::collect_value_roots(v, worklist);
             }
-            if let Some(ref v) = desc.get {
+            if let Some(v) = desc.getter() {
                 Self::collect_value_roots(v, worklist);
             }
-            if let Some(ref v) = desc.set {
+            if let Some(v) = desc.setter() {
                 Self::collect_value_roots(v, worklist);
             }
         }
@@ -943,7 +940,7 @@ impl Interpreter {
         if let Some(ref v) = obj.primitive_value {
             Self::collect_value_roots(v, worklist);
         }
-        for elem in obj.private_fields.values() {
+        for elem in obj.private_field_values() {
             match elem {
                 PrivateElement::Field(v) | PrivateElement::Method(v) => {
                     Self::collect_value_roots(v, worklist);
@@ -958,7 +955,7 @@ impl Interpreter {
                 }
             }
         }
-        for idef in &obj.class_instance_field_defs {
+        for idef in obj.instance_field_defs() {
             if let InstanceFieldDef::Private(def) = idef {
                 match def {
                     PrivateFieldDef::Method { value, .. } => {
@@ -976,15 +973,11 @@ impl Interpreter {
                 }
             }
         }
-        if let Some(ref func) = obj.callable
-            && let JsFunction::User { closure, .. } = func
-        {
+        if let Some(JsFunction::User { closure, .. }) = obj.callable.as_deref() {
             Self::collect_env_roots(closure, worklist, seen_envs);
         }
-        if let Some(ref roots) = obj.gc_native_roots {
-            for v in roots {
-                Self::collect_value_roots(v, worklist);
-            }
+        for v in obj.gc_native_roots() {
+            Self::collect_value_roots(v, worklist);
         }
         // Kind-specific roots. This is the single point of dispatch — adding a
         // new ObjectKind variant requires updating this match (Rust enforces
@@ -1076,7 +1069,7 @@ impl Interpreter {
             }
             ObjectKind::Map(entries) => {
                 // WeakMap entries are visited via the ephemeron fixpoint, not strongly.
-                if obj.class_name != "WeakMap" {
+                if !obj.is_weak_map() {
                     for entry in entries.iter() {
                         Self::collect_value_roots(&entry.0, worklist);
                         Self::collect_value_roots(&entry.1, worklist);
@@ -1084,16 +1077,16 @@ impl Interpreter {
                 }
             }
             ObjectKind::Set(entries) => {
-                if obj.class_name != "WeakSet" {
+                if !obj.is_weak_set() {
                     for val in entries.iter() {
                         Self::collect_value_roots(val, worklist);
                     }
                 }
             }
-            ObjectKind::FinalizationRegistry { cells, tokens: _ } => {
+            ObjectKind::FinalizationRegistry(data) => {
                 // Cells (target+heldValue) are held WEAKLY via the ephemeron pass;
                 // tokens are unregister keys, also weak. No strong roots here.
-                for entry in cells.iter().flatten() {
+                for entry in data.cells.iter().flatten() {
                     Self::collect_value_roots(&entry.1, worklist);
                 }
             }
@@ -1332,7 +1325,7 @@ mod tests {
     fn trace_object_fields_roots_array_elements_and_native_roots() {
         let mut data = JsObjectData::new();
         data.kind = ObjectKind::Array(ArrayData::new(vec![obj(20), JsValue::number(0.0), obj(21)]));
-        data.gc_native_roots = Some(vec![obj(22)]);
+        data.gc_native_roots_mut().push(obj(22));
 
         let mut worklist = Vec::new();
         Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
@@ -1704,10 +1697,10 @@ mod tests {
 
         let env = Environment::new(None);
         let mut owner_data = JsObjectData::new();
-        owner_data.kind = ObjectKind::Arguments(HashMap::from([(
+        owner_data.kind = ObjectKind::Arguments(Box::new(HashMap::from([(
             "0".to_string(),
             (env.clone(), "captured".to_string()),
-        )]));
+        )])));
         let owner = interp.alloc_object(owner_data);
         interp.gc_root_id(owner);
 
@@ -1855,8 +1848,8 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_map_data = JsObjectData::new();
-        weak_map_data.class_name = "WeakMap".into();
-        weak_map_data.kind = ObjectKind::Map(KeyedEntries::default());
+        weak_map_data.class_name = "WeakMap";
+        weak_map_data.kind = ObjectKind::Map(Box::default());
         let weak_map = interp.alloc_object(weak_map_data);
         interp.gc_root_id(weak_map);
         interp.gc.request();
@@ -1900,8 +1893,8 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_set_data = JsObjectData::new();
-        weak_set_data.class_name = "WeakSet".into();
-        weak_set_data.kind = ObjectKind::Set(KeyedEntries::default());
+        weak_set_data.class_name = "WeakSet";
+        weak_set_data.kind = ObjectKind::Set(Box::default());
         let weak_set = interp.alloc_object(weak_set_data);
         interp.gc_root_id(weak_set);
         interp.gc.request();

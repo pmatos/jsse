@@ -3,12 +3,11 @@ use std::collections::HashMap;
 use smallvec::SmallVec;
 
 use super::types::PropertyDescriptor;
-use crate::types::{JsPropertyKey, PropertyKeyLike};
+use crate::types::{JsPropertyKey, JsValue, PropertyKeyLike};
 
-// Properties held inline in the SmallVec before it spills to the heap. 8 would
-// push JsObjectData past 3.5 KB (issue #68), so 4 — enough for the splay-node
-// case (4 fields).
-const INLINE_CAP: usize = 4;
+// Properties held inline before spilling to the heap; `JsObjectData` is capped
+// at 320 bytes (#909), which leaves room for three entries.
+const INLINE_CAP: usize = 3;
 
 // Largest entry count kept in the linear (scan-only) representation. Entries
 // beyond `INLINE_CAP` live in the SmallVec's heap buffer, which is cheaper
@@ -20,7 +19,185 @@ const LINEAR_MAX: usize = 8;
 // (and the entry list is long enough for the rebuild to matter).
 const COMPACT_MIN_ENTRIES: usize = 32;
 
-type Entry = (JsPropertyKey, PropertyDescriptor);
+type Entry = (JsPropertyKey, PropertyRecord);
+
+const HAS_VALUE: u16 = 1 << 0;
+const HAS_GET: u16 = 1 << 1;
+const HAS_SET: u16 = 1 << 2;
+const HAS_WRITABLE: u16 = 1 << 3;
+const IS_WRITABLE: u16 = 1 << 4;
+const HAS_ENUMERABLE: u16 = 1 << 5;
+const IS_ENUMERABLE: u16 = 1 << 6;
+const HAS_CONFIGURABLE: u16 = 1 << 7;
+const IS_CONFIGURABLE: u16 = 1 << 8;
+
+/// A `PropertyDescriptor` as the map stores it: 32 bytes where the
+/// `Option`-per-field descriptor takes 56. Absent values are `undefined` and a
+/// flag word records which fields are present, partial descriptors included.
+pub(crate) struct PropertyRecord {
+    value: JsValue,
+    get: JsValue,
+    set: JsValue,
+    flags: u16,
+}
+
+impl PropertyRecord {
+    #[inline]
+    fn pack(slot: Option<JsValue>, present: u16, flags: &mut u16) -> JsValue {
+        match slot {
+            Some(v) => {
+                *flags |= present;
+                v
+            }
+            None => JsValue::UNDEFINED,
+        }
+    }
+
+    #[inline]
+    fn pack_bool(slot: Option<bool>, has: u16, is: u16, flags: &mut u16) {
+        if let Some(b) = slot {
+            *flags |= has;
+            if b {
+                *flags |= is;
+            }
+        }
+    }
+
+    #[inline]
+    fn flag(&self, bit: u16) -> bool {
+        self.flags & bit != 0
+    }
+
+    #[inline]
+    fn tri(&self, has: u16, is: u16) -> Option<bool> {
+        self.flag(has).then(|| self.flag(is))
+    }
+
+    #[inline]
+    fn set_tri(&mut self, has: u16, is: u16, value: Option<bool>) {
+        self.flags &= !(has | is);
+        Self::pack_bool(value, has, is, &mut self.flags);
+    }
+
+    #[inline]
+    pub(crate) fn value(&self) -> Option<&JsValue> {
+        self.flag(HAS_VALUE).then_some(&self.value)
+    }
+
+    #[inline]
+    pub(crate) fn getter(&self) -> Option<&JsValue> {
+        self.flag(HAS_GET).then_some(&self.get)
+    }
+
+    #[inline]
+    pub(crate) fn setter(&self) -> Option<&JsValue> {
+        self.flag(HAS_SET).then_some(&self.set)
+    }
+
+    #[inline]
+    pub(crate) fn writable(&self) -> Option<bool> {
+        self.tri(HAS_WRITABLE, IS_WRITABLE)
+    }
+
+    #[inline]
+    pub(crate) fn enumerable(&self) -> Option<bool> {
+        self.tri(HAS_ENUMERABLE, IS_ENUMERABLE)
+    }
+
+    #[inline]
+    pub(crate) fn configurable(&self) -> Option<bool> {
+        self.tri(HAS_CONFIGURABLE, IS_CONFIGURABLE)
+    }
+
+    #[inline]
+    pub(crate) fn is_data_descriptor(&self) -> bool {
+        self.flags & (HAS_VALUE | HAS_WRITABLE) != 0
+    }
+
+    #[inline]
+    pub(crate) fn is_accessor_descriptor(&self) -> bool {
+        self.flags & (HAS_GET | HAS_SET) != 0
+    }
+
+    #[inline]
+    pub(crate) fn set_value(&mut self, value: Option<JsValue>) {
+        self.flags &= !HAS_VALUE;
+        self.value = Self::pack(value, HAS_VALUE, &mut self.flags);
+    }
+
+    #[inline]
+    pub(crate) fn set_writable(&mut self, value: Option<bool>) {
+        self.set_tri(HAS_WRITABLE, IS_WRITABLE, value);
+    }
+
+    /// The descriptor this record stores, cloned.
+    pub(crate) fn to_descriptor(&self) -> PropertyDescriptor {
+        PropertyDescriptor {
+            value: self.value().cloned(),
+            writable: self.writable(),
+            get: self.getter().cloned(),
+            set: self.setter().cloned(),
+            enumerable: self.enumerable(),
+            configurable: self.configurable(),
+        }
+    }
+
+    pub(crate) fn into_descriptor(self) -> PropertyDescriptor {
+        let (writable, enumerable, configurable) =
+            (self.writable(), self.enumerable(), self.configurable());
+        let flags = self.flags;
+        let has = |bit: u16| flags & bit != 0;
+        PropertyDescriptor {
+            value: has(HAS_VALUE).then_some(self.value),
+            writable,
+            get: has(HAS_GET).then_some(self.get),
+            set: has(HAS_SET).then_some(self.set),
+            enumerable,
+            configurable,
+        }
+    }
+}
+
+impl From<PropertyDescriptor> for PropertyRecord {
+    #[inline]
+    fn from(d: PropertyDescriptor) -> Self {
+        let mut flags = 0;
+        let value = Self::pack(d.value, HAS_VALUE, &mut flags);
+        let get = Self::pack(d.get, HAS_GET, &mut flags);
+        let set = Self::pack(d.set, HAS_SET, &mut flags);
+        Self::pack_bool(d.writable, HAS_WRITABLE, IS_WRITABLE, &mut flags);
+        Self::pack_bool(d.enumerable, HAS_ENUMERABLE, IS_ENUMERABLE, &mut flags);
+        Self::pack_bool(
+            d.configurable,
+            HAS_CONFIGURABLE,
+            IS_CONFIGURABLE,
+            &mut flags,
+        );
+        Self {
+            value,
+            get,
+            set,
+            flags,
+        }
+    }
+}
+
+impl Clone for PropertyRecord {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            get: self.get.clone(),
+            set: self.set.clone(),
+            flags: self.flags,
+        }
+    }
+}
+
+impl std::fmt::Debug for PropertyRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_descriptor().fmt(f)
+    }
+}
 
 // Property names come from script, so the index is keyed with foldhash's
 // randomly seeded state (minimally DoS-resistant, unlike the SipHash kept for
@@ -116,7 +293,7 @@ impl PropertyMap {
     /// The entry at `slot`, if any. A remembered slot must be checked against
     /// the returned key before use.
     #[inline]
-    pub(crate) fn entry_at(&self, slot: usize) -> Option<(&JsPropertyKey, &PropertyDescriptor)> {
+    pub(crate) fn entry_at(&self, slot: usize) -> Option<(&JsPropertyKey, &PropertyRecord)> {
         let entry = match &self.inner {
             PropertyMapInner::Inline(v) => v.get(slot),
             PropertyMapInner::Spilled { entries, .. } => entries.get(slot)?.as_ref(),
@@ -125,7 +302,7 @@ impl PropertyMap {
     }
 
     #[inline]
-    pub(crate) fn entry_at_mut(&mut self, slot: usize) -> Option<&mut PropertyDescriptor> {
+    pub(crate) fn entry_at_mut(&mut self, slot: usize) -> Option<&mut PropertyRecord> {
         let entry = match &mut self.inner {
             PropertyMapInner::Inline(v) => v.get_mut(slot),
             PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot)?.as_mut(),
@@ -133,7 +310,7 @@ impl PropertyMap {
         entry.map(|(_, d)| d)
     }
 
-    pub(crate) fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyDescriptor> {
+    pub(crate) fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyRecord> {
         self.slot_of(key)
             .and_then(|slot| self.entry_at(slot))
             .map(|(_, d)| d)
@@ -142,7 +319,7 @@ impl PropertyMap {
     pub(crate) fn get_mut<K: PropertyKeyLike + ?Sized>(
         &mut self,
         key: &K,
-    ) -> Option<&mut PropertyDescriptor> {
+    ) -> Option<&mut PropertyRecord> {
         let slot = self.slot_of(key)?;
         self.entry_at_mut(slot)
     }
@@ -154,10 +331,11 @@ impl PropertyMap {
         key: JsPropertyKey,
         value: PropertyDescriptor,
     ) -> Option<PropertyDescriptor> {
+        let value = PropertyRecord::from(value);
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
-                    return Some(std::mem::replace(&mut slot.1, value));
+                    return Some(std::mem::replace(&mut slot.1, value).into_descriptor());
                 }
             }
             PropertyMapInner::Spilled {
@@ -170,7 +348,7 @@ impl PropertyMap {
                         let entry = entries[*e.get() as usize]
                             .as_mut()
                             .expect("indexed slot is live");
-                        return Some(std::mem::replace(&mut entry.1, value));
+                        return Some(std::mem::replace(&mut entry.1, value).into_descriptor());
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert(entries.len() as u32);
@@ -195,11 +373,11 @@ impl PropertyMap {
             !self.contains_key(&key),
             "push_fresh called with a key that is already present"
         );
-        self.append(key, value);
+        self.append(key, value.into());
     }
 
     #[inline]
-    fn append(&mut self, key: JsPropertyKey, value: PropertyDescriptor) {
+    fn append(&mut self, key: JsPropertyKey, value: PropertyRecord) {
         self.digit_leading_keys += u32::from(Self::is_digit_leading(key.as_bytes()));
         match &mut self.inner {
             PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
@@ -255,7 +433,7 @@ impl PropertyMap {
     fn spill(
         v: &mut SmallVec<[Entry; INLINE_CAP]>,
         key: JsPropertyKey,
-        value: PropertyDescriptor,
+        value: PropertyRecord,
     ) -> PropertyMapInner {
         let mut entries: Vec<Option<Entry>> = Vec::with_capacity(LINEAR_MAX + 1);
         let mut index: HashMap<JsPropertyKey, u32, IndexState> =
@@ -315,7 +493,7 @@ impl PropertyMap {
         if Self::is_digit_leading(key.as_property_key_bytes()) {
             self.digit_leading_keys -= 1;
         }
-        Some(removed)
+        Some(removed.into_descriptor())
     }
 
     pub(crate) fn iter(&self) -> PropertyMapIter<'_> {
@@ -329,7 +507,7 @@ impl PropertyMap {
         self.iter().map(|(k, _)| k)
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &PropertyDescriptor> {
+    pub(crate) fn values(&self) -> impl Iterator<Item = &PropertyRecord> {
         self.iter().map(|(_, v)| v)
     }
 }
@@ -346,7 +524,7 @@ pub(crate) enum PropertyMapIter<'a> {
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
-    type Item = (&'a JsPropertyKey, &'a PropertyDescriptor);
+    type Item = (&'a JsPropertyKey, &'a PropertyRecord);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -371,11 +549,8 @@ mod tests {
         PropertyDescriptor::data_default(JsValue::number(n))
     }
 
-    fn num(d: &PropertyDescriptor) -> f64 {
-        d.value
-            .as_ref()
-            .and_then(JsValue::as_number)
-            .unwrap_or(f64::NAN)
+    fn num(d: &PropertyRecord) -> f64 {
+        d.value().and_then(JsValue::as_number).unwrap_or(f64::NAN)
     }
 
     fn is_inline(map: &PropertyMap) -> bool {
@@ -420,7 +595,7 @@ mod tests {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         let prev = m.insert(key("k0"), desc(99.0)).expect("had previous");
-        assert_eq!(num(&prev), 0.0);
+        assert_eq!(prev.value.as_ref().and_then(JsValue::as_number), Some(0.0));
         assert!(is_inline(&m));
         assert_eq!(num(m.get("k0").expect("present")), 99.0);
     }
@@ -465,11 +640,7 @@ mod tests {
         let mut seen: Vec<(String, f64)> = m
             .iter()
             .map(|(k, d)| {
-                let n = d
-                    .value
-                    .as_ref()
-                    .and_then(JsValue::as_number)
-                    .unwrap_or(-1.0);
+                let n = d.value().and_then(JsValue::as_number).unwrap_or(-1.0);
                 (k.to_string(), n)
             })
             .collect();
@@ -486,11 +657,7 @@ mod tests {
         let mut seen: Vec<(String, f64)> = m
             .iter()
             .map(|(k, d)| {
-                let n = d
-                    .value
-                    .as_ref()
-                    .and_then(JsValue::as_number)
-                    .unwrap_or(-1.0);
+                let n = d.value().and_then(JsValue::as_number).unwrap_or(-1.0);
                 (k.to_string(), n)
             })
             .collect();
@@ -515,7 +682,7 @@ mod tests {
         let mut m = PropertyMap::new();
         m.insert(key("a"), desc(1.0));
         if let Some(d) = m.get_mut("a") {
-            d.value = Some(JsValue::number(7.0));
+            d.set_value(Some(JsValue::number(7.0)));
         }
         assert_eq!(num(m.get("a").expect("present")), 7.0);
 
@@ -524,7 +691,7 @@ mod tests {
         }
         assert!(!is_inline(&m));
         if let Some(d) = m.get_mut("a") {
-            d.value = Some(JsValue::number(42.0));
+            d.set_value(Some(JsValue::number(42.0)));
         }
         assert_eq!(num(m.get("a").expect("present")), 42.0);
     }
@@ -595,12 +762,86 @@ mod tests {
     }
 
     #[test]
-    fn js_object_data_size_under_3kb() {
-        // Tripwire: catch surprise growth of JsObjectData. If this fires,
-        // either trim a field or lower LINEAR_MAX. Keep tight enough to
-        // catch regressions but loose enough to absorb routine field adds.
+    fn record_round_trips_partial_descriptors() {
+        let cases = [
+            PropertyDescriptor {
+                value: Some(JsValue::number(1.0)),
+                writable: Some(false),
+                get: None,
+                set: None,
+                enumerable: None,
+                configurable: Some(true),
+            },
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(JsValue::UNDEFINED),
+                set: None,
+                enumerable: Some(false),
+                configurable: None,
+            },
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: None,
+                set: Some(JsValue::number(2.0)),
+                enumerable: Some(true),
+                configurable: Some(false),
+            },
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: None,
+                set: None,
+                enumerable: None,
+                configurable: None,
+            },
+        ];
+        for d in cases {
+            let record = PropertyRecord::from(d.clone());
+            let back = record.to_descriptor();
+            assert_eq!(back.value.is_some(), d.value.is_some());
+            assert_eq!(back.get.is_some(), d.get.is_some());
+            assert_eq!(back.set.is_some(), d.set.is_some());
+            assert_eq!(back.writable, d.writable);
+            assert_eq!(back.enumerable, d.enumerable);
+            assert_eq!(back.configurable, d.configurable);
+            assert_eq!(record.is_data_descriptor(), d.is_data_descriptor());
+            assert_eq!(record.is_accessor_descriptor(), d.is_accessor_descriptor());
+            let moved = record.into_descriptor();
+            assert_eq!(moved.writable, d.writable);
+            assert_eq!(moved.value.is_some(), d.value.is_some());
+        }
+    }
+
+    #[test]
+    fn record_setters_touch_only_their_field() {
+        let mut record = PropertyRecord::from(PropertyDescriptor::data(
+            JsValue::number(1.0),
+            true,
+            false,
+            true,
+        ));
+        record.set_value(Some(JsValue::number(9.0)));
+        assert_eq!(num(&record), 9.0);
+        assert_eq!(record.writable(), Some(true));
+        assert_eq!(record.enumerable(), Some(false));
+        assert_eq!(record.configurable(), Some(true));
+        record.set_writable(Some(false));
+        assert_eq!(record.writable(), Some(false));
+        assert_eq!(num(&record), 9.0);
+        record.set_writable(None);
+        assert_eq!(record.writable(), None);
+        record.set_value(None);
+        assert!(record.value().is_none());
+        assert_eq!(record.enumerable(), Some(false));
+    }
+
+    #[test]
+    fn js_object_data_size_cap() {
+        // #909: box cold state rather than raising the cap.
         let size = std::mem::size_of::<JsObjectData>();
-        assert!(size <= 3072, "JsObjectData grew to {size} bytes (cap 3072)");
+        assert!(size <= 320, "JsObjectData grew to {size} bytes (cap 320)");
     }
 
     #[test]
@@ -618,7 +859,9 @@ mod tests {
         assert!(m.slot_of("missing").is_none());
         assert!(m.entry_at(10_000).is_none());
         let slot = m.slot_of("k1").unwrap();
-        m.entry_at_mut(slot).unwrap().value = Some(JsValue::number(99.0));
+        m.entry_at_mut(slot)
+            .unwrap()
+            .set_value(Some(JsValue::number(99.0)));
         assert_eq!(num(m.get("k1").unwrap()), 99.0);
     }
 

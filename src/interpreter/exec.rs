@@ -460,10 +460,12 @@ impl Interpreter {
     /// §9.1.1.4.16 CanDeclareGlobalFunction
     fn can_declare_global_function(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
-            if desc.configurable == Some(true) {
+            if desc.configurable() == Some(true) {
                 return true;
             }
-            if desc.value.is_some() && desc.writable == Some(true) && desc.enumerable == Some(true)
+            if desc.value().is_some()
+                && desc.writable() == Some(true)
+                && desc.enumerable() == Some(true)
             {
                 return true;
             }
@@ -503,7 +505,7 @@ impl Interpreter {
     /// §9.1.1.4.13 HasRestrictedGlobalProperty
     fn has_restricted_global_property(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
-            desc.configurable == Some(false)
+            desc.configurable() == Some(false)
         } else {
             false
         }
@@ -611,6 +613,7 @@ impl Interpreter {
         let enclosing_strict = env.borrow().strict;
         let info = f.info();
         let func = JsFunction::User {
+            bytecode_cache: Default::default(),
             name: Some(f.name.clone()),
             params: info.params.clone(),
             body: f.body.clone(),
@@ -2825,6 +2828,7 @@ impl Interpreter {
                     let enclosing_strict = switch_env.borrow().strict;
                     let info = f.info();
                     let func = JsFunction::User {
+                        bytecode_cache: Default::default(),
                         name: Some(f.name.clone()),
                         params: info.params.clone(),
                         body: f.body.clone(),

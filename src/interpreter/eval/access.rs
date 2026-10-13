@@ -442,7 +442,7 @@ impl Interpreter {
             }
             let mut obj_mut = obj.borrow_mut();
             if let Some(desc) = obj_mut.properties.get(&key)
-                && desc.configurable == Some(false)
+                && desc.configurable() == Some(false)
             {
                 if is_strict {
                     drop(obj_mut);
@@ -493,7 +493,7 @@ impl Interpreter {
                 .borrow()
                 .properties
                 .get(key)
-                .and_then(|d| d.value.clone()),
+                .and_then(|d| d.value().cloned()),
             PropIcKind::Missing { proto_id, .. } => {
                 if obj_rc.borrow().prototype_id == proto_id {
                     Some(JsValue::UNDEFINED)
@@ -510,7 +510,7 @@ impl Interpreter {
                 {
                     let pb = proto_rc.borrow();
                     if pb.shape_id == proto_shape_id {
-                        return pb.properties.get(key).and_then(|d| d.value.clone());
+                        return pb.properties.get(key).and_then(|d| d.value().cloned());
                     }
                 }
                 None

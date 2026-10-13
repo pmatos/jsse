@@ -22,7 +22,7 @@ pub(super) fn create_plain_year_month_result(
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.PlainYearMonth".into();
+        .class_name = "Temporal.PlainYearMonth";
     if let Some(proto_id) = interp.realm().temporal_plain_year_month_prototype {
         interp
             .get_object_cell_expect(obj_id)
@@ -30,12 +30,12 @@ pub(super) fn create_plain_year_month_result(
             .prototype_id = Some(proto_id);
     }
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-        crate::interpreter::types::ObjectKind::Temporal(TemporalData::PlainYearMonth {
+        crate::interpreter::types::ObjectKind::Temporal(Box::new(TemporalData::PlainYearMonth {
             iso_year: y,
             iso_month: m,
             reference_iso_day: ref_day,
             calendar: cal.to_string(),
-        });
+        }));
     let id = obj_id;
     Completion::Normal(JsValue::object(id))
 }
@@ -387,7 +387,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.PlainYearMonth".into();
+            .class_name = "Temporal.PlainYearMonth";
         self.define_to_string_tag(proto_id, "Temporal.PlainYearMonth");
 
         // Getters: calendarId, year, month, monthCode

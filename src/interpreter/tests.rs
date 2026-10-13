@@ -1653,9 +1653,8 @@ fn global_pin_count(interp: &Interpreter, name: &str) -> usize {
         .get_object_cell(id)
         .expect("global object must be live")
         .borrow()
-        .gc_native_roots
-        .as_ref()
-        .map_or(0, Vec::len)
+        .gc_native_roots()
+        .len()
 }
 
 /// Number of resolving-function pairs recorded on the pending promise held by
@@ -2860,9 +2859,9 @@ fn proxy_install_via_chokepoint_bumps_shape() {
     let proxy_id = interp.alloc_object(JsObjectData::new());
     let before = interp.get_object(proxy_id).unwrap().borrow().shape_id;
     interp.mutate_object_shape(proxy_id, |obj| {
-        obj.kind = crate::interpreter::types::ObjectKind::Proxy(
+        obj.kind = crate::interpreter::types::ObjectKind::Proxy(Box::new(
             crate::interpreter::types::ProxyData::active(target_id, handler_id),
-        );
+        ));
     });
     let after = interp.get_object(proxy_id).unwrap().borrow().shape_id;
     assert!(
@@ -6356,7 +6355,7 @@ fn user_function_params(
         .get_object_cell(id)
         .expect("function object must be live")
         .borrow();
-    match obj.callable.as_ref() {
+    match obj.callable.as_deref() {
         Some(JsFunction::User { params, .. }) => (id, Rc::as_ptr(params)),
         other => panic!("global {name} must be a user function, got {other:?}"),
     }

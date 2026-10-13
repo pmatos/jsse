@@ -7923,7 +7923,7 @@ fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
     };
     let bp = realm_proto.borrow();
     if let Some(pd) = bp.properties.get("exec")
-        && let Some(exec_id) = pd.value.as_ref().and_then(JsValue::as_object_id)
+        && let Some(exec_id) = pd.value().and_then(JsValue::as_object_id)
     {
         return exec_id == builtin_exec_id;
     }
@@ -8066,8 +8066,8 @@ fn set_rsi_state(
     matcher_id: u64,
 ) {
     if let Some(obj2) = interp.get_object_cell(o_id) {
-        obj2.borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
+        obj2.borrow_mut()
+            .set_iterator_state(IteratorState::RegExpStringIterator {
                 source,
                 flags,
                 string,
@@ -9934,7 +9934,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(iter_obj_id)
                         .borrow_mut()
-                        .class_name = "RegExp String Iterator".into();
+                        .class_name = "RegExp String Iterator";
                     if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
                         interp
                             .get_object_cell_expect(iter_obj_id)
@@ -9950,18 +9950,18 @@ impl Interpreter {
                             JsValue::boolean(full_unicode),
                         );
 
-                    interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
-                        crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::RegExpStringIterator {
-                                source: m_source,
-                                flags: m_flags,
-                                string: regex_input.subject.clone(),
-                                global,
-                                last_index: last_index as usize,
-                                done: false,
-                                matcher_id,
-                            },
-                        );
+                    interp
+                        .get_object_cell_expect(iter_obj_id)
+                        .borrow_mut()
+                        .set_iterator_state(IteratorState::RegExpStringIterator {
+                            source: m_source,
+                            flags: m_flags,
+                            string: regex_input.subject.clone(),
+                            global,
+                            last_index: last_index as usize,
+                            done: false,
+                            matcher_id,
+                        });
 
                     Completion::Normal(JsValue::object(iter_obj_id))
                 })
@@ -9980,7 +9980,7 @@ impl Interpreter {
         let rsi_proto_id = self.create_object_id();
         self.get_object_cell_expect(rsi_proto_id)
             .borrow_mut()
-            .class_name = "RegExp String Iterator".into();
+            .class_name = "RegExp String Iterator";
         if let Some(ip_id) = self.realm().iterator_prototype {
             self.get_object_cell_expect(rsi_proto_id)
                 .borrow_mut()
@@ -10480,7 +10480,7 @@ impl Interpreter {
 
                 let mut obj = JsObjectData::new();
                 obj.prototype_id = proto.or(Some(regexp_proto_rc_id));
-                obj.class_name = "RegExp".into();
+                obj.class_name = "RegExp";
                 // Store internal slots ([[OriginalSource]], [[OriginalFlags]])
                 obj.kind = crate::interpreter::types::ObjectKind::RegExp(
                     crate::interpreter::types::RegExpData::new(
