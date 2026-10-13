@@ -611,6 +611,8 @@ pub(crate) struct Realm {
     pub(crate) shared_arraybuffer_prototype: Option<u64>,
     pub(crate) typed_array_prototype: Option<u64>,
     pub(crate) typed_array_constructor: Option<JsValue>,
+    /// `%Array%` of this realm; `Array.of` compares its `this` against it.
+    pub(crate) array_constructor: Option<JsValue>,
     pub(crate) int8array_prototype: Option<u64>,
     pub(crate) uint8array_prototype: Option<u64>,
     pub(crate) uint8clampedarray_prototype: Option<u64>,
@@ -721,6 +723,7 @@ impl Realm {
             shared_arraybuffer_prototype: None,
             typed_array_prototype: None,
             typed_array_constructor: None,
+            array_constructor: None,
             int8array_prototype: None,
             uint8array_prototype: None,
             uint8clampedarray_prototype: None,
@@ -881,6 +884,7 @@ impl Realm {
             &self.intl_date_time_format_ctor,
             &self.intl_duration_format_ctor,
             &self.typed_array_constructor,
+            &self.array_constructor,
             &self.abstract_module_source_ctor,
         ] {
             if let Some(id) = ctor.as_ref().and_then(JsValue::as_object_id) {
