@@ -3827,6 +3827,19 @@ fn literals_and_closures_compile_without_tree_walker_hand_offs() {
 }
 
 #[test]
+fn await_inside_a_nested_async_arrow_does_not_keep_the_body_whole() {
+    let chunk = compile_function_source(
+        "var total = 0;
+         for (let datum of data) total += datum;
+         var later = async () => { let s = await data; for await (let d of s) total += d; };
+         total;",
+        &["data"],
+    );
+    assert!(chunk.ast.is_empty(), "no node left on the tree-walker");
+    assert!(work_ops(&chunk).contains(&Op::MakeClosure));
+}
+
+#[test]
 fn unsupported_literal_forms_hand_off_the_whole_literal() {
     for (source, reason) in [
         ("[...x];", "array literal: spread"),

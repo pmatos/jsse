@@ -3200,7 +3200,10 @@ type PoisonFn = fn(&Expression) -> bool;
 /// A construct that only has its meaning when the whole function runs as one
 /// tree-walked frame, or whose compile-time handling depends on resolving
 /// names in the enclosing scope chain. Such a body stays wholly on the
-/// tree-walker, exactly as before per-node fallback existed.
+/// tree-walker, exactly as before per-node fallback existed. `yield` and
+/// `await` are not poison: only plain functions reach this compile, so the
+/// traversal meets them only inside nested generator-free async arrows,
+/// which own them.
 fn is_poison_expression(expr: &Expression) -> bool {
     match expr {
         Expression::Super
@@ -3208,9 +3211,7 @@ fn is_poison_expression(expr: &Expression) -> bool {
         | Expression::ImportMeta
         | Expression::Import(..)
         | Expression::ImportDefer(..)
-        | Expression::ImportSource(..)
-        | Expression::Yield(..)
-        | Expression::Await(_) => true,
+        | Expression::ImportSource(..) => true,
         Expression::Call(callee, _, _) => {
             matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
         }
