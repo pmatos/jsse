@@ -37,18 +37,17 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "BigInt";
 
-        fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
-            if let Some(bigint) = this.with_bigint(Clone::clone) {
-                return Some(bigint);
+        // thisBigIntValue (§21.2.3.4.1): the BigInt primitive itself, as a
+        // reference-counted handle rather than a deep copy of its digits.
+        fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<JsValue> {
+            if this.is_bigint() {
+                return Some(this.clone());
             }
             let object_id = this.as_object_id()?;
             interp.get_object_cell(object_id).and_then(|cell| {
                 let object = cell.borrow();
                 if object.class_name == "BigInt" {
-                    object
-                        .primitive_value
-                        .as_ref()
-                        .and_then(|value| value.with_bigint(Clone::clone))
+                    object.primitive_value.clone().filter(JsValue::is_bigint)
                 } else {
                     None
                 }
@@ -88,12 +87,10 @@ impl Interpreter {
                             }
                             _ => 10,
                         };
-                    let s = if radix == 10 {
-                        n.to_string()
-                    } else {
-                        bigint_to_string_radix(&n, radix)
-                    };
-                    Completion::Normal(JsValue::from_str(&s))
+                    let s = n
+                        .with_bigint(|n| bigint_to_js_string(n, radix))
+                        .expect("thisBigIntValue returns a BigInt");
+                    Completion::Normal(JsValue::string(s))
                 }),
             ),
             (
@@ -105,7 +102,7 @@ impl Interpreter {
                             interp.create_type_error("BigInt.prototype.valueOf requires a BigInt"),
                         );
                     };
-                    Completion::Normal(JsValue::bigint(JsBigInt::new(n)))
+                    Completion::Normal(n)
                 }),
             ),
             (
@@ -123,8 +120,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let bigint_val = JsValue::bigint(JsBigInt::new(n));
-                    interp.intl_number_format_format(&nf, &bigint_val)
+                    interp.intl_number_format_format(&nf, &n)
                 }),
             ),
         ];
@@ -326,4 +322,61 @@ pub(crate) fn bigint_to_string_radix(n: &num_bigint::BigInt, radix: u32) -> Stri
         s.push(char::from_digit(d as u32, radix).unwrap_or('?'));
     }
     s
+}
+
+/// Number::toString-style rendering of a BigInt in `radix` (2..=36) straight
+/// into the UTF-16 buffer of the result: no intermediate `String`, no
+/// `EncodeUtf16` round trip.
+pub(crate) fn bigint_to_js_string(n: &num_bigint::BigInt, radix: u32) -> JsString {
+    use num_bigint::Sign;
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let sign = n.sign();
+    if sign == Sign::NoSign {
+        return JsString::from_vec(vec![u16::from(b'0')]);
+    }
+    let negative = sign == Sign::Minus;
+    let magnitude = n.magnitude();
+    let mut units: Vec<u16>;
+    if radix.is_power_of_two() {
+        let bits_per_digit = radix.trailing_zeros();
+        let digit_count = magnitude.bits().div_ceil(u64::from(bits_per_digit)) as usize;
+        let sign_len = usize::from(negative);
+        units = vec![0u16; sign_len + digit_count];
+        let mask = u128::from(radix - 1);
+        let mut acc: u128 = 0;
+        let mut acc_bits: u32 = 0;
+        let mut written = 0usize;
+        let mut put = |digit: u128, units: &mut Vec<u16>| {
+            if written < digit_count {
+                let at = sign_len + digit_count - 1 - written;
+                units[at] = u16::from(DIGITS[digit as usize]);
+                written += 1;
+            }
+        };
+        for limb in magnitude.iter_u64_digits() {
+            acc |= u128::from(limb) << acc_bits;
+            acc_bits += 64;
+            while acc_bits >= bits_per_digit {
+                put(acc & mask, &mut units);
+                acc >>= bits_per_digit;
+                acc_bits -= bits_per_digit;
+            }
+        }
+        if acc_bits > 0 {
+            put(acc & mask, &mut units);
+        }
+        debug_assert_eq!(written, digit_count);
+    } else {
+        let digits = magnitude.to_radix_be(radix);
+        units = Vec::with_capacity(usize::from(negative) + digits.len());
+        if negative {
+            units.push(u16::from(b'-'));
+        }
+        units.extend(digits.iter().map(|&d| u16::from(DIGITS[d as usize])));
+        return JsString::from_vec(units);
+    }
+    if negative {
+        units[0] = u16::from(b'-');
+    }
+    JsString::from_vec(units)
 }
