@@ -82,7 +82,6 @@ pub(crate) struct Chunk {
     /// Nodes executed on the tree-walker by `EvalAst`/`ExecAst`.
     pub(crate) ast: Vec<AstNode>,
     pub(crate) escape_tables: Vec<Vec<EscapeEntry>>,
-    /// Block environments `PushEnv` instantiates.
     pub(crate) block_scopes: Vec<BlockScope>,
     /// The body declares functions or lexical bindings that the tree-walker's
     /// declaration instantiation must establish before the chunk runs.

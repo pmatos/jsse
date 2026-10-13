@@ -628,31 +628,13 @@ impl Interpreter {
     /// §14.2.2 BlockDeclarationInstantiation: Hoist let/const/class declarations as
     /// uninitialized (TDZ) bindings at the top of a block scope.
     fn hoist_lexical_declarations(stmts: &[Statement], env: &EnvRef) {
-        for stmt in stmts {
-            match stmt {
-                Statement::Variable(decl)
-                    if matches!(
-                        decl.kind,
-                        VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-                    ) =>
-                {
-                    let kind = match decl.kind {
-                        VarKind::Let => BindingKind::Let,
-                        _ => BindingKind::Const,
-                    };
-                    for d in &decl.declarations {
-                        let mut names = Vec::new();
-                        d.pattern.bound_names(&mut names);
-                        for name in names {
-                            env.borrow_mut().declare(&name, kind);
-                        }
-                    }
-                }
-                Statement::ClassDeclaration(c) if !c.name.is_empty() => {
-                    env.borrow_mut().declare(&c.name, BindingKind::Const);
-                }
-                _ => {}
-            }
+        for (name, is_const) in super::hoisting::collect_lexical_names(stmts) {
+            let kind = if is_const {
+                BindingKind::Const
+            } else {
+                BindingKind::Let
+            };
+            env.borrow_mut().declare(&name, kind);
         }
     }
 
@@ -1923,6 +1905,26 @@ impl Interpreter {
             } else {
                 Vec::new()
             };
+
+        // §14.7.4.2 step 2-5: the head's bindings exist, uninitialised, while
+        // the initializers run, so `for (let i = i;;)` cannot see an outer `i`.
+        if let Some(ForInit::Variable(decl)) = &f.init
+            && decl.kind != VarKind::Var
+        {
+            let kind = if decl.kind == VarKind::Let {
+                BindingKind::Let
+            } else {
+                BindingKind::Const
+            };
+            let mut names = Vec::new();
+            for d in &decl.declarations {
+                d.pattern.bound_names(&mut names);
+            }
+            let mut scope = for_env.borrow_mut();
+            for name in &names {
+                scope.declare(name, kind);
+            }
+        }
 
         if let Some(init) = &f.init {
             match init {

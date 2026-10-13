@@ -3122,9 +3122,9 @@ fn local_ops_address_block_bindings_and_still_hit_the_frame_for_outer_names() {
     };
     assert_eq!(slot_of("s") & BLOCK_SLOT_FLAG, 0, "frame local stays frame");
     assert_eq!(slot_of("v") & BLOCK_SLOT_FLAG, BLOCK_SLOT_FLAG);
-    assert_ne!(
+    assert_eq!(
         slot_of("v") >> 8,
-        0x80,
+        0x81,
         "the body block is the second scope"
     );
 }

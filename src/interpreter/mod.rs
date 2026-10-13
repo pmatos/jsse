@@ -2307,6 +2307,19 @@ impl Interpreter {
         }
     }
 
+    /// Returns a block environment the VM has left to the pool when nothing
+    /// else holds it.
+    pub(crate) fn recycle_block_environment(&mut self, env: EnvRef) {
+        if self.function_env_pool.len() >= MAX_POOLED_FUNCTION_ENVIRONMENTS
+            || Rc::strong_count(&env) != 1
+            || env.borrow().bindings.capacity() > MAX_POOLED_FUNCTION_BINDING_CAPACITY
+        {
+            return;
+        }
+        env.borrow_mut().release_block_scope();
+        self.function_env_pool.push(env);
+    }
+
     pub(crate) fn recycle_function_environment(&mut self, env: EnvRef) {
         if self.function_env_pool.len() >= MAX_POOLED_FUNCTION_ENVIRONMENTS
             || Rc::strong_count(&env) != 1

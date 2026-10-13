@@ -208,6 +208,11 @@ fn local_target<'a>(frame_env: &'a EnvRef, scopes: &'a [EnvRef], slot: u16) -> (
         (frame_env, slot)
     } else {
         let scope = usize::from((slot >> 8) & 0x7f);
+        debug_assert!(
+            scope < scopes.len(),
+            "block slot names environment {scope} of {}",
+            scopes.len()
+        );
         (scopes.get(scope).unwrap_or(frame_env), slot & 0xff)
     }
 }
@@ -263,7 +268,7 @@ fn unwind_scopes(
     interp.call_stack_envs.truncate(envs_base + depth);
     while scopes.len() > depth {
         let env = scopes.pop().expect("length checked above");
-        interp.recycle_function_environment(env);
+        interp.recycle_block_environment(env);
     }
 }
 
@@ -1566,6 +1571,12 @@ fn run_chunk_inner(
                 let current = scopes
                     .last()
                     .expect("CopyIterEnv inside a block environment");
+                // Only `scopes` and its `call_stack_envs` mirror own it: no
+                // closure took this iteration's environment, so a fresh copy
+                // could not be told apart from it.
+                if std::rc::Rc::strong_count(current) <= 2 {
+                    continue;
+                }
                 let (parent, bindings) = {
                     let source = current.borrow();
                     (
@@ -1592,7 +1603,7 @@ fn run_chunk_inner(
                 let top = scopes.len() - 1;
                 interp.call_stack_envs[envs_base + top] = fresh.clone();
                 let replaced = std::mem::replace(&mut scopes[top], fresh);
-                interp.recycle_function_environment(replaced);
+                interp.recycle_block_environment(replaced);
             }
             Op::Safepoint => {
                 safepoint_with_empty_stacks(interp, stack, refs, "statement boundary");

@@ -1143,6 +1143,18 @@ impl Environment {
         self.reset_scope(parent, binding_capacity, true);
     }
 
+    /// Drops what a pooled environment holds on to (its parent chain and
+    /// bindings); every other field is rewritten when it is next acquired.
+    pub(crate) fn release_block_scope(&mut self) {
+        self.bindings.clear();
+        self.parent = None;
+        self.this_binding = None;
+        self.dispose_stack = None;
+        self.annexb_function_names = None;
+        self.class_private_names = None;
+        self.indirect_bindings = None;
+    }
+
     /// Reinitialises a pooled environment as a fresh block scope under
     /// `parent`, as `Environment::new` would build one.
     pub(crate) fn reset_block_scope(&mut self, parent: EnvRef, binding_capacity: usize) {

@@ -102,7 +102,6 @@ struct Snapshot {
     block_scopes_len: usize,
 }
 
-/// The declarations one block environment instantiates.
 #[derive(Default)]
 struct ScopeDecls {
     functions: Vec<Statement>,
@@ -1115,28 +1114,19 @@ impl Compiler {
             }
         }
         for stmts in lists {
-            for stmt in *stmts {
-                match stmt {
-                    Statement::Variable(decl) => match decl.kind {
-                        VarKind::Var => {}
-                        VarKind::Let | VarKind::Const => {
-                            let is_const = decl.kind == VarKind::Const;
-                            for declarator in &decl.declarations {
-                                let mut names = Vec::new();
-                                declarator.pattern.bound_names(&mut names);
-                                decls
-                                    .lexicals
-                                    .extend(names.into_iter().map(|name| (name, is_const)));
-                            }
-                        }
-                        VarKind::Using | VarKind::AwaitUsing => return None,
-                    },
-                    Statement::ClassDeclaration(class) if !class.name.is_empty() => {
-                        decls.lexicals.push((class.name.clone(), true));
-                    }
-                    _ => {}
-                }
+            let has_using = stmts.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    Statement::Variable(decl)
+                        if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
+                )
+            });
+            if has_using {
+                return None;
             }
+            decls
+                .lexicals
+                .extend(crate::interpreter::hoisting::collect_lexical_names(stmts));
         }
         Some(decls)
     }

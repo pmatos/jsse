@@ -22,6 +22,32 @@ pub(crate) fn unwrap_labeled_function(stmt: &Statement) -> Option<&FunctionDecl>
     }
 }
 
+/// The names a statement list declares lexically (`let`, `const`, `using`,
+/// class declarations), in declaration order, each with whether its binding
+/// is immutable: the TDZ bindings BlockDeclarationInstantiation creates
+/// (sec-blockdeclarationinstantiation). Function declarations are separate
+/// (`unwrap_labeled_function`).
+pub(crate) fn collect_lexical_names(stmts: &[Statement]) -> Vec<(String, bool)> {
+    let mut names = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            Statement::Variable(decl) if decl.kind != VarKind::Var => {
+                let is_const = decl.kind != VarKind::Let;
+                let mut bound = Vec::new();
+                for d in &decl.declarations {
+                    d.pattern.bound_names(&mut bound);
+                }
+                names.extend(bound.into_iter().map(|name| (name, is_const)));
+            }
+            Statement::ClassDeclaration(c) if !c.name.is_empty() => {
+                names.push((c.name.clone(), true));
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
 /// Collect the top-level `var`-declared names of a statement list, descending
 /// into nested statements (blocks, `if`, loops, `switch`, `try`, labels,
 /// `with`) but never into nested function bodies. Order and duplicates mirror
