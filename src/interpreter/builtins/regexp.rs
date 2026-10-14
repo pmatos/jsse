@@ -98,7 +98,12 @@ fn stand_in_base(base: u32) -> u32 {
 /// subject genuinely occupy every window, so no scalar can stand in for a lone
 /// surrogate. `\p{Cs}` and `\p{Co}` then match WTF-8 bytes, whose subject has
 /// no stand-ins, and no window is taken out of a class. Stand-ins that remain
-/// (a lone surrogate in the pattern text) use the default window.
+/// (a lone surrogate in the pattern text) use the default window, so a
+/// genuine scalar at the same position in the subject is not told apart from
+/// them. This needs a genuine scalar in each of the 64 windows; matching such
+/// a text exactly would take a byte-level form of every construct that can
+/// match a lone surrogate, which neither fancy-regex nor the custom lookbehind
+/// matcher can run (#1009).
 const BYTES_MODE_BASE: u32 = 0x110000;
 
 fn window_bit(cp: u32) -> WindowMask {
@@ -4175,7 +4180,7 @@ fn resolve_class_escape(chars: &[char], i: &mut usize, unicode: bool) -> Option<
                     }
                 }
                 'u' => {
-                    if *i < chars.len() && chars[*i] == '{' {
+                    if unicode && *i < chars.len() && chars[*i] == '{' {
                         *i += 1;
                         let start = *i;
                         while *i < chars.len() && chars[*i] != '}' {
@@ -5317,7 +5322,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
 
                 if i < len {
                     i += 1; // skip ']'
-                } else if unicode {
+                } else {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Unterminated character class",
                         source
