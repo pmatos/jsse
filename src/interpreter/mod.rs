@@ -979,12 +979,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                let parsed = if stand_ins {
-                    crate::parser::Parser::new_with_stand_ins(&code)
-                } else {
-                    crate::parser::Parser::new(&code)
-                };
-                let mut p = match parsed {
+                let mut p = match crate::parser::Parser::for_source(&code, stand_ins) {
                     Ok(p) => p,
                     Err(_) => {
                         return Completion::Throw(

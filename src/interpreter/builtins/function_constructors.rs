@@ -35,12 +35,7 @@ fn parse_dynamic_function_source(
     source: &str,
     pua: bool,
 ) -> Result<crate::ast::Program, parser::ParseError> {
-    let parser = if pua {
-        parser::Parser::new_with_stand_ins(source)
-    } else {
-        parser::Parser::new(source)
-    };
-    parser.and_then(|mut p| p.parse_program())
+    parser::Parser::for_source(source, pua).and_then(|mut p| p.parse_program())
 }
 
 impl Interpreter {

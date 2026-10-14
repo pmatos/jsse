@@ -269,36 +269,33 @@ pub(crate) fn encode_source_units_as(code_units: &[u16], stand_ins: bool) -> Str
 /// Inverse of `encode_source_units` for a span of its flagged output.
 pub(crate) fn decode_source_text(s: &str) -> JsString {
     let mut code_units: Vec<u16> = Vec::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == SOURCE_ESCAPE {
-            if let Some(literal) = chars.next() {
-                code_units.extend_from_slice(literal.encode_utf16(&mut [0; 2]));
-            }
-        } else if let Some(surrogate) = pua_to_surrogate(c) {
-            code_units.push(surrogate);
-        } else {
-            code_units.extend_from_slice(c.encode_utf16(&mut [0; 2]));
+    for (c, literal) in source_chars(s) {
+        match pua_to_surrogate(c) {
+            Some(surrogate) if !literal => code_units.push(surrogate),
+            _ => code_units.extend_from_slice(c.encode_utf16(&mut [0; 2])),
         }
     }
     JsString::from_vec(code_units)
 }
 
+/// Characters of flagged source text with the escape markers removed; the
+/// flag is true for a character that a marker made literal.
+fn source_chars(s: &str) -> impl Iterator<Item = (char, bool)> + '_ {
+    let mut chars = s.chars();
+    std::iter::from_fn(move || {
+        let c = chars.next()?;
+        if c == SOURCE_ESCAPE {
+            chars.next().map(|literal| (literal, true))
+        } else {
+            Some((c, false))
+        }
+    })
+}
+
 /// Drops the escapes from flagged source text but keeps the stand-ins, the
 /// form regular expression patterns use for lone surrogates.
 pub(crate) fn unescape_source_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == SOURCE_ESCAPE {
-            if let Some(literal) = chars.next() {
-                out.push(literal);
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    source_chars(s).map(|(c, _)| c).collect()
 }
 
 /// Convert a regex match result string back from PUA to surrogates.

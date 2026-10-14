@@ -206,6 +206,15 @@ impl<'a> Parser<'a> {
         Ok(parser)
     }
 
+    /// `new_with_stand_ins` when `stand_ins`, else `new`.
+    pub(crate) fn for_source(source: &'a str, stand_ins: bool) -> Result<Self, ParseError> {
+        if stand_ins {
+            Self::new_with_stand_ins(source)
+        } else {
+            Self::new(source)
+        }
+    }
+
     fn new_with_lexer(source: &'a str, mut lexer: Lexer<'a>) -> Result<Self, ParseError> {
         let mut had_lt = false;
         let current = loop {
