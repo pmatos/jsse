@@ -1581,6 +1581,12 @@ fn parse_v_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
         't' => Some('\t' as u32),
         'f' => Some(0x0C),
         'v' => Some(0x0B),
+        'b' => Some(0x08),
+        'c' if *i < chars.len() && chars[*i].is_ascii_alphabetic() => {
+            let letter = chars[*i];
+            *i += 1;
+            Some(letter as u32 % 32)
+        }
         '0' => Some(0),
         'x' if *i + 1 < chars.len()
             && chars[*i].is_ascii_hexdigit()
@@ -1619,6 +1625,27 @@ fn parse_v_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
         c if is_syntax_character(c) || c == '/' => Some(c as u32),
         _ => Some(next as u32),
     }
+}
+
+/// `parse_v_class_escape` that also joins a `\uLead\uTrail` surrogate pair
+/// into one code point.
+fn parse_v_class_escape_pair(chars: &[char], i: &mut usize) -> Option<u32> {
+    let cp = parse_v_class_escape(chars, i)?;
+    if (0xD800..=0xDBFF).contains(&cp)
+        && *i + 1 < chars.len()
+        && chars[*i] == '\\'
+        && chars[*i + 1] == 'u'
+    {
+        let saved = *i;
+        *i += 1;
+        if let Some(trail) = parse_v_class_escape(chars, i)
+            && (0xDC00..=0xDFFF).contains(&trail)
+        {
+            return Some(((cp - 0xD800) << 10) + (trail - 0xDC00) + 0x10000);
+        }
+        *i = saved;
+    }
+    Some(cp)
 }
 
 const V_FLAG_CLASS_MAX_DEPTH: usize = 256;
@@ -1883,28 +1910,8 @@ fn parse_v_class_atom(
             _ => {
                 // Regular escape
                 *i += 1; // skip backslash
-                if let Some(cp) = parse_v_class_escape(chars, i) {
-                    // If lead surrogate, try to combine with following \uDC00-\uDFFF
-                    let final_cp = if (0xD800..=0xDBFF).contains(&cp)
-                        && *i + 1 < chars.len()
-                        && chars[*i] == '\\'
-                        && chars[*i + 1] == 'u'
-                    {
-                        let saved = *i;
-                        *i += 1; // skip backslash only; parse_v_class_escape reads from after it
-                        if let Some(trail) = parse_v_class_escape(chars, i)
-                            && (0xDC00..=0xDFFF).contains(&trail)
-                        {
-                            // Combine surrogate pair into Unicode code point
-                            ((cp - 0xD800) << 10) + (trail - 0xDC00) + 0x10000
-                        } else {
-                            *i = saved;
-                            cp
-                        }
-                    } else {
-                        cp
-                    };
-                    result.add_codepoint(final_cp);
+                if let Some(cp) = parse_v_class_escape_pair(chars, i) {
+                    result.add_codepoint(cp);
                     return check_range(chars, i, result, flags);
                 }
                 return Ok(result);
@@ -1935,7 +1942,7 @@ fn check_range(
         let start_cp = result.ranges.last().map(|r| r.1);
         let end_cp = if *i < len && chars[*i] == '\\' && *i + 1 < len {
             *i += 1; // skip backslash
-            parse_v_class_escape(chars, i)
+            parse_v_class_escape_pair(chars, i)
         } else if *i < len {
             let c = chars[*i];
             *i += 1;
@@ -1960,21 +1967,7 @@ fn unescape_q_string(s: &str, base: u32) -> String {
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             i += 1;
-            if let Some(cp) = parse_v_class_escape(&chars, &mut i) {
-                let mut cp = cp;
-                if (0xD800..=0xDBFF).contains(&cp)
-                    && chars.get(i) == Some(&'\\')
-                    && chars.get(i + 1) == Some(&'u')
-                {
-                    let saved = i;
-                    i += 1;
-                    match parse_v_class_escape(&chars, &mut i) {
-                        Some(trail) if (0xDC00..=0xDFFF).contains(&trail) => {
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
-                        }
-                        _ => i = saved,
-                    }
-                }
+            if let Some(cp) = parse_v_class_escape_pair(&chars, &mut i) {
                 if is_surrogate(cp) {
                     result.push(surrogate_to_stand_in(cp, base));
                 } else if let Some(ch) = char::from_u32(cp) {
@@ -4613,6 +4606,174 @@ fn is_v_flag_reserved_double_punctuator(a: char, b: char) -> bool {
 
 const MAX_V_FLAG_CLASS_NESTING_DEPTH: usize = 256;
 
+enum VClassAtom {
+    Char(u32),
+    Set,
+}
+
+fn v_class_hex_value(chars: &[char]) -> Option<u32> {
+    if chars.is_empty() {
+        return None;
+    }
+    chars.iter().try_fold(0u32, |acc, c| {
+        acc.checked_mul(16)?.checked_add(c.to_digit(16)?)
+    })
+}
+
+/// One ClassSetCharacter or class-escape operand starting at `chars[*i]`
+/// (ES2025 22.2.1, ClassSetOperand / ClassSetCharacter). A `[` is not handled
+/// here; the caller treats it as a NestedClass.
+fn parse_v_class_set_character(
+    chars: &[char],
+    i: &mut usize,
+    source: &str,
+    negated: bool,
+) -> Result<VClassAtom, String> {
+    let len = chars.len();
+    let err = |msg: &str| -> Result<VClassAtom, String> {
+        Err(format!(
+            "Invalid regular expression: /{}/ : {}",
+            source, msg
+        ))
+    };
+    if *i >= len {
+        return err("Unterminated character class");
+    }
+    let c = chars[*i];
+    if c != '\\' {
+        if matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '/' | '-' | '|') {
+            return err("Invalid character in character class");
+        }
+        if *i + 1 < len && is_v_flag_reserved_double_punctuator(c, chars[*i + 1]) {
+            return err("Invalid character in character class");
+        }
+        *i += 1;
+        return Ok(VClassAtom::Char(c as u32));
+    }
+    if *i + 1 >= len {
+        return err("Invalid escape at end of pattern");
+    }
+    let after = chars[*i + 1];
+    *i += 2;
+    match after {
+        'd' | 'D' | 'w' | 'W' | 's' | 'S' => Ok(VClassAtom::Set),
+        'p' | 'P' => {
+            if *i >= len || chars[*i] != '{' {
+                return err("Invalid escape");
+            }
+            let prop_start = *i + 1;
+            let mut end = prop_start;
+            while end < len && chars[end] != '}' {
+                end += 1;
+            }
+            if end >= len {
+                return err("Invalid property name");
+            }
+            let prop_content: String = chars[prop_start..end].iter().collect();
+            *i = end + 1;
+            let prop_name = match prop_content.find('=') {
+                Some(eq_pos) => &prop_content[eq_pos + 1..],
+                None => &prop_content,
+            };
+            let is_string_prop = crate::emoji_strings::lookup_string_property(prop_name).is_some();
+            if is_string_prop && negated && after == 'p' {
+                return err("Invalid property name");
+            }
+            Ok(VClassAtom::Set)
+        }
+        'q' => {
+            if *i >= len || chars[*i] != '{' {
+                return err("Invalid escape");
+            }
+            *i += 1;
+            loop {
+                if *i >= len {
+                    return err("Invalid escape");
+                }
+                match chars[*i] {
+                    '}' => {
+                        *i += 1;
+                        break;
+                    }
+                    '|' => *i += 1,
+                    '\\' if matches!(
+                        chars.get(*i + 1),
+                        Some('q' | 'p' | 'P' | 'd' | 'D' | 'w' | 'W' | 's' | 'S')
+                    ) =>
+                    {
+                        return err("Invalid escape");
+                    }
+                    _ => {
+                        parse_v_class_set_character(chars, i, source, negated)?;
+                    }
+                }
+            }
+            Ok(VClassAtom::Set)
+        }
+        'b' => Ok(VClassAtom::Char(0x08)),
+        'f' => Ok(VClassAtom::Char(0x0C)),
+        'n' => Ok(VClassAtom::Char(0x0A)),
+        'r' => Ok(VClassAtom::Char(0x0D)),
+        't' => Ok(VClassAtom::Char(0x09)),
+        'v' => Ok(VClassAtom::Char(0x0B)),
+        'c' => match chars.get(*i) {
+            Some(l) if l.is_ascii_alphabetic() => {
+                *i += 1;
+                Ok(VClassAtom::Char(*l as u32 % 32))
+            }
+            _ => err("Invalid escape"),
+        },
+        '0' if !chars.get(*i).is_some_and(|d| d.is_ascii_digit()) => Ok(VClassAtom::Char(0)),
+        'x' => match chars.get(*i..*i + 2).and_then(v_class_hex_value) {
+            Some(v) => {
+                *i += 2;
+                Ok(VClassAtom::Char(v))
+            }
+            None => err("Invalid escape"),
+        },
+        'u' => {
+            if chars.get(*i) == Some(&'{') {
+                let hex_start = *i + 1;
+                let mut end = hex_start;
+                while end < len && chars[end] != '}' {
+                    end += 1;
+                }
+                match (end < len)
+                    .then(|| v_class_hex_value(&chars[hex_start..end]))
+                    .flatten()
+                {
+                    Some(v) if v <= 0x10FFFF => {
+                        *i = end + 1;
+                        Ok(VClassAtom::Char(v))
+                    }
+                    _ => err("Invalid Unicode escape"),
+                }
+            } else {
+                let Some(lead) = chars.get(*i..*i + 4).and_then(v_class_hex_value) else {
+                    return err("Invalid Unicode escape");
+                };
+                *i += 4;
+                if (0xD800..=0xDBFF).contains(&lead)
+                    && chars.get(*i) == Some(&'\\')
+                    && chars.get(*i + 1) == Some(&'u')
+                    && let Some(trail) = chars.get(*i + 2..*i + 6).and_then(v_class_hex_value)
+                    && (0xDC00..=0xDFFF).contains(&trail)
+                {
+                    *i += 6;
+                    return Ok(VClassAtom::Char(
+                        0x10000 + ((lead - 0xD800) << 10) + (trail - 0xDC00),
+                    ));
+                }
+                Ok(VClassAtom::Char(lead))
+            }
+        }
+        '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+        | '/' | '&' | '-' | '!' | '#' | '%' | ',' | ':' | ';' | '<' | '=' | '>' | '@' | '`'
+        | '~' => Ok(VClassAtom::Char(after as u32)),
+        _ => err("Invalid escape"),
+    }
+}
+
 fn validate_v_flag_class_inner(
     chars: &[char],
     i: &mut usize,
@@ -4636,6 +4797,9 @@ fn validate_v_flag_class_inner(
     };
 
     let mut has_operand = false;
+    let mut operands = 0usize;
+    let mut set_op: Option<char> = None;
+    let mut last_was_range = false;
 
     while *i < len {
         let c = chars[*i];
@@ -4648,18 +4812,16 @@ fn validate_v_flag_class_inner(
         // Check for reserved double punctuators
         if *i + 1 < len {
             let next = chars[*i + 1];
-            if c == '-' && next == '-' {
-                if !has_operand {
+            if (c == '-' || c == '&') && next == c {
+                if !has_operand || last_was_range {
                     return err("Invalid set operation");
                 }
-                *i += 2;
-                has_operand = false;
-                continue;
-            }
-            if c == '&' && next == '&' {
-                if !has_operand {
-                    return err("Invalid set operation");
+                match set_op {
+                    Some(k) if k != c => return err("Invalid set operation"),
+                    None if operands != 1 => return err("Invalid set operation"),
+                    _ => {}
                 }
+                set_op = Some(c);
                 *i += 2;
                 has_operand = false;
                 continue;
@@ -4672,6 +4834,9 @@ fn validate_v_flag_class_inner(
         if matches!(c, '(' | ')' | '{' | '}' | '/' | '|') {
             return err("Invalid character in character class");
         }
+        if set_op.is_some() && has_operand {
+            return err("Invalid set operation");
+        }
         if c == '[' {
             *i += 1;
             let nested_negated = if *i < len && chars[*i] == '^' {
@@ -4682,96 +4847,38 @@ fn validate_v_flag_class_inner(
             };
             validate_v_flag_class_inner(chars, i, source, nested_negated, depth + 1)?;
             has_operand = true;
+            operands += 1;
+            last_was_range = false;
             continue;
         }
         if c == '-' {
-            // In v-flag mode, a single `-` is only valid as a range separator (e.g. a-z).
-            // It must appear between two class atoms (has_operand) and be followed by a valid char.
-            if has_operand && *i + 1 < len && chars[*i + 1] != ']' && chars[*i + 1] != '-' {
-                *i += 1;
-                // The next character is the range end - it will be consumed in the next iteration
-                continue;
-            }
             return err("Invalid character in character class");
         }
 
-        if c == '\\' {
-            if *i + 1 >= len {
-                return err("Invalid escape at end of pattern");
-            }
-            let after = chars[*i + 1];
-            *i += 2;
-            if after == 'u' {
-                if *i < len && chars[*i] == '{' {
-                    *i += 1;
-                    while *i < len && chars[*i] != '}' {
-                        *i += 1;
+        last_was_range = false;
+        match parse_v_class_set_character(chars, i, source, negated)? {
+            VClassAtom::Char(start) => {
+                if *i + 1 < len && chars[*i] == '-' && chars[*i + 1] != '-' {
+                    if set_op.is_some() {
+                        return err("Invalid set operation");
                     }
-                    if *i < len {
-                        *i += 1;
-                    }
-                } else {
-                    let mut count = 0;
-                    while count < 4 && *i < len && chars[*i].is_ascii_hexdigit() {
-                        *i += 1;
-                        count += 1;
-                    }
-                }
-            } else if after == 'x' {
-                let mut count = 0;
-                while count < 2 && *i < len && chars[*i].is_ascii_hexdigit() {
+                    last_was_range = true;
                     *i += 1;
-                    count += 1;
-                }
-            } else if (after == 'p' || after == 'P') && *i < len && chars[*i] == '{' {
-                let prop_start = *i + 1;
-                *i += 1;
-                while *i < len && chars[*i] != '}' {
-                    *i += 1;
-                }
-                if *i < len {
-                    let prop_content: String = chars[prop_start..*i].iter().collect();
-                    *i += 1;
-                    let prop_name = if let Some(eq_pos) = prop_content.find('=') {
-                        &prop_content[eq_pos + 1..]
-                    } else {
-                        &prop_content
-                    };
-                    let is_string_prop =
-                        crate::emoji_strings::lookup_string_property(prop_name).is_some();
-                    if is_string_prop && negated && after == 'p' {
-                        return err("Invalid property name");
-                    }
-                }
-            } else if after == 'q' && *i < len && chars[*i] == '{' {
-                *i += 1;
-                while *i < len && chars[*i] != '}' {
-                    if chars[*i] == '\\' {
-                        // An escape: `\u{...}` holds braces of its own.
-                        *i += 1;
-                        if chars.get(*i) == Some(&'u') && chars.get(*i + 1) == Some(&'{') {
-                            while *i < len && chars[*i] != '}' {
-                                *i += 1;
-                            }
+                    let end = match parse_v_class_set_character(chars, i, source, negated)? {
+                        VClassAtom::Char(end) => end,
+                        VClassAtom::Set => {
+                            return err("Invalid character class");
                         }
+                    };
+                    if start > end {
+                        return err("Range out of order in character class");
                     }
-                    *i += 1;
                 }
-                if *i < len {
-                    *i += 1;
-                }
-            } else if after == 'c' && *i < len && chars[*i].is_ascii_alphabetic() {
-                *i += 1;
             }
-            has_operand = true;
-            continue;
+            VClassAtom::Set => {}
         }
-
-        if c == '^' && *i + 1 < len && chars[*i + 1] == '^' {
-            return err("Invalid character in character class");
-        }
-        *i += 1;
         has_operand = true;
+        operands += 1;
     }
 
     err("Unterminated character class")
