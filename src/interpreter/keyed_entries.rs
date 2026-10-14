@@ -23,7 +23,7 @@
 //!   from the slots when it grows or the slots are compacted.
 
 use crate::interpreter::helpers::same_value_zero;
-use crate::interpreter::types::CARD_ELEMENTS;
+use crate::interpreter::types::{CARD_ELEMENTS, fill_card_bits, mark_card_bit};
 use crate::types::{JsValue, ValueKind};
 use std::hash::{BuildHasher, RandomState};
 use std::sync::OnceLock;
@@ -148,8 +148,7 @@ pub(crate) struct KeyedEntries<T> {
 }
 
 impl<T: Clone> Clone for KeyedEntries<T> {
-    /// A copy is a new object that no collection has scanned, so it starts
-    /// with every card dirty rather than inheriting the original's bitmap.
+    // A copy is a new object no collection has scanned: every card starts dirty.
     fn clone(&self) -> Self {
         Self {
             slots: self.slots.clone(),
@@ -352,12 +351,10 @@ impl<T> KeyedEntries<T> {
         self.table = table;
     }
 
-    /// Physical slots, live or empty: the range the card bitmap indexes.
     pub(crate) fn slot_count(&self) -> usize {
         self.slots.len()
     }
 
-    /// The card bitmap, or `None` while every card is dirty.
     pub(crate) fn dirty_card_bits(&self) -> Option<&[u64]> {
         self.dirty_cards.as_deref().map(Vec::as_slice)
     }
@@ -372,13 +369,8 @@ impl<T> KeyedEntries<T> {
     /// Called after a scan of every slot: only `cards` still hold a young
     /// reference.
     pub(crate) fn set_dirty_cards(&mut self, cards: &[usize]) {
-        let words = self.slots.len().div_ceil(CARD_ELEMENTS).div_ceil(64);
         let bits = self.dirty_cards.get_or_insert_with(Box::default);
-        bits.clear();
-        bits.resize(words, 0);
-        for &card in cards {
-            bits[card / 64] |= 1 << (card % 64);
-        }
+        fill_card_bits(bits, self.slots.len(), cards);
     }
 
     pub(crate) fn mark_all_cards_dirty(&mut self) {
@@ -391,17 +383,11 @@ impl<T> KeyedEntries<T> {
         self.dirty_cards = (self.slots.len() > CARD_ELEMENTS).then(Box::default);
     }
 
-    /// A no-op while every card is already dirty.
     fn mark_card(&mut self, slot: usize) {
         let Some(bits) = self.dirty_cards.as_deref_mut() else {
             return;
         };
-        let card = slot / CARD_ELEMENTS;
-        let word = card / 64;
-        if word >= bits.len() {
-            bits.resize(word + 1, 0);
-        }
-        bits[word] |= 1 << (card % 64);
+        mark_card_bit(bits, slot);
     }
 }
 

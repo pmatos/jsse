@@ -289,12 +289,8 @@ impl RootedSlots {
     }
 }
 
-fn object_ids(values: &[JsValue]) -> impl Iterator<Item = u64> + '_ {
-    values.iter().filter_map(JsValue::as_object_id)
-}
-
-fn object_ids_of<'a>(values: impl Iterator<Item = &'a JsValue>) -> impl Iterator<Item = u64> {
-    values.filter_map(JsValue::as_object_id)
+fn object_ids<'a>(values: impl IntoIterator<Item = &'a JsValue>) -> impl Iterator<Item = u64> {
+    values.into_iter().filter_map(JsValue::as_object_id)
 }
 
 /// The nursery as a bitmap indexed by object id, filled at the start of each
@@ -771,7 +767,7 @@ impl Interpreter {
     /// (for storage too small to track by card), plus whether the storage is
     /// large enough to track by card, in which case `retained_cards` lists
     /// the cards that must stay dirty.
-    fn scan_remembered_elements(
+    fn scan_remembered_bulk(
         &self,
         obj: &JsObjectData,
         young: &YoungIds,
@@ -810,7 +806,7 @@ impl Interpreter {
                 retained_cards,
                 |start, end| {
                     self.enqueue_young(
-                        object_ids_of(entries.live_in_slots(start, end)),
+                        object_ids(entries.live_in_slots(start, end)),
                         worklist,
                         young,
                     )
@@ -925,7 +921,7 @@ impl Interpreter {
             }
             retained_cards.clear();
             let (elements_young, card_mode) =
-                self.scan_remembered_elements(&obj, &young, &mut worklist, &mut retained_cards);
+                self.scan_remembered_bulk(&obj, &young, &mut worklist, &mut retained_cards);
             drop(obj);
             retain |= self.enqueue_young(children.drain(..), &mut worklist, &young);
             if retain {
@@ -2440,11 +2436,7 @@ mod tests {
         let handle = interp.objects.get_cell_expect(array);
         let obj = handle.borrow_untracked();
         let (_, bits) = obj.array_elements_and_cards().unwrap();
-        bits.map(|bits| {
-            (0..bits.len() * 64)
-                .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
-                .collect()
-        })
+        set_card_list(bits)
     }
 
     #[test]
@@ -2614,29 +2606,26 @@ mod tests {
         assert_eq!(interp.objects.remembered_len(), 1);
     }
 
-    fn map_cards(interp: &Interpreter, id: u64) -> Option<Vec<usize>> {
-        let handle = interp.objects.get_cell_expect(id);
-        let obj = handle.borrow_untracked();
-        let bits = obj.map_data().unwrap().dirty_card_bits();
+    fn set_card_list(bits: Option<&[u64]>) -> Option<Vec<usize>> {
         bits.map(|bits| {
             (0..bits.len() * 64)
                 .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
                 .collect()
         })
+    }
+
+    fn map_cards(interp: &Interpreter, id: u64) -> Option<Vec<usize>> {
+        let handle = interp.objects.get_cell_expect(id);
+        let obj = handle.borrow_untracked();
+        set_card_list(obj.map_data().unwrap().dirty_card_bits())
     }
 
     fn set_cards(interp: &Interpreter, id: u64) -> Option<Vec<usize>> {
         let handle = interp.objects.get_cell_expect(id);
         let obj = handle.borrow_untracked();
-        let bits = obj.set_data().unwrap().dirty_card_bits();
-        bits.map(|bits| {
-            (0..bits.len() * 64)
-                .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
-                .collect()
-        })
+        set_card_list(obj.set_data().unwrap().dirty_card_bits())
     }
 
-    /// What `Map.prototype.set` does.
     fn map_set(interp: &Interpreter, id: u64, key: JsValue, value: JsValue) {
         let handle = interp.objects.get_cell_expect(id);
         let young = interp.gc_write_barrier_entry(&handle, &[&key, &value]);
@@ -2647,7 +2636,6 @@ mod tests {
             .upsert_marking((key, value), |old, new| old.1 = new.1, young);
     }
 
-    /// What `Set.prototype.add` does.
     fn set_add(interp: &Interpreter, id: u64, value: JsValue) {
         let handle = interp.objects.get_cell_expect(id);
         let young = interp.gc_write_barrier_entry(&handle, &[&value]);

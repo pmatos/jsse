@@ -2417,6 +2417,26 @@ impl Clone for ArrayData {
 /// cards so that unit tests and stress runs cross card boundaries constantly.
 pub(crate) const CARD_ELEMENTS: usize = if cfg!(debug_assertions) { 4 } else { 512 };
 
+/// Set the bit of the card holding `index` in a dirty-card bitmap.
+#[inline]
+pub(crate) fn mark_card_bit(bits: &mut Vec<u64>, index: usize) {
+    let card = index / CARD_ELEMENTS;
+    let word = card / 64;
+    if word >= bits.len() {
+        bits.resize(word + 1, 0);
+    }
+    bits[word] |= 1 << (card % 64);
+}
+
+/// Fill `bits` with exactly the listed `cards`, sized for `len` elements.
+pub(crate) fn fill_card_bits(bits: &mut Vec<u64>, len: usize, cards: &[usize]) {
+    bits.clear();
+    bits.resize(len.div_ceil(CARD_ELEMENTS).div_ceil(64), 0);
+    for &card in cards {
+        bits[card / 64] |= 1 << (card % 64);
+    }
+}
+
 impl ArrayData {
     #[cfg(test)]
     pub(crate) fn new(elements: Vec<JsValue>) -> Self {
@@ -2741,12 +2761,7 @@ impl JsObjectData {
         else {
             return;
         };
-        let card = index / CARD_ELEMENTS;
-        let word = card / 64;
-        if word >= bits.len() {
-            bits.resize(word + 1, 0);
-        }
-        bits[word] |= 1 << (card % 64);
+        mark_card_bit(bits, index);
     }
 
     /// Keeps the card bitmap: the caller ran `gc_write_barrier_element`.
@@ -2799,13 +2814,8 @@ impl JsObjectData {
         }
         match &mut self.kind {
             ObjectKind::Array(data) => {
-                let words = data.elements.len().div_ceil(CARD_ELEMENTS).div_ceil(64);
                 let bits = data.dirty_cards.get_or_insert_with(Box::default);
-                bits.clear();
-                bits.resize(words, 0);
-                for &card in cards {
-                    bits[card / 64] |= 1 << (card % 64);
-                }
+                fill_card_bits(bits, data.elements.len(), cards);
             }
             ObjectKind::Map(entries) => entries.set_dirty_cards(cards),
             ObjectKind::Set(entries) => entries.set_dirty_cards(cards),
