@@ -72,6 +72,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 ## Building
 - `cargo build --release` — always build in release mode for test262 runs (debug is too slow)
 - The project uses Rust nightly features (`let_chains`, etc.)
+- The release profile is fat LTO + `codegen-units = 1` (#935: +6.4% JetStream 3 score geomean, -5.9% micro-suite wall time). A release build is therefore ~2.5-3x slower than before. For quick iteration that does not need benchmark-grade speed: `CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release` (use its own `--target-dir` if you also need the shipped binary). Never compare timings across the two configurations.
+- `release-nolto` (release speed, no LTO) is the profile for building things that are only tested: `cargo nextest run --cargo-profile release-nolto`, `cargo test --profile release-nolto`. `cargo test --release` would relink every test binary with fat LTO. `release-checked` inherits it.
 
 ## Conventions
  - PR titles: [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).

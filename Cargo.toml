@@ -40,6 +40,24 @@ foldhash = "0.2"
 smallvec = "1"
 getrandom = "0.4"
 
+# Shipped build: fat LTO and a single codegen unit measured +6.4% JetStream 3
+# score geomean (44 of 48 benchmarks faster, none worse than -3.6%) and -5.9%
+# micro-suite wall time (geomean) on buildbox3, at roughly 2.5-3x crate build
+# time (issue #935). For quick local iteration, where full-crate LTO is slow:
+#   CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+# Release speed without the full-crate LTO relink. Used where a binary is built
+# only to be tested, since `cargo test --release` links the lib, the bin and
+# every integration test against the release profile: CI unit tests,
+# `cargo test --profile release-nolto`, and the mutation-testing oracle.
+[profile.release-nolto]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 # Release-speed build with debug assertions on, so test262 runs execute the
 # GC root-stack discipline checks (issue #331). Build with
 # `cargo build --profile release-checked`; the binary lands in
@@ -48,5 +66,5 @@ getrandom = "0.4"
 # do not run the recursion-limit custom tests (tests/recursion-limit-*.js)
 # against it.
 [profile.release-checked]
-inherits = "release"
+inherits = "release-nolto"
 debug-assertions = true

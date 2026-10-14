@@ -8,7 +8,7 @@
 #   ./scripts/run-mutants.sh --list                   # enumerate, don't run
 #
 # All arguments are forwarded to `cargo mutants`. The oracle is `cargo test
-# --release`, which includes `tests/test262_smoke_oracle.rs` (gated on
+# --profile release-nolto`, which includes `tests/test262_smoke_oracle.rs` (gated on
 # JSSE_MUTANTS_ORACLE — set automatically here).
 #
 # Exclusions and per-mutant timeout floor live in `.cargo/mutants.toml`.
@@ -41,8 +41,9 @@ cd "$PROJECT_DIR"
 export JSSE_MUTANTS_ORACLE=1
 
 # If the user passed their own `--` separator, trust the rest of their args.
-# Otherwise append `-- --release` so cargo test runs with the release profile
-# (debug builds of the JS engine are too slow for the test262 oracle).
+# Otherwise append `-- --profile release-nolto` so cargo test runs at release
+# speed without the fat-LTO relink of every test binary (debug builds of the JS
+# engine are too slow for the test262 oracle).
 has_separator=false
 for arg in "$@"; do
     if [[ "$arg" == "--" ]]; then
@@ -54,5 +55,5 @@ done
 if $has_separator; then
     exec cargo mutants --in-place --baseline=skip --timeout 600 "$@"
 else
-    exec cargo mutants --in-place --baseline=skip --timeout 600 "$@" -- --release
+    exec cargo mutants --in-place --baseline=skip --timeout 600 "$@" -- --profile release-nolto
 fi
