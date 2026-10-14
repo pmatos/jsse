@@ -1711,6 +1711,7 @@ pub(super) fn match_with_lookbehind_no_backtrack(
     lookbehinds: &[LookbehindInfo],
     remaining_source: &str,
     flags_str: &str,
+    base: u32,
     text: &str,
     start_pos: usize,
     total_groups: usize,
@@ -1812,7 +1813,7 @@ pub(super) fn match_with_lookbehind_no_backtrack(
             }
 
             // Translate and compile substituted pattern anchored at this position
-            let tr = match super::regexp::translate_js_pattern_ex(&subst, flags_str) {
+            let tr = match super::regexp::translate_js_pattern_ex(&subst, flags_str, base) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
