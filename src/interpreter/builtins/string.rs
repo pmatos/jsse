@@ -909,17 +909,11 @@ impl Interpreter {
                             return interp.call_function(&method, &regexp, &[this_str]);
                         }
                     }
-                    let s = match to_str(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let source = if (regexp).is_undefined() {
-                        String::new()
+                        JsString::from_str("")
                     } else {
-                        match to_str(interp, &regexp) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        }
+                        propagate!(interp.to_js_string(&regexp))
                     };
                     // Create a RegExp and call @@search
                     let rx = interp.create_regexp(&source, "");
@@ -928,13 +922,13 @@ impl Interpreter {
                     {
                         let method = interp.get_property_on_id(regexp_id, &key);
                         if !(method).is_nullish() {
-                            let this_str = JsValue::string(JsString::from_str(&s));
+                            let this_str = JsValue::string(s.clone());
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
                     // Fallback
-                    if let Ok(re) = regex::Regex::new(&source)
-                        && let Some(m) = re.find(&s)
+                    if let Ok(re) = regex::Regex::new(&source.to_rust_string())
+                        && let Some(m) = re.find(&s.to_rust_string())
                     {
                         return Completion::Normal(JsValue::number(m.start() as f64));
                     }
@@ -964,17 +958,11 @@ impl Interpreter {
                             return interp.call_function(&method, &regexp, &[this_str]);
                         }
                     }
-                    let s = match to_str(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     let source = if args.is_empty() || (regexp).is_undefined() {
-                        String::new()
+                        JsString::from_str("")
                     } else {
-                        match to_str(interp, &regexp) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        }
+                        propagate!(interp.to_js_string(&regexp))
                     };
                     // Create a RegExp and call @@match
                     let rx = interp.create_regexp(&source, "");
@@ -983,12 +971,13 @@ impl Interpreter {
                     {
                         let method = interp.get_property_on_id(regexp_id, &key);
                         if !(method).is_nullish() {
-                            let this_str = JsValue::string(JsString::from_str(&s));
+                            let this_str = JsValue::string(s.clone());
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
                     // Fallback
-                    if let Ok(re) = regex::Regex::new(&source) {
+                    let s = s.to_rust_string();
+                    if let Ok(re) = regex::Regex::new(&source.to_rust_string()) {
                         if let Some(m) = re.find(&s) {
                             let matched = JsValue::string(JsString::from_str(m.as_str()));
                             let result = interp.create_array(vec![matched]);
@@ -1071,19 +1060,13 @@ impl Interpreter {
                         }
                     }
                     // Step 3: Let S be ? ToString(O)
-                    let s = match to_str(interp, this_val) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let s = propagate!(this_js_string(interp, this_val));
                     // Step 4: Let R be ? ToString(regexp)
                     // Per spec: RegExpCreate(regexp, "g") — undefined -> empty pattern
                     let source = if (regexp).is_undefined() {
-                        String::new()
+                        JsString::from_str("")
                     } else {
-                        match to_str(interp, &regexp) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        }
+                        propagate!(interp.to_js_string(&regexp))
                     };
                     let rx = interp.create_regexp(&source, "g");
                     if let Some(regexp_id) = rx.as_object_id()
@@ -1095,7 +1078,7 @@ impl Interpreter {
                             other => return other,
                         };
                         if !(method).is_nullish() {
-                            let this_str = JsValue::string(JsString::from_str(&s));
+                            let this_str = JsValue::string(s.clone());
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
@@ -1133,19 +1116,19 @@ impl Interpreter {
                 "localeCompare",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    // The collator compares decoded text, so lone surrogates
-                    // still reach it as U+FFFD.
-                    let s = propagate!(this_js_string(interp, this_val)).to_rust_string();
+                    let s = propagate!(this_js_string(interp, this_val));
                     let that = match args.first() {
-                        Some(v) => match to_str(interp, v) {
-                            Ok(s) => s,
-                            Err(c) => return c,
-                        },
-                        None => "undefined".to_string(),
+                        Some(v) => propagate!(interp.to_js_string(v)),
+                        None => JsString::from_str("undefined"),
                     };
                     let locales = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let options = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
-                    match interp.intl_locale_compare(&s, &that, &locales, &options) {
+                    match interp.intl_locale_compare(
+                        s.as_units(),
+                        that.as_units(),
+                        &locales,
+                        &options,
+                    ) {
                         Ok(result) => Completion::Normal(JsValue::number(result)),
                         Err(e) => Completion::Throw(e),
                     }

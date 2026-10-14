@@ -13,7 +13,9 @@ pub(crate) fn next_template_id() -> u64 {
 }
 
 /// A function's source text: a span of the enclosing source. Offsets are `u32`
-/// so the AST nodes that carry one stay within their cache-line budget.
+/// so the AST nodes that carry one stay within their cache-line budget; the top
+/// bit of `start` marks text that carries lone surrogates as private-use code
+/// points (see `with_pua_encoded`).
 #[derive(Clone, Debug)]
 pub(crate) struct SourceText {
     source: Rc<str>,
@@ -21,16 +23,31 @@ pub(crate) struct SourceText {
     end: u32,
 }
 
+const PUA_ENCODED: u32 = 1 << 31;
+
 impl SourceText {
     pub(crate) fn new(source: Rc<str>, start: usize, end: usize) -> Self {
         match (u32::try_from(start), u32::try_from(end)) {
-            (Ok(start), Ok(end)) => Self { source, start, end },
+            (Ok(start), Ok(end)) if start < PUA_ENCODED => Self { source, start, end },
             _ => Self::from(source[start..end].to_string()),
         }
     }
 
+    /// Marks text whose lone surrogates were mapped to private-use code points
+    /// (dynamic `Function` source), so `toString` maps them back.
+    pub(crate) fn with_pua_encoded(mut self, encoded: bool) -> Self {
+        if encoded {
+            self.start |= PUA_ENCODED;
+        }
+        self
+    }
+
+    pub(crate) fn is_pua_encoded(&self) -> bool {
+        self.start & PUA_ENCODED != 0
+    }
+
     pub(crate) fn as_str(&self) -> &str {
-        &self.source[self.start as usize..self.end as usize]
+        &self.source[(self.start & !PUA_ENCODED) as usize..self.end as usize]
     }
 }
 
@@ -1404,6 +1421,9 @@ pub(crate) struct TemplateLiteral {
     pub id: u64,
     pub quasis: Vec<Option<Vec<u16>>>,
     pub raw_quasis: Vec<String>,
+    /// `raw_quasis` carry lone surrogates as private-use stand-ins (source of
+    /// a dynamic function that had lone surrogates).
+    pub raw_stand_ins: bool,
     pub expressions: Vec<Expression>,
 }
 

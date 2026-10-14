@@ -66,7 +66,7 @@ fn is_surrogate(cp: u32) -> bool {
     (SURROGATE_START..=SURROGATE_END).contains(&cp)
 }
 
-fn surrogate_to_pua(cp: u32) -> char {
+pub(crate) fn surrogate_to_pua(cp: u32) -> char {
     char::from_u32(SURROGATE_PUA_BASE + (cp - SURROGATE_START)).unwrap()
 }
 

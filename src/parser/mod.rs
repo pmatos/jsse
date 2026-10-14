@@ -166,6 +166,7 @@ pub(crate) struct Parser<'a> {
     /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
     /// a catchable parse error instead of overflowing the native stack.
     parse_depth: u32,
+    lone_surrogate_stand_ins: bool,
 }
 
 /// Maximum parser recursion depth before a catchable parse error is raised
@@ -197,6 +198,15 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn new_for_eval(source: &'a str) -> Result<Self, ParseError> {
         Self::new_with_lexer(source, Lexer::new_for_eval(source))
+    }
+
+    /// Parser for a dynamic function's source in which lone surrogates were
+    /// mapped to private-use code points: string and template values, template
+    /// raw strings and function source text all restore them.
+    pub(crate) fn new_for_dynamic_function(source: &'a str) -> Result<Self, ParseError> {
+        let mut parser = Self::new_for_eval(source)?;
+        parser.lone_surrogate_stand_ins = true;
+        Ok(parser)
     }
 
     fn new_with_lexer(source: &'a str, mut lexer: Lexer<'a>) -> Result<Self, ParseError> {
@@ -245,6 +255,7 @@ impl<'a> Parser<'a> {
             last_expr_parenthesized: false,
             last_obj_had_proto_dup: false,
             parse_depth: 0,
+            lone_surrogate_stand_ins: false,
         })
     }
 
@@ -325,13 +336,15 @@ impl<'a> Parser<'a> {
     fn source_since(&self, start: usize) -> Option<SourceText> {
         let end = self.prev_token_end;
         if end <= start {
-            return Some(SourceText::new(
-                self.source_text_source.clone(),
-                start,
-                start,
-            ));
+            return Some(
+                SourceText::new(self.source_text_source.clone(), start, start)
+                    .with_pua_encoded(self.lone_surrogate_stand_ins),
+            );
         }
-        Some(SourceText::new(self.source_text_source.clone(), start, end))
+        Some(
+            SourceText::new(self.source_text_source.clone(), start, end)
+                .with_pua_encoded(self.lone_surrogate_stand_ins),
+        )
     }
 
     pub(crate) fn set_strict(&mut self, strict: bool) {

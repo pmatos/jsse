@@ -78,7 +78,13 @@ impl Interpreter {
         let raw_vals: Vec<JsValue> = tmpl
             .raw_quasis
             .iter()
-            .map(|s| JsValue::string(JsString::from_str(s)))
+            .map(|s| {
+                JsValue::string(if tmpl.raw_stand_ins {
+                    crate::interpreter::builtins::regexp::regex_output_to_js_string(s)
+                } else {
+                    JsString::from_str(s)
+                })
+            })
             .collect();
 
         let raw_arr = self.create_frozen_template_array(raw_vals);
@@ -208,19 +214,20 @@ impl Interpreter {
         Ok(self.symbol_key_to_jsvalue(&key))
     }
 
-    pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
+    pub(crate) fn create_regexp(&mut self, pattern: &JsString, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
         obj.prototype_id = self
             .realm()
             .regexp_prototype
             .or(self.realm().object_prototype);
         obj.class_name = "RegExp";
-        let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
+        let source = if pattern.is_empty() {
+            JsString::from_str("(?:)")
+        } else {
+            pattern.clone()
+        };
         obj.kind = crate::interpreter::types::ObjectKind::RegExp(
-            crate::interpreter::types::RegExpData::new(
-                JsString::from_str(source_str),
-                JsString::from_str(flags),
-            ),
+            crate::interpreter::types::RegExpData::new(source, JsString::from_str(flags)),
         );
         obj.insert_property(
             "lastIndex".to_string(),

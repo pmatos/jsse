@@ -81,15 +81,17 @@ pub(crate) fn do_compare(
     numeric: bool,
     case_first: &str,
     ignore_punctuation: bool,
-    x: &str,
-    y: &str,
+    x: &[u16],
+    y: &[u16],
 ) -> f64 {
     let base = base_locale(locale_str);
     let locale: IcuLocale = base.parse().unwrap_or_else(|_| "en".parse().unwrap());
 
     let normalizer = ComposingNormalizer::new_nfc();
-    let x_nfc = normalizer.normalize(x);
-    let y_nfc = normalizer.normalize(y);
+    let x_text = String::from_utf16_lossy(x);
+    let y_text = String::from_utf16_lossy(y);
+    let x_nfc = normalizer.normalize(&x_text);
+    let y_nfc = normalizer.normalize(&y_text);
 
     let mut opts = CollatorOptions::default();
     match sensitivity {
@@ -162,10 +164,33 @@ pub(crate) fn do_compare(
         Collator::try_new(fallback_prefs, opts).unwrap()
     });
 
-    match collator.compare(&x_nfc, &y_nfc) {
+    let ordering = match collator.compare(&x_nfc, &y_nfc) {
+        std::cmp::Ordering::Equal => compare_lone_surrogates(x, y),
+        other => other,
+    };
+    match ordering {
         std::cmp::Ordering::Less => -1.0,
         std::cmp::Ordering::Equal => 0.0,
         std::cmp::Ordering::Greater => 1.0,
+    }
+}
+
+// The collator sees every lone surrogate as U+FFFD, which would make distinct
+// Strings compare equal. Breaking those ties by the lone surrogates themselves
+// keeps the result a total order that only equates strings the collator
+// equates at the requested strength. A lone surrogate orders before the
+// U+FFFD it collates as.
+fn compare_lone_surrogates(x: &[u16], y: &[u16]) -> std::cmp::Ordering {
+    let lone = |units: &[u16]| -> Vec<u16> {
+        char::decode_utf16(units.iter().copied())
+            .filter_map(|r| r.err().map(|e| e.unpaired_surrogate()))
+            .collect()
+    };
+    let (kx, ky) = (lone(x), lone(y));
+    match (kx.is_empty(), ky.is_empty()) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => kx.cmp(&ky),
     }
 }
 
@@ -303,11 +328,11 @@ impl Interpreter {
                         move |interp2, _this2, args2| {
                             let x_val = args2.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             let y_val = args2.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                            let x_str = match interp2.to_string_lossy(&x_val) {
+                            let x_str = match interp2.to_js_string(&x_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let y_str = match interp2.to_string_lossy(&y_val) {
+                            let y_str = match interp2.to_js_string(&y_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -320,8 +345,8 @@ impl Interpreter {
                                 numeric,
                                 &case_first,
                                 ignore_punctuation,
-                                &x_str,
-                                &y_str,
+                                x_str.as_units(),
+                                y_str.as_units(),
                             );
                             Completion::Normal(JsValue::number(result))
                         },
@@ -717,8 +742,8 @@ impl Interpreter {
 
     pub(crate) fn intl_locale_compare(
         &mut self,
-        x: &str,
-        y: &str,
+        x: &[u16],
+        y: &[u16],
         locales: &JsValue,
         options: &JsValue,
     ) -> Result<f64, JsValue> {

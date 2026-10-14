@@ -2386,6 +2386,7 @@ impl<'a> Parser<'a> {
                     id: crate::ast::next_template_id(),
                     quasis: vec![cooked],
                     raw_quasis: vec![raw],
+                    raw_stand_ins: self.lone_surrogate_stand_ins,
                     expressions: Vec::new(),
                 })
             }
@@ -2433,6 +2434,7 @@ impl<'a> Parser<'a> {
                     id: crate::ast::next_template_id(),
                     quasis,
                     raw_quasis,
+                    raw_stand_ins: self.lone_surrogate_stand_ins,
                     expressions,
                 })
             }

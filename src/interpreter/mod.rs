@@ -21,7 +21,7 @@ pub(crate) use types::*;
 mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
-pub(crate) use builtins::regexp::{pua_to_surrogate, validate_js_pattern};
+pub(crate) use builtins::regexp::{pua_to_surrogate, surrogate_to_pua, validate_js_pattern};
 mod bytecode;
 mod dispose;
 pub(crate) use dispose::{
@@ -3570,7 +3570,8 @@ impl Interpreter {
         let value = match import_type {
             ImportModuleType::Json => {
                 let source = Self::read_module_text(path)?;
-                match crate::interpreter::helpers::json_parse_value(self, &source) {
+                let text = crate::interpreter::helpers::JsonText::from_str(&source);
+                match crate::interpreter::helpers::json_parse_value(self, &text) {
                     Completion::Normal(value) => value,
                     Completion::Throw(error) => return Err(error),
                     _ => {

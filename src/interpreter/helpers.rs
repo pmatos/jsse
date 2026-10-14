@@ -451,53 +451,50 @@ pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::Objec
 
 use std::collections::HashMap;
 
-fn json_quote_units(units: &[u16]) -> String {
-    let mut result = String::with_capacity(units.len() + 2);
-    result.push('"');
+fn push_ascii(out: &mut Vec<u16>, text: &str) {
+    out.extend(text.bytes().map(u16::from));
+}
+
+fn push_unicode_escape(out: &mut Vec<u16>, unit: u16) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    push_ascii(out, "\\u");
+    for shift in [12, 8, 4, 0] {
+        out.push(u16::from(HEX[usize::from((unit >> shift) & 0xF)]));
+    }
+}
+
+// §25.5.2.3 QuoteJSONString over code units: a paired surrogate is copied, a
+// lone one is escaped so the output is well-formed.
+fn json_quote_units_into(result: &mut Vec<u16>, units: &[u16]) {
+    result.reserve(units.len() + 2);
+    result.push(0x22);
     let mut i = 0;
     while i < units.len() {
         let cu = units[i];
         match cu {
-            0x0022 => result.push_str("\\\""),
-            0x005C => result.push_str("\\\\"),
-            0x0008 => result.push_str("\\b"),
-            0x000C => result.push_str("\\f"),
-            0x000A => result.push_str("\\n"),
-            0x000D => result.push_str("\\r"),
-            0x0009 => result.push_str("\\t"),
-            c if c < 0x0020 => {
-                result.push_str(&format!("\\u{:04x}", c));
-            }
+            0x0022 => push_ascii(result, "\\\""),
+            0x005C => push_ascii(result, "\\\\"),
+            0x0008 => push_ascii(result, "\\b"),
+            0x000C => push_ascii(result, "\\f"),
+            0x000A => push_ascii(result, "\\n"),
+            0x000D => push_ascii(result, "\\r"),
+            0x0009 => push_ascii(result, "\\t"),
+            c if c < 0x0020 => push_unicode_escape(result, c),
             c if (0xD800..=0xDBFF).contains(&c) => {
                 if i + 1 < units.len() && (0xDC00..=0xDFFF).contains(&units[i + 1]) {
-                    let hi = c as u32;
-                    let lo = units[i + 1] as u32;
-                    let cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
-                    if let Some(ch) = char::from_u32(cp) {
-                        result.push(ch);
-                    }
+                    result.push(c);
+                    result.push(units[i + 1]);
                     i += 1;
                 } else {
-                    result.push_str(&format!("\\u{:04x}", c));
+                    push_unicode_escape(result, c);
                 }
             }
-            c if (0xDC00..=0xDFFF).contains(&c) => {
-                result.push_str(&format!("\\u{:04x}", c));
-            }
-            c => {
-                if let Some(ch) = char::from_u32(c as u32) {
-                    result.push(ch);
-                }
-            }
+            c if (0xDC00..=0xDFFF).contains(&c) => push_unicode_escape(result, c),
+            c => result.push(c),
         }
         i += 1;
     }
-    result.push('"');
-    result
-}
-
-fn json_quote_js_string(s: &JsString) -> String {
-    json_quote_units(s.as_units())
+    result.push(0x22);
 }
 
 // Proxy-aware IsArray (§7.2.2)
@@ -559,8 +556,8 @@ pub(crate) fn json_stringify_full(
     interp: &mut Interpreter,
     val: &JsValue,
     replacer: &Option<JsValue>,
-    space: &str,
-) -> Result<Option<String>, JsValue> {
+    space: &[u16],
+) -> Result<Option<Vec<u16>>, JsValue> {
     let mut stack = Vec::new();
     let mut property_list: Option<Vec<JsPropertyKey>> = None;
     let mut replacer_fn: Option<JsValue> = None;
@@ -626,7 +623,8 @@ pub(crate) fn json_stringify_full(
     let holder_id = wrapper_id;
 
     let root_key = JsPropertyKey::from_str("");
-    json_stringify_internal(
+    let mut out = Vec::new();
+    let produced = json_stringify_internal(
         interp,
         holder_id,
         &root_key,
@@ -635,8 +633,10 @@ pub(crate) fn json_stringify_full(
         &replacer_fn,
         &property_list,
         space,
-        "",
-    )
+        &[],
+        &mut out,
+    )?;
+    Ok(produced.then_some(out))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -648,9 +648,10 @@ fn json_stringify_internal(
     stack: &mut Vec<u64>,
     replacer_fn: &Option<JsValue>,
     property_list: &Option<Vec<JsPropertyKey>>,
-    gap: &str,
-    indent: &str,
-) -> Result<Option<String>, JsValue> {
+    gap: &[u16],
+    indent: &[u16],
+    out: &mut Vec<u16>,
+) -> Result<bool, JsValue> {
     let mut value = val.clone();
 
     // Step 2: If Type(value) is Object or BigInt, check for toJSON
@@ -736,70 +737,90 @@ fn json_stringify_internal(
     }
 
     match value.kind() {
-        ValueKind::Null => Ok(Some("null".to_string())),
-        ValueKind::Boolean => Ok(Some(value.as_boolean().unwrap().to_string())),
+        ValueKind::Null => push_ascii(out, "null"),
+        ValueKind::Boolean => push_ascii(
+            out,
+            if value.as_boolean().unwrap() {
+                "true"
+            } else {
+                "false"
+            },
+        ),
         ValueKind::Number => {
             let n = value.as_number().unwrap();
             if n.is_nan() || n.is_infinite() {
-                Ok(Some("null".to_string()))
+                push_ascii(out, "null");
             } else {
-                Ok(Some(number_ops::to_string(n)))
+                push_ascii(out, &number_ops::to_string(n));
             }
         }
-        ValueKind::String => Ok(Some(value.with_string(json_quote_units).unwrap())),
+        ValueKind::String => {
+            value.with_string(|units| json_quote_units_into(out, units));
+        }
         ValueKind::BigInt => {
-            Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"))
+            return Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"));
         }
         ValueKind::Object => {
-            if let Some(obj) = interp.get_object_cell(value.as_object_id().unwrap()) {
-                if obj.borrow().is_raw_json
-                    && let Some(raw) = obj.borrow().get_property_value("rawJSON")
-                {
-                    return Ok(Some(to_js_string(&raw)));
-                }
-                if obj.borrow().callable.is_some() {
-                    return Ok(None);
-                }
-                let obj_id = obj.borrow().id.unwrap();
-                if stack.contains(&obj_id) {
-                    return Err(
-                        interp.create_error("TypeError", "Converting circular structure to JSON")
-                    );
-                }
-                stack.push(obj_id);
+            let Some(obj) = interp.get_object_cell(value.as_object_id().unwrap()) else {
+                push_ascii(out, "null");
+                return Ok(true);
+            };
+            if obj.borrow().is_raw_json
+                && let Some(raw) = obj.borrow().get_property_value("rawJSON")
+                && let Some(text) = raw.as_string()
+            {
+                out.extend_from_slice(text.as_units());
+                return Ok(true);
+            }
+            if obj.borrow().callable.is_some() {
+                return Ok(false);
+            }
+            let obj_id = obj.borrow().id.unwrap();
+            if stack.contains(&obj_id) {
+                return Err(
+                    interp.create_error("TypeError", "Converting circular structure to JSON")
+                );
+            }
+            stack.push(obj_id);
 
-                let is_array = is_array_value(interp, obj_id)?;
-                let obj_val = JsValue::object(obj_id);
-                let new_indent = format!("{}{}", indent, gap);
+            let is_array = is_array_value(interp, obj_id)?;
+            let obj_val = JsValue::object(obj_id);
+            let new_indent = [indent, gap].concat();
+            // Each member starts on its own line, indented, when there is a gap.
+            let begin_member = |out: &mut Vec<u16>, first: bool| {
+                if !first {
+                    out.push(0x2C);
+                }
+                if !gap.is_empty() {
+                    out.push(0x0A);
+                    out.extend_from_slice(&new_indent);
+                }
+            };
+            let end_members = |out: &mut Vec<u16>, any: bool| {
+                if any && !gap.is_empty() {
+                    out.push(0x0A);
+                    out.extend_from_slice(indent);
+                }
+            };
 
-                let result = if is_array {
+            let result: Result<(), JsValue> = (|| {
+                if is_array {
                     let len_val = match interp.get_object_property(obj_id, "length", &obj_val) {
                         Completion::Normal(v) => v,
-                        Completion::Throw(e) => {
-                            stack.pop();
-                            return Err(e);
-                        }
+                        Completion::Throw(e) => return Err(e),
                         _ => JsValue::UNDEFINED,
                     };
-                    let len = match interp.to_number_value(&len_val) {
-                        Ok(n) => n as usize,
-                        Err(e) => {
-                            stack.pop();
-                            return Err(e);
-                        }
-                    };
-                    let mut items = Vec::new();
+                    let len = interp.to_number_value(&len_val)? as usize;
+                    out.push(0x5B);
                     for i in 0..len {
                         let ikey = JsPropertyKey::from(i.to_string());
                         let v = match interp.get_object_property(obj_id, &ikey, &obj_val) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                stack.pop();
-                                return Err(e);
-                            }
+                            Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
                         };
-                        match json_stringify_internal(
+                        begin_member(out, i == 0);
+                        let produced = json_stringify_internal(
                             interp,
                             obj_id,
                             &ikey,
@@ -809,47 +830,36 @@ fn json_stringify_internal(
                             property_list,
                             gap,
                             &new_indent,
-                        )? {
-                            Some(s) => items.push(s),
-                            None => items.push("null".to_string()),
+                            out,
+                        )?;
+                        if !produced {
+                            push_ascii(out, "null");
                         }
                     }
-                    if items.is_empty() {
-                        Ok(Some("[]".to_string()))
-                    } else if gap.is_empty() {
-                        Ok(Some(format!("[{}]", items.join(","))))
-                    } else {
-                        let sep = format!(",\n{}", new_indent);
-                        Ok(Some(format!(
-                            "[\n{}{}\n{}]",
-                            new_indent,
-                            items.join(&sep),
-                            indent
-                        )))
-                    }
+                    end_members(out, len > 0);
+                    out.push(0x5D);
                 } else {
                     let keys: Vec<JsPropertyKey> = if let Some(pl) = property_list {
                         pl.clone()
                     } else {
-                        match enumerable_own_keys(interp, obj_id) {
-                            Ok(k) => k,
-                            Err(e) => {
-                                stack.pop();
-                                return Err(e);
-                            }
-                        }
+                        enumerable_own_keys(interp, obj_id)?
                     };
-                    let mut entries = Vec::new();
+                    out.push(0x7B);
+                    let mut any = false;
                     for k in &keys {
                         let v = match interp.get_object_property(obj_id, k, &obj_val) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                stack.pop();
-                                return Err(e);
-                            }
+                            Completion::Throw(e) => return Err(e),
                             _ => JsValue::UNDEFINED,
                         };
-                        if let Some(sv) = json_stringify_internal(
+                        let mark = out.len();
+                        begin_member(out, !any);
+                        json_quote_units_into(out, k.to_js_string().as_units());
+                        out.push(0x3A);
+                        if !gap.is_empty() {
+                            out.push(0x20);
+                        }
+                        let produced = json_stringify_internal(
                             interp,
                             obj_id,
                             k,
@@ -859,37 +869,25 @@ fn json_stringify_internal(
                             property_list,
                             gap,
                             &new_indent,
-                        )? {
-                            let quoted_key = json_quote_js_string(&k.to_js_string());
-                            if gap.is_empty() {
-                                entries.push(format!("{}:{}", quoted_key, sv));
-                            } else {
-                                entries.push(format!("{}: {}", quoted_key, sv));
-                            }
+                            out,
+                        )?;
+                        if produced {
+                            any = true;
+                        } else {
+                            out.truncate(mark);
                         }
                     }
-                    if entries.is_empty() {
-                        Ok(Some("{}".to_string()))
-                    } else if gap.is_empty() {
-                        Ok(Some(format!("{{{}}}", entries.join(","))))
-                    } else {
-                        let sep = format!(",\n{}", new_indent);
-                        Ok(Some(format!(
-                            "{{\n{}{}\n{}}}",
-                            new_indent,
-                            entries.join(&sep),
-                            indent
-                        )))
-                    }
-                };
-                stack.pop();
-                result
-            } else {
-                Ok(Some("null".to_string()))
-            }
+                    end_members(out, any);
+                    out.push(0x7D);
+                }
+                Ok(())
+            })();
+            stack.pop();
+            result?;
         }
-        ValueKind::Undefined | ValueKind::Symbol => Ok(None),
+        ValueKind::Undefined | ValueKind::Symbol => return Ok(false),
     }
+    Ok(true)
 }
 
 pub(crate) fn json_trim(s: &str) -> &str {
@@ -913,22 +911,80 @@ pub(crate) fn json_trim(s: &str) -> &str {
 
 pub(crate) type SourceTextMap = HashMap<(u64, JsPropertyKey), String>;
 
-pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
-    json_parse_value_inner(interp, s, None, s)
+// JSON text as the Rust `&str` the parser works on. When the code units hold
+// a lone surrogate it is written as the private-use code point
+// `pua_to_surrogate` inverts (the engine-wide convention, see
+// `js_string_to_regex_input`) and `stand_ins` tells the unescaper to map it
+// back. A genuine code point from that reserved range is then written as the
+// surrogate-pair escape it unescapes from, so it is never misread. Text with
+// no lone surrogate is passed through untouched.
+pub(crate) struct JsonText {
+    pub(crate) text: String,
+    pub(crate) stand_ins: bool,
+}
+
+impl JsonText {
+    pub(crate) fn from_units(units: &[u16]) -> Self {
+        use std::fmt::Write;
+        if units.iter().all(|&cu| cu < 0x80) {
+            return Self {
+                text: units.iter().map(|&cu| char::from(cu as u8)).collect(),
+                stand_ins: false,
+            };
+        }
+        let stand_ins = char::decode_utf16(units.iter().copied()).any(|d| d.is_err());
+        let mut text = String::with_capacity(units.len());
+        for decoded in char::decode_utf16(units.iter().copied()) {
+            match decoded {
+                Ok(c) if stand_ins && crate::interpreter::pua_to_surrogate(c).is_some() => {
+                    let cp = c as u32 - 0x10000;
+                    let _ = write!(
+                        text,
+                        "\\u{:04x}\\u{:04x}",
+                        0xD800 + (cp >> 10),
+                        0xDC00 + (cp & 0x3FF)
+                    );
+                }
+                Ok(c) => text.push(c),
+                Err(e) => text.push(crate::interpreter::surrogate_to_pua(u32::from(
+                    e.unpaired_surrogate(),
+                ))),
+            }
+        }
+        Self { text, stand_ins }
+    }
+
+    pub(crate) fn from_str(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            stand_ins: false,
+        }
+    }
+}
+
+pub(crate) fn json_parse_value(interp: &mut Interpreter, input: &JsonText) -> Completion {
+    json_parse_value_inner(interp, &input.text, input.stand_ins, None, &input.text)
 }
 
 pub(crate) fn json_parse_value_with_source(
     interp: &mut Interpreter,
-    s: &str,
+    input: &JsonText,
 ) -> (Completion, SourceTextMap) {
     let mut source_map = SourceTextMap::default();
-    let result = json_parse_value_inner(interp, s, Some(&mut source_map), s);
+    let result = json_parse_value_inner(
+        interp,
+        &input.text,
+        input.stand_ins,
+        Some(&mut source_map),
+        &input.text,
+    );
     (result, source_map)
 }
 
 fn json_parse_value_inner(
     interp: &mut Interpreter,
     s: &str,
+    stand_ins: bool,
     mut source_map: Option<&mut SourceTextMap>,
     root_source: &str,
 ) -> Completion {
@@ -948,7 +1004,7 @@ fn json_parse_value_inner(
             let err = interp.create_error("SyntaxError", &msg);
             return Completion::Throw(err);
         }
-        return Completion::Normal(JsValue::string(json_unescape_js_string(inner)));
+        return Completion::Normal(JsValue::string(json_unescape_js_string(inner, stand_ins)));
     }
     if json_is_valid_number(s)
         && let Ok(n) = s.parse::<f64>()
@@ -958,13 +1014,19 @@ fn json_parse_value_inner(
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
         if let Some(token) = json_invalid_comma_token(inner, ']') {
-            return json_unexpected_token_error(interp, token, root_source);
+            return json_unexpected_token_error(interp, token, root_source, stand_ins);
         }
         let items = json_split_items(inner);
         let mut parsed_items: Vec<(JsValue, String)> = Vec::new();
         for item in &items {
             let trimmed_src = json_trim(item).to_string();
-            match json_parse_value_inner(interp, item, source_map.as_deref_mut(), root_source) {
+            match json_parse_value_inner(
+                interp,
+                item,
+                stand_ins,
+                source_map.as_deref_mut(),
+                root_source,
+            ) {
                 Completion::Normal(v) => parsed_items.push((v, trimmed_src)),
                 other => return other,
             }
@@ -985,7 +1047,7 @@ fn json_parse_value_inner(
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
         if let Some(token) = json_invalid_comma_token(inner, '}') {
-            return json_unexpected_token_error(interp, token, root_source);
+            return json_unexpected_token_error(interp, token, root_source, stand_ins);
         }
         let pairs = json_split_items(inner);
         let obj_id = interp.create_object_id();
@@ -1009,13 +1071,19 @@ fn json_parse_value_inner(
                     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                     return Completion::Throw(err);
                 }
-                JsPropertyKey::from_js_string(&json_unescape_js_string(inner))
+                JsPropertyKey::from_js_string(&json_unescape_js_string(inner, stand_ins))
             } else {
                 let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                 return Completion::Throw(err);
             };
             let val_src = json_trim(val_str).to_string();
-            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut(), root_source) {
+            match json_parse_value_inner(
+                interp,
+                val_str,
+                stand_ins,
+                source_map.as_deref_mut(),
+                root_source,
+            ) {
                 Completion::Normal(v) => {
                     if let Some(ref mut smap) = source_map
                         && is_json_primitive(&v)
@@ -1033,15 +1101,32 @@ fn json_parse_value_inner(
         return Completion::Normal(JsValue::object(obj_id));
     }
     if let Some(token) = s.chars().next() {
-        return json_unexpected_token_error(interp, token, root_source);
+        return json_unexpected_token_error(interp, token, root_source, stand_ins);
     }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
     Completion::Throw(err)
 }
 
-fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &str) -> Completion {
+fn json_unexpected_token_error(
+    interp: &mut Interpreter,
+    token: char,
+    source: &str,
+    stand_ins: bool,
+) -> Completion {
     const MAX_SOURCE_CHARS: usize = 20;
     const TRUNCATED_SOURCE_CHARS: usize = 10;
+
+    // A lone surrogate reads as U+FFFD in the message, like any host text.
+    let as_replacement = |c: char| -> char {
+        if stand_ins && crate::interpreter::pua_to_surrogate(c).is_some() {
+            '\u{FFFD}'
+        } else {
+            c
+        }
+    };
+    let token = as_replacement(token);
+    let source: String = source.chars().map(as_replacement).collect();
+    let source = source.as_str();
 
     let (source, ellipsis) = if source.chars().nth(MAX_SOURCE_CHARS).is_some() {
         let prefix_end = source
@@ -1090,7 +1175,7 @@ fn json_validate_string(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn json_unescape_js_string(s: &str) -> JsString {
+fn json_unescape_js_string(s: &str, stand_ins: bool) -> JsString {
     let mut result = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
@@ -1116,6 +1201,8 @@ fn json_unescape_js_string(s: &str) -> JsString {
                 }
                 None => result.push(b'\\' as u16),
             }
+        } else if stand_ins && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch) {
+            result.push(surrogate);
         } else {
             result.extend(ch.encode_utf16(&mut [0; 2]).iter().copied());
         }
@@ -1243,6 +1330,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
     name: &K,
     reviver: &JsValue,
     source_map: &Option<SourceTextMap>,
+    stand_ins: bool,
 ) -> Completion {
     let val = if let Some(holder_id) = holder.as_object_id() {
         match interp.get_object_property(holder_id, name, holder) {
@@ -1271,7 +1359,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
             };
             for i in 0..len {
                 let key = i.to_string();
-                match json_internalize(interp, &val, &key, reviver, source_map) {
+                match json_internalize(interp, &val, &key, reviver, source_map, stand_ins) {
                     Completion::Normal(new_val) => {
                         if let Err(e) = json_internalize_apply(interp, obj_id, &key, new_val) {
                             return Completion::Throw(e);
@@ -1287,7 +1375,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                 Err(e) => return Completion::Throw(e),
             };
             for key in keys {
-                match json_internalize(interp, &val, &key, reviver, source_map) {
+                match json_internalize(interp, &val, &key, reviver, source_map, stand_ins) {
                     Completion::Normal(new_val) => {
                         if let Err(e) = json_internalize_apply(interp, obj_id, &key, new_val) {
                             return Completion::Throw(e);
@@ -1328,7 +1416,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                         }
                         // Source includes quotes, parse it to compare
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_js_string(inner).as_units() == units
+                        json_unescape_js_string(inner, stand_ins).as_units() == units
                     })
                     .unwrap_or(false)
             };
@@ -1336,7 +1424,14 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                 interp
                     .get_object_cell_expect(ctx_id)
                     .borrow_mut()
-                    .insert_value("source".to_string(), JsValue::from_str(src));
+                    .insert_value(
+                        "source".to_string(),
+                        JsValue::string(if stand_ins {
+                            crate::interpreter::builtins::regexp::regex_output_to_js_string(src)
+                        } else {
+                            JsString::from_str(src)
+                        }),
+                    );
             }
         }
         JsValue::object(ctx_id)
