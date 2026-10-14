@@ -188,6 +188,7 @@ struct Compiler {
     code: Vec<u8>,
     constants: Vec<Constant>,
     names: Vec<crate::interpreter::Atom>,
+    private_names: Vec<String>,
     var_names: Vec<u16>,
     current_stack: u16,
     max_stack: u16,
@@ -262,6 +263,7 @@ impl Compiler {
             code: Vec::new(),
             constants: Vec::new(),
             names: Vec::new(),
+            private_names: Vec::new(),
             var_names: Vec::new(),
             current_stack: 0,
             max_stack: 0,
@@ -311,6 +313,20 @@ impl Compiler {
             return Err(CompileError::Ineligible("name pool overflow"));
         }
         self.names.push(crate::interpreter::Atom::intern(name));
+        Ok(idx as u16)
+    }
+
+    /// Index of a private name's source spelling in the chunk's private-name
+    /// pool. The VM resolves each entry to its Private Name once per frame.
+    fn add_private_name(&mut self, name: &str) -> Result<u16, CompileError> {
+        if let Some(i) = self.private_names.iter().position(|n| n == name) {
+            return Ok(i as u16);
+        }
+        let idx = self.private_names.len();
+        if idx > u16::MAX as usize {
+            return Err(CompileError::Ineligible("private name pool overflow"));
+        }
+        self.private_names.push(name.to_string());
         Ok(idx as u16)
     }
 
@@ -798,7 +814,33 @@ impl Compiler {
                         }
                         Ok(())
                     }
-                    MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
+                    MemberProperty::Private(name) => {
+                        let idx = self.add_private_name(name)?;
+                        if *op == AssignOp::Assign {
+                            self.compile_expr(obj)?;
+                            self.compile_expr(value)?;
+                            self.emit(Op::SetPrivate);
+                            self.emit_u16(idx);
+                            self.pop_n(2);
+                            self.push_n(1);
+                        } else {
+                            // PrivateGet -> rVal -> op -> PrivateSet, the base
+                            // evaluated once (as for `base.name op= value`).
+                            self.compile_expr(obj)?;
+                            self.emit_dup_n(1);
+                            self.emit(Op::GetPrivate);
+                            self.emit_u16(idx);
+                            self.compile_expr(value)?;
+                            self.emit(Self::compound_binary_op(*op)?);
+                            self.pop_n(2);
+                            self.push_n(1);
+                            self.emit(Op::SetPrivate);
+                            self.emit_u16(idx);
+                            self.pop_n(2);
+                            self.push_n(1);
+                        }
+                        Ok(())
+                    }
                 },
                 _ => Err(CompileError::Unsupported("assign target")),
             },
@@ -842,6 +884,15 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
+            Expression::Binary(BinaryOp::In, lhs, rhs)
+                if let Expression::PrivateIdentifier(name) = lhs.as_ref() =>
+            {
+                self.compile_expr(rhs)?;
+                let idx = self.add_private_name(name)?;
+                self.emit(Op::PrivateIn);
+                self.emit_u16(idx);
+                Ok(())
+            }
             Expression::Binary(op, lhs, rhs) => {
                 let bop = Self::binary_op(*op)?;
                 if !matches!(bop, Op::Instanceof | Op::In)
@@ -873,7 +924,6 @@ impl Compiler {
                     let idx = self.add_name(name)?;
                     self.emit(Op::GetProp);
                     self.emit_u16(idx);
-                    // Stack height unchanged: pop base, push value.
                     Ok(())
                 }
                 MemberProperty::Computed(key) => {
@@ -884,7 +934,13 @@ impl Compiler {
                     self.push_n(1);
                     Ok(())
                 }
-                MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
+                MemberProperty::Private(name) => {
+                    self.compile_expr(obj)?;
+                    let idx = self.add_private_name(name)?;
+                    self.emit(Op::GetPrivate);
+                    self.emit_u16(idx);
+                    Ok(())
+                }
             },
             Expression::Call(callee, args, site_id) => {
                 self.compile_call(callee, args, Op::Call, *site_id)
@@ -1256,7 +1312,14 @@ impl Compiler {
                 self.emit(Op::UpdateProp);
                 self.emit_u16(idx);
                 self.code.push(mode);
-                // Stack height unchanged: pop base, push result.
+                Ok(())
+            }
+            Expression::Member(obj, MemberProperty::Private(name), _) if !discard => {
+                self.compile_expr(obj)?;
+                let idx = self.add_private_name(name)?;
+                self.emit(Op::UpdatePrivate);
+                self.emit_u16(idx);
+                self.code.push(mode);
                 Ok(())
             }
             Expression::Member(obj, MemberProperty::Computed(key), _) if !discard => {
@@ -1360,11 +1423,16 @@ impl Compiler {
                 // base + key on the stack become callee + this in place.
                 self.emit(Op::LoadMethodElement);
             }
-            // `super(...)`, a private method and a parenthesised optional
-            // chain pick their `this` from the callee reference.
-            Expression::Super
-            | Expression::OptionalChain(..)
-            | Expression::Member(_, MemberProperty::Private(_), _) => {
+            Expression::Member(obj, MemberProperty::Private(name), _) => {
+                self.compile_expr(obj)?;
+                let idx = self.add_private_name(name)?;
+                self.emit(Op::LoadMethodPrivate);
+                self.emit_u16(idx);
+                self.push_n(1);
+            }
+            // `super(...)` and a parenthesised optional chain pick their
+            // `this` from the callee reference.
+            Expression::Super | Expression::OptionalChain(..) => {
                 return Err(CompileError::Unsupported("call callee"));
             }
             // Any other callee (an immediately invoked function, `f()()`,
@@ -2976,6 +3044,7 @@ impl Compiler {
             code: self.code,
             constants: self.constants,
             names: self.names,
+            private_names: self.private_names,
             global_hints,
             var_names: self.var_names,
             max_stack: self.max_stack,
@@ -3193,7 +3262,7 @@ fn stmts_contain(stmts: &[Statement], pred: &dyn Fn(&Statement) -> bool) -> bool
 type PoisonFn = fn(&Expression) -> bool;
 
 /// The Script goal's poison: direct `eval`, dynamic `import()` and
-/// `import.meta`. `yield`, `await`, `new.target`, `super` and private `in`
+/// `import.meta`. `yield`, `await`, `new.target` and `super`
 /// cannot occur in a Script's own code: the traversal only meets them inside
 /// nested arrows, which own them, so they must not keep the script
 /// whole-body (the JetStream async harness is one such arrow).
@@ -3221,14 +3290,7 @@ fn is_script_poison_expression(expr: &Expression) -> bool {
 /// owns it. A nested arrow's `new.target`, `super` and direct `eval` are
 /// inherited from the frame, so those stay poison.
 fn is_poison_expression(expr: &Expression) -> bool {
-    is_script_poison_expression(expr)
-        || match expr {
-            Expression::Super | Expression::NewTarget => true,
-            Expression::Binary(BinaryOp::In, lhs, _) => {
-                matches!(lhs.as_ref(), Expression::PrivateIdentifier(_))
-            }
-            _ => false,
-        }
+    is_script_poison_expression(expr) || matches!(expr, Expression::Super | Expression::NewTarget)
 }
 
 fn pattern_has_poison(pattern: &Pattern, poison: PoisonFn) -> bool {

@@ -5643,7 +5643,7 @@ impl Interpreter {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::DateTimeFormat { .. })) {
                                 Probe::NotDtf
-                            } else if let Some(func) = b.hidden_slot("[[BoundFormat]]")
+                            } else if let Some(func) = b.hidden_slot(PrivateId::BOUND_FORMAT)
                             {
                                 Probe::Cached(func)
                             } else {
@@ -5760,7 +5760,7 @@ impl Interpreter {
                     ));
 
                     if let Some(obj) = interp.get_object_cell(o) {
-                        obj.borrow_mut().set_hidden_slot("[[BoundFormat]]", format_fn.clone());
+                        obj.borrow_mut().set_hidden_slot(PrivateId::BOUND_FORMAT, format_fn.clone());
                     }
 
                     return Completion::Normal(format_fn);

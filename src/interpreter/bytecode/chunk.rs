@@ -193,6 +193,9 @@ pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
     pub(crate) constants: Vec<Constant>,
     pub(crate) names: Vec<Atom>,
+    /// Source spellings (without the `#`) of the private names the chunk
+    /// reads; the VM resolves each to its Private Name once per frame.
+    pub(crate) private_names: Vec<String>,
     /// One remembered global-object property slot per `names` entry, consulted
     /// by the name ops (`LoadName`, `ResolveName`, ...). Verified by key on
     /// every use, so it is never an invalidation concern. May be shorter than
