@@ -116,7 +116,9 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 
 ## Execution Counters (performance investigations)
 - Off by default and absent from the shipped binary. Build with
-  `cargo build --release --features perf-counters`; every run **that executes
+  `cargo build --profile release-nolto --features perf-counters` (counts are
+  deterministic, so skip the fat-LTO relink; the binary is
+  `target/release-nolto/jsse`); every run **that executes
   JavaScript** then writes tab-separated counters to **stderr** at exit — file,
   `-e`, `--prelude`, and REPL alike, including a prelude that throws (covered by
   `tests/perf_counters_report_paths.rs`). A run that dies before any interpreter
@@ -188,7 +190,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `./scripts/run-mutants.sh --list` — enumerate mutants without running.
   - `./scripts/run-mutants.sh --shard 0/8` — single shard of the corpus.
   - `./scripts/run-mutants.sh --file src/lexer.rs` — restrict to one file.
-- Oracle is `cargo test --release` plus `tests/test262_smoke_oracle.rs`, which runs a 0.5% random test262 sample (~3,500 scenarios, ~20 s on a fast machine). The sample is unseeded, so kill verdicts are non-deterministic across mutants — the trade-off is broader cross-section coverage over many runs.
+- Oracle is `cargo test --profile release-nolto` plus `tests/test262_smoke_oracle.rs`, which runs a 0.5% random test262 sample (~3,500 scenarios, ~20 s on a fast machine). The sample is unseeded, so kill verdicts are non-deterministic across mutants — the trade-off is broader cross-section coverage over many runs.
 - Configuration in `.cargo/mutants.toml`. Generated tables (`unicode_tables.rs`, `emoji_strings.rs`) and two combinatorially-explosive Temporal helpers (`duration.rs`, `plain_date_time.rs`) are excluded.
 - Output in `mutants.out/` (gitignored): `caught.txt`, `missed.txt`, `unviable.txt`, `outcomes.json`, plus per-mutant diffs/logs.
 

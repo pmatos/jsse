@@ -20,7 +20,7 @@ LTO-first on even rounds). Outputs matched between the two binaries in every mic
 CI (`ci.yml`, GitHub runner, rust-cache): the `Build` step was 54 s; expect about +2.5 min for the fat-LTO
 build. Test steps move to `release-nolto` so they do not pay the LTO relink (`cargo test --release` links the
 lib, the bin and each of the 12 integration tests against the release profile; measured +164 s without this).
-Net CI wall time is about +2.5 min on a 12.5 min job; the nightly coverage job pins LTO off by environment
+`release-nolto` is its own target dir, so a cold rust-cache also compiles the dependencies for it once (245 s at `-j4`; `release-checked` already did this). Net CI wall time is about +2.5 min on a 12.5 min job; the nightly coverage job pins LTO off by environment
 variable and the mutation-testing oracle uses `release-nolto`.
 
 Startup: 15.6 ms -> 14.8 ms (empty script, median of 21), no regression from the larger inlining.
