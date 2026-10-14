@@ -98,8 +98,8 @@ fn stand_in_base(base: u32) -> u32 {
 /// subject genuinely occupy every window, so no scalar can stand in for a lone
 /// surrogate. `\p{Cs}` and `\p{Co}` then match WTF-8 bytes, whose subject has
 /// no stand-ins, and no window is taken out of a class. Stand-ins that remain
-/// (a lone surrogate in the pattern text or the subject) use the default
-/// window, so a genuine scalar at the same position is not told apart from
+/// (a lone surrogate in the pattern text) use the default window, so a
+/// genuine scalar at the same position in the subject is not told apart from
 /// them. This needs a genuine scalar in each of the 64 windows; matching such
 /// a text exactly would take a byte-level form of every construct that can
 /// match a lone surrogate, which neither fancy-regex nor the custom lookbehind

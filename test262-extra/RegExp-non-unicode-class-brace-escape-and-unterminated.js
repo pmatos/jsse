@@ -44,7 +44,7 @@ for (var i = 0; i < outOfOrder.length; i++) {
 
 var matching = [
   ["[\\u{61}]", ["u", "{", "6", "1", "}"], ["a", "a", "\u0001"]],
-  ["[a-\\u{2}]", ["a", "m", "u", "{", "2", "}"], ["b-", "1", "v", "\u0002"]],
+  ["[a-\\u{2}]", ["a", "m", "u", "{", "2", "}"], ["1", "v", "\u0002"]],
   ["[u-\\u{1}]", ["u", "{", "1", "}"], ["t", "v", "\u0001"]],
   ["[\\u{1}-}]", ["u", "{", "1", "}"], ["-", "\u0001", "~"]],
   ["[\\u{1}]", ["u", "{", "1", "}"], ["\u0001"]],
@@ -67,6 +67,11 @@ for (var j = 0; j < matching.length; j++) {
 }
 
 assert.sameValue(/[\u{61}]/.exec("xa}")[0], "}", "the class does not contain a");
+assert.sameValue(/[\u{]}a/.test("u}a"), true, "the class holds u and a ] after \\u{ closes it");
+assert.sameValue(/[\u{]}a/.test("{}a"), true, "the class holds {");
+assert.sameValue(/[\u{]}a/.test("]}a"), false, "the class does not swallow ]");
+assert.sameValue(/(?<=[\u{])a/.test("{a"), true, "lookbehind class holds {");
+assert.sameValue(/(?<=[\u{])a/.test("}a"), false, "lookbehind class does not hold }");
 
 var unicodeAccepted = ["u", "v", "iu"];
 for (var m = 0; m < unicodeAccepted.length; m++) {
