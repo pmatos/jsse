@@ -4709,12 +4709,15 @@ fn parse_v_class_set_character(
                         break;
                     }
                     '|' => *i += 1,
+                    '\\' if matches!(
+                        chars.get(*i + 1),
+                        Some('q' | 'p' | 'P' | 'd' | 'D' | 'w' | 'W' | 's' | 'S')
+                    ) =>
+                    {
+                        return err("Invalid escape");
+                    }
                     _ => {
-                        if let VClassAtom::Set =
-                            parse_v_class_set_character(chars, i, source, negated)?
-                        {
-                            return err("Invalid escape");
-                        }
+                        parse_v_class_set_character(chars, i, source, negated)?;
                     }
                 }
             }
@@ -4807,6 +4810,9 @@ fn validate_v_flag_class_inner(
     };
 
     let mut has_operand = false;
+    let mut operands = 0usize;
+    let mut set_op: Option<char> = None;
+    let mut last_was_range = false;
 
     while *i < len {
         let c = chars[*i];
@@ -4819,18 +4825,16 @@ fn validate_v_flag_class_inner(
         // Check for reserved double punctuators
         if *i + 1 < len {
             let next = chars[*i + 1];
-            if c == '-' && next == '-' {
-                if !has_operand {
+            if (c == '-' || c == '&') && next == c {
+                if !has_operand || last_was_range {
                     return err("Invalid set operation");
                 }
-                *i += 2;
-                has_operand = false;
-                continue;
-            }
-            if c == '&' && next == '&' {
-                if !has_operand {
-                    return err("Invalid set operation");
+                match set_op {
+                    Some(k) if k != c => return err("Invalid set operation"),
+                    None if operands != 1 => return err("Invalid set operation"),
+                    _ => {}
                 }
+                set_op = Some(c);
                 *i += 2;
                 has_operand = false;
                 continue;
@@ -4843,6 +4847,9 @@ fn validate_v_flag_class_inner(
         if matches!(c, '(' | ')' | '{' | '}' | '/' | '|') {
             return err("Invalid character in character class");
         }
+        if set_op.is_some() && has_operand {
+            return err("Invalid set operation");
+        }
         if c == '[' {
             *i += 1;
             let nested_negated = if *i < len && chars[*i] == '^' {
@@ -4853,15 +4860,22 @@ fn validate_v_flag_class_inner(
             };
             validate_v_flag_class_inner(chars, i, source, nested_negated, depth + 1)?;
             has_operand = true;
+            operands += 1;
+            last_was_range = false;
             continue;
         }
         if c == '-' {
             return err("Invalid character in character class");
         }
 
+        last_was_range = false;
         match parse_v_class_set_character(chars, i, source, negated)? {
             VClassAtom::Char(start) => {
                 if *i + 1 < len && chars[*i] == '-' && chars[*i + 1] != '-' {
+                    if set_op.is_some() {
+                        return err("Invalid set operation");
+                    }
+                    last_was_range = true;
                     *i += 1;
                     let end = match parse_v_class_set_character(chars, i, source, negated)? {
                         VClassAtom::Char(end) => end,
@@ -4877,6 +4891,7 @@ fn validate_v_flag_class_inner(
             VClassAtom::Set => {}
         }
         has_operand = true;
+        operands += 1;
     }
 
     err("Unterminated character class")

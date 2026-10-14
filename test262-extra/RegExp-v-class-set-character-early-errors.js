@@ -41,7 +41,12 @@ var invalid = [
   "[a-\\d]", "[\\d-a]", "[a-\\p{L}]", "[\\p{L}-a]", "[\\w-\\d]", "[[a]-b]", "[a-[b]]",
   "[\\q{a}-b]", "[a-\\q{b}]",
   // a range end that is not a ClassSetCharacter
-  "[a-]", "[a-!!]", "[a-z-9]"
+  "[a-]", "[a-!!]", "[a-z-9]",
+  // a ClassSetRange is not a ClassSetOperand of a set operation, and union and
+  // operators do not mix
+  "[a-z--b]", "[a--b-c]", "[a&&b-c]", "[ab--c]", "[a--bc]", "[a--b&&c]",
+  // a \q escape cannot nest in a ClassString
+  "[\\q{\\q{a}}]", "[\\q{\\p{L}}]"
 ];
 
 for (var i = 0; i < invalid.length; i++) {
