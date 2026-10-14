@@ -1600,7 +1600,7 @@ impl Interpreter {
                 // Step 20: targetDesc is not undefined
                 if let Some(ref td) = target_desc {
                     // 20a: IsCompatiblePropertyDescriptor check
-                    if !is_compatible_property_desc(target_extensible, desc, td) {
+                    if !is_compatible_property_desc(target_extensible, desc, Some(td)) {
                         return Err(self.create_type_error(
                             "'defineProperty' on proxy: trap returned truish for property descriptor not compatible with the existing property in the proxy target",
                         ));
@@ -1797,11 +1797,7 @@ impl Interpreter {
             Err(None) => return Ok(None),
         };
         complete_property_descriptor(&mut result_desc);
-        let compatible = match target_desc.as_ref() {
-            Some(td) => is_compatible_property_desc(target_extensible, &result_desc, td),
-            None => target_extensible,
-        };
-        if !compatible {
+        if !is_compatible_property_desc(target_extensible, &result_desc, target_desc.as_ref()) {
             return Err(self.create_type_error(
                 "'getOwnPropertyDescriptor' on proxy: trap returned a descriptor incompatible with the proxy target's property",
             ));
@@ -2283,10 +2279,14 @@ fn complete_property_descriptor(desc: &mut PropertyDescriptor) {
 
 /// IsCompatiblePropertyDescriptor (§10.1.6.3)
 fn is_compatible_property_desc(
-    _extensible: bool,
+    extensible: bool,
     desc: &PropertyDescriptor,
-    current: &PropertyDescriptor,
+    current: Option<&PropertyDescriptor>,
 ) -> bool {
+    // Step 2: If current is undefined, return extensible
+    let Some(current) = current else {
+        return extensible;
+    };
     // Step 3: If current.[[Configurable]] is false:
     if current.configurable == Some(false) {
         // 3a: If Desc.[[Configurable]] is true, return false
