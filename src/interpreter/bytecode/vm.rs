@@ -1180,35 +1180,22 @@ fn run_chunk_inner(
                         abrupt => bail!('dispatch, abrupt),
                     }
                 }
-                Op::GetPrivate => {
+                Op::GetPrivate | Op::LoadMethodPrivate => {
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let id = private_id!(idx);
                     let gc_frame = root_operand_stack(interp, stack);
-                    let base = stack.pop().expect("stack underflow on GetPrivate");
+                    let base = stack.pop().expect("stack underflow on private read");
                     let result =
                         interp.private_get_resolved(&base, id, &chunk.private_names[idx as usize]);
                     unroot_stack_value(interp, &base);
                     interp.gc_unroot_frame(gc_frame);
                     match result {
-                        Completion::Normal(v) => push_value(interp, stack, v),
-                        abrupt => bail!('dispatch, abrupt),
-                    }
-                }
-                Op::LoadMethodPrivate => {
-                    let idx = decode_u16(chunk, pc);
-                    pc += 2;
-                    let id = private_id!(idx);
-                    let gc_frame = root_operand_stack(interp, stack);
-                    let base = stack.pop().expect("stack underflow on LoadMethodPrivate");
-                    let result =
-                        interp.private_get_resolved(&base, id, &chunk.private_names[idx as usize]);
-                    unroot_stack_value(interp, &base);
-                    interp.gc_unroot_frame(gc_frame);
-                    match result {
-                        Completion::Normal(method) => {
-                            push_value(interp, stack, method);
-                            push_value(interp, stack, base);
+                        Completion::Normal(v) => {
+                            push_value(interp, stack, v);
+                            if op == Op::LoadMethodPrivate {
+                                push_value(interp, stack, base);
+                            }
                         }
                         abrupt => bail!('dispatch, abrupt),
                     }
