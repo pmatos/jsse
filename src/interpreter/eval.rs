@@ -5313,7 +5313,7 @@ impl Interpreter {
     ) -> Option<Completion> {
         use crate::interpreter::bytecode::BytecodeCacheState;
         let obj = self.get_object_cell(getter.as_object_id()?)?;
-        let (chunk, closure, function_realm) = {
+        let (chunk, idx, closure, function_realm) = {
             let b = obj.borrow();
             let Some(JsFunction::User {
                 closure,
@@ -5328,7 +5328,7 @@ impl Interpreter {
             else {
                 return None;
             };
-            chunk.trivial_private_getter?;
+            let idx = chunk.trivial_private_getter?;
             if b.is_proxy()
                 || b.is_proxy_revoked()
                 || b.wrapped().is_some()
@@ -5336,11 +5336,9 @@ impl Interpreter {
             {
                 return None;
             }
-            (chunk.clone(), closure.clone(), b.function_realm())
+            (chunk.clone(), idx, closure.clone(), b.function_realm())
         };
-        let name = chunk
-            .private_names
-            .get(usize::from(chunk.trivial_private_getter?))?;
+        let name = chunk.private_names.get(usize::from(idx))?;
         #[cfg(feature = "perf-counters")]
         {
             self.perf.trivial_getter_hits += 1;
