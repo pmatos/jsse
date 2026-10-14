@@ -5536,7 +5536,7 @@ impl Interpreter {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
             let function_realm = obj.borrow().function_realm();
-            if is_class_ctor && self.new_target.is_none() {
+            if is_class_ctor && !self.calling_as_construct {
                 let caller_realm = self.current_realm_id;
                 if let Some(fn_realm) = function_realm {
                     self.current_realm_id = fn_realm;
@@ -5590,6 +5590,8 @@ impl Interpreter {
                         JsValue::UNDEFINED
                     }
                 };
+                // Every exit from this block, early or not, reaches the restore
+                // of the register below.
                 let result = 'call: {
                     match func {
                         CallTarget::Native(f) => {

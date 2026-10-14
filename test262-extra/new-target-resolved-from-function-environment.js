@@ -83,6 +83,35 @@ function BadParams() {
 }
 assert.sameValue(new BadParams().nt, BadParams, "after calls that fail binding parameters");
 
+var fieldSeen = {};
+class FieldBase {
+  field = () => new.target;
+  static staticField = new.target;
+  static { fieldSeen.staticBlock = new.target; }
+}
+class FieldDerived extends FieldBase {
+  own = new.target;
+}
+var fd = new FieldDerived();
+assert.sameValue(fd.field(), undefined, "arrow in a field initializer");
+assert.sameValue(fd.own, undefined, "field initializer of a derived class");
+assert.sameValue(FieldBase.staticField, undefined, "static field initializer");
+assert.sameValue(fieldSeen.staticBlock, undefined, "static block");
+
+function ComputedKey() {
+  var o = class { [new.target.name]() {} };
+  this.key = Object.getOwnPropertyNames(o.prototype)[1];
+}
+assert.sameValue(new ComputedKey().key, "ComputedKey", "computed key sees the enclosing new.target");
+
+var origSet = Map.prototype.set;
+Map.prototype.set = class {};
+try {
+  assert.throws(TypeError, function () { new Map([[1, 2]]); }, "class constructor called by a native constructor");
+} finally {
+  Map.prototype.set = origSet;
+}
+
 class P extends Promise {}
 var subclassed = new P(async function (resolve) { resolve(1); });
 assert.sameValue(Object.getPrototypeOf(subclassed), P.prototype, "native constructor keeps its newTarget after an async executor");
