@@ -1307,9 +1307,15 @@ impl<'a> Lexer<'a> {
                 Some(ch) => {
                     raw.push(ch);
                     if let Some(ref mut c) = cooked {
-                        let mut buf = [0u16; 2];
-                        for cu in ch.encode_utf16(&mut buf).iter() {
-                            c.push(*cu);
+                        if self.pua_undo
+                            && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
+                        {
+                            c.push(surrogate);
+                        } else {
+                            let mut buf = [0u16; 2];
+                            for cu in ch.encode_utf16(&mut buf).iter() {
+                                c.push(*cu);
+                            }
                         }
                     }
                 }

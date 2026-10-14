@@ -13,7 +13,9 @@ pub(crate) fn next_template_id() -> u64 {
 }
 
 /// A function's source text: a span of the enclosing source. Offsets are `u32`
-/// so the AST nodes that carry one stay within their cache-line budget.
+/// so the AST nodes that carry one stay within their cache-line budget; the top
+/// bit of `start` marks text that carries lone surrogates as private-use code
+/// points (see `from_pua_encoded`).
 #[derive(Clone, Debug)]
 pub(crate) struct SourceText {
     source: Rc<str>,
@@ -21,16 +23,30 @@ pub(crate) struct SourceText {
     end: u32,
 }
 
+const PUA_ENCODED: u32 = 1 << 31;
+
 impl SourceText {
     pub(crate) fn new(source: Rc<str>, start: usize, end: usize) -> Self {
         match (u32::try_from(start), u32::try_from(end)) {
-            (Ok(start), Ok(end)) => Self { source, start, end },
+            (Ok(start), Ok(end)) if start < PUA_ENCODED => Self { source, start, end },
             _ => Self::from(source[start..end].to_string()),
         }
     }
 
+    /// Source text built from a string whose lone surrogates were mapped to
+    /// private-use code points, as the dynamic `Function` constructors do.
+    pub(crate) fn from_pua_encoded(source: String) -> Self {
+        let mut text = Self::from(source);
+        text.start |= PUA_ENCODED;
+        text
+    }
+
+    pub(crate) fn is_pua_encoded(&self) -> bool {
+        self.start & PUA_ENCODED != 0
+    }
+
     pub(crate) fn as_str(&self) -> &str {
-        &self.source[self.start as usize..self.end as usize]
+        &self.source[(self.start & !PUA_ENCODED) as usize..self.end as usize]
     }
 }
 

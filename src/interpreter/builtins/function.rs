@@ -283,6 +283,16 @@ impl Interpreter {
                             JsFunction::User {
                                 source_text: Some(text),
                                 ..
+                            } if text.is_pua_encoded() => {
+                                return Completion::Normal(JsValue::string(
+                                    crate::interpreter::builtins::regexp::regex_output_to_js_string(
+                                        text.as_str(),
+                                    ),
+                                ));
+                            }
+                            JsFunction::User {
+                                source_text: Some(text),
+                                ..
                             } => text.to_string(),
                             JsFunction::User {
                                 name,

@@ -45,18 +45,13 @@ impl Interpreter {
                         }
                     }
                 }
-                let gap = if let Some(n) = space_val.as_number() {
+                let gap: Vec<u16> = if let Some(n) = space_val.as_number() {
                     let count = (n as i64).clamp(0, 10) as usize;
-                    " ".repeat(count)
+                    vec![0x20; count]
                 } else if let Some(s) = space_val.as_string() {
-                    let rs = s.to_rust_string();
-                    if rs.len() > 10 {
-                        rs[..10].to_string()
-                    } else {
-                        rs
-                    }
+                    s.as_units().iter().take(10).copied().collect()
                 } else {
-                    String::new()
+                    Vec::new()
                 };
 
                 let replacer_is_undefined = match &replacer_arg {
@@ -70,7 +65,9 @@ impl Interpreter {
                 };
 
                 match json_stringify_full(interp, &val, &replacer, &gap) {
-                    Ok(Some(s)) => Completion::Normal(JsValue::string(JsString::from_str(&s))),
+                    Ok(Some(units)) => {
+                        Completion::Normal(JsValue::string(JsString::from_vec(units)))
+                    }
                     Ok(None) => Completion::Normal(JsValue::UNDEFINED),
                     Err(e) => Completion::Throw(e),
                 }
@@ -87,8 +84,8 @@ impl Interpreter {
             2,
             |interp, _this, args: &[JsValue]| {
                 let raw = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let s = match interp.to_string_lossy(&raw) {
-                    Ok(s) => s,
+                let s = match interp.to_js_string(&raw) {
+                    Ok(s) => json_text_from_units(s.as_units()),
                     Err(e) => return Completion::Throw(e),
                 };
                 let reviver = args.get(1).cloned();
@@ -150,23 +147,21 @@ impl Interpreter {
             1,
             |interp, _this, args: &[JsValue]| {
                 let raw = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let text = match interp.to_string_lossy(&raw) {
+                let raw_text = match interp.to_js_string(&raw) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
+                let units = raw_text.as_units();
                 // Reject empty, leading/trailing whitespace
-                if text.is_empty() {
+                if units.is_empty() {
                     let err = interp.create_error(
                         "SyntaxError",
                         "JSON.rawJSON cannot be called with an empty string",
                     );
                     return Completion::Throw(err);
                 }
-                let first = text.as_bytes()[0];
-                let last = text.as_bytes()[text.len() - 1];
-                if matches!(first, b'\t' | b'\n' | b'\r' | b' ')
-                    || matches!(last, b'\t' | b'\n' | b'\r' | b' ')
-                {
+                let is_json_space = |cu: u16| matches!(cu, 0x09 | 0x0A | 0x0D | 0x20);
+                if is_json_space(units[0]) || is_json_space(units[units.len() - 1]) {
                     let err = interp.create_error(
                         "SyntaxError",
                         "JSON.rawJSON text must not start or end with whitespace",
@@ -174,13 +169,14 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 // Must be a valid JSON primitive (not object/array)
-                if text.starts_with('{') || text.starts_with('[') {
+                if matches!(units[0], 0x7B | 0x5B) {
                     let err = interp
                         .create_error("SyntaxError", "JSON.rawJSON only accepts JSON primitives");
                     return Completion::Throw(err);
                 }
                 // Validate it's valid JSON
-                if let Completion::Throw(e) = json_parse_value(interp, &text) {
+                if let Completion::Throw(e) = json_parse_value(interp, &json_text_from_units(units))
+                {
                     return Completion::Throw(e);
                 }
                 let obj_id = interp.create_object_id();
@@ -191,7 +187,7 @@ impl Interpreter {
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     let desc = PropertyDescriptor::data(
-                        JsValue::string(JsString::from_str(&text)),
+                        JsValue::string(raw_text.clone()),
                         false,
                         true,
                         false,

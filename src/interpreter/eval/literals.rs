@@ -208,19 +208,20 @@ impl Interpreter {
         Ok(self.symbol_key_to_jsvalue(&key))
     }
 
-    pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
+    pub(crate) fn create_regexp(&mut self, pattern: &JsString, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
         obj.prototype_id = self
             .realm()
             .regexp_prototype
             .or(self.realm().object_prototype);
         obj.class_name = "RegExp";
-        let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
+        let source = if pattern.is_empty() {
+            JsString::from_str("(?:)")
+        } else {
+            pattern.clone()
+        };
         obj.kind = crate::interpreter::types::ObjectKind::RegExp(
-            crate::interpreter::types::RegExpData::new(
-                JsString::from_str(source_str),
-                JsString::from_str(flags),
-            ),
+            crate::interpreter::types::RegExpData::new(source, JsString::from_str(flags)),
         );
         obj.insert_property(
             "lastIndex".to_string(),

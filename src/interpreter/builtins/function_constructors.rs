@@ -1,5 +1,49 @@
 use super::super::*;
 
+// ToString of each CreateDynamicFunction argument, joined as the spec's P and
+// bodyString. Lone surrogates travel through the UTF-8 parser as private-use
+// code points, so `pua` selects the lexer that maps them back inside string
+// literals; text without lone surrogates keeps the plain lexer.
+fn dynamic_function_text(
+    interp: &mut Interpreter,
+    args: &[JsValue],
+) -> Result<(String, String, bool), JsValue> {
+    let mut params: Vec<u16> = Vec::new();
+    let mut body = JsString::from_str("");
+    if let Some((last, rest)) = args.split_last() {
+        for (i, arg) in rest.iter().enumerate() {
+            if i > 0 {
+                params.push(b',' as u16);
+            }
+            let s = interp.to_js_string(arg)?;
+            params.extend_from_slice(s.as_units());
+        }
+        body = interp.to_js_string(last)?;
+    }
+    let pua = has_lone_surrogate(&params) || has_lone_surrogate(body.as_units());
+    Ok((
+        builtins::regexp::js_string_to_regex_input(&params),
+        builtins::regexp::js_string_to_regex_input(body.as_units()),
+        pua,
+    ))
+}
+
+fn has_lone_surrogate(units: &[u16]) -> bool {
+    char::decode_utf16(units.iter().copied()).any(|r| r.is_err())
+}
+
+fn parse_dynamic_function_source(
+    source: &str,
+    pua: bool,
+) -> Result<crate::ast::Program, parser::ParseError> {
+    let parser = if pua {
+        parser::Parser::new_for_eval(source)
+    } else {
+        parser::Parser::new(source)
+    };
+    parser.and_then(|mut p| p.parse_program())
+}
+
 impl Interpreter {
     pub(super) fn setup_function_constructors(&mut self) {
         self.setup_eval();
@@ -59,26 +103,9 @@ impl Interpreter {
                 "Function".to_string(),
                 1,
                 move |interp, _this, args| {
-                    let (params_str, body_str) = if args.is_empty() {
-                        (String::new(), String::new())
-                    } else if args.len() == 1 {
-                        match interp.to_string_lossy(&args[0]) {
-                            Ok(s) => (String::new(), s),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        let mut params = Vec::new();
-                        for arg in &args[..args.len() - 1] {
-                            match interp.to_string_lossy(arg) {
-                                Ok(s) => params.push(s),
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        let body = match interp.to_string_lossy(args.last().unwrap()) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        (params.join(","), body)
+                    let (params_str, body_str, pua) = match dynamic_function_text(interp, args) {
+                        Ok(parts) => parts,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     // Per spec §20.2.1.1: parse parameters and body independently
@@ -86,8 +113,7 @@ impl Interpreter {
                     // spans the parameter/body boundary.
                     if !params_str.is_empty() {
                         let params_test = format!("(function({}\n) {{}})", params_str);
-                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
-                        {
+                        match parse_dynamic_function_source(&params_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -98,7 +124,7 @@ impl Interpreter {
                     }
                     {
                         let body_test = format!("(function() {{\n{}\n}})", body_str);
-                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                        match parse_dynamic_function_source(&body_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -114,15 +140,7 @@ impl Interpreter {
                         "(function anonymous({}\n) {{\n{}\n}})",
                         params_str, body_str
                     );
-                    let mut p = match parser::Parser::new(&source) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
-                            );
-                        }
-                    };
-                    let program = match p.parse_program() {
+                    let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
@@ -153,7 +171,11 @@ impl Interpreter {
                             is_generator: false,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(fn_source_text.into()),
+                            source_text: Some(if pua {
+                                SourceText::from_pua_encoded(fn_source_text)
+                            } else {
+                                fn_source_text.into()
+                            }),
                             uses_arguments: true, // conservative for dynamic Function()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -638,32 +660,14 @@ impl Interpreter {
                 "AsyncFunction".to_string(),
                 1,
                 |interp, _this, args| {
-                    let (params_str, body_str) = if args.is_empty() {
-                        (String::new(), String::new())
-                    } else if args.len() == 1 {
-                        match interp.to_string_lossy(&args[0]) {
-                            Ok(s) => (String::new(), s),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        let mut params = Vec::new();
-                        for arg in &args[..args.len() - 1] {
-                            match interp.to_string_lossy(arg) {
-                                Ok(s) => params.push(s),
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        let body = match interp.to_string_lossy(args.last().unwrap()) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        (params.join(","), body)
+                    let (params_str, body_str, pua) = match dynamic_function_text(interp, args) {
+                        Ok(parts) => parts,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     if !params_str.is_empty() {
                         let params_test = format!("(async function({}\n) {{}})", params_str);
-                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
-                        {
+                        match parse_dynamic_function_source(&params_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -674,7 +678,7 @@ impl Interpreter {
                     }
                     {
                         let body_test = format!("(async function() {{\n{}\n}})", body_str);
-                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                        match parse_dynamic_function_source(&body_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -692,15 +696,7 @@ impl Interpreter {
                         "(async function anonymous({}\n) {{\n{}\n}})",
                         params_str, body_str
                     );
-                    let mut p = match parser::Parser::new(&source) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
-                            );
-                        }
-                    };
-                    let program = match p.parse_program() {
+                    let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
@@ -727,7 +723,11 @@ impl Interpreter {
                             is_generator: false,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(fn_source_text.into()),
+                            source_text: Some(if pua {
+                                SourceText::from_pua_encoded(fn_source_text)
+                            } else {
+                                fn_source_text.into()
+                            }),
                             uses_arguments: true, // conservative for dynamic AsyncFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -795,32 +795,14 @@ impl Interpreter {
                 "GeneratorFunction".to_string(),
                 1,
                 |interp, _this, args| {
-                    let (params_str, body_str) = if args.is_empty() {
-                        (String::new(), String::new())
-                    } else if args.len() == 1 {
-                        match interp.to_string_lossy(&args[0]) {
-                            Ok(s) => (String::new(), s),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        let mut params = Vec::new();
-                        for arg in &args[..args.len() - 1] {
-                            match interp.to_string_lossy(arg) {
-                                Ok(s) => params.push(s),
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        let body = match interp.to_string_lossy(args.last().unwrap()) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        (params.join(","), body)
+                    let (params_str, body_str, pua) = match dynamic_function_text(interp, args) {
+                        Ok(parts) => parts,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     if !params_str.is_empty() {
                         let params_test = format!("(function*({}\n) {{}})", params_str);
-                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
-                        {
+                        match parse_dynamic_function_source(&params_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -831,7 +813,7 @@ impl Interpreter {
                     }
                     {
                         let body_test = format!("(function*() {{\n{}\n}})", body_str);
-                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                        match parse_dynamic_function_source(&body_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -847,15 +829,7 @@ impl Interpreter {
                         "(function* anonymous({}\n) {{\n{}\n}})",
                         params_str, body_str
                     );
-                    let mut p = match parser::Parser::new(&source) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
-                            );
-                        }
-                    };
-                    let program = match p.parse_program() {
+                    let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
@@ -882,7 +856,11 @@ impl Interpreter {
                             is_generator: true,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(fn_source_text.into()),
+                            source_text: Some(if pua {
+                                SourceText::from_pua_encoded(fn_source_text)
+                            } else {
+                                fn_source_text.into()
+                            }),
                             uses_arguments: true, // conservative for dynamic GeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -950,32 +928,14 @@ impl Interpreter {
                 "AsyncGeneratorFunction".to_string(),
                 1,
                 |interp, _this, args| {
-                    let (params_str, body_str) = if args.is_empty() {
-                        (String::new(), String::new())
-                    } else if args.len() == 1 {
-                        match interp.to_string_lossy(&args[0]) {
-                            Ok(s) => (String::new(), s),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        let mut params = Vec::new();
-                        for arg in &args[..args.len() - 1] {
-                            match interp.to_string_lossy(arg) {
-                                Ok(s) => params.push(s),
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        let body = match interp.to_string_lossy(args.last().unwrap()) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        (params.join(","), body)
+                    let (params_str, body_str, pua) = match dynamic_function_text(interp, args) {
+                        Ok(parts) => parts,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     if !params_str.is_empty() {
                         let params_test = format!("(async function*({}\n) {{}})", params_str);
-                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
-                        {
+                        match parse_dynamic_function_source(&params_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -986,7 +946,7 @@ impl Interpreter {
                     }
                     {
                         let body_test = format!("(async function*() {{\n{}\n}})", body_str);
-                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                        match parse_dynamic_function_source(&body_test, pua) {
                             Ok(_) => {}
                             Err(e) => {
                                 return Completion::Throw(
@@ -1004,15 +964,7 @@ impl Interpreter {
                         "(async function* anonymous({}\n) {{\n{}\n}})",
                         params_str, body_str
                     );
-                    let mut p = match parser::Parser::new(&source) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
-                            );
-                        }
-                    };
-                    let program = match p.parse_program() {
+                    let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
@@ -1039,7 +991,11 @@ impl Interpreter {
                             is_generator: true,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(fn_source_text.into()),
+                            source_text: Some(if pua {
+                                SourceText::from_pua_encoded(fn_source_text)
+                            } else {
+                                fn_source_text.into()
+                            }),
                             uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
