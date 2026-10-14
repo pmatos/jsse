@@ -596,9 +596,11 @@ fn property_ranges(content: &str) -> Option<std::borrow::Cow<'static, [(u32, u32
     if !property_includes_surrogates(content) {
         return Some(std::borrow::Cow::Borrowed(ranges));
     }
+    // The tables are sorted and never hold a surrogate, so the range goes in
+    // at its position and merges only with an adjacent neighbour.
     let mut all = ranges.to_vec();
-    all.push((SURROGATE_START, SURROGATE_END));
-    all.sort_unstable();
+    let at = all.partition_point(|&(lo, _)| lo < SURROGATE_START);
+    all.insert(at, (SURROGATE_START, SURROGATE_END));
     let mut merged: Vec<(u32, u32)> = Vec::with_capacity(all.len());
     for (lo, hi) in all {
         match merged.last_mut() {
