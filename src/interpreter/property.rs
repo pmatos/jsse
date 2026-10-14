@@ -1867,13 +1867,6 @@ impl Interpreter {
                             return Ok(Some(result_desc));
                         }
                     }
-                    if v.is_object() {
-                        return match self.to_property_descriptor(&v) {
-                            Ok(d) => Ok(Some(d)),
-                            Err(Some(e)) => Err(e),
-                            Err(None) => Ok(None),
-                        };
-                    }
                     Ok(None)
                 }
                 Err(e) => Err(e),

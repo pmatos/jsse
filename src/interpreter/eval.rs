@@ -7033,12 +7033,7 @@ impl Interpreter {
         proxy_id: u64,
         trap_name: &str,
     ) -> Result<(u64, Option<(JsValue, JsValue)>), JsValue> {
-        let Some((revoked, target_id, handler_id)) = self.get_proxy_info(proxy_id) else {
-            return Err(self.create_type_error(&format!(
-                "Cannot perform '{}' on a non-proxy object",
-                trap_name
-            )));
-        };
+        let (revoked, target_id, handler_id) = self.get_proxy_info(proxy_id).unwrap_or_default();
         let (false, Some(target_id), Some(handler_id)) = (revoked, target_id, handler_id) else {
             return Err(self.create_type_error(&format!(
                 "Cannot perform '{}' on a proxy that has been revoked",

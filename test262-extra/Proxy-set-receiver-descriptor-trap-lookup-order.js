@@ -139,3 +139,25 @@ assert.sameValue(
   log9.join(), "get:getOwnPropertyDescriptor,get:defineProperty", "proto-walk lookup order");
 assert.sameValue(Object.getPrototypeOf(recv), Object.prototype, "recv untouched");
 assert.sameValue(recv.q, 1, "proto-walk: value on receiver's target");
+
+// 9. Ordinary receivers take the same native steps: Array length, accessors,
+//    non-writable, and the set trap with a present trap.
+var arr = [1, 2, 3];
+assert.sameValue(Reflect.set({}, "length", 1, arr), true, "array receiver length");
+assert.sameValue(arr.length, 1, "array receiver length applied");
+assert.sameValue(Reflect.set({}, "0", 7, arr), true, "array receiver index");
+assert.sameValue(arr[0], 7, "array receiver index applied");
+
+var acc = Object.defineProperty({}, "k", { get() { return 1; }, configurable: true });
+assert.sameValue(Reflect.set({}, "k", 2, acc), false, "accessor receiver");
+var ro = Object.defineProperty({}, "k", { value: 1, writable: false, configurable: true });
+assert.sameValue(Reflect.set({}, "k", 2, ro), false, "non-writable receiver");
+assert.sameValue(Reflect.set({}, "k", 2, Object.preventExtensions({})), false, "non-extensible receiver");
+
+var setLog = [];
+var p10 = new Proxy({}, {
+  set(t, k, v, r) { setLog.push(k); return Reflect.set(t, k, v, r); }
+});
+p10.w = 1;
+assert.sameValue(setLog.join(), "w", "set trap invoked once");
+assert.sameValue(Object.getOwnPropertyDescriptor(p10, "w").value, 1, "set trap forwarded write");
