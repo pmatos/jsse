@@ -1254,8 +1254,10 @@ impl Environment {
         });
     }
 
-    /// The [[NewTarget]] of the nearest function environment up the chain
-    /// (§9.4.3 GetNewTarget).
+    /// `GetNewTarget` (§9.4.3): the [[NewTarget]] of the nearest function
+    /// environment up the chain. Arrow environments carry no `this` binding, so
+    /// they and direct eval resolve to the enclosing function; field
+    /// initializers, static blocks and the global scope yield undefined.
     pub(crate) fn get_new_target(&self) -> JsValue {
         if let Some(this) = &self.this_binding {
             return this.new_target.clone();

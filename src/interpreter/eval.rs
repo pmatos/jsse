@@ -348,15 +348,6 @@ impl Interpreter {
         })
     }
 
-    /// `GetNewTarget` (`sec-getnewtarget`): the `[[NewTarget]]` of the nearest
-    /// function environment up the chain. Arrow environments carry no `this`
-    /// binding, so they and direct eval resolve to the enclosing function; field
-    /// initializers, static blocks and the global scope are methods called with
-    /// no NewTarget and yield undefined.
-    pub(super) fn resolve_new_target(&self, env: &EnvRef) -> JsValue {
-        env.borrow().get_new_target()
-    }
-
     fn define_instance_elements(
         &mut self,
         this_val: &JsValue,
@@ -597,7 +588,7 @@ impl Interpreter {
             Expression::Super => {
                 Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED))
             }
-            Expression::NewTarget => Completion::Normal(self.resolve_new_target(env)),
+            Expression::NewTarget => Completion::Normal(env.borrow().get_new_target()),
             Expression::PrivateIdentifier(_) => Completion::Throw(
                 self.create_type_error("Private identifier can only be used with 'in' operator"),
             ),
@@ -4802,7 +4793,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let new_target = match interp.resolve_new_target(env) {
+                let new_target = match env.borrow().get_new_target() {
                     nt if nt.is_undefined() => super_ctor.clone(),
                     nt => nt,
                 };
