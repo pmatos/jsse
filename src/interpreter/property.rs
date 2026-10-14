@@ -1015,9 +1015,7 @@ impl Interpreter {
             match trap_call {
                 Ok(v) => {
                     if self.to_boolean_val(&v) {
-                        if let Some(target_id) = target_val.as_object_id()
-                            && let Some(tobj) = self.get_object(target_id)
-                        {
+                        if let Some(tobj) = self.get_object(target_id) {
                             let target_desc = tobj.borrow().get_own_property(key);
                             if let Some(ref desc) = target_desc
                                 && desc.configurable == Some(false)
@@ -1741,9 +1739,7 @@ impl Interpreter {
                             "'getOwnPropertyDescriptor' on proxy: trap returned neither Object nor undefined",
                         ));
                     }
-                    if let Some(target_id) = target_val.as_object_id()
-                        && let Some(tobj) = self.get_object_cell(target_id)
-                    {
+                    if let Some(tobj) = self.get_object_cell(target_id) {
                         let target_desc = tobj.borrow().get_own_property(key);
                         let target_extensible = tobj.borrow().extensible;
                         if v.is_undefined() {
