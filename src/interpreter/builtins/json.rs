@@ -39,8 +39,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     } else if cn == "String" {
-                        match interp.to_string_lossy(&space_val) {
-                            Ok(s) => space_val = JsValue::string(JsString::from_str(&s)),
+                        match interp.to_js_string(&space_val) {
+                            Ok(s) => space_val = JsValue::string(s),
                             Err(e) => return Completion::Throw(e),
                         }
                     }

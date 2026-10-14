@@ -597,7 +597,7 @@ pub(crate) fn json_stringify_full(
                     if let Some(inner) = interp.get_object_cell(item_id) {
                         let cn = inner.borrow().class_name;
                         if cn == "String" || cn == "Number" {
-                            let s = interp.to_string_lossy(&item)?;
+                            let s = interp.to_js_string(&item)?;
                             Some(JsPropertyKey::from(s))
                         } else {
                             None
@@ -716,10 +716,7 @@ fn json_stringify_internal(
                 let n = interp.to_number_value(&value)?;
                 value = JsValue::number(n)
             }
-            "String" => {
-                let s = interp.to_string_lossy(&value)?;
-                value = JsValue::from_str(&s)
-            }
+            "String" => value = JsValue::string(interp.to_js_string(&value)?),
             "Boolean" => {
                 if let Some(cell) = interp.get_object_cell(value_id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()

@@ -38,3 +38,7 @@ assert.sameValue(escape("a" + L + "b"), "a%uD800b", "escape mixed");
 assert.sameValue(unescape("%uD800"), L, "unescape %u");
 assert.sameValue(unescape(L), L, "unescape passes lone surrogate through");
 assert.sameValue(unescape("a" + H + "%41"), "a" + H + "A", "unescape mixed");
+
+assert.sameValue(JSON.stringify(new String(L)), '"\\ud800"', "JSON.stringify String wrapper");
+assert.sameValue(
+  JSON.stringify({ "\ud800": 1, a: 2 }, [new String(L)]), '{"\\ud800":1}', "JSON replacer list String object");
