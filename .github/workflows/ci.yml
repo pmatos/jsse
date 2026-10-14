@@ -70,7 +70,7 @@ jobs:
       # Frame sizes depend on inlining, so the recursion limits must trip before
       # the native stack runs out on the shipped fat-LTO binary (#935).
       - name: Run recursion-limit tests (shipped binary)
-        run: uv run python scripts/run-custom-tests.py --timeout 60 tests/recursion-limit-generator-for-of.js tests/recursion-limit-interpreter.js tests/recursion-limit-parser.js
+        run: uv run python scripts/run-custom-tests.py --timeout 60 tests/recursion-limit-*.js
 
       - name: Run test262 smoke set
         run: |

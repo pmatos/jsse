@@ -40,19 +40,17 @@ foldhash = "0.2"
 smallvec = "1"
 getrandom = "0.4"
 
-# Shipped build: fat LTO and a single codegen unit measured +6.4% JetStream 3
-# score geomean (44 of 48 benchmarks faster, none worse than -3.6%) and -5.9%
-# micro-suite wall time (geomean) on buildbox3, at roughly 2.5-3x crate build
-# time (issue #935). For quick local iteration, where full-crate LTO is slow:
-#   CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release
+# Shipped build: fat LTO and one codegen unit, +6.4% JetStream 3 score geomean
+# and -5.9% micro-suite wall time for ~2.5-3x crate build time (issue #935;
+# docs/perf/2026-10-14/935-fat-lto.md). AGENTS.md ("Building") has the
+# env-var override for quick local iteration.
 [profile.release]
 lto = "fat"
 codegen-units = 1
 
-# Release speed without the full-crate LTO relink. Used where a binary is built
-# only to be tested, since `cargo test --release` links the lib, the bin and
-# every integration test against the release profile: CI unit tests,
-# `cargo test --profile release-nolto`, and the mutation-testing oracle.
+# Release speed without the full-crate LTO relink, for binaries built only to be
+# tested (`cargo test --release` would LTO-relink the bin and every integration
+# test): CI unit tests, the mutation-testing oracle, release-checked.
 [profile.release-nolto]
 inherits = "release"
 lto = false
