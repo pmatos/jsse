@@ -3570,9 +3570,7 @@ impl Interpreter {
         let value = match import_type {
             ImportModuleType::Json => {
                 let source = Self::read_module_text(path)?;
-                let text = crate::interpreter::helpers::json_text_from_units(
-                    &source.encode_utf16().collect::<Vec<u16>>(),
-                );
+                let text = crate::interpreter::helpers::JsonText::from_str(&source);
                 match crate::interpreter::helpers::json_parse_value(self, &text) {
                     Completion::Normal(value) => value,
                     Completion::Throw(error) => return Err(error),

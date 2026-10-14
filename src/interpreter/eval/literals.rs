@@ -78,7 +78,13 @@ impl Interpreter {
         let raw_vals: Vec<JsValue> = tmpl
             .raw_quasis
             .iter()
-            .map(|s| JsValue::string(JsString::from_str(s)))
+            .map(|s| {
+                JsValue::string(if tmpl.raw_stand_ins {
+                    crate::interpreter::builtins::regexp::regex_output_to_js_string(s)
+                } else {
+                    JsString::from_str(s)
+                })
+            })
             .collect();
 
         let raw_arr = self.create_frozen_template_array(raw_vals);

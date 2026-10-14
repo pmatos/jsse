@@ -1810,6 +1810,7 @@ fn transform_yielding_expression(
                 id: tpl.id,
                 quasis: tpl.quasis.clone(),
                 raw_quasis: tpl.raw_quasis.clone(),
+                raw_stand_ins: tpl.raw_stand_ins,
                 expressions: new_exprs,
             });
             emit_expression_with_binding(&combined, &binding, ctx);
@@ -1840,6 +1841,7 @@ fn transform_yielding_expression(
                     id: tpl.id,
                     quasis: tpl.quasis.clone(),
                     raw_quasis: tpl.raw_quasis.clone(),
+                    raw_stand_ins: tpl.raw_stand_ins,
                     expressions: new_exprs,
                 },
             );
@@ -4180,6 +4182,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
                 id: tl.id,
                 quasis: tl.quasis.clone(),
                 raw_quasis: tl.raw_quasis.clone(),
+                raw_stand_ins: tl.raw_stand_ins,
                 expressions: tl.expressions.iter().map(rewrite_expr).collect(),
             },
         ),
@@ -4187,6 +4190,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             id: tl.id,
             quasis: tl.quasis.clone(),
             raw_quasis: tl.raw_quasis.clone(),
+            raw_stand_ins: tl.raw_stand_ins,
             expressions: tl.expressions.iter().map(rewrite_expr).collect(),
         }),
         Expression::Typeof(e) => Expression::Typeof(ExprBox::new(rewrite_expr(e))),

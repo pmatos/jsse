@@ -56,6 +56,18 @@ assert.sameValue(
   "function anonymous(\n) {\nreturn '\u{F0000}'\n}",
   "private-use code point in toString");
 
+var nested = new Function("return function() { return '" + L + "'; }")();
+assert.sameValue(nested(), L, "nested function result");
+assert.sameValue(nested.toString(), "function() { return '" + L + "'; }", "nested function toString");
+
+var Cls = new Function("return class C { m() { return '" + L + "'; } }")();
+assert.sameValue(Cls.toString(), "class C { m() { return '" + L + "'; } }", "nested class toString");
+assert.sameValue(new Cls().m.toString(), "m() { return '" + L + "'; }", "nested method toString");
+
+assert.sameValue(new Function("return String.raw`a" + L + "\\n`")(), "a" + L + "\\n", "String.raw");
+var rawStrings = new Function("tag", "return tag`x" + H + "y`")(function(strings) { return strings.raw[0]; });
+assert.sameValue(rawStrings, "x" + H + "y", "template raw string");
+
 assert.throws(SyntaxError, function() {
   new Function("var " + L);
 }, "lone surrogate is not an identifier character");

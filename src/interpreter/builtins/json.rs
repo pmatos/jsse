@@ -85,7 +85,7 @@ impl Interpreter {
             |interp, _this, args: &[JsValue]| {
                 let raw = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let s = match interp.to_js_string(&raw) {
-                    Ok(s) => json_text_from_units(s.as_units()),
+                    Ok(s) => JsonText::from_units(s.as_units()),
                     Err(e) => return Completion::Throw(e),
                 };
                 let reviver = args.get(1).cloned();
@@ -114,7 +114,7 @@ impl Interpreter {
                                 let mut sm = smap;
                                 sm.insert(
                                     (wrapper_id, JsPropertyKey::from_str("")),
-                                    s.trim().to_string(),
+                                    s.text.trim().to_string(),
                                 );
                                 Some(sm)
                             } else {
@@ -127,6 +127,7 @@ impl Interpreter {
                                 "",
                                 reviver.as_ref().unwrap(),
                                 &source_map,
+                                s.stand_ins,
                             )
                         }
                         other => other,
@@ -175,7 +176,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 // Validate it's valid JSON
-                if let Completion::Throw(e) = json_parse_value(interp, &json_text_from_units(units))
+                if let Completion::Throw(e) = json_parse_value(interp, &JsonText::from_units(units))
                 {
                     return Completion::Throw(e);
                 }

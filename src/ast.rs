@@ -33,12 +33,13 @@ impl SourceText {
         }
     }
 
-    /// Source text built from a string whose lone surrogates were mapped to
-    /// private-use code points, as the dynamic `Function` constructors do.
-    pub(crate) fn from_pua_encoded(source: String) -> Self {
-        let mut text = Self::from(source);
-        text.start |= PUA_ENCODED;
-        text
+    /// Marks text whose lone surrogates were mapped to private-use code points
+    /// (dynamic `Function` source), so `toString` maps them back.
+    pub(crate) fn with_pua_encoded(mut self, encoded: bool) -> Self {
+        if encoded {
+            self.start |= PUA_ENCODED;
+        }
+        self
     }
 
     pub(crate) fn is_pua_encoded(&self) -> bool {
@@ -1420,6 +1421,9 @@ pub(crate) struct TemplateLiteral {
     pub id: u64,
     pub quasis: Vec<Option<Vec<u16>>>,
     pub raw_quasis: Vec<String>,
+    /// `raw_quasis` carry lone surrogates as private-use stand-ins (source of
+    /// a dynamic function that had lone surrogates).
+    pub raw_stand_ins: bool,
     pub expressions: Vec<Expression>,
 }
 

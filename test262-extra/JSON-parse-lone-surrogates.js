@@ -51,3 +51,19 @@ assert.throws(SyntaxError, function() {
 assert.throws(SyntaxError, function() {
   JSON.rawJSON(" " + L);
 }, "rawJSON with leading whitespace");
+
+var genuine = "\u{F0000}\u{F07FF}";
+var sources = [];
+JSON.parse('["' + genuine + '"]', function(key, value, context) {
+  if (key !== "") sources.push(context.source);
+  return value;
+});
+assert.compareArray(sources, ['"' + genuine + '"'], "reviver context.source of private-use code points");
+assert.sameValue(JSON.parse('"' + genuine + '"'), genuine, "private-use code points round trip");
+var message;
+try {
+  JSON.parse('"' + genuine + '" x');
+} catch (e) {
+  message = e.message;
+}
+assert.sameValue(typeof message, "string", "private-use text followed by junk is a SyntaxError");

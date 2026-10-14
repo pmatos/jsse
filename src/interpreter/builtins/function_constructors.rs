@@ -3,7 +3,8 @@ use super::super::*;
 // ToString of each CreateDynamicFunction argument, joined as the spec's P and
 // bodyString. Lone surrogates travel through the UTF-8 parser as private-use
 // code points, so `pua` selects the lexer that maps them back inside string
-// literals; text without lone surrogates keeps the plain lexer.
+// literals and template raw strings; text without lone surrogates keeps the
+// plain lexer.
 fn dynamic_function_text(
     interp: &mut Interpreter,
     args: &[JsValue],
@@ -37,7 +38,7 @@ fn parse_dynamic_function_source(
     pua: bool,
 ) -> Result<crate::ast::Program, parser::ParseError> {
     let parser = if pua {
-        parser::Parser::new_for_eval(source)
+        parser::Parser::new_for_dynamic_function(source)
     } else {
         parser::Parser::new(source)
     };
@@ -171,11 +172,9 @@ impl Interpreter {
                             is_generator: false,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(if pua {
-                                SourceText::from_pua_encoded(fn_source_text)
-                            } else {
-                                fn_source_text.into()
-                            }),
+                            source_text: Some(
+                                SourceText::from(fn_source_text).with_pua_encoded(pua),
+                            ),
                             uses_arguments: true, // conservative for dynamic Function()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -723,11 +722,9 @@ impl Interpreter {
                             is_generator: false,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(if pua {
-                                SourceText::from_pua_encoded(fn_source_text)
-                            } else {
-                                fn_source_text.into()
-                            }),
+                            source_text: Some(
+                                SourceText::from(fn_source_text).with_pua_encoded(pua),
+                            ),
                             uses_arguments: true, // conservative for dynamic AsyncFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -856,11 +853,9 @@ impl Interpreter {
                             is_generator: true,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(if pua {
-                                SourceText::from_pua_encoded(fn_source_text)
-                            } else {
-                                fn_source_text.into()
-                            }),
+                            source_text: Some(
+                                SourceText::from(fn_source_text).with_pua_encoded(pua),
+                            ),
                             uses_arguments: true, // conservative for dynamic GeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -991,11 +986,9 @@ impl Interpreter {
                             is_generator: true,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(if pua {
-                                SourceText::from_pua_encoded(fn_source_text)
-                            } else {
-                                fn_source_text.into()
-                            }),
+                            source_text: Some(
+                                SourceText::from(fn_source_text).with_pua_encoded(pua),
+                            ),
                             uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };

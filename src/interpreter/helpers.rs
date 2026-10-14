@@ -911,53 +911,80 @@ pub(crate) fn json_trim(s: &str) -> &str {
 
 pub(crate) type SourceTextMap = HashMap<(u64, JsPropertyKey), String>;
 
-// JSON text as the Rust `&str` the parser works on. A lone surrogate becomes
-// the private-use code point `pua_to_surrogate` inverts (the engine-wide
-// convention, see `js_string_to_regex_input`). A genuine code point in that
-// reserved range is written as the surrogate-pair escape it would unescape
-// from, so the inversion in `json_unescape_js_string` never misreads it.
-pub(crate) fn json_text_from_units(units: &[u16]) -> String {
-    use std::fmt::Write;
-    if units.iter().all(|&cu| cu < 0x80) {
-        return units.iter().map(|&cu| char::from(cu as u8)).collect();
-    }
-    let mut text = String::with_capacity(units.len());
-    for decoded in char::decode_utf16(units.iter().copied()) {
-        match decoded {
-            Ok(c) if crate::interpreter::pua_to_surrogate(c).is_some() => {
-                let cp = c as u32 - 0x10000;
-                let _ = write!(
-                    text,
-                    "\\u{:04x}\\u{:04x}",
-                    0xD800 + (cp >> 10),
-                    0xDC00 + (cp & 0x3FF)
-                );
-            }
-            Ok(c) => text.push(c),
-            Err(e) => text.push(crate::interpreter::surrogate_to_pua(u32::from(
-                e.unpaired_surrogate(),
-            ))),
-        }
-    }
-    text
+// JSON text as the Rust `&str` the parser works on. When the code units hold
+// a lone surrogate it is written as the private-use code point
+// `pua_to_surrogate` inverts (the engine-wide convention, see
+// `js_string_to_regex_input`) and `stand_ins` tells the unescaper to map it
+// back. A genuine code point from that reserved range is then written as the
+// surrogate-pair escape it unescapes from, so it is never misread. Text with
+// no lone surrogate is passed through untouched.
+pub(crate) struct JsonText {
+    pub(crate) text: String,
+    pub(crate) stand_ins: bool,
 }
 
-pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
-    json_parse_value_inner(interp, s, None, s)
+impl JsonText {
+    pub(crate) fn from_units(units: &[u16]) -> Self {
+        use std::fmt::Write;
+        if units.iter().all(|&cu| cu < 0x80) {
+            return Self {
+                text: units.iter().map(|&cu| char::from(cu as u8)).collect(),
+                stand_ins: false,
+            };
+        }
+        let stand_ins = char::decode_utf16(units.iter().copied()).any(|d| d.is_err());
+        let mut text = String::with_capacity(units.len());
+        for decoded in char::decode_utf16(units.iter().copied()) {
+            match decoded {
+                Ok(c) if stand_ins && crate::interpreter::pua_to_surrogate(c).is_some() => {
+                    let cp = c as u32 - 0x10000;
+                    let _ = write!(
+                        text,
+                        "\\u{:04x}\\u{:04x}",
+                        0xD800 + (cp >> 10),
+                        0xDC00 + (cp & 0x3FF)
+                    );
+                }
+                Ok(c) => text.push(c),
+                Err(e) => text.push(crate::interpreter::surrogate_to_pua(u32::from(
+                    e.unpaired_surrogate(),
+                ))),
+            }
+        }
+        Self { text, stand_ins }
+    }
+
+    pub(crate) fn from_str(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            stand_ins: false,
+        }
+    }
+}
+
+pub(crate) fn json_parse_value(interp: &mut Interpreter, input: &JsonText) -> Completion {
+    json_parse_value_inner(interp, &input.text, input.stand_ins, None, &input.text)
 }
 
 pub(crate) fn json_parse_value_with_source(
     interp: &mut Interpreter,
-    s: &str,
+    input: &JsonText,
 ) -> (Completion, SourceTextMap) {
     let mut source_map = SourceTextMap::default();
-    let result = json_parse_value_inner(interp, s, Some(&mut source_map), s);
+    let result = json_parse_value_inner(
+        interp,
+        &input.text,
+        input.stand_ins,
+        Some(&mut source_map),
+        &input.text,
+    );
     (result, source_map)
 }
 
 fn json_parse_value_inner(
     interp: &mut Interpreter,
     s: &str,
+    stand_ins: bool,
     mut source_map: Option<&mut SourceTextMap>,
     root_source: &str,
 ) -> Completion {
@@ -977,7 +1004,7 @@ fn json_parse_value_inner(
             let err = interp.create_error("SyntaxError", &msg);
             return Completion::Throw(err);
         }
-        return Completion::Normal(JsValue::string(json_unescape_js_string(inner)));
+        return Completion::Normal(JsValue::string(json_unescape_js_string(inner, stand_ins)));
     }
     if json_is_valid_number(s)
         && let Ok(n) = s.parse::<f64>()
@@ -987,13 +1014,19 @@ fn json_parse_value_inner(
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
         if let Some(token) = json_invalid_comma_token(inner, ']') {
-            return json_unexpected_token_error(interp, token, root_source);
+            return json_unexpected_token_error(interp, token, root_source, stand_ins);
         }
         let items = json_split_items(inner);
         let mut parsed_items: Vec<(JsValue, String)> = Vec::new();
         for item in &items {
             let trimmed_src = json_trim(item).to_string();
-            match json_parse_value_inner(interp, item, source_map.as_deref_mut(), root_source) {
+            match json_parse_value_inner(
+                interp,
+                item,
+                stand_ins,
+                source_map.as_deref_mut(),
+                root_source,
+            ) {
                 Completion::Normal(v) => parsed_items.push((v, trimmed_src)),
                 other => return other,
             }
@@ -1014,7 +1047,7 @@ fn json_parse_value_inner(
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
         if let Some(token) = json_invalid_comma_token(inner, '}') {
-            return json_unexpected_token_error(interp, token, root_source);
+            return json_unexpected_token_error(interp, token, root_source, stand_ins);
         }
         let pairs = json_split_items(inner);
         let obj_id = interp.create_object_id();
@@ -1038,13 +1071,19 @@ fn json_parse_value_inner(
                     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                     return Completion::Throw(err);
                 }
-                JsPropertyKey::from_js_string(&json_unescape_js_string(inner))
+                JsPropertyKey::from_js_string(&json_unescape_js_string(inner, stand_ins))
             } else {
                 let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                 return Completion::Throw(err);
             };
             let val_src = json_trim(val_str).to_string();
-            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut(), root_source) {
+            match json_parse_value_inner(
+                interp,
+                val_str,
+                stand_ins,
+                source_map.as_deref_mut(),
+                root_source,
+            ) {
                 Completion::Normal(v) => {
                     if let Some(ref mut smap) = source_map
                         && is_json_primitive(&v)
@@ -1062,19 +1101,24 @@ fn json_parse_value_inner(
         return Completion::Normal(JsValue::object(obj_id));
     }
     if let Some(token) = s.chars().next() {
-        return json_unexpected_token_error(interp, token, root_source);
+        return json_unexpected_token_error(interp, token, root_source, stand_ins);
     }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
     Completion::Throw(err)
 }
 
-fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &str) -> Completion {
+fn json_unexpected_token_error(
+    interp: &mut Interpreter,
+    token: char,
+    source: &str,
+    stand_ins: bool,
+) -> Completion {
     const MAX_SOURCE_CHARS: usize = 20;
     const TRUNCATED_SOURCE_CHARS: usize = 10;
 
     // A lone surrogate reads as U+FFFD in the message, like any host text.
     let as_replacement = |c: char| -> char {
-        if crate::interpreter::pua_to_surrogate(c).is_some() {
+        if stand_ins && crate::interpreter::pua_to_surrogate(c).is_some() {
             '\u{FFFD}'
         } else {
             c
@@ -1131,7 +1175,7 @@ fn json_validate_string(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn json_unescape_js_string(s: &str) -> JsString {
+fn json_unescape_js_string(s: &str, stand_ins: bool) -> JsString {
     let mut result = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
@@ -1157,7 +1201,7 @@ fn json_unescape_js_string(s: &str) -> JsString {
                 }
                 None => result.push(b'\\' as u16),
             }
-        } else if let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch) {
+        } else if stand_ins && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch) {
             result.push(surrogate);
         } else {
             result.extend(ch.encode_utf16(&mut [0; 2]).iter().copied());
@@ -1286,6 +1330,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
     name: &K,
     reviver: &JsValue,
     source_map: &Option<SourceTextMap>,
+    stand_ins: bool,
 ) -> Completion {
     let val = if let Some(holder_id) = holder.as_object_id() {
         match interp.get_object_property(holder_id, name, holder) {
@@ -1314,7 +1359,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
             };
             for i in 0..len {
                 let key = i.to_string();
-                match json_internalize(interp, &val, &key, reviver, source_map) {
+                match json_internalize(interp, &val, &key, reviver, source_map, stand_ins) {
                     Completion::Normal(new_val) => {
                         if let Err(e) = json_internalize_apply(interp, obj_id, &key, new_val) {
                             return Completion::Throw(e);
@@ -1330,7 +1375,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                 Err(e) => return Completion::Throw(e),
             };
             for key in keys {
-                match json_internalize(interp, &val, &key, reviver, source_map) {
+                match json_internalize(interp, &val, &key, reviver, source_map, stand_ins) {
                     Completion::Normal(new_val) => {
                         if let Err(e) = json_internalize_apply(interp, obj_id, &key, new_val) {
                             return Completion::Throw(e);
@@ -1371,7 +1416,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                         }
                         // Source includes quotes, parse it to compare
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_js_string(inner).as_units() == units
+                        json_unescape_js_string(inner, stand_ins).as_units() == units
                     })
                     .unwrap_or(false)
             };
@@ -1381,9 +1426,11 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
                     .borrow_mut()
                     .insert_value(
                         "source".to_string(),
-                        JsValue::string(
-                            crate::interpreter::builtins::regexp::regex_output_to_js_string(src),
-                        ),
+                        JsValue::string(if stand_ins {
+                            crate::interpreter::builtins::regexp::regex_output_to_js_string(src)
+                        } else {
+                            JsString::from_str(src)
+                        }),
                     );
             }
         }
