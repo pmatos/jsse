@@ -63,6 +63,7 @@ pub(crate) struct PerfCounters {
     /// Where a `[[Call]]` came from, and what it reached.
     pub(crate) calls_from_vm: u64,
     pub(crate) calls_to_native: u64,
+    pub(crate) trivial_getter_hits: u64,
     pub(crate) calls_to_user: u64,
     /// GC collections, and the wall time inside them. Collections are rare
     /// enough (thousands, not millions) that timing them adds no measurable
@@ -124,6 +125,7 @@ impl Default for PerfCounters {
             compile_bail: FxHashMap::default(),
             calls_from_vm: 0,
             calls_to_native: 0,
+            trivial_getter_hits: 0,
             calls_to_user: 0,
             gc_minor: 0,
             gc_major: 0,
@@ -251,6 +253,11 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tcompile_bail\t{bail_total}");
         let _ = writeln!(out, "PERF\tcalls_from_vm\t{}", self.calls_from_vm);
         let _ = writeln!(out, "PERF\tcalls_to_native\t{}", self.calls_to_native);
+        let _ = writeln!(
+            out,
+            "PERF\ttrivial_getter_hits\t{}",
+            self.trivial_getter_hits
+        );
         let _ = writeln!(out, "PERF\tcalls_to_user\t{}", self.calls_to_user);
         let _ = writeln!(out, "PERF\tgc_minor\t{}", self.gc_minor);
         let _ = writeln!(out, "PERF\tgc_major\t{}", self.gc_major);

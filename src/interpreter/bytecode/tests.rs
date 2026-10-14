@@ -1327,6 +1327,31 @@ fn private_member_access_compiles_to_private_ops() {
 }
 
 #[test]
+fn trivial_private_getter_shape_is_recognised() {
+    use crate::ast::{BinaryOp, MemberProperty, PropSiteId};
+    let read = || {
+        Expression::Member(
+            ExprBox::new(Expression::This),
+            MemberProperty::Private("x".to_string()),
+            PropSiteId::UNASSIGNED,
+        )
+    };
+    let chunk = compile_body(&[Statement::Return(Some(read()))]).expect("compiles");
+    assert_eq!(chunk.detect_trivial_private_getter(), Some(0));
+
+    let sum = Expression::Binary(
+        BinaryOp::Add,
+        ExprBox::new(read()),
+        ExprBox::new(Expression::Literal(Literal::Number(1.0))),
+    );
+    let chunk = compile_body(&[Statement::Return(Some(sum))]).expect("compiles");
+    assert_eq!(chunk.detect_trivial_private_getter(), None);
+
+    let chunk = compile_body(&[Statement::Expression(read())]).expect("compiles");
+    assert_eq!(chunk.detect_trivial_private_getter(), None);
+}
+
+#[test]
 fn private_member_forms_run_identically_on_both_engines() {
     for (source, expected) in [
         (

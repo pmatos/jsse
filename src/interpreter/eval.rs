@@ -5293,6 +5293,66 @@ impl Interpreter {
         }
     }
 
+    /// [[Call]] of an accessor's getter with no arguments. A getter whose
+    /// whole body is `return this.#name;` reads the private element straight
+    /// off the receiver: it runs no user code of its own, so the frame,
+    /// environment and parameter binding a call would build are unobservable.
+    pub(crate) fn call_getter(&mut self, getter: &JsValue, receiver: &JsValue) -> Completion {
+        if self.bytecode_enabled
+            && let Some(result) = self.call_trivial_private_getter(getter, receiver)
+        {
+            return result;
+        }
+        self.call_function(getter, receiver, &[])
+    }
+
+    fn call_trivial_private_getter(
+        &mut self,
+        getter: &JsValue,
+        receiver: &JsValue,
+    ) -> Option<Completion> {
+        use crate::interpreter::bytecode::BytecodeCacheState;
+        let obj = self.get_object_cell(getter.as_object_id()?)?;
+        let (chunk, idx, closure, function_realm) = {
+            let b = obj.borrow();
+            let Some(JsFunction::User {
+                closure,
+                is_arrow: false,
+                is_strict: true,
+                is_generator: false,
+                is_async: false,
+                has_simple_params: true,
+                bytecode_cache: BytecodeCacheState::Compiled(chunk),
+                ..
+            }) = b.callable.as_deref()
+            else {
+                return None;
+            };
+            let idx = chunk.trivial_private_getter?;
+            if b.is_proxy()
+                || b.is_proxy_revoked()
+                || b.wrapped().is_some()
+                || b.is_class_constructor()
+            {
+                return None;
+            }
+            (chunk.clone(), idx, closure.clone(), b.function_realm())
+        };
+        let name = chunk.private_names.get(usize::from(idx))?;
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.trivial_getter_hits += 1;
+        }
+        let id = self.resolve_private_name(name, &closure);
+        let caller_realm = self.current_realm_id;
+        if let Some(realm) = function_realm {
+            self.current_realm_id = realm;
+        }
+        let result = self.private_get_resolved(receiver, id, name);
+        self.current_realm_id = caller_realm;
+        Some(result)
+    }
+
     /// Issue #71 Phase-3 follow-up: call_function variant for IC-validated
     /// hits. The first dispatch skips the proxy/wrapped/class-ctor entry
     /// checks (the IC's `Mono` state guarantees the callable is a plain
