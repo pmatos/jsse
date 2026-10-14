@@ -1967,21 +1967,7 @@ fn unescape_q_string(s: &str, base: u32) -> String {
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             i += 1;
-            if let Some(cp) = parse_v_class_escape(&chars, &mut i) {
-                let mut cp = cp;
-                if (0xD800..=0xDBFF).contains(&cp)
-                    && chars.get(i) == Some(&'\\')
-                    && chars.get(i + 1) == Some(&'u')
-                {
-                    let saved = i;
-                    i += 1;
-                    match parse_v_class_escape(&chars, &mut i) {
-                        Some(trail) if (0xDC00..=0xDFFF).contains(&trail) => {
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
-                        }
-                        _ => i = saved,
-                    }
-                }
+            if let Some(cp) = parse_v_class_escape_pair(&chars, &mut i) {
                 if is_surrogate(cp) {
                     result.push(surrogate_to_stand_in(cp, base));
                 } else if let Some(ch) = char::from_u32(cp) {
@@ -4626,11 +4612,12 @@ enum VClassAtom {
 }
 
 fn v_class_hex_value(chars: &[char]) -> Option<u32> {
-    if chars.is_empty() || !chars.iter().all(|c| c.is_ascii_hexdigit()) {
+    if chars.is_empty() {
         return None;
     }
-    let hex: String = chars.iter().collect();
-    u32::from_str_radix(&hex, 16).ok()
+    chars.iter().try_fold(0u32, |acc, c| {
+        acc.checked_mul(16)?.checked_add(c.to_digit(16)?)
+    })
 }
 
 /// One ClassSetCharacter or class-escape operand starting at `chars[*i]`
