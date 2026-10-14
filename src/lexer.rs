@@ -276,7 +276,9 @@ impl<'a> Lexer<'a> {
         Self::new_with_pua_undo(source, false)
     }
 
-    pub(crate) fn new_for_eval(source: &'a str) -> Self {
+    /// Lexer for source from `encode_source_units` whose lone surrogates are
+    /// private-use stand-ins: string and template values restore them.
+    pub(crate) fn new_with_stand_ins(source: &'a str) -> Self {
         Self::new_with_pua_undo(source, true)
     }
 
@@ -312,6 +314,25 @@ impl<'a> Lexer<'a> {
             self.current = self.chars.next();
         }
         ch
+    }
+
+    /// Appends `ch`, just consumed from a string or template body, as code
+    /// units. In stand-in source a stand-in is a lone surrogate and the escape
+    /// marker makes the next character literal.
+    fn push_source_char(&mut self, ch: char, out: &mut Vec<u16>) {
+        let ch = if self.pua_undo {
+            if ch == crate::interpreter::SOURCE_ESCAPE {
+                self.advance().unwrap_or(ch)
+            } else if let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch) {
+                out.push(surrogate);
+                return;
+            } else {
+                ch
+            }
+        } else {
+            ch
+        };
+        out.extend_from_slice(ch.encode_utf16(&mut [0; 2]));
     }
 
     fn peek_next(&self) -> Option<char> {
@@ -423,18 +444,7 @@ impl<'a> Lexer<'a> {
                     has_escape = true;
                     self.read_string_escape_into(&mut code_units, &mut has_legacy_octal)?;
                 }
-                Some(ch) => {
-                    if self.pua_undo
-                        && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
-                    {
-                        code_units.push(surrogate);
-                    } else {
-                        let mut buf = [0u16; 2];
-                        for cu in ch.encode_utf16(&mut buf).iter() {
-                            code_units.push(*cu);
-                        }
-                    }
-                }
+                Some(ch) => self.push_source_char(ch, &mut code_units),
             }
         }
     }
@@ -523,16 +533,7 @@ impl<'a> Lexer<'a> {
                 Ok(())
             }
             Some(ch) => {
-                if self.pua_undo
-                    && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
-                {
-                    out.push(surrogate);
-                } else {
-                    let mut buf = [0u16; 2];
-                    for cu in ch.encode_utf16(&mut buf).iter() {
-                        out.push(*cu);
-                    }
-                }
+                self.push_source_char(ch, out);
                 Ok(())
             }
         }
@@ -649,6 +650,20 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Moves the next source character into `raw`, with the literal that an
+    /// escape marker in stand-in source introduces, so a bounded scan never
+    /// separates the pair.
+    fn push_raw_source_char(&mut self, raw: &mut String) {
+        let Some(ch) = self.advance() else { return };
+        raw.push(ch);
+        if self.pua_undo
+            && ch == crate::interpreter::SOURCE_ESCAPE
+            && let Some(literal) = self.advance()
+        {
+            raw.push(literal);
+        }
+    }
+
     /// For invalid escape sequences in tagged templates: advance past the
     /// escape identifier character(s) without consuming template delimiters.
     fn scan_invalid_template_escape(&mut self, raw: &mut String) {
@@ -658,36 +673,36 @@ impl<'a> Lexer<'a> {
         }
         match self.peek() {
             Some('x') => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
                 // Skip up to 2 chars for hex digits
                 for _ in 0..2 {
                     match self.peek() {
                         Some(c) if !is_template_delim(c) => {
-                            raw.push(self.advance().unwrap());
+                            self.push_raw_source_char(raw);
                         }
                         _ => break,
                     }
                 }
             }
             Some('u') => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
                 if self.peek() == Some('{') {
-                    raw.push(self.advance().unwrap());
+                    self.push_raw_source_char(raw);
                     while let Some(c) = self.peek() {
                         if c == '}' {
-                            raw.push(self.advance().unwrap());
+                            self.push_raw_source_char(raw);
                             break;
                         }
                         if is_template_delim(c) {
                             break;
                         }
-                        raw.push(self.advance().unwrap());
+                        self.push_raw_source_char(raw);
                     }
                 } else {
                     for _ in 0..4 {
                         match self.peek() {
                             Some(c) if !is_template_delim(c) => {
-                                raw.push(self.advance().unwrap());
+                                self.push_raw_source_char(raw);
                             }
                             _ => break,
                         }
@@ -695,14 +710,14 @@ impl<'a> Lexer<'a> {
                 }
             }
             Some('0'..='9') => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
                 // Skip additional octal digits
                 while let Some('0'..='7') = self.peek() {
-                    raw.push(self.advance().unwrap());
+                    self.push_raw_source_char(raw);
                 }
             }
             Some(_) => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
             }
             None => {}
         }
@@ -1079,6 +1094,9 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        if self.pua_undo {
+            pattern = crate::interpreter::unescape_source_text(&pattern);
+        }
         Ok(Token::RegExpLiteral { pattern, flags })
     }
 
@@ -1306,17 +1324,16 @@ impl<'a> Lexer<'a> {
                 }
                 Some(ch) => {
                     raw.push(ch);
+                    if self.pua_undo
+                        && ch == crate::interpreter::SOURCE_ESCAPE
+                        && let Some(literal) = self.peek()
+                    {
+                        raw.push(literal);
+                    }
                     if let Some(ref mut c) = cooked {
-                        if self.pua_undo
-                            && let Some(surrogate) = crate::interpreter::pua_to_surrogate(ch)
-                        {
-                            c.push(surrogate);
-                        } else {
-                            let mut buf = [0u16; 2];
-                            for cu in ch.encode_utf16(&mut buf).iter() {
-                                c.push(*cu);
-                            }
-                        }
+                        self.push_source_char(ch, c);
+                    } else if self.pua_undo && ch == crate::interpreter::SOURCE_ESCAPE {
+                        self.advance();
                     }
                 }
             }

@@ -196,17 +196,23 @@ impl<'a> Parser<'a> {
         Self::new_with_lexer(source, Lexer::new(source))
     }
 
-    pub(crate) fn new_for_eval(source: &'a str) -> Result<Self, ParseError> {
-        Self::new_with_lexer(source, Lexer::new_for_eval(source))
-    }
-
-    /// Parser for a dynamic function's source in which lone surrogates were
-    /// mapped to private-use code points: string and template values, template
-    /// raw strings and function source text all restore them.
-    pub(crate) fn new_for_dynamic_function(source: &'a str) -> Result<Self, ParseError> {
-        let mut parser = Self::new_for_eval(source)?;
+    /// Parser for source from `encode_source_units` whose lone surrogates were
+    /// mapped to private-use code points (eval and dynamic function text):
+    /// string and template values, template raw strings and function source
+    /// text all restore them exactly.
+    pub(crate) fn new_with_stand_ins(source: &'a str) -> Result<Self, ParseError> {
+        let mut parser = Self::new_with_lexer(source, Lexer::new_with_stand_ins(source))?;
         parser.lone_surrogate_stand_ins = true;
         Ok(parser)
+    }
+
+    /// `new_with_stand_ins` when `stand_ins`, else `new`.
+    pub(crate) fn for_source(source: &'a str, stand_ins: bool) -> Result<Self, ParseError> {
+        if stand_ins {
+            Self::new_with_stand_ins(source)
+        } else {
+            Self::new(source)
+        }
     }
 
     fn new_with_lexer(source: &'a str, mut lexer: Lexer<'a>) -> Result<Self, ParseError> {

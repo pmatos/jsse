@@ -285,7 +285,7 @@ impl Interpreter {
                                 ..
                             } => {
                                 let source = if text.is_pua_encoded() {
-                                    crate::interpreter::builtins::regexp::regex_output_to_js_string(
+                                    crate::interpreter::builtins::regexp::decode_source_text(
                                         text.as_str(),
                                     )
                                 } else {

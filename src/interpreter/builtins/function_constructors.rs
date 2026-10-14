@@ -2,9 +2,10 @@ use super::super::*;
 
 // ToString of each CreateDynamicFunction argument, joined as the spec's P and
 // bodyString. Lone surrogates travel through the UTF-8 parser as private-use
-// code points, so `pua` selects the lexer that maps them back inside string
-// literals and template raw strings; text without lone surrogates keeps the
-// plain lexer.
+// code points (genuine ones from that range escaped, see
+// `encode_source_units`), so `pua` selects the lexer that maps them back inside
+// string literals and template raw strings; text without lone surrogates keeps
+// the plain lexer.
 fn dynamic_function_text(
     interp: &mut Interpreter,
     args: &[JsValue],
@@ -21,28 +22,20 @@ fn dynamic_function_text(
         }
         body = interp.to_js_string(last)?;
     }
-    let pua = has_lone_surrogate(&params) || has_lone_surrogate(body.as_units());
+    let pua = builtins::regexp::has_lone_surrogate(&params)
+        || builtins::regexp::has_lone_surrogate(body.as_units());
     Ok((
-        builtins::regexp::js_string_to_regex_input(&params),
-        builtins::regexp::js_string_to_regex_input(body.as_units()),
+        builtins::regexp::encode_source_units_as(&params, pua),
+        builtins::regexp::encode_source_units_as(body.as_units(), pua),
         pua,
     ))
-}
-
-fn has_lone_surrogate(units: &[u16]) -> bool {
-    char::decode_utf16(units.iter().copied()).any(|r| r.is_err())
 }
 
 fn parse_dynamic_function_source(
     source: &str,
     pua: bool,
 ) -> Result<crate::ast::Program, parser::ParseError> {
-    let parser = if pua {
-        parser::Parser::new_for_dynamic_function(source)
-    } else {
-        parser::Parser::new(source)
-    };
-    parser.and_then(|mut p| p.parse_program())
+    parser::Parser::for_source(source, pua).and_then(|mut p| p.parse_program())
 }
 
 impl Interpreter {

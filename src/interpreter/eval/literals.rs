@@ -80,7 +80,7 @@ impl Interpreter {
             .iter()
             .map(|s| {
                 JsValue::string(if tmpl.raw_stand_ins {
-                    crate::interpreter::builtins::regexp::regex_output_to_js_string(s)
+                    crate::interpreter::builtins::regexp::decode_source_text(s)
                 } else {
                     JsString::from_str(s)
                 })
