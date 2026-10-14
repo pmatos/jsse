@@ -293,13 +293,13 @@ impl Interpreter {
                 if has_map {
                     let key = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
                     let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    interp.gc_write_barrier_value(obj, &key);
-                    interp.gc_write_barrier_value(obj, &value);
+                    let young = interp.gc_write_barrier_entry(obj, &[&key, &value]);
                     let mut borrowed = obj.borrow_mut_untracked();
-                    borrowed
-                        .map_data_mut()
-                        .unwrap()
-                        .upsert((key, value), |old, new| old.1 = new.1);
+                    borrowed.map_data_mut().unwrap().upsert_marking(
+                        (key, value),
+                        |old, new| old.1 = new.1,
+                        young,
+                    );
                     return Completion::Normal(this.clone());
                 }
             }
@@ -390,13 +390,16 @@ impl Interpreter {
             };
             let key = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
             let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            interp.gc_write_barrier_value(&obj, &key);
-            interp.gc_write_barrier_value(&obj, &value);
+            let young = interp.gc_write_barrier_entry(&obj, &[&key, &value]);
             let mut result = value.clone();
             obj.borrow_mut_untracked()
                 .map_data_mut()
                 .unwrap()
-                .upsert((key, value), |existing, _| result = existing.1.clone());
+                .upsert_marking(
+                    (key, value),
+                    |existing, _| result = existing.1.clone(),
+                    young,
+                );
             Completion::Normal(result)
         });
 
@@ -432,12 +435,11 @@ impl Interpreter {
             };
             // Step 7: Re-check if key was inserted by callback
             {
-                interp.gc_write_barrier_value(&obj, &key);
-                interp.gc_write_barrier_value(&obj, &value);
+                let young = interp.gc_write_barrier_entry(&obj, &[&key, &value]);
                 let mut borrowed = obj.borrow_mut_untracked();
                 let entries = borrowed.map_data_mut().unwrap();
                 // Step 8-9: update the entry the callback inserted, else append
-                entries.upsert((key, value.clone()), |old, new| old.1 = new.1);
+                entries.upsert_marking((key, value.clone()), |old, new| old.1 = new.1, young);
             }
             Completion::Normal(value)
         });
@@ -848,9 +850,12 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let value = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
-            interp.gc_write_barrier_value(&obj, &value);
+            let young = interp.gc_write_barrier_entry(&obj, &[&value]);
             let mut borrowed = obj.borrow_mut_untracked();
-            borrowed.set_data_mut().unwrap().upsert(value, |_, _| {});
+            borrowed
+                .set_data_mut()
+                .unwrap()
+                .upsert_marking(value, |_, _| {}, young);
             Completion::Normal(this.clone())
         });
 

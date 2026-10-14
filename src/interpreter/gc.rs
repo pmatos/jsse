@@ -289,8 +289,8 @@ impl RootedSlots {
     }
 }
 
-fn object_ids(values: &[JsValue]) -> impl Iterator<Item = u64> + '_ {
-    values.iter().filter_map(JsValue::as_object_id)
+fn object_ids<'a>(values: impl IntoIterator<Item = &'a JsValue>) -> impl Iterator<Item = u64> {
+    values.into_iter().filter_map(JsValue::as_object_id)
 }
 
 /// The nursery as a bitmap indexed by object id, filled at the start of each
@@ -444,6 +444,33 @@ impl Interpreter {
                 owner.remember_all_if_old();
             }
         }
+    }
+
+    /// Barrier for storing an entry referencing `values` into a strong Map or
+    /// Set `owner`, run before the store. Returns whether the entry
+    /// references a nursery object while `owner` is old, in which case the
+    /// owner is queued for the next minor collection and the caller must
+    /// store through `KeyedEntries::upsert_marking(.., true)` so that only the
+    /// slot's card is re-scanned.
+    pub(crate) fn gc_write_barrier_entry(
+        &self,
+        owner: &crate::interpreter::object_arena::ObjectHandle,
+        values: &[&JsValue],
+    ) -> bool {
+        if !owner.is_old() {
+            return false;
+        }
+        let young = values.iter().any(|value| {
+            value.as_object_id().is_some_and(|id| {
+                self.objects
+                    .get_cell(id)
+                    .is_some_and(crate::interpreter::object_arena::ObjectHandle::is_young)
+            })
+        });
+        if young {
+            owner.remember_elements_if_old();
+        }
+        young
     }
 
     fn enqueue_unmarked<I>(candidates: I, worklist: &mut Vec<u64>, marks: &mut [bool])
@@ -733,33 +760,81 @@ impl Interpreter {
         }
     }
 
-    /// Re-scan the elements of a remembered Array: its dirty cards, or all of
-    /// them while the bitmap is absent. Marks every nursery object found and
-    /// reports whether any element still references one, plus whether the
-    /// Array is large enough to track by card, in which case `retained_cards`
-    /// lists the cards that must stay dirty.
-    fn scan_remembered_elements(
+    /// Re-scan the bulk storage of a remembered object that has card tracking
+    /// (an Array's elements, a strong Map's or Set's entries): its dirty
+    /// cards, or all of them while the bitmap is absent. Marks every nursery
+    /// object found and reports whether any of it still references one
+    /// (for storage too small to track by card), plus whether the storage is
+    /// large enough to track by card, in which case `retained_cards` lists
+    /// the cards that must stay dirty.
+    fn scan_remembered_bulk(
         &self,
         obj: &JsObjectData,
         young: &YoungIds,
         worklist: &mut Vec<u64>,
         retained_cards: &mut Vec<usize>,
     ) -> (bool, bool) {
-        use crate::interpreter::types::CARD_ELEMENTS;
-        let Some((elements, cards)) = obj.array_elements_and_cards() else {
-            return (false, false);
-        };
-        if elements.len() <= CARD_ELEMENTS {
-            return (
-                self.enqueue_young(object_ids(elements), worklist, young),
-                false,
-            );
+        use crate::interpreter::types::ObjectKind;
+        match &obj.kind {
+            ObjectKind::Array(_) => {
+                let Some((elements, cards)) = obj.array_elements_and_cards() else {
+                    return (false, false);
+                };
+                self.scan_cards(elements.len(), cards, retained_cards, |start, end| {
+                    self.enqueue_young(object_ids(&elements[start..end]), worklist, young)
+                })
+            }
+            ObjectKind::Map(entries) if !obj.is_weak_map() => self.scan_cards(
+                entries.slot_count(),
+                entries.dirty_card_bits(),
+                retained_cards,
+                |start, end| {
+                    let mut any = false;
+                    for (key, value) in entries.live_in_slots(start, end) {
+                        any |= self.enqueue_young(
+                            key.as_object_id().into_iter().chain(value.as_object_id()),
+                            worklist,
+                            young,
+                        );
+                    }
+                    any
+                },
+            ),
+            ObjectKind::Set(entries) if !obj.is_weak_set() => self.scan_cards(
+                entries.slot_count(),
+                entries.dirty_card_bits(),
+                retained_cards,
+                |start, end| {
+                    self.enqueue_young(
+                        object_ids(entries.live_in_slots(start, end)),
+                        worklist,
+                        young,
+                    )
+                },
+            ),
+            _ => (false, false),
         }
-        let card_count = elements.len().div_ceil(CARD_ELEMENTS);
+    }
+
+    /// Run `scan_range(start, end)` over the cards of a `len`-slot store
+    /// that are dirty (all of them for `cards == None`); it reports whether
+    /// the range still holds a nursery reference.
+    fn scan_cards(
+        &self,
+        len: usize,
+        cards: Option<&[u64]>,
+        retained_cards: &mut Vec<usize>,
+        mut scan_range: impl FnMut(usize, usize) -> bool,
+    ) -> (bool, bool) {
+        use crate::interpreter::types::CARD_ELEMENTS;
+        if len <= CARD_ELEMENTS {
+            return (scan_range(0, len), false);
+        }
+        let card_count = len.div_ceil(CARD_ELEMENTS);
         let mut scan_card = |card: usize| {
             let start = card * CARD_ELEMENTS;
-            let end = (start + CARD_ELEMENTS).min(elements.len());
-            if self.enqueue_young(object_ids(&elements[start..end]), worklist, young) {
+            let end = (start + CARD_ELEMENTS).min(len);
+            if scan_range(start, end) {
                 retained_cards.push(card);
             }
         };
@@ -831,9 +906,9 @@ impl Interpreter {
                 handle.borrow_mut_untracked().mark_all_cards_dirty();
             }
             let obj = handle.borrow_untracked();
-            // Everything but an Array's dirty cards is scanned unless the
-            // barrier knew only a card changed.
-            let scan_fields = state.fields || obj.array_data().is_none();
+            // Everything but a card-tracked object's dirty cards is scanned
+            // unless the barrier knew only a card changed.
+            let scan_fields = state.fields || !obj.has_card_tracking();
             if obj.is_weak_container() {
                 weak_containers.push(id);
             }
@@ -846,7 +921,7 @@ impl Interpreter {
             }
             retained_cards.clear();
             let (elements_young, card_mode) =
-                self.scan_remembered_elements(&obj, &young, &mut worklist, &mut retained_cards);
+                self.scan_remembered_bulk(&obj, &young, &mut worklist, &mut retained_cards);
             drop(obj);
             retain |= self.enqueue_young(children.drain(..), &mut worklist, &young);
             if retain {
@@ -974,11 +1049,24 @@ impl Interpreter {
     }
 
     /// Barrier check for the minor collector, run once marking is complete: a
-    /// nursery object that an old Array's element still references but that
+    /// nursery object that an old Array's element (or strong Map or Set
+    /// entry) still references but that
     /// nothing marked is about to be freed under it. That means a store
     /// reached the elements without remembering their card.
     #[cfg(debug_assertions)]
     fn debug_assert_old_arrays_reach_only_marked_young(&self) {
+        use crate::interpreter::types::ObjectKind;
+        let check = |id: u64, what: &str, index: usize, value: &JsValue| {
+            if let Some(child) = value.as_object_id()
+                && let Some(child_handle) = self.objects.get_cell(child)
+            {
+                assert!(
+                    !child_handle.is_young() || child_handle.is_young_marked(),
+                    "old {what} {id} entry {index} references unmarked nursery object \
+                     {child}: a store skipped the write barrier"
+                );
+            }
+        };
         for id in 0..self.objects.capacity() {
             let Some(handle) = self.objects.get_cell(id) else {
                 continue;
@@ -987,19 +1075,28 @@ impl Interpreter {
                 continue;
             }
             let obj = handle.borrow_untracked();
-            let Some(elements) = obj.array_elements() else {
-                continue;
-            };
-            for (index, value) in elements.iter().enumerate() {
-                if let Some(child) = value.as_object_id()
-                    && let Some(child_handle) = self.objects.get_cell(child)
-                {
-                    assert!(
-                        !child_handle.is_young() || child_handle.is_young_marked(),
-                        "old Array {id} element {index} references unmarked nursery object \
-                         {child}: a store skipped the write barrier"
-                    );
+            if let Some(elements) = obj.array_elements() {
+                for (index, value) in elements.iter().enumerate() {
+                    check(id, "Array", index, value);
                 }
+                continue;
+            }
+            if !obj.has_card_tracking() {
+                continue;
+            }
+            match &obj.kind {
+                ObjectKind::Map(entries) => {
+                    for (index, (key, value)) in entries.iter().enumerate() {
+                        check(id, "Map", index, key);
+                        check(id, "Map", index, value);
+                    }
+                }
+                ObjectKind::Set(entries) => {
+                    for (index, value) in entries.iter().enumerate() {
+                        check(id, "Set", index, value);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1152,12 +1249,13 @@ impl Interpreter {
     }
 
     /// `trace_object_fields`, optionally leaving out an Array's element
-    /// vector, which a minor collection scans card by card instead.
+    /// vector or a strong Map's or Set's entries, which a minor collection
+    /// scans card by card instead.
     fn trace_object_fields_in(
         obj: &JsObjectData,
         worklist: &mut Vec<u64>,
         seen_envs: &mut HashSet<usize>,
-        elements: bool,
+        bulk: bool,
     ) {
         if let Some(pid) = obj.prototype_id {
             worklist.push(pid);
@@ -1173,7 +1271,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if elements && let Some(elems) = obj.array_elements() {
+        if bulk && let Some(elems) = obj.array_elements() {
             for v in elems {
                 Self::collect_value_roots(v, worklist);
             }
@@ -1310,7 +1408,7 @@ impl Interpreter {
             }
             ObjectKind::Map(entries) => {
                 // WeakMap entries are visited via the ephemeron fixpoint, not strongly.
-                if !obj.is_weak_map() {
+                if bulk && !obj.is_weak_map() {
                     for entry in entries.iter() {
                         Self::collect_value_roots(&entry.0, worklist);
                         Self::collect_value_roots(&entry.1, worklist);
@@ -1318,7 +1416,7 @@ impl Interpreter {
                 }
             }
             ObjectKind::Set(entries) => {
-                if !obj.is_weak_set() {
+                if bulk && !obj.is_weak_set() {
                     for val in entries.iter() {
                         Self::collect_value_roots(val, worklist);
                     }
@@ -2338,11 +2436,7 @@ mod tests {
         let handle = interp.objects.get_cell_expect(array);
         let obj = handle.borrow_untracked();
         let (_, bits) = obj.array_elements_and_cards().unwrap();
-        bits.map(|bits| {
-            (0..bits.len() * 64)
-                .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
-                .collect()
-        })
+        set_card_list(bits)
     }
 
     #[test]
@@ -2510,5 +2604,264 @@ mod tests {
         assert!(interp.objects.get_cell_expect(parent).is_old());
         assert!(interp.objects.get_cell_expect(child).is_young());
         assert_eq!(interp.objects.remembered_len(), 1);
+    }
+
+    fn set_card_list(bits: Option<&[u64]>) -> Option<Vec<usize>> {
+        bits.map(|bits| {
+            (0..bits.len() * 64)
+                .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
+                .collect()
+        })
+    }
+
+    fn map_cards(interp: &Interpreter, id: u64) -> Option<Vec<usize>> {
+        let handle = interp.objects.get_cell_expect(id);
+        let obj = handle.borrow_untracked();
+        set_card_list(obj.map_data().unwrap().dirty_card_bits())
+    }
+
+    fn set_cards(interp: &Interpreter, id: u64) -> Option<Vec<usize>> {
+        let handle = interp.objects.get_cell_expect(id);
+        let obj = handle.borrow_untracked();
+        set_card_list(obj.set_data().unwrap().dirty_card_bits())
+    }
+
+    fn map_set(interp: &Interpreter, id: u64, key: JsValue, value: JsValue) {
+        let handle = interp.objects.get_cell_expect(id);
+        let young = interp.gc_write_barrier_entry(&handle, &[&key, &value]);
+        handle
+            .borrow_mut_untracked()
+            .map_data_mut()
+            .unwrap()
+            .upsert_marking((key, value), |old, new| old.1 = new.1, young);
+    }
+
+    fn set_add(interp: &Interpreter, id: u64, value: JsValue) {
+        let handle = interp.objects.get_cell_expect(id);
+        let young = interp.gc_write_barrier_entry(&handle, &[&value]);
+        handle
+            .borrow_mut_untracked()
+            .set_data_mut()
+            .unwrap()
+            .upsert_marking(value, |_, _| {}, young);
+    }
+
+    /// An old, rooted Map of `cards` cards of number entries that a major
+    /// collection has put into card tracking with every card clean.
+    fn tenured_map(interp: &mut Interpreter, cards: usize) -> u64 {
+        let mut data = JsObjectData::new();
+        data.class_name = "Map";
+        let mut entries = KeyedEntries::default();
+        for i in 0..cards * CARD_ELEMENTS {
+            entries.upsert((JsValue::number(i as f64), JsValue::number(0.0)), |_, _| {});
+        }
+        data.kind = ObjectKind::Map(Box::new(entries));
+        let id = interp.alloc_object(data);
+        interp.gc_root_id(id);
+        major_gc(interp);
+        assert!(interp.objects.get_cell_expect(id).is_old());
+        assert_eq!(map_cards(interp, id), Some(vec![]));
+        id
+    }
+
+    fn tenured_set(interp: &mut Interpreter, cards: usize) -> u64 {
+        let mut data = JsObjectData::new();
+        data.class_name = "Set";
+        let mut entries = KeyedEntries::default();
+        for i in 0..cards * CARD_ELEMENTS {
+            entries.upsert(JsValue::number(i as f64), |_, _| {});
+        }
+        data.kind = ObjectKind::Set(Box::new(entries));
+        let id = interp.alloc_object(data);
+        interp.gc_root_id(id);
+        major_gc(interp);
+        assert!(interp.objects.get_cell_expect(id).is_old());
+        assert_eq!(set_cards(interp, id), Some(vec![]));
+        id
+    }
+
+    #[test]
+    fn map_set_marks_only_its_card_and_keeps_the_young_value_alive() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let map = tenured_map(&mut interp, 8);
+        let child = fresh_object(&mut interp);
+
+        map_set(
+            &interp,
+            map,
+            JsValue::number((6 * CARD_ELEMENTS + 1) as f64),
+            obj(child),
+        );
+        assert_eq!(map_cards(&interp, map), Some(vec![6]));
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+        assert_eq!(map_cards(&interp, map), Some(vec![6]));
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(child).is_old());
+        minor_gc(&mut interp);
+        assert_eq!(map_cards(&interp, map), Some(vec![]));
+        assert_eq!(interp.objects.remembered_len(), 0);
+        assert!(interp.objects.get_cell(child).is_some());
+    }
+
+    #[test]
+    fn map_set_of_a_young_key_appends_into_a_new_card() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let map = tenured_map(&mut interp, 2);
+        let key = fresh_object(&mut interp);
+
+        map_set(&interp, map, obj(key), JsValue::number(1.0));
+        assert_eq!(map_cards(&interp, map), Some(vec![2]));
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(key).is_some());
+    }
+
+    #[test]
+    fn map_set_of_old_values_dirties_no_card() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let map = tenured_map(&mut interp, 4);
+        let old = fresh_object(&mut interp);
+        interp.gc_root_id(old);
+        major_gc(&mut interp);
+
+        map_set(&interp, map, JsValue::number(3.0), obj(old));
+        map_set(&interp, map, JsValue::number(-1.0), JsValue::number(1.0));
+        assert_eq!(map_cards(&interp, map), Some(vec![]));
+        assert_eq!(interp.objects.remembered_len(), 0);
+    }
+
+    #[test]
+    fn set_add_marks_only_its_card() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let set = tenured_set(&mut interp, 5);
+        let child = fresh_object(&mut interp);
+
+        set_add(&interp, set, obj(child));
+        assert_eq!(set_cards(&interp, set), Some(vec![5]));
+        minor_gc(&mut interp);
+        minor_gc(&mut interp);
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+        assert_eq!(set_cards(&interp, set), Some(vec![]));
+        assert_eq!(interp.objects.remembered_len(), 0);
+    }
+
+    #[test]
+    fn deleting_until_compaction_keeps_a_young_entry_reachable() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let map = tenured_map(&mut interp, 8);
+        let child = fresh_object(&mut interp);
+        let last = ((8 * CARD_ELEMENTS) - 1) as f64;
+        map_set(&interp, map, JsValue::number(last), obj(child));
+        assert_eq!(map_cards(&interp, map), Some(vec![7]));
+
+        // Removing most entries compacts the slots, moving the young value
+        // into card 0; the stale bitmap must give way to a full scan.
+        {
+            let handle = interp.objects.get_cell_expect(map);
+            let mut borrowed = handle.borrow_mut_untracked();
+            let entries = borrowed.map_data_mut().unwrap();
+            for i in 0..(7 * CARD_ELEMENTS) {
+                entries.remove(&JsValue::number(i as f64));
+            }
+        }
+        assert_eq!(map_cards(&interp, map), None);
+
+        for _ in 0..4 {
+            minor_gc(&mut interp);
+            assert!(interp.objects.get_cell(child).is_some());
+        }
+    }
+
+    #[test]
+    fn clear_then_refill_with_young_values_is_scanned() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let set = tenured_set(&mut interp, 4);
+        {
+            let handle = interp.objects.get_cell_expect(set);
+            handle
+                .borrow_mut_untracked()
+                .set_data_mut()
+                .unwrap()
+                .clear();
+        }
+        let child = fresh_object(&mut interp);
+        set_add(&interp, set, obj(child));
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+    }
+
+    #[test]
+    fn conservative_upsert_on_a_card_tracked_map_is_scanned() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let map = tenured_map(&mut interp, 4);
+        let child = fresh_object(&mut interp);
+        {
+            let handle = interp.objects.get_cell_expect(map);
+            handle
+                .borrow_mut()
+                .map_data_mut()
+                .unwrap()
+                .upsert((JsValue::number(2.0), obj(child)), |old, new| old.1 = new.1);
+        }
+        assert_eq!(map_cards(&interp, map), None);
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
+    }
+
+    #[test]
+    fn named_property_write_on_a_card_tracked_set_is_scanned() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let set = tenured_set(&mut interp, 4);
+        let by_card = fresh_object(&mut interp);
+        let by_property = fresh_object(&mut interp);
+
+        set_add(&interp, set, obj(by_card));
+        interp
+            .objects
+            .get_cell_expect(set)
+            .borrow_mut()
+            .insert_value("tag".to_string(), obj(by_property));
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(by_card).is_some());
+        assert!(interp.objects.get_cell(by_property).is_some());
+    }
+
+    #[test]
+    fn promoted_map_is_fully_scanned_once() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let mut data = JsObjectData::new();
+        data.class_name = "Map";
+        data.kind = ObjectKind::Map(Box::default());
+        let map = interp.alloc_object(data);
+        interp.gc_root_id(map);
+        let child = fresh_object(&mut interp);
+        for i in 0..(3 * CARD_ELEMENTS) {
+            let value = if i == 2 * CARD_ELEMENTS + 1 {
+                obj(child)
+            } else {
+                JsValue::number(0.0)
+            };
+            map_set(&interp, map, JsValue::number(i as f64), value);
+        }
+        // The map is young, so nothing was recorded; promotion makes every
+        // card dirty and the first minor scan narrows it.
+        minor_gc(&mut interp);
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(map).is_old());
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(child).is_some());
     }
 }

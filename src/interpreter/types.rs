@@ -2417,6 +2417,26 @@ impl Clone for ArrayData {
 /// cards so that unit tests and stress runs cross card boundaries constantly.
 pub(crate) const CARD_ELEMENTS: usize = if cfg!(debug_assertions) { 4 } else { 512 };
 
+/// Set the bit of the card holding `index` in a dirty-card bitmap.
+#[inline]
+pub(crate) fn mark_card_bit(bits: &mut Vec<u64>, index: usize) {
+    let card = index / CARD_ELEMENTS;
+    let word = card / 64;
+    if word >= bits.len() {
+        bits.resize(word + 1, 0);
+    }
+    bits[word] |= 1 << (card % 64);
+}
+
+/// Fill `bits` with exactly the listed `cards`, sized for `len` elements.
+pub(crate) fn fill_card_bits(bits: &mut Vec<u64>, len: usize, cards: &[usize]) {
+    bits.clear();
+    bits.resize(len.div_ceil(CARD_ELEMENTS).div_ceil(64), 0);
+    for &card in cards {
+        bits[card / 64] |= 1 << (card % 64);
+    }
+}
+
 impl ArrayData {
     #[cfg(test)]
     pub(crate) fn new(elements: Vec<JsValue>) -> Self {
@@ -2741,12 +2761,7 @@ impl JsObjectData {
         else {
             return;
         };
-        let card = index / CARD_ELEMENTS;
-        let word = card / 64;
-        if word >= bits.len() {
-            bits.resize(word + 1, 0);
-        }
-        bits[word] |= 1 << (card % 64);
+        mark_card_bit(bits, index);
     }
 
     /// Keeps the card bitmap: the caller ran `gc_write_barrier_element`.
@@ -2778,30 +2793,58 @@ impl JsObjectData {
         })
     }
 
-    /// Called after a scan of every element: only `cards` still hold a young reference.
+    /// Whether a minor collection scans this object's bulk storage (an
+    /// Array's elements, a strong Map's or Set's entries) card by card.
+    /// Weak containers are not carded: they are re-scanned whole.
+    #[inline]
+    pub(crate) fn has_card_tracking(&self) -> bool {
+        match &self.kind {
+            ObjectKind::Array(_) => true,
+            ObjectKind::Map(_) => !self.is_weak_map(),
+            ObjectKind::Set(_) => !self.is_weak_set(),
+            _ => false,
+        }
+    }
+
+    /// Called after a scan of every element or slot: only `cards` still hold
+    /// a young reference.
     pub(crate) fn set_dirty_cards(&mut self, cards: &[usize]) {
-        if let Some(data) = self.array_data_mut() {
-            let words = data.elements.len().div_ceil(CARD_ELEMENTS).div_ceil(64);
-            let bits = data.dirty_cards.get_or_insert_with(Box::default);
-            bits.clear();
-            bits.resize(words, 0);
-            for &card in cards {
-                bits[card / 64] |= 1 << (card % 64);
+        if !self.has_card_tracking() {
+            return;
+        }
+        match &mut self.kind {
+            ObjectKind::Array(data) => {
+                let bits = data.dirty_cards.get_or_insert_with(Box::default);
+                fill_card_bits(bits, data.elements.len(), cards);
             }
+            ObjectKind::Map(entries) => entries.set_dirty_cards(cards),
+            ObjectKind::Set(entries) => entries.set_dirty_cards(cards),
+            _ => {}
         }
     }
 
     pub(crate) fn mark_all_cards_dirty(&mut self) {
-        if let Some(data) = self.array_data_mut() {
-            data.dirty_cards = None;
+        match &mut self.kind {
+            ObjectKind::Array(data) => data.dirty_cards = None,
+            ObjectKind::Map(entries) => entries.mark_all_cards_dirty(),
+            ObjectKind::Set(entries) => entries.mark_all_cards_dirty(),
+            _ => {}
         }
     }
 
-    /// After a major collection nothing is young, so a large Array's bitmap
+    /// After a major collection nothing is young, so a large object's bitmap
     /// starts empty. Smaller ones are not tracked by card.
     pub(crate) fn reset_cards_after_major(&mut self) {
-        if let Some(data) = self.array_data_mut() {
-            data.dirty_cards = (data.elements.len() > CARD_ELEMENTS).then(Box::default);
+        if !self.has_card_tracking() {
+            return;
+        }
+        match &mut self.kind {
+            ObjectKind::Array(data) => {
+                data.dirty_cards = (data.elements.len() > CARD_ELEMENTS).then(Box::default);
+            }
+            ObjectKind::Map(entries) => entries.reset_cards_after_major(),
+            ObjectKind::Set(entries) => entries.reset_cards_after_major(),
+            _ => {}
         }
     }
 
