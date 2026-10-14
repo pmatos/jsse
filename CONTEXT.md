@@ -189,6 +189,20 @@ _Avoid_: root cell, traced box, rooted buffer.
 
 ## Builtins
 
+**Direct IteratorStepValue**:
+The synchronous iterator step through an explicitly captured `next` method,
+owned by `iterator_step_value_direct` in `builtins/iterators.rs`. It calls that
+method with the iterator as receiver, rejects a non-object result, and shares
+`iterator_result_value` with the generic step path to read `done` before `value`
+inside a GC Root Scope. Truthy `done` skips the value read; a step failure
+propagates without IteratorClose. Eager helpers and the existing zip, join,
+chunks, and windows consumers use this seam; each retains its own close policy,
+counters, and roots for values held across later user code. The method never
+looks up `next` again or uses the generic step's next-cache/intrinsic selection.
+Lazy helpers retain staged stepping where completion latching or value-skipping
+requires the result object.
+_Avoid_: eager loop kernel, next-method cache, iterator result protocol.
+
 **Promise Combinator Scope**:
 The synchronous setup and result convention shared by `all`, `allSettled`,
 `race`, `any`, `allKeyed`, and `allSettledKeyed` through `run_promise_combinator`.
