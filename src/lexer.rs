@@ -16,7 +16,7 @@ pub(crate) enum Token {
     StringLiteral(Vec<u16>),
     BooleanLiteral(bool),
     NullLiteral,
-    RegExpLiteral { pattern: String, flags: String },
+    RegExpLiteral { pattern: Vec<u16>, flags: String },
 
     // Template literals: (cooked, raw) — cooked is None for invalid escapes in tagged templates
     NoSubstitutionTemplate(Option<Vec<u16>>, String),
@@ -1094,9 +1094,13 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        if self.pua_undo {
-            pattern = crate::interpreter::unescape_source_text(&pattern);
-        }
+        let pattern = if self.pua_undo {
+            crate::interpreter::decode_source_text(&pattern)
+                .as_units()
+                .to_vec()
+        } else {
+            pattern.encode_utf16().collect()
+        };
         Ok(Token::RegExpLiteral { pattern, flags })
     }
 

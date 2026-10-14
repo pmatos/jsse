@@ -62,6 +62,22 @@ pub(super) struct LbFlags {
     pub ignore_case: bool,
     pub multiline: bool,
     pub dot_all: bool,
+    /// `u`/`v`: a lead and a trail `\uHHHH` escape form one code point.
+    pub unicode: bool,
+    /// The stand-in window the text view draws lone surrogates from.
+    pub stand_in_base: u32,
+}
+
+impl LbFlags {
+    pub(super) fn new(flags: &str, stand_in_base: u32) -> Self {
+        Self {
+            ignore_case: flags.contains('i'),
+            multiline: flags.contains('m'),
+            dot_all: flags.contains('s'),
+            unicode: flags.contains('u') || flags.contains('v'),
+            stand_in_base,
+        }
+    }
 }
 
 fn is_line_terminator(c: char) -> bool {
@@ -105,13 +121,13 @@ fn parse_seq(chars: &[char], start: usize, gc: &mut u32, flags: &LbFlags) -> (Ve
                 i = new_i;
             }
             '[' => {
-                let (atom, end) = parse_char_class(chars, i);
+                let (atom, end) = parse_char_class(chars, i, flags);
                 let (atom, new_i) = maybe_quantify(chars, atom, end);
                 cur.push(atom);
                 i = new_i;
             }
             '\\' if i + 1 < chars.len() => {
-                let (atom, end) = parse_escape(chars, i + 1);
+                let (atom, end) = parse_escape(chars, i + 1, flags);
                 let (atom, new_i) = maybe_quantify(chars, atom, end);
                 cur.push(atom);
                 i = new_i;
@@ -220,7 +236,7 @@ fn parse_group(chars: &[char], start: usize, gc: &mut u32, flags: &LbFlags) -> (
     (LbAtom::CaptureGroup { num, content }, end)
 }
 
-fn parse_char_class(chars: &[char], start: usize) -> (LbAtom, usize) {
+fn parse_char_class(chars: &[char], start: usize, flags: &LbFlags) -> (LbAtom, usize) {
     let mut i = start + 1;
     let negated = if i < chars.len() && chars[i] == '^' {
         i += 1;
@@ -231,21 +247,23 @@ fn parse_char_class(chars: &[char], start: usize) -> (LbAtom, usize) {
     let mut ranges: Vec<(char, char)> = Vec::new();
     while i < chars.len() && chars[i] != ']' {
         let c = if chars[i] == '\\' && i + 1 < chars.len() {
-            i += 1;
-            unescape_char(chars[i])
+            let (c, next) = read_escaped_char(chars, i + 1, flags);
+            i = next;
+            c
         } else {
-            chars[i]
+            i += 1;
+            chars[i - 1]
         };
-        i += 1;
         if i + 1 < chars.len() && chars[i] == '-' && chars[i + 1] != ']' {
             i += 1;
             let e = if chars[i] == '\\' && i + 1 < chars.len() {
-                i += 1;
-                unescape_char(chars[i])
+                let (e, next) = read_escaped_char(chars, i + 1, flags);
+                i = next;
+                e
             } else {
-                chars[i]
+                i += 1;
+                chars[i - 1]
             };
-            i += 1;
             ranges.push((c, e));
         } else {
             ranges.push((c, c));
@@ -269,7 +287,71 @@ fn unescape_char(c: char) -> char {
     }
 }
 
-fn parse_escape(chars: &[char], i: usize) -> (LbAtom, usize) {
+/// The character an escape denotes, `chars[i]` being the character after the
+/// backslash, and the index after the escape. `\xHH`, `\uHHHH` and `\u{H+}`
+/// are read as code points; a lone surrogate becomes its stand-in in the text
+/// view's window, and a lead and a trail `\uHHHH` form one code point only in
+/// Unicode mode.
+fn read_escaped_char(chars: &[char], i: usize, flags: &LbFlags) -> (char, usize) {
+    let hex = |from: usize, count: usize| -> Option<u32> {
+        let digits = chars.get(from..from + count)?;
+        digits
+            .iter()
+            .try_fold(0u32, |acc, c| Some(acc * 16 + c.to_digit(16)?))
+    };
+    let code_point = |cp: u32| -> Option<char> {
+        if (0xD800..=0xDFFF).contains(&cp) {
+            Some(super::regexp::surrogate_to_stand_in(
+                cp,
+                flags.stand_in_base,
+            ))
+        } else {
+            char::from_u32(cp)
+        }
+    };
+    match chars[i] {
+        'x' => {
+            if let Some(c) = hex(i + 1, 2).and_then(code_point) {
+                return (c, i + 3);
+            }
+        }
+        'u' if flags.unicode && chars.get(i + 1) == Some(&'{') => {
+            if let Some(close) = chars[i + 2..].iter().position(|&c| c == '}') {
+                let digits = &chars[i + 2..i + 2 + close];
+                if !digits.is_empty()
+                    && let Some(cp) = digits.iter().try_fold(0u32, |acc, c| {
+                        acc.checked_mul(16)?.checked_add(c.to_digit(16)?)
+                    })
+                    && let Some(c) = code_point(cp)
+                {
+                    return (c, i + 2 + close + 1);
+                }
+            }
+        }
+        'u' => {
+            if let Some(cp) = hex(i + 1, 4) {
+                if flags.unicode
+                    && (0xD800..=0xDBFF).contains(&cp)
+                    && chars.get(i + 5) == Some(&'\\')
+                    && chars.get(i + 6) == Some(&'u')
+                    && let Some(trail) = hex(i + 7, 4)
+                    && (0xDC00..=0xDFFF).contains(&trail)
+                    && let Some(c) =
+                        char::from_u32(0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00))
+                {
+                    return (c, i + 11);
+                }
+                if let Some(c) = code_point(cp) {
+                    return (c, i + 5);
+                }
+            }
+        }
+        _ => {}
+    }
+    (unescape_char(chars[i]), i + 1)
+}
+
+fn parse_escape(chars: &[char], i: usize, flags: &LbFlags) -> (LbAtom, usize) {
     match chars[i] {
         'd' => (LbAtom::CharClass(vec![('0', '9')], false), i + 1),
         'D' => (LbAtom::CharClass(vec![('0', '9')], true), i + 1),
@@ -323,7 +405,10 @@ fn parse_escape(chars: &[char], i: usize) -> (LbAtom, usize) {
                 .unwrap_or(0);
             (LbAtom::Backref(n), end)
         }
-        _ => (LbAtom::Literal(unescape_char(chars[i])), i + 1),
+        _ => {
+            let (c, end) = read_escaped_char(chars, i, flags);
+            (LbAtom::Literal(c), end)
+        }
     }
 }
 
@@ -1548,15 +1633,12 @@ pub(super) fn match_with_lookbehind(
     lookbehinds: &[LookbehindInfo],
     text: &str,
     flags: &str,
+    base: u32,
     start_pos: usize,
     total_groups: usize,
 ) -> Option<Vec<Option<(usize, usize)>>> {
     let text_chars: Vec<char> = text.chars().collect();
-    let lb_flags = LbFlags {
-        ignore_case: flags.contains('i'),
-        multiline: flags.contains('m'),
-        dot_all: flags.contains('s'),
-    };
+    let lb_flags = LbFlags::new(flags, base);
 
     let mut char_to_byte: Vec<usize> = Vec::with_capacity(text_chars.len() + 1);
     let mut byte_off = 0;
@@ -1711,6 +1793,7 @@ pub(super) fn match_with_lookbehind_no_backtrack(
     lookbehinds: &[LookbehindInfo],
     remaining_source: &str,
     flags_str: &str,
+    base: u32,
     text: &str,
     start_pos: usize,
     total_groups: usize,
@@ -1741,11 +1824,7 @@ pub(super) fn match_with_lookbehind_no_backtrack(
         }
     };
 
-    let lb_flags = LbFlags {
-        ignore_case: flags_str.contains('i'),
-        multiline: flags_str.contains('m'),
-        dot_all: flags_str.contains('s'),
-    };
+    let lb_flags = LbFlags::new(flags_str, base);
 
     let start_char = byte_to_char(start_pos);
     let parsed_lookbehinds: Vec<Vec<LbAtom>> = lookbehinds
@@ -1812,7 +1891,7 @@ pub(super) fn match_with_lookbehind_no_backtrack(
             }
 
             // Translate and compile substituted pattern anchored at this position
-            let tr = match super::regexp::translate_js_pattern_ex(&subst, flags_str) {
+            let tr = match super::regexp::translate_js_pattern_ex(&subst, flags_str, base) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
@@ -1901,5 +1980,4 @@ pub(super) struct LookbehindVerifyInfo {
     pub capture_groups: Vec<u32>,
     /// Number of groups before this lookbehind (for group numbering offset)
     pub capture_offset: u32,
-    pub flags: LbFlags,
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError> {
+fn validate_regexp_literal(pattern: &[u16], flags: &str) -> Result<(), ParseError> {
     let valid_flags = "dgimsuyv";
     for c in flags.chars() {
         if !valid_flags.contains(c) {
@@ -22,7 +22,7 @@ fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError>
             message: format!("Invalid regular expression flags '{}'", flags),
         });
     }
-    if let Err(msg) = crate::interpreter::validate_js_pattern(pattern, flags) {
+    if let Err(msg) = crate::interpreter::validate_js_pattern_units(pattern, flags) {
         return Err(ParseError { message: msg });
     }
     Ok(())
@@ -1354,7 +1354,8 @@ impl<'a> Parser<'a> {
                 };
                 let regex_tok = self.lexer.lex_regex()?;
                 if let Token::RegExpLiteral { pattern, flags } = regex_tok {
-                    let full_pattern = format!("{}{}", prefix, pattern);
+                    let mut full_pattern: Vec<u16> = prefix.encode_utf16().collect();
+                    full_pattern.extend_from_slice(&pattern);
                     self.prev_line_terminator = false;
                     self.current = self.lexer.next_token()?;
                     while self.current == Token::LineTerminator {

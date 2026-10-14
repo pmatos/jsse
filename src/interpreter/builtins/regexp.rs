@@ -22,10 +22,6 @@ fn is_whitespace_or_line_terminator(c: char) -> bool {
 }
 
 fn encode_for_regexp_escape(c: char) -> String {
-    // Check for PUA-mapped surrogates first
-    if let Some(surrogate) = pua_to_surrogate(c) {
-        return format!("\\u{:04x}", surrogate);
-    }
     if is_syntax_character(c) || c == '/' {
         return format!("\\{}", c);
     }
@@ -67,7 +63,135 @@ fn is_surrogate(cp: u32) -> bool {
 }
 
 pub(crate) fn surrogate_to_pua(cp: u32) -> char {
-    char::from_u32(SURROGATE_PUA_BASE + (cp - SURROGATE_START)).unwrap()
+    surrogate_to_stand_in(cp, SURROGATE_PUA_BASE)
+}
+
+// In Unicode mode (`u`/`v`) the matcher sees a surrogate pair as one scalar, so
+// a genuine U+F0000..U+10FFFF scalar and a lone-surrogate stand-in drawn from
+// that range are the same character. The stand-ins therefore live in a window
+// of `STAND_IN_WINDOW` scalars chosen per pattern and subject so that no
+// genuine scalar of the pair falls inside it. Window 0 (`SURROGATE_PUA_BASE`)
+// is the default; a regex built for another window is keyed and cached by it.
+// Non-Unicode matching reads each code unit as one character, so a genuine
+// supplementary scalar never reaches the matcher and window 0 always suffices.
+const STAND_IN_WINDOW: u32 = 0x800;
+const STAND_IN_WINDOWS: u32 = 64;
+const GENUINE_PRIVATE_USE_END: u32 = 0x10FFFF;
+
+/// Bit `n` set: the text holds a genuine scalar inside stand-in window `n`.
+type WindowMask = u64;
+
+pub(super) fn surrogate_to_stand_in(cp: u32, base: u32) -> char {
+    char::from_u32(stand_in_base(base) + (cp - SURROGATE_START)).unwrap()
+}
+
+/// The window lone surrogates are drawn from for a translation `base`.
+fn stand_in_base(base: u32) -> u32 {
+    if base == BYTES_MODE_BASE {
+        SURROGATE_PUA_BASE
+    } else {
+        base
+    }
+}
+
+/// The `base` of a pattern translated without a private window: its text and
+/// subject genuinely occupy every window, so no scalar can stand in for a lone
+/// surrogate. `\p{Cs}` and `\p{Co}` then match WTF-8 bytes, whose subject has
+/// no stand-ins, and no window is taken out of a class. Stand-ins that remain
+/// (a lone surrogate in the pattern text) use the default window.
+const BYTES_MODE_BASE: u32 = 0x110000;
+
+fn window_bit(cp: u32) -> WindowMask {
+    if (SURROGATE_PUA_BASE..=GENUINE_PRIVATE_USE_END).contains(&cp) {
+        1 << ((cp - SURROGATE_PUA_BASE) / STAND_IN_WINDOW)
+    } else {
+        0
+    }
+}
+
+fn window_of_base(base: u32) -> WindowMask {
+    if base == BYTES_MODE_BASE {
+        0
+    } else {
+        window_bit(base)
+    }
+}
+
+/// The lowest stand-in window base that no genuine scalar of `mask` occupies,
+/// or `BYTES_MODE_BASE` (no window) when every window is taken.
+fn free_stand_in_base(mask: WindowMask) -> u32 {
+    let window = (!mask).trailing_zeros();
+    if window < STAND_IN_WINDOWS {
+        SURROGATE_PUA_BASE + window * STAND_IN_WINDOW
+    } else {
+        BYTES_MODE_BASE
+    }
+}
+
+/// Windows holding a genuine scalar of a subject, read from its UTF-16 units.
+fn subject_window_mask(code_units: &[u16]) -> WindowMask {
+    let mut mask = 0;
+    let mut i = 0;
+    while i + 1 < code_units.len() {
+        let hi = code_units[i];
+        if (0xDB80..=0xDBFF).contains(&hi) && (0xDC00..=0xDFFF).contains(&code_units[i + 1]) {
+            let cp = ((hi as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
+            mask |= window_bit(cp);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    mask
+}
+
+/// Windows holding a genuine scalar a Unicode-mode pattern can denote: a
+/// literal pair, or an escape (`\u{...}`, `\uD83D\uDE00`). Over-approximates
+/// (an escaped backslash is not told apart); the only cost is another window.
+fn pattern_window_mask(code_units: &[u16]) -> WindowMask {
+    let mut mask = subject_window_mask(code_units);
+    let hex = |i: usize| -> Option<u32> {
+        let digits = code_units.get(i..i + 4)?;
+        digits.iter().try_fold(0u32, |acc, &u| {
+            char::from_u32(u as u32)?.to_digit(16).map(|d| acc * 16 + d)
+        })
+    };
+    let is_escape_u =
+        |i: usize| code_units.get(i) == Some(&0x5C) && code_units.get(i + 1) == Some(&0x75);
+    let mut i = 0;
+    while i < code_units.len() {
+        if !is_escape_u(i) {
+            i += 1;
+            continue;
+        }
+        if code_units.get(i + 2) == Some(&0x7B) {
+            let mut cp = 0u32;
+            let mut j = i + 3;
+            while let Some(d) = code_units
+                .get(j)
+                .and_then(|&u| char::from_u32(u as u32))
+                .and_then(|c| c.to_digit(16))
+            {
+                cp = cp.saturating_mul(16).saturating_add(d);
+                j += 1;
+            }
+            mask |= window_bit(cp);
+            i = j.max(i + 2);
+        } else if let Some(cp) = hex(i + 2) {
+            if (0xD800..=0xDBFF).contains(&cp)
+                && is_escape_u(i + 6)
+                && let Some(trail) = hex(i + 8)
+                && (0xDC00..=0xDFFF).contains(&trail)
+            {
+                mask |= window_bit(0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00));
+            }
+            mask |= window_bit(cp);
+            i += 6;
+        } else {
+            i += 2;
+        }
+    }
+    mask
 }
 
 pub(crate) fn pua_to_surrogate(c: char) -> Option<u16> {
@@ -83,19 +207,57 @@ pub(crate) fn pua_to_surrogate(c: char) -> Option<u16> {
 /// Lone surrogates are mapped to PUA characters so they survive the conversion
 /// and can be matched by patterns that also use the PUA mapping.
 pub(crate) fn js_string_to_regex_input(code_units: &[u16]) -> String {
-    js_string_to_regex_input_mode(code_units, true)
+    js_string_to_regex_input_mode(code_units, true, SURROGATE_PUA_BASE)
 }
 
 fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
-    js_string_to_regex_input_mode(code_units, false)
+    js_string_to_regex_input_mode(code_units, false, SURROGATE_PUA_BASE)
 }
 
 fn js_string_to_regex_pattern(code_units: &[u16], flags: &str) -> String {
+    js_string_to_regex_pattern_at(code_units, flags, SURROGATE_PUA_BASE)
+}
+
+/// The pattern text for the matcher with lone surrogates drawn from the
+/// stand-in window at `base` (Unicode mode only; see `STAND_IN_WINDOW`).
+fn js_string_to_regex_pattern_at(code_units: &[u16], flags: &str, base: u32) -> String {
     if flags.contains('u') || flags.contains('v') {
-        js_string_to_regex_input(code_units)
+        js_string_to_unicode_pattern(code_units, base)
     } else {
         js_string_to_regex_pattern_non_unicode(code_units)
     }
+}
+
+/// A Unicode-mode pattern for the translator. A lone surrogate is written as
+/// its `\u{XXXX}` escape so the translator alone decides how it reaches the
+/// matcher (as a stand-in from the window at `base`, or inside a class range);
+/// the braced form is never combined with a neighbouring escape. Only right
+/// after a backslash, where an escape would change the meaning, does it stay a
+/// literal stand-in.
+fn js_string_to_unicode_pattern(code_units: &[u16], base: u32) -> String {
+    if code_units_are_ascii(code_units) {
+        return js_string_to_regex_input_mode(code_units, true, base);
+    }
+    let mut result = String::with_capacity(code_units.len());
+    let mut after_backslash = false;
+    for decoded in char::decode_utf16(code_units.iter().copied()) {
+        match decoded {
+            Ok(c) => {
+                after_backslash = c == '\\' && !after_backslash;
+                result.push(c);
+            }
+            Err(e) => {
+                let cu = u32::from(e.unpaired_surrogate());
+                if after_backslash {
+                    result.push(surrogate_to_stand_in(cu, base));
+                } else {
+                    result.push_str(&format!("\\u{{{:X}}}", cu));
+                }
+                after_backslash = false;
+            }
+        }
+    }
+    result
 }
 
 /// Encode non-Unicode pattern atoms as individual UTF-16 code units while
@@ -185,7 +347,7 @@ fn code_units_are_ascii(code_units: &[u16]) -> bool {
     code_units.iter().all(|&cu| cu < 0x80)
 }
 
-fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
+fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool, base: u32) -> String {
     if code_units_are_ascii(code_units) {
         return code_units.iter().map(|&cu| cu as u8 as char).collect();
     }
@@ -204,11 +366,11 @@ fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
                 }
                 i += 2;
             } else {
-                result.push(surrogate_to_pua(cu as u32));
+                result.push(surrogate_to_stand_in(cu as u32, base));
                 i += 1;
             }
         } else if (0xDC00..=0xDFFF).contains(&cu) {
-            result.push(surrogate_to_pua(cu as u32));
+            result.push(surrogate_to_stand_in(cu as u32, base));
             i += 1;
         } else if let Some(c) = char::from_u32(cu as u32) {
             result.push(c);
@@ -290,12 +452,6 @@ fn source_chars(s: &str) -> impl Iterator<Item = (char, bool)> + '_ {
             Some((c, false))
         }
     })
-}
-
-/// Drops the escapes from flagged source text but keeps the stand-ins, the
-/// form regular expression patterns use for lone surrogates.
-pub(crate) fn unescape_source_text(s: &str) -> String {
-    source_chars(s).map(|(c, _)| c).collect()
 }
 
 /// Convert a regex match result string back from PUA to surrogates.
@@ -416,6 +572,45 @@ fn is_cs_property(content: &str) -> bool {
     }
 }
 
+/// Whether `\p{content}` holds the surrogate code points: the Unicode tables
+/// list scalar values only, so these are the properties that a lone surrogate
+/// (general category Cs, script Zzzz) belongs to.
+fn property_includes_surrogates(content: &str) -> bool {
+    match content.split_once('=') {
+        Some((prop, val)) => match prop {
+            "General_Category" | "gc" => matches!(val, "C" | "Other" | "Cs" | "Surrogate"),
+            "Script" | "sc" | "Script_Extensions" | "scx" => matches!(val, "Zzzz" | "Unknown"),
+            _ => false,
+        },
+        None => matches!(
+            content,
+            "Any" | "Assigned" | "C" | "Other" | "Cs" | "Surrogate"
+        ),
+    }
+}
+
+/// The code point ranges of a property escape, with the surrogates added for
+/// the properties that include them.
+fn property_ranges(content: &str) -> Option<std::borrow::Cow<'static, [(u32, u32)]>> {
+    let ranges = crate::unicode_tables::lookup_property(content)?;
+    if !property_includes_surrogates(content) {
+        return Some(std::borrow::Cow::Borrowed(ranges));
+    }
+    // The tables are sorted and never hold a surrogate, so the range goes in
+    // at its position and merges only with an adjacent neighbour.
+    let mut all = ranges.to_vec();
+    let at = all.partition_point(|&(lo, _)| lo < SURROGATE_START);
+    all.insert(at, (SURROGATE_START, SURROGATE_END));
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(all.len());
+    for (lo, hi) in all {
+        match merged.last_mut() {
+            Some(last) if lo <= last.1.saturating_add(1) => last.1 = last.1.max(hi),
+            _ => merged.push((lo, hi)),
+        }
+    }
+    Some(std::borrow::Cow::Owned(merged))
+}
+
 fn is_co_property(content: &str) -> bool {
     if let Some(eq_pos) = content.find('=') {
         let prop = &content[..eq_pos];
@@ -434,6 +629,9 @@ struct RegexInput {
     unicode_boundaries: std::cell::OnceCell<Vec<RegexInputBoundary>>,
     non_unicode_offsets: std::cell::OnceCell<Vec<usize>>,
     wtf8: std::cell::OnceCell<Vec<u8>>,
+    window_mask: std::cell::OnceCell<WindowMask>,
+    /// The Unicode view for the one non-default stand-in window last asked for.
+    alt_unicode: std::cell::RefCell<Option<(u32, Rc<str>)>>,
 }
 
 /// Which representation of the subject a set of byte offsets belongs to. The
@@ -502,6 +700,35 @@ impl RegexInput {
             unicode_boundaries: std::cell::OnceCell::new(),
             non_unicode_offsets: std::cell::OnceCell::new(),
             wtf8: std::cell::OnceCell::new(),
+            window_mask: std::cell::OnceCell::new(),
+            alt_unicode: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Stand-in windows occupied by genuine scalars of the subject.
+    fn window_mask(&self) -> WindowMask {
+        if self.ascii {
+            return 0;
+        }
+        *self
+            .window_mask
+            .get_or_init(|| subject_window_mask(self.subject.as_units()))
+    }
+
+    /// The Unicode view with lone surrogates drawn from the window at `base`.
+    fn unicode_view_at(&self, base: u32) -> Rc<str> {
+        let mut alt = self.alt_unicode.borrow_mut();
+        match &*alt {
+            Some((cached_base, view)) if *cached_base == base => Rc::clone(view),
+            _ => {
+                let view: Rc<str> =
+                    js_string_to_regex_input_mode(self.subject.as_units(), true, base).into();
+                // Every stand-in window is made of 4-byte scalars, which is
+                // what lets the default view's boundary table serve this one.
+                debug_assert_eq!(view.len(), self.as_str(true).len());
+                *alt = Some((base, Rc::clone(&view)));
+                view
+            }
         }
     }
 
@@ -1151,12 +1378,20 @@ impl VClassSet {
         self.ranges.push((lo, hi));
     }
 
-    fn add_string(&mut self, s: String) {
+    /// Adds a `\q{}` alternative. `s` holds lone surrogates as stand-ins from
+    /// the window at `base`; a one-character alternative becomes a class member
+    /// and a stand-in is turned back into its surrogate, which the class
+    /// emitter maps to the window again.
+    fn add_string(&mut self, s: String, base: u32) {
         if s.chars().count() == 1 {
-            self.ranges.push((
-                s.chars().next().unwrap() as u32,
-                s.chars().next().unwrap() as u32,
-            ));
+            let cp = s.chars().next().unwrap() as u32;
+            let base = stand_in_base(base);
+            let cp = if (base..base + STAND_IN_WINDOW).contains(&cp) {
+                cp - base + SURROGATE_START
+            } else {
+                cp
+            };
+            self.ranges.push((cp, cp));
         } else {
             self.strings.push(s);
         }
@@ -1270,7 +1505,7 @@ impl VClassSet {
         }
     }
 
-    fn to_regex_pattern(&self) -> String {
+    fn to_regex_pattern(&self, base: u32) -> String {
         let mut s = self.clone();
         s.normalize_ranges();
         s.dedup_strings();
@@ -1290,7 +1525,7 @@ impl VClassSet {
         if has_ranges {
             char_class.push('[');
             for &(lo, hi) in &s.ranges {
-                append_unicode_range(&mut char_class, lo, hi);
+                append_class_range_at(&mut char_class, lo, hi, base);
             }
             char_class.push(']');
         }
@@ -1389,14 +1624,16 @@ fn parse_v_flag_class(
     chars: &[char],
     start: usize,
     flags: &str,
+    base: u32,
 ) -> Result<(VClassSet, usize), String> {
-    parse_v_flag_class_with_depth(chars, start, flags, 0)
+    parse_v_flag_class_with_depth(chars, start, flags, base, 0)
 }
 
 fn parse_v_flag_class_with_depth(
     chars: &[char],
     start: usize,
     flags: &str,
+    base: u32,
     depth: usize,
 ) -> Result<(VClassSet, usize), String> {
     if depth >= V_FLAG_CLASS_MAX_DEPTH {
@@ -1411,29 +1648,29 @@ fn parse_v_flag_class_with_depth(
     }
 
     // Parse the first operand
-    let mut result = parse_v_class_operand(chars, &mut i, flags, depth)?;
+    let mut result = parse_v_class_operand(chars, &mut i, flags, base, depth)?;
 
     // Check for set operations
     while i < len && chars[i] != ']' {
         if i + 1 < len && chars[i] == '-' && chars[i + 1] == '-' {
             // Difference: --
             i += 2;
-            let rhs = parse_v_class_operand(chars, &mut i, flags, depth)?;
+            let rhs = parse_v_class_operand(chars, &mut i, flags, base, depth)?;
             result = result.difference(&rhs);
         } else if i + 1 < len && chars[i] == '&' && chars[i + 1] == '&' {
             // Intersection: &&
             i += 2;
-            let rhs = parse_v_class_operand(chars, &mut i, flags, depth)?;
+            let rhs = parse_v_class_operand(chars, &mut i, flags, base, depth)?;
             result = result.intersect(&rhs);
         } else if i < len && chars[i] == '[' {
             // Nested class in union position
             i += 1;
-            let (set, new_i) = parse_v_flag_class_with_depth(chars, i, flags, depth + 1)?;
+            let (set, new_i) = parse_v_flag_class_with_depth(chars, i, flags, base, depth + 1)?;
             i = new_i;
             result = result.union(&set);
         } else {
             // Union: implicit (just more atoms)
-            let atom = parse_v_class_atom(chars, &mut i, flags)?;
+            let atom = parse_v_class_atom(chars, &mut i, flags, base)?;
             result = result.union(&atom);
         }
     }
@@ -1454,13 +1691,14 @@ fn parse_v_class_operand(
     chars: &[char],
     i: &mut usize,
     flags: &str,
+    base: u32,
     depth: usize,
 ) -> Result<VClassSet, String> {
     let len = chars.len();
     if *i < len && chars[*i] == '[' {
         // Nested character class
         *i += 1;
-        let (set, new_i) = parse_v_flag_class_with_depth(chars, *i, flags, depth + 1)?;
+        let (set, new_i) = parse_v_flag_class_with_depth(chars, *i, flags, base, depth + 1)?;
         *i = new_i;
         return Ok(set);
     }
@@ -1481,19 +1719,24 @@ fn parse_v_class_operand(
         if c == '[' {
             // Nested class in union position
             *i += 1;
-            let (set, new_i) = parse_v_flag_class_with_depth(chars, *i, flags, depth + 1)?;
+            let (set, new_i) = parse_v_flag_class_with_depth(chars, *i, flags, base, depth + 1)?;
             *i = new_i;
             result = result.union(&set);
             continue;
         }
-        let atom = parse_v_class_atom(chars, i, flags)?;
+        let atom = parse_v_class_atom(chars, i, flags, base)?;
         result = result.union(&atom);
     }
     Ok(result)
 }
 
 /// Parse a single atom in a v-flag character class. May return ranges or strings.
-fn parse_v_class_atom(chars: &[char], i: &mut usize, flags: &str) -> Result<VClassSet, String> {
+fn parse_v_class_atom(
+    chars: &[char],
+    i: &mut usize,
+    flags: &str,
+    base: u32,
+) -> Result<VClassSet, String> {
     let len = chars.len();
     let mut result = VClassSet::new();
 
@@ -1587,14 +1830,14 @@ fn parse_v_class_atom(chars: &[char], i: &mut usize, flags: &str) -> Result<VCla
                             result.add_codepoint(cp);
                         }
                         for s in multi_strs {
-                            result.add_string(s.to_string());
+                            result.add_string(s.to_string(), base);
                         }
                         return Ok(result);
                     }
                     // Regular property
-                    if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
+                    if let Some(ranges) = property_ranges(&content) {
                         let ranges_to_use = if negated {
-                            complement_ranges(ranges)
+                            complement_ranges(&ranges)
                         } else {
                             ranges.to_vec()
                         };
@@ -1627,8 +1870,8 @@ fn parse_v_class_atom(chars: &[char], i: &mut usize, flags: &str) -> Result<VCla
                 *i = j + 1; // skip closing }
                 // Split on | and add each alternative
                 for alt in content.split('|') {
-                    let s = unescape_q_string(alt);
-                    result.add_string(s);
+                    let s = unescape_q_string(alt, base);
+                    result.add_string(s, base);
                 }
                 return Ok(result);
             }
@@ -1705,17 +1948,33 @@ fn check_range(
 }
 
 /// Unescape a \q{...} string content (handles \uHHHH, \u{HHHH}, \xHH, etc.)
-fn unescape_q_string(s: &str) -> String {
+fn unescape_q_string(s: &str, base: u32) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut result = String::new();
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             i += 1;
-            if let Some(cp) = parse_v_class_escape(&chars, &mut i)
-                && let Some(ch) = char::from_u32(cp)
-            {
-                result.push(ch);
+            if let Some(cp) = parse_v_class_escape(&chars, &mut i) {
+                let mut cp = cp;
+                if (0xD800..=0xDBFF).contains(&cp)
+                    && chars.get(i) == Some(&'\\')
+                    && chars.get(i + 1) == Some(&'u')
+                {
+                    let saved = i;
+                    i += 1;
+                    match parse_v_class_escape(&chars, &mut i) {
+                        Some(trail) if (0xDC00..=0xDFFF).contains(&trail) => {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                        }
+                        _ => i = saved,
+                    }
+                }
+                if is_surrogate(cp) {
+                    result.push(surrogate_to_stand_in(cp, base));
+                } else if let Some(ch) = char::from_u32(cp) {
+                    result.push(ch);
+                }
             }
         } else {
             result.push(chars[i]);
@@ -1876,7 +2135,7 @@ fn find_lookahead_start_in_result(result: &str) -> Option<usize> {
 }
 
 fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
-    translate_js_pattern_ex(source, flags).map(|r| r.pattern)
+    translate_js_pattern_ex(source, flags, SURROGATE_PUA_BASE).map(|r| r.pattern)
 }
 
 fn nq_internal_condition_header_end(
@@ -2347,13 +2606,15 @@ fn expand_quantified_dup_groups_with_depth(
 pub(super) fn translate_js_pattern_ex(
     source: &str,
     flags: &str,
+    base: u32,
 ) -> Result<TranslationResult, String> {
-    translate_js_pattern_ex_with_sentinels(source, flags, &HashSet::new())
+    translate_js_pattern_ex_with_sentinels(source, flags, base, &HashSet::new())
 }
 
 fn translate_js_pattern_ex_with_sentinels(
     source: &str,
     flags: &str,
+    base: u32,
     sentinel_names: &HashSet<String>,
 ) -> Result<TranslationResult, String> {
     let mut result = String::new();
@@ -2619,9 +2880,9 @@ fn translate_js_pattern_ex_with_sentinels(
             // set operations (&&, --), property-of-strings, and \q{...}
             if flags.contains('v') {
                 i += 1; // skip opening [
-                let (vclass, new_i) = parse_v_flag_class(&chars, i, flags)?;
+                let (vclass, new_i) = parse_v_flag_class(&chars, i, flags, base)?;
                 i = new_i;
-                result.push_str(&vclass.to_regex_pattern());
+                result.push_str(&vclass.to_regex_pattern(base));
                 continue;
             }
             in_char_class = true;
@@ -2663,6 +2924,27 @@ fn translate_js_pattern_ex_with_sentinels(
             && hi >= SURROGATE_START
         {
             append_non_unicode_class_range(&mut result, lo, hi);
+            cc_prev_was_class_escape = false;
+            i = hi_end;
+            continue;
+        }
+
+        // Unicode mode: a simple class range that reaches the surrogates or the
+        // stand-in window is emitted with those parts mapped (see
+        // `append_class_range_at`).
+        if in_char_class
+            && unicode
+            && !flags.contains('v')
+            && !(i == cc_content_start && chars[i] == '^')
+            && let Some((lo, lo_end)) = parse_unicode_class_atom(&chars, i)
+            && lo_end < len
+            && chars[lo_end] == '-'
+            && let Some((hi, hi_end)) = parse_unicode_class_atom(&chars, lo_end + 1)
+            && lo <= hi
+            && ((hi >= SURROGATE_START && lo <= SURROGATE_END)
+                || (hi >= base && lo < base + STAND_IN_WINDOW))
+        {
+            append_class_range_at(&mut result, lo, hi, base);
             cc_prev_was_class_escape = false;
             i = hi_end;
             continue;
@@ -2831,7 +3113,7 @@ fn translate_js_pattern_ex_with_sentinels(
                                 if is_surrogate(cp) {
                                     push_literal_char(
                                         &mut result,
-                                        surrogate_to_pua(cp),
+                                        surrogate_to_stand_in(cp, base),
                                         in_char_class,
                                     );
                                 } else if let Some(ch) = char::from_u32(cp) {
@@ -2882,7 +3164,7 @@ fn translate_js_pattern_ex_with_sentinels(
                                     if is_surrogate(cp) {
                                         push_literal_char(
                                             &mut result,
-                                            surrogate_to_pua(cp),
+                                            surrogate_to_stand_in(cp, base),
                                             in_char_class,
                                         );
                                     } else if let Some(ch) = char::from_u32(cp) {
@@ -2891,7 +3173,11 @@ fn translate_js_pattern_ex_with_sentinels(
                                     i += 6;
                                 }
                             } else if is_surrogate(cp) {
-                                push_literal_char(&mut result, surrogate_to_pua(cp), in_char_class);
+                                push_literal_char(
+                                    &mut result,
+                                    surrogate_to_stand_in(cp, base),
+                                    in_char_class,
+                                );
                                 i += 6;
                             } else if let Some(ch) = char::from_u32(cp) {
                                 if non_unicode_icase(icase)
@@ -3152,14 +3438,15 @@ fn translate_js_pattern_ex_with_sentinels(
                                 vset.add_codepoint(cp);
                             }
                             for s in multi_strs {
-                                vset.add_string(s.to_string());
+                                vset.add_string(s.to_string(), base);
                             }
-                            result.push_str(&vset.to_regex_pattern());
+                            result.push_str(&vset.to_regex_pattern(base));
                             i = start + end + 1;
                             continue;
                         }
-                        if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
-                            if is_cs_property(&content) {
+                        if let Some(ranges) = property_ranges(&content) {
+                            let ranges = &ranges[..];
+                            if base == BYTES_MODE_BASE && is_cs_property(&content) {
                                 needs_bytes_mode = true;
                                 if negated {
                                     // \P{Cs}: all valid Unicode (WTF-8 surrogates naturally excluded)
@@ -3168,6 +3455,7 @@ fn translate_js_pattern_ex_with_sentinels(
                                         ranges,
                                         true,
                                         in_char_class,
+                                        base,
                                     );
                                 } else if !in_char_class {
                                     // \p{Cs}: match WTF-8 surrogates
@@ -3178,16 +3466,17 @@ fn translate_js_pattern_ex_with_sentinels(
                                         ranges,
                                         false,
                                         in_char_class,
+                                        base,
                                     );
                                 }
-                            } else if is_co_property(&content) {
+                            } else if base == BYTES_MODE_BASE && is_co_property(&content) {
                                 needs_bytes_mode = true;
                                 if negated && !in_char_class {
                                     // \P{Co}: complement + WTF-8 surrogates
                                     let comp = complement_ranges(ranges);
                                     result.push_str("(?:[");
                                     for &(lo, hi) in &comp {
-                                        append_unicode_range(&mut result, lo, hi);
+                                        append_class_range_at(&mut result, lo, hi, base);
                                     }
                                     result.push_str("]|(?-u:\\xED[\\xA0-\\xBF][\\x80-\\xBF]))");
                                 } else {
@@ -3197,6 +3486,7 @@ fn translate_js_pattern_ex_with_sentinels(
                                         ranges,
                                         negated,
                                         in_char_class,
+                                        base,
                                     );
                                 }
                             } else {
@@ -3205,6 +3495,7 @@ fn translate_js_pattern_ex_with_sentinels(
                                     ranges,
                                     negated,
                                     in_char_class,
+                                    base,
                                 );
                             }
                         } else {
@@ -3625,6 +3916,93 @@ fn append_unicode_range(result: &mut String, lo: u32, hi: u32) {
     }
 }
 
+/// Appends the Unicode-mode class range `lo..=hi` of JS code points. The
+/// matcher has no surrogate scalars: the surrogate part of the range becomes
+/// the same stand-ins the subject uses, and the stand-in window is taken out
+/// of the rest, because a genuine range never contains a lone surrogate and no
+/// genuine scalar lies in a window chosen for its text.
+fn append_class_range_at(result: &mut String, lo: u32, hi: u32, base: u32) {
+    // A WTF-8 matcher has no stand-ins in its subject, so nothing is carved.
+    let (base, carve) = if base == BYTES_MODE_BASE {
+        (SURROGATE_PUA_BASE, false)
+    } else {
+        (base, true)
+    };
+    if lo < SURROGATE_START {
+        append_unicode_range(result, lo, hi.min(SURROGATE_START - 1));
+    }
+    let surrogate_lo = lo.max(SURROGATE_START);
+    let surrogate_hi = hi.min(SURROGATE_END);
+    if surrogate_lo <= surrogate_hi {
+        append_unicode_range(
+            result,
+            base + (surrogate_lo - SURROGATE_START),
+            base + (surrogate_hi - SURROGATE_START),
+        );
+    }
+    let upper_lo = lo.max(SURROGATE_END + 1);
+    if upper_lo > hi {
+        return;
+    }
+    if !carve {
+        append_unicode_range(result, upper_lo, hi);
+        return;
+    }
+    let window_end = base + STAND_IN_WINDOW - 1;
+    if upper_lo < base {
+        append_unicode_range(result, upper_lo, hi.min(base - 1));
+    }
+    if hi > window_end {
+        append_unicode_range(result, upper_lo.max(window_end + 1), hi);
+    }
+}
+
+/// The class atom at `start` for a Unicode-mode range endpoint: a literal
+/// scalar, `\xHH`, `\uHHHH` (a lead and trail escape pair combine), `\u{H+}`,
+/// or an escaped syntax character. Returns its code point and end index.
+fn parse_unicode_class_atom(chars: &[char], start: usize) -> Option<(u32, usize)> {
+    let hex = |from: usize, count: usize| -> Option<u32> {
+        let digits: String = chars.get(from..from + count)?.iter().collect();
+        if digits.chars().all(|d| d.is_ascii_hexdigit()) {
+            u32::from_str_radix(&digits, 16).ok()
+        } else {
+            None
+        }
+    };
+    let ch = *chars.get(start)?;
+    if ch != '\\' {
+        return (ch != ']' && ch != '-').then_some((ch as u32, start + 1));
+    }
+    match *chars.get(start + 1)? {
+        'u' if chars.get(start + 2) == Some(&'{') => {
+            let close = chars[start + 3..].iter().position(|&c| c == '}')? + start + 3;
+            let digits: String = chars[start + 3..close].iter().collect();
+            let cp = u32::from_str_radix(&digits, 16).ok()?;
+            (cp <= 0x10FFFF).then_some((cp, close + 1))
+        }
+        'u' => {
+            let cp = hex(start + 2, 4)?;
+            if (0xD800..=0xDBFF).contains(&cp)
+                && chars.get(start + 6) == Some(&'\\')
+                && chars.get(start + 7) == Some(&'u')
+                && let Some(trail) = hex(start + 8, 4)
+                && (0xDC00..=0xDFFF).contains(&trail)
+            {
+                return Some((
+                    0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00),
+                    start + 12,
+                ));
+            }
+            Some((cp, start + 6))
+        }
+        'x' => Some((hex(start + 2, 2)?, start + 4)),
+        escaped if is_syntax_character(escaped) || escaped == '/' || escaped == '-' => {
+            Some((escaped as u32, start + 2))
+        }
+        _ => None,
+    }
+}
+
 fn parse_simple_class_atom(chars: &[char], start: usize) -> Option<(u32, usize)> {
     let ch = *chars.get(start)?;
     if ch == '\\' {
@@ -3684,21 +4062,7 @@ fn complement_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
     if prev <= 0x10FFFF {
         comp.push((prev, 0x10FFFF));
     }
-    // Remove surrogate range [0xD800, 0xDFFF]
-    let mut result = Vec::new();
-    for (lo, hi) in comp {
-        if hi < 0xD800 || lo > 0xDFFF {
-            result.push((lo, hi));
-        } else if lo < 0xD800 && hi > 0xDFFF {
-            result.push((lo, 0xD7FF));
-            result.push((0xE000, hi));
-        } else if lo < 0xD800 {
-            result.push((lo, 0xD7FF));
-        } else if hi > 0xDFFF {
-            result.push((0xE000, hi));
-        }
-    }
-    result
+    comp
 }
 
 fn expand_property_to_char_class(
@@ -3706,6 +4070,7 @@ fn expand_property_to_char_class(
     ranges: &[(u32, u32)],
     negated: bool,
     in_char_class: bool,
+    base: u32,
 ) {
     let effective_ranges: Vec<(u32, u32)>;
     let ranges_to_use = if negated {
@@ -3717,12 +4082,12 @@ fn expand_property_to_char_class(
 
     if in_char_class {
         for &(lo, hi) in ranges_to_use {
-            append_unicode_range(result, lo, hi);
+            append_class_range_at(result, lo, hi, base);
         }
     } else {
         result.push('[');
         for &(lo, hi) in ranges_to_use {
-            append_unicode_range(result, lo, hi);
+            append_class_range_at(result, lo, hi, base);
         }
         result.push(']');
     }
@@ -4376,6 +4741,15 @@ fn validate_v_flag_class_inner(
             } else if after == 'q' && *i < len && chars[*i] == '{' {
                 *i += 1;
                 while *i < len && chars[*i] != '}' {
+                    if chars[*i] == '\\' {
+                        // An escape: `\u{...}` holds braces of its own.
+                        *i += 1;
+                        if chars.get(*i) == Some(&'u') && chars.get(*i + 1) == Some(&'{') {
+                            while *i < len && chars[*i] != '}' {
+                                *i += 1;
+                            }
+                        }
+                    }
                     *i += 1;
                 }
                 if *i < len {
@@ -4425,6 +4799,12 @@ fn quantifier_brace_end(chars: &[char], open: usize, len: usize) -> Option<usize
         }
     }
     None
+}
+
+/// `validate_js_pattern` over a pattern's UTF-16 code units, the form regular
+/// expression literals and the RegExp constructor hold.
+pub(crate) fn validate_js_pattern_units(code_units: &[u16], flags: &str) -> Result<(), String> {
+    validate_js_pattern(&js_string_to_regex_pattern(code_units, flags), flags)
 }
 
 pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), String> {
@@ -5276,6 +5656,7 @@ enum CompiledRegex {
         outer_regex: fancy_regex::Regex,
         lookbehinds: Vec<super::regexp_lookbehind::LookbehindInfo>,
         flags: String,
+        base: u32,
         total_groups: usize,
         /// When lookbehind captures are referenced by external backrefs,
         /// store the remaining pattern source and backref-to-lb-capture mapping
@@ -5324,6 +5705,8 @@ pub(crate) struct CachedRegex {
     /// successful match.
     quantifier_resets: std::cell::OnceCell<QuantifierResets>,
     source: String,
+    /// The stand-in window this regex was translated for (see `STAND_IN_WINDOW`).
+    base: u32,
 }
 
 impl CachedRegex {
@@ -5341,6 +5724,52 @@ pub(crate) struct ExecPlan {
     sticky: bool,
     has_indices: bool,
     unicode: bool,
+    /// Unicode mode only: the pattern's own code units and the stand-in
+    /// windows their genuine scalars occupy, to re-translate for a subject
+    /// that occupies the window `cached` uses.
+    source: JsString,
+    flags: String,
+    pattern_mask: WindowMask,
+    /// The regex last built for another window, so a loop over subjects that
+    /// share a shifted window translates the pattern once.
+    shifted: std::cell::RefCell<Option<Rc<CachedRegex>>>,
+}
+
+impl ExecPlan {
+    /// The regex to run against `input`: `cached` unless a genuine scalar of
+    /// the subject sits in its stand-in window, in which case the same pattern
+    /// translated for a window both texts leave free.
+    fn cached_for(&self, interp: &mut Interpreter, input: &RegexInput) -> Rc<CachedRegex> {
+        if !self.unicode {
+            return Rc::clone(&self.cached);
+        }
+        if matches!(self.cached.compiled, CompiledRegex::Bytes(_)) {
+            return Rc::clone(&self.cached);
+        }
+        let subject_mask = input.window_mask();
+        if subject_mask & window_of_base(self.cached.base) == 0 {
+            return Rc::clone(&self.cached);
+        }
+        let base = free_stand_in_base(self.pattern_mask | subject_mask);
+        if base == self.cached.base {
+            return Rc::clone(&self.cached);
+        }
+        if let Some(shifted) = &*self.shifted.borrow()
+            && shifted.base == base
+        {
+            return Rc::clone(shifted);
+        }
+        let pattern = js_string_to_regex_pattern_at(self.source.as_units(), &self.flags, base);
+        match build_regex_cached(interp, &pattern, &self.flags, base) {
+            Ok(built) => {
+                *self.shifted.borrow_mut() = Some(Rc::clone(&built));
+                built
+            }
+            // Translation does not depend on the window, so this is the same
+            // failure the plan's own regex would have hit; keep that one.
+            Err(_) => Rc::clone(&self.cached),
+        }
+    }
 }
 
 const REGEX_CACHE_MAX: usize = 256;
@@ -5350,18 +5779,39 @@ const REGEX_CACHE_MAX: usize = 256;
 #[derive(Default)]
 pub(crate) struct RegexCache {
     by_flags: HashMap<String, HashMap<String, Rc<CachedRegex>>>,
+    /// Regexes translated for a stand-in window other than the default, keyed
+    /// `(window base, flags, source)`.
+    by_base: HashMap<u32, HashMap<String, HashMap<String, Rc<CachedRegex>>>>,
     len: usize,
 }
 
 impl RegexCache {
-    fn get(&self, source: &str, flags: &str) -> Option<&Rc<CachedRegex>> {
+    fn get(&self, source: &str, flags: &str, base: u32) -> Option<&Rc<CachedRegex>> {
+        if base != SURROGATE_PUA_BASE {
+            return self.by_base.get(&base)?.get(flags)?.get(source);
+        }
         self.by_flags.get(flags)?.get(source)
     }
 
-    fn insert(&mut self, source: &str, flags: &str, entry: Rc<CachedRegex>) {
+    fn insert(&mut self, source: &str, flags: &str, base: u32, entry: Rc<CachedRegex>) {
         if self.len >= REGEX_CACHE_MAX {
             self.by_flags.clear();
+            self.by_base.clear();
             self.len = 0;
+        }
+        if base != SURROGATE_PUA_BASE {
+            if self
+                .by_base
+                .entry(base)
+                .or_default()
+                .entry(flags.to_string())
+                .or_default()
+                .insert(source.to_string(), entry)
+                .is_none()
+            {
+                self.len += 1;
+            }
+            return;
         }
         if self
             .by_flags
@@ -5379,11 +5829,12 @@ fn build_regex_cached(
     interp: &mut Interpreter,
     source: &str,
     flags: &str,
+    base: u32,
 ) -> Result<std::rc::Rc<CachedRegex>, String> {
-    if let Some(cached) = interp.regexp_legacy.regex_cache.get(source, flags) {
+    if let Some(cached) = interp.regexp_legacy.regex_cache.get(source, flags, base) {
         return Ok(std::rc::Rc::clone(cached));
     }
-    let (compiled, dup_map, name_order) = build_regex_ex(source, flags)?;
+    let (compiled, dup_map, name_order) = build_regex_ex_at(source, flags, base)?;
     let entry = std::rc::Rc::new(CachedRegex {
         compiled,
         dup_map,
@@ -5391,11 +5842,12 @@ fn build_regex_cached(
         total_groups: count_capture_groups(source),
         quantifier_resets: std::cell::OnceCell::new(),
         source: source.to_string(),
+        base,
     });
     interp
         .regexp_legacy
         .regex_cache
-        .insert(source, flags, std::rc::Rc::clone(&entry));
+        .insert(source, flags, base, std::rc::Rc::clone(&entry));
     Ok(entry)
 }
 
@@ -5404,25 +5856,33 @@ fn build_regex_cached(
 /// longer compiles.
 fn exec_plan_for(interp: &mut Interpreter, obj_id: u64) -> Option<Rc<ExecPlan>> {
     let obj = interp.get_object_cell(obj_id)?.clone();
-    let (pattern, flags) = {
+    let (source, flags) = {
         let b = obj.borrow();
         let r = b.regexp()?;
         if let Some(plan) = r.exec_plan.0.get() {
             return Some(Rc::clone(plan));
         }
-        let flags = r.flags.to_rust_string();
-        (
-            js_string_to_regex_pattern(r.source.as_units(), &flags),
-            flags,
-        )
+        (r.source.clone(), r.flags.to_rust_string())
     };
-    let cached = build_regex_cached(interp, &pattern, &flags).ok()?;
+    let unicode = flags.contains('u') || flags.contains('v');
+    let pattern_mask = if unicode {
+        pattern_window_mask(source.as_units())
+    } else {
+        0
+    };
+    let base = free_stand_in_base(pattern_mask);
+    let pattern = js_string_to_regex_pattern_at(source.as_units(), &flags, base);
+    let cached = build_regex_cached(interp, &pattern, &flags, base).ok()?;
     let plan = Rc::new(ExecPlan {
         global: flags.contains('g'),
         sticky: flags.contains('y'),
         has_indices: flags.contains('d'),
-        unicode: flags.contains('u') || flags.contains('v'),
+        unicode,
         cached,
+        source,
+        flags,
+        pattern_mask,
+        shifted: std::cell::RefCell::new(None),
     });
     if let Some(r) = obj.borrow().regexp() {
         let _ = r.exec_plan.0.set(Rc::clone(&plan));
@@ -6117,7 +6577,6 @@ fn lookbehind_needs_custom_rtl(source: &str) -> bool {
 /// the lookbehind. Returns verify info if so, None otherwise.
 fn lookbehind_captures_with_external_backrefs(
     source: &str,
-    flags: &str,
 ) -> Option<Vec<super::regexp_lookbehind::LookbehindVerifyInfo>> {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
@@ -6239,11 +6698,6 @@ fn lookbehind_captures_with_external_backrefs(
                 content: content.clone(),
                 capture_groups: referenced_groups,
                 capture_offset: *offset,
-                flags: super::regexp_lookbehind::LbFlags {
-                    ignore_case: flags.contains('i'),
-                    multiline: flags.contains('m'),
-                    dot_all: flags.contains('s'),
-                },
             });
         }
     }
@@ -6258,6 +6712,7 @@ fn lookbehind_captures_with_external_backrefs(
 fn try_build_custom_lookbehind(
     source: &str,
     flags: &str,
+    base: u32,
     dup_map: DupGroupMap,
     name_order: Vec<String>,
 ) -> Option<(CompiledRegex, DupGroupMap, Vec<String>)> {
@@ -6270,7 +6725,7 @@ fn try_build_custom_lookbehind(
     let mut external_lb_backrefs: Vec<(u32, u32)> = Vec::new();
     let mut remaining_source: Option<String> = None;
 
-    if let Some(verify_infos) = lookbehind_captures_with_external_backrefs(source, flags) {
+    if let Some(verify_infos) = lookbehind_captures_with_external_backrefs(source) {
         for vi in &verify_infos {
             for &g in &vi.capture_groups {
                 external_lb_backrefs.push((g, g));
@@ -6281,7 +6736,7 @@ fn try_build_custom_lookbehind(
         remaining_source = Some(rem);
     }
 
-    let stripped_tr = translate_js_pattern_ex(&stripped, flags).ok()?;
+    let stripped_tr = translate_js_pattern_ex(&stripped, flags, base).ok()?;
     let outer = fancy_regex::Regex::new(&stripped_tr.pattern).ok()?;
     let total = count_capture_groups(source);
     Some((
@@ -6289,6 +6744,7 @@ fn try_build_custom_lookbehind(
             outer_regex: outer,
             lookbehinds,
             flags: flags.to_string(),
+            base,
             total_groups: total,
             external_lb_backrefs,
             remaining_source,
@@ -7591,20 +8047,33 @@ fn build_regex_ex(
     source: &str,
     flags: &str,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
-    build_regex_ex_with_nullable_state(source, flags, true)
+    build_regex_ex_at(source, flags, SURROGATE_PUA_BASE)
+}
+
+fn build_regex_ex_at(
+    source: &str,
+    flags: &str,
+    base: u32,
+) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
+    build_regex_ex_with_nullable_state(source, flags, base, true)
 }
 
 fn build_regex_ex_with_nullable_state(
     source: &str,
     flags: &str,
+    base: u32,
     stateful_positive_minimum: bool,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
     let original_source = source;
     let rewrite = fix_nullable_quantifiers(original_source, stateful_positive_minimum);
-    let tr =
-        translate_js_pattern_ex_with_sentinels(&rewrite.source, flags, &rewrite.sentinel_names)?;
+    let tr = translate_js_pattern_ex_with_sentinels(
+        &rewrite.source,
+        flags,
+        base,
+        &rewrite.sentinel_names,
+    )?;
     if tr.needs_bytes_mode && !rewrite.sentinel_names.is_empty() {
-        return build_regex_ex_with_nullable_state(original_source, flags, false);
+        return build_regex_ex_with_nullable_state(original_source, flags, base, false);
     }
     let retry_without_sentinels = stateful_positive_minimum && !rewrite.sentinel_names.is_empty();
     let source = rewrite.source;
@@ -7620,7 +8089,7 @@ fn build_regex_ex_with_nullable_state(
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
     if lookbehind_needs_custom_rtl(&source)
         && let Some(result) =
-            try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
+            try_build_custom_lookbehind(&source, flags, base, dup_map.clone(), name_order.clone())
     {
         return Ok(result);
     }
@@ -7645,13 +8114,18 @@ fn build_regex_ex_with_nullable_state(
 
             // If fancy-regex fails and the pattern has lookbehinds, try custom path
             if (source.contains("(?<=") || source.contains("(?<!"))
-                && let Some(result) =
-                    try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
+                && let Some(result) = try_build_custom_lookbehind(
+                    &source,
+                    flags,
+                    base,
+                    dup_map.clone(),
+                    name_order.clone(),
+                )
             {
                 return Ok(result);
             }
             if retry_without_sentinels {
-                return build_regex_ex_with_nullable_state(original_source, flags, false);
+                return build_regex_ex_with_nullable_state(original_source, flags, base, false);
             }
             build_meta_regex(&tr.pattern, false)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
@@ -7785,14 +8259,23 @@ fn regex_captures_at(
 /// [`regex_captures_at`] over the representation of `input` the matcher
 /// expects: WTF-8 bytes for the byte matcher, else the text view for `unicode`.
 fn subject_captures_at(
-    compiled: &CompiledRegex,
+    cached: &CachedRegex,
     input: &RegexInput,
     unicode: bool,
     pos: usize,
     anchored: bool,
 ) -> Option<RegexCaptures> {
+    let compiled = &cached.compiled;
     match compiled {
         CompiledRegex::Bytes(re) => meta_captures_at(re, input.wtf8(), pos, anchored),
+        _ if unicode
+            && cached.base != SURROGATE_PUA_BASE
+            && cached.base != BYTES_MODE_BASE
+            && !input.ascii =>
+        {
+            let view = input.unicode_view_at(cached.base);
+            regex_captures_at(compiled, &view, pos, anchored)
+        }
         _ => regex_captures_at(compiled, input.as_str(unicode), pos, anchored),
     }
 }
@@ -7816,6 +8299,7 @@ fn search_captures_at(
             outer_regex,
             lookbehinds,
             flags,
+            base,
             total_groups,
             external_lb_backrefs,
             remaining_source,
@@ -7826,6 +8310,7 @@ fn search_captures_at(
                         lookbehinds,
                         rem,
                         flags,
+                        *base,
                         text,
                         pos,
                         *total_groups,
@@ -7837,6 +8322,7 @@ fn search_captures_at(
                         lookbehinds,
                         text,
                         flags,
+                        *base,
                         pos,
                         *total_groups,
                     )?
@@ -7847,6 +8333,7 @@ fn search_captures_at(
                     lookbehinds,
                     text,
                     flags,
+                    *base,
                     pos,
                     *total_groups,
                 )?
@@ -8343,7 +8830,8 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
     let sticky = plan.sticky;
     let has_indices = plan.has_indices;
     let unicode = plan.unicode;
-    let cached = &plan.cached;
+    let cached_rc = plan.cached_for(interp, regex_input);
+    let cached = &*cached_rc;
 
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
     let input_utf16_len = regex_input.subject.len();
@@ -8364,13 +8852,8 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
     let view = RegexView::select(is_bytes_mode, unicode);
     let last_index_byte = regex_input.utf16_to_byte_offset(view, last_index_utf16);
 
-    let Some(mut caps) = subject_captures_at(
-        &cached.compiled,
-        regex_input,
-        unicode,
-        last_index_byte,
-        sticky,
-    ) else {
+    let Some(mut caps) = subject_captures_at(cached, regex_input, unicode, last_index_byte, sticky)
+    else {
         if (global || sticky)
             && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
         {
@@ -8900,7 +9383,8 @@ impl Interpreter {
                     let Some(plan) = exec_plan_for(interp, rx_id) else {
                         return Completion::Normal(JsValue::NULL);
                     };
-                    let cached = &plan.cached;
+                    let cached_rc = plan.cached_for(interp, &regex_input);
+                    let cached = &*cached_rc;
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = plan.sticky;
                     let unicode = plan.unicode;
@@ -8915,7 +9399,7 @@ impl Interpreter {
                         let last_index_byte =
                             regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let Some(caps) = subject_captures_at(
-                            &cached.compiled,
+                            cached,
                             &regex_input,
                             unicode,
                             last_index_byte,
@@ -9188,7 +9672,8 @@ impl Interpreter {
                     let Some(plan) = exec_plan_for(interp, rx_id) else {
                         return Completion::Normal(JsValue::string(regex_input.subject.clone()));
                     };
-                    let cached = &plan.cached;
+                    let cached_rc = plan.cached_for(interp, &regex_input);
+                    let cached = &*cached_rc;
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
                     let sticky = plan.sticky;
                     let unicode = plan.unicode;
@@ -9206,7 +9691,7 @@ impl Interpreter {
                         let last_index_byte =
                             regex_input.utf16_to_byte_offset(view, last_index_utf16);
                         let Some(mut caps) = subject_captures_at(
-                            &cached.compiled,
+                            cached,
                             &regex_input,
                             unicode,
                             last_index_byte,

@@ -22,7 +22,8 @@ mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
 pub(crate) use builtins::regexp::{
-    SOURCE_ESCAPE, pua_to_surrogate, surrogate_to_pua, unescape_source_text, validate_js_pattern,
+    SOURCE_ESCAPE, decode_source_text, pua_to_surrogate, surrogate_to_pua,
+    validate_js_pattern_units,
 };
 mod bytecode;
 mod dispose;

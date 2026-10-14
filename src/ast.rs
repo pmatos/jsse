@@ -610,7 +610,7 @@ pub(crate) enum Literal {
     Number(f64),
     String(Vec<u16>),
     BigInt(JsBigInt),
-    RegExp(String, String),
+    RegExp(Vec<u16>, String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
