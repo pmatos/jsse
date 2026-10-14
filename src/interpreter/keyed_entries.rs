@@ -23,6 +23,7 @@
 //!   from the slots when it grows or the slots are compacted.
 
 use crate::interpreter::helpers::same_value_zero;
+use crate::interpreter::types::CARD_ELEMENTS;
 use crate::types::{JsValue, ValueKind};
 use std::hash::{BuildHasher, RandomState};
 use std::sync::OnceLock;
@@ -117,7 +118,7 @@ struct Slot<T> {
     value: Option<T>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct KeyedEntries<T> {
     /// Ascending by `seq`; `None` values are deleted entries awaiting
     /// compaction.
@@ -134,6 +135,31 @@ pub(crate) struct KeyedEntries<T> {
     /// members until the next rebuild; they never match because the slot is
     /// empty. The cell count is a power of two, at least twice `slots.len()`.
     table: Vec<u64>,
+    /// Dirty-card bitmap for the generational collector: bit `c` is set when
+    /// slots `c * CARD_ELEMENTS ..` (one card) may hold a nursery reference.
+    /// `None` means every slot may, the safe state: a new collection starts
+    /// there, and every method that adds an edge without naming its slot
+    /// ([`Self::upsert`]) or moves slots ([`Self::compact`], `clear`) returns
+    /// to it, so no structural change can leave a stale bitmap behind. Only a
+    /// minor collection that has just scanned every slot replaces it with a
+    /// bitmap, and only [`Self::upsert_marking`] sets a bit.
+    #[allow(clippy::box_collection)] // a pointer per collection, not the 24-byte Vec
+    dirty_cards: Option<Box<Vec<u64>>>,
+}
+
+impl<T: Clone> Clone for KeyedEntries<T> {
+    /// A copy is a new object that no collection has scanned, so it starts
+    /// with every card dirty rather than inheriting the original's bitmap.
+    fn clone(&self) -> Self {
+        Self {
+            slots: self.slots.clone(),
+            next_seq: self.next_seq,
+            live: self.live,
+            first_live: self.first_live,
+            table: self.table.clone(),
+            dirty_cards: None,
+        }
+    }
 }
 
 impl<T> Default for KeyedEntries<T> {
@@ -144,6 +170,7 @@ impl<T> Default for KeyedEntries<T> {
             live: 0,
             first_live: 0,
             table: Vec::new(),
+            dirty_cards: None,
         }
     }
 }
@@ -219,6 +246,7 @@ impl<T> KeyedEntries<T> {
         self.table = Vec::new();
         self.live = 0;
         self.first_live = 0;
+        self.dirty_cards = None;
     }
 
     /// Delete every live entry for which `keep` is false.
@@ -244,6 +272,7 @@ impl<T> KeyedEntries<T> {
         self.table = Vec::new();
         self.live = 0;
         self.first_live = 0;
+        self.dirty_cards = None;
     }
 
     fn advance_first_live(&mut self) {
@@ -270,6 +299,8 @@ impl<T> KeyedEntries<T> {
 
     /// Drop empty slots, keeping each entry's spec index.
     fn compact(&mut self) {
+        // Slots move, so the bitmap no longer describes them.
+        self.dirty_cards = None;
         let had_index = !self.table.is_empty();
         let mut moved_to = Vec::new();
         if had_index {
@@ -320,6 +351,58 @@ impl<T> KeyedEntries<T> {
         }
         self.table = table;
     }
+
+    /// Physical slots, live or empty: the range the card bitmap indexes.
+    pub(crate) fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// The card bitmap, or `None` while every card is dirty.
+    pub(crate) fn dirty_card_bits(&self) -> Option<&[u64]> {
+        self.dirty_cards.as_deref().map(Vec::as_slice)
+    }
+
+    /// The live entries held by slots `start..end`.
+    pub(crate) fn live_in_slots(&self, start: usize, end: usize) -> impl Iterator<Item = &T> {
+        self.slots[start..end]
+            .iter()
+            .filter_map(|slot| slot.value.as_ref())
+    }
+
+    /// Called after a scan of every slot: only `cards` still hold a young
+    /// reference.
+    pub(crate) fn set_dirty_cards(&mut self, cards: &[usize]) {
+        let words = self.slots.len().div_ceil(CARD_ELEMENTS).div_ceil(64);
+        let bits = self.dirty_cards.get_or_insert_with(Box::default);
+        bits.clear();
+        bits.resize(words, 0);
+        for &card in cards {
+            bits[card / 64] |= 1 << (card % 64);
+        }
+    }
+
+    pub(crate) fn mark_all_cards_dirty(&mut self) {
+        self.dirty_cards = None;
+    }
+
+    /// After a major collection nothing is young, so a large collection's
+    /// bitmap starts empty. Smaller ones are not tracked by card.
+    pub(crate) fn reset_cards_after_major(&mut self) {
+        self.dirty_cards = (self.slots.len() > CARD_ELEMENTS).then(Box::default);
+    }
+
+    /// A no-op while every card is already dirty.
+    fn mark_card(&mut self, slot: usize) {
+        let Some(bits) = self.dirty_cards.as_deref_mut() else {
+            return;
+        };
+        let card = slot / CARD_ELEMENTS;
+        let word = card / 64;
+        if word >= bits.len() {
+            bits.resize(word + 1, 0);
+        }
+        bits[word] |= 1 << (card % 64);
+    }
 }
 
 impl<T: KeyedEntry> KeyedEntries<T> {
@@ -369,17 +452,45 @@ impl<T: KeyedEntry> KeyedEntries<T> {
 
     /// Append `entry` at the end of the list unless an entry with an equal
     /// key is present, in which case `update` receives that entry and the
-    /// new one. Returns whether the entry was appended.
+    /// new one. Returns whether the entry was appended. The new references
+    /// are not attributed to a slot, so every card becomes dirty; a caller
+    /// that knows whether they are young uses [`Self::upsert_marking`].
     pub(crate) fn upsert(&mut self, entry: T, update: impl FnOnce(&mut T, T)) -> bool {
+        self.dirty_cards = None;
+        self.upsert_at(entry, update).0
+    }
+
+    /// [`Self::upsert`] that keeps the card bitmap: `young` says whether
+    /// `entry` references a nursery object, and the caller has queued the
+    /// owner for the next minor collection if so (see
+    /// `Interpreter::gc_write_barrier_entry`). Only the slot written is
+    /// marked.
+    pub(crate) fn upsert_marking(
+        &mut self,
+        entry: T,
+        update: impl FnOnce(&mut T, T),
+        young: bool,
+    ) -> bool {
+        let (appended, slot) = self.upsert_at(entry, update);
+        if young {
+            self.mark_card(slot);
+        }
+        appended
+    }
+
+    /// Returns whether the entry was appended and the offset of the slot that
+    /// now holds it.
+    fn upsert_at(&mut self, entry: T, update: impl FnOnce(&mut T, T)) -> (bool, usize) {
         let hash = (!self.table.is_empty()).then(|| key_hash(entry.key()));
         if let Some(at) = self.find_slot(entry.key(), hash)
             && let Some(existing) = self.slots[at].value.as_mut()
         {
             update(existing, entry);
-            return false;
+            return (false, at);
         }
+        let at = self.slots.len();
         self.append(entry, hash);
-        true
+        (true, at)
     }
 
     fn append(&mut self, entry: T, hash: Option<u32>) {
@@ -611,5 +722,72 @@ mod tests {
         }
         assert_eq!(entries.live_len(), 100);
         assert_eq!(drain(&entries).first(), Some(&4900.0));
+    }
+
+    fn cards(entries: &KeyedEntries<JsValue>) -> Option<Vec<usize>> {
+        entries.dirty_card_bits().map(|bits| {
+            (0..bits.len() * 64)
+                .filter(|card| bits[card / 64] & (1 << (card % 64)) != 0)
+                .collect()
+        })
+    }
+
+    fn tracked(cards: usize) -> KeyedEntries<JsValue> {
+        let mut entries = set_of((0..cards * CARD_ELEMENTS).map(|i| num(i as f64)));
+        entries.reset_cards_after_major();
+        assert_eq!(self::cards(&entries), Some(vec![]));
+        entries
+    }
+
+    #[test]
+    fn marking_upsert_dirties_only_the_slot_written() {
+        let mut entries = tracked(4);
+        entries.upsert_marking(num(f64::NAN), |_, _| {}, false);
+        assert_eq!(cards(&entries), Some(vec![]));
+        entries.upsert_marking(num(f64::NAN), |_, _| {}, true);
+        assert_eq!(cards(&entries), Some(vec![4]));
+        entries.upsert_marking(num(1.0), |_, _| {}, true);
+        assert_eq!(cards(&entries), Some(vec![0, 4]));
+    }
+
+    #[test]
+    fn plain_upsert_clear_compaction_and_clone_make_every_card_dirty() {
+        let mut entries = tracked(4);
+        entries.upsert(num(1.0), |_, _| {});
+        assert_eq!(cards(&entries), None);
+
+        let mut entries = tracked(4);
+        entries.clear();
+        assert_eq!(cards(&entries), None);
+
+        let mut entries = tracked(8);
+        entries.remove(&num(0.0));
+        assert_eq!(cards(&entries), Some(vec![]));
+        for i in 1..(6 * CARD_ELEMENTS) {
+            entries.remove(&num(i as f64));
+        }
+        assert_eq!(cards(&entries), None);
+
+        let entries = tracked(4);
+        assert_eq!(cards(&entries.clone()), None);
+    }
+
+    #[test]
+    fn small_collections_are_not_tracked_by_card() {
+        let mut entries = set_of((0..CARD_ELEMENTS).map(|i| num(i as f64)));
+        entries.reset_cards_after_major();
+        assert_eq!(cards(&entries), None);
+    }
+
+    #[test]
+    fn scan_helpers_see_live_entries_of_a_slot_range() {
+        let mut entries = set_of((0..10).map(f64::from).map(num));
+        entries.remove(&num(3.0));
+        let seen: Vec<f64> = entries
+            .live_in_slots(2, 6)
+            .filter_map(JsValue::as_number)
+            .collect();
+        assert_eq!(seen, vec![2.0, 4.0, 5.0]);
+        assert_eq!(entries.slot_count(), 10);
     }
 }
