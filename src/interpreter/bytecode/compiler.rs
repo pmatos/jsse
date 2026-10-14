@@ -885,16 +885,12 @@ impl Compiler {
                 Ok(())
             }
             Expression::Binary(BinaryOp::In, lhs, rhs)
-                if matches!(lhs.as_ref(), Expression::PrivateIdentifier(_)) =>
+                if let Expression::PrivateIdentifier(name) = lhs.as_ref() =>
             {
-                let Expression::PrivateIdentifier(name) = lhs.as_ref() else {
-                    unreachable!("guarded by the match arm");
-                };
                 self.compile_expr(rhs)?;
                 let idx = self.add_private_name(name)?;
                 self.emit(Op::PrivateIn);
                 self.emit_u16(idx);
-                // Stack height unchanged: pop the object, push the boolean.
                 Ok(())
             }
             Expression::Binary(op, lhs, rhs) => {
@@ -928,7 +924,6 @@ impl Compiler {
                     let idx = self.add_name(name)?;
                     self.emit(Op::GetProp);
                     self.emit_u16(idx);
-                    // Stack height unchanged: pop base, push value.
                     Ok(())
                 }
                 MemberProperty::Computed(key) => {
@@ -944,7 +939,6 @@ impl Compiler {
                     let idx = self.add_private_name(name)?;
                     self.emit(Op::GetPrivate);
                     self.emit_u16(idx);
-                    // Stack height unchanged: pop base, push value.
                     Ok(())
                 }
             },
@@ -1318,7 +1312,6 @@ impl Compiler {
                 self.emit(Op::UpdateProp);
                 self.emit_u16(idx);
                 self.code.push(mode);
-                // Stack height unchanged: pop base, push result.
                 Ok(())
             }
             Expression::Member(obj, MemberProperty::Private(name), _) if !discard => {
@@ -1327,7 +1320,6 @@ impl Compiler {
                 self.emit(Op::UpdatePrivate);
                 self.emit_u16(idx);
                 self.code.push(mode);
-                // Stack height unchanged: pop base, push result.
                 Ok(())
             }
             Expression::Member(obj, MemberProperty::Computed(key), _) if !discard => {
