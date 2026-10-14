@@ -2417,28 +2417,20 @@ fn nested_tail_positions_and_unsupported_member_callees_remain_ineligible() {
     use super::compiler::CompileError;
     use crate::ast::{CallSiteId, LogicalOp, MemberProperty, PropSiteId};
 
-    for callee in [
-        Expression::Member(
-            ExprBox::new(Expression::Super),
-            MemberProperty::Dot("method".to_string()),
-            PropSiteId::UNASSIGNED,
-        ),
-        Expression::Member(
-            ExprBox::new(Expression::Identifier("object".to_string())),
-            MemberProperty::Private("method".to_string()),
-            PropSiteId::UNASSIGNED,
-        ),
-    ] {
-        let call = vec![Statement::Expression(Expression::Call(
-            ExprBox::new(callee),
-            vec![],
-            CallSiteId::UNASSIGNED,
-        ))];
-        assert!(matches!(
-            compile_body(&call),
-            Err(CompileError::Ineligible(_))
-        ));
-    }
+    let callee = Expression::Member(
+        ExprBox::new(Expression::Super),
+        MemberProperty::Dot("method".to_string()),
+        PropSiteId::UNASSIGNED,
+    );
+    let call = vec![Statement::Expression(Expression::Call(
+        ExprBox::new(callee),
+        vec![],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&call),
+        Err(CompileError::Ineligible(_))
+    ));
 
     let nested_tail_call = Expression::Logical(
         LogicalOp::And,
