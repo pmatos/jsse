@@ -5315,15 +5315,13 @@ impl Interpreter {
         let obj = self.get_object_cell(getter.as_object_id()?)?;
         let (chunk, closure, function_realm) = {
             let b = obj.borrow();
-            if b.is_proxy() || b.is_proxy_revoked() || b.wrapped().is_some() {
-                return None;
-            }
             let Some(JsFunction::User {
                 closure,
                 is_arrow: false,
                 is_strict: true,
                 is_generator: false,
                 is_async: false,
+                has_simple_params: true,
                 bytecode_cache: BytecodeCacheState::Compiled(chunk),
                 ..
             }) = b.callable.as_deref()
@@ -5331,10 +5329,18 @@ impl Interpreter {
                 return None;
             };
             chunk.trivial_private_getter?;
+            if b.is_proxy()
+                || b.is_proxy_revoked()
+                || b.wrapped().is_some()
+                || b.is_class_constructor()
+            {
+                return None;
+            }
             (chunk.clone(), closure.clone(), b.function_realm())
         };
-        let idx = usize::from(chunk.trivial_private_getter?);
-        let name = chunk.private_names.get(idx)?;
+        let name = chunk
+            .private_names
+            .get(usize::from(chunk.trivial_private_getter?))?;
         #[cfg(feature = "perf-counters")]
         {
             self.perf.trivial_getter_hits += 1;

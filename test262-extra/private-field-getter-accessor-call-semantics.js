@@ -131,3 +131,35 @@ for (var i = 0; i < 5; i++) {
     "the brand-check error comes from the getter's realm " + i
   );
 }
+
+class Ctor {
+  #x = 2;
+  constructor() { return this.#x; }
+}
+var ctorHolder = {};
+Object.defineProperty(ctorHolder, "p", { get: Ctor });
+new Ctor();
+new Ctor();
+new Ctor();
+for (var i = 0; i < 5; i++) {
+  assert.throws(TypeError, function() {
+    ctorHolder.p;
+  }, "a class constructor used as a getter throws on [[Call]] " + i);
+}
+
+var log = [];
+class Params {
+  #x = 1;
+  m(a = log.push("default")) { return this.#x; }
+  n({ a }) { return this.#x; }
+}
+var params = new Params();
+Object.defineProperty(params, "p", { get: Params.prototype.m });
+Object.defineProperty(params, "q", { get: Params.prototype.n });
+for (var i = 0; i < 5; i++) {
+  assert.sameValue(params.p, 1, "default-parameter getter value " + i);
+  assert.sameValue(log.length, i + 1, "the parameter initializer runs on every call " + i);
+  assert.throws(TypeError, function() {
+    params.q;
+  }, "destructuring undefined in the parameter list throws " + i);
+}
