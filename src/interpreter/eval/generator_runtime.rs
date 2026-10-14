@@ -686,6 +686,8 @@ impl Interpreter {
         self.raw_iter_step = None;
         // `%GeneratorPrototype%.next` is a native [[Call]]: the body it
         // resumes sees no NewTarget, whatever constructor is running here.
+        // This path skips the call-entry clear of the register, which a native
+        // constructor driving the iterator (`new Map(gen())`) leaves set.
         let saved_new_target = self.new_target.take();
         // The native `next` call this replaces counted one call level; keep
         // that so recursion through generators stays bounded.

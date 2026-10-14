@@ -154,7 +154,6 @@ impl Interpreter {
                             is_async: false,
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
-                            captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic Function()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -729,7 +728,6 @@ impl Interpreter {
                             is_async: true,
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
-                            captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic AsyncFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -885,7 +883,6 @@ impl Interpreter {
                             is_async: false,
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
-                            captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic GeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -1043,7 +1040,6 @@ impl Interpreter {
                             is_async: true,
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
-                            captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };

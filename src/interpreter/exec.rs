@@ -624,7 +624,6 @@ impl Interpreter {
             is_async: f.is_async,
             is_method: false,
             source_text: f.source_text.clone(),
-            captured_new_target: None,
             uses_arguments: info.uses_arguments,
             has_simple_params: info.has_simple_params,
         };
@@ -2839,7 +2838,6 @@ impl Interpreter {
                         is_async: f.is_async,
                         is_method: false,
                         source_text: f.source_text.clone(),
-                        captured_new_target: None,
                         uses_arguments: info.uses_arguments,
                         has_simple_params: info.has_simple_params,
                     };
@@ -3086,10 +3084,7 @@ impl Interpreter {
                 }
             }
             let this_val = JsValue::object(new_obj_id);
-            let prev_new_target = self.new_target.take();
-            self.new_target = Some(ctor_val.clone());
             let result = self.call_function(&ctor_val, &this_val, args);
-            self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if (v).is_object() => Completion::Normal(v),
                 Completion::Normal(_) => Completion::Normal(this_val),

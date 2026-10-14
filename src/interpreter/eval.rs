@@ -48,8 +48,6 @@ enum CallTarget {
         closure: EnvRef,
         /// The function's boolean attributes, one bit each (`CALL_*`).
         flags: u8,
-        /// Only populated for arrow functions, which inherit it.
-        captured_new_target: Option<JsValue>,
     },
 }
 
@@ -159,11 +157,6 @@ impl Interpreter {
             is_async: spec.is_async,
             is_method,
             source_text: spec.source_text.clone(),
-            captured_new_target: if spec.is_arrow {
-                self.new_target.clone()
-            } else {
-                None
-            },
             // Arrows never have their own `arguments`; their literal info
             // records `false`.
             uses_arguments: spec.info.uses_arguments,
@@ -351,21 +344,8 @@ impl Interpreter {
         // are methods called with no NewTarget.
         self.with_gc_root_scope(|interp| {
             interp.gc_root_value(&this_val);
-            interp.with_new_target_undefined(|interp| {
-                interp.define_instance_elements(&this_val, this_obj_id, ctor_id, &defs)
-            })
+            interp.define_instance_elements(&this_val, this_obj_id, ctor_id, &defs)
         })
-    }
-
-    /// Run `body` as a class field initializer or static block: those are
-    /// methods called with no NewTarget (DefineField, ClassStaticBlockDefinition
-    /// call them with [[Call]]), so `new.target` in them, and in the arrow
-    /// functions they create, is undefined whatever is being constructed.
-    fn with_new_target_undefined<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
-        let saved = self.new_target.take();
-        let result = body(self);
-        self.new_target = saved;
-        result
     }
 
     fn define_instance_elements(
@@ -608,9 +588,7 @@ impl Interpreter {
             Expression::Super => {
                 Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED))
             }
-            Expression::NewTarget => {
-                Completion::Normal(self.new_target.clone().unwrap_or(JsValue::UNDEFINED))
-            }
+            Expression::NewTarget => Completion::Normal(env.borrow().get_new_target()),
             Expression::PrivateIdentifier(_) => Completion::Throw(
                 self.create_type_error("Private identifier can only be used with 'in' operator"),
             ),
@@ -4815,10 +4793,11 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let saved_new_target = interp.new_target.clone();
-                let new_target = saved_new_target.clone().unwrap_or(super_ctor.clone());
+                let new_target = match env.borrow().get_new_target() {
+                    nt if nt.is_undefined() => super_ctor.clone(),
+                    nt => nt,
+                };
                 let result = interp.construct_super(&super_ctor, &arg_vals, new_target);
-                interp.new_target = saved_new_target;
                 let Completion::Normal(v) = result else {
                     return result;
                 };
@@ -5548,7 +5527,7 @@ impl Interpreter {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
             let function_realm = obj.borrow().function_realm();
-            if is_class_ctor && self.new_target.is_none() {
+            if is_class_ctor && !self.calling_as_construct {
                 let caller_realm = self.current_realm_id;
                 if let Some(fn_realm) = function_realm {
                     self.current_realm_id = fn_realm;
@@ -5569,7 +5548,6 @@ impl Interpreter {
                     is_async,
                     uses_arguments,
                     has_simple_params,
-                    captured_new_target,
                     ..
                 }) => Some(CallTarget::User {
                     params: params.clone(),
@@ -5581,537 +5559,550 @@ impl Interpreter {
                         | (u8::from(*is_async) * CALL_ASYNC)
                         | (u8::from(*uses_arguments) * CALL_USES_ARGUMENTS)
                         | (u8::from(*has_simple_params) * CALL_SIMPLE_PARAMS),
-                    captured_new_target: captured_new_target.clone(),
                 }),
                 Some(JsFunction::Native(_, _, f, _)) => Some(CallTarget::Native(f.clone())),
                 None => None,
             };
             if let Some(func) = callable {
-                // [[Call]] vs [[Construct]] new.target semantics:
-                // - [[Call]]: new.target = undefined (clear for non-arrow functions)
-                // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
-                // - Arrow functions: inherit new.target from enclosing scope (don't clear)
-                let is_arrow_func =
-                    matches!(func, CallTarget::User { flags, .. } if flags & CALL_ARROW != 0);
+                // The register carries NewTarget only into a native constructor.
+                // A user function reads it from its function environment, so it
+                // is cleared while the body runs and restored on every exit.
                 let was_construct = std::mem::replace(&mut self.calling_as_construct, false);
-                let outer_new_target = if !is_arrow_func {
-                    let nt = self.new_target.take();
-                    if was_construct {
-                        self.new_target = nt.clone();
+                let entry_new_target = self.new_target.take();
+                let env_new_target = match func {
+                    CallTarget::User { flags, .. } if was_construct && flags & CALL_ARROW == 0 => {
+                        entry_new_target.clone().unwrap_or(JsValue::UNDEFINED)
                     }
-                    Some(nt)
-                } else {
-                    // Arrow functions inherit new.target from creation context
-                    let saved = self.new_target.take();
-                    if let CallTarget::User {
-                        captured_new_target: Some(ref cnt),
-                        ..
-                    } = func
-                    {
-                        self.new_target = Some(cnt.clone());
+                    CallTarget::User { .. } => JsValue::UNDEFINED,
+                    CallTarget::Native(_) => {
+                        if was_construct {
+                            self.new_target = entry_new_target.clone();
+                        }
+                        JsValue::UNDEFINED
                     }
-                    Some(saved)
                 };
-                let result = match func {
-                    CallTarget::Native(f) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            self.perf.calls_to_native += 1;
-                        }
-                        let caller_realm = self.current_realm_id;
-                        if let Some(fn_realm) = function_realm {
-                            self.current_realm_id = fn_realm;
-                        }
-                        let operands_base = self.gc_root_frame();
-                        self.gc_root_value(_this_val);
-                        for a in args.iter() {
-                            self.gc_root_value(a);
-                        }
-                        let operands_depth = self.gc_root_frame();
-                        let saved_this = self.last_call_this_value.take();
-                        let result = f(self, _this_val, args);
-                        self.last_call_this_value = saved_this;
-                        self.last_call_had_explicit_return = true;
-                        self.gc_assert_root_depth(operands_depth, "a native call");
-                        // Unroot the native call operands after the call returns.
-                        for a in args.iter().rev() {
-                            self.gc_unroot_value(a);
-                        }
-                        self.gc_unroot_value(_this_val);
-                        self.gc_assert_root_depth(operands_base, "a native call's operands");
-                        self.current_realm_id = caller_realm;
-                        result
-                    }
-                    CallTarget::User {
-                        params,
-                        body,
-                        closure,
-                        flags,
-                        ..
-                    } => {
-                        let is_arrow = flags & CALL_ARROW != 0;
-                        let is_strict = flags & CALL_STRICT != 0;
-                        let is_generator = flags & CALL_GENERATOR != 0;
-                        let is_async = flags & CALL_ASYNC != 0;
-                        let uses_arguments = flags & CALL_USES_ARGUMENTS != 0;
-                        let has_simple_params = flags & CALL_SIMPLE_PARAMS != 0;
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            self.perf.calls_to_user += 1;
-                        }
-                        // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
-                        let caller_realm = self.current_realm_id;
-                        if let Some(fn_realm) = function_realm {
-                            self.current_realm_id = fn_realm;
-                        }
-
-                        if is_async && !is_generator {
-                            let result = self.call_async_function(
-                                o.id,
-                                &params,
-                                &body,
-                                closure.clone(),
-                                is_arrow,
-                                is_strict,
-                                _this_val,
-                                args,
-                                func_val,
-                                uses_arguments,
-                                has_simple_params,
-                            );
-                            self.current_realm_id = caller_realm;
-                            return result;
-                        }
-                        if is_async && is_generator {
-                            // Create persistent function environment
-                            let func_env = Environment::new_function_scope_with_capacity(
-                                Some(closure.clone()),
-                                params.len().saturating_add(2),
-                            );
-                            func_env.borrow_mut().strict = is_strict;
-                            func_env.borrow_mut().set_this(_this_val.clone());
-                            let is_simple_ag = has_simple_params;
-                            if uses_arguments {
-                                let env_strict_ag = func_env.borrow().strict;
-                                let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
-                                let mapped_env_ag =
-                                    if use_mapped_ag { Some(&func_env) } else { None };
-                                let arguments_obj = self.create_arguments_object(
-                                    args,
-                                    func_val.clone(),
-                                    is_strict,
-                                    mapped_env_ag,
-                                    &params,
-                                );
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                let _ = self.env_set(&func_env, "arguments", arguments_obj);
-                                if is_strict || !is_simple_ag {
-                                    func_env.borrow_mut().arguments_immutable = true;
-                                }
-                            }
-                            if !is_simple_ag {
-                                func_env.borrow_mut().has_parameter_expressions = true;
-                            }
-                            // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            if let Err(error) = self.bind_function_parameters(
-                                &params,
-                                args,
-                                &func_env,
-                                is_simple_ag,
-                            ) {
-                                self.current_realm_id = caller_realm;
-                                return Completion::Throw(error);
-                            }
-                            // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
-                            let gen_obj_id = self.create_object_id();
-                            let mut proto_set = false;
-                            if let Some(func_obj_rc) = self.get_object_cell(o.id) {
-                                let proto_val =
-                                    func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(proto_id) =
-                                    proto_val.as_ref().and_then(JsValue::as_object_id)
-                                {
-                                    self.get_object_cell_expect(gen_obj_id)
-                                        .borrow_mut()
-                                        .prototype_id = Some(proto_id);
-                                    proto_set = true;
-                                }
-                            }
-                            if !proto_set {
-                                let fn_realm_id = match self.get_function_realm(func_val) {
-                                    Ok(r) => r,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                let agp_id = self.realms[fn_realm_id].async_generator_prototype;
-                                self.get_object_cell_expect(gen_obj_id)
-                                    .borrow_mut()
-                                    .prototype_id = agp_id;
-                            }
-                            self.get_object_cell_expect(gen_obj_id)
-                                .borrow_mut()
-                                .class_name = "AsyncGenerator";
-                            let is_simple = has_simple_params;
-                            let exec_env = if !is_simple {
-                                let body_env =
-                                    Environment::new_function_scope(Some(func_env.clone()));
-                                body_env.borrow_mut().strict = func_env.borrow().strict;
-                                body_env.borrow_mut().has_simple_params = false;
-                                let analysis = self.hoist_cache.analysis_for(&body);
-                                for name in &analysis.var_names {
-                                    body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if name == "arguments"
-                                        || params.iter().any(|p| p.binds_name(name))
-                                    {
-                                        let val = func_env
-                                            .borrow()
-                                            .get(name)
-                                            .unwrap_or(JsValue::UNDEFINED);
-                                        let _ = self.env_set(&body_env, name, val);
-                                    }
-                                }
-                                body_env
-                            } else {
-                                func_env.clone()
-                            };
-
-                            let state_machine = self.state_machine_for(
-                                StateMachineKind::AsyncGenerator,
-                                &body,
-                                &params,
-                                o.id,
-                            );
-                            for temp_var in &state_machine.temp_vars {
-                                exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
-                            }
-                            for lv in &state_machine.local_vars {
-                                let bk = match lv.kind {
-                                    crate::ast::VarKind::Let
-                                    | crate::ast::VarKind::Const
-                                    | crate::ast::VarKind::Using
-                                    | crate::ast::VarKind::AwaitUsing => {
-                                        // Block-scoped bindings must not be hoisted to function level
-                                        if lv.scope_depth > 0 {
-                                            continue;
-                                        }
-                                        BindingKind::Let
-                                    }
-                                    _ => BindingKind::Var,
-                                };
-                                if !exec_env.borrow().bindings.contains_key(&lv.name)
-                                    && !func_env.borrow().bindings.contains_key(&lv.name)
-                                {
-                                    exec_env.borrow_mut().declare(&lv.name, bk);
-                                }
-                            }
-                            self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
-                            self.get_object_cell_expect(gen_obj_id)
-                                .borrow_mut()
-                                .set_iterator_state(IteratorState::StateMachineAsyncGenerator {
-                                    state_machine,
-                                    func_env: exec_env,
-                                    is_strict,
-                                    execution_state: StateMachineExecutionState::SuspendedStart,
-                                    _sent_value: JsValue::UNDEFINED,
-                                    try_stack: vec![],
-                                    pending_binding: None,
-                                    delegated_iterator: None,
-                                    pending_exception: None,
-                                    pending_return: None,
-                                });
-                            let gen_id = gen_obj_id;
-                            if let Some(obj_rc) = self.get_object_cell(gen_id) {
-                                obj_rc
-                                    .borrow_mut()
-                                    .set_generator_realm_id(self.current_realm_id);
-                            }
-                            self.current_realm_id = caller_realm;
-                            return Completion::Normal(JsValue::object(gen_id));
-                        }
-                        if is_generator {
-                            // Create persistent function environment
-                            let func_env = Environment::new_function_scope_with_capacity(
-                                Some(closure.clone()),
-                                params.len().saturating_add(2),
-                            );
-                            let closure_strict = closure.borrow().strict;
-                            func_env.borrow_mut().strict = is_strict;
-                            // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
-                            let effective_this =
-                                self.ordinary_call_bind_this(_this_val, is_strict, closure_strict);
-                            func_env.borrow_mut().set_this(effective_this);
-                            let is_simple_g = has_simple_params;
-                            if uses_arguments {
-                                let env_strict_g = func_env.borrow().strict;
-                                let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
-                                let mapped_env_g =
-                                    if use_mapped_g { Some(&func_env) } else { None };
-                                let arguments_obj = self.create_arguments_object(
-                                    args,
-                                    func_val.clone(),
-                                    is_strict,
-                                    mapped_env_g,
-                                    &params,
-                                );
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                let _ = self.env_set(&func_env, "arguments", arguments_obj);
-                                if is_strict || !is_simple_g {
-                                    func_env.borrow_mut().arguments_immutable = true;
-                                }
-                            }
-                            if !is_simple_g {
-                                func_env.borrow_mut().has_parameter_expressions = true;
-                            }
-                            // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            if let Err(error) =
-                                self.bind_function_parameters(&params, args, &func_env, is_simple_g)
+                // Every exit from this block, early or not, reaches the restore
+                // of the register below.
+                let result = 'call: {
+                    match func {
+                        CallTarget::Native(f) => {
+                            #[cfg(feature = "perf-counters")]
                             {
-                                self.current_realm_id = caller_realm;
-                                return Completion::Throw(error);
+                                self.perf.calls_to_native += 1;
                             }
-                            // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
-                            let gen_obj_id = self.create_object_id();
-                            let mut proto_set = false;
-                            if let Some(func_obj_rc) = self.get_object_cell(o.id) {
-                                let proto_val =
-                                    func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(proto_id) =
-                                    proto_val.as_ref().and_then(JsValue::as_object_id)
-                                {
+                            let caller_realm = self.current_realm_id;
+                            if let Some(fn_realm) = function_realm {
+                                self.current_realm_id = fn_realm;
+                            }
+                            let operands_base = self.gc_root_frame();
+                            self.gc_root_value(_this_val);
+                            for a in args.iter() {
+                                self.gc_root_value(a);
+                            }
+                            let operands_depth = self.gc_root_frame();
+                            let saved_this = self.last_call_this_value.take();
+                            let result = f(self, _this_val, args);
+                            self.last_call_this_value = saved_this;
+                            self.last_call_had_explicit_return = true;
+                            self.gc_assert_root_depth(operands_depth, "a native call");
+                            // Unroot the native call operands after the call returns.
+                            for a in args.iter().rev() {
+                                self.gc_unroot_value(a);
+                            }
+                            self.gc_unroot_value(_this_val);
+                            self.gc_assert_root_depth(operands_base, "a native call's operands");
+                            self.current_realm_id = caller_realm;
+                            result
+                        }
+                        CallTarget::User {
+                            params,
+                            body,
+                            closure,
+                            flags,
+                            ..
+                        } => {
+                            let is_arrow = flags & CALL_ARROW != 0;
+                            let is_strict = flags & CALL_STRICT != 0;
+                            let is_generator = flags & CALL_GENERATOR != 0;
+                            let is_async = flags & CALL_ASYNC != 0;
+                            let uses_arguments = flags & CALL_USES_ARGUMENTS != 0;
+                            let has_simple_params = flags & CALL_SIMPLE_PARAMS != 0;
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                self.perf.calls_to_user += 1;
+                            }
+                            // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
+                            let caller_realm = self.current_realm_id;
+                            if let Some(fn_realm) = function_realm {
+                                self.current_realm_id = fn_realm;
+                            }
+
+                            if is_async && !is_generator {
+                                let result = self.call_async_function(
+                                    o.id,
+                                    &params,
+                                    &body,
+                                    closure.clone(),
+                                    is_arrow,
+                                    is_strict,
+                                    _this_val,
+                                    args,
+                                    func_val,
+                                    uses_arguments,
+                                    has_simple_params,
+                                );
+                                self.current_realm_id = caller_realm;
+                                break 'call result;
+                            }
+                            if is_async && is_generator {
+                                // Create persistent function environment
+                                let func_env = Environment::new_function_scope_with_capacity(
+                                    Some(closure.clone()),
+                                    params.len().saturating_add(2),
+                                );
+                                func_env.borrow_mut().strict = is_strict;
+                                func_env.borrow_mut().set_this(_this_val.clone());
+                                let is_simple_ag = has_simple_params;
+                                if uses_arguments {
+                                    let env_strict_ag = func_env.borrow().strict;
+                                    let use_mapped_ag =
+                                        is_simple_ag && !is_strict && !env_strict_ag;
+                                    let mapped_env_ag =
+                                        if use_mapped_ag { Some(&func_env) } else { None };
+                                    let arguments_obj = self.create_arguments_object(
+                                        args,
+                                        func_val.clone(),
+                                        is_strict,
+                                        mapped_env_ag,
+                                        &params,
+                                    );
+                                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                    let _ = self.env_set(&func_env, "arguments", arguments_obj);
+                                    if is_strict || !is_simple_ag {
+                                        func_env.borrow_mut().arguments_immutable = true;
+                                    }
+                                }
+                                if !is_simple_ag {
+                                    func_env.borrow_mut().has_parameter_expressions = true;
+                                }
+                                // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
+                                if let Err(error) = self.bind_function_parameters(
+                                    &params,
+                                    args,
+                                    &func_env,
+                                    is_simple_ag,
+                                ) {
+                                    self.current_realm_id = caller_realm;
+                                    break 'call Completion::Throw(error);
+                                }
+                                // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
+                                let gen_obj_id = self.create_object_id();
+                                let mut proto_set = false;
+                                if let Some(func_obj_rc) = self.get_object_cell(o.id) {
+                                    let proto_val =
+                                        func_obj_rc.borrow().get_property_value("prototype");
+                                    if let Some(proto_id) =
+                                        proto_val.as_ref().and_then(JsValue::as_object_id)
+                                    {
+                                        self.get_object_cell_expect(gen_obj_id)
+                                            .borrow_mut()
+                                            .prototype_id = Some(proto_id);
+                                        proto_set = true;
+                                    }
+                                }
+                                if !proto_set {
+                                    let fn_realm_id = match self.get_function_realm(func_val) {
+                                        Ok(r) => r,
+                                        Err(e) => break 'call Completion::Throw(e),
+                                    };
+                                    let agp_id = self.realms[fn_realm_id].async_generator_prototype;
                                     self.get_object_cell_expect(gen_obj_id)
                                         .borrow_mut()
-                                        .prototype_id = Some(proto_id);
-                                    proto_set = true;
+                                        .prototype_id = agp_id;
                                 }
-                            }
-                            if !proto_set {
-                                let fn_realm_id = match self.get_function_realm(func_val) {
-                                    Ok(r) => r,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                let gp_id = self.realms[fn_realm_id].generator_prototype;
                                 self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .prototype_id = gp_id;
-                            }
-                            self.get_object_cell_expect(gen_obj_id)
-                                .borrow_mut()
-                                .class_name = "Generator";
-                            let is_simple = has_simple_params;
-                            let exec_env = if !is_simple {
-                                let body_env =
-                                    Environment::new_function_scope(Some(func_env.clone()));
-                                body_env.borrow_mut().strict = func_env.borrow().strict;
-                                body_env.borrow_mut().has_simple_params = false;
-                                let analysis = self.hoist_cache.analysis_for(&body);
-                                for name in &analysis.var_names {
-                                    body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if name == "arguments"
-                                        || params.iter().any(|p| p.binds_name(name))
-                                    {
-                                        let val = func_env
-                                            .borrow()
-                                            .get(name)
-                                            .unwrap_or(JsValue::UNDEFINED);
-                                        let _ = self.env_set(&body_env, name, val);
-                                    }
-                                }
-                                body_env
-                            } else {
-                                func_env.clone()
-                            };
-
-                            let state_machine = self.state_machine_for(
-                                StateMachineKind::Generator,
-                                &body,
-                                &params,
-                                o.id,
-                            );
-                            for temp_var in &state_machine.temp_vars {
-                                exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
-                            }
-                            for lv in &state_machine.local_vars {
-                                let bk = match lv.kind {
-                                    crate::ast::VarKind::Let
-                                    | crate::ast::VarKind::Const
-                                    | crate::ast::VarKind::Using
-                                    | crate::ast::VarKind::AwaitUsing => {
-                                        // Block-scoped bindings must not be hoisted to function level
-                                        if lv.scope_depth > 0 {
-                                            continue;
+                                    .class_name = "AsyncGenerator";
+                                let is_simple = has_simple_params;
+                                let exec_env = if !is_simple {
+                                    let body_env =
+                                        Environment::new_function_scope(Some(func_env.clone()));
+                                    body_env.borrow_mut().strict = func_env.borrow().strict;
+                                    body_env.borrow_mut().has_simple_params = false;
+                                    let analysis = self.hoist_cache.analysis_for(&body);
+                                    for name in &analysis.var_names {
+                                        body_env.borrow_mut().declare(name, BindingKind::Var);
+                                        if name == "arguments"
+                                            || params.iter().any(|p| p.binds_name(name))
+                                        {
+                                            let val = func_env
+                                                .borrow()
+                                                .get(name)
+                                                .unwrap_or(JsValue::UNDEFINED);
+                                            let _ = self.env_set(&body_env, name, val);
                                         }
-                                        BindingKind::Let
                                     }
-                                    _ => BindingKind::Var,
+                                    body_env
+                                } else {
+                                    func_env.clone()
                                 };
-                                if !exec_env.borrow().bindings.contains_key(&lv.name)
-                                    && !func_env.borrow().bindings.contains_key(&lv.name)
-                                {
-                                    exec_env.borrow_mut().declare(&lv.name, bk);
+
+                                let state_machine = self.state_machine_for(
+                                    StateMachineKind::AsyncGenerator,
+                                    &body,
+                                    &params,
+                                    o.id,
+                                );
+                                for temp_var in &state_machine.temp_vars {
+                                    exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                                 }
-                            }
-                            self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
-                            self.get_object_cell_expect(gen_obj_id)
-                                .borrow_mut()
-                                .set_iterator_state(IteratorState::StateMachineGenerator {
-                                    state_machine,
-                                    func_env: exec_env,
-                                    is_strict,
-                                    execution_state: StateMachineExecutionState::SuspendedStart,
-                                    _sent_value: JsValue::UNDEFINED,
-                                    try_stack: vec![],
-                                    pending_binding: None,
-                                    delegated_iterator: None,
-                                    pending_exception: None,
-                                    pending_return: None,
-                                });
-                            let gen_id = gen_obj_id;
-                            if let Some(obj_rc) = self.get_object_cell(gen_id) {
-                                obj_rc
+                                for lv in &state_machine.local_vars {
+                                    let bk = match lv.kind {
+                                        crate::ast::VarKind::Let
+                                        | crate::ast::VarKind::Const
+                                        | crate::ast::VarKind::Using
+                                        | crate::ast::VarKind::AwaitUsing => {
+                                            // Block-scoped bindings must not be hoisted to function level
+                                            if lv.scope_depth > 0 {
+                                                continue;
+                                            }
+                                            BindingKind::Let
+                                        }
+                                        _ => BindingKind::Var,
+                                    };
+                                    if !exec_env.borrow().bindings.contains_key(&lv.name)
+                                        && !func_env.borrow().bindings.contains_key(&lv.name)
+                                    {
+                                        exec_env.borrow_mut().declare(&lv.name, bk);
+                                    }
+                                }
+                                self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
+                                self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .set_generator_realm_id(self.current_realm_id);
+                                    .set_iterator_state(
+                                        IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env: exec_env,
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedStart,
+                                            _sent_value: JsValue::UNDEFINED,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        },
+                                    );
+                                let gen_id = gen_obj_id;
+                                if let Some(obj_rc) = self.get_object_cell(gen_id) {
+                                    obj_rc
+                                        .borrow_mut()
+                                        .set_generator_realm_id(self.current_realm_id);
+                                }
+                                self.current_realm_id = caller_realm;
+                                break 'call Completion::Normal(JsValue::object(gen_id));
                             }
-                            self.current_realm_id = caller_realm;
-                            return Completion::Normal(JsValue::object(gen_id));
-                        }
-                        let closure_strict = closure.borrow().strict;
-                        let func_env = self
-                            .acquire_function_environment(closure, params.len().saturating_add(2));
-                        if is_arrow {
-                            func_env.borrow_mut().is_arrow_scope = true;
-                        }
-                        let is_simple = has_simple_params;
-                        let mut call_frame_arguments = CallFrameArguments::None;
-                        if !is_arrow {
-                            if self.constructing_derived {
-                                // Derived constructor: this is in TDZ until super() is called
-                                func_env.borrow_mut().declare_this_uninit();
-                                func_env.borrow_mut().is_derived_constructor_scope = true;
-                                self.constructing_derived = false;
-                            } else {
+                            if is_generator {
+                                // Create persistent function environment
+                                let func_env = Environment::new_function_scope_with_capacity(
+                                    Some(closure.clone()),
+                                    params.len().saturating_add(2),
+                                );
+                                let closure_strict = closure.borrow().strict;
+                                func_env.borrow_mut().strict = is_strict;
+                                // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
                                 let effective_this = self.ordinary_call_bind_this(
                                     _this_val,
                                     is_strict,
                                     closure_strict,
                                 );
                                 func_env.borrow_mut().set_this(effective_this);
-                            }
-                            let env_strict = func_env.borrow().strict;
-                            if uses_arguments {
-                                let use_mapped = is_simple && !is_strict && !env_strict;
-                                let mapped_env = if use_mapped { Some(&func_env) } else { None };
-                                let arguments_obj = self.create_arguments_object(
-                                    args,
-                                    func_val.clone(),
-                                    is_strict,
-                                    mapped_env,
-                                    &params,
-                                );
-                                call_frame_arguments =
-                                    CallFrameArguments::Materialized(arguments_obj.clone());
-                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                let _ = self.env_set(&func_env, "arguments", arguments_obj);
-                                if is_strict || !is_simple {
-                                    func_env.borrow_mut().arguments_immutable = true;
+                                let is_simple_g = has_simple_params;
+                                if uses_arguments {
+                                    let env_strict_g = func_env.borrow().strict;
+                                    let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
+                                    let mapped_env_g =
+                                        if use_mapped_g { Some(&func_env) } else { None };
+                                    let arguments_obj = self.create_arguments_object(
+                                        args,
+                                        func_val.clone(),
+                                        is_strict,
+                                        mapped_env_g,
+                                        &params,
+                                    );
+                                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                    let _ = self.env_set(&func_env, "arguments", arguments_obj);
+                                    if is_strict || !is_simple_g {
+                                        func_env.borrow_mut().arguments_immutable = true;
+                                    }
                                 }
-                            } else if !is_strict && !env_strict {
-                                // `arguments` is unobservable by name here (no
-                                // reference, declaration or direct eval), so no
-                                // binding is created; sloppy frames keep the args
-                                // for the legacy `fn.arguments` accessor.
-                                call_frame_arguments = CallFrameArguments::Deferred {
-                                    args: DeferredCallArguments::new(args),
-                                    func_env: func_env.clone(),
-                                    mapped: is_simple,
+                                if !is_simple_g {
+                                    func_env.borrow_mut().has_parameter_expressions = true;
+                                }
+                                // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
+                                if let Err(error) = self.bind_function_parameters(
+                                    &params,
+                                    args,
+                                    &func_env,
+                                    is_simple_g,
+                                ) {
+                                    self.current_realm_id = caller_realm;
+                                    break 'call Completion::Throw(error);
+                                }
+                                // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
+                                let gen_obj_id = self.create_object_id();
+                                let mut proto_set = false;
+                                if let Some(func_obj_rc) = self.get_object_cell(o.id) {
+                                    let proto_val =
+                                        func_obj_rc.borrow().get_property_value("prototype");
+                                    if let Some(proto_id) =
+                                        proto_val.as_ref().and_then(JsValue::as_object_id)
+                                    {
+                                        self.get_object_cell_expect(gen_obj_id)
+                                            .borrow_mut()
+                                            .prototype_id = Some(proto_id);
+                                        proto_set = true;
+                                    }
+                                }
+                                if !proto_set {
+                                    let fn_realm_id = match self.get_function_realm(func_val) {
+                                        Ok(r) => r,
+                                        Err(e) => break 'call Completion::Throw(e),
+                                    };
+                                    let gp_id = self.realms[fn_realm_id].generator_prototype;
+                                    self.get_object_cell_expect(gen_obj_id)
+                                        .borrow_mut()
+                                        .prototype_id = gp_id;
+                                }
+                                self.get_object_cell_expect(gen_obj_id)
+                                    .borrow_mut()
+                                    .class_name = "Generator";
+                                let is_simple = has_simple_params;
+                                let exec_env = if !is_simple {
+                                    let body_env =
+                                        Environment::new_function_scope(Some(func_env.clone()));
+                                    body_env.borrow_mut().strict = func_env.borrow().strict;
+                                    body_env.borrow_mut().has_simple_params = false;
+                                    let analysis = self.hoist_cache.analysis_for(&body);
+                                    for name in &analysis.var_names {
+                                        body_env.borrow_mut().declare(name, BindingKind::Var);
+                                        if name == "arguments"
+                                            || params.iter().any(|p| p.binds_name(name))
+                                        {
+                                            let val = func_env
+                                                .borrow()
+                                                .get(name)
+                                                .unwrap_or(JsValue::UNDEFINED);
+                                            let _ = self.env_set(&body_env, name, val);
+                                        }
+                                    }
+                                    body_env
+                                } else {
+                                    func_env.clone()
                                 };
+
+                                let state_machine = self.state_machine_for(
+                                    StateMachineKind::Generator,
+                                    &body,
+                                    &params,
+                                    o.id,
+                                );
+                                for temp_var in &state_machine.temp_vars {
+                                    exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
+                                }
+                                for lv in &state_machine.local_vars {
+                                    let bk = match lv.kind {
+                                        crate::ast::VarKind::Let
+                                        | crate::ast::VarKind::Const
+                                        | crate::ast::VarKind::Using
+                                        | crate::ast::VarKind::AwaitUsing => {
+                                            // Block-scoped bindings must not be hoisted to function level
+                                            if lv.scope_depth > 0 {
+                                                continue;
+                                            }
+                                            BindingKind::Let
+                                        }
+                                        _ => BindingKind::Var,
+                                    };
+                                    if !exec_env.borrow().bindings.contains_key(&lv.name)
+                                        && !func_env.borrow().bindings.contains_key(&lv.name)
+                                    {
+                                        exec_env.borrow_mut().declare(&lv.name, bk);
+                                    }
+                                }
+                                self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
+                                self.get_object_cell_expect(gen_obj_id)
+                                    .borrow_mut()
+                                    .set_iterator_state(IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env: exec_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::SuspendedStart,
+                                        _sent_value: JsValue::UNDEFINED,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                        pending_return: None,
+                                    });
+                                let gen_id = gen_obj_id;
+                                if let Some(obj_rc) = self.get_object_cell(gen_id) {
+                                    obj_rc
+                                        .borrow_mut()
+                                        .set_generator_realm_id(self.current_realm_id);
+                                }
+                                self.current_realm_id = caller_realm;
+                                break 'call Completion::Normal(JsValue::object(gen_id));
                             }
-                        }
-                        // For arrows with non-simple params and "arguments" parameter,
-                        // mark arguments as immutable for eval redeclaration checks
-                        if is_arrow && !is_simple {
-                            let has_arguments_param = params.iter().any(
+                            let closure_strict = closure.borrow().strict;
+                            let func_env = self.acquire_function_environment(
+                                closure,
+                                params.len().saturating_add(2),
+                            );
+                            if is_arrow {
+                                func_env.borrow_mut().is_arrow_scope = true;
+                            }
+                            let is_simple = has_simple_params;
+                            let mut call_frame_arguments = CallFrameArguments::None;
+                            if !is_arrow {
+                                if self.constructing_derived {
+                                    // Derived constructor: this is in TDZ until super() is called
+                                    let mut fe = func_env.borrow_mut();
+                                    fe.declare_this_uninit(env_new_target);
+                                    fe.is_derived_constructor_scope = true;
+                                    drop(fe);
+                                    self.constructing_derived = false;
+                                } else {
+                                    let effective_this = self.ordinary_call_bind_this(
+                                        _this_val,
+                                        is_strict,
+                                        closure_strict,
+                                    );
+                                    func_env
+                                        .borrow_mut()
+                                        .bind_this_for_call(effective_this, env_new_target);
+                                }
+                                let env_strict = func_env.borrow().strict;
+                                if uses_arguments {
+                                    let use_mapped = is_simple && !is_strict && !env_strict;
+                                    let mapped_env =
+                                        if use_mapped { Some(&func_env) } else { None };
+                                    let arguments_obj = self.create_arguments_object(
+                                        args,
+                                        func_val.clone(),
+                                        is_strict,
+                                        mapped_env,
+                                        &params,
+                                    );
+                                    call_frame_arguments =
+                                        CallFrameArguments::Materialized(arguments_obj.clone());
+                                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                    let _ = self.env_set(&func_env, "arguments", arguments_obj);
+                                    if is_strict || !is_simple {
+                                        func_env.borrow_mut().arguments_immutable = true;
+                                    }
+                                } else if !is_strict && !env_strict {
+                                    // `arguments` is unobservable by name here (no
+                                    // reference, declaration or direct eval), so no
+                                    // binding is created; sloppy frames keep the args
+                                    // for the legacy `fn.arguments` accessor.
+                                    call_frame_arguments = CallFrameArguments::Deferred {
+                                        args: DeferredCallArguments::new(args),
+                                        func_env: func_env.clone(),
+                                        mapped: is_simple,
+                                    };
+                                }
+                            }
+                            // For arrows with non-simple params and "arguments" parameter,
+                            // mark arguments as immutable for eval redeclaration checks
+                            if is_arrow && !is_simple {
+                                let has_arguments_param = params.iter().any(
                                 |p| matches!(p, Pattern::Identifier(name) if name == "arguments"),
                             );
-                            if has_arguments_param {
-                                func_env.borrow_mut().arguments_immutable = true;
-                            }
-                        }
-                        if !is_simple {
-                            func_env.borrow_mut().has_parameter_expressions = true;
-                        }
-                        // Bind parameters (after this so default exprs can access this)
-                        let bound = if is_simple {
-                            self.bind_simple_parameters(&body, &params, args, &func_env);
-                            Ok(())
-                        } else {
-                            self.bind_function_parameters(&params, args, &func_env, is_simple)
-                        };
-                        if let Err(error) = bound {
-                            self.current_realm_id = caller_realm;
-                            self.recycle_function_environment(func_env);
-                            return Completion::Throw(error);
-                        }
-                        let exec_env = if !is_simple {
-                            let body_env = Environment::new_function_scope(Some(func_env.clone()));
-                            body_env.borrow_mut().strict = func_env.borrow().strict;
-                            body_env.borrow_mut().has_simple_params = false;
-                            let analysis = self.hoist_cache.analysis_for(&body);
-                            for name in &analysis.var_names {
-                                body_env.borrow_mut().declare(name, BindingKind::Var);
-                                if name == "arguments" || params.iter().any(|p| p.binds_name(name))
-                                {
-                                    let val =
-                                        self.env_get(&func_env, name).unwrap_or(JsValue::UNDEFINED);
-                                    let _ = self.env_set(&body_env, name, val);
+                                if has_arguments_param {
+                                    func_env.borrow_mut().arguments_immutable = true;
                                 }
                             }
-                            body_env
-                        } else {
-                            func_env.clone()
-                        };
-                        exec_env.borrow_mut().strict = is_strict;
-                        self.call_stack_frames.push(CallFrame {
-                            func_obj_id: o.id,
-                            arguments: call_frame_arguments,
-                            is_eval: false,
-                        });
-                        self.call_stack_envs.push(exec_env.clone());
-                        self.in_tail_position = false;
-                        // A fresh function body: its tail positions are
-                        // independent of any try/finally region in the caller.
-                        let saved_tco_suppress = self.tco_suppress_depth;
-                        self.tco_suppress_depth = 0;
-                        let result = self.dispatch_body(o.id, &body, &exec_env, _this_val);
-                        self.tco_suppress_depth = saved_tco_suppress;
-                        self.call_stack_envs.pop();
-                        self.call_stack_frames.pop();
-                        let result = self.dispose_resources(&exec_env, result);
-                        if was_construct {
-                            self.last_call_this_value = func_env.borrow().get_this();
-                        }
-                        self.current_realm_id = caller_realm;
-                        drop(exec_env);
-                        self.recycle_function_environment(func_env);
-                        match result {
-                            Completion::Return(v) => {
-                                self.last_call_had_explicit_return = true;
-                                Completion::Normal(v)
+                            if !is_simple {
+                                func_env.borrow_mut().has_parameter_expressions = true;
                             }
-                            Completion::TailCall { .. } => {
-                                self.last_call_had_explicit_return = true;
-                                result
+                            // Bind parameters (after this so default exprs can access this)
+                            let bound = if is_simple {
+                                self.bind_simple_parameters(&body, &params, args, &func_env);
+                                Ok(())
+                            } else {
+                                self.bind_function_parameters(&params, args, &func_env, is_simple)
+                            };
+                            if let Err(error) = bound {
+                                self.current_realm_id = caller_realm;
+                                self.recycle_function_environment(func_env);
+                                break 'call Completion::Throw(error);
                             }
-                            Completion::Normal(_) | Completion::Empty => {
-                                self.last_call_had_explicit_return = false;
-                                Completion::Normal(JsValue::UNDEFINED)
+                            let exec_env = if !is_simple {
+                                let body_env =
+                                    Environment::new_function_scope(Some(func_env.clone()));
+                                body_env.borrow_mut().strict = func_env.borrow().strict;
+                                body_env.borrow_mut().has_simple_params = false;
+                                let analysis = self.hoist_cache.analysis_for(&body);
+                                for name in &analysis.var_names {
+                                    body_env.borrow_mut().declare(name, BindingKind::Var);
+                                    if name == "arguments"
+                                        || params.iter().any(|p| p.binds_name(name))
+                                    {
+                                        let val = self
+                                            .env_get(&func_env, name)
+                                            .unwrap_or(JsValue::UNDEFINED);
+                                        let _ = self.env_set(&body_env, name, val);
+                                    }
+                                }
+                                body_env
+                            } else {
+                                func_env.clone()
+                            };
+                            exec_env.borrow_mut().strict = is_strict;
+                            self.call_stack_frames.push(CallFrame {
+                                func_obj_id: o.id,
+                                arguments: call_frame_arguments,
+                                is_eval: false,
+                            });
+                            self.call_stack_envs.push(exec_env.clone());
+                            self.in_tail_position = false;
+                            // A fresh function body: its tail positions are
+                            // independent of any try/finally region in the caller.
+                            let saved_tco_suppress = self.tco_suppress_depth;
+                            self.tco_suppress_depth = 0;
+                            let result = self.dispatch_body(o.id, &body, &exec_env, _this_val);
+                            self.tco_suppress_depth = saved_tco_suppress;
+                            self.call_stack_envs.pop();
+                            self.call_stack_frames.pop();
+                            let result = self.dispose_resources(&exec_env, result);
+                            if was_construct {
+                                self.last_call_this_value = func_env.borrow().get_this();
                             }
-                            Completion::Yield(_) => Completion::Normal(JsValue::UNDEFINED),
-                            other => other,
+                            self.current_realm_id = caller_realm;
+                            drop(exec_env);
+                            self.recycle_function_environment(func_env);
+                            match result {
+                                Completion::Return(v) => {
+                                    self.last_call_had_explicit_return = true;
+                                    Completion::Normal(v)
+                                }
+                                Completion::TailCall { .. } => {
+                                    self.last_call_had_explicit_return = true;
+                                    result
+                                }
+                                Completion::Normal(_) | Completion::Empty => {
+                                    self.last_call_had_explicit_return = false;
+                                    Completion::Normal(JsValue::UNDEFINED)
+                                }
+                                Completion::Yield(_) => Completion::Normal(JsValue::UNDEFINED),
+                                other => other,
+                            }
                         }
                     }
                 };
-                if let Some(nt) = outer_new_target {
-                    self.new_target = nt;
-                }
+                self.new_target = entry_new_target;
                 return result;
             }
         }
@@ -6541,7 +6532,6 @@ impl Interpreter {
                 is_async: f.is_async,
                 is_method: false,
                 source_text: f.source_text.clone(),
-                captured_new_target: None,
                 uses_arguments: info.uses_arguments,
                 has_simple_params: info.has_simple_params,
             };
