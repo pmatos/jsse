@@ -15,7 +15,7 @@ pub(crate) fn next_template_id() -> u64 {
 /// A function's source text: a span of the enclosing source. Offsets are `u32`
 /// so the AST nodes that carry one stay within their cache-line budget; the top
 /// bit of `start` marks text that carries lone surrogates as private-use code
-/// points (see `from_pua_encoded`).
+/// points (see `with_pua_encoded`).
 #[derive(Clone, Debug)]
 pub(crate) struct SourceText {
     source: Rc<str>,
