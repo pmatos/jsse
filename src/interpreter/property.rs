@@ -994,14 +994,26 @@ impl Interpreter {
         proxy_depth: usize,
     ) -> Result<SetOutcome, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
-            let target_val = self.get_proxy_target_val(obj_id);
+            let (target_id, trap) = self.resolve_proxy_trap(obj_id, "set")?;
+            let target_val = JsValue::object(target_id);
+            let Some((handler_val, trap_val)) = trap else {
+                let next_depth = self.advance_proxy_chain_depth(proxy_depth)?;
+                return self.proxy_set_with_outcome_and_proxy_depth(
+                    target_id, key, value, receiver, next_depth,
+                );
+            };
             let key_val = self.symbol_key_to_jsvalue(key);
-            match self.invoke_proxy_trap(
-                obj_id,
-                "set",
-                vec![target_val.clone(), key_val, value.clone(), receiver.clone()],
+            let trap_call = match self.call_function(
+                &trap_val,
+                &handler_val,
+                &[target_val.clone(), key_val, value.clone(), receiver.clone()],
             ) {
-                Ok(Some(v)) => {
+                Completion::Normal(v) => Ok(v),
+                Completion::Throw(e) => Err(e),
+                _ => Ok(JsValue::UNDEFINED),
+            };
+            match trap_call {
+                Ok(v) => {
                     if self.to_boolean_val(&v) {
                         if let Some(target_id) = target_val.as_object_id()
                             && let Some(tobj) = self.get_object(target_id)
@@ -1034,15 +1046,6 @@ impl Interpreter {
                     } else {
                         Ok(SetOutcome::Rejected)
                     }
-                }
-                Ok(None) => {
-                    if let Some(target_id) = target_val.as_object_id() {
-                        let next_depth = self.advance_proxy_chain_depth(proxy_depth)?;
-                        return self.proxy_set_with_outcome_and_proxy_depth(
-                            target_id, key, value, receiver, next_depth,
-                        );
-                    }
-                    Ok(SetOutcome::Rejected)
                 }
                 Err(e) => Err(e),
             }
@@ -1152,62 +1155,12 @@ impl Interpreter {
                             let b = cell.borrow();
                             b.is_proxy() || b.is_proxy_revoked()
                         });
-                    let existing = self.proxy_get_own_property_descriptor(rid, key)?;
-                    if existing.is_undefined() {
-                        // CreateDataProperty(Receiver, P, V)
-                        let desc = crate::interpreter::types::PropertyDescriptor {
-                            value: Some(value),
-                            writable: Some(true),
-                            enumerable: Some(true),
-                            configurable: Some(true),
-                            get: None,
-                            set: None,
-                        };
-                        let desc_val = self.from_property_descriptor(&desc);
-                        let succeeded = self.proxy_define_own_property(
-                            rid,
-                            key.to_js_property_key(),
-                            &desc_val,
-                        )?;
-                        return Ok(if receiver_uses_proxy_define {
-                            SetOutcome::from_success(succeeded)
-                        } else {
-                            SetOutcome::from_own_data_write(rid, succeeded)
-                        });
+                    let succeeded = self.set_on_receiver_native(rid, key, value)?;
+                    return Ok(if receiver_uses_proxy_define {
+                        SetOutcome::from_success(succeeded)
                     } else {
-                        // existingDescriptor found: check accessor or non-writable
-                        let existing_desc = match self.to_property_descriptor(&existing) {
-                            Ok(d) => d,
-                            Err(Some(e)) => return Err(e),
-                            Err(None) => return Ok(SetOutcome::Rejected),
-                        };
-                        if existing_desc.is_accessor_descriptor() {
-                            return Ok(SetOutcome::Rejected);
-                        }
-                        if existing_desc.writable == Some(false) {
-                            return Ok(SetOutcome::Rejected);
-                        }
-                        // [[DefineOwnProperty]](P, {Value: V})
-                        let val_desc = crate::interpreter::types::PropertyDescriptor {
-                            value: Some(value),
-                            writable: None,
-                            enumerable: None,
-                            configurable: None,
-                            get: None,
-                            set: None,
-                        };
-                        let desc_val = self.from_property_descriptor(&val_desc);
-                        let succeeded = self.proxy_define_own_property(
-                            rid,
-                            key.to_js_property_key(),
-                            &desc_val,
-                        )?;
-                        return Ok(if receiver_uses_proxy_define {
-                            SetOutcome::from_success(succeeded)
-                        } else {
-                            SetOutcome::from_own_data_write(rid, succeeded)
-                        });
-                    }
+                        SetOutcome::from_own_data_write(rid, succeeded)
+                    });
                 }
                 // Receiver is not an Object: [[Set]] must return false, never
                 // fall back to writing the property onto `obj` itself — `obj`
@@ -1249,52 +1202,8 @@ impl Interpreter {
                     return Ok(SetOutcome::Rejected);
                 }
                 if is_proxy_recv {
-                    let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
-                    if existing.is_undefined() {
-                        // CreateDataProperty(Receiver, P, V)
-                        let create_desc = crate::interpreter::types::PropertyDescriptor {
-                            value: Some(value),
-                            writable: Some(true),
-                            enumerable: Some(true),
-                            configurable: Some(true),
-                            get: None,
-                            set: None,
-                        };
-                        let desc_val = self.from_property_descriptor(&create_desc);
-                        let succeeded = self.proxy_define_own_property(
-                            recv_id,
-                            key.to_js_property_key(),
-                            &desc_val,
-                        )?;
-                        return Ok(SetOutcome::from_success(succeeded));
-                    } else {
-                        let existing_desc = match self.to_property_descriptor(&existing) {
-                            Ok(d) => d,
-                            Err(Some(e)) => return Err(e),
-                            Err(None) => return Ok(SetOutcome::Rejected),
-                        };
-                        if existing_desc.is_accessor_descriptor() {
-                            return Ok(SetOutcome::Rejected);
-                        }
-                        if existing_desc.writable == Some(false) {
-                            return Ok(SetOutcome::Rejected);
-                        }
-                        let val_desc = crate::interpreter::types::PropertyDescriptor {
-                            value: Some(value),
-                            writable: None,
-                            enumerable: None,
-                            configurable: None,
-                            get: None,
-                            set: None,
-                        };
-                        let desc_val = self.from_property_descriptor(&val_desc);
-                        let succeeded = self.proxy_define_own_property(
-                            recv_id,
-                            key.to_js_property_key(),
-                            &desc_val,
-                        )?;
-                        return Ok(SetOutcome::from_success(succeeded));
-                    }
+                    let succeeded = self.set_on_receiver_native(recv_id, key, value)?;
+                    return Ok(SetOutcome::from_success(succeeded));
                 }
                 if let Some(recv_obj) = self.get_object_cell(recv_id) {
                     self.gc_write_barrier_value(recv_obj, &value);
@@ -1310,6 +1219,42 @@ impl Interpreter {
         } else {
             Ok(SetOutcome::Rejected)
         }
+    }
+
+    /// OrdinarySetWithOwnDescriptor steps 2.c-2.e against an object `receiver`:
+    /// `Receiver.[[GetOwnProperty]](P)` followed by `CreateDataProperty` or
+    /// `[[DefineOwnProperty]](P, {[[Value]]: V})`, all on internal descriptor
+    /// records so a Proxy receiver only builds JS objects for traps that exist.
+    pub(crate) fn set_on_receiver_native<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        receiver_id: u64,
+        key: &K,
+        value: JsValue,
+    ) -> Result<bool, JsValue> {
+        let desc = match self.proxy_get_own_property_native(receiver_id, key)? {
+            None => PropertyDescriptor {
+                value: Some(value),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            },
+            Some(existing) => {
+                if existing.is_accessor_descriptor() || existing.writable == Some(false) {
+                    return Ok(false);
+                }
+                PropertyDescriptor {
+                    value: Some(value),
+                    writable: None,
+                    enumerable: None,
+                    configurable: None,
+                    get: None,
+                    set: None,
+                }
+            }
+        };
+        self.proxy_define_own_property_native(receiver_id, key.to_js_property_key(), desc)
     }
 
     pub(crate) fn has_proxy_in_prototype_chain(&self, obj_id: u64) -> bool {
@@ -1521,60 +1466,11 @@ impl Interpreter {
                 vec![target_val.clone(), key_val, desc_val.clone()],
             ) {
                 Ok(Some(v)) => {
-                    let trap_result = self.to_boolean_val(&v);
-                    if !trap_result {
+                    if !self.to_boolean_val(&v) {
                         return Ok(false);
                     }
-                    if let Some(target_id) = target_val.as_object_id()
-                        && let Some(tobj) = self.get_object_cell(target_id)
-                    {
-                        let target_desc = tobj.borrow().get_own_property(&key);
-                        let target_extensible = tobj.borrow().extensible;
-                        let desc = self.to_property_descriptor(desc_val).ok();
-                        let setting_config_false =
-                            desc.as_ref().is_some_and(|d| d.configurable == Some(false));
-
-                        if let Some(ref desc) = desc {
-                            // Step 19: targetDesc is undefined
-                            if target_desc.is_none() {
-                                if !target_extensible {
-                                    return Err(self.create_type_error(
-                                        "'defineProperty' on proxy: trap returned truish for adding property to the non-extensible proxy target",
-                                    ));
-                                }
-                                if setting_config_false {
-                                    return Err(self.create_type_error(
-                                        "'defineProperty' on proxy: trap returned truish for defining non-configurable property which does not exist on the proxy target",
-                                    ));
-                                }
-                            }
-                            // Step 20: targetDesc is not undefined
-                            if let Some(ref td) = target_desc {
-                                // 20a: IsCompatiblePropertyDescriptor check
-                                if !is_compatible_property_desc(target_extensible, desc, td) {
-                                    return Err(self.create_type_error(
-                                        "'defineProperty' on proxy: trap returned truish for property descriptor not compatible with the existing property in the proxy target",
-                                    ));
-                                }
-                                // 20b: settingConfigFalse + target configurable
-                                if setting_config_false && td.configurable == Some(true) {
-                                    return Err(self.create_type_error(
-                                        "'defineProperty' on proxy: trap returned truish for defining non-configurable property which is configurable in the proxy target",
-                                    ));
-                                }
-                                // 20c: target non-configurable+writable, desc says non-writable
-                                if td.is_data_descriptor()
-                                    && td.configurable == Some(false)
-                                    && td.writable == Some(true)
-                                    && desc.writable == Some(false)
-                                {
-                                    return Err(self.create_type_error(
-                                        "'defineProperty' on proxy: trap returned truish for setting non-writable on a non-configurable writable property in the proxy target",
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                    let desc = self.to_property_descriptor(desc_val).ok();
+                    self.check_proxy_define_invariants(&target_val, &key, desc.as_ref())?;
                     Ok(true)
                 }
                 Ok(None) => {
@@ -1585,34 +1481,152 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object_cell(obj_id) {
-            // Deferred namespace: trigger evaluation on [[DefineOwnProperty]] with non-symbol-like key
-            {
-                let is_deferred_ns = obj
-                    .borrow()
-                    .module_namespace()
-                    .as_ref()
-                    .is_some_and(|ns| ns.deferred);
-                if is_deferred_ns && !Self::is_symbol_like_namespace_key(&key, true) {
-                    self.ensure_deferred_namespace_evaluation(obj_id)?;
-                }
-            }
-            let obj = self.get_object(obj_id).unwrap();
-            let is_array = obj.borrow().class_name == "Array";
+        } else if self.get_object_cell(obj_id).is_some() {
+            self.ensure_deferred_namespace_for_define(obj_id, &key)?;
             match self.to_property_descriptor(desc_val) {
-                Ok(desc) => {
-                    if is_array {
-                        self.array_define_own_property(obj_id as usize, &key, desc)
-                    } else {
-                        Ok(obj.borrow_mut().define_own_property(key, desc))
-                    }
-                }
+                Ok(desc) => self.ordinary_define_own_property_native(obj_id, key, desc),
                 Err(Some(e)) => Err(e),
                 Err(None) => Ok(false),
             }
         } else {
             Ok(false)
         }
+    }
+
+    /// [[DefineOwnProperty]] taking the internal descriptor record directly. A
+    /// `defineProperty` trap that is present still receives a descriptor object
+    /// (FromPropertyDescriptor, built only then); without one the call forwards to
+    /// the target and no JS object is materialised.
+    pub(crate) fn proxy_define_own_property_native(
+        &mut self,
+        obj_id: u64,
+        key: JsPropertyKey,
+        desc: PropertyDescriptor,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_none() {
+            self.ensure_deferred_namespace_for_define(obj_id, &key)?;
+            return self.ordinary_define_own_property_native(obj_id, key, desc);
+        }
+        let (target_id, trap) = self.resolve_proxy_trap(obj_id, "defineProperty")?;
+        let Some((handler_val, trap_val)) = trap else {
+            return self.proxy_define_own_property_native(target_id, key, desc);
+        };
+        let target_val = JsValue::object(target_id);
+        let key_val = self.symbol_key_to_jsvalue(&key);
+        let desc_val = self.from_property_descriptor(&desc);
+        let trap_result = match self.call_function(
+            &trap_val,
+            &handler_val,
+            &[target_val.clone(), key_val, desc_val],
+        ) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        if !self.to_boolean_val(&trap_result) {
+            return Ok(false);
+        }
+        self.check_proxy_define_invariants(&target_val, &key, Some(&desc))?;
+        Ok(true)
+    }
+
+    /// Deferred namespace: [[DefineOwnProperty]] with a non-symbol-like key
+    /// triggers evaluation before anything else observable happens.
+    fn ensure_deferred_namespace_for_define(
+        &mut self,
+        obj_id: u64,
+        key: &JsPropertyKey,
+    ) -> Result<(), JsValue> {
+        let Some(obj) = self.get_object_cell(obj_id) else {
+            return Ok(());
+        };
+        let is_deferred_ns = obj
+            .borrow()
+            .module_namespace()
+            .as_ref()
+            .is_some_and(|ns| ns.deferred);
+        if is_deferred_ns && !Self::is_symbol_like_namespace_key(key, true) {
+            self.ensure_deferred_namespace_evaluation(obj_id)?;
+        }
+        Ok(())
+    }
+
+    /// [[DefineOwnProperty]] of a non-proxy object (Array exotic or ordinary) from a
+    /// descriptor record; callers have already run the deferred-namespace step.
+    fn ordinary_define_own_property_native(
+        &mut self,
+        obj_id: u64,
+        key: JsPropertyKey,
+        desc: PropertyDescriptor,
+    ) -> Result<bool, JsValue> {
+        let Some(obj) = self.get_object(obj_id) else {
+            return Ok(false);
+        };
+        if obj.borrow().class_name == "Array" {
+            self.array_define_own_property(obj_id as usize, &key, desc)
+        } else {
+            Ok(obj.borrow_mut().define_own_property(key, desc))
+        }
+    }
+
+    /// [[DefineOwnProperty]] steps 15-22 of the proxy: invariants checked after a
+    /// truish `defineProperty` trap result. `desc` is `None` only when the caller
+    /// could not form a descriptor record, in which case no invariant applies.
+    fn check_proxy_define_invariants(
+        &mut self,
+        target_val: &JsValue,
+        key: &JsPropertyKey,
+        desc: Option<&PropertyDescriptor>,
+    ) -> Result<(), JsValue> {
+        if let Some(target_id) = target_val.as_object_id()
+            && let Some(tobj) = self.get_object_cell(target_id)
+        {
+            let target_desc = tobj.borrow().get_own_property(key);
+            let target_extensible = tobj.borrow().extensible;
+            let setting_config_false = desc.is_some_and(|d| d.configurable == Some(false));
+
+            if let Some(desc) = desc {
+                // Step 19: targetDesc is undefined
+                if target_desc.is_none() {
+                    if !target_extensible {
+                        return Err(self.create_type_error(
+                            "'defineProperty' on proxy: trap returned truish for adding property to the non-extensible proxy target",
+                        ));
+                    }
+                    if setting_config_false {
+                        return Err(self.create_type_error(
+                            "'defineProperty' on proxy: trap returned truish for defining non-configurable property which does not exist on the proxy target",
+                        ));
+                    }
+                }
+                // Step 20: targetDesc is not undefined
+                if let Some(ref td) = target_desc {
+                    // 20a: IsCompatiblePropertyDescriptor check
+                    if !is_compatible_property_desc(target_extensible, desc, td) {
+                        return Err(self.create_type_error(
+                            "'defineProperty' on proxy: trap returned truish for property descriptor not compatible with the existing property in the proxy target",
+                        ));
+                    }
+                    // 20b: settingConfigFalse + target configurable
+                    if setting_config_false && td.configurable == Some(true) {
+                        return Err(self.create_type_error(
+                            "'defineProperty' on proxy: trap returned truish for defining non-configurable property which is configurable in the proxy target",
+                        ));
+                    }
+                    // 20c: target non-configurable+writable, desc says non-writable
+                    if td.is_data_descriptor()
+                        && td.configurable == Some(false)
+                        && td.writable == Some(true)
+                        && desc.writable == Some(false)
+                    {
+                        return Err(self.create_type_error(
+                            "'defineProperty' on proxy: trap returned truish for setting non-writable on a non-configurable writable property in the proxy target",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Whether `key` is an enumerable own property of `obj_id`, via the same [[GetOwnProperty]]
@@ -1685,21 +1699,42 @@ impl Interpreter {
             .is_undefined())
     }
 
-    /// Proxy-aware [[GetOwnProperty]] - checks proxy `getOwnPropertyDescriptor` trap, recurses on target if no trap.
+    /// Proxy-aware [[GetOwnProperty]] returning a JS descriptor object (or `undefined`).
     pub(crate) fn proxy_get_own_property_descriptor<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_id: u64,
         key: &K,
     ) -> Result<JsValue, JsValue> {
+        Ok(match self.proxy_get_own_property_native(obj_id, key)? {
+            Some(d) => self.from_property_descriptor(&d),
+            None => JsValue::UNDEFINED,
+        })
+    }
+
+    /// Proxy-aware [[GetOwnProperty]] yielding the internal descriptor record: the
+    /// spec's Property Descriptor, with no JS object built unless a
+    /// `getOwnPropertyDescriptor` trap is actually present. Forwards natively to the
+    /// target when the handler has no such trap (the lookup itself stays observable).
+    pub(crate) fn proxy_get_own_property_native<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+    ) -> Result<Option<PropertyDescriptor>, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
-            let target_val = self.get_proxy_target_val(obj_id);
+            let (target_id, trap) = self.resolve_proxy_trap(obj_id, "getOwnPropertyDescriptor")?;
+            let target_val = JsValue::object(target_id);
+            let Some((handler_val, trap_val)) = trap else {
+                return self.proxy_get_own_property_native(target_id, key);
+            };
             let key_val = self.symbol_key_to_jsvalue(key);
-            match self.invoke_proxy_trap(
-                obj_id,
-                "getOwnPropertyDescriptor",
-                vec![target_val.clone(), key_val],
-            ) {
-                Ok(Some(v)) => {
+            let trap_call =
+                match self.call_function(&trap_val, &handler_val, &[target_val.clone(), key_val]) {
+                    Completion::Normal(v) => Ok(v),
+                    Completion::Throw(e) => Err(e),
+                    _ => Ok(JsValue::UNDEFINED),
+                };
+            match trap_call {
+                Ok(v) => {
                     // Step 11: If Type(trapResultObj) is neither Object nor Undefined, throw TypeError
                     if !v.is_object() && !v.is_undefined() {
                         return Err(self.create_type_error(
@@ -1728,7 +1763,7 @@ impl Interpreter {
                             let result_desc = match self.to_property_descriptor(&v) {
                                 Ok(d) => d,
                                 Err(Some(e)) => return Err(e),
-                                Err(None) => return Ok(JsValue::UNDEFINED),
+                                Err(None) => return Ok(None),
                             };
                             // Step 22: If resultDesc.[[Configurable]] is false
                             if result_desc.configurable == Some(false) {
@@ -1829,16 +1864,17 @@ impl Interpreter {
                                         "'getOwnPropertyDescriptor' on proxy: trap returned descriptor for property which does not exist in the non-extensible proxy target",
                                     ));
                             }
-                            return Ok(self.from_property_descriptor(&result_desc));
+                            return Ok(Some(result_desc));
                         }
                     }
-                    Ok(v)
-                }
-                Ok(None) => {
-                    if let Some(target_id) = target_val.as_object_id() {
-                        return self.proxy_get_own_property_descriptor(target_id, key);
+                    if v.is_object() {
+                        return match self.to_property_descriptor(&v) {
+                            Ok(d) => Ok(Some(d)),
+                            Err(Some(e)) => Err(e),
+                            Err(None) => Ok(None),
+                        };
                     }
-                    Ok(JsValue::UNDEFINED)
+                    Ok(None)
                 }
                 Err(e) => Err(e),
             }
@@ -1846,12 +1882,9 @@ impl Interpreter {
             // §10.4.6.4 [[GetOwnProperty]] step 4: namespace [[Get]] can throw for TDZ
             self.check_namespace_tdz(obj_id, key)?;
             let desc = obj.borrow().get_own_property(key);
-            match desc {
-                Some(d) => Ok(self.from_property_descriptor(&d)),
-                None => Ok(JsValue::UNDEFINED),
-            }
+            Ok(desc)
         } else {
-            Ok(JsValue::UNDEFINED)
+            Ok(None)
         }
     }
 
