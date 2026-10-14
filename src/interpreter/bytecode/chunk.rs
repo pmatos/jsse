@@ -224,9 +224,42 @@ pub(crate) struct Chunk {
     /// Why each fallback node could not compile natively, one entry per node.
     #[cfg_attr(not(feature = "perf-counters"), allow(dead_code))]
     pub(crate) fallback_reasons: Vec<&'static str>,
+    /// The body is exactly `return this.#name;`: the `private_names` index it
+    /// reads. A getter with this shape is served without a frame (see
+    /// `Interpreter::call_getter`).
+    pub(crate) trivial_private_getter: Option<u16>,
 }
 
 impl Chunk {
+    /// Recognise the `return this.#name;` body: an optional `Safepoint`, then
+    /// `LoadThis`, `GetPrivate`, `Return`, with at most a trailing
+    /// `ReturnUndefined` after it. Nothing else may be present, so no
+    /// handler, hand-off or declaration needs a frame.
+    pub(crate) fn detect_trivial_private_getter(&self) -> Option<u16> {
+        use super::op::Op;
+        if !self.ast.is_empty() || !self.handlers.is_empty() || self.needs_instantiation {
+            return None;
+        }
+        let mut code = self.code.as_slice();
+        if let [first, rest @ ..] = code
+            && *first == Op::Safepoint as u8
+        {
+            code = rest;
+        }
+        match code {
+            [load_this, get, lo, hi, ret, tail @ ..]
+                if *load_this == Op::LoadThis as u8
+                    && *get == Op::GetPrivate as u8
+                    && *ret == Op::Return as u8
+                    && (tail.is_empty() || tail == [Op::ReturnUndefined as u8]) =>
+            {
+                let idx = u16::from_le_bytes([*lo, *hi]);
+                (usize::from(idx) < self.private_names.len()).then_some(idx)
+            }
+            _ => None,
+        }
+    }
+
     #[inline]
     pub(crate) fn global_hint(&self, name_idx: u16) -> Option<&GlobalHint> {
         self.global_hints.get(usize::from(name_idx))

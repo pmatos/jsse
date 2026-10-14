@@ -284,7 +284,7 @@ impl Interpreter {
                 match own {
                     Some((Some(getter), _)) if !getter.is_undefined() => {
                         drop(b);
-                        return self.call_function(&getter, this_val, &[]);
+                        return self.call_getter(&getter, this_val);
                     }
                     Some((Some(_), _)) => return Completion::Normal(JsValue::UNDEFINED),
                     Some((None, value)) => {
@@ -424,7 +424,7 @@ impl Interpreter {
         match own_desc {
             Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
                 let getter = d.get.clone().unwrap();
-                self.call_function(&getter, this_val, &[])
+                self.call_getter(&getter, this_val)
             }
             Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::UNDEFINED),
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED)),

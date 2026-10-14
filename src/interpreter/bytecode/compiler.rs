@@ -3062,6 +3062,7 @@ impl Compiler {
             head_bindings: self.head_bindings,
             persistent_slots: self.max_persistent,
             fallback_reasons: self.fallback_reasons,
+            trivial_private_getter: None,
         }
     }
 }
@@ -3501,7 +3502,8 @@ pub(crate) fn compile_function_body(
     body: &[Statement],
     shape: &FrameShape<'_>,
 ) -> Result<Chunk, CompileError> {
-    let first = compile_body(body)?;
+    let mut first = compile_body(body)?;
+    first.trivial_private_getter = first.detect_trivial_private_getter();
     let mut locals: Vec<String> = Vec::new();
     let mut push = |name: &str| {
         if !locals.iter().any(|n| n == name) {
@@ -3520,7 +3522,9 @@ pub(crate) fn compile_function_body(
     if locals.is_empty() {
         return Ok(first);
     }
-    compile_function_goal(body, locals)
+    let mut chunk = compile_function_goal(body, locals)?;
+    chunk.trivial_private_getter = chunk.detect_trivial_private_getter();
+    Ok(chunk)
 }
 
 /// Script-goal compile. Like a function body, a Script falls back per node
