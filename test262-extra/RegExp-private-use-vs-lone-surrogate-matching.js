@@ -13,7 +13,7 @@ info: |
   22.2.2.9 CharacterSetMatcher ( rer, A, invert, direction )
     ... each character of the input is a code unit, or a code point with the
     "u" or "v" flag.
-features: [regexp-v-flag, regexp-lookbehind, regexp-named-groups]
+features: [regexp-v-flag, regexp-lookbehind, regexp-named-groups, String.prototype.matchAll, RegExp.escape]
 ---*/
 
 function units(s) {
@@ -128,6 +128,34 @@ check("(?<=\\ud800)x", "u", LEAD + "x", at(1, "x"));
 check("(?<=\\ud800)x", "u", C0 + "x", null);
 check("(?<!\\ud800)x", "u", C0 + "x", at(2, "x"));
 check("(?<!" + C0 + ")x", "u", C0 + "x", null);
+
+// A lone surrogate next to \p{Cs} and \p{Co} is still not U+F0000.
+check("^\\ud800$|\\p{Cs}", "u", C0, null);
+check("\\ud800|\\p{Cs}", "u", C0, null);
+check("\\ud800|\\P{Co}", "u", C0, null);
+check("\\ud800|\\p{Co}", "u", C0, at(0, C0));
+check("\\ud800|\\p{Co}", "u", LEAD, at(0, LEAD));
+check("[\\ud800\\p{Co}]", "u", LEAD, at(0, LEAD));
+check("[^\\p{Co}]", "u", LEAD, at(0, LEAD));
+check("[^\\p{Co}]", "u", C0, null);
+check("\\ud800\\p{Co}", "u", LEAD + C0, at(0, LEAD + C0));
+check("\\p{Cs}\\ud800", "u", LEAD + LEAD + "x", at(0, LEAD + LEAD));
+check("\\p{Cs}\\ud800", "u", LEAD + TRAIL + LEAD, null);
+check("\\p{Cs}\\ud800", "u", C0 + LEAD, null);
+
+// Lookbehind with a backreference, which is matched by its own engine.
+check("(?<=(\ud800)\\1)x", "u", LEAD + LEAD + "x", at(2, "x"));
+check("(?<=(\\ud800)\\1)x", "u", LEAD + LEAD + "x", at(2, "x"));
+check("(?<=(\\u{D800})\\1)x", "u", LEAD + LEAD + "x", at(2, "x"));
+check("(?<=(\\ud800)\\1)x", "u", C0 + LEAD + LEAD + "x", at(4, "x"));
+check("(?<=(\\ud800)\\1)x", "u", C0 + C0 + "x", null);
+check("(?<=(\\u{F0000})\\1)x", "u", C0 + C0 + "x", at(4, "x"));
+check("(?<=(\\u{F0000})\\1)x", "u", LEAD + LEAD + "x", null);
+check("(?<=(\\u{F0000})\\1)x", "u", C0 + LEAD + "x", null);
+check("(?<=(\\ud83d\\ude00)\\1)x", "u", "\u{1F600}\u{1F600}x", at(4, "x"));
+check("(?<=(\\ud83d\\ude00)\\1)x", "", "\u{1F600}\u{1F600}x", at(4, "x"));
+check("(?<=(\\u0041)\\1)x", "u", "AAx", at(2, "x"));
+check("(?<=(\\x41)\\1)x", "", "AAx", at(2, "x"));
 
 // Set notation and string alternatives.
 check("[\\ud800]", "v", LEAD, at(0, LEAD));

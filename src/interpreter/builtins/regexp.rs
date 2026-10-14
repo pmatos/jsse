@@ -81,7 +81,7 @@ const GENUINE_PRIVATE_USE_END: u32 = 0x10FFFF;
 /// Bit `n` set: the text holds a genuine scalar inside stand-in window `n`.
 type WindowMask = u64;
 
-fn surrogate_to_stand_in(cp: u32, base: u32) -> char {
+pub(super) fn surrogate_to_stand_in(cp: u32, base: u32) -> char {
     let base = if base == BYTES_MODE_BASE {
         SURROGATE_PUA_BASE
     } else {
@@ -90,10 +90,11 @@ fn surrogate_to_stand_in(cp: u32, base: u32) -> char {
     char::from_u32(base + (cp - SURROGATE_START)).unwrap()
 }
 
-/// The `base` of a pattern translated without a private window: one that
-/// matches WTF-8 bytes (`\p{Cs}`/`\p{Co}`), whose subject has no stand-ins, or
-/// one whose text and subject genuinely occupy every window. Stand-ins use the
-/// default window and no window is taken out of a class.
+/// The `base` of a pattern translated without a private window: its text and
+/// subject genuinely occupy every window, so no scalar can stand in for a lone
+/// surrogate. `\p{Cs}` and `\p{Co}` then match WTF-8 bytes, whose subject has
+/// no stand-ins, and no window is taken out of a class. Stand-ins that remain
+/// (a lone surrogate in the pattern text) use the default window.
 const BYTES_MODE_BASE: u32 = 0x110000;
 
 fn window_bit(cp: u32) -> WindowMask {
@@ -716,6 +717,9 @@ impl RegexInput {
             _ => {
                 let view: Rc<str> =
                     js_string_to_regex_input_mode(self.subject.as_units(), true, base).into();
+                // Every stand-in window is made of 4-byte scalars, which is
+                // what lets the default view's boundary table serve this one.
+                debug_assert_eq!(view.len(), self.as_str(true).len());
                 *alt = Some((base, Rc::clone(&view)));
                 view
             }
@@ -2606,19 +2610,6 @@ fn translate_js_pattern_ex_with_sentinels(
     base: u32,
     sentinel_names: &HashSet<String>,
 ) -> Result<TranslationResult, String> {
-    let tr = translate_js_pattern_at(source, flags, base, sentinel_names)?;
-    if tr.needs_bytes_mode && base != BYTES_MODE_BASE {
-        return translate_js_pattern_at(source, flags, BYTES_MODE_BASE, sentinel_names);
-    }
-    Ok(tr)
-}
-
-fn translate_js_pattern_at(
-    source: &str,
-    flags: &str,
-    base: u32,
-    sentinel_names: &HashSet<String>,
-) -> Result<TranslationResult, String> {
     let mut result = String::new();
     if flags.contains('i') {
         result.push_str("(?i)");
@@ -3448,7 +3439,7 @@ fn translate_js_pattern_at(
                         }
                         if let Some(ranges) = property_ranges(&content) {
                             let ranges = &ranges[..];
-                            if is_cs_property(&content) {
+                            if base == BYTES_MODE_BASE && is_cs_property(&content) {
                                 needs_bytes_mode = true;
                                 if negated {
                                     // \P{Cs}: all valid Unicode (WTF-8 surrogates naturally excluded)
@@ -3471,7 +3462,7 @@ fn translate_js_pattern_at(
                                         base,
                                     );
                                 }
-                            } else if is_co_property(&content) {
+                            } else if base == BYTES_MODE_BASE && is_co_property(&content) {
                                 needs_bytes_mode = true;
                                 if negated && !in_char_class {
                                     // \P{Co}: complement + WTF-8 surrogates
@@ -5732,6 +5723,9 @@ pub(crate) struct ExecPlan {
     source: JsString,
     flags: String,
     pattern_mask: WindowMask,
+    /// The regex last built for another window, so a loop over subjects that
+    /// share a shifted window translates the pattern once.
+    shifted: std::cell::RefCell<Option<Rc<CachedRegex>>>,
 }
 
 impl ExecPlan {
@@ -5753,9 +5747,16 @@ impl ExecPlan {
         if base == self.cached.base {
             return Rc::clone(&self.cached);
         }
+        if let Some(shifted) = &*self.shifted.borrow()
+            && shifted.base == base
+        {
+            return Rc::clone(shifted);
+        }
         let pattern = js_string_to_regex_pattern_at(self.source.as_units(), &self.flags, base);
-        build_regex_cached(interp, &pattern, &self.flags, base)
-            .unwrap_or_else(|_| Rc::clone(&self.cached))
+        let built = build_regex_cached(interp, &pattern, &self.flags, base)
+            .unwrap_or_else(|_| Rc::clone(&self.cached));
+        *self.shifted.borrow_mut() = Some(Rc::clone(&built));
+        built
     }
 }
 
@@ -5867,6 +5868,7 @@ fn exec_plan_for(interp: &mut Interpreter, obj_id: u64) -> Option<Rc<ExecPlan>> 
         source,
         flags,
         pattern_mask,
+        shifted: std::cell::RefCell::new(None),
     });
     if let Some(r) = obj.borrow().regexp() {
         let _ = r.exec_plan.0.set(Rc::clone(&plan));
@@ -6683,11 +6685,7 @@ fn lookbehind_captures_with_external_backrefs(
                 content: content.clone(),
                 capture_groups: referenced_groups,
                 capture_offset: *offset,
-                flags: super::regexp_lookbehind::LbFlags {
-                    ignore_case: flags.contains('i'),
-                    multiline: flags.contains('m'),
-                    dot_all: flags.contains('s'),
-                },
+                flags: super::regexp_lookbehind::LbFlags::new(flags, SURROGATE_PUA_BASE),
             });
         }
     }
@@ -8312,6 +8310,7 @@ fn search_captures_at(
                         lookbehinds,
                         text,
                         flags,
+                        *base,
                         pos,
                         *total_groups,
                     )?
@@ -8322,6 +8321,7 @@ fn search_captures_at(
                     lookbehinds,
                     text,
                     flags,
+                    *base,
                     pos,
                     *total_groups,
                 )?
