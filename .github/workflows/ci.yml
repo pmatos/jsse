@@ -53,19 +53,24 @@ jobs:
         run: cargo build --release
 
       - name: Run unit tests
-        run: cargo nextest run --release
+        run: cargo nextest run --cargo-profile release-nolto
 
       # The instrumented binary needs its own target dir: the steps below run
       # ./target/release/jsse, which must stay the plain build.
       - name: Run perf-counters gate tests
         run: >
-          cargo test --release --features perf-counters --target-dir target/perf-counters
+          cargo test --profile release-nolto --features perf-counters --target-dir target/perf-counters
           --test perf_counters_env_hashing --test perf_counters_report_paths --test perf_counters_bytecode_fallback
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run Python script tests
         run: uv run python -m unittest discover -s scripts -p 'test_*.py'
+
+      # Frame sizes depend on inlining, so the recursion limits must trip before
+      # the native stack runs out on the shipped fat-LTO binary (#935).
+      - name: Run recursion-limit tests (shipped binary)
+        run: python3 scripts/run-custom-tests.py --timeout 60 tests/recursion-limit-*.js
 
       - name: Run test262 smoke set
         run: |

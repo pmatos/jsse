@@ -72,6 +72,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 ## Building
 - `cargo build --release` — always build in release mode for test262 runs (debug is too slow)
 - The project uses Rust nightly features (`let_chains`, etc.)
+- The release profile is fat LTO + `codegen-units = 1` (#935: +6.4% JetStream 3 score geomean, -5.9% micro-suite wall time). A release build is therefore ~2.5-3x slower than before. For quick iteration that does not need benchmark-grade speed: `CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release` (use its own `--target-dir` if you also need the shipped binary). Never compare timings across the two configurations.
+- `release-nolto` (release speed, no LTO) is the profile for building things that are only tested: `cargo nextest run --cargo-profile release-nolto`, `cargo test --profile release-nolto`. `cargo test --release` would relink every test binary with fat LTO. `release-checked` inherits it.
 
 ## Conventions
  - PR titles: [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
@@ -114,7 +116,9 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 
 ## Execution Counters (performance investigations)
 - Off by default and absent from the shipped binary. Build with
-  `cargo build --release --features perf-counters`; every run **that executes
+  `cargo build --profile release-nolto --features perf-counters` (counts are
+  deterministic, so skip the fat-LTO relink; the binary is
+  `target/release-nolto/jsse`); every run **that executes
   JavaScript** then writes tab-separated counters to **stderr** at exit — file,
   `-e`, `--prelude`, and REPL alike, including a prelude that throws (covered by
   `tests/perf_counters_report_paths.rs`). A run that dies before any interpreter
@@ -186,7 +190,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `./scripts/run-mutants.sh --list` — enumerate mutants without running.
   - `./scripts/run-mutants.sh --shard 0/8` — single shard of the corpus.
   - `./scripts/run-mutants.sh --file src/lexer.rs` — restrict to one file.
-- Oracle is `cargo test --release` plus `tests/test262_smoke_oracle.rs`, which runs a 0.5% random test262 sample (~3,500 scenarios, ~20 s on a fast machine). The sample is unseeded, so kill verdicts are non-deterministic across mutants — the trade-off is broader cross-section coverage over many runs.
+- Oracle is `cargo test --profile release-nolto` plus `tests/test262_smoke_oracle.rs`, which runs a 0.5% random test262 sample (~3,500 scenarios, ~20 s on a fast machine). The sample is unseeded, so kill verdicts are non-deterministic across mutants — the trade-off is broader cross-section coverage over many runs.
 - Configuration in `.cargo/mutants.toml`. Generated tables (`unicode_tables.rs`, `emoji_strings.rs`) and two combinatorially-explosive Temporal helpers (`duration.rs`, `plain_date_time.rs`) are excluded.
 - Output in `mutants.out/` (gitignored): `caught.txt`, `missed.txt`, `unviable.txt`, `outcomes.json`, plus per-mutant diffs/logs.
 
