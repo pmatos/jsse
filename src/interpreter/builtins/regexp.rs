@@ -220,6 +220,87 @@ fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
     result
 }
 
+/// Marker of an escaped genuine code point in source text that carries lone
+/// surrogates as private-use stand-ins (`encode_source_units`). It directly
+/// follows the stand-in range, so a genuine U+F0000..=U+F0800 scalar is written
+/// as this marker followed by the scalar itself and is never read as a
+/// surrogate; the encoding is injective.
+pub(crate) const SOURCE_ESCAPE: char = '\u{F0800}';
+
+fn needs_source_escape(c: char) -> bool {
+    (SURROGATE_PUA_BASE..=SOURCE_ESCAPE as u32).contains(&(c as u32))
+}
+
+/// Source text for the UTF-8 parser from UTF-16 code units. Without a lone
+/// surrogate the text is exact and the flag is false. Otherwise each lone
+/// surrogate is a stand-in from `surrogate_to_pua` and each genuine scalar
+/// that could be mistaken for one is escaped, so `decode_source_text` and the
+/// lexer's string/template reading invert it exactly. The flag is true.
+pub(crate) fn encode_source_units(code_units: &[u16]) -> (String, bool) {
+    let stand_ins = has_lone_surrogate(code_units);
+    (encode_source_units_as(code_units, stand_ins), stand_ins)
+}
+
+pub(crate) fn has_lone_surrogate(code_units: &[u16]) -> bool {
+    char::decode_utf16(code_units.iter().copied()).any(|r| r.is_err())
+}
+
+/// `encode_source_units` with the stand-in decision made by the caller, for
+/// text assembled from several parts that must share one encoding.
+pub(crate) fn encode_source_units_as(code_units: &[u16], stand_ins: bool) -> String {
+    if !stand_ins {
+        return js_string_to_regex_input(code_units);
+    }
+    let mut result = String::with_capacity(code_units.len());
+    for decoded in char::decode_utf16(code_units.iter().copied()) {
+        match decoded {
+            Ok(c) => {
+                if needs_source_escape(c) {
+                    result.push(SOURCE_ESCAPE);
+                }
+                result.push(c);
+            }
+            Err(e) => result.push(surrogate_to_pua(u32::from(e.unpaired_surrogate()))),
+        }
+    }
+    result
+}
+
+/// Inverse of `encode_source_units` for a span of its flagged output.
+pub(crate) fn decode_source_text(s: &str) -> JsString {
+    let mut code_units: Vec<u16> = Vec::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == SOURCE_ESCAPE {
+            if let Some(literal) = chars.next() {
+                code_units.extend_from_slice(literal.encode_utf16(&mut [0; 2]));
+            }
+        } else if let Some(surrogate) = pua_to_surrogate(c) {
+            code_units.push(surrogate);
+        } else {
+            code_units.extend_from_slice(c.encode_utf16(&mut [0; 2]));
+        }
+    }
+    JsString::from_vec(code_units)
+}
+
+/// Drops the escapes from flagged source text but keeps the stand-ins, the
+/// form regular expression patterns use for lone surrogates.
+pub(crate) fn unescape_source_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == SOURCE_ESCAPE {
+            if let Some(literal) = chars.next() {
+                out.push(literal);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Convert a regex match result string back from PUA to surrogates.
 pub(crate) fn regex_output_to_js_string(s: &str) -> JsString {
     let mut code_units: Vec<u16> = Vec::new();

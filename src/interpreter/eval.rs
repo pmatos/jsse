@@ -6185,13 +6185,18 @@ impl Interpreter {
         if !arg.is_string() {
             return Completion::Normal(arg);
         }
-        // Use PUA mapping to preserve lone surrogates through the UTF-8 parser
-        let code = if let Some(s) = (arg).as_string() {
-            crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
+        // Lone surrogates travel through the UTF-8 parser as private-use code points
+        let (code, stand_ins) = if let Some(s) = (arg).as_string() {
+            crate::interpreter::builtins::regexp::encode_source_units(s.as_units())
         } else {
-            to_js_string(&arg)
+            (to_js_string(&arg), false)
         };
-        let mut p = match parser::Parser::new_for_eval(&code) {
+        let parsed = if stand_ins {
+            parser::Parser::new_with_stand_ins(&code)
+        } else {
+            parser::Parser::new(&code)
+        };
+        let mut p = match parsed {
             Ok(p) => p,
             Err(_) => {
                 return Completion::Throw(self.create_error("SyntaxError", "Invalid eval source"));

@@ -21,7 +21,9 @@ pub(crate) use types::*;
 mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
-pub(crate) use builtins::regexp::{pua_to_surrogate, surrogate_to_pua, validate_js_pattern};
+pub(crate) use builtins::regexp::{
+    SOURCE_ESCAPE, pua_to_surrogate, surrogate_to_pua, unescape_source_text, validate_js_pattern,
+};
 mod bytecode;
 mod dispose;
 pub(crate) use dispose::{
@@ -969,15 +971,20 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 let code_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let code = if let Some(s) = (code_val).as_string() {
-                    crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
+                let (code, stand_ins) = if let Some(s) = (code_val).as_string() {
+                    crate::interpreter::builtins::regexp::encode_source_units(s.as_units())
                 } else {
                     match interp.to_string_lossy(&code_val) {
-                        Ok(s) => s,
+                        Ok(s) => (s, false),
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                let mut p = match crate::parser::Parser::new_for_eval(&code) {
+                let parsed = if stand_ins {
+                    crate::parser::Parser::new_with_stand_ins(&code)
+                } else {
+                    crate::parser::Parser::new(&code)
+                };
+                let mut p = match parsed {
                     Ok(p) => p,
                     Err(_) => {
                         return Completion::Throw(
