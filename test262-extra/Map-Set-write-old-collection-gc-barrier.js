@@ -13,6 +13,7 @@ info: |
   or throw. Only the observable result is asserted here: every entry must
   still hold the object last written to it.
 esid: sec-map-objects
+features: [upsert, host-gc-required]
 ---*/
 
 var seed = 987654;
@@ -97,6 +98,17 @@ for (var g = 0; g < 300; g++) {
   if (g % 8 === 0) churn();
 }
 checkMap("after getOrInsert");
+
+for (var h = 0; h < 300; h++) {
+  var hk = N + 2000 + h;
+  var made = map.getOrInsertComputed(hk, function () {
+    return { id: serial };
+  });
+  expectedMap[hk] = serial++;
+  assert.sameValue(made.id, expectedMap[hk], "getOrInsertComputed result");
+  if (h % 8 === 0) churn();
+}
+checkMap("after getOrInsertComputed");
 
 for (var s = 0; s < 800; s++) {
   var member = { id: s };
