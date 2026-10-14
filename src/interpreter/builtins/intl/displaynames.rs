@@ -1092,7 +1092,7 @@ impl Interpreter {
                 };
 
                 let code_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let code = match interp.to_string_value(&code_arg) {
+                let code = match interp.to_string_lossy(&code_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };

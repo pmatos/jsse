@@ -18,7 +18,7 @@ fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, 
 }
 
 fn to_str(interp: &mut Interpreter, val: &JsValue) -> Result<String, Completion> {
-    match interp.to_string_value(val) {
+    match interp.to_string_lossy(val) {
         Ok(s) => Ok(s),
         Err(e) => Err(Completion::Throw(e)),
     }
@@ -800,7 +800,7 @@ impl Interpreter {
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     other => return other,
                                 };
-                            let flags = propagate!(interp.to_string_value(&flags_val));
+                            let flags = propagate!(interp.to_string_lossy(&flags_val));
                             if !flags.contains('g') {
                                 return Completion::Throw(interp.create_type_error(
                                     "String.prototype.replaceAll called with a non-global RegExp argument",
@@ -1050,7 +1050,7 @@ impl Interpreter {
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     other => return other,
                                 };
-                            let flags = propagate!(interp.to_string_value(&flags_val));
+                            let flags = propagate!(interp.to_string_lossy(&flags_val));
                             if !flags.contains('g') {
                                 return Completion::Throw(interp.create_type_error(
                                     "String.prototype.matchAll called with a non-global RegExp argument",

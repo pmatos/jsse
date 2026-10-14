@@ -8580,7 +8580,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let source = match interp.to_string_value(&source_val) {
+                let source = match interp.to_string_lossy(&source_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8589,7 +8589,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let flags = match interp.to_string_value(&flags_val) {
+                let flags = match interp.to_string_lossy(&flags_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -8695,7 +8695,7 @@ impl Interpreter {
                     flags_str = if flags_arg.is_undefined() {
                         String::new()
                     } else {
-                        match interp.to_string_value(&flags_arg) {
+                        match interp.to_string_lossy(&flags_arg) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         }
@@ -8790,7 +8790,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    match interp.to_string_value(&flags_val) {
+                    match interp.to_string_lossy(&flags_val) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
@@ -9072,7 +9072,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    match interp.to_string_value(&flags_val) {
+                    match interp.to_string_lossy(&flags_val) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
@@ -9312,7 +9312,7 @@ impl Interpreter {
                                             return other;
                                         }
                                     };
-                                let match_str = match interp.to_string_value(&matched_val) {
+                                let match_str = match interp.to_string_lossy(&matched_val) {
                                     Ok(s) => s,
                                     Err(e) => {
                                         return Completion::Throw(e);
@@ -9605,7 +9605,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    match interp.to_string_value(&flags_val) {
+                    match interp.to_string_lossy(&flags_val) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
@@ -9856,7 +9856,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    match interp.to_string_value(&flags_val) {
+                    match interp.to_string_lossy(&flags_val) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
@@ -10081,7 +10081,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let match_str = match interp.to_string_value(&match_str_val) {
+                let match_str = match interp.to_string_lossy(&match_str_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -10430,7 +10430,7 @@ impl Interpreter {
                 // Phase 2: Now ToString flags (after prototype lookup)
                 let flags_str = match raw_flags {
                     RawFlags::Resolved(s) => s,
-                    RawFlags::NeedsToString(v) => match interp.to_string_value(&v) {
+                    RawFlags::NeedsToString(v) => match interp.to_string_lossy(&v) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     },

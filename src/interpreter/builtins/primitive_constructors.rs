@@ -16,8 +16,8 @@ impl Interpreter {
                         if (v).is_undefined() {
                             None
                         } else {
-                            match interp.to_string_value(v) {
-                                Ok(s) => Some(JsString::from_str(&s)),
+                            match interp.to_js_string(v) {
+                                Ok(s) => Some(s),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -72,19 +72,19 @@ impl Interpreter {
                     1,
                     Rc::new(|interp, _this, args| {
                         let key = if let Some(v) = args.first() {
-                            match interp.to_string_value(v) {
+                            match interp.to_js_string(v) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             }
                         } else {
-                            "undefined".to_string()
+                            JsString::from_str("undefined")
                         };
                         if let Some(existing) = interp.global_symbol_registry.get(&key) {
                             return Completion::Normal(JsValue::symbol(existing.clone()));
                         }
                         let id = interp.next_symbol_id;
                         interp.next_symbol_id += 1;
-                        let sym = crate::types::JsSymbol::new(id, Some(JsString::from_str(&key)));
+                        let sym = crate::types::JsSymbol::new(id, Some(key.clone()));
                         interp.global_symbol_registry.insert(key, sym.clone());
                         Completion::Normal(JsValue::symbol(sym))
                     }),
@@ -104,9 +104,7 @@ impl Interpreter {
                         };
                         for (key, reg_sym) in &interp.global_symbol_registry {
                             if reg_sym.id() == sym.id() {
-                                return Completion::Normal(JsValue::string(JsString::from_str(
-                                    key,
-                                )));
+                                return Completion::Normal(JsValue::string(key.clone()));
                             }
                         }
                         Completion::Normal(JsValue::UNDEFINED)

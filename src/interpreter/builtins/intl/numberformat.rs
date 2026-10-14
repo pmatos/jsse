@@ -4398,7 +4398,7 @@ impl Interpreter {
                             "false".to_string()
                         } else {
                             // Step 6: ToString(value)
-                            let sv = match interp.to_string_value(&ug_val) {
+                            let sv = match interp.to_string_lossy(&ug_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };

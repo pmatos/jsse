@@ -1049,7 +1049,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 // Per spec: ToString(specifier) errors produce a rejected promise
-                let source = match self.to_string_value(&source_val) {
+                let source = match self.to_string_lossy(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
@@ -1070,7 +1070,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let source = match self.to_string_value(&source_val) {
+                let source = match self.to_string_lossy(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
@@ -1117,7 +1117,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let source = match self.to_string_value(&source_val) {
+                let source = match self.to_string_lossy(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
@@ -1533,9 +1533,11 @@ impl Interpreter {
         }
     }
 
-    // §7.1.17 ToString — calls ToPrimitive for objects
+    // §7.1.17 ToString for callers that need Rust text (number parsing, host
+    // diagnostics, source text). Lone surrogates decode to U+FFFD, so a result
+    // that can reach JS must use `to_js_string` instead.
     #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn to_string_value(&mut self, val: &JsValue) -> Result<String, JsValue> {
+    pub(crate) fn to_string_lossy(&mut self, val: &JsValue) -> Result<String, JsValue> {
         if val.is_undefined() {
             Ok("undefined".to_string())
         } else if val.is_null() {
@@ -1552,7 +1554,7 @@ impl Interpreter {
             Ok(n.value.to_string())
         } else {
             let prim = self.to_primitive(val, "string")?;
-            self.to_string_value(&prim)
+            self.to_string_lossy(&prim)
         }
     }
 
@@ -1562,11 +1564,11 @@ impl Interpreter {
             Ok(s)
         } else if val.is_object() {
             // Recurse on the primitive so a string from toString/valueOf keeps
-            // its exact code units (to_string_value would decode lossily).
+            // its exact code units (to_string_lossy would decode lossily).
             let prim = self.to_primitive(val, "string")?;
             self.to_js_string(&prim)
         } else {
-            let s = self.to_string_value(val)?;
+            let s = self.to_string_lossy(val)?;
             Ok(JsString::from_str(&s))
         }
     }
@@ -1609,7 +1611,7 @@ impl Interpreter {
             {
                 return self.append_code_units(out, units);
             }
-            out.extend(self.to_string_value(val)?.encode_utf16());
+            out.extend(self.to_string_lossy(val)?.encode_utf16());
             if out.len() > MAX_STRING_LENGTH {
                 return Err(self.invalid_string_length_error());
             }
@@ -1636,7 +1638,7 @@ impl Interpreter {
     // zero (NaN → +0, ±∞ pass through). The combined coercion that callers used
     // to open-code as a `to_number_value` match feeding `to_integer_or_infinity`;
     // this is the spec abstract operation as a single named step, alongside
-    // to_number_value / to_string_value / to_index.
+    // to_number_value / to_string_lossy / to_index.
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_integer_or_infinity_value(&mut self, val: &JsValue) -> Result<f64, JsValue> {
         let n = self.to_number_value(val)?;

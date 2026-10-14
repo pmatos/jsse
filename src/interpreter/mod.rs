@@ -297,7 +297,7 @@ pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
     objects: object_arena::ObjectArena,
-    global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
+    global_symbol_registry: HashMap<JsString, crate::types::JsSymbol>,
     pub(crate) well_known_symbols: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     /// NewTarget handed to a native constructor (`new_target.is_some()` means
@@ -972,7 +972,7 @@ impl Interpreter {
                 let code = if let Some(s) = (code_val).as_string() {
                     crate::interpreter::builtins::regexp::js_string_to_regex_input(s.as_units())
                 } else {
-                    match interp.to_string_value(&code_val) {
+                    match interp.to_string_lossy(&code_val) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
@@ -1035,7 +1035,7 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 let script_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let script = match interp.to_string_value(&script_val) {
+                let script = match interp.to_string_lossy(&script_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -5919,7 +5919,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         1,
         |interp, _this, args| {
             let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let s = match interp.to_string_value(&val) {
+            let s = match interp.to_string_lossy(&val) {
                 Ok(s) => s,
                 Err(e) => return Completion::Throw(e),
             };

@@ -62,19 +62,19 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        match interp.to_string_value(&args[0]) {
+                        match interp.to_string_lossy(&args[0]) {
                             Ok(s) => (String::new(), s),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
                         let mut params = Vec::new();
                         for arg in &args[..args.len() - 1] {
-                            match interp.to_string_value(arg) {
+                            match interp.to_string_lossy(arg) {
                                 Ok(s) => params.push(s),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let body = match interp.to_string_value(args.last().unwrap()) {
+                        let body = match interp.to_string_lossy(args.last().unwrap()) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         };
@@ -641,19 +641,19 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        match interp.to_string_value(&args[0]) {
+                        match interp.to_string_lossy(&args[0]) {
                             Ok(s) => (String::new(), s),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
                         let mut params = Vec::new();
                         for arg in &args[..args.len() - 1] {
-                            match interp.to_string_value(arg) {
+                            match interp.to_string_lossy(arg) {
                                 Ok(s) => params.push(s),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let body = match interp.to_string_value(args.last().unwrap()) {
+                        let body = match interp.to_string_lossy(args.last().unwrap()) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         };
@@ -798,19 +798,19 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        match interp.to_string_value(&args[0]) {
+                        match interp.to_string_lossy(&args[0]) {
                             Ok(s) => (String::new(), s),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
                         let mut params = Vec::new();
                         for arg in &args[..args.len() - 1] {
-                            match interp.to_string_value(arg) {
+                            match interp.to_string_lossy(arg) {
                                 Ok(s) => params.push(s),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let body = match interp.to_string_value(args.last().unwrap()) {
+                        let body = match interp.to_string_lossy(args.last().unwrap()) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         };
@@ -953,19 +953,19 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        match interp.to_string_value(&args[0]) {
+                        match interp.to_string_lossy(&args[0]) {
                             Ok(s) => (String::new(), s),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
                         let mut params = Vec::new();
                         for arg in &args[..args.len() - 1] {
-                            match interp.to_string_value(arg) {
+                            match interp.to_string_lossy(arg) {
                                 Ok(s) => params.push(s),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let body = match interp.to_string_value(args.last().unwrap()) {
+                        let body = match interp.to_string_lossy(args.last().unwrap()) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         };

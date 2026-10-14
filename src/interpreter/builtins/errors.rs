@@ -47,8 +47,8 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let msg_str = if !(msg_raw).is_undefined() {
-                        match interp.to_string_value(&msg_raw) {
-                            Ok(s) => Some(JsValue::string(JsString::from_str(&s))),
+                        match interp.to_js_string(&msg_raw) {
+                            Ok(s) => Some(JsValue::string(s)),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
@@ -141,31 +141,37 @@ impl Interpreter {
                     if let Some(this_id) = this_val.as_object_id() {
                         let name_val = interp.get_object_property(this_id, "name", this_val);
                         let name = match name_val {
-                            Completion::Normal(v) if v.is_undefined() => "Error".to_string(),
+                            Completion::Normal(v) if v.is_undefined() => {
+                                JsString::from_str("Error")
+                            }
                             Completion::Normal(v) => match interp.to_js_string(&v) {
-                                Ok(s) => s.to_rust_string(),
+                                Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             },
                             other => return other,
                         };
                         let msg_val = interp.get_object_property(this_id, "message", this_val);
                         let msg = match msg_val {
-                            Completion::Normal(v) if v.is_undefined() => String::new(),
+                            Completion::Normal(v) if v.is_undefined() => JsString::from_str(""),
                             Completion::Normal(v) => match interp.to_js_string(&v) {
-                                Ok(s) => s.to_rust_string(),
+                                Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             },
                             other => return other,
                         };
-                        return if name.is_empty() {
-                            Completion::Normal(JsValue::string(JsString::from_str(&msg)))
-                        } else if msg.is_empty() {
-                            Completion::Normal(JsValue::string(JsString::from_str(&name)))
-                        } else {
-                            Completion::Normal(JsValue::string(JsString::from_str(&format!(
-                                "{name}: {msg}"
-                            ))))
-                        };
+                        if name.is_empty() {
+                            return Completion::Normal(JsValue::string(msg));
+                        }
+                        if msg.is_empty() {
+                            return Completion::Normal(JsValue::string(name));
+                        }
+                        let mut out: Vec<u16> = Vec::new();
+                        for part in [name.as_units(), &[0x3A, 0x20], msg.as_units()] {
+                            if let Err(e) = interp.append_code_units(&mut out, part) {
+                                return Completion::Throw(e);
+                            }
+                        }
+                        return Completion::Normal(JsValue::string(JsString::from_vec(out)));
                     }
                     Completion::Throw(interp.create_type_error(
                         "Error.prototype.toString requires that 'this' be an Object",
@@ -461,8 +467,8 @@ impl Interpreter {
                     };
 
                     let msg_str = if !(msg_raw).is_undefined() {
-                        match interp.to_string_value(&msg_raw) {
-                            Ok(s) => Some(JsValue::string(JsString::from_str(&s))),
+                        match interp.to_js_string(&msg_raw) {
+                            Ok(s) => Some(JsValue::string(s)),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
@@ -584,8 +590,8 @@ impl Interpreter {
                     // Extract msg_str BEFORE the mut borrow on obj's RefCell
                     // (lifetime is tied to &interp; can't hold across &mut interp).
                     let msg_str = if !(msg_raw).is_undefined() {
-                        match interp.to_string_value(&msg_raw) {
-                            Ok(s) => Some(JsValue::string(JsString::from_str(&s))),
+                        match interp.to_js_string(&msg_raw) {
+                            Ok(s) => Some(JsValue::string(s)),
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
@@ -676,8 +682,8 @@ impl Interpreter {
 
                         // §20.5.7.1 step 3: ToString(message) BEFORE iterating errors
                         let msg_str = if !(msg_raw).is_undefined() {
-                            match interp.to_string_value(&msg_raw) {
-                                Ok(s) => Some(JsValue::string(JsString::from_str(&s))),
+                            match interp.to_js_string(&msg_raw) {
+                                Ok(s) => Some(JsValue::string(s)),
                                 Err(e) => return Completion::Throw(e),
                             }
                         } else {

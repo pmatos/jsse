@@ -322,7 +322,7 @@ impl Interpreter {
                     let rm_str: Option<String> = if is_undefined(&rm_val) {
                         None
                     } else {
-                        Some(match interp.to_string_value(&rm_val) {
+                        Some(match interp.to_string_lossy(&rm_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         })
@@ -335,7 +335,7 @@ impl Interpreter {
                     let su_str: Option<String> = if is_undefined(&su_val) {
                         None
                     } else {
-                        Some(match interp.to_string_value(&su_val) {
+                        Some(match interp.to_string_lossy(&su_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         })
@@ -853,7 +853,7 @@ pub(super) fn to_temporal_instant(
                 }
             }
             // Not a Temporal.Instant — call toString() and parse
-            let s = match interp.to_string_value(&item) {
+            let s = match interp.to_string_lossy(&item) {
                 Ok(v) => v,
                 Err(e) => return Err(Completion::Throw(e)),
             };
@@ -1205,7 +1205,7 @@ fn parse_to_string_options(
         Some(floored as u8)
     } else {
         // Not a number — convert to string and check for "auto"
-        let s = match interp.to_string_value(&fsd_val) {
+        let s = match interp.to_string_lossy(&fsd_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };
@@ -1226,7 +1226,7 @@ fn parse_to_string_options(
     let rounding_mode = if is_undefined(&rm_val) {
         "trunc"
     } else {
-        let s = match interp.to_string_value(&rm_val) {
+        let s = match interp.to_string_lossy(&rm_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };
@@ -1256,7 +1256,7 @@ fn parse_to_string_options(
     let su_str: Option<String> = if is_undefined(&su_val) {
         None
     } else {
-        Some(match interp.to_string_value(&su_val) {
+        Some(match interp.to_string_lossy(&su_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })

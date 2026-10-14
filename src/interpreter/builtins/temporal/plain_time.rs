@@ -300,7 +300,7 @@ impl Interpreter {
                     let rm_str: Option<String> = if is_undefined(&rm_val) {
                         None
                     } else {
-                        Some(match interp.to_string_value(&rm_val) {
+                        Some(match interp.to_string_lossy(&rm_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         })
@@ -313,7 +313,7 @@ impl Interpreter {
                     let su_str: Option<String> = if is_undefined(&su_val) {
                         None
                     } else {
-                        Some(match interp.to_string_value(&su_val) {
+                        Some(match interp.to_string_lossy(&su_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         })
@@ -1154,7 +1154,7 @@ fn parse_time_diff_options<'a>(
     let largest_str: Option<String> = if is_undefined(&lu) {
         None // auto
     } else {
-        Some(match interp.to_string_value(&lu) {
+        Some(match interp.to_string_lossy(&lu) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })
@@ -1175,7 +1175,7 @@ fn parse_time_diff_options<'a>(
     let rm_str: Option<String> = if is_undefined(&rm_val) {
         None
     } else {
-        Some(match interp.to_string_value(&rm_val) {
+        Some(match interp.to_string_lossy(&rm_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })
@@ -1189,7 +1189,7 @@ fn parse_time_diff_options<'a>(
     let su_str: Option<String> = if is_undefined(&su) {
         None
     } else {
-        Some(match interp.to_string_value(&su) {
+        Some(match interp.to_string_lossy(&su) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })
@@ -1322,7 +1322,7 @@ fn parse_time_to_string_options(
         } else {
             // GetStringOrNumberOption: non-Number → ToString then check for "auto"
             let s = interp
-                .to_string_value(&fsd_val)
+                .to_string_lossy(&fsd_val)
                 .map_err(Completion::Throw)?;
             if s != "auto" {
                 return Err(Completion::Throw(interp.create_range_error(
@@ -1339,7 +1339,7 @@ fn parse_time_to_string_options(
     let rm = if is_undefined(&rm_val) {
         "trunc"
     } else {
-        let s = match interp.to_string_value(&rm_val) {
+        let s = match interp.to_string_lossy(&rm_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };
@@ -1366,7 +1366,7 @@ fn parse_time_to_string_options(
         other => return Err(other),
     };
     if !is_undefined(&su_val) {
-        let s = match interp.to_string_value(&su_val) {
+        let s = match interp.to_string_lossy(&su_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };

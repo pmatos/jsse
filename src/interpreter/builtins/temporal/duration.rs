@@ -2257,7 +2257,7 @@ impl Interpreter {
                     if is_undefined(&u) {
                         return Completion::Throw(interp.create_range_error("unit is required"));
                     }
-                    let us = propagate!(interp.to_string_value(&u));
+                    let us = propagate!(interp.to_string_lossy(&u));
                     let unit = match temporal_unit_singular(&us) {
                         Some(u) => u,
                         None => {
@@ -3087,7 +3087,7 @@ fn parse_round_options(
     let large_unit_str = if !is_undefined(&large_unit_val) {
         Some(
             interp
-                .to_string_value(&large_unit_val)
+                .to_string_lossy(&large_unit_val)
                 .map_err(Completion::Throw)?,
         )
     } else {
@@ -3116,7 +3116,7 @@ fn parse_round_options(
     let rounding_mode: &'static str = if is_undefined(&rm_val) {
         "halfExpand"
     } else {
-        let rm = interp.to_string_value(&rm_val).map_err(Completion::Throw)?;
+        let rm = interp.to_string_lossy(&rm_val).map_err(Completion::Throw)?;
         match rm.as_str() {
             "ceil" => "ceil",
             "floor" => "floor",
@@ -3144,7 +3144,7 @@ fn parse_round_options(
         None
     } else {
         let su = interp
-            .to_string_value(&small_unit_val)
+            .to_string_lossy(&small_unit_val)
             .map_err(Completion::Throw)?;
         Some(temporal_unit_singular(&su).ok_or_else(|| {
             Completion::Throw(interp.create_range_error(&format!("Invalid unit: {su}")))
@@ -3245,7 +3245,7 @@ fn parse_to_string_options(
         }
         Some(Some(floored as u8))
     } else {
-        let s = interp.to_string_value(&fp).map_err(Completion::Throw)?;
+        let s = interp.to_string_lossy(&fp).map_err(Completion::Throw)?;
         if s == "auto" {
             Some(None)
         } else {
@@ -3263,7 +3263,7 @@ fn parse_to_string_options(
     let rounding_mode: &'static str = if is_undefined(&rm_val) {
         "trunc"
     } else {
-        let rm = interp.to_string_value(&rm_val).map_err(Completion::Throw)?;
+        let rm = interp.to_string_lossy(&rm_val).map_err(Completion::Throw)?;
         match rm.as_str() {
             "ceil" => "ceil",
             "floor" => "floor",
@@ -3288,7 +3288,7 @@ fn parse_to_string_options(
         other => return Err(other),
     };
     if !is_undefined(&sp) {
-        let su = interp.to_string_value(&sp).map_err(Completion::Throw)?;
+        let su = interp.to_string_lossy(&sp).map_err(Completion::Throw)?;
         return match su.as_str() {
             "second" | "seconds" => Ok((Some(0), rounding_mode)),
             "millisecond" | "milliseconds" => Ok((Some(3), rounding_mode)),
