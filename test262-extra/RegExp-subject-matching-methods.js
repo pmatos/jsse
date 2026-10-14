@@ -74,6 +74,22 @@ assert.sameValue(duplicate[1], undefined, "unselected duplicate capture is absen
 assert.sameValue(duplicate.groups.part, "b", "second duplicate resolves original name");
 assert.compareArray(duplicate.indices.groups.part, [0, 1], "second duplicate indices");
 
+// Many distinct private-use scalars must remain distinct from a lone surrogate.
+var privateUse = "";
+for (var window = 0; window < 64; window++) {
+  privateUse += String.fromCodePoint(0xF0000 + window * 0x800);
+}
+var crowded = privateUse + lone;
+var surrogate = /(\p{Cs})/duy;
+surrogate.lastIndex = privateUse.length;
+var crowdedResult = surrogate.exec(crowded);
+assert.sameValue(crowdedResult[1], lone, "capture preserves the lone surrogate");
+assert.compareArray(crowdedResult.indices[1], [128, 129], "capture uses UTF-16 positions");
+assert.sameValue(surrogate.lastIndex, 129, "sticky position after private-use scalars");
+assert.compareArray(crowded.match(/(\p{Cs})/gu), [lone], "global surrogate match");
+assert.sameValue(crowded.replace(/(\p{Cs})/gu, "<$1>"), privateUse + "<" + lone + ">",
+  "replacement preserves private-use scalars and surrogate capture");
+
 var sticky = /x/gy;
 sticky.lastIndex = 1;
 assert.sameValue(sticky.exec("x!x"), null, "sticky failure does not search ahead");
