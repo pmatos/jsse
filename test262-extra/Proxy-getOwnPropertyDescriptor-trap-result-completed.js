@@ -129,3 +129,30 @@ assert.throws(TypeError, function() {
   Object.getOwnPropertyDescriptor(outer, "k");
 }, "completed writable:false against nested proxy target's writable non-configurable property");
 assert.compareArray(log, ["inner-gopd", "inner-isExtensible"], "nested target traps, in spec order");
+
+// The trap result object must stay alive across the nested target's traps,
+// which run user code that can trigger a collection.
+var gcTarget = {};
+Object.defineProperty(gcTarget, "k", { value: 1, writable: true, enumerable: true, configurable: true });
+var gcInner = new Proxy(gcTarget, {
+  getOwnPropertyDescriptor(t, k) {
+    $262.gc();
+    return Reflect.getOwnPropertyDescriptor(t, k);
+  },
+  isExtensible(t) {
+    $262.gc();
+    return Reflect.isExtensible(t);
+  }
+});
+var gcOuter = new Proxy(gcInner, {
+  getOwnPropertyDescriptor() {
+    return { value: 1, writable: true, enumerable: true, configurable: true };
+  }
+});
+for (var i = 0; i < 3; i++) {
+  d = Object.getOwnPropertyDescriptor(gcOuter, "k");
+  assert.sameValue(d.value, 1, "gc: value, iteration " + i);
+  assert.sameValue(d.writable, true, "gc: writable, iteration " + i);
+  assert.sameValue(d.enumerable, true, "gc: enumerable, iteration " + i);
+  assert.sameValue(d.configurable, true, "gc: configurable, iteration " + i);
+}

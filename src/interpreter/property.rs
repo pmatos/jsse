@@ -1739,64 +1739,12 @@ impl Interpreter {
                             "'getOwnPropertyDescriptor' on proxy: trap returned neither Object nor undefined",
                         ));
                     }
-                    let target_desc = self.proxy_get_own_property_native(target_id, key)?;
-                    if v.is_undefined() {
-                        let Some(td) = target_desc else {
-                            return Ok(None);
-                        };
-                        if td.configurable == Some(false) {
-                            return Err(self.create_type_error(
-                                "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which is non-configurable in the proxy target",
-                            ));
-                        }
-                        if !self.proxy_is_extensible(target_id)? {
-                            return Err(self.create_type_error(
-                                "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which exists in the non-extensible proxy target",
-                            ));
-                        }
-                        return Ok(None);
-                    }
-                    let target_extensible = self.proxy_is_extensible(target_id)?;
-                    let mut result_desc = match self.to_property_descriptor(&v) {
-                        Ok(d) => d,
-                        Err(Some(e)) => return Err(e),
-                        Err(None) => return Ok(None),
-                    };
-                    complete_property_descriptor(&mut result_desc);
-                    let compatible = match target_desc.as_ref() {
-                        Some(td) => {
-                            is_compatible_property_desc(target_extensible, &result_desc, td)
-                        }
-                        None => target_extensible,
-                    };
-                    if !compatible {
-                        return Err(self.create_type_error(
-                            "'getOwnPropertyDescriptor' on proxy: trap returned a descriptor incompatible with the proxy target's property",
-                        ));
-                    }
-                    if result_desc.configurable == Some(false) {
-                        match target_desc.as_ref() {
-                            None => {
-                                return Err(self.create_type_error(
-                                    "'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for a property that does not exist in the proxy target",
-                                ));
-                            }
-                            Some(td) if td.configurable == Some(true) => {
-                                return Err(self.create_type_error(
-                                    "'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for a property that is configurable in the proxy target",
-                                ));
-                            }
-                            Some(td) => {
-                                if result_desc.writable == Some(false) && td.writable == Some(true)
-                                {
-                                    return Err(self.create_type_error(
-                                        "'getOwnPropertyDescriptor' on proxy: trap returned non-configurable non-writable descriptor for a writable property in the proxy target",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    Ok(Some(result_desc))
+                    self.gc_root_value(&v);
+                    let frame = self.gc_root_frame();
+                    let result = self.validate_proxy_gopd_trap_result(target_id, key, &v);
+                    self.gc_unroot_frame(frame);
+                    self.gc_unroot_value(&v);
+                    result
                 }
                 Err(e) => Err(e),
             }
@@ -1808,6 +1756,78 @@ impl Interpreter {
         } else {
             Ok(None)
         }
+    }
+
+    /// Steps 11-20 of Proxy [[GetOwnProperty]] once the trap has returned `v`.
+    /// `v` and the target's descriptor values stay rooted across the nested
+    /// target traps (`[[GetOwnProperty]]`, `[[IsExtensible]]`), which run user code
+    /// that can reach a GC safepoint before `v` is read back.
+    fn validate_proxy_gopd_trap_result<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        target_id: u64,
+        key: &K,
+        v: &JsValue,
+    ) -> Result<Option<PropertyDescriptor>, JsValue> {
+        let target_desc = self.proxy_get_own_property_native(target_id, key)?;
+        if let Some(td) = target_desc.as_ref() {
+            for val in [&td.value, &td.get, &td.set].into_iter().flatten() {
+                self.gc_root_value(val);
+            }
+        }
+        if v.is_undefined() {
+            let Some(td) = target_desc else {
+                return Ok(None);
+            };
+            if td.configurable == Some(false) {
+                return Err(self.create_type_error(
+                    "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which is non-configurable in the proxy target",
+                ));
+            }
+            if !self.proxy_is_extensible(target_id)? {
+                return Err(self.create_type_error(
+                    "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which exists in the non-extensible proxy target",
+                ));
+            }
+            return Ok(None);
+        }
+        let target_extensible = self.proxy_is_extensible(target_id)?;
+        let mut result_desc = match self.to_property_descriptor(v) {
+            Ok(d) => d,
+            Err(Some(e)) => return Err(e),
+            Err(None) => return Ok(None),
+        };
+        complete_property_descriptor(&mut result_desc);
+        let compatible = match target_desc.as_ref() {
+            Some(td) => is_compatible_property_desc(target_extensible, &result_desc, td),
+            None => target_extensible,
+        };
+        if !compatible {
+            return Err(self.create_type_error(
+                "'getOwnPropertyDescriptor' on proxy: trap returned a descriptor incompatible with the proxy target's property",
+            ));
+        }
+        if result_desc.configurable == Some(false) {
+            match target_desc.as_ref() {
+                None => {
+                    return Err(self.create_type_error(
+                        "'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for a property that does not exist in the proxy target",
+                    ));
+                }
+                Some(td) if td.configurable == Some(true) => {
+                    return Err(self.create_type_error(
+                        "'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for a property that is configurable in the proxy target",
+                    ));
+                }
+                Some(td) => {
+                    if result_desc.writable == Some(false) && td.writable == Some(true) {
+                        return Err(self.create_type_error(
+                            "'getOwnPropertyDescriptor' on proxy: trap returned non-configurable non-writable descriptor for a writable property in the proxy target",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(Some(result_desc))
     }
 
     /// Proxy-aware [[OwnPropertyKeys]] - checks proxy `ownKeys` trap, recurses on target if no trap.
