@@ -401,7 +401,6 @@ impl Interpreter {
             is_async: false,
             is_method: false,
             source_text: class_source_text.clone(),
-            captured_new_target: None,
             uses_arguments,
             has_simple_params,
         };
@@ -621,7 +620,6 @@ impl Interpreter {
                                 is_async: m.value.is_async,
                                 is_method: true,
                                 source_text: m.value.source_text.clone(),
-                                captured_new_target: None,
                                 uses_arguments: info.uses_arguments,
                                 has_simple_params: info.has_simple_params,
                             };
@@ -798,7 +796,6 @@ impl Interpreter {
                         is_async: m.value.is_async,
                         is_method: true,
                         source_text: m.value.source_text.clone(),
-                        captured_new_target: None,
                         uses_arguments: info.uses_arguments,
                         has_simple_params: info.has_simple_params,
                     };
@@ -1101,117 +1098,115 @@ impl Interpreter {
         }
 
         // Phase 2: Execute deferred static field initializers and static blocks.
-        // Both are methods called with no NewTarget.
-        self.with_new_target_undefined(|interp| {
-            for deferred in deferred_static {
-                match deferred {
-                    DeferredStatic::PublicField(key, initializer) => {
-                        let val = if let Some(ref expr) = initializer {
-                            match interp.eval_expr(expr, &static_field_env) {
-                                Completion::Normal(v) => {
-                                    if expr.is_anonymous_function_definition() {
-                                        interp.set_function_name(&v, &key);
-                                    }
-                                    v
+        // Both are methods called with no NewTarget; their environments carry none.
+        for deferred in deferred_static {
+            match deferred {
+                DeferredStatic::PublicField(key, initializer) => {
+                    let val = if let Some(ref expr) = initializer {
+                        match self.eval_expr(expr, &static_field_env) {
+                            Completion::Normal(v) => {
+                                if expr.is_anonymous_function_definition() {
+                                    self.set_function_name(&v, &key);
                                 }
-                                other => return other,
+                                v
                             }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(o) = (ctor_val)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                            && let Some(func_obj) = interp.get_object_cell(o.id)
-                        {
-                            func_obj.borrow_mut().insert_value(key, val);
+                            other => return other,
                         }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                        && let Some(func_obj) = self.get_object_cell(o.id)
+                    {
+                        func_obj.borrow_mut().insert_value(key, val);
                     }
-                    DeferredStatic::PrivateField(source_name, branded, initializer) => {
-                        let display_name = format!("#{source_name}");
-                        let val = if let Some(ref expr) = initializer {
-                            match interp.eval_expr(expr, &static_field_env) {
-                                Completion::Normal(v) => {
-                                    if expr.is_anonymous_function_definition() {
-                                        interp.set_function_name(&v, &display_name);
-                                    }
-                                    v
+                }
+                DeferredStatic::PrivateField(source_name, branded, initializer) => {
+                    let display_name = format!("#{source_name}");
+                    let val = if let Some(ref expr) = initializer {
+                        match self.eval_expr(expr, &static_field_env) {
+                            Completion::Normal(v) => {
+                                if expr.is_anonymous_function_definition() {
+                                    self.set_function_name(&v, &display_name);
                                 }
-                                other => return other,
+                                v
                             }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(o) = (ctor_val)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                            && let Some(func_obj) = interp.get_object_cell(o.id)
-                        {
-                            if !func_obj.borrow().extensible {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Cannot add private field to non-extensible object",
-                                ));
-                            }
-                            if func_obj.borrow().has_private_field(branded) {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Cannot initialize private field twice on the same object",
-                                ));
-                            }
-                            func_obj
-                                .borrow_mut()
-                                .private_fields_mut()
-                                .insert(branded, PrivateElement::Field(val));
+                            other => return other,
                         }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                        && let Some(func_obj) = self.get_object_cell(o.id)
+                    {
+                        if !func_obj.borrow().extensible {
+                            return Completion::Throw(self.create_type_error(
+                                "Cannot add private field to non-extensible object",
+                            ));
+                        }
+                        if func_obj.borrow().has_private_field(branded) {
+                            return Completion::Throw(self.create_type_error(
+                                "Cannot initialize private field twice on the same object",
+                            ));
+                        }
+                        func_obj
+                            .borrow_mut()
+                            .private_fields_mut()
+                            .insert(branded, PrivateElement::Field(val));
                     }
-                    DeferredStatic::AutoAccessor(_key, storage_slot, initializer) => {
-                        let val = if let Some(ref expr) = initializer {
-                            match interp.eval_expr(expr, &static_field_env) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if let Some(o) = (ctor_val)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
-                            && let Some(func_obj) = interp.get_object_cell(o.id)
-                        {
-                            func_obj
-                                .borrow_mut()
-                                .private_fields_mut()
-                                .insert(storage_slot, PrivateElement::Field(val));
+                }
+                DeferredStatic::AutoAccessor(_key, storage_slot, initializer) => {
+                    let val = if let Some(ref expr) = initializer {
+                        match self.eval_expr(expr, &static_field_env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
                         }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
+                        && let Some(func_obj) = self.get_object_cell(o.id)
+                    {
+                        func_obj
+                            .borrow_mut()
+                            .private_fields_mut()
+                            .insert(storage_slot, PrivateElement::Field(val));
                     }
-                    DeferredStatic::Block(stmts) => {
-                        let block_env = Environment::new_function_scope(Some(class_env.clone()));
-                        {
-                            let mut be = block_env.borrow_mut();
-                            be.strict = true; // class bodies are always strict
-                            be.set_this(ctor_val.clone());
-                            be.bindings.insert(
-                                "__home_object__",
-                                Binding {
-                                    value: ctor_val.clone(),
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
-                            be.class_private_names = interp.class_private_names.last().cloned();
-                        }
-                        let result = interp.exec_statements(&stmts, &block_env);
-                        let result = interp.dispose_resources(&block_env, result);
-                        match result {
-                            Completion::Normal(_) => {}
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
-                        }
+                }
+                DeferredStatic::Block(stmts) => {
+                    let block_env = Environment::new_function_scope(Some(class_env.clone()));
+                    {
+                        let mut be = block_env.borrow_mut();
+                        be.strict = true; // class bodies are always strict
+                        be.set_this(ctor_val.clone());
+                        be.bindings.insert(
+                            "__home_object__",
+                            Binding {
+                                value: ctor_val.clone(),
+                                kind: BindingKind::Const,
+                                initialized: true,
+                                deletable: false,
+                            },
+                        );
+                        be.class_private_names = self.class_private_names.last().cloned();
+                    }
+                    let result = self.exec_statements(&stmts, &block_env);
+                    let result = self.dispose_resources(&block_env, result);
+                    match result {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {}
                     }
                 }
             }
-            Completion::Normal(ctor_val)
-        })
+        }
+        Completion::Normal(ctor_val)
     }
 
     /// CopyDataProperties (§7.3.26) — copies own enumerable properties from source

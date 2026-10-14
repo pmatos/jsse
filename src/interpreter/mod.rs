@@ -300,6 +300,9 @@ pub(crate) struct Interpreter {
     global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
     pub(crate) well_known_symbols: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
+    /// NewTarget handed to a native constructor (`new_target.is_some()` means
+    /// [[Construct]]). User functions read [[NewTarget]] from their function
+    /// environment instead, so the register is clear while a user body runs.
     new_target: Option<JsValue>,
     // Allocation-pressure pacing: decides when to collect (see gc::GcPacer).
     gc: crate::interpreter::gc::GcPacer,
@@ -5234,7 +5237,6 @@ impl Interpreter {
                     is_async: f.is_async,
                     is_method: false,
                     source_text: f.source_text.clone(),
-                    captured_new_target: None,
                     uses_arguments: info.uses_arguments,
                     has_simple_params: info.has_simple_params,
                 };
@@ -5285,7 +5287,6 @@ impl Interpreter {
                     is_async: f.is_async,
                     is_method: false,
                     source_text: f.source_text.clone(),
-                    captured_new_target: None,
                     uses_arguments: info.uses_arguments,
                     has_simple_params: info.has_simple_params,
                 };
@@ -5468,7 +5469,6 @@ impl Interpreter {
                     is_async: func.is_async,
                     is_method: false,
                     source_text: func.source_text.clone(),
-                    captured_new_target: None,
                     uses_arguments: info.uses_arguments,
                     has_simple_params: info.has_simple_params,
                 };

@@ -1564,6 +1564,7 @@ impl Interpreter {
             }
             if let Some(this) = &borrowed.this_binding {
                 Self::collect_value_roots(&this.value, worklist);
+                Self::collect_value_roots(&this.new_target, worklist);
             }
             // The with-target is interned (id-only) — root it explicitly so
             // identifier resolution inside `with(o) { ... }` keeps `o` alive
@@ -1729,6 +1730,18 @@ mod tests {
         let mut worklist = Vec::new();
         Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
         assert_eq!(worklist, vec![34]);
+    }
+
+    #[test]
+    fn collect_env_roots_marks_the_new_target() {
+        let env = Environment::new(None);
+        env.borrow_mut().bind_this_for_call(obj(34), obj(35));
+        let child = Environment::new(Some(env));
+
+        let mut worklist = Vec::new();
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
+        worklist.sort_unstable();
+        assert_eq!(worklist, vec![34, 35]);
     }
 
     #[test]

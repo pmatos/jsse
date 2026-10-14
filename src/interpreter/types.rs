@@ -1013,6 +1013,9 @@ impl std::fmt::Debug for Environment {
 pub(crate) struct ThisBinding {
     pub(crate) value: JsValue,
     pub(crate) initialized: bool,
+    /// §9.1.1.3 [[NewTarget]]: the constructor a [[Construct]] call was made
+    /// through, undefined for [[Call]] and for scopes that are not functions.
+    pub(crate) new_target: JsValue,
 }
 
 pub(crate) struct WithObject {
@@ -1217,20 +1220,49 @@ impl Environment {
     }
 
     /// Binds `this` to an initialized value (§9.1.1.3.1 BindThisValue).
+    /// An existing [[NewTarget]] is kept, so a derived constructor's `super()`
+    /// binds `this` without losing it.
     pub(crate) fn set_this(&mut self, value: JsValue) {
+        let new_target = self
+            .this_binding
+            .take()
+            .map_or(JsValue::UNDEFINED, |t| t.new_target);
         self.this_binding = Some(ThisBinding {
             value,
             initialized: true,
+            new_target,
+        });
+    }
+
+    /// Binds `this` and [[NewTarget]] of a function environment being created
+    /// for a call.
+    pub(crate) fn bind_this_for_call(&mut self, value: JsValue, new_target: JsValue) {
+        self.this_binding = Some(ThisBinding {
+            value,
+            initialized: true,
+            new_target,
         });
     }
 
     /// Creates the `this` binding uninitialized: a derived constructor's TDZ
     /// until `super()` returns.
-    pub(crate) fn declare_this_uninit(&mut self) {
+    pub(crate) fn declare_this_uninit(&mut self, new_target: JsValue) {
         self.this_binding = Some(ThisBinding {
             value: JsValue::UNDEFINED,
             initialized: false,
+            new_target,
         });
+    }
+
+    /// The [[NewTarget]] of the nearest function environment up the chain
+    /// (§9.4.3 GetNewTarget).
+    pub(crate) fn get_new_target(&self) -> JsValue {
+        if let Some(this) = &self.this_binding {
+            return this.new_target.clone();
+        }
+        self.parent
+            .as_ref()
+            .map_or(JsValue::UNDEFINED, |p| p.borrow().get_new_target())
     }
 
     /// The value of the nearest `this` binding up the chain, or `None` when
@@ -1485,7 +1517,6 @@ pub(crate) enum JsFunction {
         is_async: bool,
         is_method: bool,
         source_text: Option<SourceText>,
-        captured_new_target: Option<JsValue>,
         uses_arguments: bool,
         /// Cached `IsSimpleParameterList` (§15.1.3): all params are plain
         /// identifiers (no rest/defaults/destructuring). Computed once at
@@ -1535,7 +1566,6 @@ impl Clone for JsFunction {
                 is_async,
                 is_method,
                 source_text,
-                captured_new_target,
                 uses_arguments,
                 has_simple_params,
                 bytecode_cache,
@@ -1550,7 +1580,6 @@ impl Clone for JsFunction {
                 is_async: *is_async,
                 is_method: *is_method,
                 source_text: source_text.clone(),
-                captured_new_target: captured_new_target.clone(),
                 uses_arguments: *uses_arguments,
                 has_simple_params: *has_simple_params,
                 bytecode_cache: bytecode_cache.clone(),
