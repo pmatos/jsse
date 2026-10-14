@@ -794,58 +794,11 @@ impl Interpreter {
                 if let Some(receiver_id) = receiver.as_object_id() {
                     let is_proxy_recv = interp.get_proxy_info(receiver_id).is_some();
                     if is_proxy_recv {
-                        // §10.1.9.2: Receiver.[[GetOwnProperty]](P)
-                        let existing_val =
-                            match interp.proxy_get_own_property_descriptor(receiver_id, &key) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                        if (existing_val).is_undefined() {
-                            // CreateDataProperty(Receiver, P, V)
-                            let create_desc = PropertyDescriptor {
-                                value: Some(value),
-                                writable: Some(true),
-                                enumerable: Some(true),
-                                configurable: Some(true),
-                                get: None,
-                                set: None,
-                            };
-                            let desc_val = interp.from_property_descriptor(&create_desc);
-                            match interp.proxy_define_own_property(receiver_id, key, &desc_val) {
-                                Ok(success) => {
-                                    return Completion::Normal(JsValue::boolean(success));
-                                }
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            let existing_desc = match interp.to_property_descriptor(&existing_val) {
-                                Ok(d) => d,
-                                Err(Some(e)) => return Completion::Throw(e),
-                                Err(None) => return Completion::Normal(JsValue::boolean(false)),
-                            };
-                            if existing_desc.is_accessor_descriptor() {
-                                return Completion::Normal(JsValue::boolean(false));
-                            }
-                            if existing_desc.writable == Some(false) {
-                                return Completion::Normal(JsValue::boolean(false));
-                            }
-                            // Receiver.[[DefineOwnProperty]](P, {[[Value]]: V})
-                            let val_desc = PropertyDescriptor {
-                                value: Some(value),
-                                writable: None,
-                                enumerable: None,
-                                configurable: None,
-                                get: None,
-                                set: None,
-                            };
-                            let desc_val = interp.from_property_descriptor(&val_desc);
-                            match interp.proxy_define_own_property(receiver_id, key, &desc_val) {
-                                Ok(success) => {
-                                    return Completion::Normal(JsValue::boolean(success));
-                                }
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
+                        // §10.1.9.2 steps 2.c-2.e on the proxy receiver
+                        return match interp.set_on_receiver_native(receiver_id, &key, value) {
+                            Ok(success) => Completion::Normal(JsValue::boolean(success)),
+                            Err(e) => Completion::Throw(e),
+                        };
                     }
                     if let Some(recv_obj) = interp.get_object_cell(receiver_id) {
                         let existing = recv_obj.borrow().get_own_property(&key);

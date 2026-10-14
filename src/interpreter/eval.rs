@@ -7024,45 +7024,58 @@ impl Interpreter {
         Some((p.revoked, p.target_id, p.handler_id))
     }
 
+    /// Looks up `handler[trap_name]` for a live proxy (the spec's GetMethod on
+    /// the handler) without building any trap arguments. Returns the target id
+    /// and the callable trap, or `None` when the trap is undefined/null so the
+    /// caller can forward to the target natively.
+    pub(crate) fn resolve_proxy_trap(
+        &mut self,
+        proxy_id: u64,
+        trap_name: &str,
+    ) -> Result<(u64, Option<(JsValue, JsValue)>), JsValue> {
+        let (revoked, target_id, handler_id) = self.get_proxy_info(proxy_id).unwrap_or_default();
+        let (false, Some(target_id), Some(handler_id)) = (revoked, target_id, handler_id) else {
+            return Err(self.create_type_error(&format!(
+                "Cannot perform '{}' on a proxy that has been revoked",
+                trap_name
+            )));
+        };
+        let handler_val = JsValue::object(handler_id);
+        let trap_val = match self.get_object_property(handler_id, trap_name, &handler_val) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        if trap_val.is_nullish() {
+            return Ok((target_id, None));
+        }
+        if !self.is_callable(&trap_val) {
+            return Err(self.create_type_error(&format!(
+                "proxy handler's {} trap is not a function",
+                trap_name
+            )));
+        }
+        Ok((target_id, Some((handler_val, trap_val))))
+    }
+
     pub(crate) fn invoke_proxy_trap(
         &mut self,
         proxy_id: u64,
         trap_name: &str,
         args: Vec<JsValue>,
     ) -> Result<Option<JsValue>, JsValue> {
-        let info = self.get_proxy_info(proxy_id);
-        match info {
-            Some((true, _, _)) => Err(self.create_type_error(&format!(
-                "Cannot perform '{}' on a proxy that has been revoked",
-                trap_name
-            ))),
-            Some((false, Some(_target_id), Some(handler_id))) => {
-                let handler_val = JsValue::object(handler_id);
-                let trap_val = match self.get_object_property(handler_id, trap_name, &handler_val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if (trap_val).is_nullish() {
-                    return Ok(None); // No trap, fall through to target
-                }
-                if !self.is_callable(&trap_val) {
-                    return Err(self.create_type_error(&format!(
-                        "proxy handler's {} trap is not a function",
-                        trap_name
-                    )));
-                }
+        if self.get_proxy_info(proxy_id).is_none() {
+            return Ok(None);
+        }
+        match self.resolve_proxy_trap(proxy_id, trap_name)? {
+            (_, None) => Ok(None),
+            (_, Some((handler_val, trap_val))) => {
                 match self.call_function(&trap_val, &handler_val, &args) {
                     Completion::Normal(v) => Ok(Some(v)),
                     Completion::Throw(e) => Err(e),
                     _ => Ok(Some(JsValue::UNDEFINED)),
                 }
             }
-            Some((false, _, _)) => Err(self.create_type_error(&format!(
-                "Cannot perform '{}' on a proxy that has been revoked",
-                trap_name
-            ))),
-            None => Ok(None),
         }
     }
 
