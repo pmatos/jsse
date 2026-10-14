@@ -1253,7 +1253,7 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let s = match args.first() {
-                        Some(a) => match interp.to_string_value(a) {
+                        Some(a) => match interp.to_string_lossy(a) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         },

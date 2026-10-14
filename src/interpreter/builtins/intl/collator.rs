@@ -303,11 +303,11 @@ impl Interpreter {
                         move |interp2, _this2, args2| {
                             let x_val = args2.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             let y_val = args2.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                            let x_str = match interp2.to_string_value(&x_val) {
+                            let x_str = match interp2.to_string_lossy(&x_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let y_str = match interp2.to_string_value(&y_val) {
+                            let y_str = match interp2.to_string_lossy(&y_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };

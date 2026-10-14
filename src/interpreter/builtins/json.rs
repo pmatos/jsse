@@ -39,8 +39,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     } else if cn == "String" {
-                        match interp.to_string_value(&space_val) {
-                            Ok(s) => space_val = JsValue::string(JsString::from_str(&s)),
+                        match interp.to_js_string(&space_val) {
+                            Ok(s) => space_val = JsValue::string(s),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -87,7 +87,7 @@ impl Interpreter {
             2,
             |interp, _this, args: &[JsValue]| {
                 let raw = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let s = match interp.to_string_value(&raw) {
+                let s = match interp.to_string_lossy(&raw) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -150,7 +150,7 @@ impl Interpreter {
             1,
             |interp, _this, args: &[JsValue]| {
                 let raw = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let text = match interp.to_string_value(&raw) {
+                let text = match interp.to_string_lossy(&raw) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };

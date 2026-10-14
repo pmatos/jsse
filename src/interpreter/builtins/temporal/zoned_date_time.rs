@@ -1583,7 +1583,7 @@ fn parse_zdt_options(
     let disambiguation = if is_undefined(&dis_val) {
         "compatible".to_string()
     } else {
-        let s = match interp.to_string_value(&dis_val) {
+        let s = match interp.to_string_lossy(&dis_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };
@@ -1604,7 +1604,7 @@ fn parse_zdt_options(
     let offset = if is_undefined(&off_val) {
         default_offset.to_string()
     } else {
-        let s = match interp.to_string_value(&off_val) {
+        let s = match interp.to_string_lossy(&off_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };
@@ -1625,7 +1625,7 @@ fn parse_zdt_options(
     let overflow = if is_undefined(&ovf_val) {
         "constrain".to_string()
     } else {
-        let s = match interp.to_string_value(&ovf_val) {
+        let s = match interp.to_string_lossy(&ovf_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         };
@@ -2650,7 +2650,7 @@ impl Interpreter {
                                     cached_offset_str_cal = Some(s_str);
                                 }
                                 ValueKind::Object => {
-                                    let s_str = match interp.to_string_value(&offset_prop) {
+                                    let s_str = match interp.to_string_lossy(&offset_prop) {
                                         Ok(sv) => sv,
                                         Err(c) => return Completion::Throw(c),
                                     };
@@ -2956,7 +2956,7 @@ impl Interpreter {
                                 cached_offset_str = Some(s_str);
                             }
                             ValueKind::Object => {
-                                let s_str = match interp.to_string_value(&offset_prop) {
+                                let s_str = match interp.to_string_lossy(&offset_prop) {
                                     Ok(s) => s,
                                     Err(c) => return Completion::Throw(c),
                                 };
@@ -3249,7 +3249,7 @@ impl Interpreter {
                         let rounding_mode = if is_undefined(&rm_val) {
                             "halfExpand".to_string()
                         } else {
-                            let v = match interp.to_string_value(&rm_val) {
+                            let v = match interp.to_string_lossy(&rm_val) {
                                 Ok(s) => s,
                                 Err(c) => return Completion::Throw(c),
                             };
@@ -3272,7 +3272,7 @@ impl Interpreter {
                                 interp.create_range_error("smallestUnit is required for round"),
                             );
                         }
-                        let su_str = match interp.to_string_value(&su_val) {
+                        let su_str = match interp.to_string_lossy(&su_val) {
                             Ok(s) => s,
                             Err(c) => return Completion::Throw(c),
                         };
@@ -3416,7 +3416,7 @@ impl Interpreter {
                                 "direction is required for getTimeZoneTransition",
                             ));
                         }
-                        match interp.to_string_value(&dir_val) {
+                        match interp.to_string_lossy(&dir_val) {
                             Ok(s) => s,
                             Err(c) => return Completion::Throw(c),
                         }
@@ -4162,7 +4162,7 @@ fn parse_zdt_to_string_options(
     let cal_display = if is_undefined(&cn_val) {
         "auto".to_string()
     } else {
-        match interp.to_string_value(&cn_val) {
+        match interp.to_string_lossy(&cn_val) {
             Ok(s) => {
                 if !matches!(s.as_str(), "auto" | "always" | "never" | "critical") {
                     return Err(Completion::Throw(
@@ -4200,7 +4200,7 @@ fn parse_zdt_to_string_options(
         }
         Some(digits)
     } else {
-        let s = match interp.to_string_value(&fsd_val) {
+        let s = match interp.to_string_lossy(&fsd_val) {
             Ok(v) => v,
             Err(c) => return Err(Completion::Throw(c)),
         };
@@ -4221,7 +4221,7 @@ fn parse_zdt_to_string_options(
     let offset_display = if is_undefined(&off_val) {
         "auto".to_string()
     } else {
-        match interp.to_string_value(&off_val) {
+        match interp.to_string_lossy(&off_val) {
             Ok(s) => {
                 if !matches!(s.as_str(), "auto" | "never") {
                     return Err(Completion::Throw(
@@ -4242,7 +4242,7 @@ fn parse_zdt_to_string_options(
     let rounding_mode = if is_undefined(&rm_val) {
         "trunc".to_string()
     } else {
-        match interp.to_string_value(&rm_val) {
+        match interp.to_string_lossy(&rm_val) {
             Ok(s) => {
                 if !matches!(
                     s.as_str(),
@@ -4272,7 +4272,7 @@ fn parse_zdt_to_string_options(
         c => return Err(c),
     };
     let su_coerced = if !is_undefined(&su_val) {
-        let su_str = match interp.to_string_value(&su_val) {
+        let su_str = match interp.to_string_lossy(&su_val) {
             Ok(s) => s,
             Err(c) => return Err(Completion::Throw(c)),
         };
@@ -4289,7 +4289,7 @@ fn parse_zdt_to_string_options(
     let tz_display = if is_undefined(&tzn_val) {
         "auto".to_string()
     } else {
-        match interp.to_string_value(&tzn_val) {
+        match interp.to_string_lossy(&tzn_val) {
             Ok(s) => {
                 if !matches!(s.as_str(), "auto" | "never" | "critical") {
                     return Err(Completion::Throw(

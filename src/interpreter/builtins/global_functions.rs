@@ -15,7 +15,7 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("parseInt".to_string(), 2, |interp, _this, args| {
                 let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let s = match interp.to_string_value(&input) {
+                let s = match interp.to_string_lossy(&input) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -72,7 +72,7 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("parseFloat".to_string(), 1, |interp, _this, args| {
                 let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let s = match interp.to_string_value(&input) {
+                let s = match interp.to_string_lossy(&input) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -267,13 +267,12 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("escape".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let s = match interp.to_string_value(&val) {
+                let s = match interp.to_js_string(&val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let units: Vec<u16> = s.encode_utf16().collect();
                 let mut result = String::new();
-                for &cu in &units {
+                for &cu in s.as_units() {
                     match cu {
                         b if (b'A' as u16..=b'Z' as u16).contains(&b)
                             || (b'a' as u16..=b'z' as u16).contains(&b)
@@ -306,42 +305,37 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("unescape".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let s = match interp.to_string_value(&val) {
+                let s = match interp.to_js_string(&val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let chars: Vec<char> = s.chars().collect();
-                let mut result: Vec<u16> = Vec::new();
+                let units = s.as_units();
+                let hex = |u: &u16| char::from_u32(*u as u32).and_then(|c| c.to_digit(16));
+                let hex_run = |run: &[u16]| {
+                    run.iter()
+                        .try_fold(0u16, |acc, u| hex(u).map(|d| (acc << 4) | d as u16))
+                };
+                let mut result: Vec<u16> = Vec::with_capacity(units.len());
                 let mut i = 0;
-                while i < chars.len() {
-                    if chars[i] == '%' {
-                        if i + 5 < chars.len()
-                            && chars[i + 1] == 'u'
-                            && chars[i + 2..i + 6].iter().all(|c| c.is_ascii_hexdigit())
+                while i < units.len() {
+                    if units[i] == b'%' as u16 {
+                        if i + 5 < units.len()
+                            && units[i + 1] == b'u' as u16
+                            && let Some(code) = hex_run(&units[i + 2..i + 6])
                         {
-                            let hex: String = chars[i + 2..i + 6].iter().collect();
-                            if let Ok(code) = u16::from_str_radix(&hex, 16) {
-                                result.push(code);
-                                i += 6;
-                                continue;
-                            }
+                            result.push(code);
+                            i += 6;
+                            continue;
                         }
-                        if i + 2 < chars.len()
-                            && chars[i + 1..i + 3].iter().all(|c| c.is_ascii_hexdigit())
+                        if i + 2 < units.len()
+                            && let Some(code) = hex_run(&units[i + 1..i + 3])
                         {
-                            let hex: String = chars[i + 1..i + 3].iter().collect();
-                            if let Ok(code) = u8::from_str_radix(&hex, 16) {
-                                result.push(code as u16);
-                                i += 3;
-                                continue;
-                            }
+                            result.push(code);
+                            i += 3;
+                            continue;
                         }
                     }
-                    let ch = chars[i];
-                    let mut buf = [0u16; 2];
-                    for u in ch.encode_utf16(&mut buf) {
-                        result.push(*u);
-                    }
+                    result.push(units[i]);
                     i += 1;
                 }
                 Completion::Normal(JsValue::string(JsString::from_vec(result)))

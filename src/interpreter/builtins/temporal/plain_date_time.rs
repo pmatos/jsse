@@ -1600,7 +1600,7 @@ impl Interpreter {
                     let rm_str: Option<String> = if is_undefined(&rm) {
                         None
                     } else {
-                        Some(match interp.to_string_value(&rm) {
+                        Some(match interp.to_string_lossy(&rm) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         })
@@ -1613,7 +1613,7 @@ impl Interpreter {
                     let su_str: Option<String> = if is_undefined(&su) {
                         None
                     } else {
-                        Some(match interp.to_string_value(&su) {
+                        Some(match interp.to_string_lossy(&su) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         })
@@ -1757,7 +1757,7 @@ impl Interpreter {
                         let sc = if is_undefined(&cv) {
                             "auto"
                         } else {
-                            let sv = match interp.to_string_value(&cv) {
+                            let sv = match interp.to_string_lossy(&cv) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1798,7 +1798,7 @@ impl Interpreter {
                             }
                             Some(floored as i32)
                         } else {
-                            let s = match interp.to_string_value(&fsd) {
+                            let s = match interp.to_string_lossy(&fsd) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1818,7 +1818,7 @@ impl Interpreter {
                         let rm: &str = if is_undefined(&rm_val) {
                             "trunc"
                         } else {
-                            let sv = match interp.to_string_value(&rm_val) {
+                            let sv = match interp.to_string_lossy(&rm_val) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1845,7 +1845,7 @@ impl Interpreter {
                             other => return other,
                         };
                         if !is_undefined(&su_val) {
-                            let sv = match interp.to_string_value(&su_val) {
+                            let sv = match interp.to_string_lossy(&su_val) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -2051,7 +2051,7 @@ impl Interpreter {
                         c => return c,
                     };
                     if !super::is_undefined(&dis_val) {
-                        let sv = match interp.to_string_value(&dis_val) {
+                        let sv = match interp.to_string_lossy(&dis_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };

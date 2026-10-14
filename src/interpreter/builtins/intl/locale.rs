@@ -1237,19 +1237,19 @@ impl Interpreter {
                             tag.clone()
                         } else {
                             drop(b);
-                            match interp.to_string_value(&tag_arg) {
+                            match interp.to_string_lossy(&tag_arg) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
                     } else {
-                        match interp.to_string_value(&tag_arg) {
+                        match interp.to_string_lossy(&tag_arg) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         }
                     }
                 } else {
-                    match interp.to_string_value(&tag_arg) {
+                    match interp.to_string_lossy(&tag_arg) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
@@ -1296,7 +1296,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !lang_val.is_undefined() {
-                            let lang_str = match interp.to_string_value(&lang_val) {
+                            let lang_str = match interp.to_string_lossy(&lang_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1317,7 +1317,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !script_val.is_undefined() {
-                            let script_str = match interp.to_string_value(&script_val) {
+                            let script_str = match interp.to_string_lossy(&script_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1338,7 +1338,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !region_val.is_undefined() {
-                            let region_str = match interp.to_string_value(&region_val) {
+                            let region_str = match interp.to_string_lossy(&region_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1360,7 +1360,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !variants_val.is_undefined() {
-                            let variants_str = match interp.to_string_value(&variants_val) {
+                            let variants_str = match interp.to_string_lossy(&variants_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1410,7 +1410,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !cal_val.is_undefined() {
-                            let s = match interp.to_string_value(&cal_val) {
+                            let s = match interp.to_string_lossy(&cal_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1430,7 +1430,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !col_val.is_undefined() {
-                            let s = match interp.to_string_value(&col_val) {
+                            let s = match interp.to_string_lossy(&col_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1451,7 +1451,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !fw_val.is_undefined() {
-                            let fw_string = match interp.to_string_value(&fw_val) {
+                            let fw_string = match interp.to_string_lossy(&fw_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1480,7 +1480,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !hc_val.is_undefined() {
-                            let s = match interp.to_string_value(&hc_val) {
+                            let s = match interp.to_string_lossy(&hc_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1500,7 +1500,7 @@ impl Interpreter {
                             _ => JsValue::UNDEFINED,
                         };
                         if !kf_val.is_undefined() {
-                            let s = match interp.to_string_value(&kf_val) {
+                            let s = match interp.to_string_lossy(&kf_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -1533,7 +1533,7 @@ impl Interpreter {
                                 _ => JsValue::UNDEFINED,
                             };
                         if !nu_val.is_undefined() {
-                            let s = match interp.to_string_value(&nu_val) {
+                            let s = match interp.to_string_lossy(&nu_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };

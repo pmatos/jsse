@@ -952,7 +952,7 @@ impl Interpreter {
                     if is_undefined(&cv) {
                         "auto"
                     } else {
-                        let s = match interp.to_string_value(&cv) {
+                        let s = match interp.to_string_lossy(&cv) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };

@@ -47,7 +47,7 @@ impl Interpreter {
             1,
             |interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]| {
                 let key = match args.first() {
-                    Some(v) => match interp.to_string_value(v) {
+                    Some(v) => match interp.to_string_lossy(v) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     },
@@ -525,7 +525,7 @@ impl Interpreter {
                 if let Some(tag) = cached {
                     tag
                 } else {
-                    self.to_string_value(&k_value)?
+                    self.to_string_lossy(&k_value)?
                 }
             } else if let Some(s) = k_value.as_string() {
                 s.to_rust_string()
@@ -623,7 +623,7 @@ impl Interpreter {
             return Ok(fallback.map(|s| s.to_string()));
         }
 
-        let str_val = self.to_string_value(&value)?;
+        let str_val = self.to_string_lossy(&value)?;
 
         if !valid_values.is_empty() && !valid_values.contains(&str_val.as_str()) {
             return Err(self.create_range_error(&format!(

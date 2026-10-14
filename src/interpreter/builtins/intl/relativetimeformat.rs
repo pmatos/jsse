@@ -500,7 +500,7 @@ impl Interpreter {
                     }
 
                     let unit_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                    let unit_str = match interp.to_string_value(&unit_arg) {
+                    let unit_str = match interp.to_string_lossy(&unit_arg) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -547,7 +547,7 @@ impl Interpreter {
                 }
 
                 let unit_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let unit_str = match interp.to_string_value(&unit_arg) {
+                let unit_str = match interp.to_string_lossy(&unit_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };

@@ -137,7 +137,7 @@ impl Interpreter {
                 let specifier_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let export_name_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                let specifier = match interp.to_string_value(&specifier_val) {
+                let specifier = match interp.to_string_lossy(&specifier_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };

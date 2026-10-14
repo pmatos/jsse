@@ -1599,7 +1599,7 @@ pub(crate) fn parse_overflow_option(
     if is_undefined(&val) {
         return Ok("constrain".to_string());
     }
-    let s = match interp.to_string_value(&val) {
+    let s = match interp.to_string_lossy(&val) {
         Ok(v) => v,
         Err(e) => return Err(Completion::Throw(e)),
     };
@@ -4142,7 +4142,7 @@ pub(crate) fn parse_difference_options(
     let lu_str: Option<String> = if is_undefined(&lu) {
         None
     } else {
-        Some(match interp.to_string_value(&lu) {
+        Some(match interp.to_string_lossy(&lu) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })
@@ -4163,7 +4163,7 @@ pub(crate) fn parse_difference_options(
     let rm_str: Option<String> = if is_undefined(&rm) {
         None
     } else {
-        Some(match interp.to_string_value(&rm) {
+        Some(match interp.to_string_lossy(&rm) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })
@@ -4177,7 +4177,7 @@ pub(crate) fn parse_difference_options(
     let su_str: Option<String> = if is_undefined(&su) {
         None
     } else {
-        Some(match interp.to_string_value(&su) {
+        Some(match interp.to_string_lossy(&su) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
         })

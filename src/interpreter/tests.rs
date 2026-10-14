@@ -3909,7 +3909,7 @@ mod loop_completion_value_tests {
 }
 
 // §7.1.5 ToIntegerOrInfinity — the combined `? ToIntegerOrInfinity(argument)`
-// coercion method that sits alongside to_number_value / to_string_value / to_index.
+// coercion method that sits alongside to_number_value / to_string_lossy / to_index.
 // Expected values are the spec's, not recomputed the way the code does it.
 mod to_integer_or_infinity_value_tests {
     use super::*;

@@ -188,10 +188,10 @@ impl Interpreter {
             if let Some(s) = prim.as_string() {
                 Ok(JsPropertyKey::from_js_string(&s))
             } else {
-                self.to_string_value(&prim).map(JsPropertyKey::from)
+                self.to_string_lossy(&prim).map(JsPropertyKey::from)
             }
         } else {
-            self.to_string_value(val).map(JsPropertyKey::from)
+            self.to_string_lossy(val).map(JsPropertyKey::from)
         }
     }
 

@@ -61,7 +61,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let s =
-                    match interp.to_string_value(args.get(1).unwrap_or(JsValue::undefined_ref())) {
+                    match interp.to_string_lossy(args.get(1).unwrap_or(JsValue::undefined_ref())) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     };
