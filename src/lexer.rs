@@ -650,6 +650,20 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Moves the next source character into `raw`, with the literal that an
+    /// escape marker in stand-in source introduces, so a bounded scan never
+    /// separates the pair.
+    fn push_raw_source_char(&mut self, raw: &mut String) {
+        let Some(ch) = self.advance() else { return };
+        raw.push(ch);
+        if self.pua_undo
+            && ch == crate::interpreter::SOURCE_ESCAPE
+            && let Some(literal) = self.advance()
+        {
+            raw.push(literal);
+        }
+    }
+
     /// For invalid escape sequences in tagged templates: advance past the
     /// escape identifier character(s) without consuming template delimiters.
     fn scan_invalid_template_escape(&mut self, raw: &mut String) {
@@ -659,36 +673,36 @@ impl<'a> Lexer<'a> {
         }
         match self.peek() {
             Some('x') => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
                 // Skip up to 2 chars for hex digits
                 for _ in 0..2 {
                     match self.peek() {
                         Some(c) if !is_template_delim(c) => {
-                            raw.push(self.advance().unwrap());
+                            self.push_raw_source_char(raw);
                         }
                         _ => break,
                     }
                 }
             }
             Some('u') => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
                 if self.peek() == Some('{') {
-                    raw.push(self.advance().unwrap());
+                    self.push_raw_source_char(raw);
                     while let Some(c) = self.peek() {
                         if c == '}' {
-                            raw.push(self.advance().unwrap());
+                            self.push_raw_source_char(raw);
                             break;
                         }
                         if is_template_delim(c) {
                             break;
                         }
-                        raw.push(self.advance().unwrap());
+                        self.push_raw_source_char(raw);
                     }
                 } else {
                     for _ in 0..4 {
                         match self.peek() {
                             Some(c) if !is_template_delim(c) => {
-                                raw.push(self.advance().unwrap());
+                                self.push_raw_source_char(raw);
                             }
                             _ => break,
                         }
@@ -696,14 +710,14 @@ impl<'a> Lexer<'a> {
                 }
             }
             Some('0'..='9') => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
                 // Skip additional octal digits
                 while let Some('0'..='7') = self.peek() {
-                    raw.push(self.advance().unwrap());
+                    self.push_raw_source_char(raw);
                 }
             }
             Some(_) => {
-                raw.push(self.advance().unwrap());
+                self.push_raw_source_char(raw);
             }
             None => {}
         }

@@ -932,7 +932,7 @@ impl JsonText {
                 stand_ins: false,
             };
         }
-        let stand_ins = char::decode_utf16(units.iter().copied()).any(|d| d.is_err());
+        let stand_ins = crate::interpreter::builtins::regexp::has_lone_surrogate(units);
         let mut text = String::with_capacity(units.len());
         for decoded in char::decode_utf16(units.iter().copied()) {
             match decoded {

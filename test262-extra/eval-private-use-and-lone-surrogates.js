@@ -107,3 +107,10 @@ assert.sameValue(
   eval("'\\u{F0000}' + '" + P + "'") , P + P, "escape and literal agree");
 assert.sameValue(eval("'" + P + L + "'.codePointAt(0)"), 0xF0000, "codePointAt of genuine");
 assert.sameValue(eval("'" + P + L + "'.codePointAt(2)"), 0xD800, "codePointAt of lone");
+
+assert.sameValue(
+  eval("[(function (s) { return s.raw[0]; })`\\x1" + P3 + "`, '" + L + "'][0]"), "\\x1" + P3,
+  "tagged template raw after an invalid escape and U+F0800");
+assert.sameValue(
+  eval("[(function (s) { return s.raw[0]; })`\\u123" + P3 + "${1}`, '" + L + "'][0]"),
+  "\\u123" + P3, "tagged template raw before a substitution");
