@@ -82,12 +82,16 @@ const GENUINE_PRIVATE_USE_END: u32 = 0x10FFFF;
 type WindowMask = u64;
 
 pub(super) fn surrogate_to_stand_in(cp: u32, base: u32) -> char {
-    let base = if base == BYTES_MODE_BASE {
+    char::from_u32(stand_in_base(base) + (cp - SURROGATE_START)).unwrap()
+}
+
+/// The window lone surrogates are drawn from for a translation `base`.
+fn stand_in_base(base: u32) -> u32 {
+    if base == BYTES_MODE_BASE {
         SURROGATE_PUA_BASE
     } else {
         base
-    };
-    char::from_u32(base + (cp - SURROGATE_START)).unwrap()
+    }
 }
 
 /// The `base` of a pattern translated without a private window: its text and
@@ -1379,6 +1383,7 @@ impl VClassSet {
     fn add_string(&mut self, s: String, base: u32) {
         if s.chars().count() == 1 {
             let cp = s.chars().next().unwrap() as u32;
+            let base = stand_in_base(base);
             let cp = if (base..base + STAND_IN_WINDOW).contains(&cp) {
                 cp - base + SURROGATE_START
             } else {
@@ -5753,10 +5758,15 @@ impl ExecPlan {
             return Rc::clone(shifted);
         }
         let pattern = js_string_to_regex_pattern_at(self.source.as_units(), &self.flags, base);
-        let built = build_regex_cached(interp, &pattern, &self.flags, base)
-            .unwrap_or_else(|_| Rc::clone(&self.cached));
-        *self.shifted.borrow_mut() = Some(Rc::clone(&built));
-        built
+        match build_regex_cached(interp, &pattern, &self.flags, base) {
+            Ok(built) => {
+                *self.shifted.borrow_mut() = Some(Rc::clone(&built));
+                built
+            }
+            // Translation does not depend on the window, so this is the same
+            // failure the plan's own regex would have hit; keep that one.
+            Err(_) => Rc::clone(&self.cached),
+        }
     }
 }
 
@@ -5769,16 +5779,14 @@ pub(crate) struct RegexCache {
     by_flags: HashMap<String, HashMap<String, Rc<CachedRegex>>>,
     /// Regexes translated for a stand-in window other than the default, keyed
     /// `(window base, flags, source)`.
-    by_base: HashMap<(u32, String, String), Rc<CachedRegex>>,
+    by_base: HashMap<u32, HashMap<String, HashMap<String, Rc<CachedRegex>>>>,
     len: usize,
 }
 
 impl RegexCache {
     fn get(&self, source: &str, flags: &str, base: u32) -> Option<&Rc<CachedRegex>> {
         if base != SURROGATE_PUA_BASE {
-            return self
-                .by_base
-                .get(&(base, flags.to_string(), source.to_string()));
+            return self.by_base.get(&base)?.get(flags)?.get(source);
         }
         self.by_flags.get(flags)?.get(source)
     }
@@ -5792,7 +5800,11 @@ impl RegexCache {
         if base != SURROGATE_PUA_BASE {
             if self
                 .by_base
-                .insert((base, flags.to_string(), source.to_string()), entry)
+                .entry(base)
+                .or_default()
+                .entry(flags.to_string())
+                .or_default()
+                .insert(source.to_string(), entry)
                 .is_none()
             {
                 self.len += 1;
@@ -6563,7 +6575,6 @@ fn lookbehind_needs_custom_rtl(source: &str) -> bool {
 /// the lookbehind. Returns verify info if so, None otherwise.
 fn lookbehind_captures_with_external_backrefs(
     source: &str,
-    flags: &str,
 ) -> Option<Vec<super::regexp_lookbehind::LookbehindVerifyInfo>> {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
@@ -6685,7 +6696,6 @@ fn lookbehind_captures_with_external_backrefs(
                 content: content.clone(),
                 capture_groups: referenced_groups,
                 capture_offset: *offset,
-                flags: super::regexp_lookbehind::LbFlags::new(flags, SURROGATE_PUA_BASE),
             });
         }
     }
@@ -6713,7 +6723,7 @@ fn try_build_custom_lookbehind(
     let mut external_lb_backrefs: Vec<(u32, u32)> = Vec::new();
     let mut remaining_source: Option<String> = None;
 
-    if let Some(verify_infos) = lookbehind_captures_with_external_backrefs(source, flags) {
+    if let Some(verify_infos) = lookbehind_captures_with_external_backrefs(source) {
         for vi in &verify_infos {
             for &g in &vi.capture_groups {
                 external_lb_backrefs.push((g, g));

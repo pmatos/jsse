@@ -1980,5 +1980,4 @@ pub(super) struct LookbehindVerifyInfo {
     pub capture_groups: Vec<u32>,
     /// Number of groups before this lookbehind (for group numbering offset)
     pub capture_offset: u32,
-    pub flags: LbFlags,
 }
