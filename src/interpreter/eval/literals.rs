@@ -308,6 +308,7 @@ impl Interpreter {
             }
         }
         self.class_private_names.push(Rc::new(pn_set));
+        let gc_frame = self.gc_root_frame();
         let result = self.eval_class_inner(
             name,
             class_binding_name,
@@ -316,6 +317,7 @@ impl Interpreter {
             env,
             class_source_text,
         );
+        self.gc_unroot_frame(gc_frame);
         self.class_private_names.pop();
         result
     }
@@ -416,6 +418,9 @@ impl Interpreter {
         };
 
         let ctor_val = self.create_function_with(ctor_func, FunctionInit::ClassConstructor);
+        // Computed keys and field initializers run JS (and so may collect)
+        // before the constructor is reachable from any binding.
+        self.gc_root_value(&ctor_val);
 
         // Mark derived class constructors
         if let Some(o) = (ctor_val)
