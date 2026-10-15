@@ -1332,7 +1332,11 @@ fn validate_unicode_property_escape(content: &str) -> Result<(), String> {
         {
             return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
-        // For Script/Script_Extensions, let fancy_regex validate the value
+        if !matches!(prop_name, "General_Category" | "gc")
+            && crate::unicode_tables::lookup_property(content).is_none()
+        {
+            return Err(format!("Invalid property escape: \\p{{{}}}", content));
+        }
         Ok(())
     } else {
         // Lone value: must be a valid binary property OR a valid GC value
@@ -1857,16 +1861,16 @@ fn parse_v_class_atom(
                         }
                         return Ok(result);
                     }
-                    // Regular property
-                    if let Some(ranges) = property_ranges(&content) {
-                        let ranges_to_use = if negated {
-                            complement_ranges(&ranges)
-                        } else {
-                            ranges.to_vec()
-                        };
-                        for &(lo, hi) in &ranges_to_use {
-                            result.add_range(lo, hi);
-                        }
+                    let Some(ranges) = property_ranges(&content) else {
+                        return Err(format!("Invalid property escape: \\p{{{}}}", content));
+                    };
+                    let ranges_to_use = if negated {
+                        complement_ranges(&ranges)
+                    } else {
+                        ranges.to_vec()
+                    };
+                    for &(lo, hi) in &ranges_to_use {
+                        result.add_range(lo, hi);
                     }
                     return check_range(chars, i, result, flags);
                 }
@@ -3488,12 +3492,10 @@ fn translate_js_pattern_ex_with_sentinels(
                                 );
                             }
                         } else {
-                            // Fallback to fancy_regex for unrecognized properties
-                            result.push('\\');
-                            result.push(next);
-                            result.push('{');
-                            result.push_str(&content);
-                            result.push('}');
+                            return Err(format!(
+                                "Invalid property escape: \\{}{{{}}}",
+                                next, content
+                            ));
                         }
                         i = start + end + 1;
                     } else {
@@ -4662,6 +4664,9 @@ fn parse_v_class_set_character(
             }
             let prop_content: String = chars[prop_start..end].iter().collect();
             *i = end + 1;
+            if validate_unicode_property_escape(&prop_content).is_err() {
+                return err("Invalid property name");
+            }
             let prop_name = match prop_content.find('=') {
                 Some(eq_pos) => &prop_content[eq_pos + 1..],
                 None => &prop_content,

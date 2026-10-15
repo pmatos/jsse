@@ -14,6 +14,7 @@ UCD_FILES = {
     "DerivedGeneralCategory.txt": "extracted/DerivedGeneralCategory.txt",
     "DerivedCoreProperties.txt": "DerivedCoreProperties.txt",
     "DerivedNormalizationProps.txt": "DerivedNormalizationProps.txt",
+    "DerivedBinaryProperties.txt": "extracted/DerivedBinaryProperties.txt",
     "PropList.txt": "PropList.txt",
     "emoji-data.txt": "emoji/emoji-data.txt",
     "PropertyValueAliases.txt": "PropertyValueAliases.txt",
@@ -564,6 +565,10 @@ def main():
             binary_data[name] = merge_ranges(sorted(binary_data[name] + ranges))
         else:
             binary_data[name] = ranges
+
+    derived_binary = parse_ranges(texts["DerivedBinaryProperties.txt"])
+    for name, ranges in derived_binary.items():
+        binary_data[name] = ranges
 
     print(f"Binary properties: {len(binary_data)} values", file=sys.stderr)
 
