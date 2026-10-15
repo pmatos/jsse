@@ -66,3 +66,10 @@ codegen-units = 16
 [profile.release-checked]
 inherits = "release-nolto"
 debug-assertions = true
+
+[dev-dependencies]
+divan = { version = "5.0.3", package = "codspeed-divan-compat" }
+
+[[bench]]
+name = "engine"
+harness = false
