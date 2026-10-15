@@ -3,6 +3,7 @@ use crate::interpreter::atom::Atom;
 use crate::interpreter::generator_analysis::*;
 use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// Which transform built a [`GeneratorStateMachine`], so a memoised machine is
@@ -674,7 +675,7 @@ fn transform_generator_inner_opts(
 
     let end_state = ctx.new_state();
 
-    transform_statements(body, &mut ctx, end_state);
+    transform_statements(&function_declarations_first(body), &mut ctx, end_state);
 
     if !matches!(
         ctx.states[ctx.current_state_id].terminator,
@@ -694,6 +695,26 @@ fn transform_generator_inner_opts(
         #[cfg(feature = "perf-counters")]
         perf_key: None,
     }
+}
+
+/// FunctionDeclarationInstantiation initializes every function-level
+/// declaration before the body runs, wherever it sits in the statement list.
+/// Lowering puts each statement in the fragment it appears in, so a declaration
+/// after a `return`/`yield`/`await` would land in a state that has not run (or
+/// never runs). Moving the declarations to the head of the first fragment, in
+/// source order (last duplicate wins), instantiates them once when the first
+/// fragment starts; they are removed from their original positions, where
+/// evaluating them would be a no-op anyway.
+fn function_declarations_first(body: &[Statement]) -> Cow<'_, [Statement]> {
+    let is_function =
+        |s: &Statement| crate::interpreter::hoisting::unwrap_labeled_function(s).is_some();
+    let leading = body.iter().take_while(|s| is_function(s)).count();
+    if !body[leading..].iter().any(is_function) {
+        return Cow::Borrowed(body);
+    }
+    let (mut reordered, others): (Vec<_>, Vec<_>) = body.iter().cloned().partition(is_function);
+    reordered.extend(others);
+    Cow::Owned(reordered)
 }
 
 fn create_simple_machine(
