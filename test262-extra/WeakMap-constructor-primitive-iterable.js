@@ -67,3 +67,52 @@ iterable[Symbol.iterator] = function() {
 new WeakMap(iterable);
 assert.sameValue(nextReads, 1, "next is read once by GetIteratorFromMethod");
 assert.sameValue(count, 4, "next is called until done");
+
+var key = {};
+var original = Object.getOwnPropertyDescriptor(String.prototype, Symbol.iterator);
+Object.defineProperty(String.prototype, Symbol.iterator, {
+  configurable: true,
+  value: function() {
+    var done = false;
+    return {
+      next: function() {
+        if (done) return { done: true };
+        done = true;
+        return { done: false, value: [key, 42] };
+      }
+    };
+  }
+});
+var populated;
+try {
+  populated = new WeakMap("x");
+} finally {
+  Object.defineProperty(String.prototype, Symbol.iterator, original);
+}
+assert.sameValue(populated.get(key), 42, "entries from a primitive iterable are added");
+
+var returnCalls = 0;
+var closing = {};
+closing[Symbol.iterator] = function() {
+  return {
+    next: function() { return { done: false, value: 1 }; },
+    return: function() { returnCalls += 1; return {}; }
+  };
+};
+assert.throws(TypeError, function() {
+  new WeakMap(closing);
+}, "a non-object entry throws");
+assert.sameValue(returnCalls, 1, "the iterator is closed for a non-object entry");
+
+var nonObjectResult = {};
+returnCalls = 0;
+nonObjectResult[Symbol.iterator] = function() {
+  return {
+    next: function() { return 1; },
+    return: function() { returnCalls += 1; return {}; }
+  };
+};
+assert.throws(TypeError, function() {
+  new WeakMap(nonObjectResult);
+}, "a non-object next result throws");
+assert.sameValue(returnCalls, 0, "the iterator is not closed for a failing next result");

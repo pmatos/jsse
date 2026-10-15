@@ -50,7 +50,6 @@ assert.sameValue(receiverType, "string", "the @@iterator getter receives the pri
 
 var nextReads = 0;
 var count = 0;
-var obj = {};
 var iterable = {};
 iterable[Symbol.iterator] = function() {
   var iterator = {};
@@ -68,3 +67,52 @@ iterable[Symbol.iterator] = function() {
 new WeakSet(iterable);
 assert.sameValue(nextReads, 1, "next is read once by GetIteratorFromMethod");
 assert.sameValue(count, 4, "next is called until done");
+
+var item = {};
+var original = Object.getOwnPropertyDescriptor(String.prototype, Symbol.iterator);
+Object.defineProperty(String.prototype, Symbol.iterator, {
+  configurable: true,
+  value: function() {
+    var done = false;
+    return {
+      next: function() {
+        if (done) return { done: true };
+        done = true;
+        return { done: false, value: item };
+      }
+    };
+  }
+});
+var populated;
+try {
+  populated = new WeakSet("x");
+} finally {
+  Object.defineProperty(String.prototype, Symbol.iterator, original);
+}
+assert.sameValue(populated.has(item), true, "values from a primitive iterable are added");
+
+var returnCalls = 0;
+var closing = {};
+closing[Symbol.iterator] = function() {
+  return {
+    next: function() { return { done: false, value: 1 }; },
+    return: function() { returnCalls += 1; return {}; }
+  };
+};
+assert.throws(TypeError, function() {
+  new WeakSet(closing);
+}, "a non-object value makes the adder throw");
+assert.sameValue(returnCalls, 1, "the iterator is closed when the adder throws");
+
+var nonObjectResult = {};
+returnCalls = 0;
+nonObjectResult[Symbol.iterator] = function() {
+  return {
+    next: function() { return 1; },
+    return: function() { returnCalls += 1; return {}; }
+  };
+};
+assert.throws(TypeError, function() {
+  new WeakSet(nonObjectResult);
+}, "a non-object next result throws");
+assert.sameValue(returnCalls, 0, "the iterator is not closed for a failing next result");
