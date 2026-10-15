@@ -29,7 +29,7 @@ fn eval_with_check(src: &str, check: &str) {
 mod parse {
     use super::*;
 
-    /// A realistic mid-sized script: every micro-benchmark script concatenated.
+    /// A realistic mid-sized script: the micro-benchmark scripts joined.
     const SCRIPTS: &[&str] = &[
         include_str!("../benchmarks/scripts/bench_array.js"),
         include_str!("../benchmarks/scripts/bench_closure_create.js"),
@@ -60,7 +60,7 @@ label: for (const [k, v] of Object.entries(obj)) { if (k === 'b') continue label
 
     #[divan::bench]
     fn bench_scripts(bencher: divan::Bencher) {
-        let src = SCRIPTS.concat();
+        let src = SCRIPTS.join("\n");
         bencher.bench_local(|| assert!(jsse::bench_parse(black_box(&src))));
     }
 

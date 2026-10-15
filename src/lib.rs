@@ -77,9 +77,13 @@ pub fn fuzz_parse_bytes(data: &[u8]) {
 /// already run on an engine-sized stack, so no thread is spawned per call.
 #[doc(hidden)]
 pub fn bench_parse(src: &str) -> bool {
+    parse_script(src).is_some()
+}
+
+fn parse_script(src: &str) -> Option<ast::Program> {
     parser::Parser::new(src)
         .and_then(|mut p| p.parse_program())
-        .is_ok()
+        .ok()
 }
 
 /// Parses and runs `src` as a script in a fresh interpreter on the current
@@ -98,7 +102,7 @@ pub fn bench_eval(src: &str) -> bool {
 /// only rejects its promise and cannot fail this harness.
 #[doc(hidden)]
 pub fn bench_eval_with_check(src: &str, check: &str) -> bool {
-    let Ok(program) = parser::Parser::new(src).and_then(|mut p| p.parse_program()) else {
+    let Some(program) = parse_script(src) else {
         return false;
     };
     let mut interp = interpreter::Interpreter::new();
@@ -111,7 +115,7 @@ pub fn bench_eval_with_check(src: &str, check: &str) -> bool {
     if check.is_empty() {
         return true;
     }
-    let Ok(validation) = parser::Parser::new(check).and_then(|mut p| p.parse_program()) else {
+    let Some(validation) = parse_script(check) else {
         return false;
     };
     matches!(
