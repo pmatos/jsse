@@ -84,6 +84,10 @@ check("Array.from", function () {
   assert.sameValue(Array.from("abc").length, 1);
 });
 
+check("Uint8Array.from", function () {
+  assert.sameValue(Uint8Array.from("abc").length, 1);
+});
+
 delete String.prototype[Symbol.iterator];
 assert.throws(TypeError, function () {
   const [a] = "abc";

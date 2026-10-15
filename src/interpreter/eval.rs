@@ -1364,7 +1364,7 @@ impl Interpreter {
         }
     }
 
-    fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
+    pub(crate) fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
         if val.is_nullish() {
             let err = self.create_type_error("Cannot convert undefined or null to object");
             Completion::Throw(err)
@@ -4614,22 +4614,14 @@ impl Interpreter {
         rval: &JsValue,
         env: &EnvRef,
     ) -> Completion {
-        // RequireObjectCoercible
         if let Completion::Throw(e) = self.require_object_coercible(rval) {
             return Completion::Throw(e);
         }
 
-        // ToObject to wrap primitives
-        let obj_val = match self.to_object(rval) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Completion::Throw(e),
-            _ => unreachable!(),
-        };
-
         // Computed keys, getters, initializers, rest copying, and target writes
-        // can all run user code while the ToObject result lives only here.
+        // can all run user code while `rval` lives only here.
         let gc_frame = self.gc_root_frame();
-        self.gc_root_value(&obj_val);
+        self.gc_root_value(rval);
 
         let result = (|| {
             let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
@@ -4648,7 +4640,12 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let result = self.with_destruct_lref(precomp, inner, env, |interp| {
-                        interp.bind_object_rest_values(&obj_val, &excluded_keys)
+                        // CopyDataProperties: ToObject(source), Get(from, key).
+                        let source = propagate!(interp.to_object(rval));
+                        interp.gc_root_value(&source);
+                        let rest = interp.bind_object_rest_values(&source, &excluded_keys);
+                        interp.gc_unroot_value(&source);
+                        rest
                     });
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4703,7 +4700,7 @@ impl Interpreter {
                         };
 
                         let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
-                            // Get property via get_object_property (invokes getters/Proxy)
+                            // GetV: a primitive source stays the getter receiver.
                             let val = match interp.access_property_on_value(rval, &key) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),

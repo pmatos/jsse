@@ -24,7 +24,7 @@ info: |
   1. Let O be ? ToObject(V).
   2. Return ? O.[[Get]](P, V).
 flags: [async]
-features: [async-iteration, Symbol.asyncIterator]
+features: [async-iteration, Symbol.asyncIterator, Array.fromAsync]
 ---*/
 
 var receivers = [];
@@ -44,4 +44,11 @@ Object.defineProperty(String.prototype, Symbol.asyncIterator, {
   assert.sameValue(receivers[0], "string", "receiver");
   assert.sameValue(seen.length, 1, "iterations");
   assert.sameValue(seen[0], "custom", "value from @@asyncIterator");
+
+  receivers.length = 0;
+  var fromAsync = await Array.fromAsync("abc");
+  assert.sameValue(receivers.length, 1, "Array.fromAsync getter calls");
+  assert.sameValue(receivers[0], "string", "Array.fromAsync receiver");
+  assert.sameValue(fromAsync.length, 1, "Array.fromAsync length");
+  assert.sameValue(fromAsync[0], "custom", "Array.fromAsync value");
 })().then($DONE, $DONE);

@@ -1619,19 +1619,16 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
             Pattern::Object(props) => {
-                // RequireObjectCoercible + ToObject for primitives
-                let obj_val = match self.to_object(&val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Completion::Throw(e),
-                    _ => unreachable!(),
-                };
-                // obj_val is otherwise only a Rust local for the rest of this
+                // RequireObjectCoercible; properties are read with GetV on
+                // `val` itself so accessors see a primitive receiver.
+                propagate!(self.require_object_coercible(&val));
+                // val is otherwise only a Rust local for the rest of this
                 // pattern's binding: property gets, default-value
                 // initializers, and with-scope/Proxy binding resolution can
                 // all run arbitrary user code (and reach a GC safepoint)
                 // before every property has been consumed.
                 self.with_gc_root_scope(|interp| {
-                    interp.gc_root_value(&obj_val);
+                    interp.gc_root_value(&val);
                     let mut excluded_keys = Vec::new();
                     for prop in props {
                         match prop {
@@ -1750,9 +1747,12 @@ impl Interpreter {
                                 }
                             }
                             ObjectPatternProperty::Rest(pat) => {
-                                let rest_val = propagate!(
-                                    interp.bind_object_rest_values(&obj_val, &excluded_keys)
-                                );
+                                // CopyDataProperties: ToObject(source), Get(from, key).
+                                let source = propagate!(interp.to_object(&val));
+                                interp.gc_root_value(&source);
+                                let rest = interp.bind_object_rest_values(&source, &excluded_keys);
+                                interp.gc_unroot_value(&source);
+                                let rest_val = propagate!(rest);
                                 // rest_val is otherwise only a Rust local; bind_pattern's
                                 // binding step (e.g. a with-scope's @@unscopables getter, or
                                 // a Proxy `has` trap) can run arbitrary user code before the

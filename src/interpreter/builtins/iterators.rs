@@ -4026,36 +4026,18 @@ impl Interpreter {
 
     pub(crate) fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let sym_key = self.get_symbol_iterator_key();
-        let iter_fn = if let Some(obj_id) = obj.as_object_id() {
-            if let Some(key) = &sym_key {
-                let val = match self.get_object_property(obj_id, key, obj) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if val.is_undefined() {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-                val
-            } else {
-                return Err(self.create_type_error("is not iterable"));
-            }
-        } else if let Some(key) = &sym_key {
-            if obj.is_nullish() {
-                return Err(self.create_type_error("Cannot convert undefined or null to object"));
-            }
-            // GetV: the primitive itself is the receiver of the @@iterator lookup.
-            let val = match self.access_property_on_value(obj, key) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => JsValue::UNDEFINED,
-            };
-            if val.is_nullish() {
-                return Err(self.create_type_error("is not iterable"));
-            }
-            val
-        } else {
+        let Some(key) = &sym_key else {
             return Err(self.create_type_error("is not iterable"));
+        };
+        if obj.is_nullish() {
+            return Err(self.create_type_error("Cannot convert undefined or null to object"));
+        }
+        // GetMethod(obj, @@iterator): GetV passes a primitive as the receiver.
+        let iter_fn = match self.access_property_on_value(obj, key) {
+            Completion::Normal(v) if !v.is_nullish() => v,
+            Completion::Normal(_) => return Err(self.create_type_error("is not iterable")),
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::UNDEFINED,
         };
         self.get_iterator_from_method(&iter_fn, obj)
     }
