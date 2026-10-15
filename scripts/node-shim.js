@@ -1235,12 +1235,8 @@
     },
   };
 
-  // jsse binds `console` as a lexical const (not a plain global-object
-  // property), so a `globalThis.console = …` reassignment would be shadowed by
-  // bare `console` references in the bundle. Mutate the existing object instead:
-  // its native `log` is writable/configurable and the object is extensible, so
-  // overriding `log` and adding the rest of the method set takes effect for
-  // both `console.x` and bare `console` uses.
+  // Extend the host console in place so existing references to the object also
+  // observe the shimmed methods.
   for (var method in jsseConsole) {
     if (Object.prototype.hasOwnProperty.call(jsseConsole, method)) {
       console[method] = jsseConsole[method];
