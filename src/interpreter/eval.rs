@@ -6413,20 +6413,26 @@ impl Interpreter {
                     .collect();
                 // §10.2.11 step 29: In sloppy mode, the spec creates a separate
                 // lexical environment for let/const/class (child of var env). Our
-                // engine merges them, so when caller_env === var_env, also check
-                // for let/const conflicts within the same function scope.
-                if direct && Rc::ptr_eq(caller_env, var_env) {
-                    let env_b = var_env.borrow();
-                    for name in &all_names {
-                        if let Some(binding) = env_b.bindings.get(name)
-                            && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-                        {
-                            drop(env_b);
-                            return Err(self.create_error(
-                                "SyntaxError",
-                                &format!("Identifier '{}' has already been declared", name),
-                            ));
-                        }
+                // engine merges them into the var environment, so the let/const/class
+                // bindings there are lexical names the walk below never visits,
+                // whether or not the eval sits directly in the function's top level.
+                if direct {
+                    let conflict = {
+                        let env_b = var_env.borrow();
+                        all_names
+                            .iter()
+                            .find(|name| {
+                                env_b.bindings.get(name.as_str()).is_some_and(|binding| {
+                                    matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+                                })
+                            })
+                            .cloned()
+                    };
+                    if let Some(name) = conflict {
+                        return Err(self.create_error(
+                            "SyntaxError",
+                            &format!("Identifier '{}' has already been declared", name),
+                        ));
                     }
                 }
                 // Walk from caller_env up to (but not including) var_env
