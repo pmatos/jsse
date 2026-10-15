@@ -11,6 +11,113 @@ use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
 
+#[cfg(test)]
+mod member_operand_scope_tests {
+    use super::*;
+    use crate::interpreter::types::JsObjectData;
+
+    fn object(interp: &mut Interpreter) -> JsValue {
+        JsValue::object(interp.alloc_object(JsObjectData::new()))
+    }
+
+    fn collect(interp: &mut Interpreter) {
+        interp.gc.request();
+        interp.gc_safepoint();
+    }
+
+    fn assert_live(interp: &Interpreter, value: &JsValue) {
+        assert!(interp.get_object(value.as_object_id().unwrap()).is_some());
+    }
+
+    #[test]
+    fn member_operand_scope_retains_operands_and_preserves_the_pending_prefix() {
+        let mut interp = Interpreter::new();
+        let parent = object(&mut interp);
+        interp.gc_root_value(&parent);
+        let bytecode_parent = object(&mut interp);
+        root_stack_value(&mut interp, &bytecode_parent);
+        let older = object(&mut interp);
+        let base = object(&mut interp);
+        let rhs = object(&mut interp);
+        let mut stack = Vec::new();
+        for value in [&older, &base, &JsValue::number(7.0), &rhs] {
+            push_value(&mut interp, &mut stack, value.clone());
+        }
+        let temp_roots = interp.gc_temp_roots.as_slice().to_vec();
+        let remaining_roots = vec![
+            bytecode_parent.as_object_id().unwrap(),
+            older.as_object_id().unwrap(),
+        ];
+
+        let result = with_member_operands(&mut interp, &mut stack, |interp, [b, key, r]| {
+            assert_eq!(b.as_object_id(), base.as_object_id());
+            assert_eq!(key.as_number(), Some(7.0));
+            assert_eq!(r.as_object_id(), rhs.as_object_id());
+            collect(interp);
+            for value in [&parent, &bytecode_parent, &older, &b, &r] {
+                assert_live(interp, value);
+            }
+            Completion::Normal(r)
+        });
+
+        assert!(matches!(result, Completion::Normal(v) if v.as_object_id() == rhs.as_object_id()));
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].as_object_id(), older.as_object_id());
+        assert_eq!(interp.gc_temp_roots.as_slice(), temp_roots);
+        assert_eq!(interp.gc_bytecode_roots.as_slice(), remaining_roots);
+        collect(&mut interp);
+        assert_live(&interp, &older);
+        assert!(interp.get_object(base.as_object_id().unwrap()).is_none());
+        assert!(interp.get_object(rhs.as_object_id().unwrap()).is_none());
+        pop_value(&mut interp, &mut stack, "pending operand");
+        unroot_stack_value(&mut interp, &bytecode_parent);
+        interp.gc_unroot_value(&parent);
+    }
+
+    #[test]
+    fn member_operand_scope_restores_nested_scopes_on_error() {
+        let mut interp = Interpreter::new();
+        let parent = object(&mut interp);
+        interp.gc_root_value(&parent);
+        let operand = object(&mut interp);
+        let mut stack = Vec::new();
+        // Duplicate roots must still be released in reverse push order.
+        push_value(&mut interp, &mut stack, operand.clone());
+        push_value(&mut interp, &mut stack, operand.clone());
+        let temp_roots = interp.gc_temp_roots.as_slice().to_vec();
+
+        let result: Result<(), JsValue> =
+            with_member_operands(&mut interp, &mut stack, |interp, [base, rhs]| {
+                let outer_roots = interp.gc_temp_roots.as_slice().to_vec();
+                let nested = object(interp);
+                let mut nested_stack = Vec::new();
+                push_value(interp, &mut nested_stack, nested.clone());
+                let error: Result<(), JsValue> =
+                    with_member_operands(interp, &mut nested_stack, |interp, [inner]| {
+                        collect(interp);
+                        for value in [&parent, &base, &rhs, &inner] {
+                            assert_live(interp, value);
+                        }
+                        Err(base)
+                    });
+                assert!(nested_stack.is_empty());
+                assert_eq!(interp.gc_temp_roots.as_slice(), outer_roots);
+                assert!(interp.gc_bytecode_roots.is_empty());
+                error?;
+                Ok(())
+            });
+
+        assert_eq!(result.unwrap_err().as_object_id(), operand.as_object_id());
+        assert!(stack.is_empty());
+        assert_eq!(interp.gc_temp_roots.as_slice(), temp_roots);
+        assert!(interp.gc_bytecode_roots.is_empty());
+        collect(&mut interp);
+        assert_live(&interp, &parent);
+        assert!(interp.get_object(operand.as_object_id().unwrap()).is_none());
+        interp.gc_unroot_value(&parent);
+    }
+}
+
 #[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     let lo = chunk.code[pc] as u16;
