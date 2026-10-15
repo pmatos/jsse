@@ -1637,14 +1637,7 @@ impl Interpreter {
                         match prop {
                             ObjectPatternProperty::Shorthand(name) => {
                                 excluded_keys.push(JsPropertyKey::from(name.clone()));
-                                let v = if let Some(o) = obj_val
-                                    .as_object_id()
-                                    .map(|id| crate::types::JsObject { id })
-                                {
-                                    propagate!(interp.get_object_property(o.id, name, &obj_val))
-                                } else {
-                                    JsValue::UNDEFINED
-                                };
+                                let v = propagate!(interp.access_property_on_value(&val, name));
                                 if kind == BindingKind::Var {
                                     let var_scope = Environment::find_var_scope(env);
                                     if !var_scope.borrow().bindings.contains_key(name) {
@@ -1724,16 +1717,8 @@ impl Interpreter {
                                     };
 
                                     // Step 3: v = GetV(value, propertyName)
-                                    let mut v = if let Some(o) = obj_val
-                                        .as_object_id()
-                                        .map(|id| crate::types::JsObject { id })
-                                    {
-                                        propagate!(
-                                            interp.get_object_property(o.id, &key_str, &obj_val)
-                                        )
-                                    } else {
-                                        JsValue::UNDEFINED
-                                    };
+                                    let mut v =
+                                        propagate!(interp.access_property_on_value(&val, &key_str));
 
                                     // Step 4: If v undefined and initializer present, evaluate
                                     if v.is_undefined()
@@ -1759,16 +1744,8 @@ impl Interpreter {
                                         None => propagate!(interp.env_set(env, binding_name, v)),
                                     }
                                 } else {
-                                    let v = if let Some(o) = obj_val
-                                        .as_object_id()
-                                        .map(|id| crate::types::JsObject { id })
-                                    {
-                                        propagate!(
-                                            interp.get_object_property(o.id, &key_str, &obj_val)
-                                        )
-                                    } else {
-                                        JsValue::UNDEFINED
-                                    };
+                                    let v =
+                                        propagate!(interp.access_property_on_value(&val, &key_str));
                                     propagate!(interp.bind_pattern(pat, v, kind, env));
                                 }
                             }

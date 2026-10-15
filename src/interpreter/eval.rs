@@ -4704,18 +4704,11 @@ impl Interpreter {
 
                         let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
                             // Get property via get_object_property (invokes getters/Proxy)
-                            let val = if let Some(o) = obj_val
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                match interp.get_object_property(o.id, &key, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    Completion::Yield(v) => return Completion::Yield(v),
-                                    _ => JsValue::UNDEFINED,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
+                            let val = match interp.access_property_on_value(rval, &key) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Yield(v) => return Completion::Yield(v),
+                                _ => JsValue::UNDEFINED,
                             };
 
                             let val = if val.is_undefined() {

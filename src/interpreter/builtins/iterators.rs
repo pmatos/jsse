@@ -4040,47 +4040,20 @@ impl Interpreter {
             } else {
                 return Err(self.create_type_error("is not iterable"));
             }
-        } else if obj.is_string() {
-            if let Some(key) = &sym_key {
-                let str_proto_id = self.realm().string_prototype;
-                if let Some(proto_id) = str_proto_id {
-                    let proto_val = JsValue::object(proto_id);
-                    let val = match self.get_object_property(proto_id, key, &proto_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if !val.is_undefined() {
-                        val
-                    } else {
-                        return Err(self.create_type_error("is not iterable"));
-                    }
-                } else {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-            } else {
-                return Err(self.create_type_error("is not iterable"));
-            }
         } else if let Some(key) = &sym_key {
-            let wrapped = match self.to_object(obj) {
+            if obj.is_nullish() {
+                return Err(self.create_type_error("Cannot convert undefined or null to object"));
+            }
+            // GetV: the primitive itself is the receiver of the @@iterator lookup.
+            let val = match self.access_property_on_value(obj, key) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => return Err(self.create_type_error("is not iterable")),
+                _ => JsValue::UNDEFINED,
             };
-            if let Some(wrapped_id) = wrapped.as_object_id() {
-                let val = match self.get_object_property(wrapped_id, key, &wrapped) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if !val.is_nullish() {
-                    val
-                } else {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-            } else {
+            if val.is_nullish() {
                 return Err(self.create_type_error("is not iterable"));
             }
+            val
         } else {
             return Err(self.create_type_error("is not iterable"));
         };
@@ -4117,15 +4090,15 @@ impl Interpreter {
     pub(crate) fn get_async_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let async_sym_key = self.get_symbol_key("asyncIterator");
         if let Some(key) = &async_sym_key {
-            let iter_fn = if let Some(obj_id) = obj.as_object_id() {
-                let val = match self.get_object_property(obj_id, key, obj) {
+            let iter_fn = if obj.is_nullish() {
+                None
+            } else {
+                let val = match self.access_property_on_value(obj, key) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
                 if !val.is_nullish() { Some(val) } else { None }
-            } else {
-                None
             };
             if let Some(iter_fn) = iter_fn {
                 return match self.call_function(&iter_fn, obj, &[]) {
