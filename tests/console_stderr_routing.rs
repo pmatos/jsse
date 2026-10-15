@@ -7,9 +7,9 @@ use std::process::Command;
 
 #[test]
 fn console_global_replacement_suppresses_host_output_in_both_modes() {
-    for flags in [vec![], vec!["--no-bytecode"]] {
+    for flags in [&[][..], &["--no-bytecode"][..]] {
         let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
-            .args(&flags)
+            .args(flags)
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/console-global-property.js"
