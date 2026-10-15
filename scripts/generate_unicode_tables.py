@@ -14,6 +14,7 @@ UCD_FILES = {
     "DerivedGeneralCategory.txt": "extracted/DerivedGeneralCategory.txt",
     "DerivedCoreProperties.txt": "DerivedCoreProperties.txt",
     "DerivedNormalizationProps.txt": "DerivedNormalizationProps.txt",
+    "DerivedBinaryProperties.txt": "extracted/DerivedBinaryProperties.txt",
     "PropList.txt": "PropList.txt",
     "emoji-data.txt": "emoji/emoji-data.txt",
     "PropertyValueAliases.txt": "PropertyValueAliases.txt",
@@ -310,7 +311,7 @@ def generate_rust(
 
     # Build the lookup function
     lines.append(
-        "pub fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {"
+        "pub(crate) fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {"
     )
     lines.append("    if let Some(eq_pos) = content.find('=') {")
     lines.append("        let prop_name = &content[..eq_pos];")
@@ -564,6 +565,10 @@ def main():
             binary_data[name] = merge_ranges(sorted(binary_data[name] + ranges))
         else:
             binary_data[name] = ranges
+
+    derived_binary = parse_ranges(texts["DerivedBinaryProperties.txt"])
+    for name, ranges in derived_binary.items():
+        binary_data[name] = ranges
 
     print(f"Binary properties: {len(binary_data)} values", file=sys.stderr)
 

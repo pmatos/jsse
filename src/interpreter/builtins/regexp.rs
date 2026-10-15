@@ -1326,13 +1326,14 @@ fn validate_unicode_property_escape(content: &str) -> Result<(), String> {
         if !NONBINARY_PROPERTIES.contains(&prop_name) {
             return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
-        // For General_Category, validate the value
-        if (prop_name == "General_Category" || prop_name == "gc")
-            && !VALID_GC_VALUES.contains(&prop_value)
-        {
+        let known = if matches!(prop_name, "General_Category" | "gc") {
+            VALID_GC_VALUES.contains(&prop_value)
+        } else {
+            crate::unicode_tables::lookup_property(content).is_some()
+        };
+        if !known {
             return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
-        // For Script/Script_Extensions, let fancy_regex validate the value
         Ok(())
     } else {
         // Lone value: must be a valid binary property OR a valid GC value
@@ -1857,16 +1858,16 @@ fn parse_v_class_atom(
                         }
                         return Ok(result);
                     }
-                    // Regular property
-                    if let Some(ranges) = property_ranges(&content) {
-                        let ranges_to_use = if negated {
-                            complement_ranges(&ranges)
-                        } else {
-                            ranges.to_vec()
-                        };
-                        for &(lo, hi) in &ranges_to_use {
-                            result.add_range(lo, hi);
-                        }
+                    let Some(ranges) = property_ranges(&content) else {
+                        return Err(format!("Invalid property escape: \\p{{{}}}", content));
+                    };
+                    let ranges_to_use = if negated {
+                        complement_ranges(&ranges)
+                    } else {
+                        ranges.to_vec()
+                    };
+                    for &(lo, hi) in &ranges_to_use {
+                        result.add_range(lo, hi);
                     }
                     return check_range(chars, i, result, flags);
                 }
@@ -3488,12 +3489,10 @@ fn translate_js_pattern_ex_with_sentinels(
                                 );
                             }
                         } else {
-                            // Fallback to fancy_regex for unrecognized properties
-                            result.push('\\');
-                            result.push(next);
-                            result.push('{');
-                            result.push_str(&content);
-                            result.push('}');
+                            return Err(format!(
+                                "Invalid property escape: \\{}{{{}}}",
+                                next, content
+                            ));
                         }
                         i = start + end + 1;
                     } else {
@@ -4662,11 +4661,11 @@ fn parse_v_class_set_character(
             }
             let prop_content: String = chars[prop_start..end].iter().collect();
             *i = end + 1;
-            let prop_name = match prop_content.find('=') {
-                Some(eq_pos) => &prop_content[eq_pos + 1..],
-                None => &prop_content,
-            };
-            let is_string_prop = crate::emoji_strings::lookup_string_property(prop_name).is_some();
+            if let Err(msg) = validate_unicode_property_escape(&prop_content) {
+                return err(&msg);
+            }
+            let is_string_prop =
+                crate::emoji_strings::lookup_string_property(&prop_content).is_some();
             if is_string_prop && negated && after == 'p' {
                 return err("Invalid property name");
             }
@@ -5116,14 +5115,8 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                                 source
                             )
                         })?;
-                        // Check if this is a property-of-strings
-                        let prop_name = if let Some(eq_pos) = content.find('=') {
-                            &content[eq_pos + 1..]
-                        } else {
-                            &content
-                        };
                         let is_string_prop =
-                            crate::emoji_strings::lookup_string_property(prop_name).is_some();
+                            crate::emoji_strings::lookup_string_property(&content).is_some();
                         if is_string_prop {
                             if !v_flag {
                                 // \p{StringProp}/u — only valid with v flag
