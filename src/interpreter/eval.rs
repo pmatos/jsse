@@ -6311,6 +6311,14 @@ impl Interpreter {
         self.dispose_resources(&lex_env, result.update_empty(JsValue::UNDEFINED))
     }
 
+    /// Whether `env` itself holds a let/const/class binding named `name`.
+    fn has_lexical_binding(env: &EnvRef, name: &str) -> bool {
+        env.borrow()
+            .bindings
+            .get(name)
+            .is_some_and(|binding| matches!(binding.kind, BindingKind::Let | BindingKind::Const))
+    }
+
     /// EvalDeclarationInstantiation per spec 19.2.1.4
     fn eval_declaration_instantiation(
         &mut self,
@@ -6417,17 +6425,9 @@ impl Interpreter {
                 // bindings there are lexical names the walk below never visits,
                 // whether or not the eval sits directly in the function's top level.
                 if direct {
-                    let conflict = {
-                        let env_b = var_env.borrow();
-                        all_names
-                            .iter()
-                            .find(|name| {
-                                env_b.bindings.get(name.as_str()).is_some_and(|binding| {
-                                    matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-                                })
-                            })
-                            .cloned()
-                    };
+                    let conflict = all_names
+                        .iter()
+                        .find(|name| Self::has_lexical_binding(var_env, name));
                     if let Some(name) = conflict {
                         return Err(self.create_error(
                             "SyntaxError",
@@ -6624,10 +6624,11 @@ impl Interpreter {
 
                     if !declared_func_or_var.contains(&name) {
                         if direct && !is_global {
-                            let mut conflict = false;
+                            // The function's top-level lexical bindings live in var_env
+                            let mut conflict = Self::has_lexical_binding(var_env, &name);
                             let mut check_env: Option<EnvRef> = Some(caller_env.clone());
                             while let Some(env) = check_env {
-                                if Rc::ptr_eq(&env, var_env) {
+                                if conflict || Rc::ptr_eq(&env, var_env) {
                                     break;
                                 }
                                 if env.borrow().bindings.contains_key(&name) {

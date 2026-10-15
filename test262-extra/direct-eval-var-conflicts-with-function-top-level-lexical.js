@@ -19,7 +19,7 @@ info: |
   Environment Record is created for the function's top-level lexical
   declarations when the function is not strict, so the eval's walk visits it.
 esid: sec-evaldeclarationinstantiation
-flags: [noStrict]
+flags: [noStrict, async]
 ---*/
 
 function outcome(thunk) {
@@ -119,7 +119,7 @@ assert.sameValue(outcome(function() {
 
 assert.sameValue(typeof leaked, "undefined", "no global leak either");
 
-// Generators and async functions share the check
+// Generators, async functions and methods share the check
 assert.sameValue(outcome(function() {
   function* g() {
     let y = 1;
@@ -129,6 +129,93 @@ assert.sameValue(outcome(function() {
   g().next();
   return "no throw";
 }), "SyntaxError", "generator top-level let");
+
+var asyncFn = async function() {
+  let y = 1;
+  { eval("var y"); }
+};
+var asyncGen = async function*() {
+  const y = 1;
+  { eval("var y"); }
+};
+var obj = {
+  method() {
+    class y {}
+    { eval("var y"); }
+  }
+};
+assert.sameValue(outcome(function() { obj.method(); return "no throw"; }), "SyntaxError", "method top-level class");
+
+// Annex B.3.3.3 block-function hoisting in eval skips names that are lexically bound
+assert.sameValue(typeof (function() {
+  let y = 1;
+  eval("{ function y() {} }");
+  return y;
+})(), "number", "eval block function does not overwrite a top-level let");
+
+assert.sameValue((function() {
+  class y { static v = 3 }
+  eval("{ function y() {} }");
+  return y.v;
+})(), 3, "eval block function does not overwrite a top-level class");
+
+assert.sameValue(typeof (function() {
+  let y = 1;
+  { eval("if (true) function y() {}"); }
+  return y;
+})(), "number", "eval if-function does not overwrite a top-level let");
+
+assert.sameValue(typeof (function() {
+  let y = 1;
+  eval("switch (1) { case 1: function y() {} }");
+  return y;
+})(), "number", "eval switch-function does not overwrite a top-level let");
+
+assert.sameValue(typeof (function() {
+  eval("{ function y() {} }");
+  return y;
+})(), "function", "eval block function hoists when there is no lexical binding");
+
+// Bindings that are not function-top-level lexical declarations do not conflict
+assert.sameValue(outcome(function() {
+  { let y = 1; }
+  eval("var y = 2");
+  return y;
+}), 2, "sibling block let");
+
+assert.sameValue(outcome(function() {
+  for (let y = 0; y < 1; y++) {}
+  for (const y of [1]) {}
+  for (let y in { a: 1 }) {}
+  eval("var y = 2");
+  return y;
+}), 2, "for-loop head bindings");
+
+assert.sameValue(outcome(function() {
+  switch (1) { case 1: let y = 1; }
+  eval("var y = 2");
+  return y;
+}), 2, "switch case let");
+
+assert.sameValue(outcome(function() {
+  try { throw 1; } catch (y) {}
+  eval("var y = 2");
+  return y;
+}), 2, "catch parameter scope");
+
+assert.sameValue(outcome(function() {
+  function* g() {
+    { let y = 1; }
+    eval("var y = 2");
+    yield y;
+  }
+  return g().next().value;
+}), 2, "generator sibling block let");
+
+assert.sameValue(outcome(function() {
+  function f(a = eval("var y = 3")) { let y = 2; return y; }
+  return f();
+}), 2, "parameter-expression eval var is separate from a body let");
 
 // Controls
 assert.sameValue(outcome(function() {
@@ -173,3 +260,11 @@ assert.sameValue(outcome(function() {
   eval("'use strict'; var y = 2");
   return y;
 }), 1, "eval code with a Use Strict Directive has its own variable environment");
+
+Promise.all([
+  asyncFn().then(() => "no throw", e => e.constructor.name),
+  asyncGen().next().then(() => "no throw", e => e.constructor.name)
+]).then(function(results) {
+  assert.sameValue(results[0], "SyntaxError", "async function top-level let");
+  assert.sameValue(results[1], "SyntaxError", "async generator top-level const");
+}).then($DONE, $DONE);
