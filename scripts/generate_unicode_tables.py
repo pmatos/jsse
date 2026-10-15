@@ -311,7 +311,7 @@ def generate_rust(
 
     # Build the lookup function
     lines.append(
-        "pub fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {"
+        "pub(crate) fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {"
     )
     lines.append("    if let Some(eq_pos) = content.find('=') {")
     lines.append("        let prop_name = &content[..eq_pos];")

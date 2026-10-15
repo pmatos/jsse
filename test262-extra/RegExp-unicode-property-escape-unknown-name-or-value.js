@@ -101,6 +101,39 @@ valid.forEach(function (c) {
   new RegExp(c[0], c[1]);
 });
 
+var binaryProperties = [
+  "ASCII", "ASCII_Hex_Digit", "AHex", "Alphabetic", "Alpha", "Any", "Assigned",
+  "Bidi_Control", "Bidi_C", "Bidi_Mirrored", "Bidi_M", "Case_Ignorable", "CI",
+  "Cased", "Changes_When_Casefolded", "CWCF", "Changes_When_Casemapped",
+  "CWCM", "Changes_When_Lowercased", "CWL", "Changes_When_NFKC_Casefolded",
+  "CWKCF", "Changes_When_Titlecased", "CWT", "Changes_When_Uppercased", "CWU",
+  "Dash", "Default_Ignorable_Code_Point", "DI", "Deprecated", "Dep",
+  "Diacritic", "Dia", "Emoji", "Emoji_Component", "EComp", "Emoji_Modifier",
+  "EMod", "Emoji_Modifier_Base", "EBase", "Emoji_Presentation", "EPres",
+  "Extended_Pictographic", "ExtPict", "Extender", "Ext", "Grapheme_Base",
+  "Gr_Base", "Grapheme_Extend", "Gr_Ext", "Hex_Digit", "Hex",
+  "IDS_Binary_Operator", "IDSB", "IDS_Trinary_Operator", "IDST", "ID_Continue",
+  "IDC", "ID_Start", "IDS", "Ideographic", "Ideo", "Join_Control", "Join_C",
+  "Logical_Order_Exception", "LOE", "Lowercase", "Lower", "Math",
+  "Noncharacter_Code_Point", "NChar", "Pattern_Syntax", "Pat_Syn",
+  "Pattern_White_Space", "Pat_WS", "Quotation_Mark", "QMark", "Radical",
+  "Regional_Indicator", "RI", "Sentence_Terminal", "STerm", "Soft_Dotted",
+  "SD", "Terminal_Punctuation", "Term", "Unified_Ideograph", "UIdeo",
+  "Uppercase", "Upper", "Variation_Selector", "VS", "White_Space", "space",
+  "XID_Continue", "XIDC", "XID_Start", "XIDS"
+];
+
+binaryProperties.forEach(function (name) {
+  ["u", "v"].forEach(function (flag) {
+    new RegExp("\\p{" + name + "}", flag);
+    new RegExp("\\P{" + name + "}", flag);
+    new RegExp("[\\p{" + name + "}]", flag);
+  });
+});
+
+assert(/\p{Bidi_Mirrored}/u.test("("), "Bidi_Mirrored matches (");
+assert(!/\p{Bidi_M}/u.test("a"), "Bidi_M does not match a");
+
 assert(/\p{Script=Latin}/u.test("a"), "Script=Latin matches a");
 assert(!/\p{Script=Latin}/u.test("1"), "Script=Latin does not match 1");
 assert(/[\p{scx=Grek}]/v.test("α"), "scx=Grek matches alpha");

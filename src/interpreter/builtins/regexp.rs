@@ -4664,14 +4664,11 @@ fn parse_v_class_set_character(
             }
             let prop_content: String = chars[prop_start..end].iter().collect();
             *i = end + 1;
-            if validate_unicode_property_escape(&prop_content).is_err() {
-                return err("Invalid property name");
+            if let Err(msg) = validate_unicode_property_escape(&prop_content) {
+                return err(&msg);
             }
-            let prop_name = match prop_content.find('=') {
-                Some(eq_pos) => &prop_content[eq_pos + 1..],
-                None => &prop_content,
-            };
-            let is_string_prop = crate::emoji_strings::lookup_string_property(prop_name).is_some();
+            let is_string_prop =
+                crate::emoji_strings::lookup_string_property(&prop_content).is_some();
             if is_string_prop && negated && after == 'p' {
                 return err("Invalid property name");
             }
@@ -5121,14 +5118,8 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                                 source
                             )
                         })?;
-                        // Check if this is a property-of-strings
-                        let prop_name = if let Some(eq_pos) = content.find('=') {
-                            &content[eq_pos + 1..]
-                        } else {
-                            &content
-                        };
                         let is_string_prop =
-                            crate::emoji_strings::lookup_string_property(prop_name).is_some();
+                            crate::emoji_strings::lookup_string_property(&content).is_some();
                         if is_string_prop {
                             if !v_flag {
                                 // \p{StringProp}/u — only valid with v flag
