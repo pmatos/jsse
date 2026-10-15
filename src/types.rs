@@ -276,7 +276,7 @@ impl JsPropertyKey {
 
 /// Well-known symbol names in the index order of
 /// [`JsPropertyKey::cached_well_known_symbol`].
-const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [
+pub(crate) const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [
     "iterator",
     "hasInstance",
     "toPrimitive",

@@ -32,24 +32,7 @@ impl Interpreter {
             if let Some(symbol_id) = symbol_fn.as_object_id()
                 && let Some(obj) = self.get_object(symbol_id)
             {
-                let well_known = [
-                    "iterator",
-                    "hasInstance",
-                    "toPrimitive",
-                    "toStringTag",
-                    "isConcatSpreadable",
-                    "species",
-                    "match",
-                    "replace",
-                    "search",
-                    "split",
-                    "matchAll",
-                    "unscopables",
-                    "asyncIterator",
-                    "dispose",
-                    "asyncDispose",
-                ];
-                for name in well_known {
+                for name in crate::types::WELL_KNOWN_SYMBOL_NAMES {
                     let sym_val = if let Some(existing) = self.well_known_symbols.get(name) {
                         JsValue::symbol(existing.clone())
                     } else {
