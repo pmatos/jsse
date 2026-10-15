@@ -1362,14 +1362,13 @@ impl Interpreter {
         source_val: &JsValue,
         excluded: &[JsPropertyKey],
     ) -> Completion {
+        let from = propagate!(self.to_object(source_val));
         let rest_obj_id = self.create_object_id();
-        if let Some(o) = source_val
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        {
+        if let Some(from_id) = from.as_object_id() {
             let pairs = propagate!(self.with_gc_root_scope(|interp| {
+                interp.gc_root_value(&from);
                 interp.gc_root_id(rest_obj_id);
-                interp.copy_data_properties(o.id, source_val, excluded)
+                interp.copy_data_properties(from_id, &from, excluded)
             }));
             let mut rest = self.get_object_cell_expect(rest_obj_id).borrow_mut();
             rest.properties.reserve(pairs.len());
@@ -1392,12 +1391,12 @@ impl Interpreter {
         source_val: JsValue,
         excluded_vals: &[JsValue],
     ) -> Completion {
-        let obj_val = propagate!(self.to_object(&source_val));
+        propagate!(self.require_object_coercible(&source_val));
         let mut excluded_keys = Vec::with_capacity(excluded_vals.len());
         for v in excluded_vals {
             excluded_keys.push(propagate!(self.to_property_key(v)));
         }
-        self.bind_object_rest_values(&obj_val, &excluded_keys)
+        self.bind_object_rest_values(&source_val, &excluded_keys)
     }
 
     /// Binds `val` to `pat`, declaring/initializing names in `env` per `kind`.
@@ -1747,12 +1746,9 @@ impl Interpreter {
                                 }
                             }
                             ObjectPatternProperty::Rest(pat) => {
-                                // CopyDataProperties: ToObject(source), Get(from, key).
-                                let source = propagate!(interp.to_object(&val));
-                                interp.gc_root_value(&source);
-                                let rest = interp.bind_object_rest_values(&source, &excluded_keys);
-                                interp.gc_unroot_value(&source);
-                                let rest_val = propagate!(rest);
+                                let rest_val = propagate!(
+                                    interp.bind_object_rest_values(&val, &excluded_keys)
+                                );
                                 // rest_val is otherwise only a Rust local; bind_pattern's
                                 // binding step (e.g. a with-scope's @@unscopables getter, or
                                 // a Proxy `has` trap) can run arbitrary user code before the

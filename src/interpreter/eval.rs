@@ -1280,41 +1280,40 @@ impl Interpreter {
     ) -> Completion {
         // §6.2.5.5 GetValue permits eliding the transient primitive wrapper,
         // but its prototype [[Get]] must still receive the primitive itself.
-        let name = name.to_js_property_key();
         if let Some(id) = base_val.as_object_id() {
-            self.get_object_property(id, &name, base_val)
+            self.get_object_property(id, name, base_val)
         } else if let Some(s) = base_val.as_string() {
-            if name.eq_str("length") {
+            if name.as_property_key_bytes() == b"length" {
                 Completion::Normal(JsValue::number(s.len() as f64))
-            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(&name, s.len())
+            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(name, s.len())
             {
                 Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else if let Some(sp_id) = self.realm().string_prototype {
-                self.get_object_property(sp_id, &name, base_val)
+                self.get_object_property(sp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_number() {
             if let Some(np_id) = self.realm().number_prototype {
-                self.get_object_property(np_id, &name, base_val)
+                self.get_object_property(np_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_boolean() {
             if let Some(bp_id) = self.realm().boolean_prototype {
-                self.get_object_property(bp_id, &name, base_val)
+                self.get_object_property(bp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_symbol() {
             if let Some(sp_id) = self.realm().symbol_prototype {
-                self.get_object_property(sp_id, &name, base_val)
+                self.get_object_property(sp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_bigint() {
             if let Some(bp_id) = self.realm().bigint_prototype {
-                self.get_object_property(bp_id, &name, base_val)
+                self.get_object_property(bp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
@@ -4640,12 +4639,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let result = self.with_destruct_lref(precomp, inner, env, |interp| {
-                        // CopyDataProperties: ToObject(source), Get(from, key).
-                        let source = propagate!(interp.to_object(rval));
-                        interp.gc_root_value(&source);
-                        let rest = interp.bind_object_rest_values(&source, &excluded_keys);
-                        interp.gc_unroot_value(&source);
-                        rest
+                        interp.bind_object_rest_values(rval, &excluded_keys)
                     });
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4701,12 +4695,7 @@ impl Interpreter {
 
                         let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
                             // GetV: a primitive source stays the getter receiver.
-                            let val = match interp.access_property_on_value(rval, &key) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                Completion::Yield(v) => return Completion::Yield(v),
-                                _ => JsValue::UNDEFINED,
-                            };
+                            let val = propagate!(interp.access_property_on_value(rval, &key));
 
                             let val = if val.is_undefined() {
                                 if let Some(default) = default_expr {

@@ -4035,9 +4035,8 @@ impl Interpreter {
         // GetMethod(obj, @@iterator): GetV passes a primitive as the receiver.
         let iter_fn = match self.access_property_on_value(obj, key) {
             Completion::Normal(v) if !v.is_nullish() => v,
-            Completion::Normal(_) => return Err(self.create_type_error("is not iterable")),
             Completion::Throw(e) => return Err(e),
-            _ => JsValue::UNDEFINED,
+            _ => return Err(self.create_type_error("is not iterable")),
         };
         self.get_iterator_from_method(&iter_fn, obj)
     }
@@ -4075,12 +4074,11 @@ impl Interpreter {
             let iter_fn = if obj.is_nullish() {
                 None
             } else {
-                let val = match self.access_property_on_value(obj, key) {
-                    Completion::Normal(v) => v,
+                match self.access_property_on_value(obj, key) {
+                    Completion::Normal(v) if !v.is_nullish() => Some(v),
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if !val.is_nullish() { Some(val) } else { None }
+                    _ => None,
+                }
             };
             if let Some(iter_fn) = iter_fn {
                 return match self.call_function(&iter_fn, obj, &[]) {
