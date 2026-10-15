@@ -1326,15 +1326,12 @@ fn validate_unicode_property_escape(content: &str) -> Result<(), String> {
         if !NONBINARY_PROPERTIES.contains(&prop_name) {
             return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
-        // For General_Category, validate the value
-        if (prop_name == "General_Category" || prop_name == "gc")
-            && !VALID_GC_VALUES.contains(&prop_value)
-        {
-            return Err(format!("Invalid property escape: \\p{{{}}}", content));
-        }
-        if !matches!(prop_name, "General_Category" | "gc")
-            && crate::unicode_tables::lookup_property(content).is_none()
-        {
+        let known = if matches!(prop_name, "General_Category" | "gc") {
+            VALID_GC_VALUES.contains(&prop_value)
+        } else {
+            crate::unicode_tables::lookup_property(content).is_some()
+        };
+        if !known {
             return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
         Ok(())
