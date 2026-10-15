@@ -83,20 +83,77 @@ pub fn bench_parse(src: &str) -> bool {
 }
 
 /// Parses and runs `src` as a script in a fresh interpreter on the current
-/// thread, returning `false` on a parse error or an uncaught exception.
+/// thread, returning `false` on a parse error or a synchronous uncaught exception.
+/// Promise rejections must be checked with [`bench_eval_with_check`].
 /// Backs the CodSpeed benchmarks (`benches/engine.rs`).
 #[doc(hidden)]
 pub fn bench_eval(src: &str) -> bool {
+    bench_eval_with_check(src, "")
+}
+
+/// Runs `src`, drains its jobs, then runs a synchronous validation script in
+/// the same interpreter. Async workloads should store a result on fulfillment;
+/// `check` must reject both a wrong result and a missing result (e.g. rejection
+/// or a callback that never ran). An assertion inside a promise callback alone
+/// only rejects its promise and cannot fail this harness.
+#[doc(hidden)]
+pub fn bench_eval_with_check(src: &str, check: &str) -> bool {
     let Ok(program) = parser::Parser::new(src).and_then(|mut p| p.parse_program()) else {
         return false;
     };
     let mut interp = interpreter::Interpreter::new();
-    !matches!(interp.run(&program), interpreter::Completion::Throw(_))
+    if !matches!(
+        interp.run(&program),
+        interpreter::Completion::Normal(_) | interpreter::Completion::Empty
+    ) {
+        return false;
+    }
+    if check.is_empty() {
+        return true;
+    }
+    let Ok(validation) = parser::Parser::new(check).and_then(|mut p| p.parse_program()) else {
+        return false;
+    };
+    matches!(
+        interp.run(&validation),
+        interpreter::Completion::Normal(_) | interpreter::Completion::Empty
+    )
 }
 
 #[cfg(test)]
 mod lib_tests {
     use super::*;
+
+    #[test]
+    fn benchmark_validation_observes_drained_promise_jobs() {
+        run_on_engine_stack(|| {
+            let check = "if (result !== 42) throw new Error('wrong or missing result');";
+            assert!(bench_eval_with_check(
+                "var result; Promise.resolve(41).then(v => { result = v + 1; });",
+                check,
+            ));
+            for src in [
+                "var result; Promise.resolve(0).then(v => { result = v; });",
+                "var result; Promise.resolve().then(() => { throw new Error('bad'); });",
+                "var result; Promise.reject(new Error('bad')).then(v => { result = v; });",
+                "var result; new Promise(() => {}).then(v => { result = v; });",
+            ] {
+                assert!(!bench_eval_with_check(src, check), "accepted: {src}");
+            }
+        });
+    }
+
+    #[test]
+    fn benchmark_validation_rejects_script_failures() {
+        run_on_engine_stack(|| {
+            assert!(bench_eval(""));
+            assert!(bench_eval_with_check("", ""));
+            assert!(!bench_eval("throw new Error('bad');"));
+            assert!(!bench_eval("let ="));
+            assert!(!bench_eval_with_check("", "throw new Error('bad check');"));
+            assert!(!bench_eval_with_check("", "let ="));
+        });
+    }
 
     #[test]
     fn run_on_engine_stack_returns_result() {
