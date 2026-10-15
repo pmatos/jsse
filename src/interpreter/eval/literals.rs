@@ -54,7 +54,10 @@ pub(crate) fn static_property_key(key: &PropertyKey) -> Option<JsPropertyKey> {
 
 pub(crate) fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
     let mut code_units: Vec<u16> = prefix.encode_utf16().collect();
-    code_units.extend_from_slice(key.to_js_string().as_units());
+    let name = key
+        .symbol_function_name()
+        .unwrap_or_else(|| key.to_js_string());
+    code_units.extend_from_slice(name.as_units());
     JsPropertyKey::from_js_string(&JsString::from_vec(code_units))
 }
 
@@ -573,18 +576,15 @@ impl Interpreter {
                             (key.clone(), key)
                         }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
-                            Completion::Normal(v) => {
-                                let symbol_name = v
-                                    .as_symbol()
-                                    .map(|sym| JsPropertyKey::from(sym.function_name()));
-                                match self.to_property_key(&v) {
-                                    Ok(s) => {
-                                        let name = symbol_name.unwrap_or_else(|| s.clone());
-                                        (s, name)
-                                    }
-                                    Err(e) => return Completion::Throw(e),
+                            Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(s) => {
+                                    let name = s
+                                        .symbol_function_name()
+                                        .map_or_else(|| s.clone(), JsPropertyKey::from);
+                                    (s, name)
                                 }
-                            }
+                                Err(e) => return Completion::Throw(e),
+                            },
                             other => return other,
                         },
                         PropertyKey::Private(name) => {
@@ -1322,14 +1322,13 @@ impl Interpreter {
                                 other => return other,
                             };
                             self.gc_root_value(&v);
-                            let symbol_name = v
-                                .as_symbol()
-                                .map(|sym| JsPropertyKey::from(sym.function_name()));
                             let pk = match self.to_property_key(&v) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let name = symbol_name.unwrap_or_else(|| pk.clone());
+                            let name = pk
+                                .symbol_function_name()
+                                .map_or_else(|| pk.clone(), JsPropertyKey::from);
                             (pk, name)
                         }
                         _ => {

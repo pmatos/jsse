@@ -491,20 +491,20 @@ impl JsPropertyKey {
         self.is_symbol().then(|| &self.bytes[1..])
     }
 
-    /// The `name` of an intrinsic well-known symbol key (`Symbol(Symbol.name)`).
     pub(crate) fn well_known_symbol_name(&self) -> Option<&str> {
-        let encoding = std::str::from_utf8(self.symbol_encoding()?).ok()?;
-        let name = encoding.strip_prefix("Symbol(Symbol.")?.strip_suffix(')')?;
-        (!name.contains('#')).then_some(name)
+        let encoding = self.symbol_encoding()?;
+        let name = encoding
+            .strip_prefix(b"Symbol(Symbol.")?
+            .strip_suffix(b")")?;
+        std::str::from_utf8(name).ok()
     }
 
-    /// The SetFunctionName name a Symbol-valued key gives a function, or
-    /// `None` for a String key.
     pub(crate) fn symbol_function_name(&self) -> Option<JsString> {
         if let Some(name) = self.well_known_symbol_name() {
-            return Some(bracketed_description(Some(&JsString::from_str(&format!(
-                "Symbol.{name}"
-            )))));
+            let mut units: Vec<u16> = "[Symbol.".encode_utf16().collect();
+            units.extend(name.encode_utf16());
+            units.push(u16::from(b']'));
+            return Some(JsString::from_vec(units));
         }
         let (description, _) = self.user_symbol_parts()?;
         Some(bracketed_description(description.as_ref()))
@@ -737,13 +737,17 @@ impl JsSymbol {
 
     /// Convert to the internal Symbol-valued property key. Well-known symbols
     /// use a stable key without an id, so bootstrap lookups can construct the
-    /// same key directly; every other symbol includes its unique id. The
-    /// description is never consulted: it is not an identity.
+    /// same key directly; every other symbol includes its unique id. The key
+    /// also carries the description (WTF-8) so it can be recovered from the key
+    /// alone; identity is the id, never the description.
     pub(crate) fn to_property_key(&self) -> JsPropertyKey {
         if let Some(index) = self.data.well_known {
             return WELL_KNOWN_SYMBOL_KEYS[index as usize].clone();
         }
-        let mut bytes = vec![SYMBOL_PROPERTY_KEY_SIGIL];
+        use std::io::Write as _;
+        let description_len = self.description().map_or(0, |d| d.len() * 3);
+        let mut bytes = Vec::with_capacity(description_len + 32);
+        bytes.push(SYMBOL_PROPERTY_KEY_SIGIL);
         match self.description() {
             Some(desc) => {
                 bytes.extend_from_slice(b"Symbol(");
@@ -752,14 +756,12 @@ impl JsSymbol {
             }
             None => bytes.extend_from_slice(b"Symbol#"),
         }
-        bytes.extend_from_slice(self.id().to_string().as_bytes());
+        let _ = write!(bytes, "{}", self.id());
         JsPropertyKey {
             bytes: Arc::from(bytes),
         }
     }
 
-    /// SymbolDescriptiveString (§20.4.3.3.1), built from code units so a lone
-    /// surrogate in the description survives.
     pub(crate) fn descriptive_string(&self) -> JsString {
         let desc = self.description().map_or(&[][..], JsString::as_units);
         let mut units = Vec::with_capacity(desc.len() + 8);
@@ -767,12 +769,6 @@ impl JsSymbol {
         units.extend_from_slice(desc);
         units.push(u16::from(b')'));
         JsString::from_vec(units)
-    }
-
-    /// The SetFunctionName (§10.2.9) name for a function whose property key is
-    /// this symbol: `[description]`, or the empty string for no description.
-    pub(crate) fn function_name(&self) -> JsString {
-        bracketed_description(self.description())
     }
 }
 

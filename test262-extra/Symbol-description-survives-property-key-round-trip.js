@@ -72,3 +72,41 @@ class D {
 var d = new D();
 assert.sameValue(d[lone].name, '[a\ud800b]', "instance field function name");
 assert.sameValue(d[empty].name, '[]', "instance field function name with empty description");
+
+var accessors = Object.getOwnPropertyDescriptor({ get [lone]() {}, set [lone](v) {} }, lone);
+assert.sameValue(accessors.get.name, 'get [a\ud800b]', "object literal getter name");
+assert.sameValue(accessors.set.name, 'set [a\ud800b]', "object literal setter name");
+var emptyAccessor = Object.getOwnPropertyDescriptor({ get [empty]() {} }, empty);
+assert.sameValue(emptyAccessor.get.name, 'get []', "getter name with empty description");
+
+class G {
+  get [lone]() {}
+  static set [lone](v) {}
+}
+assert.sameValue(Object.getOwnPropertyDescriptor(G.prototype, lone).get.name, 'get [a\ud800b]', "class getter name");
+assert.sameValue(Object.getOwnPropertyDescriptor(G, lone).set.name, 'set [a\ud800b]', "static setter name");
+
+var coerced = { [Symbol.toPrimitive]: function() { return lone; } };
+assert.sameValue(
+  Object.getOwnPropertyDescriptor({ get [coerced]() {} }, lone).get.name,
+  'get [a\ud800b]',
+  "getter name when the computed key coerces to a Symbol"
+);
+assert.sameValue({ [coerced]: function() {} }[lone].name, '[a\ud800b]', "method name when the computed key coerces to a Symbol");
+assert.sameValue(
+  Object.getOwnPropertyDescriptor(class { static get [coerced]() {} }, lone).get.name,
+  'get [a\ud800b]',
+  "class getter name when the computed key coerces to a Symbol"
+);
+
+var registered = Symbol.for('');
+assert.sameValue(Object.getOwnPropertySymbols(holder(registered))[0], registered, "registry symbol identity");
+assert.sameValue(Object.getOwnPropertySymbols(holder(registered))[0].description, "", "registry symbol empty description");
+assert.sameValue(Symbol.keyFor(Object.getOwnPropertySymbols(holder(registered))[0]), "", "registry symbol keyFor");
+
+assert.sameValue({ [Symbol.iterator]: function() {} }[Symbol.iterator].name, '[Symbol.iterator]', "well-known symbol method name");
+assert.sameValue(
+  Object.getOwnPropertyDescriptor(class { static get [Symbol.species]() {} }, Symbol.species).get.name,
+  'get [Symbol.species]',
+  "well-known symbol getter name"
+);
