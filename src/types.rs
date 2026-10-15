@@ -304,6 +304,86 @@ pub(crate) enum JsPropertyKeyParseError<E> {
     Value(E),
 }
 
+/// Appends `units` as WTF-8: ordinary UTF-8 for well-formed text and the
+/// canonical three-byte form for a lone surrogate.
+fn push_wtf8(units: &[u16], bytes: &mut Vec<u8>) {
+    let mut i = 0;
+    while i < units.len() {
+        let unit = units[i];
+        if (0xD800..=0xDBFF).contains(&unit)
+            && i + 1 < units.len()
+            && (0xDC00..=0xDFFF).contains(&units[i + 1])
+        {
+            let code_point =
+                ((unit as u32 - 0xD800) << 10) + (units[i + 1] as u32 - 0xDC00) + 0x10000;
+            bytes.push((0xF0 | (code_point >> 18)) as u8);
+            bytes.push((0x80 | ((code_point >> 12) & 0x3F)) as u8);
+            bytes.push((0x80 | ((code_point >> 6) & 0x3F)) as u8);
+            bytes.push((0x80 | (code_point & 0x3F)) as u8);
+            i += 2;
+        } else if unit < 0x80 {
+            bytes.push(unit as u8);
+            i += 1;
+        } else if unit < 0x800 {
+            bytes.push((0xC0 | (unit >> 6)) as u8);
+            bytes.push((0x80 | (unit & 0x3F)) as u8);
+            i += 1;
+        } else {
+            bytes.push((0xE0 | (unit >> 12)) as u8);
+            bytes.push((0x80 | ((unit >> 6) & 0x3F)) as u8);
+            bytes.push((0x80 | (unit & 0x3F)) as u8);
+            i += 1;
+        }
+    }
+}
+
+fn bracketed_description(description: Option<&JsString>) -> JsString {
+    let Some(desc) = description else {
+        return JsString::from_str("");
+    };
+    let mut units = Vec::with_capacity(desc.len() + 2);
+    units.push(u16::from(b'['));
+    units.extend_from_slice(desc.as_units());
+    units.push(u16::from(b']'));
+    JsString::from_vec(units)
+}
+
+/// Decodes WTF-8 produced by `push_wtf8` back to UTF-16 code units.
+fn wtf8_to_js_string(bytes: &[u8]) -> JsString {
+    let mut units = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let first = bytes[i];
+        if first < 0x80 {
+            units.push(first as u16);
+            i += 1;
+        } else if first < 0xE0 {
+            debug_assert!(i + 1 < bytes.len());
+            let code_point = ((first as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
+            units.push(code_point as u16);
+            i += 2;
+        } else if first < 0xF0 {
+            debug_assert!(i + 2 < bytes.len());
+            let code_point = ((first as u32 & 0x0F) << 12)
+                | ((bytes[i + 1] as u32 & 0x3F) << 6)
+                | (bytes[i + 2] as u32 & 0x3F);
+            units.push(code_point as u16);
+            i += 3;
+        } else {
+            debug_assert!(i + 3 < bytes.len());
+            let code_point = ((first as u32 & 0x07) << 18)
+                | ((bytes[i + 1] as u32 & 0x3F) << 12)
+                | ((bytes[i + 2] as u32 & 0x3F) << 6)
+                | (bytes[i + 3] as u32 & 0x3F);
+            let offset = code_point - 0x10000;
+            units.push((0xD800 + (offset >> 10)) as u16);
+            units.push((0xDC00 + (offset & 0x3FF)) as u16);
+            i += 4;
+        }
+    }
+    JsString::from_vec(units)
+}
+
 impl JsPropertyKey {
     pub(crate) fn from_str(s: &str) -> Self {
         Self {
@@ -343,36 +423,7 @@ impl JsPropertyKey {
     pub(crate) fn from_js_string(s: &JsString) -> Self {
         let units = s.as_units();
         let mut bytes = Vec::with_capacity(units.len() * 3);
-        let mut i = 0;
-        while i < units.len() {
-            let unit = units[i];
-            if (0xD800..=0xDBFF).contains(&unit)
-                && i + 1 < units.len()
-                && (0xDC00..=0xDFFF).contains(&units[i + 1])
-            {
-                let code_point =
-                    ((unit as u32 - 0xD800) << 10) + (units[i + 1] as u32 - 0xDC00) + 0x10000;
-                bytes.push((0xF0 | (code_point >> 18)) as u8);
-                bytes.push((0x80 | ((code_point >> 12) & 0x3F)) as u8);
-                bytes.push((0x80 | ((code_point >> 6) & 0x3F)) as u8);
-                bytes.push((0x80 | (code_point & 0x3F)) as u8);
-                i += 2;
-            } else if unit < 0x80 {
-                bytes.push(unit as u8);
-                i += 1;
-            } else if unit < 0x800 {
-                bytes.push((0xC0 | (unit >> 6)) as u8);
-                bytes.push((0x80 | (unit & 0x3F)) as u8);
-                i += 1;
-            } else {
-                // This is ordinary three-byte UTF-8 for BMP scalars and the
-                // canonical WTF-8 encoding for a lone surrogate.
-                bytes.push((0xE0 | (unit >> 12)) as u8);
-                bytes.push((0x80 | ((unit >> 6) & 0x3F)) as u8);
-                bytes.push((0x80 | (unit & 0x3F)) as u8);
-                i += 1;
-            }
-        }
+        push_wtf8(units, &mut bytes);
         Self {
             bytes: Arc::from(bytes),
         }
@@ -434,9 +485,48 @@ impl JsPropertyKey {
         self.bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
     }
 
-    pub(crate) fn symbol_encoding(&self) -> Option<&str> {
-        self.is_symbol()
-            .then(|| std::str::from_utf8(&self.bytes[1..]).expect("Symbol encoding is UTF-8"))
+    /// The bytes after the symbol sigil. The description inside is WTF-8, so
+    /// this is not necessarily valid UTF-8.
+    pub(crate) fn symbol_encoding(&self) -> Option<&[u8]> {
+        self.is_symbol().then(|| &self.bytes[1..])
+    }
+
+    /// The `name` of an intrinsic well-known symbol key (`Symbol(Symbol.name)`).
+    pub(crate) fn well_known_symbol_name(&self) -> Option<&str> {
+        let encoding = std::str::from_utf8(self.symbol_encoding()?).ok()?;
+        let name = encoding.strip_prefix("Symbol(Symbol.")?.strip_suffix(')')?;
+        (!name.contains('#')).then_some(name)
+    }
+
+    /// The SetFunctionName name a Symbol-valued key gives a function, or
+    /// `None` for a String key.
+    pub(crate) fn symbol_function_name(&self) -> Option<JsString> {
+        if let Some(name) = self.well_known_symbol_name() {
+            return Some(bracketed_description(Some(&JsString::from_str(&format!(
+                "Symbol.{name}"
+            )))));
+        }
+        let (description, _) = self.user_symbol_parts()?;
+        Some(bracketed_description(description.as_ref()))
+    }
+
+    /// The `[[Description]]` and id carried by a non-well-known symbol key:
+    /// `Symbol(<WTF-8 description>)#<id>`, or `Symbol#<id>` when the
+    /// description is undefined (so `Symbol('')` and `Symbol()` stay apart).
+    pub(crate) fn user_symbol_parts(&self) -> Option<(Option<JsString>, u64)> {
+        let encoding = self.symbol_encoding()?;
+        let parse_id =
+            |digits: &[u8]| -> Option<u64> { std::str::from_utf8(digits).ok()?.parse().ok() };
+        if let Some(digits) = encoding.strip_prefix(b"Symbol#") {
+            return Some((None, parse_id(digits)?));
+        }
+        let rest = encoding.strip_prefix(b"Symbol(")?;
+        let hash = rest.iter().rposition(|&b| b == b'#')?;
+        let description = rest[..hash].strip_suffix(b")")?;
+        Some((
+            Some(wtf8_to_js_string(description)),
+            parse_id(&rest[hash + 1..])?,
+        ))
     }
 
     pub(crate) fn eq_str(&self, other: &str) -> bool {
@@ -461,38 +551,7 @@ impl JsPropertyKey {
         } else {
             &self.bytes
         };
-        let mut units = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let first = bytes[i];
-            if first < 0x80 {
-                units.push(first as u16);
-                i += 1;
-            } else if first < 0xE0 {
-                debug_assert!(i + 1 < bytes.len());
-                let code_point = ((first as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
-                units.push(code_point as u16);
-                i += 2;
-            } else if first < 0xF0 {
-                debug_assert!(i + 2 < bytes.len());
-                let code_point = ((first as u32 & 0x0F) << 12)
-                    | ((bytes[i + 1] as u32 & 0x3F) << 6)
-                    | (bytes[i + 2] as u32 & 0x3F);
-                units.push(code_point as u16);
-                i += 3;
-            } else {
-                debug_assert!(i + 3 < bytes.len());
-                let code_point = ((first as u32 & 0x07) << 18)
-                    | ((bytes[i + 1] as u32 & 0x3F) << 12)
-                    | ((bytes[i + 2] as u32 & 0x3F) << 6)
-                    | (bytes[i + 3] as u32 & 0x3F);
-                let offset = code_point - 0x10000;
-                units.push((0xD800 + (offset >> 10)) as u16);
-                units.push((0xDC00 + (offset & 0x3FF)) as u16);
-                i += 4;
-            }
-        }
-        JsString::from_vec(units)
+        wtf8_to_js_string(bytes)
     }
 }
 
@@ -684,11 +743,36 @@ impl JsSymbol {
         if let Some(index) = self.data.well_known {
             return WELL_KNOWN_SYMBOL_KEYS[index as usize].clone();
         }
-        let encoding = match self.description() {
-            Some(desc) => format!("Symbol({})#{}", desc, self.id()),
-            None => format!("Symbol()#{}", self.id()),
-        };
-        JsPropertyKey::from_symbol_encoding(encoding)
+        let mut bytes = vec![SYMBOL_PROPERTY_KEY_SIGIL];
+        match self.description() {
+            Some(desc) => {
+                bytes.extend_from_slice(b"Symbol(");
+                push_wtf8(desc.as_units(), &mut bytes);
+                bytes.extend_from_slice(b")#");
+            }
+            None => bytes.extend_from_slice(b"Symbol#"),
+        }
+        bytes.extend_from_slice(self.id().to_string().as_bytes());
+        JsPropertyKey {
+            bytes: Arc::from(bytes),
+        }
+    }
+
+    /// SymbolDescriptiveString (§20.4.3.3.1), built from code units so a lone
+    /// surrogate in the description survives.
+    pub(crate) fn descriptive_string(&self) -> JsString {
+        let desc = self.description().map_or(&[][..], JsString::as_units);
+        let mut units = Vec::with_capacity(desc.len() + 8);
+        units.extend("Symbol(".encode_utf16());
+        units.extend_from_slice(desc);
+        units.push(u16::from(b')'));
+        JsString::from_vec(units)
+    }
+
+    /// The SetFunctionName (§10.2.9) name for a function whose property key is
+    /// this symbol: `[description]`, or the empty string for no description.
+    pub(crate) fn function_name(&self) -> JsString {
+        bracketed_description(self.description())
     }
 }
 
@@ -1624,8 +1708,38 @@ mod tests {
         assert!(symbol.is_symbol());
         assert!(!text.is_symbol());
         assert_ne!(symbol, text);
-        assert_eq!(symbol.symbol_encoding(), Some("Symbol(x)#7"));
+        assert_eq!(symbol.symbol_encoding(), Some(&b"Symbol(x)#7"[..]));
         assert_eq!(symbol.to_string(), "Symbol(x)#7");
+    }
+
+    #[test]
+    fn symbol_key_encoding_keeps_description_exactly() {
+        let descriptions = [
+            None,
+            Some(vec![]),
+            Some(vec![0xD800, 0x62]),
+            Some("x)#9".encode_utf16().collect::<Vec<u16>>()),
+            Some("\u{1D306}".encode_utf16().collect::<Vec<u16>>()),
+        ];
+        for description in descriptions {
+            let description = description.map(JsString::from_vec);
+            let key = JsSymbol::new(31, description.clone()).to_property_key();
+            let (parsed, id) = key.user_symbol_parts().expect("user symbol key");
+            assert_eq!(id, 31);
+            assert_eq!(
+                parsed.as_ref().map(JsString::as_units),
+                description.as_ref().map(JsString::as_units)
+            );
+            assert!(key.well_known_symbol_name().is_none());
+        }
+        let well_known = JsSymbol::new_well_known(1, "iterator").to_property_key();
+        assert_eq!(well_known.well_known_symbol_name(), Some("iterator"));
+        assert!(well_known.user_symbol_parts().is_none());
+        assert!(
+            JsPropertyKey::from_str("Symbol(x)#7")
+                .user_symbol_parts()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1647,7 +1761,10 @@ mod tests {
 
         assert_ne!(user, well_known);
         assert_ne!(user, other);
-        assert_eq!(user.symbol_encoding(), Some("Symbol(Symbol.iterator)#2"));
+        assert_eq!(
+            user.symbol_encoding(),
+            Some(&b"Symbol(Symbol.iterator)#2"[..])
+        );
     }
 
     #[test]

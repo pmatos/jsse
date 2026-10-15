@@ -574,22 +574,12 @@ impl Interpreter {
                         }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                             Completion::Normal(v) => {
-                                let is_symbol = v.is_symbol();
-                                let fn_name = if let Some(sym) = v.as_symbol() {
-                                    match sym.description() {
-                                        Some(desc) => format!("[{}]", desc),
-                                        None => String::new(),
-                                    }
-                                } else {
-                                    String::new()
-                                };
+                                let symbol_name = v
+                                    .as_symbol()
+                                    .map(|sym| JsPropertyKey::from(sym.function_name()));
                                 match self.to_property_key(&v) {
                                     Ok(s) => {
-                                        let name = if is_symbol {
-                                            JsPropertyKey::from(fn_name)
-                                        } else {
-                                            s.clone()
-                                        };
+                                        let name = symbol_name.unwrap_or_else(|| s.clone());
                                         (s, name)
                                     }
                                     Err(e) => return Completion::Throw(e),
@@ -1332,24 +1322,14 @@ impl Interpreter {
                                 other => return other,
                             };
                             self.gc_root_value(&v);
-                            let is_symbol = v.is_symbol();
-                            let fn_name = if let Some(sym) = v.as_symbol() {
-                                match sym.description() {
-                                    Some(desc) => format!("[{}]", desc),
-                                    None => String::new(),
-                                }
-                            } else {
-                                String::new()
-                            };
+                            let symbol_name = v
+                                .as_symbol()
+                                .map(|sym| JsPropertyKey::from(sym.function_name()));
                             let pk = match self.to_property_key(&v) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let name = if is_symbol {
-                                JsPropertyKey::from(fn_name)
-                            } else {
-                                pk.clone()
-                            };
+                            let name = symbol_name.unwrap_or_else(|| pk.clone());
                             (pk, name)
                         }
                         _ => {
