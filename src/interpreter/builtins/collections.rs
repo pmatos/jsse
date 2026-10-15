@@ -1725,108 +1725,47 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let Some(io) = iterable.as_object_id() {
-                            let v = interp.get_property_on_id(io, key);
-                            if v.is_undefined() {
-                                JsValue::UNDEFINED
-                            } else {
-                                v
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
                     interp.gc_root_value(&iterator);
 
                     loop {
-                        let next_fn = if let Some(io) = iterator.as_object_id() {
-                            interp.get_property_on_id(io, "next")
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-
-                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-
-                        // IteratorStep: access .done via getter-aware Get (not raw get_property)
-                        // Per spec, if accessing .done throws, the error propagates directly
-                        // without closing the iterator.
-                        let done = if let Some(ro) = next_result.as_object_id() {
-                            match interp.get_object_property(ro, "done", &next_result) {
-                                Completion::Normal(d) => interp.to_boolean_val(&d),
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => false,
-                            }
-                        } else {
-                            false
-                        };
-
-                        if done {
-                            break;
-                        }
-
-                        // §24.3.1.1 step 9d: Get value via Get (invokes getters).
-                        // If accessing .value throws, the error propagates without closing the iterator.
-                        let value = if let Some(ro) = next_result.as_object_id() {
-                            match interp.get_object_property(ro, "value", &next_result) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
+                        let value = match interp.iterator_step_value(&iterator) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(e) => return Completion::Throw(e),
                         };
 
                         // §24.3.1.1 step 9e: If value is not Object, close iterator + throw
-                        if !value.is_object() {
+                        let Some(val_id) = value.as_object_id() else {
                             let err = interp.create_type_error("Iterator value is not an object");
                             let e2 = interp.iterator_close(&iterator, err);
                             return Completion::Throw(e2);
-                        }
+                        };
 
-                        // Get key and value from the [key, value] pair
-                        let (k, v) = if let Some(vo) = value.as_object_id() {
-                            let k = match interp.get_object_property(vo, "0", &value) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let e2 = interp.iterator_close(&iterator, e);
-                                    return Completion::Throw(e2);
-                                }
-                                other => return other,
-                            };
-                            // `k` is rooted for the duration: it's otherwise only
-                            // a Rust local, and this Get can run arbitrary user
-                            // code (a getter) that triggers a collection.
-                            let v = match interp.with_gc_root_scope(|interp| {
-                                interp.gc_root_value(&k);
-                                interp.get_object_property(vo, "1", &value)
-                            }) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let e2 = interp.iterator_close(&iterator, e);
-                                    return Completion::Throw(e2);
-                                }
-                                other => return other,
-                            };
-                            (k, v)
-                        } else {
-                            unreachable!()
+                        let k = match interp.get_object_property(val_id, "0", &value) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let e2 = interp.iterator_close(&iterator, e);
+                                return Completion::Throw(e2);
+                            }
+                            other => return other,
+                        };
+                        // `k` is rooted for the duration: it's otherwise only
+                        // a Rust local, and this Get can run arbitrary user
+                        // code (a getter) that triggers a collection.
+                        let v = match interp.with_gc_root_scope(|interp| {
+                            interp.gc_root_value(&k);
+                            interp.get_object_property(val_id, "1", &value)
+                        }) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let e2 = interp.iterator_close(&iterator, e);
+                                return Completion::Throw(e2);
+                            }
+                            other => return other,
                         };
 
                         // §24.3.1.1 step 9f-g: Call adder, IteratorClose on failure
@@ -2011,75 +1950,17 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let Some(io) = iterable.as_object_id() {
-                            let v = interp.get_property_on_id(io, key);
-                            if v.is_undefined() {
-                                JsValue::UNDEFINED
-                            } else {
-                                v
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
                     interp.gc_root_value(&iterator);
 
                     loop {
-                        let next_fn = if let Some(io) = iterator.as_object_id() {
-                            interp.get_property_on_id(io, "next")
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-
-                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-
-                        if !(next_result).is_object() {
-                            return Completion::Throw(
-                                interp.create_type_error("Iterator result is not an object"),
-                            );
-                        }
-
-                        // Use getter-aware property access for done/value.
-                        // Per IteratorStepValue, errors from .done/.value propagate
-                        // directly without closing the iterator.
-                        let done = if let Some(ro) = next_result.as_object_id() {
-                            match interp.get_object_property(ro, "done", &next_result) {
-                                Completion::Normal(d) => interp.to_boolean_val(&d),
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => false,
-                            }
-                        } else {
-                            false
-                        };
-                        if done {
-                            break;
-                        }
-
-                        let value = if let Some(ro) = next_result.as_object_id() {
-                            match interp.get_object_property(ro, "value", &next_result) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
+                        let value = match interp.iterator_step_value(&iterator) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(e) => return Completion::Throw(e),
                         };
 
                         // §24.4.1.1 step 9f-g: Call adder, IteratorClose on failure
