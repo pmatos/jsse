@@ -293,13 +293,7 @@ impl Interpreter {
                             interp.create_type_error("Symbol.prototype.toString requires a Symbol");
                         return Completion::Throw(err);
                     };
-                    let desc = sym
-                        .description()
-                        .map(|d| d.to_rust_string())
-                        .unwrap_or_default();
-                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
-                        "Symbol({desc})"
-                    ))))
+                    Completion::Normal(JsValue::string(sym.descriptive_string()))
                 }),
             ),
             (

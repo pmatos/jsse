@@ -120,12 +120,7 @@ impl Interpreter {
                     if interp.new_target.is_none()
                         && let Some(sym) = val.as_symbol()
                     {
-                        let desc = if let Some(desc) = sym.description() {
-                            format!("Symbol({desc})")
-                        } else {
-                            "Symbol()".to_string()
-                        };
-                        JsString::from_str(&desc)
+                        sym.descriptive_string()
                     } else {
                         // §22.1.1.1 step 2b: ToString(value) — throws TypeError for Symbol
                         match interp.to_js_string(val) {

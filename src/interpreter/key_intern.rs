@@ -322,7 +322,7 @@ mod tests {
         let b = intern_js_key(symbol.to_property_key());
         assert!(a.shares_storage_with(&b), "Symbol keys must intern");
         // Byte content must be preserved exactly for symbol_key_to_jsvalue.
-        assert_eq!(a.symbol_encoding(), Some("Symbol(desc)#42"));
+        assert_eq!(a.symbol_encoding(), Some(&b"Symbol(desc)#42"[..]));
         assert!(a.is_symbol());
         assert_ne!(a, intern_key("Symbol(desc)#42"));
     }

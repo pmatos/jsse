@@ -2273,14 +2273,13 @@ impl Interpreter {
                 }
             }
             drop(obj_ref);
+            let key = name.to_js_property_key();
+            let name_string = key
+                .symbol_function_name()
+                .unwrap_or_else(|| key.to_js_string());
             obj.borrow_mut().insert_property(
                 "name".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::string(name.to_js_property_key().to_js_string()),
-                    false,
-                    false,
-                    true,
-                ),
+                PropertyDescriptor::data(JsValue::string(name_string), false, false, true),
             );
         }
     }
@@ -2471,42 +2470,20 @@ impl Interpreter {
         property_key: &K,
     ) -> JsValue {
         let exact_key = property_key.to_js_property_key();
-        let Some(key) = exact_key.symbol_encoding() else {
-            return JsValue::string(exact_key.to_js_string());
-        };
-        // Well-known symbols: "Symbol(Symbol.xyz)" — recover the intrinsic Symbol value.
-        if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
-            // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
-            let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
-            let name = &inner[7..]; // "toStringTag"
-            if let Some(symbol) = self.well_known_symbols.get(name) {
-                return JsValue::symbol(symbol.clone());
-            }
-        }
-        // User symbols with id: "Symbol(desc)#id" or "Symbol()#id"
-        if let Some(hash_pos) = key.rfind('#')
-            && let Ok(id) = key[hash_pos + 1..].parse::<u64>()
+        if let Some(name) = exact_key.well_known_symbol_name()
+            && let Some(symbol) = self.well_known_symbols.get(name)
         {
-            let desc_part = &key[7..hash_pos]; // content between "Symbol(" and ")#id"
-            // desc_part should end with ')'
-            let desc = if let Some(inner) = desc_part.strip_suffix(')') {
-                if inner.is_empty() {
-                    None
-                } else {
-                    Some(JsString::from_str(inner))
-                }
-            } else {
-                None
-            };
-            // Check global_symbol_registry for Symbol.for() symbols
+            return JsValue::symbol(symbol.clone());
+        }
+        if let Some((description, id)) = exact_key.user_symbol_parts() {
+            // Symbol.for() symbols keep their registry entry as the original.
             for sym in self.global_symbol_registry.values() {
                 if sym.id() == id {
                     return JsValue::symbol(sym.clone());
                 }
             }
-            return JsValue::symbol(crate::types::JsSymbol::new(id, desc));
+            return JsValue::symbol(crate::types::JsSymbol::new(id, description));
         }
-        // Fallback: return as string
         JsValue::string(exact_key.to_js_string())
     }
 
