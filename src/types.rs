@@ -276,7 +276,7 @@ impl JsPropertyKey {
 
 /// Well-known symbol names in the index order of
 /// [`JsPropertyKey::cached_well_known_symbol`].
-const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [
+pub(crate) const WELL_KNOWN_SYMBOL_NAMES: [&str; 15] = [
     "iterator",
     "hasInstance",
     "toPrimitive",
@@ -626,6 +626,9 @@ impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
 struct JsSymbolData {
     id: u64,
     description: Option<JsString>,
+    /// Index into `WELL_KNOWN_SYMBOL_NAMES` for a realm intrinsic well-known
+    /// symbol (§6.1.5.1); `None` for every other symbol.
+    well_known: Option<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -636,7 +639,27 @@ pub(crate) struct JsSymbol {
 impl JsSymbol {
     pub(crate) fn new(id: u64, description: Option<JsString>) -> Self {
         Self {
-            data: Arc::new(JsSymbolData { id, description }),
+            data: Arc::new(JsSymbolData {
+                id,
+                description,
+                well_known: None,
+            }),
+        }
+    }
+
+    /// The well-known symbol `%Symbol.<name>%` (§6.1.5.1). Panics if `name`
+    /// is not one of the well-known symbol names.
+    pub(crate) fn new_well_known(id: u64, name: &str) -> Self {
+        let index = WELL_KNOWN_SYMBOL_NAMES
+            .iter()
+            .position(|known| *known == name)
+            .expect("not a well-known symbol name");
+        Self {
+            data: Arc::new(JsSymbolData {
+                id,
+                description: Some(JsString::from_str(&format!("Symbol.{name}"))),
+                well_known: Some(index as u8),
+            }),
         }
     }
 
@@ -653,15 +676,15 @@ impl JsSymbol {
         Arc::ptr_eq(&self.data, &other.data)
     }
 
-    /// Convert to the internal Symbol-valued property key.
-    /// Well-known symbols (description starts with "Symbol.") use a stable format
-    /// without id, so bootstrap lookups can construct the same key directly.
-    /// User-created symbols include the unique id to avoid collisions.
+    /// Convert to the internal Symbol-valued property key. Well-known symbols
+    /// use a stable key without an id, so bootstrap lookups can construct the
+    /// same key directly; every other symbol includes its unique id. The
+    /// description is never consulted: it is not an identity.
     pub(crate) fn to_property_key(&self) -> JsPropertyKey {
+        if let Some(index) = self.data.well_known {
+            return WELL_KNOWN_SYMBOL_KEYS[index as usize].clone();
+        }
         let encoding = match self.description() {
-            Some(desc) if desc.to_string().starts_with("Symbol.") => {
-                format!("Symbol({})", desc)
-            }
             Some(desc) => format!("Symbol({})#{}", desc, self.id()),
             None => format!("Symbol()#{}", self.id()),
         };
@@ -1610,17 +1633,27 @@ mod tests {
         for (index, name) in WELL_KNOWN_SYMBOL_NAMES.iter().enumerate() {
             let cached = JsPropertyKey::cached_well_known_symbol(name).expect("known name");
             assert!(std::ptr::eq(cached, &WELL_KNOWN_SYMBOL_KEYS[index]));
-            let symbol = JsSymbol::new(99, Some(JsString::from_str(&format!("Symbol.{name}"))));
+            let symbol = JsSymbol::new_well_known(99, name);
             assert_eq!(*cached, symbol.to_property_key());
         }
         assert!(JsPropertyKey::cached_well_known_symbol("notWellKnown").is_none());
     }
 
     #[test]
+    fn user_symbols_with_well_known_descriptions_stay_distinct() {
+        let well_known = JsSymbol::new_well_known(1, "iterator").to_property_key();
+        let user = JsSymbol::new(2, Some(JsString::from_str("Symbol.iterator"))).to_property_key();
+        let other = JsSymbol::new(3, Some(JsString::from_str("Symbol.iterator"))).to_property_key();
+
+        assert_ne!(user, well_known);
+        assert_ne!(user, other);
+        assert_eq!(user.symbol_encoding(), Some("Symbol(Symbol.iterator)#2"));
+    }
+
+    #[test]
     fn well_known_symbol_property_keys_are_tagged() {
         let constructed = JsPropertyKey::well_known_symbol("iterator");
-        let symbol =
-            JsSymbol::new(1, Some(JsString::from_str("Symbol.iterator"))).to_property_key();
+        let symbol = JsSymbol::new_well_known(1, "iterator").to_property_key();
 
         assert_eq!(constructed, symbol);
         assert!(constructed.is_symbol());
