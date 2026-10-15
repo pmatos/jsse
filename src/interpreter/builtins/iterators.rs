@@ -4026,63 +4026,17 @@ impl Interpreter {
 
     pub(crate) fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let sym_key = self.get_symbol_iterator_key();
-        let iter_fn = if let Some(obj_id) = obj.as_object_id() {
-            if let Some(key) = &sym_key {
-                let val = match self.get_object_property(obj_id, key, obj) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if val.is_undefined() {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-                val
-            } else {
-                return Err(self.create_type_error("is not iterable"));
-            }
-        } else if obj.is_string() {
-            if let Some(key) = &sym_key {
-                let str_proto_id = self.realm().string_prototype;
-                if let Some(proto_id) = str_proto_id {
-                    let proto_val = JsValue::object(proto_id);
-                    let val = match self.get_object_property(proto_id, key, &proto_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if !val.is_undefined() {
-                        val
-                    } else {
-                        return Err(self.create_type_error("is not iterable"));
-                    }
-                } else {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-            } else {
-                return Err(self.create_type_error("is not iterable"));
-            }
-        } else if let Some(key) = &sym_key {
-            let wrapped = match self.to_object(obj) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Err(self.create_type_error("is not iterable")),
-            };
-            if let Some(wrapped_id) = wrapped.as_object_id() {
-                let val = match self.get_object_property(wrapped_id, key, &wrapped) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if !val.is_nullish() {
-                    val
-                } else {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-            } else {
-                return Err(self.create_type_error("is not iterable"));
-            }
-        } else {
+        let Some(key) = &sym_key else {
             return Err(self.create_type_error("is not iterable"));
+        };
+        if obj.is_nullish() {
+            return Err(self.create_type_error("Cannot convert undefined or null to object"));
+        }
+        // GetMethod(obj, @@iterator): GetV passes a primitive as the receiver.
+        let iter_fn = match self.access_property_on_value(obj, key) {
+            Completion::Normal(v) if !v.is_nullish() => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Err(self.create_type_error("is not iterable")),
         };
         self.get_iterator_from_method(&iter_fn, obj)
     }
@@ -4117,15 +4071,14 @@ impl Interpreter {
     pub(crate) fn get_async_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let async_sym_key = self.get_symbol_key("asyncIterator");
         if let Some(key) = &async_sym_key {
-            let iter_fn = if let Some(obj_id) = obj.as_object_id() {
-                let val = match self.get_object_property(obj_id, key, obj) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                if !val.is_nullish() { Some(val) } else { None }
-            } else {
+            let iter_fn = if obj.is_nullish() {
                 None
+            } else {
+                match self.access_property_on_value(obj, key) {
+                    Completion::Normal(v) if !v.is_nullish() => Some(v),
+                    Completion::Throw(e) => return Err(e),
+                    _ => None,
+                }
             };
             if let Some(iter_fn) = iter_fn {
                 return match self.call_function(&iter_fn, obj, &[]) {

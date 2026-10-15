@@ -3019,22 +3019,11 @@ impl Interpreter {
                 }
 
                 // §23.1.2.1 step 4: Let usingIterator be ? GetMethod(items, @@iterator).
-                // GetMethod calls GetV which works on any value via ToObject.
                 let using_iterator = if let Some(key) = interp.get_symbol_key("iterator") {
-                    let obj_val = match interp.to_object(&source) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
+                    match interp.access_property_on_value(&source, &key) {
+                        Completion::Normal(v) if !(v).is_nullish() => Some(v),
+                        Completion::Normal(_) => None,
                         other => return other,
-                    };
-                    if let Some(obj_id) = obj_val.as_object_id() {
-                        match interp.get_object_property(obj_id, &key, &source) {
-                            Completion::Normal(v) if !(v).is_nullish() => Some(v),
-                            Completion::Normal(_) => None,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            other => return other,
-                        }
-                    } else {
-                        None
                     }
                 } else {
                     None
@@ -3286,9 +3275,8 @@ impl Interpreter {
                 let async_sym_key = interp.get_symbol_key("asyncIterator");
                 let mut has_async_iter = false;
                 if let Some(ref key) = async_sym_key {
-                    if let Some(async_items_id) = async_items.as_object_id() {
-                        let val =
-                            match interp.get_object_property(async_items_id, key, &async_items) {
+                    if !async_items.is_nullish() {
+                        let val = match interp.access_property_on_value(&async_items, key) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return interp.create_rejected_promise(e),
                             _ => JsValue::UNDEFINED,
@@ -3310,8 +3298,8 @@ impl Interpreter {
                 let using_sync_iterator = if !has_async_iter {
                     let sym_key = interp.get_symbol_iterator_key();
                     if let Some(ref key) = sym_key {
-                        if let Some(async_items_id) = async_items.as_object_id() {
-                            match interp.get_object_property(async_items_id, key, &async_items) {
+                        if !async_items.is_nullish() {
+                            match interp.access_property_on_value(&async_items, key) {
                                 Completion::Normal(v) if !(v).is_nullish() => Some(v),
                                 Completion::Throw(e) => return interp.create_rejected_promise(e),
                                 _ => None,

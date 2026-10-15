@@ -2997,45 +2997,19 @@ impl Interpreter {
                     false
                 };
 
-                // Step 4: Get @@iterator from raw source (before ToObject)
-                let using_iterator = if let Some(o) = source.as_object_id() {
-                    match interp.get_object_property(
-                        o,
-                        &JsPropertyKey::well_known_symbol("iterator"),
-                        &source,
-                    ) {
-                        Completion::Normal(v) if !v.is_nullish() => Some(v),
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => None,
-                    }
-                } else if source.is_nullish() {
-                    // GetMethod on non-object primitive: need ToObject first for null/undefined → TypeError
+                // Step 4: GetMethod(source, @@iterator); GetV keeps a primitive as receiver.
+                let using_iterator = if source.is_nullish() {
                     return Completion::Throw(
                         interp.create_type_error("Cannot convert undefined or null to object"),
                     );
                 } else {
-                    // Primitive: wrap to object, check @@iterator
-                    let wrapped = match interp.to_object(&source) {
-                        Completion::Normal(v) => v,
+                    match interp.access_property_on_value(
+                        &source,
+                        &JsPropertyKey::well_known_symbol("iterator"),
+                    ) {
+                        Completion::Normal(v) if !v.is_nullish() => Some(v),
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => {
-                            return Completion::Throw(
-                                interp.create_type_error("Cannot convert to object"),
-                            );
-                        }
-                    };
-                    if let Some(wo) = wrapped.as_object_id() {
-                        match interp.get_object_property(
-                            wo,
-                            &JsPropertyKey::well_known_symbol("iterator"),
-                            &wrapped,
-                        ) {
-                            Completion::Normal(v) if !v.is_nullish() => Some(v),
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => None,
-                        }
-                    } else {
-                        None
+                        _ => None,
                     }
                 };
 

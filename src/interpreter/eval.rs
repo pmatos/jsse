@@ -1280,41 +1280,40 @@ impl Interpreter {
     ) -> Completion {
         // §6.2.5.5 GetValue permits eliding the transient primitive wrapper,
         // but its prototype [[Get]] must still receive the primitive itself.
-        let name = name.to_js_property_key();
         if let Some(id) = base_val.as_object_id() {
-            self.get_object_property(id, &name, base_val)
+            self.get_object_property(id, name, base_val)
         } else if let Some(s) = base_val.as_string() {
-            if name.eq_str("length") {
+            if name.as_property_key_bytes() == b"length" {
                 Completion::Normal(JsValue::number(s.len() as f64))
-            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(&name, s.len())
+            } else if let Some(idx) = crate::interpreter::types::string_exotic_index(name, s.len())
             {
                 Completion::Normal(JsValue::string(JsString::from_vec(vec![s.as_units()[idx]])))
             } else if let Some(sp_id) = self.realm().string_prototype {
-                self.get_object_property(sp_id, &name, base_val)
+                self.get_object_property(sp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_number() {
             if let Some(np_id) = self.realm().number_prototype {
-                self.get_object_property(np_id, &name, base_val)
+                self.get_object_property(np_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_boolean() {
             if let Some(bp_id) = self.realm().boolean_prototype {
-                self.get_object_property(bp_id, &name, base_val)
+                self.get_object_property(bp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_symbol() {
             if let Some(sp_id) = self.realm().symbol_prototype {
-                self.get_object_property(sp_id, &name, base_val)
+                self.get_object_property(sp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else if base_val.is_bigint() {
             if let Some(bp_id) = self.realm().bigint_prototype {
-                self.get_object_property(bp_id, &name, base_val)
+                self.get_object_property(bp_id, name, base_val)
             } else {
                 Completion::Normal(JsValue::UNDEFINED)
             }
@@ -1364,7 +1363,7 @@ impl Interpreter {
         }
     }
 
-    fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
+    pub(crate) fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
         if val.is_nullish() {
             let err = self.create_type_error("Cannot convert undefined or null to object");
             Completion::Throw(err)
@@ -4614,22 +4613,14 @@ impl Interpreter {
         rval: &JsValue,
         env: &EnvRef,
     ) -> Completion {
-        // RequireObjectCoercible
         if let Completion::Throw(e) = self.require_object_coercible(rval) {
             return Completion::Throw(e);
         }
 
-        // ToObject to wrap primitives
-        let obj_val = match self.to_object(rval) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Completion::Throw(e),
-            _ => unreachable!(),
-        };
-
         // Computed keys, getters, initializers, rest copying, and target writes
-        // can all run user code while the ToObject result lives only here.
+        // can all run user code while `rval` lives only here.
         let gc_frame = self.gc_root_frame();
-        self.gc_root_value(&obj_val);
+        self.gc_root_value(rval);
 
         let result = (|| {
             let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
@@ -4648,7 +4639,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let result = self.with_destruct_lref(precomp, inner, env, |interp| {
-                        interp.bind_object_rest_values(&obj_val, &excluded_keys)
+                        interp.bind_object_rest_values(rval, &excluded_keys)
                     });
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4703,20 +4694,8 @@ impl Interpreter {
                         };
 
                         let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
-                            // Get property via get_object_property (invokes getters/Proxy)
-                            let val = if let Some(o) = obj_val
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                match interp.get_object_property(o.id, &key, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    Completion::Yield(v) => return Completion::Yield(v),
-                                    _ => JsValue::UNDEFINED,
-                                }
-                            } else {
-                                JsValue::UNDEFINED
-                            };
+                            // GetV: a primitive source stays the getter receiver.
+                            let val = propagate!(interp.access_property_on_value(rval, &key));
 
                             let val = if val.is_undefined() {
                                 if let Some(default) = default_expr {
