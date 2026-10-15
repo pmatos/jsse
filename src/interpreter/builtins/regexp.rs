@@ -961,15 +961,6 @@ impl RegexInput {
             RegexView::NonUnicode => self.non_unicode_byte_offset_to_utf16(offset),
         }
     }
-
-    /// Materialize a match span from the original UTF-16 subject. Matcher text
-    /// cannot be decoded safely because the lone-surrogate sentinel range also
-    /// contains genuine Unicode scalars.
-    fn subject_slice(&self, view: RegexView, byte_start: usize, byte_end: usize) -> JsString {
-        let start = self.byte_offset_to_utf16(view, byte_start);
-        let end = self.byte_offset_to_utf16(view, byte_end);
-        JsString::from_vec(self.subject.as_units()[start..end].to_vec())
-    }
 }
 
 /// Recently converted subjects, keyed by `JsString` identity.
@@ -5848,6 +5839,23 @@ pub(crate) struct ExecPlan {
 }
 
 impl ExecPlan {
+    /// Bind a matcher to its original UTF-16 subject. Callers obtain the plan
+    /// only after observable coercions (notably ToLength(lastIndex)) finish.
+    fn bind<'a>(&self, interp: &mut Interpreter, input: &'a RegexInput) -> SubjectMatcher<'a> {
+        let cached = self.cached_for(interp, input);
+        let view = RegexView::select(
+            matches!(cached.compiled, CompiledRegex::Bytes(_)),
+            self.unicode,
+        );
+        SubjectMatcher {
+            input,
+            cached,
+            view,
+            unicode: self.unicode,
+            sticky: self.sticky,
+        }
+    }
+
     /// The regex to run against `input`: `cached` unless a genuine scalar of
     /// the subject sits in its stand-in window, in which case the same pattern
     /// translated for a window both texts leave free.
@@ -5881,6 +5889,86 @@ impl ExecPlan {
             // failure the plan's own regex would have hit; keep that one.
             Err(_) => Rc::clone(&self.cached),
         }
+    }
+}
+
+/// Matcher selection, capture cleanup and byte coordinates stay behind this
+/// seam. The three spec algorithms consume only the original subject's UTF-16
+/// ranges and code units; none can pair a match with the wrong subject view.
+struct SubjectMatcher<'a> {
+    input: &'a RegexInput,
+    cached: Rc<CachedRegex>,
+    view: RegexView,
+    unicode: bool,
+    sticky: bool,
+}
+
+impl<'a> SubjectMatcher<'a> {
+    fn captures_at(&self, start_utf16: usize) -> Option<SubjectMatch<'a>> {
+        if start_utf16 > self.input.subject.len() {
+            return None;
+        }
+        let start = self.input.utf16_to_byte_offset(self.view, start_utf16);
+        let mut captures =
+            subject_captures_at(&self.cached, self.input, self.unicode, start, self.sticky)?;
+        clear_stale_dup_captures(&mut captures, &self.cached.dup_map);
+        strip_renamed_qi_captures(&mut captures);
+        reset_quantifier_inner_captures(&mut captures, self.cached.quantifier_resets());
+        ensure_capture_slots(&mut captures, self.cached.total_groups);
+        Some(SubjectMatch {
+            input: self.input,
+            cached: Rc::clone(&self.cached),
+            view: self.view,
+            captures,
+        })
+    }
+}
+
+struct SubjectMatch<'a> {
+    input: &'a RegexInput,
+    cached: Rc<CachedRegex>,
+    view: RegexView,
+    captures: RegexCaptures,
+}
+
+struct SubjectCapture<'a> {
+    range: std::ops::Range<usize>,
+    units: &'a [u16],
+}
+
+impl SubjectCapture<'_> {
+    fn text(&self) -> JsString {
+        JsString::from_vec(self.units.to_vec())
+    }
+}
+
+impl<'a> SubjectMatch<'a> {
+    fn len(&self) -> usize {
+        self.captures.len()
+    }
+
+    fn capture(&self, index: usize) -> Option<SubjectCapture<'a>> {
+        self.captures.get(index).map(|m| self.subject_capture(m))
+    }
+
+    fn subject_capture(&self, m: &RegexMatch) -> SubjectCapture<'a> {
+        let start = self.input.byte_offset_to_utf16(self.view, m.start);
+        let end = self.input.byte_offset_to_utf16(self.view, m.end);
+        SubjectCapture {
+            range: start..end,
+            units: &self.input.subject.as_units()[start..end],
+        }
+    }
+
+    fn named_captures(&self) -> Vec<(String, Option<SubjectCapture<'a>>)> {
+        resolve_named_group_matches(
+            &self.captures,
+            &self.cached.dup_map,
+            &self.cached.name_order,
+        )
+        .into_iter()
+        .map(|(name, capture)| (name, capture.map(|m| self.subject_capture(m))))
+        .collect()
     }
 }
 
@@ -8941,11 +9029,9 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
     let global = plan.global;
     let sticky = plan.sticky;
     let has_indices = plan.has_indices;
-    let unicode = plan.unicode;
-    let cached_rc = plan.cached_for(interp, regex_input);
-    let cached = &*cached_rc;
+    let matcher = plan.bind(interp, regex_input);
 
-    // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
+    // lastIndex and the Subject Matcher both use original UTF-16 code units.
     let input_utf16_len = regex_input.subject.len();
     let last_index_utf16 = if global || sticky {
         let li_int = li_length as i64;
@@ -8960,12 +9046,7 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
         0
     };
 
-    let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-    let view = RegexView::select(is_bytes_mode, unicode);
-    let last_index_byte = regex_input.utf16_to_byte_offset(view, last_index_utf16);
-
-    let Some(mut caps) = subject_captures_at(cached, regex_input, unicode, last_index_byte, sticky)
-    else {
+    let Some(caps) = matcher.captures_at(last_index_utf16) else {
         if (global || sticky)
             && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
         {
@@ -8974,17 +9055,9 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
         return Completion::Normal(JsValue::NULL);
     };
 
-    clear_stale_dup_captures(&mut caps, &cached.dup_map);
-    strip_renamed_qi_captures(&mut caps);
-    reset_quantifier_inner_captures(&mut caps, cached.quantifier_resets());
-    ensure_capture_slots(&mut caps, cached.total_groups);
-    let dup_map = &cached.dup_map;
-    let name_order = &cached.name_order;
-
-    let full_match = caps.get(0).unwrap();
-    // Convert absolute byte offsets to UTF-16 code unit offsets
-    let match_start_utf16 = regex_input.byte_offset_to_utf16(view, full_match.start);
-    let match_end_utf16 = regex_input.byte_offset_to_utf16(view, full_match.end);
+    let full_match = caps.capture(0).unwrap();
+    let match_start_utf16 = full_match.range.start;
+    let match_end_utf16 = full_match.range.end;
 
     if (global || sticky)
         && let Err(e) = set_last_index_strict(interp, this_id, match_end_utf16 as f64)
@@ -8998,54 +9071,40 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
         interp.regexp_legacy.context_input = regex_input.subject.clone();
         interp.regexp_legacy.left_context_end = match_start_utf16;
         interp.regexp_legacy.right_context_start = match_end_utf16;
-        interp.regexp_legacy.last_match =
-            regex_input.subject_slice(view, full_match.start, full_match.end);
+        interp.regexp_legacy.last_match = full_match.text();
         let mut last_paren = JsString::default();
         for idx in (1..caps.len()).rev() {
-            if let Some(m) = caps.get(idx) {
-                last_paren = regex_input.subject_slice(view, m.start, m.end);
+            if let Some(m) = caps.capture(idx) {
+                last_paren = m.text();
                 break;
             }
         }
         interp.regexp_legacy.last_paren = last_paren;
         for p in 0..9 {
-            interp.regexp_legacy.parens[p] = caps
-                .get(p + 1)
-                .map(|m| regex_input.subject_slice(view, m.start, m.end))
-                .unwrap_or_default();
+            interp.regexp_legacy.parens[p] =
+                caps.capture(p + 1).map(|m| m.text()).unwrap_or_default();
         }
     }
 
     let mut elements: Vec<JsValue> = Vec::new();
-    elements.push(JsValue::string(regex_input.subject_slice(
-        view,
-        full_match.start,
-        full_match.end,
-    )));
+    elements.push(JsValue::string(full_match.text()));
     for i in 1..caps.len() {
-        match caps.get(i) {
-            Some(m) => elements.push(JsValue::string(
-                regex_input.subject_slice(view, m.start, m.end),
-            )),
+        match caps.capture(i) {
+            Some(m) => elements.push(JsValue::string(m.text())),
             None => elements.push(JsValue::UNDEFINED),
         }
     }
 
-    let has_named = !name_order.is_empty();
-    let resolved_named = if has_named {
-        Some(resolve_named_group_matches(&caps, dup_map, name_order))
-    } else {
-        None
-    };
-    let groups_val = if let Some(ref resolved) = resolved_named {
+    let resolved_named = caps.named_captures();
+    let groups_val = if !resolved_named.is_empty() {
         let groups_obj_id = interp.create_object_id();
         interp
             .get_object_cell_expect(groups_obj_id)
             .borrow_mut()
             .prototype_id = None;
-        for (name, m) in resolved {
+        for (name, m) in &resolved_named {
             let val = match m {
-                Some(m) => JsValue::string(regex_input.subject_slice(view, m.start, m.end)),
+                Some(m) => JsValue::string(m.text()),
                 None => JsValue::UNDEFINED,
             };
             interp
@@ -9075,14 +9134,12 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
             .insert_value("groups".to_string(), groups_val.clone());
 
         if has_indices {
-            let cap_byte_to_utf16 =
-                |offset: usize| -> usize { regex_input.byte_offset_to_utf16(view, offset) };
             let mut index_pairs: Vec<JsValue> = Vec::new();
             for i in 0..caps.len() {
-                match caps.get(i) {
+                match caps.capture(i) {
                     Some(m) => {
-                        let cap_start = cap_byte_to_utf16(m.start);
-                        let cap_end = cap_byte_to_utf16(m.end);
+                        let cap_start = m.range.start;
+                        let cap_end = m.range.end;
                         let pair = interp.create_array(vec![
                             JsValue::number(cap_start as f64),
                             JsValue::number(cap_end as f64),
@@ -9093,17 +9150,17 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
                 }
             }
             let indices_arr = interp.create_array(index_pairs);
-            if let Some(ref resolved) = resolved_named {
+            if !resolved_named.is_empty() {
                 let idx_groups_id = interp.create_object_id();
                 interp
                     .get_object_cell_expect(idx_groups_id)
                     .borrow_mut()
                     .prototype_id = None;
-                for (name, m) in resolved {
+                for (name, m) in &resolved_named {
                     let val = match m {
                         Some(m) => {
-                            let cap_start = cap_byte_to_utf16(m.start);
-                            let cap_end = cap_byte_to_utf16(m.end);
+                            let cap_start = m.range.start;
+                            let cap_end = m.range.end;
                             interp.create_array(vec![
                                 JsValue::number(cap_start as f64),
                                 JsValue::number(cap_end as f64),
@@ -9495,12 +9552,7 @@ impl Interpreter {
                     let Some(plan) = exec_plan_for(interp, rx_id) else {
                         return Completion::Normal(JsValue::NULL);
                     };
-                    let cached_rc = plan.cached_for(interp, &regex_input);
-                    let cached = &*cached_rc;
-                    let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-                    let sticky = plan.sticky;
-                    let unicode = plan.unicode;
-                    let view = RegexView::select(is_bytes_mode, unicode);
+                    let matcher = plan.bind(interp, &regex_input);
                     let input_utf16_len = regex_input.subject.len();
                     let mut results: Vec<JsValue> = Vec::new();
                     let mut last_index_utf16: usize = 0;
@@ -9508,30 +9560,16 @@ impl Interpreter {
                         if last_index_utf16 > input_utf16_len {
                             break;
                         }
-                        let last_index_byte =
-                            regex_input.utf16_to_byte_offset(view, last_index_utf16);
-                        let Some(caps) = subject_captures_at(
-                            cached,
-                            &regex_input,
-                            unicode,
-                            last_index_byte,
-                            sticky,
-                        ) else {
+                        let Some(caps) = matcher.captures_at(last_index_utf16) else {
                             break;
                         };
-                        let full_match = caps.get(0).unwrap();
-                        let match_end_utf16 =
-                            regex_input.byte_offset_to_utf16(view, full_match.end);
+                        let full_match = caps.capture(0).unwrap();
+                        let match_end_utf16 = full_match.range.end;
 
-                        results.push(JsValue::string(regex_input.subject_slice(
-                            view,
-                            full_match.start,
-                            full_match.end,
-                        )));
+                        results.push(JsValue::string(full_match.text()));
 
-                        if full_match.start == full_match.end {
-                            let match_start_utf16 =
-                                regex_input.byte_offset_to_utf16(view, full_match.start);
+                        if full_match.range.is_empty() {
+                            let match_start_utf16 = full_match.range.start;
                             // AdvanceStringIndex per spec operates on the original S, not the
                             // possibly-preprocessed `input` — full_unicode must be able to detect
                             // real surrogate pairs in S even when the matcher runs on a split form.
@@ -9784,12 +9822,7 @@ impl Interpreter {
                     let Some(plan) = exec_plan_for(interp, rx_id) else {
                         return Completion::Normal(JsValue::string(regex_input.subject.clone()));
                     };
-                    let cached_rc = plan.cached_for(interp, &regex_input);
-                    let cached = &*cached_rc;
-                    let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
-                    let sticky = plan.sticky;
-                    let unicode = plan.unicode;
-                    let view = RegexView::select(is_bytes_mode, unicode);
+                    let matcher = plan.bind(interp, &regex_input);
                     let input_utf16_len = regex_input.subject.len();
                     let template = replace_str.as_ref().unwrap();
                     let mut accumulated_result = Vec::new();
@@ -9800,99 +9833,42 @@ impl Interpreter {
                         if last_index_utf16 > input_utf16_len {
                             break;
                         }
-                        let last_index_byte =
-                            regex_input.utf16_to_byte_offset(view, last_index_utf16);
-                        let Some(mut caps) = subject_captures_at(
-                            cached,
-                            &regex_input,
-                            unicode,
-                            last_index_byte,
-                            sticky,
-                        ) else {
+                        let Some(caps) = matcher.captures_at(last_index_utf16) else {
                             break;
                         };
-                        clear_stale_dup_captures(&mut caps, &cached.dup_map);
-                        strip_renamed_qi_captures(&mut caps);
-                        reset_quantifier_inner_captures(&mut caps, cached.quantifier_resets());
-                        ensure_capture_slots(&mut caps, cached.total_groups);
-
-                        let full_match = caps.get(0).unwrap();
-                        let match_start_utf16 =
-                            regex_input.byte_offset_to_utf16(view, full_match.start);
-                        let match_end_utf16 =
-                            regex_input.byte_offset_to_utf16(view, full_match.end);
+                        let full_match = caps.capture(0).unwrap();
+                        let match_start_utf16 = full_match.range.start;
+                        let match_end_utf16 = full_match.range.end;
                         let match_length_utf16 = match_end_utf16 - match_start_utf16;
                         let position_utf16 = match_start_utf16;
-                        let matched =
-                            regex_input.subject_slice(view, full_match.start, full_match.end);
+                        let matched = full_match.text();
 
                         // Build captures as JsValues for get_substitution
                         let mut capture_vals: Vec<JsValue> = Vec::new();
                         for i in 1..caps.len() {
-                            match caps.get(i) {
-                                Some(m) => capture_vals.push(JsValue::string(
-                                    regex_input.subject_slice(view, m.start, m.end),
-                                )),
+                            match caps.capture(i) {
+                                Some(m) => capture_vals.push(JsValue::string(m.text())),
                                 None => capture_vals.push(JsValue::UNDEFINED),
                             }
                         }
 
-                        // Named captures
-                        let has_named = !cached.name_order.is_empty();
-                        let named_captures_obj = if has_named {
+                        let named = caps.named_captures();
+                        let named_captures_obj = if !named.is_empty() {
                             let groups_obj_id = interp.create_object_id();
                             interp
                                 .get_object_cell_expect(groups_obj_id)
                                 .borrow_mut()
                                 .prototype_id = None;
-                            for orig_name in &cached.name_order {
-                                if let Some(variants) = cached.dup_map.get(orig_name as &str) {
-                                    let mut matched_val = JsValue::UNDEFINED;
-                                    for (internal_name, _) in variants {
-                                        let sanitized = sanitize_group_name(internal_name);
-                                        for (i, name_opt) in caps.names.iter().enumerate() {
-                                            if let Some(n) = name_opt
-                                                && *n == sanitized
-                                                && let Some(m) = caps.get(i)
-                                            {
-                                                matched_val = JsValue::string(
-                                                    regex_input.subject_slice(view, m.start, m.end),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                        if !matched_val.is_undefined() {
-                                            break;
-                                        }
-                                    }
-                                    interp
-                                        .get_object_cell_expect(groups_obj_id)
-                                        .borrow_mut()
-                                        .insert_value(orig_name.clone(), matched_val);
-                                } else {
-                                    let sanitized = sanitize_group_name(orig_name);
-                                    let mut val = JsValue::UNDEFINED;
-                                    for (i, name_opt) in caps.names.iter().enumerate() {
-                                        if let Some(n) = name_opt
-                                            && *n == sanitized
-                                        {
-                                            val = match caps.get(i) {
-                                                Some(m) => JsValue::string(
-                                                    regex_input.subject_slice(view, m.start, m.end),
-                                                ),
-                                                None => JsValue::UNDEFINED,
-                                            };
-                                            break;
-                                        }
-                                    }
-                                    interp
-                                        .get_object_cell_expect(groups_obj_id)
-                                        .borrow_mut()
-                                        .insert_value(orig_name.clone(), val);
-                                }
+                            for (name, capture) in named {
+                                let value = capture
+                                    .map(|m| JsValue::string(m.text()))
+                                    .unwrap_or(JsValue::UNDEFINED);
+                                interp
+                                    .get_object_cell_expect(groups_obj_id)
+                                    .borrow_mut()
+                                    .insert_value(name, value);
                             }
-                            let groups_id = groups_obj_id;
-                            JsValue::object(groups_id)
+                            JsValue::object(groups_obj_id)
                         } else {
                             JsValue::UNDEFINED
                         };
@@ -9934,7 +9910,7 @@ impl Interpreter {
 
                         // Advance past match — AdvanceStringIndex per spec operates on the
                         // original S, not the possibly-preprocessed `input`.
-                        if full_match.start == full_match.end {
+                        if full_match.range.is_empty() {
                             last_index_utf16 =
                                 advance_string_index(&regex_input, match_start_utf16, full_unicode);
                         } else {
@@ -11515,6 +11491,115 @@ mod nullable_quantifier_rewrite_tests {
 
         let capture_only = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)", true);
         assert!(!capture_only.sentinel_names.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod subject_match_tests {
+    use super::*;
+
+    fn plan(interp: &mut Interpreter, source: &str, flags: &str) -> Rc<ExecPlan> {
+        let regexp = interp.create_regexp(&JsString::from_str(source), flags);
+        exec_plan_for(interp, regexp.as_object_id().unwrap()).expect("valid regexp")
+    }
+
+    #[test]
+    fn subject_match_uses_original_utf16_ranges_and_captures() {
+        let mut interp = Interpreter::new();
+        let cases: &[(&str, &str, &[u16], usize, usize, usize, &[u16])] = &[
+            ("(a)", "", &[120, 97], 0, 1, 2, &[97]),
+            (
+                "(.)",
+                "uy",
+                &[0xd83d, 0xde00, 120],
+                1,
+                0,
+                2,
+                &[0xd83d, 0xde00],
+            ),
+            ("(.)", "y", &[0xd83d, 0xde00, 120], 1, 1, 2, &[0xde00]),
+            (
+                r"(\ud800)",
+                "uy",
+                &[0xdb80, 0xdc00, 0xd800],
+                2,
+                2,
+                3,
+                &[0xd800],
+            ),
+            (r"(a)\1", "u", &[0xd83d, 0xde00, 97, 97], 0, 2, 4, &[97]),
+            (r"(?<=(a)\1)x", "u", &[97, 97, 120], 0, 2, 3, &[97]),
+        ];
+        for &(source, flags, units, start, lo, hi, captured) in cases {
+            let plan = plan(&mut interp, source, flags);
+            let input = RegexInput::new(JsString::from_vec(units.to_vec()));
+            let matcher = plan.bind(&mut interp, &input);
+            let hit = matcher.captures_at(start).expect("match");
+            let full = hit.capture(0).unwrap();
+            assert_eq!(full.range, lo..hi, "/{source}/{flags}");
+            assert_eq!(full.units, &units[lo..hi]);
+            assert_eq!(hit.capture(1).unwrap().units, captured);
+            assert!(matcher.captures_at(units.len() + 1).is_none());
+        }
+    }
+
+    #[test]
+    fn subject_match_keeps_sticky_anchoring_and_unmatched_slots() {
+        let mut interp = Interpreter::new();
+        let plan = plan(&mut interp, r"(a)(b){0}", "y");
+        let input = RegexInput::new(JsString::from_str("xa"));
+        let matcher = plan.bind(&mut interp, &input);
+        assert!(matcher.captures_at(0).is_none());
+        let hit = matcher.captures_at(1).unwrap();
+        assert_eq!(hit.len(), 3);
+        assert!(hit.capture(2).is_none());
+    }
+
+    #[test]
+    fn subject_match_normalizes_quantified_and_duplicate_named_captures() {
+        let mut interp = Interpreter::new();
+        let plan = plan(&mut interp, r"(?:(?<x>a)|(?<x>b))(?<z>c){0}", "u");
+        let input = RegexInput::new(JsString::from_str("b"));
+        let hit = plan.bind(&mut interp, &input).captures_at(0).unwrap();
+        let named = hit.named_captures();
+        assert_eq!(
+            named.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["x", "z"]
+        );
+        assert_eq!(named[0].1.as_ref().unwrap().units, &[98]);
+        assert!(named[1].1.is_none());
+
+        let plan = self::plan(&mut interp, r"(z)((a+)?(b+)?(c))*", "");
+        let input = RegexInput::new(JsString::from_str("zaacbbbcac"));
+        let hit = plan.bind(&mut interp, &input).captures_at(0).unwrap();
+        assert!(
+            hit.capture(4).is_none(),
+            "an earlier iteration's capture is reset"
+        );
+        assert_eq!(hit.capture(3).unwrap().units, &[97]);
+    }
+
+    #[test]
+    fn subject_match_selects_wtf8_when_all_stand_in_windows_are_occupied() {
+        let mut interp = Interpreter::new();
+        let plan = plan(&mut interp, r"(\p{Cs})", "uy");
+        let mut units = Vec::new();
+        for window in 0..STAND_IN_WINDOWS {
+            let mut encoded = [0; 2];
+            units.extend_from_slice(
+                char::from_u32(SURROGATE_PUA_BASE + window * STAND_IN_WINDOW)
+                    .unwrap()
+                    .encode_utf16(&mut encoded),
+            );
+        }
+        let start = units.len();
+        units.push(0xd800);
+        let input = RegexInput::new(JsString::from_vec(units));
+        let matcher = plan.bind(&mut interp, &input);
+        assert!(matcher.captures_at(0).is_none());
+        let hit = matcher.captures_at(start).unwrap();
+        assert_eq!(hit.capture(0).unwrap().range, start..start + 1);
+        assert_eq!(hit.capture(1).unwrap().units, &[0xd800]);
     }
 }
 

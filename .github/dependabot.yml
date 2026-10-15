@@ -12,6 +12,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # CodeQL sub-actions share a versioned configuration and must move together.
+    groups:
+      codeql:
+        patterns:
+          - github/codeql-action/*
     commit-message:
       prefix: ci
     open-pull-requests-limit: 5

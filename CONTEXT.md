@@ -189,6 +189,17 @@ _Avoid_: root cell, traced box, rooted buffer.
 
 ## Builtins
 
+**Subject Matcher**:
+The RegExp matching seam bound by `ExecPlan::bind` to one original UTF-16
+subject. `SubjectMatcher::captures_at` takes a UTF-16 start position and owns
+subject-specific matcher selection, view conversion, sticky anchoring and
+capture normalization. Its `SubjectMatch` exposes original-subject ranges and
+code units lazily, with original named captures resolved in source order.
+Raw `exec` and the pristine `@@match`/`@@replace` paths share this interface;
+observable coercions, lastIndex writes, empty-match advancement, legacy
+statics and JS result construction remain with those algorithms.
+_Avoid_: byte captures, matcher view (for the caller-facing result).
+
 **Direct IteratorStepValue**:
 The synchronous iterator step through an explicitly captured `next` method,
 owned by `iterator_step_value_direct` in `builtins/iterators.rs`. It calls that
