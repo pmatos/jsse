@@ -68,13 +68,12 @@ pub fn fuzz_parse_bytes(data: &[u8]) {
         return;
     };
     run_on_engine_stack(move || {
-        let _ = parser::Parser::new(src).and_then(|mut p| p.parse_program());
+        let _ = parse_script(src);
     });
 }
 
-/// Parses `src` as a script on the current thread and reports whether it
-/// parsed cleanly. Backs the CodSpeed benchmarks (`benches/engine.rs`), which
-/// already run on an engine-sized stack, so no thread is spawned per call.
+/// Parses `src` on the current thread (already on an engine-sized stack) and
+/// reports whether it parsed cleanly. Backs `benches/engine.rs`.
 #[doc(hidden)]
 pub fn bench_parse(src: &str) -> bool {
     parse_script(src).is_some()
@@ -86,42 +85,36 @@ fn parse_script(src: &str) -> Option<ast::Program> {
         .ok()
 }
 
-/// Parses and runs `src` as a script in a fresh interpreter on the current
-/// thread, returning `false` on a parse error or a synchronous uncaught exception.
-/// Promise rejections must be checked with [`bench_eval_with_check`].
-/// Backs the CodSpeed benchmarks (`benches/engine.rs`).
+/// Runs `src` in a fresh interpreter, returning `false` on a parse error or a
+/// synchronous uncaught exception. Backs `benches/engine.rs`.
 #[doc(hidden)]
 pub fn bench_eval(src: &str) -> bool {
-    bench_eval_with_check(src, "")
+    bench_eval_with_check(src, None)
 }
 
-/// Runs `src`, drains its jobs, then runs a synchronous validation script in
-/// the same interpreter. Async workloads should store a result on fulfillment;
-/// `check` must reject both a wrong result and a missing result (e.g. rejection
-/// or a callback that never ran). An assertion inside a promise callback alone
-/// only rejects its promise and cannot fail this harness.
+/// Runs `src`, drains its jobs, then runs the validation script `check` in the
+/// same interpreter. An assertion inside a promise callback only rejects its
+/// promise, so async workloads store a result and `check` must reject a wrong
+/// or missing one.
 #[doc(hidden)]
-pub fn bench_eval_with_check(src: &str, check: &str) -> bool {
+pub fn bench_eval_with_check(src: &str, check: Option<&str>) -> bool {
+    let completed = |interp: &mut interpreter::Interpreter, program: &ast::Program| {
+        matches!(
+            interp.run(program),
+            interpreter::Completion::Normal(_) | interpreter::Completion::Empty
+        )
+    };
     let Some(program) = parse_script(src) else {
         return false;
     };
     let mut interp = interpreter::Interpreter::new();
-    if !matches!(
-        interp.run(&program),
-        interpreter::Completion::Normal(_) | interpreter::Completion::Empty
-    ) {
+    if !completed(&mut interp, &program) {
         return false;
     }
-    if check.is_empty() {
-        return true;
+    match check {
+        None => true,
+        Some(check) => parse_script(check).is_some_and(|v| completed(&mut interp, &v)),
     }
-    let Some(validation) = parse_script(check) else {
-        return false;
-    };
-    matches!(
-        interp.run(&validation),
-        interpreter::Completion::Normal(_) | interpreter::Completion::Empty
-    )
 }
 
 #[cfg(test)]
@@ -134,7 +127,7 @@ mod lib_tests {
             let check = "if (result !== 42) throw new Error('wrong or missing result');";
             assert!(bench_eval_with_check(
                 "var result; Promise.resolve(41).then(v => { result = v + 1; });",
-                check,
+                Some(check),
             ));
             for src in [
                 "var result; Promise.resolve(0).then(v => { result = v; });",
@@ -142,7 +135,7 @@ mod lib_tests {
                 "var result; Promise.reject(new Error('bad')).then(v => { result = v; });",
                 "var result; new Promise(() => {}).then(v => { result = v; });",
             ] {
-                assert!(!bench_eval_with_check(src, check), "accepted: {src}");
+                assert!(!bench_eval_with_check(src, Some(check)), "accepted: {src}");
             }
         });
     }
@@ -151,11 +144,13 @@ mod lib_tests {
     fn benchmark_validation_rejects_script_failures() {
         run_on_engine_stack(|| {
             assert!(bench_eval(""));
-            assert!(bench_eval_with_check("", ""));
             assert!(!bench_eval("throw new Error('bad');"));
             assert!(!bench_eval("let ="));
-            assert!(!bench_eval_with_check("", "throw new Error('bad check');"));
-            assert!(!bench_eval_with_check("", "let ="));
+            assert!(!bench_eval_with_check(
+                "",
+                Some("throw new Error('bad check');")
+            ));
+            assert!(!bench_eval_with_check("", Some("let =")));
         });
     }
 

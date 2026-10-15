@@ -1,11 +1,7 @@
 //! CodSpeed benchmarks for the jsse engine.
 //!
-//! Workloads mirror `benchmarks/scripts/*.js`, scaled down so each iteration
-//! stays short under CodSpeed's CPU simulation. Every benchmark creates a
-//! fresh interpreter, so realm setup is included in the `eval` group and
-//! measured on its own by `eval::empty_program`. Async results are validated
-//! after jobs drain. Targeted workloads also adapt the tracked performance repros
-//! under `docs/perf/2026-10-10/` and `docs/perf/2026-10-13/`.
+//! See `benches/README.md`. Every benchmark creates a fresh interpreter, so
+//! realm setup is included in `eval` and measured alone by `eval::empty_program`.
 
 use divan::black_box;
 
@@ -21,7 +17,7 @@ fn eval(src: &str) {
 
 fn eval_with_check(src: &str, check: &str) {
     assert!(
-        jsse::bench_eval_with_check(black_box(src), black_box(check)),
+        jsse::bench_eval_with_check(black_box(src), Some(black_box(check))),
         "benchmark script or validation failed"
     );
 }
@@ -66,7 +62,6 @@ label: for (const [k, v] of Object.entries(obj)) { if (k === 'b') continue label
 
     #[divan::bench]
     fn modern_syntax_x50(bencher: divan::Bencher) {
-        // Each copy gets its own block so lexical declarations do not clash.
         let src = format!("{{{CLASSES}}}\n").repeat(50);
         bencher.bench_local(|| assert!(jsse::bench_parse(black_box(&src))));
     }
@@ -264,7 +259,7 @@ if (sum !== 4501500 || m.size !== 3000 || s.size !== 100) throw new Error("bad c
 "#,
         );
     }
-    // Local slots and global-name access deserve separate closure benchmarks.
+
     #[divan::bench]
     fn closures_local() {
         eval(
@@ -304,7 +299,6 @@ scan();
 "#;
 
         fn sticky(bencher: divan::Bencher, pattern: &str) {
-            // Generate the two otherwise identical fixtures outside measurement.
             let src = STICKY.replace("DIGIT", pattern);
             bencher.bench_local(|| eval(&src));
         }
@@ -429,37 +423,31 @@ class Point {
 if (new Point().run(5000) !== 12512500) throw new Error("bad getter result");
 "#;
 
-        fn access(bencher: divan::Bencher, template: &str, private: bool) {
-            // The public control has the same work and validation; only the
-            // field syntax changes. Source construction is outside measurement.
-            let src = if private {
-                template.to_owned()
-            } else {
-                template.replace('#', "")
-            };
-            bencher.bench_local(|| eval(&src));
+        fn access(bencher: divan::Bencher, src: &str) {
+            bencher.bench_local(|| eval(src));
         }
 
         #[divan::bench]
         fn private_fields(bencher: divan::Bencher) {
-            access(bencher, ACCESS, true);
+            access(bencher, ACCESS);
         }
 
         #[divan::bench]
         fn public_fields(bencher: divan::Bencher) {
-            access(bencher, ACCESS, false);
+            access(bencher, &ACCESS.replace('#', ""));
         }
 
         #[divan::bench]
         fn private_getters(bencher: divan::Bencher) {
-            access(bencher, GETTERS, true);
+            access(bencher, GETTERS);
         }
 
         #[divan::bench]
         fn public_getters(bencher: divan::Bencher) {
-            access(bencher, GETTERS, false);
+            access(bencher, &GETTERS.replace('#', ""));
         }
     }
+
     #[divan::bench]
     fn map_set_rolling() {
         eval(
@@ -502,42 +490,52 @@ function run() {
 run();
 "#;
 
-        fn retained(bencher: divan::Bencher, map: bool) {
-            let src = if map {
-                RETAINED
-                    .replace("NEW_TABLE", "new Map()")
-                    .replace("INITIAL_STORE", "table.set(i, {value: i})")
-                    .replace("UPDATE_STORE", "table.set(15360 + (j & 1023), {value: j})")
-                    .replace("READ_VALUE", "table.get(k)")
-            } else {
-                RETAINED
-                    .replace("NEW_TABLE", "new Array(16384)")
-                    .replace("INITIAL_STORE", "table[i] = {value: i}")
-                    .replace("UPDATE_STORE", "table[15360 + (j & 1023)] = {value: j}")
-                    .replace("READ_VALUE", "table[k]")
-            };
+        fn retained(
+            bencher: divan::Bencher,
+            new_table: &str,
+            initial: &str,
+            update: &str,
+            read: &str,
+        ) {
+            let src = RETAINED
+                .replace("NEW_TABLE", new_table)
+                .replace("INITIAL_STORE", initial)
+                .replace("UPDATE_STORE", update)
+                .replace("READ_VALUE", read);
             bencher.bench_local(|| eval(&src));
         }
 
         #[divan::bench]
         fn retained_array(bencher: divan::Bencher) {
-            retained(bencher, false);
+            retained(
+                bencher,
+                "new Array(16384)",
+                "table[i] = {value: i}",
+                "table[15360 + (j & 1023)] = {value: j}",
+                "table[k]",
+            );
         }
 
         #[divan::bench]
         fn retained_map(bencher: divan::Bencher) {
-            retained(bencher, true);
+            retained(
+                bencher,
+                "new Map()",
+                "table.set(i, {value: i})",
+                "table.set(15360 + (j & 1023), {value: j})",
+                "table.get(k)",
+            );
         }
     }
 
     mod opmix {
         use super::*;
 
-        // Mirrors the diagnostic family in benchmarks/scripts/bench_opmix.js.
-        // Keep separate measurements so calls, element traffic and labeled
-        // control flow cannot hide one another in the existing mixed case.
-        const OPS: &str = r#"
-var heap32 = new Int32Array(1024);
+        // Separate cases keep calls, element traffic and labeled control flow
+        // from hiding one another (cf. benchmarks/scripts/bench_opmix.js).
+        // Each case parses only its own function.
+        const HEAP: &str = "var heap32 = new Int32Array(1024);\n";
+        const ARITH: &str = r#"
 function arith(n) {
   var r0 = 0, r1 = 1, r2 = 2;
   for (var i = 0; i < n; i++) {
@@ -546,6 +544,8 @@ function arith(n) {
   }
   return r0 + r1 + r2;
 }
+"#;
+        const ELEM: &str = r#"
 function elem(n) {
   var fp = 16;
   for (var i = 0; i < n; i++) {
@@ -556,12 +556,16 @@ function elem(n) {
   }
   return heap32[fp] + heap32[fp + 1];
 }
+"#;
+        const CALLED: &str = r#"
 function leaf(x) { return ((x >> 2) + 4) & 65535; }
 function called(n) {
   var sum = 0;
   for (var i = 0; i < n; i++) { sum = leaf(sum); sum = leaf(sum); }
   return sum;
 }
+"#;
+        const LABELED_LOOP: &str = r#"
 function labeledLoop(n) {
   var i = 0, fp = 16;
   loop: while (true) {
@@ -574,6 +578,8 @@ function labeledLoop(n) {
   }
   return heap32[fp] + heap32[fp + 1];
 }
+"#;
+        const LABELED_CONTROL: &str = r#"
 function labeledControl(n) {
   var i = 0;
   loop: while (true) { if (i >= n) break loop; i++; continue loop; }
@@ -581,36 +587,37 @@ function labeledControl(n) {
 }
 "#;
 
-        fn run(bencher: divan::Bencher, name: &str, expected: i32) {
+        fn run(bencher: divan::Bencher, source: &[&str], name: &str, expected: i32) {
             let src = format!(
-                "{OPS}\nif ({name}(5000) !== {expected}) throw new Error('bad opmix result');"
+                "{}\nif ({name}(5000) !== {expected}) throw new Error('bad opmix result');",
+                source.concat()
             );
             bencher.bench_local(|| eval(&src));
         }
 
         #[divan::bench]
         fn arithmetic(bencher: divan::Bencher) {
-            run(bencher, "arith", 129073);
+            run(bencher, &[ARITH], "arith", 129073);
         }
 
         #[divan::bench]
         fn elements(bencher: divan::Bencher) {
-            run(bencher, "elem", 26032);
+            run(bencher, &[HEAP, ELEM], "elem", 26032);
         }
 
         #[divan::bench]
         fn leaf_calls(bencher: divan::Bencher) {
-            run(bencher, "called", 5);
+            run(bencher, &[CALLED], "called", 5);
         }
 
         #[divan::bench]
         fn labeled_loop(bencher: divan::Bencher) {
-            run(bencher, "labeledLoop", 50784);
+            run(bencher, &[HEAP, LABELED_LOOP], "labeledLoop", 50784);
         }
 
         #[divan::bench]
         fn labeled_control(bencher: divan::Bencher) {
-            run(bencher, "labeledControl", 5000);
+            run(bencher, &[LABELED_CONTROL], "labeledControl", 5000);
         }
     }
 

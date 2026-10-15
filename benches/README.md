@@ -1,7 +1,7 @@
 # Engine benchmarks
 
-`engine.rs` contains 35 CodSpeed/Divan benchmarks: two parser cases and 33
-evaluation cases, including the empty-program setup control. Evaluation measures
+`engine.rs` contains the CodSpeed/Divan benchmarks: parser cases and evaluation
+cases, including the empty-program setup control. Evaluation measures
 parsing, a fresh realm, execution, job draining, validation, and teardown. Source
 template construction happens outside the measured closure. The benchmark
 profile inherits the shipped release configuration (fat LTO, one codegen unit).
@@ -48,8 +48,3 @@ container survives promotion. Never time that instrumented build, and do not
 compare `release-nolto` timings with shipped-profile measurements. These cases
 track end-to-end work; they do not isolate collector time from allocation or
 provide a steady-state execution-only measurement.
-
-At the current sizes, a separate `perf-counters` check recorded three minor and
-three major collections for each retained-container case, with each `run` body
-dispatched through bytecode. These counts verify workload sizing; they are not
-timing results or fixed expectations for future collector implementations.
