@@ -6,6 +6,29 @@
 use std::process::Command;
 
 #[test]
+fn console_global_replacement_suppresses_host_output_in_both_modes() {
+    for flags in [&[][..], &["--no-bytecode"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+            .args(flags)
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/console-global-property.js"
+            ))
+            .output()
+            .expect("run jsse");
+        assert!(
+            out.status.success(),
+            "{flags:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stdout.is_empty(), "{flags:?}: host logger ran");
+        if !cfg!(feature = "perf-counters") {
+            assert!(out.stderr.is_empty(), "{flags:?}: unexpected stderr");
+        }
+    }
+}
+
+#[test]
 fn error_and_warn_write_to_stderr_only() {
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .args(["-e", "console.error('x'); console.warn('y')"])

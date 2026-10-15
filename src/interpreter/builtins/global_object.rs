@@ -1,6 +1,7 @@
 use super::super::*;
 
-/// Built-in global names mirrored onto the global object (§19.1) and removed from the declarative bootstrap bindings (§9.1.1.4).
+/// Built-in and host global names mirrored onto the global object (§19.1) and
+/// removed from the declarative bootstrap bindings (§9.1.1.4).
 const BUILTIN_GLOBAL_NAMES: &[&str] = &[
     "Object",
     "Function",
@@ -61,6 +62,7 @@ const BUILTIN_GLOBAL_NAMES: &[&str] = &[
     "Atomics",
     "Temporal",
     "Intl",
+    "console",
     "setTimeout",
     "setInterval",
     "clearTimeout",
