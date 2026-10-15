@@ -72,6 +72,28 @@ pub fn fuzz_parse_bytes(data: &[u8]) {
     });
 }
 
+/// Parses `src` as a script on the current thread and reports whether it
+/// parsed cleanly. Backs the CodSpeed benchmarks (`benches/engine.rs`), which
+/// already run on an engine-sized stack, so no thread is spawned per call.
+#[doc(hidden)]
+pub fn bench_parse(src: &str) -> bool {
+    parser::Parser::new(src)
+        .and_then(|mut p| p.parse_program())
+        .is_ok()
+}
+
+/// Parses and runs `src` as a script in a fresh interpreter on the current
+/// thread, returning `false` on a parse error or an uncaught exception.
+/// Backs the CodSpeed benchmarks (`benches/engine.rs`).
+#[doc(hidden)]
+pub fn bench_eval(src: &str) -> bool {
+    let Ok(program) = parser::Parser::new(src).and_then(|mut p| p.parse_program()) else {
+        return false;
+    };
+    let mut interp = interpreter::Interpreter::new();
+    !matches!(interp.run(&program), interpreter::Completion::Throw(_))
+}
+
 #[cfg(test)]
 mod lib_tests {
     use super::*;

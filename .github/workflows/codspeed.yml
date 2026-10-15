@@ -1,0 +1,50 @@
+name: CodSpeed
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Lets CodSpeed trigger backtest runs to build initial performance data.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Least-privilege default for all jobs; widen per-job only when needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OpenID Connect authentication with CodSpeed
+    steps:
+      # The benchmarks only need the crate and benchmarks/scripts, not the
+      # test262/spec submodules.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain, cache and cargo-codspeed
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3 # v1.3.0
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-codspeed
+
+      - name: Build the benchmarks
+        run: cargo codspeed build -m simulation
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
+        with:
+          mode: simulation
+          run: cargo codspeed run
