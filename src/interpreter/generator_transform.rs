@@ -703,7 +703,8 @@ fn transform_generator_inner_opts(
 /// after a `return`/`yield`/`await` would land in a state that has not run (or
 /// never runs). Moving the declarations to the head of the first fragment, after
 /// any directive prologue and in source order (last duplicate wins), instantiates
-/// them once at entry; their original positions are no-ops.
+/// them once when the first fragment starts; they are removed from their
+/// original positions, where evaluating them would be a no-op anyway.
 fn function_declarations_first(body: &[Statement]) -> Cow<'_, [Statement]> {
     let is_function =
         |s: &Statement| crate::interpreter::hoisting::unwrap_labeled_function(s).is_some();
