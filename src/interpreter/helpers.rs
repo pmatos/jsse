@@ -404,28 +404,42 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
-pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::ObjectArena) -> &'a str {
+/// The eight `typeof` result strings (sec-typeof-operator-runtime-semantics-evaluation, table 41).
+pub(crate) const TYPEOF_NAMES: [&str; 8] = [
+    "undefined",
+    "object",
+    "boolean",
+    "number",
+    "string",
+    "symbol",
+    "bigint",
+    "function",
+];
+pub(crate) const TYPEOF_UNDEFINED: usize = 0;
+
+/// Index into `TYPEOF_NAMES` for a value (HTMLDDA reports "undefined").
+pub(crate) fn typeof_index(val: &JsValue, objects: &super::object_arena::ObjectArena) -> usize {
     match val.kind() {
-        ValueKind::Undefined => "undefined",
-        ValueKind::Null => "object",
-        ValueKind::Boolean => "boolean",
-        ValueKind::Number => "number",
-        ValueKind::String => "string",
-        ValueKind::Symbol => "symbol",
-        ValueKind::BigInt => "bigint",
+        ValueKind::Undefined => 0,
+        ValueKind::Null => 1,
+        ValueKind::Boolean => 2,
+        ValueKind::Number => 3,
+        ValueKind::String => 4,
+        ValueKind::Symbol => 5,
+        ValueKind::BigInt => 6,
         ValueKind::Object => {
             if let Some(id) = val.as_object_id()
                 && let Some(obj) = objects.get(id)
             {
                 let b = obj.borrow();
                 if b.is_htmldda {
-                    return "undefined";
+                    return 0;
                 }
                 if b.callable.is_some() {
-                    return "function";
+                    return 7;
                 }
             }
-            "object"
+            1
         }
     }
 }
