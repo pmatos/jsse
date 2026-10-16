@@ -42,8 +42,6 @@ pub(crate) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -
     walk_index_free_chain(interp, start, true)
 }
 
-/// `scan_keys` decides what a link with digit-leading keys means: scan them
-/// for a real array index (`true`) or decline outright (`false`).
 fn walk_index_free_chain(interp: &Interpreter, start: Option<u64>, scan_keys: bool) -> bool {
     let mut next = start;
     let mut hops = 0usize;
@@ -74,10 +72,8 @@ fn walk_index_free_chain(interp: &Interpreter, start: Option<u64>, scan_keys: bo
     true
 }
 
-/// Read-side variant of [`proto_chain_index_free`] for a per-read check: a
-/// link that owns any digit-leading key declines instead of scanning its key
-/// list, so a program that sets `Array.prototype[0]` pays the generic path
-/// rather than a key scan on every hole read.
+/// [`proto_chain_index_free`] for per-read use: a link owning any digit-leading
+/// key declines instead of scanning its key list.
 pub(crate) fn proto_chain_without_index_keys(interp: &Interpreter, start: Option<u64>) -> bool {
     walk_index_free_chain(interp, start, false)
 }

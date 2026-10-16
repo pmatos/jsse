@@ -3411,10 +3411,8 @@ impl JsObjectData {
         self.get_own_exotic_property(key)
     }
 
-    /// The own properties that never reach `properties`: Array elements,
-    /// TypedArray integer-indexed elements and String-wrapper `length`/indices.
-    /// [`Self::get_own_property_full`] without its `properties` lookup, for
-    /// callers that just missed there and must not scan the list twice.
+    /// [`Self::get_own_property_full`] without its `properties` lookup: Array
+    /// elements, TypedArray indices and String-wrapper `length`/indices.
     pub(crate) fn get_own_exotic_property<K: PropertyKeyLike + ?Sized>(
         &self,
         key: &K,

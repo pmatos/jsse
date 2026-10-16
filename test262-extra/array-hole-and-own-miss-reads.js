@@ -360,3 +360,49 @@ function setIndex(obj, key, value) {
   assert.sameValue(new Array(3).join("-"), "--", "join without the inherited index");
   assert.sameValue(new Array(200).join("ab").length, 398, "long join of holes");
 })();
+
+// A prototype link that is not an empty Array, or a very deep chain, still answers.
+(function () {
+  var a = new Array(3);
+  Object.setPrototypeOf(a, [10, 20, 30, 40]);
+  assert.sameValue(a[1], 20, "non-empty Array prototype supplies the hole");
+  assert.sameValue(a[3], 40, "non-empty Array prototype supplies an out-of-range index");
+  assert.sameValue(a[4], undefined, "absent from the whole chain");
+
+  var b = new Array(3);
+  Object.setPrototypeOf(b, new Uint8Array([7, 8, 9, 10]));
+  assert.sameValue(b[1], 8, "TypedArray prototype supplies the hole");
+  assert.sameValue(b[3], 10, "TypedArray prototype supplies an out-of-range index");
+
+  var c = new Array(3);
+  Object.setPrototypeOf(c, function () {});
+  assert.sameValue(c[1], undefined, "function prototype without the index");
+  Object.getPrototypeOf(c)[1] = "fn";
+  assert.sameValue(c[1], "fn", "function prototype with the index");
+
+  var deep = { 2: "far" };
+  for (var i = 0; i < 70; i++) deep = Object.create(deep);
+  var d = new Array(4);
+  Object.setPrototypeOf(d, deep);
+  assert.sameValue(d[2], "far", "index at the end of a 70-link chain");
+  assert.sameValue(d[1], undefined, "absent from a 70-link chain");
+})();
+
+// Digit-leading keys that are not array indices are not indices.
+(function () {
+  Object.prototype["2x"] = "named";
+  Array.prototype["3d"] = "named";
+  try {
+    var a = new Array(4);
+    assert.sameValue(a[2], undefined, "2x is not index 2");
+    assert.sameValue(a[3], undefined, "3d is not index 3");
+    assert.sameValue(a["2x"], "named", "the named key is still readable");
+    var b = [];
+    b["1st"] = "own";
+    assert.sameValue(b[1], undefined, "own 1st is not index 1");
+    assert.sameValue(b["1st"], "own", "own named key");
+  } finally {
+    delete Object.prototype["2x"];
+    delete Array.prototype["3d"];
+  }
+})();
