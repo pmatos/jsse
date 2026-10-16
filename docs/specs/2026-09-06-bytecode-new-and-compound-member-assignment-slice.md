@@ -161,10 +161,10 @@ the two-tier rooting-design hazard the member-access slice's own GC-rooting
 section documents. `DupN` pushes its clones through the ordinary
 `push_value` path, so a duplicated pending id is rooted/unrooted exactly like
 any other operand-stack value. `ToPrimitiveKey`'s side-effecting
-`to_primitive` call runs inside a `root_operand_stack` scope (roots the
-*entire* operand stack, not just this opcode's own operands — the same
-mechanism the member-access slice's GC-rooting section motivates for chained
-member expressions), so a duplicated base/key pending from an earlier `DupN`
+`to_primitive` call runs with the *entire* operand stack rooted through the
+`gc_bytecode_roots` mirror (the mechanism the member-access slice's GC-rooting
+section motivates for chained member expressions; #1058 removed the separate
+`root_operand_stack` copy), so a duplicated base/key pending from an earlier `DupN`
 survives a nested collection triggered by the key's own `toString`/
 `Symbol.toPrimitive`.
 

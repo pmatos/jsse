@@ -29,6 +29,9 @@ pub(crate) struct GcPacer {
     /// Debug stress mode: force a collection every `stress_period` safepoints
     /// that would otherwise not collect. Zero disables it.
     stress_period: u32,
+    /// `major_requested | minor_requested | (stress_period != 0)`, kept in
+    /// step by every writer so the VM's safepoint poll is one load and test.
+    poll: bool,
     /// Safepoints seen while stress mode is on. Every `stress_period`th one
     /// collects, alternating major (finds missing roots) and minor (finds
     /// missing write barriers).
@@ -67,6 +70,7 @@ pub(crate) enum CollectionKind {
 
 impl GcPacer {
     pub(crate) fn new() -> Self {
+        let stress_period = stress_period_from_env();
         GcPacer {
             nursery_alloc_count: 0,
             nursery_bytes: 0,
@@ -76,17 +80,36 @@ impl GcPacer {
             minor_requested: false,
             major_requested: false,
             minor_suppressed: false,
-            stress_period: stress_period_from_env(),
+            stress_period,
+            poll: stress_period != 0,
             stress_count: 0,
             #[cfg(test)]
             safepoint_calls: 0,
         }
     }
 
+    #[inline(always)]
+    fn sync_poll(&mut self) {
+        self.poll = self.major_requested | self.minor_requested | (self.stress_period != 0);
+    }
+
+    #[inline(always)]
+    fn mark_major(&mut self) {
+        self.major_requested = true;
+        self.poll = true;
+    }
+
+    #[inline(always)]
+    fn mark_minor(&mut self) {
+        self.minor_requested = true;
+        self.poll = true;
+    }
+
     #[cfg(test)]
     pub(crate) fn set_stress_period(&mut self, period: u32) {
         self.stress_period = period;
         self.stress_count = 0;
+        self.sync_poll();
     }
 
     /// Charge one object allocation. Reused logical slots still hold a full
@@ -97,13 +120,13 @@ impl GcPacer {
         self.major_bytes_since_gc += GC_OBJECT_OVERHEAD;
         if self.nursery_bytes >= GC_NURSERY_THRESHOLD_BYTES {
             if self.minor_suppressed {
-                self.major_requested = true;
+                self.mark_major();
             } else {
-                self.minor_requested = true;
+                self.mark_minor();
             }
         }
         if self.major_bytes_since_gc >= self.major_threshold_bytes {
-            self.major_requested = true;
+            self.mark_major();
         }
     }
 
@@ -112,7 +135,7 @@ impl GcPacer {
         self.external_bytes += bytes;
         self.major_bytes_since_gc += bytes;
         if self.major_bytes_since_gc >= self.major_threshold_bytes {
-            self.major_requested = true;
+            self.mark_major();
         }
     }
 
@@ -123,12 +146,24 @@ impl GcPacer {
 
     /// Force a collection at the next safepoint.
     pub(crate) fn request(&mut self) {
-        self.major_requested = true;
+        self.mark_major();
     }
 
     #[cfg(test)]
     pub(crate) fn request_minor(&mut self) {
-        self.minor_requested = true;
+        self.mark_minor();
+    }
+
+    /// Whether a safepoint has anything to do: a pending request, or stress
+    /// mode, whose counter must tick at every safepoint. Under `cfg(test)`
+    /// it is always true so `safepoint_calls` still counts every poll.
+    #[inline(always)]
+    pub(crate) fn safepoint_pending(&self) -> bool {
+        debug_assert_eq!(
+            self.poll,
+            self.major_requested | self.minor_requested | (self.stress_period != 0)
+        );
+        cfg!(test) || self.poll
     }
 
     /// Consume the highest-priority pending request at a safepoint.
@@ -140,9 +175,11 @@ impl GcPacer {
         if self.major_requested {
             self.major_requested = false;
             self.minor_requested = false;
+            self.sync_poll();
             Some(CollectionKind::Major)
         } else if self.minor_requested {
             self.minor_requested = false;
+            self.sync_poll();
             Some(CollectionKind::Minor)
         } else if self.stress_period != 0 {
             self.stress_count += 1;
@@ -174,6 +211,7 @@ impl GcPacer {
     /// remain allocated until the next budget requests a major collection.
     pub(crate) fn suppress_minor_temporarily(&mut self) {
         self.minor_requested = false;
+        self.sync_poll();
         self.minor_suppressed = true;
         self.nursery_alloc_count = 0;
         self.nursery_bytes = 0;
@@ -506,6 +544,21 @@ impl Interpreter {
             Self::trace_object_fields(&obj, &mut children, seen_envs);
             Self::enqueue_unmarked(children.drain(..), worklist, marks);
         }
+    }
+
+    /// `gc_safepoint` for the VM's hot path: one inline test of `poll`, the call
+    /// only when a request or stress mode makes the safepoint do something.
+    #[inline(always)]
+    pub(crate) fn gc_safepoint_poll(&mut self) {
+        if self.gc.safepoint_pending() {
+            self.gc_safepoint_slow();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn gc_safepoint_slow(&mut self) {
+        self.gc_safepoint();
     }
 
     pub(crate) fn gc_safepoint(&mut self) {
@@ -1762,6 +1815,35 @@ mod tests {
     // GcPacer — the allocation-pressure heuristic that decides when to collect.
     // Tested through its public interface; expected budgets are hand-computed
     // literals (independent of the pacer's own arithmetic).
+
+    #[test]
+    fn safepoint_poll_flag_tracks_requests_and_stress_mode() {
+        let mut pacer = GcPacer::new();
+        pacer.set_stress_period(0);
+        assert!(!pacer.poll);
+
+        pacer.request();
+        assert!(pacer.poll);
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+        assert!(!pacer.poll);
+
+        pacer.request_minor();
+        assert!(pacer.poll);
+        pacer.suppress_minor_temporarily();
+        assert!(!pacer.poll);
+
+        pacer.request_minor();
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
+        assert!(!pacer.poll);
+
+        pacer.set_stress_period(3);
+        assert!(pacer.poll);
+        pacer.request();
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+        assert!(pacer.poll, "stress mode keeps every safepoint live");
+        pacer.set_stress_period(0);
+        assert!(!pacer.poll);
+    }
 
     #[test]
     fn stress_period_zero_never_collects() {
