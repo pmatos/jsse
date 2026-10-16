@@ -2460,12 +2460,11 @@ fn unsupported_member_callees_remain_ineligible() {
 
 #[test]
 fn nested_tail_positions_lower_to_return_call_leaves() {
-    let count = |source: &str| {
-        let chunk = compile_function_source(source, &["a", "b"]);
-        let ops = decode_ops(&chunk);
+    let count = |body: &str| {
+        let ops = decode_ops(&compile_returning_body(body));
         (
             ops.iter().filter(|(op, _)| *op == Op::ReturnCall).count(),
-            ops.iter().any(|(op, _)| matches!(op, Op::ExecAst)),
+            ops.iter().any(|(op, _)| *op == Op::ExecAst),
         )
     };
     assert_eq!(count("return a && f(b);"), (1, false));
@@ -2479,13 +2478,39 @@ fn nested_tail_positions_lower_to_return_call_leaves() {
 
 #[test]
 fn nested_tail_call_leaf_compile_failures_keep_the_tree_walker() {
-    let chunk = compile_function_source("var x = 1; return a && f(...b);", &["a", "b"]);
-    let ops = decode_ops(&chunk);
-    assert!(ops.iter().any(|(op, _)| *op == Op::ExecAst), "{ops:?}");
-    assert!(!ops.iter().any(|(op, _)| *op == Op::ReturnCall), "{ops:?}");
-    let chunk = compile_function_source("var x = 1; return a && g`t`;", &["a"]);
-    let ops = decode_ops(&chunk);
-    assert!(ops.iter().any(|(op, _)| *op == Op::ExecAst), "{ops:?}");
+    for body in [
+        "var x = 1; return a && f(...b);",
+        "var x = 1; return a && g`t`;",
+    ] {
+        let ops = decode_ops(&compile_returning_body(body));
+        assert!(
+            ops.iter().any(|(op, _)| *op == Op::ExecAst),
+            "{body}: {ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|(op, _)| *op == Op::ReturnCall),
+            "{body}: {ops:?}"
+        );
+    }
+}
+
+#[test]
+fn nested_tail_calls_stay_ordinary_calls_inside_cleanup_regions() {
+    for body in [
+        "try { return a && f(b); } catch (e) { return 0; }",
+        "try { return a ? f(b) : g(b); } finally { b; }",
+        "for (var x of a) { return b ? f(x) : x; }",
+    ] {
+        let ops = decode_ops(&compile_returning_body(body));
+        assert!(
+            !ops.iter().any(|(op, _)| *op == Op::ReturnCall),
+            "{body}: {ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|(op, _)| *op == Op::ExecAst),
+            "{body}: {ops:?}"
+        );
+    }
 }
 
 #[test]
@@ -2928,6 +2953,28 @@ fn compile_function_source(source: &str, params: &[&str]) -> Chunk {
     try_compile_function_source(source, params).expect("compile")
 }
 
+/// Compiles the body of `function f(a, b) { <body> }`, where `return` is legal.
+fn compile_returning_body(body: &str) -> Chunk {
+    use super::compiler::{FrameShape, compile_function_body};
+    use crate::parser::Parser;
+
+    let source = format!("function f(a, b) {{ {body}\n}}");
+    let mut parser = Parser::new(&source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let Some(Statement::FunctionDeclaration(decl)) = program.body.as_slice().first() else {
+        panic!("function declaration");
+    };
+    let params = vec!["a".to_string(), "b".to_string()];
+    compile_function_body(
+        decl.body.statements.as_slice(),
+        &FrameShape {
+            arguments_slot: false,
+            simple_params: &params,
+        },
+    )
+    .expect("compile")
+}
+
 fn try_compile_function_source(
     source: &str,
     params: &[&str],
@@ -2935,15 +2982,11 @@ fn try_compile_function_source(
     use super::compiler::{FrameShape, compile_function_body};
     use crate::parser::Parser;
 
-    let wrapped = format!("function wrapper() {{ {source}\n}}");
-    let mut parser = Parser::new(&wrapped).expect("parser init");
+    let mut parser = Parser::new(source).expect("parser init");
     let program = parser.parse_program().expect("parse");
-    let Some(Statement::FunctionDeclaration(decl)) = program.body.as_slice().first() else {
-        panic!("wrapper function declaration");
-    };
     let params: Vec<String> = params.iter().map(|p| p.to_string()).collect();
     compile_function_body(
-        decl.body.statements.as_slice(),
+        program.body.as_slice(),
         &FrameShape {
             arguments_slot: false,
             simple_params: &params,

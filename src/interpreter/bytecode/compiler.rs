@@ -851,12 +851,7 @@ impl Compiler {
             Expression::Logical(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
                 // lhs stays on stack via *Keep variants
-                let short_circuit_op = match op {
-                    LogicalOp::And => Op::JumpIfFalsyKeep,
-                    LogicalOp::Or => Op::JumpIfTruthyKeep,
-                    LogicalOp::NullishCoalescing => Op::JumpIfNotNullishKeep,
-                };
-                let to_end = self.emit_jump(short_circuit_op);
+                let to_end = self.emit_jump(Self::logical_keep_jump(*op));
                 // Short-circuit not taken: drop lhs and use rhs
                 self.emit(Op::Pop);
                 self.pop_n(1);
@@ -2008,16 +2003,6 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Statement::Return(Some(Expression::Call(callee, args, site_id))) => {
-                if self.tail_call_allowed() {
-                    self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
-                } else {
-                    self.compile_call(callee, args, Op::Call, *site_id)?;
-                }
-                self.compile_jump(Terminal::Return, true)?;
-                self.pop_n(1);
-                Ok(())
-            }
             Statement::Return(Some(expr)) => {
                 if self.tail_call_allowed() && contains_tail_call(expr) {
                     return self.compile_tail_return(expr);
@@ -2028,6 +2013,16 @@ impl Compiler {
                 Ok(())
             }
             _ => Err(CompileError::Unsupported(statement_kind(stmt))),
+        }
+    }
+
+    /// The jump taken when `lhs` already decides the result; it leaves `lhs`
+    /// on the operand stack.
+    fn logical_keep_jump(op: LogicalOp) -> Op {
+        match op {
+            LogicalOp::And => Op::JumpIfFalsyKeep,
+            LogicalOp::Or => Op::JumpIfTruthyKeep,
+            LogicalOp::NullishCoalescing => Op::JumpIfNotNullishKeep,
         }
     }
 
@@ -2054,12 +2049,7 @@ impl Compiler {
             }
             Expression::Logical(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
-                let short_circuit_op = match op {
-                    LogicalOp::And => Op::JumpIfFalsyKeep,
-                    LogicalOp::Or => Op::JumpIfTruthyKeep,
-                    LogicalOp::NullishCoalescing => Op::JumpIfNotNullishKeep,
-                };
-                let to_return = self.emit_jump(short_circuit_op);
+                let to_return = self.emit_jump(Self::logical_keep_jump(*op));
                 self.emit(Op::Pop);
                 self.pop_n(1);
                 self.compile_tail_return(rhs)?;
