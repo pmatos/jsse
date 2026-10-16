@@ -4,9 +4,19 @@ version = "0.11.0"
 edition = "2024"
 
 [features]
+default = ["jemalloc"]
 # Opt-in execution counters for performance investigations (issue #526).
 # Off by default so the shipped binary carries no counter writes.
 perf-counters = []
+# jemalloc as the shipped binary's global allocator (issue #1047). The
+# `#[global_allocator]` lives in src/main.rs only, so the library, unit tests,
+# miri and fuzz targets keep the system allocator. Build with
+# `--no-default-features` for allocator-sensitive profiling (valgrind
+# dhat/memcheck heap tools). The dependency is not resolved on Windows or wasm.
+jemalloc = ["dep:tikv-jemallocator"]
+
+[target.'cfg(not(any(windows, target_family = "wasm")))'.dependencies]
+tikv-jemallocator = { version = "0.6", optional = true }
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
