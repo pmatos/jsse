@@ -124,7 +124,7 @@ fn trim_string(s: JsString, trim_start: bool, trim_end: bool) -> JsString {
     if start == 0 && end == units.len() {
         return s;
     }
-    JsString::from_vec(units[start..end].to_vec())
+    JsString::from_units(&units[start..end])
 }
 
 // §22.1.3.17.1 StringPaddingBuiltinsImpl over code units.
@@ -209,7 +209,7 @@ fn append_replacement(
         return Ok(());
     }
     let call_args = [
-        JsValue::string(JsString::from_vec(matched.to_vec())),
+        JsValue::string(JsString::from_units(matched)),
         JsValue::number(position as f64),
         JsValue::string(string.clone()),
     ];
@@ -698,13 +698,13 @@ impl Interpreter {
                     let mut parts = Vec::new();
                     let mut p = 0usize; // start of unmatched portion
                     while let Some(q) = string_index_of(s_units, sep_units, p) {
-                        parts.push(JsValue::string(JsString::from_vec(s_units[p..q].to_vec())));
+                        parts.push(JsValue::string(JsString::from_units(&s_units[p..q])));
                         if parts.len() >= limit {
                             return Completion::Normal(interp.create_array(parts));
                         }
                         p = q + sep_units.len();
                     }
-                    parts.push(JsValue::string(JsString::from_vec(s_units[p..].to_vec())));
+                    parts.push(JsValue::string(JsString::from_units(&s_units[p..])));
                     Completion::Normal(interp.create_array(parts))
                 }),
             ),

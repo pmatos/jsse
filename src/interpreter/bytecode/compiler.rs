@@ -338,17 +338,17 @@ impl Compiler {
         if idx > u16::MAX as usize {
             return Err(CompileError::Ineligible("name pool overflow"));
         }
+        if self.name_index.is_none() && idx >= NAME_SCAN_LIMIT {
+            self.name_index = Some(
+                self.names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| (n.clone(), i as u16))
+                    .collect(),
+            );
+        }
         if let Some(index) = &mut self.name_index {
             index.insert(atom.clone(), idx as u16);
-        } else if idx >= NAME_SCAN_LIMIT {
-            let mut index: NameIndex = self
-                .names
-                .iter()
-                .enumerate()
-                .map(|(i, n)| (n.clone(), i as u16))
-                .collect();
-            index.insert(atom.clone(), idx as u16);
-            self.name_index = Some(index);
         }
         self.names.push(atom);
         Ok(idx as u16)

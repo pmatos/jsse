@@ -131,6 +131,19 @@ impl StrView {
         }
     }
 
+    fn inline_utf8(s: &str) -> Self {
+        let mut units = [0u16; INLINE_UNITS];
+        let mut len = 0;
+        for unit in s.encode_utf16() {
+            units[len] = unit;
+            len += 1;
+        }
+        Self {
+            len,
+            units: Units::Inline(units),
+        }
+    }
+
     fn units(&self) -> &[u16] {
         match &self.units {
             Units::Inline(units) => &units[..self.len],
@@ -166,20 +179,21 @@ impl JsString {
     pub fn from_str(s: &str) -> Self {
         // UTF-16 never has more units than the UTF-8 text has bytes.
         if s.len() <= INLINE_UNITS {
-            let mut units = [0u16; INLINE_UNITS];
-            let mut len = 0;
-            for unit in s.encode_utf16() {
-                units[len] = unit;
-                len += 1;
-            }
             return Self {
-                view: Arc::new(StrView {
-                    len,
-                    units: Units::Inline(units),
-                }),
+                view: Arc::new(StrView::inline_utf8(s)),
             };
         }
         Self::from_vec(s.encode_utf16().collect())
+    }
+
+    /// A copy of `units`, built in place when short enough to be stored inline.
+    pub(crate) fn from_units(units: &[u16]) -> Self {
+        if units.len() <= INLINE_UNITS {
+            return Self {
+                view: Arc::new(StrView::inline(units, &[])),
+            };
+        }
+        Self::from_vec(units.to_vec())
     }
 
     pub(crate) fn from_vec(v: Vec<u16>) -> Self {
@@ -234,31 +248,29 @@ impl JsString {
         }
         let len = self.view.len;
         let new_len = len + extra.len();
-        let mut grown = false;
-        if let Units::Shared { buf, .. } = &self.view.units {
-            if new_len <= buf.cap
-                && buf
-                    .tail
-                    .compare_exchange(len, new_len, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-            {
-                // SAFETY: the successful exchange gave this call exclusive
-                // ownership of `[len, new_len)`, which is within capacity and
-                // above every existing view's length.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(extra.as_ptr(), buf.ptr.add(len), extra.len());
-                }
-                return Self {
-                    view: Arc::new(StrView::from_buf(Arc::clone(buf), new_len)),
-                };
+        if let Units::Shared { buf, .. } = &self.view.units
+            && new_len <= buf.cap
+            && buf
+                .tail
+                .compare_exchange(len, new_len, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            // SAFETY: the successful exchange gave this call exclusive
+            // ownership of `[len, new_len)`, which is within capacity and
+            // above every existing view's length.
+            unsafe {
+                std::ptr::copy_nonoverlapping(extra.as_ptr(), buf.ptr.add(len), extra.len());
             }
-            grown = buf.grown;
+            return Self {
+                view: Arc::new(StrView::from_buf(Arc::clone(buf), new_len)),
+            };
         }
         if new_len <= INLINE_UNITS {
             return Self {
                 view: Arc::new(StrView::inline(self.as_units(), extra)),
             };
         }
+        let grown = matches!(&self.view.units, Units::Shared { buf, .. } if buf.grown);
         let cap = if grown && new_len >= STR_SLACK_THRESHOLD {
             new_len.saturating_mul(2)
         } else {

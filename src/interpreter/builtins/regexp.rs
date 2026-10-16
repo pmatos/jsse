@@ -5931,7 +5931,7 @@ struct SubjectCapture<'a> {
 
 impl SubjectCapture<'_> {
     fn text(&self) -> JsString {
-        JsString::from_vec(self.units.to_vec())
+        JsString::from_units(self.units)
     }
 }
 
@@ -8910,8 +8910,8 @@ pub(super) fn get_substitution(
                             .position(|&cu| cu == b'>' as u16)
                         {
                             let end = start + relative_end;
-                            let group_name = JsString::from_vec(replacement[start..end].to_vec())
-                                .to_rust_string();
+                            let group_name =
+                                JsString::from_units(&replacement[start..end]).to_rust_string();
                             let nc_obj = match named_captures.as_object_id() {
                                 Some(id) => id,
                                 None => {
@@ -11525,7 +11525,7 @@ mod subject_match_tests {
         ];
         for &(source, flags, units, start, lo, hi, captured) in cases {
             let plan = plan(&mut interp, source, flags);
-            let input = RegexInput::new(JsString::from_vec(units.to_vec()));
+            let input = RegexInput::new(JsString::from_units(units));
             let matcher = plan.bind(&mut interp, &input);
             let hit = matcher.captures_at(start).expect("match");
             let full = hit.capture(0).unwrap();

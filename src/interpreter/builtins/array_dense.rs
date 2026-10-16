@@ -85,8 +85,7 @@ pub(crate) fn try_intrinsic_iteration(
     interp: &Interpreter,
     iterable: &JsValue,
 ) -> Option<Vec<JsValue>> {
-    let cell = interp.get_object_cell(iterable.as_object_id()?)?;
-    let b = cell.borrow();
+    let b = array_cell(interp, iterable)?.borrow();
     let elements = b.array_elements()?;
     let realm = interp.realm();
     if !b.is_plain_dense_array(elements.len()) || b.prototype_id != realm.array_prototype {
@@ -96,9 +95,7 @@ pub(crate) fn try_intrinsic_iteration(
     let values_id = realm.array_prototype_values.as_ref()?.as_object_id()?;
     let proto = interp.get_object_cell(realm.array_prototype?)?.borrow();
     let iterator_method = proto.properties.get(iterator_key)?;
-    if iterator_method.getter().is_some()
-        || iterator_method.value().and_then(JsValue::as_object_id) != Some(values_id)
-    {
+    if iterator_method.value().and_then(JsValue::as_object_id) != Some(values_id) {
         return None;
     }
     drop(proto);
@@ -107,7 +104,7 @@ pub(crate) fn try_intrinsic_iteration(
         .get_object_cell(realm.array_iterator_prototype?)?
         .borrow();
     let next = iterator_proto.properties.get("next")?;
-    if next.getter().is_some() || next.value().and_then(JsValue::as_object_id) != Some(next_id) {
+    if next.value().and_then(JsValue::as_object_id) != Some(next_id) {
         return None;
     }
     if has_hole(elements) && !proto_chain_index_free(interp, b.prototype_id) {

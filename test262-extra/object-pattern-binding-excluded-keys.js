@@ -128,3 +128,25 @@ assert.throws(TypeError, function () {
   var { m: m2, n } = local;
   assert.sameValue(m2 + n, 3, "var declaration without rest");
 })();
+
+(function () {
+  var order = [];
+  var src = {
+    get a() { order.push("get a"); return 1; },
+    get b() { order.push("get b"); return 2; },
+    get c() { order.push("get c"); return 3; }
+  };
+  function k(name) {
+    order.push("key " + name);
+    return name;
+  }
+  var a, b, rest;
+  ({ a, [k("b")]: b } = src);
+  assert.sameValue(a + b, 3);
+  assert.sameValue(order.join(), "get a,key b,get b", "assignment without rest");
+
+  order.length = 0;
+  ({ a, [k("b")]: b, ...rest } = src);
+  assert.sameValue(Object.keys(rest).join(), "c", "assignment rest excludes computed key");
+  assert.sameValue(order.join(), "get a,key b,get b,get c", "assignment with rest");
+})();
