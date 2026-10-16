@@ -723,6 +723,18 @@ thread_local! {
     });
 }
 
+#[inline(never)]
+fn register_symbol(data: &Arc<JsSymbolData>) {
+    let _ = SYMBOL_INDEX.try_with(|index| index.borrow_mut().insert(data));
+}
+
+#[inline(never)]
+fn registered_symbol(id: u64) -> Option<Arc<JsSymbolData>> {
+    SYMBOL_INDEX
+        .try_with(|index| index.borrow().by_id.get(&id)?.upgrade())
+        .ok()?
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct JsSymbol {
     data: Arc<JsSymbolData>,
@@ -794,7 +806,7 @@ impl JsSymbol {
         self.data
             .key
             .get_or_init(|| {
-                let _ = SYMBOL_INDEX.try_with(|index| index.borrow_mut().insert(&self.data));
+                register_symbol(&self.data);
                 crate::interpreter::key_intern::intern_js_key(self.build_property_key())
             })
             .clone()
@@ -830,9 +842,7 @@ impl JsSymbol {
             .ok()?
             .parse()
             .ok()?;
-        let data = SYMBOL_INDEX
-            .try_with(|index| index.borrow().by_id.get(&id)?.upgrade())
-            .ok()??;
+        let data = registered_symbol(id)?;
         // Another interpreter on this thread may have reused the id.
         let own_key = data.key.get()?;
         (own_key.same_allocation(key) || own_key == key).then_some(Self { data })
