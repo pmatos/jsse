@@ -1070,7 +1070,6 @@ impl NanBoxedValue {
         Some(f(unsafe { &*ptr }.units()))
     }
 
-    #[inline(always)]
     pub(crate) fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
         if self.tag() != Some(NanTag::Symbol) {
             return None;
@@ -1085,7 +1084,6 @@ impl NanBoxedValue {
         Some(f(&symbol))
     }
 
-    #[inline(always)]
     pub(crate) fn with_bigint<R>(&self, f: impl FnOnce(&num_bigint::BigInt) -> R) -> Option<R> {
         if self.tag() != Some(NanTag::BigInt) {
             return None;

@@ -26,7 +26,7 @@ both operands and went `binary_slow` -> `eval_binary` -> `bigint_binary` (dead p
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
 cachegrind `--cache-sim=no`, whole-process `I refs`. base = `origin/main` at `5784ea97` (binary sha256 `a346c1cb51e4...`),
-new = base plus this change (`345caacfc876...`). Repro = the issue's `repro.js` (switch Ir per 8-case iteration, net of
+new = base plus this change (`34712a1dc939...`). Repro = the issue's `repro.js` (switch Ir per 8-case iteration, net of
 the N=0 run; direct loop Ir per compare, two compares per iteration).
 
 | operands | switch base | switch new | delta | `a === b; a !== b` base | new | delta |
@@ -46,8 +46,8 @@ JetStream drivers at `--iterations 1`, whole-process Ir:
 
 | benchmark | base | new | delta |
 |---|---:|---:|---:|
-| Air | 2,751,217,125 | 2,401,750,600 | -12.7% |
-| hash-map | 22,337,705,990 | 20,998,547,187 | -6.0% |
+| Air | 2,751,217,125 | 2,401,226,427 | -12.7% |
+| hash-map | 22,337,705,990 | 20,957,194,403 | -6.2% |
 | proxy-mobx | 782,569,966 | 760,465,379 | -2.8% |
 | Babylon | 3,466,135,005 | 3,397,469,558 | -2.0% |
 | fib | 7,515,772,271 | 7,425,572,871 | -1.2% |
