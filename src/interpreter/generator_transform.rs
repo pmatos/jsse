@@ -1157,6 +1157,20 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 // lowers through the ordinary per-statement pipeline instead
                 // of being tree-walked intact — see issue #683.
                 transform_scope_block_joined(stmts, ctx, after_state);
+            } else if ctx.with_scopes.is_empty()
+                && !crate::interpreter::hoisting::block_declares_lexical(stmts)
+            {
+                // A block with no lexical declaration has an environment no
+                // code can observe: lower its statements in place with no
+                // state boundary, scope action or join state. Under a `with`
+                // chain the block keeps its scope, which claims the chain.
+                transform_statements(stmts, ctx, after_state);
+                if after_state != usize::MAX {
+                    if ctx.current_state_id != after_state {
+                        ctx.finalize_current_state(StateTerminator::Goto(after_state));
+                    }
+                    ctx.current_state_id = after_state;
+                }
             } else {
                 // §14.2.2 Block Evaluation: a fresh declarative environment per
                 // entry, discarded on the way out. Force a state boundary
