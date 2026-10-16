@@ -335,23 +335,30 @@ fn decode_u32(chunk: &Chunk, pc: usize) -> u32 {
     u32::from_le_bytes(chunk.code[pc..pc + 4].try_into().unwrap())
 }
 
-/// Roots every object-valued `JsValue` currently on the operand stack, not
-/// just the current opcode's own operands. A value pushed by an earlier `GetProp`/
-/// `GetElement` (e.g. the base of `a.b.value = a.c`) can still be pending on
-/// the stack while a *later* opcode's own getter/proxy-trap/`ToPropertyKey`
-/// coercion runs and reaches a nested `gc_safepoint()` — rooting only this
-/// opcode's own operands would miss that older, still-pending value.
-///
-/// `GetElement`'s numeric-index fast path deliberately skips this temporary
-/// frame: it only borrows existing typed-array/array storage and cannot run
-/// user code or reach a nested safepoint. Its operands remain independently
-/// rooted in `gc_bytecode_roots` until `pop_value` consumes them.
-fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
-    let frame = interp.gc_root_frame();
-    for v in stack {
-        interp.gc_root_value(v);
+/// Debug check of the operand-stack rooting invariant: every object-valued
+/// entry of the operand stack was pushed through `push_value`, which roots it
+/// in `gc_bytecode_roots`, so this frame's slice of that stack holds one id per
+/// object operand (plus one for an object the Script's completion value
+/// accumulator holds). An opcode that can run user code (a getter, proxy trap
+/// or `ToPropertyKey` coercion reaching a nested `gc_safepoint`) therefore
+/// needs no further rooting of the operands still pending below its own; a raw
+/// `stack.push` of an object would fail this check.
+#[inline(always)]
+fn debug_assert_operands_rooted(
+    interp: &Interpreter,
+    stack: &[JsValue],
+    roots_base: usize,
+    completion_value: Option<&JsValue>,
+) {
+    if cfg!(debug_assertions) {
+        let operands = stack.iter().filter(|v| v.as_object_id().is_some()).count();
+        let accumulator = completion_value.is_some_and(|v| v.as_object_id().is_some());
+        debug_assert_eq!(
+            interp.gc_bytecode_roots.len() - roots_base,
+            operands + usize::from(accumulator),
+            "an object operand reached the stack without push_value"
+        );
     }
-    frame
 }
 
 #[inline(always)]
@@ -826,6 +833,7 @@ fn run_chunk_with_var_prologue(
 /// Hits a GC safepoint, asserting the VM's two scratch stacks are empty —
 /// both safepoint sites (a loop back-edge, a statement boundary) land
 /// between statements, where the compiler guarantees a net-zero stack.
+#[inline(always)]
 fn safepoint_with_empty_stacks(
     interp: &mut Interpreter,
     stack: &[JsValue],
@@ -835,7 +843,7 @@ fn safepoint_with_empty_stacks(
 ) {
     debug_assert!(stack.len() <= persistent, "operand stack live at {context}");
     debug_assert!(refs.is_empty(), "reference stack live at {context}");
-    interp.gc_safepoint();
+    interp.gc_safepoint_poll();
 }
 
 fn run_chunk_inner(
@@ -864,6 +872,12 @@ fn run_chunk_inner(
     let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
     let envs_base = interp.call_stack_envs.len();
     let roots_base = interp.gc_bytecode_roots.len();
+    // Before an opcode that can run user code with operands pending.
+    macro_rules! assert_operands_rooted {
+        () => {
+            debug_assert_operands_rooted(interp, stack, roots_base, completion_value.as_ref())
+        };
+    }
     macro_rules! cur_env {
         () => {
             scopes.last().unwrap_or(frame_env)
@@ -1183,11 +1197,10 @@ fn run_chunk_inner(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = chunk.names[idx as usize].clone();
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let base = stack.pop().expect("stack underflow on GetProp");
                     let result = member_get(interp, &base, &name);
                     unroot_stack_value(interp, &base);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
@@ -1197,12 +1210,11 @@ fn run_chunk_inner(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let id = private_id!(idx);
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let base = stack.pop().expect("stack underflow on private read");
                     let result =
                         interp.private_get_resolved(&base, id, &chunk.private_names[idx as usize]);
                     unroot_stack_value(interp, &base);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Completion::Normal(v) => {
                             push_value(interp, stack, v);
@@ -1217,7 +1229,7 @@ fn run_chunk_inner(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let id = private_id!(idx);
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let rhs = stack.pop().expect("stack underflow on SetPrivate rhs");
                     let base = stack.pop().expect("stack underflow on SetPrivate base");
                     let result = interp.set_private_resolved(
@@ -1228,7 +1240,6 @@ fn run_chunk_inner(
                     );
                     unroot_stack_value(interp, &rhs);
                     unroot_stack_value(interp, &base);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(()) => push_value(interp, stack, rhs),
                         Err(e) => throw!('dispatch, e),
@@ -1280,13 +1291,12 @@ fn run_chunk_inner(
                         pop_value(interp, stack, "stack underflow on GetElement base");
                         push_value(interp, stack, value);
                     } else {
-                        let gc_frame = root_operand_stack(interp, stack);
+                        assert_operands_rooted!();
                         let key_val = stack.pop().expect("stack underflow on GetElement key");
                         let base = stack.pop().expect("stack underflow on GetElement base");
                         let result = member_get_computed(interp, &base, &key_val);
                         unroot_stack_value(interp, &key_val);
                         unroot_stack_value(interp, &base);
-                        interp.gc_unroot_frame(gc_frame);
                         match result {
                             Completion::Normal(v) => push_value(interp, stack, v),
                             abrupt => bail!('dispatch, abrupt),
@@ -1297,11 +1307,10 @@ fn run_chunk_inner(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let base = stack.pop().expect("stack underflow on LoadMethod");
                     let result = member_get(interp, &base, name);
                     unroot_stack_value(interp, &base);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Completion::Normal(method) => {
                             push_value(interp, stack, method);
@@ -1311,7 +1320,7 @@ fn run_chunk_inner(
                     }
                 }
                 Op::LoadMethodElement => {
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let key_val = stack
                         .pop()
                         .expect("stack underflow on LoadMethodElement key");
@@ -1321,7 +1330,6 @@ fn run_chunk_inner(
                     let result = member_get_computed(interp, &base, &key_val);
                     unroot_stack_value(interp, &key_val);
                     unroot_stack_value(interp, &base);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Completion::Normal(method) => {
                             push_value(interp, stack, method);
@@ -1334,7 +1342,7 @@ fn run_chunk_inner(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = chunk.names[idx as usize].clone();
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let rhs = stack.pop().expect("stack underflow on SetProp rhs");
                     let base = stack.pop().expect("stack underflow on SetProp base");
                     let base_root = base.clone();
@@ -1342,7 +1350,6 @@ fn run_chunk_inner(
                     let result = member_set(interp, base, &name, rhs.clone(), strict);
                     unroot_stack_value(interp, &rhs);
                     unroot_stack_value(interp, &base_root);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(()) => push_value(interp, stack, rhs),
                         Err(e) => throw!('dispatch, e),
@@ -1360,7 +1367,7 @@ fn run_chunk_inner(
                         push_value(interp, stack, rhs);
                         continue;
                     }
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let rhs = stack.pop().expect("stack underflow on SetElement rhs");
                     let key_val = stack.pop().expect("stack underflow on SetElement key");
                     let base = stack.pop().expect("stack underflow on SetElement base");
@@ -1370,7 +1377,6 @@ fn run_chunk_inner(
                     unroot_stack_value(interp, &rhs);
                     unroot_stack_value(interp, &key_val);
                     unroot_stack_value(interp, &base_root);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(()) => push_value(interp, stack, rhs),
                         Err(e) => throw!('dispatch, e),
@@ -1922,11 +1928,10 @@ fn run_chunk_inner(
                             interp.create_type_error(&format!("Cannot read properties of {base}"));
                         throw!('dispatch, error);
                     }
-                    let gc_frame = root_operand_stack(interp, stack);
+                    assert_operands_rooted!();
                     let key = stack.pop().expect("stack underflow on ToPrimitiveKey key");
                     let result = interp.to_primitive(&key, "string");
                     unroot_stack_value(interp, &key);
-                    interp.gc_unroot_frame(gc_frame);
                     match result {
                         Ok(v) => push_value(interp, stack, v),
                         Err(e) => throw!('dispatch, e),
