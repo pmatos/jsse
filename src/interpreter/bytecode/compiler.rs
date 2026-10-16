@@ -2007,10 +2007,7 @@ impl Compiler {
                 if self.tail_call_allowed() && contains_tail_call(expr) {
                     return self.compile_tail_return(expr);
                 }
-                self.compile_expr(expr)?;
-                self.compile_jump(Terminal::Return, true)?;
-                self.pop_n(1);
-                Ok(())
+                self.compile_return_value(expr)
             }
             _ => Err(CompileError::Unsupported(statement_kind(stmt))),
         }
@@ -2059,20 +2056,24 @@ impl Compiler {
                 self.pop_n(1);
                 Ok(())
             }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) if !exprs.is_empty() => {
-                let (last, prefix) = exprs.split_last().expect("checked non-empty");
+            Expression::Sequence(exprs) | Expression::Comma(exprs)
+                if let Some((last, prefix)) = exprs.split_last() =>
+            {
                 for e in prefix {
                     self.compile_effect(e)?;
                 }
                 self.compile_tail_return(last)
             }
-            _ => {
-                self.compile_expr(expr)?;
-                self.compile_jump(Terminal::Return, true)?;
-                self.pop_n(1);
-                Ok(())
-            }
+            _ => self.compile_return_value(expr),
         }
+    }
+
+    /// Evaluates `expr` and returns it through any open cleanups.
+    fn compile_return_value(&mut self, expr: &Expression) -> Result<(), CompileError> {
+        self.compile_expr(expr)?;
+        self.compile_jump(Terminal::Return, true)?;
+        self.pop_n(1);
+        Ok(())
     }
 
     /// A literal `true` has no side effects and cannot end the loop. In
