@@ -13,6 +13,7 @@ use crate::ast::{
 };
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
+use crate::interpreter::hoisting::block_declares_lexical;
 use crate::interpreter::types::BindingKind;
 use crate::types::{JsString, JsValue};
 
@@ -1618,7 +1619,7 @@ impl Compiler {
     /// A statement list that runs in its own environment when it declares a
     /// binding (a block, a `try`/`catch`/`finally` block).
     fn compile_scoped_block(&mut self, body: &[Statement]) -> Result<(), CompileError> {
-        if !declares_lexical(body) {
+        if !block_declares_lexical(body) {
             return self.compile_statement_list(body);
         }
         let decls = self
@@ -2242,7 +2243,7 @@ impl Compiler {
         let scoped = switch
             .cases
             .iter()
-            .any(|case| declares_lexical(&case.consequent));
+            .any(|case| block_declares_lexical(&case.consequent));
         let decls = if scoped {
             let lists: Vec<&[Statement]> = switch
                 .cases
@@ -3213,16 +3214,6 @@ fn is_function_declaration(stmt: &Statement) -> bool {
     crate::interpreter::hoisting::unwrap_labeled_function(stmt).is_some()
 }
 
-/// Whether a statement list declares a binding a block would scope to itself
-/// (`let`/`const`/`using`, class, function declarations).
-fn declares_lexical(stmts: &[Statement]) -> bool {
-    stmts.iter().any(|stmt| match stmt {
-        Statement::Variable(decl) => decl.kind != VarKind::Var,
-        Statement::ClassDeclaration(_) => true,
-        other => is_function_declaration(other),
-    })
-}
-
 /// Pre-order walk over `stmt` and the statements nested in it (not into
 /// function bodies, which are separate Bodies); true when `pred` matches any.
 fn stmt_contains(stmt: &Statement, pred: &dyn Fn(&Statement) -> bool) -> bool {
@@ -3364,7 +3355,7 @@ fn body_has_poison(body: &[Statement], poison: PoisonFn) -> bool {
 /// function declarations (anywhere — Annex B hoists block-level ones) and
 /// top-level lexical bindings, which the VM itself never declares.
 fn body_needs_instantiation(body: &[Statement]) -> bool {
-    declares_lexical(body) || stmts_contain(body, &|s| is_function_declaration(s))
+    block_declares_lexical(body) || stmts_contain(body, &|s| is_function_declaration(s))
 }
 
 fn contains_tail_call(expr: &Expression) -> bool {
