@@ -70,7 +70,8 @@ pub(crate) enum CollectionKind {
 
 impl GcPacer {
     pub(crate) fn new() -> Self {
-        let mut pacer = GcPacer {
+        let stress_period = stress_period_from_env();
+        GcPacer {
             nursery_alloc_count: 0,
             nursery_bytes: 0,
             major_bytes_since_gc: 0,
@@ -79,14 +80,12 @@ impl GcPacer {
             minor_requested: false,
             major_requested: false,
             minor_suppressed: false,
-            stress_period: stress_period_from_env(),
-            poll: false,
+            stress_period,
+            poll: stress_period != 0,
             stress_count: 0,
             #[cfg(test)]
             safepoint_calls: 0,
-        };
-        pacer.sync_poll();
-        pacer
+        }
     }
 
     #[inline(always)]
