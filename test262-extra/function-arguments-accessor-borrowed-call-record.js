@@ -62,6 +62,33 @@ function onlyInRecord(a) {
 }
 assert.sameValue(onlyInRecord({ tag: "only" }), null, "mapped write replaces the argument");
 
+function extraOnly(a) {
+  $262.gc();
+  return probe(extraOnly);
+}
+record = extraOnly(0, { tag: "extra" }, [4, 5]);
+$262.gc();
+assert.sameValue(record[1].tag, "extra", "extra object argument survives collection");
+assert.sameValue(record[2][1], 5, "extra array argument survives collection");
+
+var sourceArray = [{ tag: "only-in-call" }];
+var mapped = sourceArray.map(function nativeCaller(element, unusedDefault = 0) {
+  sourceArray.length = 0;
+  element = null;
+  $262.gc();
+  for (var i = 0, junk = []; i < 2000; i++) junk.push({ junk: i });
+  return probe(nativeCaller)[0].tag;
+});
+assert.sameValue(mapped[0], "only-in-call", "argument held only by the call record survives collection");
+
+function reassignedUnmapped(a = 1, b) {
+  b = null;
+  $262.gc();
+  return probe(reassignedUnmapped);
+}
+record = reassignedUnmapped(undefined, { tag: "kept" });
+assert.sameValue(record[1].tag, "kept", "unmapped record keeps the original argument");
+
 function unmapped(a = 1, b) {
   $262.gc();
   return probe(unmapped);

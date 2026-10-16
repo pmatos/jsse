@@ -2359,7 +2359,7 @@ impl Interpreter {
             CallFrameArguments::Materialized(arguments) => return arguments.clone(),
             CallFrameArguments::Deferred { args, mapped } => (
                 args.values().to_vec(),
-                args.func_env(),
+                mapped.then(|| args.func_env()),
                 *mapped,
                 frame.func_obj_id,
             ),
@@ -2380,7 +2380,7 @@ impl Interpreter {
             &args,
             callee,
             false,
-            mapped.then_some(&func_env),
+            func_env.as_ref(),
             params.as_deref().map_or(&[], |p| p.as_slice()),
         );
         self.call_stack_frames[frame_index].arguments =
