@@ -31,6 +31,36 @@ var key = {
   }
 };
 
+var valueKey = {
+  toString: function () {
+    collect();
+    return "value";
+  }
+};
+
+var methodKey = {
+  toString: function () {
+    collect();
+    return "method";
+  }
+};
+
+var deleted;
+function trackedTarget() {
+  return new Proxy({}, {
+    deleteProperty: function (target, name) {
+      deleted = name;
+      return true;
+    }
+  });
+}
+var deleteKey = {
+  toString: function () {
+    collect();
+    return "gone";
+  }
+};
+
 var proto = {
   get value() {
     collect();
@@ -58,6 +88,15 @@ function namedGet() { return observe(pending(), base().value); }
 function computedGet() { return observe(pending(), base()[key]); }
 function namedCall() { return observe(pending(), base().method()); }
 function computedCall() { return observe(pending(), base()["method"]()); }
+function collectingKeyCall() { return observe(pending(), base()[methodKey]()); }
+function optionalComputedGet() { return observe(pending(), base()[valueKey]?.valueOf()); }
+function taggedMethod() { return observe(pending(), base()[methodKey]`x`); }
+function computedDelete() {
+  return observe(pending(), delete trackedTarget()[deleteKey]);
+}
+function optionalDelete() {
+  return observe(pending(), delete { a: trackedTarget() }?.a[deleteKey]);
+}
 function namedSet() { return observe(pending(), base().value = { marker: 41 }); }
 function computedSet() { return observe(pending(), base()[key] = { marker: 42 }); }
 function namedUpdate() { return observe(pending(), base().value++); }
@@ -68,6 +107,14 @@ assert.sameValue(+namedGet(), 23);
 assert.sameValue(+computedGet(), 23);
 assert.sameValue(namedCall(), 31);
 assert.sameValue(computedCall(), 31);
+assert.sameValue(collectingKeyCall(), 31);
+assert.sameValue(optionalComputedGet(), 23);
+assert.sameValue(taggedMethod(), 31);
+assert.sameValue(computedDelete(), true);
+assert.sameValue(deleted, "gone");
+deleted = undefined;
+assert.sameValue(optionalDelete(), true);
+assert.sameValue(deleted, "gone");
 assert.sameValue(namedSet().marker, 41);
 assert.sameValue(stored.marker, 41);
 assert.sameValue(computedSet().marker, 42);
@@ -106,6 +153,7 @@ assert.sameValue(privateBase.stored(), 24);
 throwing = true;
 var operations = [
   namedGet, computedGet, namedCall, computedCall,
+  collectingKeyCall, optionalComputedGet, taggedMethod, computedDelete, optionalDelete,
   namedSet, computedSet, namedUpdate, computedUpdate, computedCompound,
   function () { return new PrivateAccess().read(); },
   function () { return new PrivateAccess().call(); },
@@ -113,7 +161,7 @@ var operations = [
   function () { return new PrivateAccess().update(); }
 ];
 for (var i = 0; i < operations.length; i++) {
-  var caught;
+  var caught = undefined;
   try {
     operations[i]();
   } catch (error) {
