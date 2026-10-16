@@ -41,7 +41,7 @@ medians are reported.
 
 | helper body | base | stage 1+2 |
 |---|---:|---:|
-| `var r = 0; return a + b;` (var1) | +453 | +470 |
+| `var r = 0; return a + b;` (var1) | +453 | +468 |
 | `const r = 0; const s = 1; ...` (const2) | +2,633 | +830 |
 | `let r = 0; let s = 1; ...` (let2) | +2,633 | +815 |
 | `const r = a + b; return r;` (const1read) | +1,654 | +556 |
