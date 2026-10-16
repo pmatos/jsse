@@ -15,6 +15,8 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use super::body_memo::{BodyMemo, DEFAULT_CAPACITY};
+use super::atom::Atom;
+use super::types::BindingKind;
 use crate::ast::{Body, Statement};
 use crate::interpreter::Interpreter;
 
@@ -30,6 +32,10 @@ pub(crate) struct HoistAnalysis {
     /// `blocked` accumulator is internal to the walk and discarded afterwards
     /// by the original code, so it is intentionally not cached.)
     pub(crate) annexb_names: Vec<String>,
+    /// The `let`/`const`/class names the Body declares at its top level, in
+    /// declaration order and already interned: BlockDeclarationInstantiation's
+    /// TDZ bindings, declared per call without re-hashing the names (#1052).
+    pub(crate) lexical_names: Vec<(Atom, BindingKind)>,
 }
 
 /// Capacity-bounded, approximate-LRU memo of `HoistAnalysis`, keyed by
@@ -92,6 +98,17 @@ fn collect_names(stmts: &[Statement]) -> HoistAnalysis {
     HoistAnalysis {
         var_names: var_set.into_iter().collect(),
         annexb_names,
+        lexical_names: super::hoisting::collect_lexical_names(stmts)
+            .into_iter()
+            .map(|(name, is_const)| {
+                let kind = if is_const {
+                    BindingKind::Const
+                } else {
+                    BindingKind::Let
+                };
+                (Atom::intern(&name), kind)
+            })
+            .collect(),
     }
 }
 
