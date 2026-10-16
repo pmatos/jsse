@@ -335,14 +335,11 @@ fn decode_u32(chunk: &Chunk, pc: usize) -> u32 {
     u32::from_le_bytes(chunk.code[pc..pc + 4].try_into().unwrap())
 }
 
-/// Debug check of the operand-stack rooting invariant: every object-valued
-/// entry of the operand stack was pushed through `push_value`, which roots it
-/// in `gc_bytecode_roots`, so this frame's slice of that stack holds one id per
-/// object operand (plus one for an object the Script's completion value
-/// accumulator holds). An opcode that can run user code (a getter, proxy trap
-/// or `ToPropertyKey` coercion reaching a nested `gc_safepoint`) therefore
-/// needs no further rooting of the operands still pending below its own; a raw
-/// `stack.push` of an object would fail this check.
+/// Opcodes that can run user code rely on every object operand having been
+/// pushed through `push_value`, which roots it in `gc_bytecode_roots` (one id
+/// per object operand, plus one for an object held by the Script completion
+/// accumulator). A raw `stack.push` of an object would break that; this check
+/// catches it in debug builds.
 #[inline(always)]
 fn debug_assert_operands_rooted(
     interp: &Interpreter,

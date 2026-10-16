@@ -547,7 +547,7 @@ impl Interpreter {
         }
     }
 
-    /// `gc_safepoint` for the VM's hot path: two flag tests inline, the call
+    /// `gc_safepoint` for the VM's hot path: one inline test of `poll`, the call
     /// only when a request or stress mode makes the safepoint do something.
     #[inline(always)]
     pub(crate) fn gc_safepoint_poll(&mut self) {
