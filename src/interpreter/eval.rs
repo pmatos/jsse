@@ -2678,8 +2678,17 @@ impl Interpreter {
             // `ToPropertyKey` run user code that can collect.
             self.with_gc_root_scope(|this| {
                 this.gc_root_value(&obj_val);
-                let key = match prop {
-                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                let strict = env.borrow().strict;
+                match prop {
+                    MemberProperty::Dot(name) => {
+                        if obj_val.is_nullish() {
+                            return Completion::Throw(this.create_type_error(&format!(
+                                "Cannot read properties of {obj_val} (reading '{name}')"
+                            )));
+                        }
+                        let key = JsPropertyKey::from(name.clone());
+                        this.update_member_value(&obj_val, &key, op, prefix, strict)
+                    }
                     MemberProperty::Computed(expr) => {
                         let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
@@ -2689,17 +2698,10 @@ impl Interpreter {
                             ));
                             return Completion::Throw(err);
                         }
-                        propagate!(this.to_property_key(&v))
+                        this.update_member_computed(&obj_val, &v, op, prefix, strict)
                     }
                     MemberProperty::Private(_) => unreachable!(),
-                };
-                if obj_val.is_nullish() {
-                    return Completion::Throw(this.create_type_error(&format!(
-                        "Cannot read properties of {obj_val} (reading '{key}')"
-                    )));
                 }
-                let strict = env.borrow().strict;
-                this.update_member_value(&obj_val, &key, op, prefix, strict)
             })
         } else if let Expression::Call(_, _, _) = arg {
             match self.eval_expr(arg, env) {
@@ -2753,6 +2755,48 @@ impl Interpreter {
             Ok(()) => Completion::Normal(if prefix { new_val } else { old_val }),
             Err(e) => Completion::Throw(e),
         }
+    }
+
+    /// `update_member_value` for a computed key that has not been through
+    /// `ToPropertyKey` yet (base known non-nullish). A Number key over a
+    /// plain dense Array or in-range TypedArray element reads, updates and
+    /// writes through `numeric_index_fast_get`/`numeric_index_fast_set`
+    /// without ever building the key string. Whenever either helper declines
+    /// the generic path continues from the same point: the read is not
+    /// repeated and `ToNumeric` has run exactly once on the old value.
+    pub(super) fn update_member_computed(
+        &mut self,
+        base: &JsValue,
+        key_val: &JsValue,
+        op: UpdateOp,
+        prefix: bool,
+        strict: bool,
+    ) -> Completion {
+        if let Some(index) = key_val.as_number()
+            && let Some(current) = self.numeric_index_fast_get(base, index)
+        {
+            let (old_val, new_val) = match self.apply_update_numeric(&current, op) {
+                Ok(pair) => pair,
+                Err(e) => return Completion::Throw(e),
+            };
+            if !self.numeric_index_fast_set(base, index, &new_val) {
+                let key = match self.to_property_key(key_val) {
+                    Ok(key) => key,
+                    Err(e) => return Completion::Throw(e),
+                };
+                if let Err(e) =
+                    self.set_object_with_key(base.clone(), &key, new_val.clone(), strict)
+                {
+                    return Completion::Throw(e);
+                }
+            }
+            return Completion::Normal(if prefix { new_val } else { old_val });
+        }
+        let key = match self.to_property_key(key_val) {
+            Ok(key) => key,
+            Err(e) => return Completion::Throw(e),
+        };
+        self.update_member_value(base, &key, op, prefix, strict)
     }
 
     pub(crate) fn assign_to_expr(
@@ -3106,7 +3150,16 @@ impl Interpreter {
                         }
                         _ => None,
                     };
-                    // For compound ops, compute property key and get current value before RHS
+                    // A Number key is converted lazily: ToPropertyKey of a Number is pure,
+                    // so a store that `numeric_index_fast_set` completes never builds
+                    // the key string (the key stays `None`).
+                    let numeric_key = match prop {
+                        MemberProperty::Computed(_) => {
+                            key_val.as_ref().and_then(JsValue::as_number)
+                        }
+                        _ => None,
+                    };
+                    // For compound ops, read the current value before the RHS
                     let (key, lval_for_compound) = if op != AssignOp::Assign {
                         // §6.2.5.5 GetValue: if base is null/undefined, throw TypeError
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
@@ -3121,47 +3174,54 @@ impl Interpreter {
                                 "Cannot read properties of {base_str}"
                             )));
                         }
-                        let key = match prop {
-                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                            MemberProperty::Computed(_) => {
-                                match interp.to_property_key(key_val.as_ref().unwrap()) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
-                            MemberProperty::Private(_) => unreachable!(),
-                        };
-                        let lval = if let Some(o) = (obj_val)
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
+                        if let Some(current) = numeric_key
+                            .and_then(|index| interp.numeric_index_fast_get(&obj_val, index))
                         {
-                            match interp.get_object_property(o.id, &key, &obj_val) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
+                            interp.gc_root_value(&current);
+                            (None, Some(current))
                         } else {
-                            match interp.to_object(&obj_val) {
-                                Completion::Normal(wrapped) => {
-                                    if let Some(o) = (wrapped)
-                                        .as_object_id()
-                                        .map(|id| crate::types::JsObject { id })
-                                    {
-                                        match interp.get_object_property(o.id, &key, &obj_val) {
-                                            Completion::Normal(v) => v,
-                                            other => return other,
-                                        }
-                                    } else {
-                                        JsValue::UNDEFINED
+                            let key = match prop {
+                                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                                MemberProperty::Computed(_) => {
+                                    match interp.to_property_key(key_val.as_ref().unwrap()) {
+                                        Ok(s) => s,
+                                        Err(e) => return Completion::Throw(e),
                                     }
                                 }
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::UNDEFINED,
-                            }
-                        };
-                        interp.gc_root_value(&lval);
-                        (key, Some(lval))
+                                MemberProperty::Private(_) => unreachable!(),
+                            };
+                            let lval = if let Some(o) = (obj_val)
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
+                            {
+                                match interp.get_object_property(o.id, &key, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                match interp.to_object(&obj_val) {
+                                    Completion::Normal(wrapped) => {
+                                        if let Some(o) = (wrapped)
+                                            .as_object_id()
+                                            .map(|id| crate::types::JsObject { id })
+                                        {
+                                            match interp.get_object_property(o.id, &key, &obj_val) {
+                                                Completion::Normal(v) => v,
+                                                other => return other,
+                                            }
+                                        } else {
+                                            JsValue::UNDEFINED
+                                        }
+                                    }
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => JsValue::UNDEFINED,
+                                }
+                            };
+                            interp.gc_root_value(&lval);
+                            (Some(key), Some(lval))
+                        }
                     } else {
-                        (JsPropertyKey::from_str(""), None) // key computed after RHS for simple assign
+                        (None, None) // key computed after RHS for simple assign
                     };
                     // Now evaluate RHS
                     let rval = match interp.eval_expr(right, env) {
@@ -3169,9 +3229,12 @@ impl Interpreter {
                         other => return other,
                     };
                     interp.gc_root_value(&rval);
-                    // For simple assign, compute key now
-                    let key = if op == AssignOp::Assign {
-                        match prop {
+                    // A Number key reaches ToPropertyKey only on a declined fast store
+                    // or the null-base message; every other key is converted here.
+                    let key = match (key, numeric_key) {
+                        (Some(key), _) => Some(key),
+                        (None, Some(_)) => None,
+                        (None, None) => Some(match prop {
                             MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
                                 match interp.to_property_key(key_val.as_ref().unwrap()) {
@@ -3180,13 +3243,18 @@ impl Interpreter {
                                 }
                             }
                             MemberProperty::Private(_) => unreachable!(),
-                        }
-                    } else {
-                        key
+                        }),
                     };
                     // Note: super[key] = val is handled by the early return above
                     // Throw for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
+                        let key = match key {
+                            Some(key) => key,
+                            None => match interp.to_property_key(key_val.as_ref().unwrap()) {
+                                Ok(key) => key,
+                                Err(e) => return Completion::Throw(e),
+                            },
+                        };
                         return Completion::Throw(interp.create_type_error(&format!(
                             "Cannot set properties of {} (setting '{}')",
                             if obj_val.is_null() {
@@ -3205,112 +3273,29 @@ impl Interpreter {
                             other => return other,
                         }
                     };
-                    // Fast path for dense ordinary Array indexed writes: in-bounds
-                    // overwrite or append-at-end directly into the backing Vec,
-                    // bypassing the setter/prototype/Set machinery. Bails to the
-                    // slow path on holes, length mismatch, frozen/sealed/non-
-                    // -writable-length, non-extensible, proxies, or shadowed
-                    // indices so strict-throw and exotic behaviour stay correct.
-                    //
-                    // NB: in this engine `JsValue::UNDEFINED` in `array_elements`
-                    // (with no `properties` entry) is the HOLE sentinel (see
-                    // `has_own_property`/`get_own_property_full`). The fast path
-                    // therefore must not (a) treat an `Undefined` slot as a live
-                    // element to overwrite, nor (b) store `undefined` as a present
-                    // element without the `properties` presence marker the slow
-                    // path adds — doing either materialises/leaves a hole with the
-                    // wrong own-property state. Both cases bail to the slow path.
-                    //
-                    // The key and value tests gate the arena lookup: both are
-                    // pure and allocation-free, so a non-index write never pays
-                    // for an object handle it would immediately drop.
-                    if !(final_val).is_undefined()
-                        && let Some(idx_u32) = parse_array_index(&key)
-                        && let Some(obj_id) = obj_val.as_object_id()
-                        && let Some(obj) = interp.get_object(obj_id)
-                    {
-                        let fast = {
-                            let b = obj.borrow();
-                            if b.class_name == "Array"
-                                && !b.is_proxy()
-                                && b.array_elements().is_some()
-                                && !b.properties.contains_key(&key)
-                            {
-                                let elems = b.array_elements().unwrap();
-                                let elems_len = elems.len();
-                                let idx = idx_u32 as usize;
-                                // Overwrite is only sound on a genuinely live slot
-                                // (not the hole sentinel).
-                                let slot_is_hole = idx < elems_len && (elems[idx]).is_undefined();
-                                let len_desc = b.properties.get("length");
-                                let cur_len = len_desc
-                                    .and_then(|d| d.value())
-                                    .and_then(|v| (v).as_number().map(|n| n as u32))
-                                    .unwrap_or(0);
-                                let length_writable = len_desc
-                                    .map(|d| d.writable() != Some(false))
-                                    .unwrap_or(false);
-                                Some((
-                                    elems_len,
-                                    cur_len,
-                                    length_writable,
-                                    b.extensible,
-                                    slot_is_hole,
-                                    b.prototype_id,
-                                ))
-                            } else {
-                                None
-                            }
-                        };
-                        if let Some((
-                            elems_len,
-                            cur_len,
-                            length_writable,
-                            extensible,
-                            slot_is_hole,
-                            proto_id,
-                        )) = fast
-                        {
-                            let idx = idx_u32 as usize;
-                            if idx < elems_len && !slot_is_hole {
-                                // In-bounds overwrite of a live slot: no length /
-                                // extensible / shape / prototype involvement.
-                                interp.gc_write_barrier_element(&obj, idx, &final_val);
-                                obj.borrow_mut_untracked()
-                                    .overwrite_array_element(idx, &final_val);
-                                return Completion::Normal(final_val);
-                            } else if idx == elems_len
-                            && idx_u32 >= cur_len
-                            && cur_len as usize == elems_len
-                            && extensible
-                            && length_writable
-                            && idx_u32 < 0xFFFF_FFFF
-                            // OrdinarySet walks the prototype chain when the
-                            // receiver has no own property for this index.
-                            // If the index ToString is inherited (setter or
-                            // data), or a Proxy sits anywhere in the chain,
-                            // we must honour the proto via the slow path's
-                            // OrdinarySet/proxy_set — a bare Proxy exposes no
-                            // own descriptor here, so check it explicitly.
-                            && !proto_id.is_some_and(|pid| {
-                                interp.has_proxy_in_prototype_chain(pid)
-                                    || interp.get_property_descriptor_on_id(pid, &key).is_some()
-                            }) {
-                                // Append at end: push and bump length + shape.
-                                interp.gc_write_barrier_element(&obj, idx, &final_val);
-                                let mut b = obj.borrow_mut_untracked();
-                                b.extend_array_elements_precise(std::slice::from_ref(&final_val));
-                                if let Some(len_desc) = b.properties.get_mut("length") {
-                                    len_desc.set_value(Some(JsValue::number((idx_u32 + 1) as f64)));
-                                }
-                                b.shape_id = crate::interpreter::types::fresh_shape_id();
-                                return Completion::Normal(final_val);
-                            }
-                            // Otherwise (hole creation/overwrite, length mismatch,
-                            // frozen/sealed/non-writable-length, non-extensible,
-                            // inherited index): fall through to the slow path.
+                    // Dense Array / TypedArray element stores that need neither user
+                    // code nor a trap. `numeric_index_fast_set` re-validates the target
+                    // (the RHS or a valueOf may have frozen, shrunk or detached it) and
+                    // declines with no side effect, so every other case, holes and
+                    // `undefined` values included, takes the generic [[Set]] below.
+                    if let Some(index) = numeric_key {
+                        if interp.numeric_index_fast_set(&obj_val, index, &final_val) {
+                            return Completion::Normal(final_val);
                         }
+                    } else if matches!(prop, MemberProperty::Computed(_))
+                        && let Some(key) = &key
+                        && let Some(index) = parse_array_index(key)
+                        && interp.numeric_index_fast_set(&obj_val, f64::from(index), &final_val)
+                    {
+                        return Completion::Normal(final_val);
                     }
+                    let key = match key {
+                        Some(key) => key,
+                        None => match interp.to_property_key(key_val.as_ref().unwrap()) {
+                            Ok(key) => key,
+                            Err(e) => return Completion::Throw(e),
+                        },
+                    };
                     let strict = env.borrow().strict;
                     let set_outcome = match interp.set_object_with_key_result(
                         obj_val.clone(),
