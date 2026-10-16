@@ -339,10 +339,6 @@ impl GeneratorDisposal {
         }
     }
 
-    pub(crate) fn request(&self) -> &JsValue {
-        &self.promise
-    }
-
     pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
         self.cursor.for_each_value(&mut f);
         f(&self.promise);

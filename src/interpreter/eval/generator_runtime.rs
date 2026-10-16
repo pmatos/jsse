@@ -653,19 +653,11 @@ impl Interpreter {
         sent_value: JsValue,
         raw: bool,
     ) -> Completion {
-        let caller_realm = self.current_realm_id;
-        if let Some(o) = (this)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(obj_rc) = self.get_object(o.id)
-            && let Some(realm_id) = obj_rc.borrow().generator_realm_id()
-        {
-            self.current_realm_id = realm_id;
-        }
-        let result = self
-            .with_iter_close_scope(|s| s.generator_next_state_machine_impl(this, sent_value, raw));
-        self.current_realm_id = caller_realm;
-        result
+        self.with_generator_realm(this.as_object_id().unwrap_or_default(), |interp| {
+            interp.with_iter_close_scope(|s| {
+                s.generator_next_state_machine_impl(this, sent_value, raw)
+            })
+        })
     }
 
     /// Save the iterators this activation left open at a yield so that
@@ -2940,10 +2932,8 @@ impl Interpreter {
     }
 
     fn reject_with_type_error(&mut self, msg: &str) -> Completion {
-        let promise = self.create_promise_object();
         let err = self.create_type_error(msg);
-        self.async_gen_reject_request(&promise, err);
-        Completion::Normal(promise)
+        self.create_rejected_promise(err)
     }
 
     fn async_gen_enqueue(
@@ -3016,25 +3006,21 @@ impl Interpreter {
             }
         };
         self.scheduler.set_async_gen_yield_pending(false);
-        let result = match request.kind {
-            super::AsyncGenRequestKind::Next => self
-                .async_generator_next_state_machine_with_promise(
-                    this,
-                    request.value.clone(),
-                    request.promise.clone(),
-                ),
-            super::AsyncGenRequestKind::Return => self
-                .async_generator_return_state_machine_with_promise(
-                    this,
-                    request.value.clone(),
-                    request.promise.clone(),
-                ),
-            super::AsyncGenRequestKind::Throw => self
-                .async_generator_throw_state_machine_with_promise(
-                    this,
-                    request.value.clone(),
-                    request.promise.clone(),
-                ),
+        let super::AsyncGenRequest {
+            kind,
+            value,
+            promise,
+        } = request;
+        let result = match kind {
+            super::AsyncGenRequestKind::Next => {
+                self.async_generator_next_state_machine_with_promise(this, value, promise)
+            }
+            super::AsyncGenRequestKind::Return => {
+                self.async_generator_return_state_machine_with_promise(this, value, promise)
+            }
+            super::AsyncGenRequestKind::Throw => {
+                self.async_generator_throw_state_machine_with_promise(this, value, promise)
+            }
         };
 
         // The queue driver has no Completion return channel of its own. Latch
@@ -3675,20 +3661,11 @@ impl Interpreter {
         promise: JsValue,
         reentry: GeneratorReentry,
     ) -> Completion {
-        let caller_realm = self.current_realm_id;
-        if let Some(o) = (this)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(obj_rc) = self.get_object(o.id)
-            && let Some(realm_id) = obj_rc.borrow().generator_realm_id()
-        {
-            self.current_realm_id = realm_id;
-        }
-        let result = self.with_iter_close_scope(|s| {
-            s.async_generator_next_state_machine_impl(this, sent_value, promise, reentry)
-        });
-        self.current_realm_id = caller_realm;
-        result
+        self.with_generator_realm(this.as_object_id().unwrap_or_default(), |interp| {
+            interp.with_iter_close_scope(|s| {
+                s.async_generator_next_state_machine_impl(this, sent_value, promise, reentry)
+            })
+        })
     }
 
     fn async_generator_next_state_machine_impl(
@@ -4615,9 +4592,8 @@ impl Interpreter {
                                 match self.get_object_property(io.id, "next", &iterator) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => {
-                                        self.retire_generator(o.id);
-                                        self.async_gen_reject_request(&promise, e);
-                                        return Completion::Normal(promise);
+                                        return self
+                                            .reject_async_generator_request(o.id, promise, e);
                                     }
                                     _ => JsValue::UNDEFINED,
                                 }
@@ -4688,16 +4664,8 @@ impl Interpreter {
                     }
 
                     // Check if yield value is a pending promise — need async suspension
-                    let wrapped = self.promise_resolve_value(&yield_val);
-                    let wrapped_id = if let Some(wo) = (wrapped)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        wo.id
-                    } else {
-                        0
-                    };
-                    let wrapped_state = self.get_promise_state(wrapped_id);
+                    let wrapped_id = self.await_promise_resolve(&yield_val);
+                    let wrapped_state = wrapped_id.and_then(|id| self.get_promise_state(id));
 
                     if matches!(wrapped_state, Some(PromiseState::Pending)) {
                         self.stash_pending_iter_close(o.id);
@@ -4719,10 +4687,9 @@ impl Interpreter {
                             },
                         );
 
-                        self.perform_promise_then_internal(
+                        self.await_then_internal(
                             wrapped_id,
-                            None,
-                            None,
+                            &yield_val,
                             ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
                         );
 
@@ -4770,13 +4737,10 @@ impl Interpreter {
                     );
 
                     // Schedule resolution via microtask to ensure proper interleaving
-                    self.scheduler.enqueue_reaction_job(
-                        PromiseReaction {
-                            handler: None,
-                            target: ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
-                            reaction_type: PromiseReactionType::Fulfill,
-                        },
-                        awaited_val,
+                    self.await_then_internal(
+                        None,
+                        &awaited_val,
+                        ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
                     );
                     self.scheduler.set_async_gen_yield_pending(true);
                     return Completion::Normal(promise);
@@ -4796,9 +4760,7 @@ impl Interpreter {
                                     Completion::Exit(code) => return Completion::Exit(code),
                                     _ => unreachable!("disposing a throw must stay abrupt"),
                                 };
-                                self.retire_generator(o.id);
-                                self.async_gen_reject_request(&promise, err);
-                                return Completion::Normal(promise);
+                                return self.reject_async_generator_request(o.id, promise, err);
                             }
                             Operand::Abort(exit) => abort_async_generator!(exit),
                             Operand::Suspend(yv) => yv,
@@ -4859,9 +4821,7 @@ impl Interpreter {
                         Completion::Exit(code) => return Completion::Exit(code),
                         _ => unreachable!("disposing a throw must stay abrupt"),
                     };
-                    self.retire_generator(o.id);
-                    self.async_gen_reject_request(&promise, throw_val);
-                    return Completion::Normal(promise);
+                    return self.reject_async_generator_request(o.id, promise, throw_val);
                 }
 
                 // A break/continue that leaves try statements must run each
@@ -5324,9 +5284,7 @@ impl Interpreter {
                                         &iterator,
                                     );
                                     let e = route_exception!(e);
-                                    self.retire_generator(o.id);
-                                    self.async_gen_reject_request(&promise, e);
-                                    return Completion::Normal(promise);
+                                    return self.reject_async_generator_request(o.id, promise, e);
                                 }
                             };
                             let needs_iteration_env = Self::for_of_head_lexical(left).is_some();
@@ -5362,9 +5320,8 @@ impl Interpreter {
                                                 &iterator,
                                             );
                                             let e = route_exception!(e);
-                                            self.retire_generator(o.id);
-                                            self.async_gen_reject_request(&promise, e);
-                                            return Completion::Normal(promise);
+                                            return self
+                                                .reject_async_generator_request(o.id, promise, e);
                                         }
                                     }
                                     if let Some(d) = decl.declarations.first()
@@ -5379,9 +5336,8 @@ impl Interpreter {
                                             &iterator,
                                         );
                                         let e = route_exception!(e);
-                                        self.retire_generator(o.id);
-                                        self.async_gen_reject_request(&promise, e);
-                                        return Completion::Normal(promise);
+                                        return self
+                                            .reject_async_generator_request(o.id, promise, e);
                                     }
                                 }
                                 ForInOfLeft::Pattern(pat) => {
@@ -5396,9 +5352,8 @@ impl Interpreter {
                                                 &iterator,
                                             );
                                             let e = route_exception!(e);
-                                            self.retire_generator(o.id);
-                                            self.async_gen_reject_request(&promise, e);
-                                            return Completion::Normal(promise);
+                                            return self
+                                                .reject_async_generator_request(o.id, promise, e);
                                         }
                                         _other => {}
                                     }
@@ -5670,9 +5625,7 @@ impl Interpreter {
                         abort_async_generator!(Completion::Exit(code));
                     }
                     if let Completion::Throw(e) = disp {
-                        self.retire_generator(o.id);
-                        self.async_gen_reject_request(&promise, e);
-                        return Completion::Normal(promise);
+                        return self.reject_async_generator_request(o.id, promise, e);
                     }
                     self.retire_generator(o.id);
                     let iter_result = self.create_iter_result_object(JsValue::UNDEFINED, true);
@@ -5933,7 +5886,7 @@ impl Interpreter {
         match self.async_gen_step_disposal(gen_id, disposal, awaited) {
             None => Completion::Normal(JsValue::UNDEFINED),
             Some((completion, then, disposal)) => {
-                self.async_gen_finish_disposal(gen_id, then, completion, disposal.request())
+                self.async_gen_finish_disposal(gen_id, then, completion, &disposal.promise)
             }
         }
     }
@@ -6037,6 +5990,21 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
+    /// Runs `f` with the realm of async generator `gen_id` current, restoring
+    /// the caller's afterwards.
+    fn with_generator_realm<R>(&mut self, gen_id: u64, f: impl FnOnce(&mut Self) -> R) -> R {
+        let caller_realm = self.current_realm_id;
+        if let Some(realm_id) = self
+            .get_object_cell(gen_id)
+            .and_then(|cell| cell.borrow().generator_realm_id())
+        {
+            self.current_realm_id = realm_id;
+        }
+        let result = f(self);
+        self.current_realm_id = caller_realm;
+        result
+    }
+
     /// The settlement of what a request of async generator `gen_id` was
     /// waiting on (`value`, or the rejection reason when `is_reject`).
     /// The suspended step belongs to the request at the front of the queue,
@@ -6067,23 +6035,17 @@ impl Interpreter {
         }
         // The job runs in the realm that drains the queue; the iterator result
         // and anything the settlement creates belong to the generator's.
-        let caller_realm = self.current_realm_id;
-        if let Some(realm_id) = self
-            .get_object_cell(gen_id)
-            .and_then(|cell| cell.borrow().generator_realm_id())
-        {
-            self.current_realm_id = realm_id;
-        }
-        // AsyncGeneratorCompleteStep, then AsyncGeneratorDrainQueue inline.
-        if is_reject {
-            self.async_gen_reject_request(&promise, value);
-        } else {
-            let done = step == AsyncGenStep::AwaitReturn;
-            let iter_result = self.create_iter_result_object(value, done);
-            self.async_gen_resolve_request(&promise, iter_result);
-        }
-        self.async_gen_drain_queue(gen_id);
-        self.current_realm_id = caller_realm;
+        self.with_generator_realm(gen_id, |interp| {
+            // AsyncGeneratorCompleteStep, then AsyncGeneratorDrainQueue inline.
+            if is_reject {
+                interp.async_gen_reject_request(&promise, value);
+            } else {
+                let done = step == AsyncGenStep::AwaitReturn;
+                let iter_result = interp.create_iter_result_object(value, done);
+                interp.async_gen_resolve_request(&promise, iter_result);
+            }
+            interp.async_gen_drain_queue(gen_id);
+        });
     }
 
     fn async_gen_await_resume(
@@ -6098,39 +6060,29 @@ impl Interpreter {
             return;
         };
 
-        let state = obj_rc.borrow().iterator_state().cloned();
-        let Some(IteratorState::StateMachineAsyncGenerator {
-            func_env,
-            pending_binding,
-            ..
-        }) = &state
-        else {
-            return;
+        let binding = {
+            let mut obj = obj_rc.borrow_mut();
+            let Some(IteratorState::StateMachineAsyncGenerator {
+                func_env,
+                pending_binding,
+                pending_exception,
+                ..
+            }) = obj.iterator_state_mut()
+            else {
+                return;
+            };
+            if is_reject {
+                // The executor routes the exception through the try stack.
+                *pending_exception = Some(value.clone());
+                None
+            } else {
+                pending_binding
+                    .take()
+                    .map(|binding| (binding, func_env.clone()))
+            }
         };
-
-        if is_reject {
-            // Set pending_exception so the executor routes through try_stack
-            if let Some(obj) = self.get_object_cell(gen_id) {
-                let mut o = obj.borrow_mut();
-                if let Some(IteratorState::StateMachineAsyncGenerator {
-                    pending_exception, ..
-                }) = o.iterator_state_mut()
-                {
-                    *pending_exception = Some(value);
-                }
-            }
-        } else if let Some(b) = pending_binding {
-            self.apply_sent_value_binding(b, &value, func_env);
-            // Clear the pending_binding
-            if let Some(obj) = self.get_object(gen_id) {
-                let mut o = obj.borrow_mut();
-                if let Some(IteratorState::StateMachineAsyncGenerator {
-                    pending_binding, ..
-                }) = o.iterator_state_mut()
-                {
-                    *pending_binding = None;
-                }
-            }
+        if let Some((binding, func_env)) = binding {
+            self.apply_sent_value_binding(&binding, &value, &func_env);
         }
 
         self.scheduler.set_async_gen_yield_pending(false);
@@ -6208,6 +6160,12 @@ impl Interpreter {
         value: JsValue,
         request: &JsValue,
     ) -> AwaitReturnStart {
+        let target = ReactionTarget::AsyncGen(gen_id, AsyncGenStep::AwaitReturn);
+        if !value.is_object() {
+            // PromiseResolve of a non-object is an unobservable fulfilled promise.
+            self.await_then_internal(None, &value, target);
+            return AwaitReturnStart::Parked;
+        }
         let promise = self.with_gc_root_scope(|interp| {
             // PromiseResolve reads `value.constructor`, which can run user
             // code and collect.
@@ -6226,28 +6184,8 @@ impl Interpreter {
         let promise_id = promise
             .as_object_id()
             .expect("PromiseResolve returns a promise object");
-        self.perform_promise_then_internal(
-            promise_id,
-            None,
-            None,
-            ReactionTarget::AsyncGen(gen_id, AsyncGenStep::AwaitReturn),
-        );
+        self.perform_promise_then_internal(promise_id, None, None, target);
         AwaitReturnStart::Parked
-    }
-
-    /// AsyncGeneratorAwaitReturn for a request served by the queue driver:
-    /// a parked request tells the driver, through the yield-pending flag, not
-    /// to pop it.
-    fn async_gen_await_return_in_driver(
-        &mut self,
-        gen_id: u64,
-        value: JsValue,
-        promise: JsValue,
-    ) -> Completion {
-        if self.async_gen_await_return(gen_id, value, &promise) == AwaitReturnStart::Parked {
-            self.scheduler.set_async_gen_yield_pending(true);
-        }
-        Completion::Normal(promise)
     }
 
     /// Retire the settled front request of `gen_id`'s queue and serve the rest
@@ -6319,7 +6257,11 @@ impl Interpreter {
             }
             StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
                 self.retire_generator(o.id);
-                return self.async_gen_await_return_in_driver(o.id, value, promise);
+                if self.async_gen_await_return(o.id, value, &promise) == AwaitReturnStart::Parked {
+                    // The driver must not pop a parked request.
+                    self.scheduler.set_async_gen_yield_pending(true);
+                }
+                return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedAtState { .. } => {}
         }

@@ -19,7 +19,8 @@ the async-generator request pair and per-await handlers behind.
    state instead of `to_vec()`.
 3. Same mechanism, the rest of the family: a `yield` of a pending promise (`AsyncGenStep::Yield`), the
    AsyncGeneratorAwaitReturn handlers (`AsyncGenStep::AwaitReturn`) and the `yield <settled value>` continuation
-   (a handler-less `AsyncGenStep::Yield` reaction job, replacing a `Closure { roots Vec, Box }`) all
+   (a handler-less `AsyncGenStep::Yield` reaction job, replacing a `Closure { roots Vec, Box }`; a non-object
+   operand of `yield` or `return(..)` builds no promise) all
    complete the front request through `async_gen_reaction`, which installs the generator's realm around the settlement.
 
 Why the front request is the right one: a suspended step belongs to the request at the head of the queue, which
@@ -33,48 +34,49 @@ Tick counts are unchanged: every await, yield-await and return-await is still ex
 
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
-cachegrind `--cache-sim=no`, whole-process `I refs`, empty script 7,484,842 / 7,485,497 (base / new) subtracted for
+cachegrind `--cache-sim=no`, whole-process `I refs`, empty script 7,486,825 / 7,486,899 (base / new) subtracted for
 the net figures. base = `origin/main` at `029b06a7` (binary sha256 `9fdac928a458...`), new = the same tree plus this
-change (`a86ac698eabc...`). The isolating scripts are this PR's reading of the issue's variants (6,000 requests;
-1,500 iterations x 4 awaits); absolute numbers differ from the issue's, the ratios are what matter.
+change (`3e0cee1b146a...`, built from the PR head's source). The isolating scripts are this PR's reading of the
+issue's variants (6,000 requests; 1,500 iterations x 4 awaits); absolute numbers differ from the issue's, the ratios
+are what matter.
 
 | workload | base Ir | new Ir | net delta | criterion |
 |---|---:|---:|---:|---|
-| `repro.js` pipeline (net) | 159,737,795 | 108,766,988 | -31.9% | >= 25% |
-| `req.js` 6,000 `await it.next()` (net) | 149,702,608 | 114,486,586 | -23.5% | >= 15% |
-| `await.js` 4 awaits per item (net) | 115,123,497 | 55,098,259 | -52.1% | >= 35% |
-| `ctl-await-gen.js`, Ir per await | 15,241 | 7,097 | -53.4% | <= 10,000 |
-| `ctl-await-fn.js`, Ir per await (async function control) | 5,399 | 5,413 | +0.3% | within +-2% |
-| async-fs FULL | 11,045,689,488 | 9,916,426,069 | -10.2% | >= 8% |
-| async-fs setup-only | 5,126,804,739 | 5,118,129,475 | -0.2% | unchanged |
+| `repro.js` pipeline (net) | 159,703,731 | 107,689,869 | -32.6% | >= 25% |
+| `req.js` 6,000 `await it.next()` (net) | 149,700,481 | 108,621,517 | -27.4% | >= 15% |
+| `await.js` 4 awaits per item (net) | 115,120,890 | 52,165,732 | -54.7% | >= 35% |
+| `ctl-await-gen.js`, Ir per await | 15,241 | 6,848 | -55.1% | <= 10,000 |
+| `ctl-await-fn.js`, Ir per await (async function control) | 5,400 | 5,420 | +0.4% | within +-2% |
+| async-fs FULL | 11,052,893,625 | 9,884,283,974 | -10.6% | >= 8% |
+| async-fs setup-only | 5,126,238,651 | 5,118,246,170 | -0.2% | unchanged |
 
-async-fs scored iteration (FULL minus setup-only): 5,918,884,749 -> 4,798,296,594 Ir, -18.9%. callgrind
+async-fs scored iteration (FULL minus setup-only): 5,926,654,974 -> 4,766,037,804 Ir, -19.6%. callgrind
 (`line-tables-only` + frame-pointer build of the same tree, call edges into `create_function_with_name`): base FULL
 332,982 -> new 960 calls, setup-only 2,562 -> 960, so the scored iteration goes from 330,420 calls (195,502 from
 `create_resolving_functions`, 136,520 from `async_gen_suspend_at_await`) to zero. Timed iteration of the async-fs
-driver (`taskset` one core, alternating, shipped builds, load 4-5): base 1701/1706/1700/1705/1719 ms (median 1705),
-new 1332/1336/1332/1338/1324 ms (median 1332), -21.9%.
+driver (`taskset` one core, alternating, shipped builds, load 4-5): base 1722/1695/1719/1703/1703 ms (median 1703),
+new 1324/1328/1330/1339/1338 ms (median 1330), -21.9%.
 
 ### Controls (Ir, same binaries; "no Ir regression > 1%")
 
 | control | base | new | delta |
 |---|---:|---:|---:|
-| `bench_promises_for_await` | 3,944,548,011 | 3,371,906,196 | -14.5% |
-| `bench_promises_async_fs` | 11,048,353,722 | 9,921,777,286 | -10.2% |
-| `bench_promises_await_loop` | 2,298,753,465 | 2,301,135,489 | +0.10% |
-| `bench_promises_async_call` | 5,350,541,126 | 5,350,283,958 | 0.00% |
-| `bench_promises_then_chain` | 3,384,860,063 | 3,385,978,292 | +0.03% |
-| `bench_promises_new_promise` | 6,271,860,472 | 6,273,402,272 | +0.02% |
-| `bench_promises_queue_deep` | 3,967,133,532 | 3,971,416,923 | +0.11% |
-| `bench_generators_simple_yield` | 8,237,659,927 | 8,237,691,443 | 0.00% |
-| `bench_generators_manual_next` | 5,399,186,806 | 5,399,188,293 | 0.00% |
-| `bench_generators_pipeline` | 7,978,695,941 | 7,978,691,385 | 0.00% |
-| `bench_generators_lazy_collections` | 8,807,325,629 | 8,807,209,191 | 0.00% |
-| sync-fs (JetStream) | 12,904,733,732 | 12,902,849,769 | -0.01% |
-| lazy-collections (JetStream) | 8,872,143,244 | 8,872,704,324 | +0.01% |
+| `bench_promises_for_await` | 3,944,354,427 | 3,253,347,840 | -17.5% |
+| `bench_promises_async_fs` | 11,042,327,273 | 9,888,460,449 | -10.5% |
+| `bench_promises_await_loop` | 2,298,047,255 | 2,302,521,361 | +0.19% |
+| `bench_promises_async_call` | 5,347,867,646 | 5,349,438,823 | +0.03% |
+| `bench_promises_then_chain` | 3,384,859,240 | 3,386,934,137 | +0.06% |
+| `bench_promises_new_promise` | 6,271,399,293 | 6,270,202,071 | -0.02% |
+| `bench_promises_queue_deep` | 3,967,102,258 | 3,972,075,009 | +0.13% |
+| `bench_generators_simple_yield` | 8,237,695,293 | 8,225,057,852 | -0.15% |
+| `bench_generators_manual_next` | 5,399,132,335 | 5,393,588,411 | -0.10% |
+| `bench_generators_pipeline` | 7,974,375,082 | 7,963,174,372 | -0.14% |
+| `bench_generators_lazy_collections` | 8,806,977,968 | 8,799,076,182 | -0.09% |
+| sync-fs (JetStream) | 12,904,259,836 | 12,899,728,940 | -0.04% |
+| lazy-collections (JetStream) | 8,872,586,763 | 8,865,579,402 | -0.08% |
 
-The +0.1% rows are the randomised identifier interner's run-to-run spread, not a code-path change (none of these
-workloads touches an async generator).
+The +-0.2% rows are the randomised identifier interner's run-to-run spread; the small gains on the generator rows
+come from `yield <non-object>` no longer building a throwaway promise.
 
 ## Correctness gates
 
