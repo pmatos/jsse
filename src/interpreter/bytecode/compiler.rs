@@ -2266,7 +2266,7 @@ impl Compiler {
     /// (else the `default` clause) and falls through the later clauses.
     ///
     ///   <discriminant>
-    ///   per case:  DupN 1; <selector>; StrictEq; JumpIfTrue match_i
+    ///   per case:  <selector>; CaseStrictEq match_i
     ///   Pop; Jump default_body | end
     ///   match_i:   Pop; Jump body_i            (one trampoline per case)
     ///   body_0 ... body_n                      (source order)
@@ -2311,13 +2311,9 @@ impl Compiler {
         for case in &switch.cases {
             match &case.test {
                 Some(test) => {
-                    self.emit_dup_n(1);
                     self.compile_expr(test)?;
-                    self.emit(Op::StrictEq);
-                    self.pop_n(2);
-                    self.push_n(1);
                     self.pop_n(1);
-                    match_sites.push(Some(self.emit_jump(Op::JumpIfTrue)));
+                    match_sites.push(Some(self.emit_jump(Op::CaseStrictEq)));
                 }
                 None => match_sites.push(None),
             }

@@ -396,30 +396,11 @@ pub(crate) fn same_value_zero(left: &JsValue, right: &JsValue) -> bool {
     strict_equality(left, right)
 }
 
+#[inline]
 pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
-    if left.kind() != right.kind() {
-        return false;
-    }
-    match left.kind() {
-        ValueKind::Undefined | ValueKind::Null => true,
-        ValueKind::Boolean => left.as_boolean() == right.as_boolean(),
-        ValueKind::Number => {
-            number_ops::equal(left.as_number().unwrap(), right.as_number().unwrap())
-        }
-        ValueKind::String => left
-            .with_string(|a| right.with_string(|b| a == b).unwrap_or(false))
-            .unwrap_or(false),
-        ValueKind::Symbol => left
-            .with_symbol(|a| right.with_symbol(|b| a.id() == b.id()).unwrap_or(false))
-            .unwrap_or(false),
-        ValueKind::BigInt => left
-            .with_bigint(|a| {
-                right
-                    .with_bigint(|b| bigint_ops::equal(a, b))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false),
-        ValueKind::Object => left.as_object_id() == right.as_object_id(),
+    match left.strict_equal_non_number(right) {
+        Some(equal) => equal,
+        None => number_ops::equal(left.as_number().unwrap(), right.as_number().unwrap()),
     }
 }
 

@@ -1060,6 +1060,7 @@ impl NanBoxedValue {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn with_string<R>(&self, f: impl FnOnce(&[u16]) -> R) -> Option<R> {
         if self.tag() != Some(NanTag::String) {
             return None;
@@ -1177,6 +1178,48 @@ impl NanBoxedValue {
 
     pub(crate) fn is_nullish(&self) -> bool {
         matches!(self.tag(), Some(NanTag::Undefined | NanTag::Null))
+    }
+
+    /// `===` for every pair except two Numbers, which return `None` so the
+    /// caller applies the IEEE comparison (NaN, `-0`).
+    #[inline]
+    pub(crate) fn strict_equal_non_number(&self, other: &Self) -> Option<bool> {
+        let (Some(a), Some(b)) = (self.tag(), other.tag()) else {
+            return if self.is_number() && other.is_number() {
+                None
+            } else {
+                Some(false)
+            };
+        };
+        if self.0 == other.0 {
+            return Some(true);
+        }
+        if a != b {
+            return Some(false);
+        }
+        Some(match a {
+            NanTag::String => self
+                .with_string(|x| other.with_string(|y| x == y).unwrap_or(false))
+                .unwrap_or(false),
+            NanTag::Symbol | NanTag::BigInt => self.symbol_or_bigint_equal(other),
+            _ => false,
+        })
+    }
+
+    /// Same-tag, different-bits Symbols (equal ids: one rebuilt from its id)
+    /// or BigInts (equal values).
+    #[inline(never)]
+    fn symbol_or_bigint_equal(&self, other: &Self) -> bool {
+        if self.is_symbol() {
+            self.with_symbol(|x| other.with_symbol(|y| x.id() == y.id()).unwrap_or(false))
+        } else {
+            self.with_bigint(|x| {
+                other
+                    .with_bigint(|y| bigint_ops::equal(x, y))
+                    .unwrap_or(false)
+            })
+        }
+        .unwrap_or(false)
     }
 }
 

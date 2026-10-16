@@ -1861,7 +1861,16 @@ impl Interpreter {
         JsValue::object(id)
     }
 
+    #[inline]
     pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
+        match val.as_boolean() {
+            Some(b) => b,
+            None => self.to_boolean_val_slow(val),
+        }
+    }
+
+    #[inline(never)]
+    fn to_boolean_val_slow(&self, val: &JsValue) -> bool {
         if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
