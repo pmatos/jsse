@@ -777,10 +777,20 @@ impl JsSymbol {
     /// alone; identity is the id, never the description. A user symbol builds
     /// its key once, through the property-key interner, so later conversions
     /// are a refcount bump and later stores hit the interner's address fast path.
+    #[inline]
     pub(crate) fn to_property_key(&self) -> JsPropertyKey {
         if let Some(index) = self.data.well_known {
             return WELL_KNOWN_SYMBOL_KEYS[index as usize].clone();
         }
+        match self.data.key.get() {
+            Some(key) => key.clone(),
+            None => self.init_property_key(),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn init_property_key(&self) -> JsPropertyKey {
         self.data
             .key
             .get_or_init(|| {
