@@ -1,9 +1,6 @@
-//! Call-frame facts that are pure functions of one function literal (#1062).
-//!
-//! A [`LiteralFrame`] is created with the literal's `FunctionLiteralInfo` and
-//! shared by `Rc` with every closure of the literal, so a call reads the
-//! parameter atoms and the inline-cache store handle off the function it is
-//! already holding instead of re-deriving them through a Body-keyed hash probe.
+//! Call-frame facts that are pure functions of one function literal (#1062),
+//! shared by `Rc` with every closure of the literal so a call reads them off
+//! the function it already holds instead of probing a Body-keyed table.
 
 use std::cell::{Cell, OnceCell};
 
@@ -13,6 +10,7 @@ use super::atom::Atom;
 use super::ic_store::BodyStoreHandle;
 
 /// The interned parameter names of a simple parameter list.
+#[derive(Debug)]
 pub(crate) struct ParamAtoms {
     atoms: Box<[Atom]>,
     /// True when no two names are equal and none is `arguments`, so each can
@@ -47,16 +45,10 @@ impl ParamAtoms {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct LiteralFrame {
     param_atoms: OnceCell<ParamAtoms>,
     ic_handle: Cell<Option<BodyStoreHandle>>,
-}
-
-impl std::fmt::Debug for LiteralFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("LiteralFrame")
-    }
 }
 
 impl LiteralFrame {

@@ -94,7 +94,6 @@ for (var i = 0; i < 3; i++) {
 var viaThisRealm = (0, eval)("(function mk(a, b, a) { return a + ':' + b; })");
 assert.sameValue(viaThisRealm(1, 2, 3), "3:2");
 
-var params = ["a", "b", "a"];
 var made = [];
 for (var i = 0; i < 3; i++) {
   made.push(new Function("a", "b", "a", "return a + ':' + b + ':' + arguments.length;"));

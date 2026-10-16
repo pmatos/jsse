@@ -63,6 +63,23 @@ struct StoreEntry {
     in_flight: usize,
 }
 
+fn tick_clock(clock: &mut u64) -> u64 {
+    *clock = clock
+        .checked_add(1)
+        .expect("IcStore recency clock overflowed");
+    *clock
+}
+
+impl StoreEntry {
+    fn mark_entered(&mut self, tick: u64) {
+        self.last_used = tick;
+        self.in_flight = self
+            .in_flight
+            .checked_add(1)
+            .expect("IcStore in-flight count overflowed");
+    }
+}
+
 impl IcStore {
     pub(crate) fn new() -> Self {
         Self::with_capacity(DEFAULT_CAPACITY)
@@ -84,17 +101,12 @@ impl IcStore {
     pub(crate) fn enter_body(&mut self, body: &Body) -> BodyStoreHandle {
         let key = body.key();
         if let Some(&idx) = self.index.get(&key) {
-            let tick = self.next_tick();
+            let tick = tick_clock(&mut self.clock);
             let slot = &mut self.stores[idx];
-            let entry = slot
-                .entry
+            slot.entry
                 .as_mut()
-                .expect("IcStore index pointed to a free slot");
-            entry.last_used = tick;
-            entry.in_flight = entry
-                .in_flight
-                .checked_add(1)
-                .expect("IcStore in-flight count overflowed");
+                .expect("IcStore index pointed to a free slot")
+                .mark_entered(tick);
             return BodyStoreHandle {
                 slot: idx,
                 generation: slot.generation,
@@ -138,28 +150,23 @@ impl IcStore {
         }
     }
 
-    /// [`enter_body`](Self::enter_body) through a handle the caller remembered
-    /// from an earlier entry of the same Body, skipping the index probe.
-    ///
-    /// The handle is used only if its slot still holds this Body's store (the
-    /// generation and the store's Body identity both match); otherwise the
-    /// index is consulted and `cached` is refreshed. Either way the entry is
-    /// ticked and counted in flight exactly as `enter_body` does.
+    /// [`enter_body`](Self::enter_body) through a handle remembered from an
+    /// earlier entry of the same Body, skipping the index probe. The handle is
+    /// used only if its slot still holds this Body's store (generation and
+    /// Body identity both match); otherwise `cached` is refreshed.
     #[inline]
     pub(crate) fn enter_body_cached(
         &mut self,
         body: &Body,
         cached: &Cell<Option<BodyStoreHandle>>,
     ) -> BodyStoreHandle {
-        let tick = self.next_tick();
         if let Some(handle) = cached.get()
             && let Some(slot) = self.stores.get_mut(handle.slot)
             && slot.generation == handle.generation
             && let Some(entry) = slot.entry.as_mut()
             && entry.store.body_key() == body.key()
         {
-            entry.last_used = tick;
-            entry.in_flight += 1;
+            entry.mark_entered(tick_clock(&mut self.clock));
             return handle;
         }
         let handle = self.enter_body(body);
@@ -210,11 +217,7 @@ impl IcStore {
     }
 
     fn next_tick(&mut self) -> u64 {
-        self.clock = self
-            .clock
-            .checked_add(1)
-            .expect("IcStore recency clock overflowed");
-        self.clock
+        tick_clock(&mut self.clock)
     }
 
     /// Evict enough old inactive entries to retain roughly the newer half.

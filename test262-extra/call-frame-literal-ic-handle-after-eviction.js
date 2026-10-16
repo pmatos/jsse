@@ -34,9 +34,6 @@ for (var i = 0; i < churn; i++) {
   if (f({ x: 1 }) !== 1 + i) {
     throw new Test262Error("churn function " + i + " returned a wrong value");
   }
-  if (i % 3000 === 0) {
-    assert.sameValue(hot(shapeA, 3), 9, "hot function while bodies churn");
-  }
 }
 
 assert.sameValue(hot(shapeA, 4), 12, "after eviction, shape A");

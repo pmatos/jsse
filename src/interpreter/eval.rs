@@ -49,8 +49,6 @@ enum CallTarget {
         body: Body,
         closure: EnvRef,
         frame: Rc<LiteralFrame>,
-        /// The compile verdict recorded on the function object, read under
-        /// the same borrow as the other fields.
         bytecode_cache: BytecodeCacheState,
         /// The function's boolean attributes, one bit each (`CALL_*`).
         flags: u8,
@@ -5140,18 +5138,20 @@ impl Interpreter {
         func_env: &EnvRef,
     ) {
         let names = frame.param_atoms(params);
+        let binding = |index: usize| Binding {
+            value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+            kind: BindingKind::Var,
+            initialized: true,
+            deletable: false,
+        };
         let mut env = func_env.borrow_mut();
-        for (index, atom) in names.atoms().iter().enumerate() {
-            let binding = Binding {
-                value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
-                kind: BindingKind::Var,
-                initialized: true,
-                deletable: false,
-            };
-            if names.names_are_fresh() {
-                env.bindings.push_unique(atom.clone(), binding);
-            } else {
-                env.bindings.insert_atom(atom, binding);
+        if names.names_are_fresh() {
+            for (index, atom) in names.atoms().iter().enumerate() {
+                env.bindings.push_unique(atom.clone(), binding(index));
+            }
+        } else {
+            for (index, atom) in names.atoms().iter().enumerate() {
+                env.bindings.insert_atom(atom, binding(index));
             }
         }
     }
