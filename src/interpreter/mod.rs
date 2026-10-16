@@ -51,6 +51,7 @@ pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
 mod keyed_entries;
+pub(crate) mod literal_frame;
 pub(crate) use keyed_entries::KeyedEntries;
 mod object_arena;
 #[cfg(feature = "perf-counters")]
@@ -454,9 +455,6 @@ pub(crate) struct Interpreter {
     /// Per-body bytecode compile verdict shared by every closure of a function
     /// literal (#900). See `body_memo`.
     pub(crate) bytecode_memo: body_memo::BodyMemo<bytecode::BytecodeCacheState>,
-    /// Interned simple-parameter names per Body, so a call binds parameters
-    /// without hashing them (#898).
-    pub(crate) frame_layout_memo: body_memo::BodyMemo<Rc<Vec<Atom>>>,
     /// Per-body generator/async state machine, built once per function literal
     /// instead of on every call (#914). See `body_memo`.
     pub(crate) state_machine_memo: body_memo::BodyMemo<(
@@ -857,7 +855,6 @@ impl Interpreter {
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
             bytecode_memo: body_memo::BodyMemo::new(),
-            frame_layout_memo: body_memo::BodyMemo::new(),
             state_machine_memo: body_memo::BodyMemo::new(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: None,
@@ -5198,6 +5195,7 @@ impl Interpreter {
                 let info = f.info();
                 let func = JsFunction::User {
                     bytecode_cache: Default::default(),
+                    frame: info.frame.clone(),
                     name: Some(f.name.clone()),
                     params: info.params.clone(),
                     body: f.body.clone(),
@@ -5244,6 +5242,7 @@ impl Interpreter {
                 let info = f.info();
                 let func = JsFunction::User {
                     bytecode_cache: Default::default(),
+                    frame: info.frame.clone(),
                     name: Some(if f.name.is_empty() {
                         "default".to_string()
                     } else {
@@ -5430,6 +5429,7 @@ impl Interpreter {
                 let info = func.info();
                 let js_func = JsFunction::User {
                     bytecode_cache: Default::default(),
+                    frame: info.frame.clone(),
                     name: Some(name),
                     params: info.params.clone(),
                     body: func.body.clone(),

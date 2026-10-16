@@ -1211,6 +1211,9 @@ pub(crate) struct FunctionLiteralInfo {
     pub params: Rc<Vec<Pattern>>,
     pub uses_arguments: bool,
     pub has_simple_params: bool,
+    /// Call-frame facts the interpreter derives from the literal on its first
+    /// call (parameter atoms, inline-cache store handle), shared like the rest.
+    pub frame: Rc<crate::interpreter::literal_frame::LiteralFrame>,
 }
 
 /// Lazily filled cache of a function literal's [`FunctionLiteralInfo`]. It is
@@ -1234,6 +1237,7 @@ impl LiteralInfoCell {
                     params: Rc::new(params.to_vec()),
                     uses_arguments: body.is_some_and(|b| func_uses_arguments(params, b)),
                     has_simple_params: params_are_simple(params),
+                    frame: Rc::default(),
                 })
             })
             .clone()

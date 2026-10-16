@@ -1,4 +1,5 @@
 use super::*;
+use crate::interpreter::literal_frame::LiteralFrame;
 
 thread_local! {
     /// The default `constructor(...args) { super(...args); }` that
@@ -6,7 +7,7 @@ thread_local! {
     /// class shares this Body, so the per-Body side tables (hoist analysis,
     /// bytecode compile verdict, IC store) hold one entry for all of them and
     /// the body is compiled once instead of once per class evaluation.
-    static DEFAULT_DERIVED_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body) = {
+    static DEFAULT_DERIVED_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body, Rc<LiteralFrame>) = {
         let statements = vec![Statement::Expression(Expression::Call(
             ExprBox::new(Expression::Super),
             vec![Expression::Spread(ExprBox::new(Expression::Identifier(
@@ -16,12 +17,12 @@ thread_local! {
         ))];
         debug_assert!(!stmts_use_arguments(&statements));
         let params = vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))];
-        (Rc::new(params), Body::new(statements))
+        (Rc::new(params), Body::new(statements), Rc::default())
     };
     /// The synthesized `constructor() {}` of a base class without one, shared
     /// the same way.
-    static DEFAULT_BASE_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body) =
-        (Rc::new(Vec::new()), Body::new(Vec::new()));
+    static DEFAULT_BASE_CONSTRUCTOR: (Rc<Vec<Pattern>>, Body, Rc<LiteralFrame>) =
+        (Rc::new(Vec::new()), Body::new(Vec::new()), Rc::default());
 }
 
 pub(crate) fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
@@ -383,28 +384,30 @@ impl Interpreter {
         }
 
         // Create constructor function (classes are always strict mode)
-        let (ctor_params, ctor_body, uses_arguments, has_simple_params) =
+        let (ctor_params, ctor_body, ctor_frame, uses_arguments, has_simple_params) =
             if let Some(cm) = ctor_method {
                 let info = cm.value.info();
                 (
                     info.params.clone(),
                     cm.value.body.clone(),
+                    info.frame.clone(),
                     info.uses_arguments,
                     info.has_simple_params,
                 )
             } else if super_val.is_some() {
                 // default derived constructor takes `...args` (rest) — not simple
-                let (params, body) = DEFAULT_DERIVED_CONSTRUCTOR.with(Clone::clone);
-                (params, body, false, false)
+                let (params, body, frame) = DEFAULT_DERIVED_CONSTRUCTOR.with(Clone::clone);
+                (params, body, frame, false, false)
             } else {
                 // default base constructor has an empty (simple) parameter list
-                let (params, body) = DEFAULT_BASE_CONSTRUCTOR.with(Clone::clone);
-                (params, body, false, true)
+                let (params, body, frame) = DEFAULT_BASE_CONSTRUCTOR.with(Clone::clone);
+                (params, body, frame, false, true)
             };
         let ctor_func = JsFunction::User {
             bytecode_cache: Default::default(),
             name: Some(name.to_string()),
             params: ctor_params,
+            frame: ctor_frame,
             body: ctor_body,
             closure: class_env.clone(),
             is_arrow: false,
@@ -612,6 +615,7 @@ impl Interpreter {
                             let info = m.value.info();
                             let method_func = JsFunction::User {
                                 bytecode_cache: Default::default(),
+                                frame: info.frame.clone(),
                                 name: Some(format!("#{name}")),
                                 params: info.params.clone(),
                                 body: m.value.body.clone(),
@@ -786,6 +790,7 @@ impl Interpreter {
                     let info = m.value.info();
                     let method_func = JsFunction::User {
                         bytecode_cache: Default::default(),
+                        frame: info.frame.clone(),
                         // create_function installs an empty configurable name, then
                         // SetFunctionName below replaces it without a lossy Rust String seam.
                         name: Some(String::new()),

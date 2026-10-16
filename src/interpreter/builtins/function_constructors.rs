@@ -156,6 +156,7 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             bytecode_cache: Default::default(),
+                            frame: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
@@ -706,6 +707,7 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             bytecode_cache: Default::default(),
+                            frame: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
@@ -837,6 +839,7 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             bytecode_cache: Default::default(),
+                            frame: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
@@ -970,6 +973,7 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             bytecode_cache: Default::default(),
+                            frame: Default::default(),
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
                             body: fe.body.clone(),
