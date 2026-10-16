@@ -4737,7 +4737,14 @@ impl Interpreter {
                         v
                     } else if let Some(PromiseState::Rejected(e)) = wrapped_state {
                         self.retire_generator(o.id);
-                        self.scheduler.enqueue_async_gen_yield(o.id, e, true);
+                        self.scheduler.enqueue_reaction_job(
+                            PromiseReaction {
+                                handler: None,
+                                target: ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
+                                reaction_type: PromiseReactionType::Reject,
+                            },
+                            e,
+                        );
                         self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     } else {
@@ -4763,8 +4770,14 @@ impl Interpreter {
                     );
 
                     // Schedule resolution via microtask to ensure proper interleaving
-                    self.scheduler
-                        .enqueue_async_gen_yield(o.id, awaited_val, false);
+                    self.scheduler.enqueue_reaction_job(
+                        PromiseReaction {
+                            handler: None,
+                            target: ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
+                            reaction_type: PromiseReactionType::Fulfill,
+                        },
+                        awaited_val,
+                    );
                     self.scheduler.set_async_gen_yield_pending(true);
                     return Completion::Normal(promise);
                 }
@@ -5728,13 +5741,7 @@ impl Interpreter {
         promise: &JsValue,
         await_val: &JsValue,
     ) -> Completion {
-        // §6.2.3.1 Await step 2. A non-object can only produce a promise that
-        // is already fulfilled with it, so its job is queued without one.
-        let awaited_promise = if await_val.is_object() {
-            self.promise_resolve_value(await_val).as_object_id()
-        } else {
-            None
-        };
+        let awaited_promise = self.await_promise_resolve(await_val);
 
         obj_rc
             .borrow_mut()
@@ -5753,21 +5760,14 @@ impl Interpreter {
                 pending_return,
             });
 
-        let target =
-            ReactionTarget::AsyncGen(this.as_object_id().unwrap_or_default(), AsyncGenStep::Await);
-        match awaited_promise {
-            Some(promise_id) => {
-                self.perform_promise_then_internal(promise_id, None, None, target);
-            }
-            None => self.scheduler.enqueue_reaction_job(
-                PromiseReaction {
-                    handler: None,
-                    target,
-                    reaction_type: PromiseReactionType::Fulfill,
-                },
-                await_val.clone(),
-            ),
-        }
+        let gen_id = this
+            .as_object_id()
+            .expect("an async generator receiver is an object");
+        self.await_then_internal(
+            awaited_promise,
+            await_val,
+            ReactionTarget::AsyncGen(gen_id, AsyncGenStep::Await),
+        );
 
         self.scheduler.set_async_gen_yield_pending(true);
         Completion::Normal(promise.clone())
@@ -6055,17 +6055,24 @@ impl Interpreter {
             .and_then(|queue| queue.front())
             .map(|request| request.promise.clone())
         else {
+            debug_assert!(
+                false,
+                "async generator {gen_id} resumed with an empty queue"
+            );
             return;
         };
         if step == AsyncGenStep::Await {
-            self.async_gen_await_resume(
-                &JsValue::object(gen_id),
-                value,
-                is_reject,
-                &promise,
-                gen_id,
-            );
+            self.async_gen_await_resume(gen_id, value, is_reject, &promise);
             return;
+        }
+        // The job runs in the realm that drains the queue; the iterator result
+        // and anything the settlement creates belong to the generator's.
+        let caller_realm = self.current_realm_id;
+        if let Some(realm_id) = self
+            .get_object_cell(gen_id)
+            .and_then(|cell| cell.borrow().generator_realm_id())
+        {
+            self.current_realm_id = realm_id;
         }
         // AsyncGeneratorCompleteStep, then AsyncGeneratorDrainQueue inline.
         if is_reject {
@@ -6076,16 +6083,17 @@ impl Interpreter {
             self.async_gen_resolve_request(&promise, iter_result);
         }
         self.async_gen_drain_queue(gen_id);
+        self.current_realm_id = caller_realm;
     }
 
     fn async_gen_await_resume(
         &mut self,
-        this: &JsValue,
+        gen_id: u64,
         value: JsValue,
         is_reject: bool,
         promise: &JsValue,
-        gen_id: u64,
     ) {
+        let this = &JsValue::object(gen_id);
         let Some(obj_rc) = self.get_object_cell(gen_id) else {
             return;
         };
@@ -6215,14 +6223,15 @@ impl Interpreter {
             }
         };
 
-        if let Some(promise_id) = promise.as_object_id() {
-            self.perform_promise_then_internal(
-                promise_id,
-                None,
-                None,
-                ReactionTarget::AsyncGen(gen_id, AsyncGenStep::AwaitReturn),
-            );
-        }
+        let promise_id = promise
+            .as_object_id()
+            .expect("PromiseResolve returns a promise object");
+        self.perform_promise_then_internal(
+            promise_id,
+            None,
+            None,
+            ReactionTarget::AsyncGen(gen_id, AsyncGenStep::AwaitReturn),
+        );
         AwaitReturnStart::Parked
     }
 

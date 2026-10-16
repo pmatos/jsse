@@ -40,14 +40,6 @@ pub(crate) enum Microtask {
         thenable: JsValue,
         then_fn: JsValue,
     },
-    /// The continuation of an async generator `yield` whose operand is already
-    /// settled: completes the front request of `gen_id`'s queue with
-    /// `{ value, done: false }`, or rejects it with `value` when `rejected`.
-    AsyncGenYield {
-        gen_id: u64,
-        value: JsValue,
-        rejected: bool,
-    },
 }
 
 impl Microtask {
@@ -74,10 +66,6 @@ impl Microtask {
                 visit(thenable);
                 visit(then_fn);
                 visit(&JsValue::object(*promise_id));
-            }
-            Microtask::AsyncGenYield { gen_id, value, .. } => {
-                visit(&JsValue::object(*gen_id));
-                visit(value);
             }
         }
     }
@@ -293,14 +281,6 @@ impl JobScheduler {
             promise_id,
             thenable,
             then_fn,
-        });
-    }
-
-    pub(crate) fn enqueue_async_gen_yield(&mut self, gen_id: u64, value: JsValue, rejected: bool) {
-        self.microtask_queue.push_back(Microtask::AsyncGenYield {
-            gen_id,
-            value,
-            rejected,
         });
     }
 

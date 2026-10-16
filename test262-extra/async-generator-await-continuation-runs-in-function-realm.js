@@ -33,7 +33,7 @@ var nonObject = source(2, gate).next();
 
 Promise.resolve().then(function () { release(); });
 
-Promise.all([pending, settled, nonObject]).then(function (results) {
+var awaitChecks = Promise.all([pending, settled, nonObject]).then(function (results) {
   var labels = ["pending await", "settled await", "non-object await"];
   results.forEach(function (r, i) {
     var v = r.value;
@@ -41,4 +41,36 @@ Promise.all([pending, settled, nonObject]).then(function (results) {
     assert.sameValue(v.error, true, labels[i] + ": thrown TypeError uses the generator's realm");
     assert.sameValue(v.fn, true, labels[i] + ": function literal uses the generator's realm");
   });
-}).then($DONE, $DONE);
+});
+
+var otherObjectPrototype = other.Object.prototype;
+var yieldSource = other.eval("(async function* (v) { yield v; })");
+var releaseYield;
+var yieldGate = new Promise(function (resolve) { releaseYield = resolve; });
+
+var yieldPending = yieldSource(yieldGate).next();
+var yieldSettled = yieldSource(1).next();
+var yieldSettledPromise = yieldSource(Promise.resolve(2)).next();
+var returned = yieldSource(0).return(Promise.resolve(3));
+var returnedPending = yieldSource(0).return(yieldGate);
+
+Promise.resolve().then(function () { releaseYield(4); });
+
+var yieldChecks = Promise.all([yieldPending, yieldSettled, yieldSettledPromise, returned, returnedPending]).then(function (results) {
+  var labels = [
+    "yield of a pending promise",
+    "yield of a non-object",
+    "yield of a settled promise",
+    "return of a settled promise",
+    "return of a pending promise"
+  ];
+  results.forEach(function (r, i) {
+    assert.sameValue(
+      Object.getPrototypeOf(r),
+      otherObjectPrototype,
+      labels[i] + ": the iterator result belongs to the generator's realm"
+    );
+  });
+});
+
+Promise.all([awaitChecks, yieldChecks]).then(function () {}).then($DONE, $DONE);

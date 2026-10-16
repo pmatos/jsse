@@ -1306,6 +1306,40 @@ impl Interpreter {
         );
     }
 
+    /// §6.2.3.1 Await step 2. A non-object can only produce a promise that is
+    /// already fulfilled with it, so no promise is built for it (`None`).
+    pub(crate) fn await_promise_resolve(&mut self, await_val: &JsValue) -> Option<u64> {
+        if await_val.is_object() {
+            self.promise_resolve_value(await_val).as_object_id()
+        } else {
+            None
+        }
+    }
+
+    /// §6.2.3.1 Await steps 5-9 for a continuation with a typed `target` and no
+    /// handler: PerformPromiseThen on `awaited_promise`, or, for a non-object
+    /// (`None`), the one reaction job it would have queued, carrying the value.
+    pub(crate) fn await_then_internal(
+        &mut self,
+        awaited_promise: Option<u64>,
+        await_val: &JsValue,
+        target: ReactionTarget,
+    ) {
+        match awaited_promise {
+            Some(promise_id) => {
+                self.perform_promise_then_internal(promise_id, None, None, target);
+            }
+            None => self.scheduler.enqueue_reaction_job(
+                PromiseReaction {
+                    handler: None,
+                    target,
+                    reaction_type: PromiseReactionType::Fulfill,
+                },
+                await_val.clone(),
+            ),
+        }
+    }
+
     pub(crate) fn promise_then(
         &mut self,
         promise_val: &JsValue,
