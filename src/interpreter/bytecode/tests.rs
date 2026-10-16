@@ -4273,3 +4273,46 @@ fn handler_keeps_pending_operands_rooted_and_restores_the_stack() {
     );
     assert!(interp.gc_bytecode_roots.is_empty());
 }
+
+#[test]
+fn lexical_only_body_precomputes_its_declaration_prologue() {
+    let chunk = compile_function_source(
+        "var v = 1; let a = 1; const { b, c: [d] } = o; class K {} a + v;",
+        &[],
+    );
+    assert!(chunk.needs_instantiation);
+    let lexicals = chunk
+        .top_level_lexicals
+        .as_ref()
+        .expect("a body of var and lexical declarations needs only the lexical prologue");
+    let shown: Vec<(&str, bool)> = lexicals
+        .iter()
+        .map(|&(idx, is_const)| (chunk.names[usize::from(idx)].as_str(), is_const))
+        .collect();
+    assert_eq!(
+        shown,
+        [("a", false), ("b", true), ("d", true), ("K", true)],
+        "source order, with immutability"
+    );
+}
+
+#[test]
+fn function_declarations_keep_the_generic_instantiation() {
+    for source in [
+        "let a = 1; function f() {} a;",
+        "let a = 1; { function f() {} } a;",
+        "let a = 1; if (a) function f() {} a;",
+        "let a = 1; l: function f() {} a;",
+    ] {
+        let chunk = compile_function_source(source, &[]);
+        assert!(chunk.needs_instantiation, "{source}");
+        assert!(chunk.top_level_lexicals.is_none(), "{source}");
+    }
+}
+
+#[test]
+fn body_without_lexicals_has_no_declaration_prologue() {
+    let chunk = compile_function_source("var a = 1; a;", &[]);
+    assert!(!chunk.needs_instantiation);
+    assert!(chunk.top_level_lexicals.is_none());
+}

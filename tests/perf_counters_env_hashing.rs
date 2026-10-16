@@ -112,3 +112,32 @@ fn arith_loop_dispatches_at_most_25_ops_per_iteration() {
         "arith loop dispatches {per_iteration} ops per iteration"
     );
 }
+
+/// Function-top-level `let`/`const`/destructured `const` names are interned
+/// once per Body, not once per call (#1052). A class declaration is left out:
+/// evaluating one still interns its binding name on the tree-walker.
+#[test]
+fn function_top_level_lexicals_intern_nothing_per_call() {
+    fn lexical_loop(iterations: u32) -> String {
+        format!(
+            "function f(o, a) {{\n\
+               let r = a + 1;\n\
+               const s = r * 2;\n\
+               const {{ x, y }} = o;\n\
+               return s + x + y;\n\
+             }}\n\
+             function main() {{ var o = {{ x: 1, y: 2 }}, t = 0;\n\
+               for (var i = 0; i < {iterations}; i++) {{ t = (t + f(o, i & 7)) | 0; }}\n\
+               return t; }}\n\
+             main();"
+        )
+    }
+    let (small, _) = counters(&lexical_loop(1_000));
+    let (large, _) = counters(&lexical_loop(2_000));
+    let extra_interns = large["atom_intern_calls"] - small["atom_intern_calls"];
+    assert!(
+        extra_interns <= 8,
+        "{extra_interns} extra interns over 1,000 extra calls of a body with four lexical names"
+    );
+    assert!(large["calls_to_user"] > small["calls_to_user"]);
+}

@@ -215,6 +215,10 @@ pub(crate) struct Chunk {
     /// The body declares functions or lexical bindings that the tree-walker's
     /// declaration instantiation must establish before the chunk runs.
     pub(crate) needs_instantiation: bool,
+    /// Set when that instantiation is only declaring these top-level
+    /// `let`/`const`/class bindings (`names` index, immutable) in TDZ; the
+    /// call path then skips the tree-walker's pass (#1052).
+    pub(crate) top_level_lexicals: Option<Vec<(u16, bool)>>,
     pub(crate) handlers: Vec<Handler>,
     pub(crate) finally_tables: Vec<Vec<FinallyExit>>,
     pub(crate) head_bindings: Vec<HeadBinding>,

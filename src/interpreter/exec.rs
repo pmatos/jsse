@@ -277,7 +277,15 @@ impl Interpreter {
 
         // §14.2.2 BlockDeclarationInstantiation / §10.2.11 FunctionDeclarationInstantiation:
         // Hoist let/const/class declarations as uninitialized (TDZ) bindings
-        Self::hoist_lexical_declarations(stmts, env);
+        match analysis {
+            Some(analysis) => {
+                let mut env = env.borrow_mut();
+                for (name, kind) in analysis.lexical_names(stmts) {
+                    env.declare_atom(name, *kind);
+                }
+            }
+            None => Self::hoist_lexical_declarations(stmts, env),
+        }
 
         if !is_block_scope && !env.borrow().strict {
             // Only the raw name collection is cacheable; the post-processing
@@ -641,12 +649,8 @@ impl Interpreter {
     /// uninitialized (TDZ) bindings at the top of a block scope.
     fn hoist_lexical_declarations(stmts: &[Statement], env: &EnvRef) {
         for (name, is_const) in super::hoisting::collect_lexical_names(stmts) {
-            let kind = if is_const {
-                BindingKind::Const
-            } else {
-                BindingKind::Let
-            };
-            env.borrow_mut().declare(&name, kind);
+            env.borrow_mut()
+                .declare(&name, BindingKind::lexical(is_const));
         }
     }
 

@@ -1052,6 +1052,13 @@ pub(crate) enum BindingKind {
     ImmutableValue,
 }
 
+impl BindingKind {
+    /// The kind of a `let`/`const`/class binding created in TDZ.
+    pub(crate) fn lexical(is_const: bool) -> Self {
+        if is_const { Self::Const } else { Self::Let }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SetBindingCheck {
     Ok,
