@@ -1,0 +1,30 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 810  of event 'cpu-clock:u'
+# Event count (approx.): 1623246480
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                     IPC   [IPC Coverage]
+# ........  ........  ................  .........................................................................................................................................................................  ....................
+#
+    17.04%    15.56%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                       -      -            
+    12.59%    12.59%  jsse              [.] <jsse::interpreter::Interpreter>::trace_object_fields_in                                                                                                               -      -            
+     6.30%     6.30%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                                                         -      -            
+     5.93%     5.68%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                          -      -            
+     5.43%     5.43%  jsse              [.] <jsse::interpreter::Interpreter>::to_boolean_val                                                                                                                       -      -            
+     4.94%     4.94%  jsse              [.] <jsse::interpreter::Interpreter>::enqueue_young::<alloc::vec::drain::Drain<u64>>                                                                                       -      -            
+     4.44%     0.25%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                           -      -            
+            |          
+             --4.32%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --4.20%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.83%     3.83%  jsse              [.] <jsse::interpreter::Interpreter>::trace_mark_worklist                                                                                                                  -      -            
+     2.35%     2.35%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                             -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

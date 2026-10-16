@@ -1,0 +1,113 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 588  of event 'cpu-clock:u'
+# Event count (approx.): 1178356704
+#
+# Children      Self  Shared Object     Symbol                                                                                                                             IPC   [IPC Coverage]
+# ........  ........  ................  .................................................................................................................................  ....................
+#
+    15.14%    11.73%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                  -      -            
+            |          
+            |--4.42%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+            |          |          
+            |           --2.72%--<alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow
+            |          
+             --2.04%--0x7
+                       <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+    14.29%    14.29%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                               -      -            
+            |          
+             --9.52%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     9.52%     0.00%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                   -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     9.01%     9.01%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                         -      -            
+            |          
+             --2.38%--<jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     6.46%     6.29%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                           -      -            
+            |          
+             --2.04%--<hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>
+
+     6.12%     0.00%  [unknown]         [.] 0xfff7ffffffffffff                                                                                                             -      -            
+            |
+            ---0xfff7ffffffffffff
+
+     5.27%     0.00%  [unknown]         [.] 0x0000000000000002                                                                                                             -      -            
+            |
+            ---0x2
+               |          
+                --3.06%--<jsse::interpreter::Interpreter>::env_set::<jsse::interpreter::atom::Atom>
+                          |          
+                           --2.21%--<alloc::sync::Arc<jsse::types::StrView>>::drop_slow
+
+     4.59%     4.25%  jsse              [.] <alloc::sync::Arc<jsse::types::StrView>>::drop_slow                                                                            -      -            
+            |          
+             --2.04%--0x2
+                       <jsse::interpreter::Interpreter>::env_set::<jsse::interpreter::atom::Atom>
+                       <alloc::sync::Arc<jsse::types::StrView>>::drop_slow
+
+     4.59%     3.57%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                            -      -            
+            |          
+             --2.55%--jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>
+
+     4.25%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                             -      -            
+            |
+            ---0x7
+               |          
+                --3.23%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     4.25%     3.74%  jsse              [.] <jsse::interpreter::Interpreter>::invoke_proxy_trap                                                                            -      -            
+     4.08%     3.57%  jsse              [.] <jsse::interpreter::Interpreter>::symbol_key_to_jsvalue::<str>                                                                 -      -            
+     3.91%     2.55%  jsse              [.] <alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow                                                                             -      -            
+     3.57%     3.57%  libc.so.6         [.] malloc                                                                                                                         -      -            
+     3.40%     2.21%  jsse              [.] <jsse::interpreter::Interpreter>::resolve_proxy_trap                                                                           -      -            
+     3.06%     2.55%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property_full::<str>                                                         -      -            
+     3.06%     0.17%  jsse              [.] <jsse::interpreter::Interpreter>::env_set::<jsse::interpreter::atom::Atom>                                                     -      -            
+            |          
+             --2.89%--<jsse::interpreter::Interpreter>::env_set::<jsse::interpreter::atom::Atom>
+                       |          
+                        --2.21%--<alloc::sync::Arc<jsse::types::StrView>>::drop_slow
+
+     2.89%     0.85%  jsse              [.] <jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>                               -      -            
+            |          
+             --2.38%--<jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>
+
+     2.89%     1.02%  jsse              [.] <jsse::types::JsString>::from_vec_grown                                                                                        -      -            
+            |          
+             --2.55%--<jsse::types::JsString>::from_vec_grown
+
+     2.89%     2.89%  jsse              [.] <alloc::sync::Arc<[u8]>>::drop_slow                                                                                            -      -            
+            |          
+             --2.04%--<alloc::sync::Arc<[u8]>>::drop_slow
+
+     2.72%     0.68%  jsse              [.] <jsse::types::JsPropertyKey>::to_js_string                                                                                     -      -            
+            |          
+             --2.21%--<jsse::types::JsPropertyKey>::to_js_string
+
+     2.38%     2.38%  libc.so.6         [.] cfree                                                                                                                          -      -            
+     2.21%     0.00%  [unknown]         [.] 0x0000000000000433                                                                                                             -      -            
+            |
+            ---0x433
+
+     2.21%     1.53%  jsse              [.] <jsse::interpreter::types::JsObjectData>::define_own_property::<jsse::types::JsPropertyKey>                                    -      -            
+     2.04%     0.00%  [unknown]         [.] 0x0000000000000028                                                                                                             -      -            
+            |
+            ---0x28
+
+     2.04%     0.00%  [unknown]         [.] 0x0000000000000001                                                                                                             -      -            
+            |
+            ---0x1
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

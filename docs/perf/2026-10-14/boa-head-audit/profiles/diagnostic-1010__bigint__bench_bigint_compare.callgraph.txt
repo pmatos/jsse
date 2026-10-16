@@ -1,0 +1,54 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 686  of event 'cpu-clock:u'
+# Event count (approx.): 1374749488
+#
+# Children      Self  Shared Object         Symbol                                                                                                     IPC   [IPC Coverage]
+# ........  ........  ....................  .........................................................................................................  ....................
+#
+    31.34%    30.61%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                       -      -            
+            |          
+            |--9.33%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --2.19%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    14.58%    14.58%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                 -      -            
+            |          
+             --3.50%--<jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+
+    10.93%    10.93%  jsse                  [.] jsse::interpreter::bytecode::vm::binary_slow                                                           -      -            
+            |          
+             --4.08%--0x7
+                       jsse::interpreter::bytecode::vm::binary_slow
+
+    10.06%     0.00%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                           -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     7.14%     7.14%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                    -      -            
+     5.69%     5.69%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                      -      -            
+            |          
+             --2.19%--<jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}
+
+     5.39%     0.00%  [unknown]             [.] 0x0000000000000007                                                                                     -      -            
+            |
+            ---0x7
+               |          
+                --4.08%--jsse::interpreter::bytecode::vm::binary_slow
+
+     4.81%     4.08%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                                          -      -            
+            |          
+             --2.48%--<jsse::interpreter::Interpreter>::eval_binary
+
+     3.50%     3.50%  jsse                  [.] <jsse::interpreter::Interpreter>::bigint_binary                                                        -      -            
+     3.06%     2.92%  jsse                  [.] <jsse::interpreter::Interpreter>::env_set::<jsse::interpreter::atom::Atom>                             -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

@@ -1,0 +1,33 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 729  of event 'cpu-clock:u'
+# Event count (approx.): 1460921832
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ....................  ...............................................................................................................................................................................................  ....................
+#
+    13.17%    13.17%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+     3.98%     3.84%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     3.70%     3.70%  libc.so.6             [.] malloc                                                                                                                                                                                       -      -            
+     3.29%     0.96%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |          
+             --2.33%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.16%     3.16%  jsse                  [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+     2.88%     2.74%  jsse                  [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                     -      -            
+     2.88%     2.88%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                       -      -            
+     2.61%     2.33%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                          -      -            
+     2.61%     2.33%  jsse                  [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+     2.47%     2.47%  jsse                  [.] <jsse::interpreter::atom::Atom>::intern                                                                                                                                                      -      -            
+     2.33%     2.33%  jsse                  [.] jsse::interpreter::bytecode::vm::pop_operands                                                                                                                                                -      -            
+     2.06%     1.78%  jsse                  [.] jsse::interpreter::helpers::strict_equality                                                                                                                                                  -      -            
+     2.06%     1.78%  jsse                  [.] <jsse::interpreter::Interpreter>::create_function_with_name                                                                                                                                  -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

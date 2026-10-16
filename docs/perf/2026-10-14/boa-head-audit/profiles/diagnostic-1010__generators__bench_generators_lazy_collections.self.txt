@@ -1,0 +1,64 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 615  of event 'cpu-clock:u'
+# Event count (approx.): 1232464920
+#
+# Overhead  Shared Object         Symbol                                                                                                             IPC   [IPC Coverage]
+# ........  ....................  .................................................................................................................  ....................
+#
+     9.59%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl                                            -      -            
+     8.94%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                               -      -            
+     4.39%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_expr                                                                    -      -            
+     4.23%  jsse                  [.] <str as jsse::interpreter::binding_map::BindingKey>::find_in                                                   -      -            
+     3.41%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>                                    -      -            
+     2.76%  jsse                  [.] <jsse::interpreter::Interpreter>::reconcile_scope_stack                                                        -      -            
+     2.60%  jsse                  [.] <jsse::interpreter::Interpreter>::sync_generator_for_of_stack                                                  -      -            
+     2.44%  jsse                  [.] <jsse::interpreter::Interpreter>::sync_generator_scope_stack                                                   -      -            
+     2.11%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                     -      -            
+     1.63%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_body_inner                                                              -      -            
+     1.63%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                            -      -            
+     1.46%  jsse                  [.] <jsse::interpreter::Interpreter>::unwind_generator_for_of_loops                                                -      -            
+     1.46%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::types::Completion>                                                   -      -            
+     1.30%  jsse                  [.] jsse::interpreter::helpers::to_boolean                                                                         -      -            
+     1.30%  libc.so.6             [.] malloc                                                                                                         -      -            
+     1.14%  libc.so.6             [.] 0x0000000000185de5                                                                                             -      -            
+     0.98%  jsse                  [.] <jsse::interpreter::Interpreter>::env_set::<alloc::string::String>                                             -      -            
+     0.98%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_spread_args                                                             -      -            
+     0.98%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_with                                            -      -            
+     0.98%  jsse                  [.] <jsse::interpreter::Interpreter>::instantiate_body_declarations                                                -      -            
+     0.98%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::types::IteratorState>                                                -      -            
+     0.98%  libc.so.6             [.] 0x0000000000185deb                                                                                             -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::Interpreter>::align_generator_for_of_stack                                                 -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::Interpreter>::apply_update_numeric                                                         -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                       -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_call                                                                    -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_operand                                                                 -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                 -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::atom::Atom>::intern                                                                        -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::generator_transform::GeneratorState>::inline_jump_terminator                               -      -            
+     0.81%  jsse                  [.] <jsse::interpreter::types::IteratorState as core::clone::Clone>::clone                                         -      -            
+     0.81%  jsse                  [.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>                                  -      -            
+     0.81%  jsse                  [.] core::ptr::drop_glue::<core::result::Result<jsse::types::NanBoxedValue, jsse::types::NanBoxedValue>>           -      -            
+     0.81%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                   -      -            
+     0.81%  jsse                  [.] jsse::interpreter::hoisting::collect_lexical_names                                                             -      -            
+     0.81%  libc.so.6             [.] cfree                                                                                                          -      -            
+     0.81%  libc.so.6             [.] 0x0000000000185dc0                                                                                             -      -            
+     0.81%  libc.so.6             [.] 0x0000000000185dd4                                                                                             -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::Interpreter>::apply_compound_assign                                                        -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_assign                                                                  -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_prepared_statements                                                     -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::Interpreter>::iterator_step_value                                                          -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                             -      -            
+     0.65%  jsse                  [.] <jsse::interpreter::types::Environment>::new                                                                   -      -            
+     0.65%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::binding_map::BindingMap>                                             -      -            
+     0.65%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::eval::generator_runtime::ForOfTransitionOutcome<usize>>              -      -            
+     0.65%  libc.so.6             [.] 0x0000000000185de9                                                                                             -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

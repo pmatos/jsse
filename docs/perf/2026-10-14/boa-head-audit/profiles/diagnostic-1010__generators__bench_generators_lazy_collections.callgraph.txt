@@ -1,0 +1,53 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 615  of event 'cpu-clock:u'
+# Event count (approx.): 1232464920
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                          IPC   [IPC Coverage]
+# ........  ........  ....................  ..............................................................................................................................................................................................................  ....................
+#
+    10.73%     9.59%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl                                                                                                                                         -      -            
+            |          
+            |--2.93%--<jsse::interpreter::Interpreter>::generator_step_value
+            |          <jsse::interpreter::Interpreter>::generator_next_state_machine_with
+            |          <jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+            |          
+             --2.76%--<jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+
+     9.11%     8.94%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                                            -      -            
+     7.48%     4.23%  jsse                  [.] <str as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                                                                -      -            
+            |          
+             --4.55%--<str as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     5.69%     0.98%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_with                                                                                                                                         -      -            
+            |          
+             --4.72%--<jsse::interpreter::Interpreter>::generator_next_state_machine_with
+                       <jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+
+     4.88%     4.39%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_expr                                                                                                                                                                 -      -            
+     4.07%     0.49%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_step_value                                                                                                                                                      -      -            
+            |          
+             --3.74%--<jsse::interpreter::Interpreter>::generator_step_value
+                       |          
+                        --3.58%--<jsse::interpreter::Interpreter>::generator_next_state_machine_with
+                                  <jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+
+     3.41%     3.41%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>                                                                                                                                 -      -            
+     3.25%     0.81%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                                -      -            
+            |          
+             --2.76%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --2.44%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.76%     2.76%  jsse                  [.] <jsse::interpreter::Interpreter>::reconcile_scope_stack                                                                                                                                                     -      -            
+     2.60%     2.60%  jsse                  [.] <jsse::interpreter::Interpreter>::sync_generator_for_of_stack                                                                                                                                               -      -            
+     2.60%     2.44%  jsse                  [.] <jsse::interpreter::Interpreter>::sync_generator_scope_stack                                                                                                                                                -      -            
+     2.11%     2.11%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                                  -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

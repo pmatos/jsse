@@ -1,0 +1,9 @@
+[
+  {
+    "workload": "jetstream-registry/WSL",
+    "repeat": 1,
+    "pid": 654186,
+    "reason": "Redundant repetition canceled after a complete successful JSSE run and Boa parse failure; excluded from measurements",
+    "timestamp": "2026-10-14T21:22:11Z"
+  }
+]

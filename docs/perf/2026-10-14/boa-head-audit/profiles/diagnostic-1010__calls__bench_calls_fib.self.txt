@@ -1,0 +1,47 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 559  of event 'cpu-clock:u'
+# Event count (approx.): 1120240472
+#
+# Overhead  Shared Object         Symbol                                                                                                                          IPC   [IPC Coverage]
+# ........  ....................  ..............................................................................................................................  ....................
+#
+    28.26%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                            -      -            
+    15.03%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                  -      -            
+     4.83%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                      -      -            
+     3.76%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                                               -      -            
+     3.58%  jsse                  [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                                                   -      -            
+     3.58%  jsse                  [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                             -      -            
+     3.58%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::CallFrameArguments>                                                               -      -            
+     3.40%  jsse                  [.] <jsse::interpreter::DeferredCallArguments>::new                                                                             -      -            
+     3.04%  jsse                  [.] jsse::interpreter::bytecode::vm::pop_operands                                                                               -      -            
+     3.04%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                -      -            
+     2.86%  jsse                  [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                    -      -            
+     2.68%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_ic_validated                                                                -      -            
+     2.50%  jsse                  [.] <jsse::interpreter::Interpreter>::recycle_function_environment                                                              -      -            
+     2.15%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                         -      -            
+     1.79%  jsse                  [.] <jsse::interpreter::types::Environment>::reset_scope                                                                        -      -            
+     1.43%  jsse                  [.] <jsse::interpreter::Interpreter>::acquire_function_environment                                                              -      -            
+     1.43%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                              -      -            
+     1.25%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                         -      -            
+     1.07%  jsse                  [.] jsse::interpreter::helpers::to_boolean                                                                                      -      -            
+     0.89%  jsse                  [.] <jsse::interpreter::ic_store::IcStore>::exit_body                                                                           -      -            
+     0.89%  jsse                  [.] core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>                                         -      -            
+     0.89%  libc.so.6             [.] 0x0000000000185dde                                                                                                          -      -            
+     0.72%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                           -      -            
+     0.72%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::push_unique                                                                   -      -            
+     0.54%  jsse                  [.] <jsse::interpreter::Interpreter>::call_slot                                                                                 -      -            
+     0.54%  jsse                  [.] <jsse::interpreter::Interpreter>::ordinary_call_bind_this                                                                   -      -            
+     0.54%  jsse                  [.] <jsse::interpreter::Interpreter>::to_boolean_val                                                                            -      -            
+     0.54%  jsse                  [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                                          -      -            
+     0.54%  jsse                  [.] jsse::interpreter::bytecode::vm::declare_var_prologue                                                                       -      -            
+     0.54%  libc.so.6             [.] 0x0000000000185dd8                                                                                                          -      -            
+     0.54%  libc.so.6             [.] 0x0000000000185deb                                                                                                          -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

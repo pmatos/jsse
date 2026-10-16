@@ -1,0 +1,50 @@
+intarith 522725361
+PERF	vm_ops	44000058
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	1
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	44000058.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	2
+PERF	compile_bail	0
+PERF	calls_from_vm	2
+PERF	calls_to_native	1
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	1
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	28000020
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	0
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	115
+PERF	atom_lookup_calls	325
+PERF	key_intern_calls	1212
+BODY	<script body>	0	0.00%	1	-
+OP	LoadLocal	14500010	32.95%
+OP	StoreLocalPop	7000010	15.91%
+OP	LocalBinConst	6000000	13.64%
+OP	BitXor	3500007	7.95%
+OP	Add	3500000	7.95%
+OP	BitOr	3000000	6.82%
+OP	BitAnd	2500000	5.68%
+OP	BinConst	2000010	4.55%
+OP	CmpJumpIfFalse	500001	1.14%
+OP	BitNot	500000	1.14%
+OP	Jump	500000	1.14%
+OP	UpdateLocal	500000	1.14%
+OP	LoadConst	12	0.00%
+OP	Call	2	0.00%
+OP	Return	1	0.00%
+OP	LoadName	1	0.00%
+OP	LoadCalleeName	1	0.00%
+OP	SetCompletion	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	LoadMethod	1	0.00%

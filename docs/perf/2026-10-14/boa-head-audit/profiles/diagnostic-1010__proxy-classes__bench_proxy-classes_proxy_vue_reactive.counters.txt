@@ -1,0 +1,111 @@
+proxy_vue_reactive 36584335
+PERF	vm_ops	10411177
+PERF	ast_stmt_execs	204027
+PERF	ast_expr_evals	1770203
+PERF	ast_work_units	1974230
+PERF	body_dispatch_compiled	582059
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	17.89
+PERF	ast_units_in_functions	0
+PERF	compile_ok	10
+PERF	compile_bail	0
+PERF	calls_from_vm	1092126
+PERF	calls_to_native	972126
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	582059
+PERF	gc_minor	40
+PERF	gc_major	41
+PERF	gc_ms	53
+PERF	gc_minor_us	24842
+PERF	local_slot_hits	1836193
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	222026
+PERF	ast_units_in_fallbacks	1974207
+PERF	global_prop_fast_hits	324049
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	1014303
+PERF	atom_lookup_calls	102367
+PERF	key_intern_calls	19294
+FALLBACK	lexical declaration	5
+FALLBACK	array literal: spread	1
+FALLBACK	nested tail call	1
+BODY	<anonymous#1089>	1308132	66.26%	114011	-
+BODY	trigger	35998	1.82%	17999	-
+BODY	<script body>	23	0.00%	1	-
+BODY	<anonymous#7767>#64826	7	0.00%	1	-
+BODY	<anonymous#2250>#78857	7	0.00%	1	-
+BODY	<anonymous#4215>#6366	7	0.00%	1	-
+BODY	<anonymous#6669>#42829	7	0.00%	1	-
+BODY	<anonymous#8289>#15776	7	0.00%	1	-
+BODY	<anonymous#7154>#51051	7	0.00%	1	-
+BODY	<anonymous#5182>#64074	7	0.00%	1	-
+BODY	<anonymous#5465>#60707	7	0.00%	1	-
+BODY	<anonymous#7221>#78186	7	0.00%	1	-
+BODY	<anonymous#7482>#36076	7	0.00%	1	-
+BODY	<anonymous#6925>#62095	7	0.00%	1	-
+BODY	<anonymous#5314>#49656	7	0.00%	1	-
+BODY	<anonymous#7444>#11723	7	0.00%	1	-
+BODY	<anonymous#7889>#55951	7	0.00%	1	-
+BODY	<anonymous#1758>#21347	7	0.00%	1	-
+BODY	<anonymous#7729>#40059	7	0.00%	1	-
+BODY	<anonymous#8709>#62484	7	0.00%	1	-
+BODY	<anonymous#3812>#74958	7	0.00%	1	-
+BODY	<anonymous#8118>#75851	7	0.00%	1	-
+BODY	<anonymous#8605>#35747	7	0.00%	1	-
+BODY	<anonymous#9036>#77941	7	0.00%	1	-
+BODY	<anonymous#5718>#82817	7	0.00%	1	-
+BODY	<anonymous#8296>#29063	7	0.00%	1	-
+BODY	<anonymous#6600>#9621	7	0.00%	1	-
+BODY	<anonymous#8217>#42620	7	0.00%	1	-
+BODY	<anonymous#6451>#59817	7	0.00%	1	-
+BODY	<anonymous#4660>#21929	7	0.00%	1	-
+BODY	<anonymous#3948>#58697	7	0.00%	1	-
+BODY	<anonymous#8849>#51281	7	0.00%	1	-
+BODY	<anonymous#3657>#34379	7	0.00%	1	-
+BODY	<anonymous#2335>#45974	7	0.00%	1	-
+BODY	<anonymous#6588>#76057	7	0.00%	1	-
+BODY	<anonymous#2615>#5730	7	0.00%	1	-
+BODY	<anonymous#4255>#44016	7	0.00%	1	-
+BODY	<anonymous#8667>#22629	7	0.00%	1	-
+BODY	<anonymous#4372>#19675	7	0.00%	1	-
+BODY	<anonymous#2987>#50489	7	0.00%	1	-
+OP	LoadName	1974232	18.96%
+OP	LoadLocal	1782188	17.12%
+OP	Call	1092126	10.49%
+OP	LoadMethod	834101	8.01%
+OP	InitLexical	708069	6.80%
+OP	Not	624064	5.99%
+OP	JumpIfFalse	624064	5.99%
+OP	Pop	450059	4.32%
+OP	MakeClosure	306040	2.94%
+OP	LoadCalleeName	258025	2.48%
+OP	ReturnUndefined	258023	2.48%
+OP	ExecAst	204027	1.96%
+OP	GetProp	174017	1.67%
+OP	Return	120014	1.15%
+OP	Construct	102026	0.98%
+OP	NewObject	102012	0.98%
+OP	ResolveName	84022	0.81%
+OP	StoreResolvedNamePop	84008	0.81%
+OP	Add	72006	0.69%
+OP	Jump	72005	0.69%
+OP	CmpJumpIfFalse	60007	0.58%
+OP	LoadResolvedName	48006	0.46%
+OP	GetElement	48005	0.46%
+OP	PushEnv	42000	0.40%
+OP	PopEnv	42000	0.40%
+OP	UpdateLocal	36005	0.35%
+OP	IterStep	35998	0.35%
+OP	LoadConst	30006	0.29%
+OP	SetCompletion	18005	0.17%
+OP	LoadUndefined	18002	0.17%
+OP	EndFinally	18001	0.17%
+OP	CheckExit	18001	0.17%
+OP	LocalBinConst	18000	0.17%
+OP	EvalAst	17999	0.17%
+OP	GetIterator	17999	0.17%
+OP	SetProp	12000	0.12%
+OP	SetElement	6000	0.06%
+OP	StoreResolvedName	14	0.00%
+OP	ReturnCompletion	1	0.00%

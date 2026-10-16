@@ -1,0 +1,50 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 498  of event 'cpu-clock:u'
+# Event count (approx.): 997995984
+#
+# Children      Self  Shared Object         Symbol                                                                                                    IPC   [IPC Coverage]
+# ........  ........  ....................  ........................................................................................................  ....................
+#
+    77.51%    77.51%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                      -      -            
+            |          
+            |--61.65%--0x3
+            |          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --6.63%--0x2
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    74.30%     0.00%  [unknown]             [.] 0x0000000000000003                                                                                    -      -            
+            |
+            ---0x3
+               |          
+               |--61.65%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               |          jsse::interpreter::bytecode::vm::run_chunk_inner
+               |          
+                --12.65%--jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}
+
+    61.65%     0.00%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                          -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    14.86%    14.86%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                         -      -            
+            |          
+             --12.65%--0x3
+                       jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}
+
+     6.63%     0.00%  [unknown]             [.] 0x0000000000000002                                                                                    -      -            
+            |
+            ---0x2
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.01%     2.01%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                        -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

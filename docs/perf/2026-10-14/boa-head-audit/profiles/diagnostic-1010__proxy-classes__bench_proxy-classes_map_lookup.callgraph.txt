@@ -1,0 +1,50 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 441  of event 'cpu-clock:u'
+# Event count (approx.): 883767528
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    22.68%    21.54%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+            |          
+            |--8.16%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --3.17%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    13.38%    13.38%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                       -      -            
+            |          
+             --3.63%--<jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     9.30%     0.00%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     8.16%     7.03%  jsse              [.] jsse::types::number_ops::to_string                                                                                                                                                           -      -            
+            |          
+             --2.49%--jsse::types::number_ops::to_string
+
+     5.90%     5.67%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                          -      -            
+     3.85%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                                                                                           -      -            
+            |
+            ---0x7
+
+     3.40%     3.40%  libc.so.6         [.] malloc                                                                                                                                                                                       -      -            
+     2.95%     2.95%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     2.72%     2.72%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+     2.72%     2.49%  jsse              [.] <alloc::sync::Arc<jsse::types::StrView>>::drop_slow                                                                                                                                          -      -            
+     2.72%     2.27%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+     2.49%     2.49%  jsse              [.] jsse::interpreter::keyed_entries::key_hash                                                                                                                                                   -      -            
+     2.27%     2.27%  jsse              [.] <alloc::vec::Vec<u16> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<u16, core::str::iter::EncodeUtf16>>::from_iter                                                                -      -            
+     2.04%     2.04%  jsse              [.] jsse::interpreter::builtins::collections::this_map                                                                                                                                           -      -            
+     2.04%     2.04%  jsse              [.] jsse::interpreter::bytecode::vm::pop_operands                                                                                                                                                -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

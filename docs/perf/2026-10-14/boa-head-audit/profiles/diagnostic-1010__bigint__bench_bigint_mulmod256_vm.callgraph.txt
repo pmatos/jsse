@@ -1,0 +1,29 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 517  of event 'cpu-clock:u'
+# Event count (approx.): 1036072136
+#
+# Children      Self  Shared Object         Symbol                                                                                                                          IPC   [IPC Coverage]
+# ........  ........  ....................  ..............................................................................................................................  ....................
+#
+    16.05%    16.05%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                            -      -            
+     9.86%     9.86%  jsse                  [.] num_bigint::biguint::division::div_rem_core                                                                                 -      -            
+     8.51%     8.51%  jsse                  [.] jsse::interpreter::bytecode::vm::binary_slow                                                                                -      -            
+     6.38%     6.38%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                           -      -            
+     4.26%     4.26%  jsse                  [.] core::ptr::drop_glue::<(jsse::interpreter::atom::Atom, jsse::interpreter::types::Binding)>                                  -      -            
+     3.87%     3.68%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                  -      -            
+     3.29%     3.29%  jsse                  [.] jsse::interpreter::bytecode::vm::pop_operands                                                                               -      -            
+     2.90%     2.90%  jsse                  [.] num_bigint::biguint::multiplication::mac3                                                                                   -      -            
+     2.32%     2.32%  jsse                  [.] <alloc::sync::Arc<num_bigint::bigint::BigInt>>::drop_slow                                                                   -      -            
+     2.32%     2.32%  jsse                  [.] <jsse::interpreter::DeferredCallArguments>::new                                                                             -      -            
+     2.32%     2.32%  jsse                  [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                    -      -            
+     2.13%     2.13%  jsse                  [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                             -      -            
+     2.13%     2.13%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::CallFrameArguments>                                                               -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

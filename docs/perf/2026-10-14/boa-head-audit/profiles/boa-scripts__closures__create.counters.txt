@@ -1,0 +1,65 @@
+AUDIT_RESULT number 11 868383944
+AUDIT_TIME_MS 64
+PERF	vm_ops	2700298
+PERF	ast_stmt_execs	1
+PERF	ast_expr_evals	1
+PERF	ast_work_units	2
+PERF	body_dispatch_compiled	100001
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	27.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	3
+PERF	compile_bail	0
+PERF	calls_from_vm	100028
+PERF	calls_to_native	27
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	100001
+PERF	gc_minor	6
+PERF	gc_major	6
+PERF	gc_ms	10
+PERF	gc_minor_us	5213
+PERF	local_slot_hits	600001
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	1
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	118
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	112
+PERF	atom_lookup_calls	347
+PERF	key_intern_calls	1214
+FALLBACK	lexical declaration	1
+BODY	<script body>	2	100.00%	1	-
+OP	LoadName	300084	11.11%
+OP	Add	300011	11.11%
+OP	InitLexical	300002	11.11%
+OP	LoadLocal	300001	11.11%
+OP	LocalBinConst	200000	7.41%
+OP	Call	100028	3.70%
+OP	ResolveName	100017	3.70%
+OP	CmpJumpIfFalse	100015	3.70%
+OP	Jump	100011	3.70%
+OP	StoreResolvedNamePop	100006	3.70%
+OP	Return	100001	3.70%
+OP	LoadCalleeName	100001	3.70%
+OP	PushEnv	100001	3.70%
+OP	PopEnv	100001	3.70%
+OP	CopyIterEnv	100001	3.70%
+OP	LoadResolvedName	100000	3.70%
+OP	UpdateLocal	100000	3.70%
+OP	MakeClosure	100000	3.70%
+OP	LoadMethod	27	0.00%
+OP	LoadConst	18	0.00%
+OP	SetCompletion	16	0.00%
+OP	GetProp	13	0.00%
+OP	StoreResolvedName	11	0.00%
+OP	UpdateName	11	0.00%
+OP	BinConst	11	0.00%
+OP	LoadUndefined	3	0.00%
+OP	TypeofName	2	0.00%
+OP	Sub	1	0.00%
+OP	StrictNotEq	1	0.00%
+OP	JumpIfFalse	1	0.00%
+OP	JumpIfFalsyKeep	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	ExecAst	1	0.00%

@@ -1,0 +1,34 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 544  of event 'cpu-clock:u'
+# Event count (approx.): 1090180352
+#
+# Overhead  Shared Object         Symbol                                                                                                        IPC   [IPC Coverage]
+# ........  ....................  ............................................................................................................  ....................
+#
+    35.11%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                          -      -            
+    20.22%  jsse                  [.] jsse::interpreter::bytecode::vm::binary_slow                                                              -      -            
+     9.56%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                                             -      -            
+     6.25%  jsse                  [.] <jsse::interpreter::Interpreter>::bigint_binary                                                           -      -            
+     5.15%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                         -      -            
+     4.78%  jsse                  [.] <alloc::sync::Arc<num_bigint::bigint::BigInt>>::drop_slow                                                 -      -            
+     2.57%  jsse                  [.] <&num_bigint::bigint::BigInt as core::ops::arith::Rem>::rem                                               -      -            
+     1.84%  jsse                  [.] <num_bigint::bigint::BigInt as num_integer::Integer>::div_rem                                             -      -            
+     1.65%  jsse                  [.] <&num_bigint::bigint::BigInt as core::ops::arith::Add>::add                                               -      -            
+     1.65%  jsse                  [.] num_bigint::biguint::division::div_rem_cow                                                                -      -            
+     1.47%  jsse                  [.] <&num_bigint::bigint::BigInt as core::ops::arith::Mul>::mul                                               -      -            
+     1.29%  jsse                  [.] <&num_bigint::biguint::BigUint as core::ops::arith::Add>::add                                             -      -            
+     1.29%  jsse                  [.] <num_bigint::biguint::BigUint as core::ops::arith::AddAssign<&num_bigint::biguint::BigUint>>::add_assign  -      -            
+     1.29%  libc.so.6             [.] malloc                                                                                                    -      -            
+     1.10%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                            -      -            
+     0.92%  jsse                  [.] jsse::interpreter::helpers::to_boolean                                                                    -      -            
+     0.92%  libc.so.6             [.] cfree                                                                                                     -      -            
+     0.55%  jsse                  [.] <&num_bigint::bigint::BigInt as core::ops::arith::Sub>::sub                                               -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

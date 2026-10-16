@@ -1,0 +1,72 @@
+bigdenary_numeric true 114461546991719 36135503037707
+PERF	vm_ops	13803030
+PERF	ast_stmt_execs	5
+PERF	ast_expr_evals	17
+PERF	ast_work_units	22
+PERF	body_dispatch_compiled	1150254
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	12.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	22
+PERF	compile_bail	0
+PERF	calls_from_vm	620146
+PERF	calls_to_native	230052
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	1150254
+PERF	gc_minor	14
+PERF	gc_major	14
+PERF	gc_ms	6
+PERF	gc_minor_us	2782
+PERF	local_slot_hits	1480330
+PERF	local_slot_misses	180018
+PERF	ast_fallback_execs	5
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	60016
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	650466
+PERF	atom_lookup_calls	355
+PERF	key_intern_calls	1407
+FALLBACK	lexical declaration	4
+FALLBACK	statement:ClassDeclaration	1
+BODY	<script body>	22	100.00%	1	-
+OP	LoadThis	1600351	11.59%
+OP	GetProp	1570351	11.38%
+OP	LoadName	1410325	10.22%
+OP	LoadLocal	1140266	8.26%
+OP	JumpIfFalse	800156	5.80%
+OP	Pop	720163	5.22%
+OP	Return	720161	5.22%
+OP	InitLexical	650146	4.71%
+OP	Call	540126	3.91%
+OP	LoadConst	540114	3.91%
+OP	SetProp	420092	3.04%
+OP	ReturnUndefined	410090	2.97%
+OP	LocalBinConst	400076	2.90%
+OP	LoadMethod	390093	2.83%
+OP	CmpJumpIfFalse	370094	2.68%
+OP	BinConst	360079	2.61%
+OP	Jump	280043	2.03%
+OP	LoadCalleeName	230053	1.67%
+OP	JumpIfFalsyKeep	230051	1.67%
+OP	Instanceof	170035	1.23%
+OP	Construct	170033	1.23%
+OP	ReturnCall	80020	0.58%
+OP	Mul	70010	0.51%
+OP	StrictEq	60010	0.43%
+OP	StrictNotEq	60010	0.43%
+OP	LoadNull	60010	0.43%
+OP	Typeof	60010	0.43%
+OP	NewObject	60008	0.43%
+OP	StoreLocalPop	60006	0.43%
+OP	UpdateLocal	60000	0.43%
+OP	Neg	50007	0.36%
+OP	Add	30004	0.22%
+OP	Sub	20004	0.14%
+OP	Div	10002	0.07%
+OP	SetCompletion	7	0.00%
+OP	ResolveName	6	0.00%
+OP	StoreResolvedName	6	0.00%
+OP	MakeClosure	6	0.00%
+OP	ExecAst	5	0.00%
+OP	ReturnCompletion	1	0.00%

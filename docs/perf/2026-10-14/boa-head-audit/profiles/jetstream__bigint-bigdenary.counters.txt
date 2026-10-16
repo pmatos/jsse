@@ -1,0 +1,91 @@
+{"results":[439],"iterations":1,"worstCaseCount":16}
+PERF	vm_ops	14992976
+PERF	ast_stmt_execs	12
+PERF	ast_expr_evals	63
+PERF	ast_work_units	75
+PERF	body_dispatch_compiled	1150228
+PERF	body_dispatch_ast	1
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	13.03
+PERF	ast_units_in_functions	33
+PERF	ast_units_per_ast_body	33.00
+PERF	compile_ok	30
+PERF	compile_bail	1
+PERF	calls_from_vm	610147
+PERF	calls_to_native	220071
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	1150229
+PERF	gc_minor	14
+PERF	gc_major	14
+PERF	gc_ms	9
+PERF	gc_minor_us	4514
+PERF	local_slot_hits	1660326
+PERF	local_slot_misses	180018
+PERF	ast_fallback_execs	11
+PERF	ast_units_in_fallbacks	31
+PERF	global_prop_fast_hits	50034
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	670603
+PERF	atom_lookup_calls	370
+PERF	key_intern_calls	1560
+BAIL	fallback-only body	1
+FALLBACK	lexical binding pattern	3
+FALLBACK	lexical declaration	3
+FALLBACK	statement:ClassDeclaration	2
+BODY	<anonymous#1155>	33	44.00%	1	fallback-only body
+BODY	getDecimals	12	16.00%	2	-
+BODY	<script body>	11	14.67%	1	-
+BODY	extractExp	10	13.33%	2	-
+BODY	BigDenary	8	10.67%	170029	-
+BODY	<anonymous#1090>	1	1.33%	1	-
+OP	LoadThis	1600295	10.67%
+OP	GetProp	1580303	10.54%
+OP	LoadLocal	1490302	9.94%
+OP	LoadName	1420321	9.47%
+OP	LoadConst	1220227	8.14%
+OP	CmpJumpIfFalse	720149	4.80%
+OP	Pop	720136	4.80%
+OP	Return	670143	4.47%
+OP	InitLexical	670140	4.47%
+OP	JumpIfFalse	630105	4.20%
+OP	Call	540129	3.60%
+OP	SetProp	420085	2.80%
+OP	ReturnUndefined	410078	2.74%
+OP	LoadMethod	370096	2.47%
+OP	Jump	270036	1.80%
+OP	LoadCalleeName	240049	1.60%
+OP	Typeof	240031	1.60%
+OP	StrictEq	230040	1.53%
+OP	JumpIfFalsyKeep	230035	1.53%
+OP	LocalBinConst	230035	1.53%
+OP	Mod	170029	1.13%
+OP	Instanceof	170029	1.13%
+OP	Construct	170028	1.13%
+OP	ReturnCall	70018	0.47%
+OP	Mul	70009	0.47%
+OP	NewObject	60009	0.40%
+OP	StrictNotEq	60006	0.40%
+OP	LoadNull	60006	0.40%
+OP	StoreLocalPop	60006	0.40%
+OP	UpdateLocal	60001	0.40%
+OP	Neg	50014	0.33%
+OP	Add	30003	0.20%
+OP	Sub	20007	0.13%
+OP	BinConst	20004	0.13%
+OP	Div	10001	0.07%
+OP	Pow	10001	0.07%
+OP	SetCompletion	14	0.00%
+OP	ExecAst	11	0.00%
+OP	LoadUndefined	9	0.00%
+OP	MakeClosure	7	0.00%
+OP	NewArray	6	0.00%
+OP	PushEnv	5	0.00%
+OP	PopEnv	5	0.00%
+OP	TypeofName	4	0.00%
+OP	ResolveName	2	0.00%
+OP	StoreResolvedNamePop	2	0.00%
+OP	Not	1	0.00%
+OP	LoadTrue	1	0.00%
+OP	LoadFalse	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	NewArrayConst	1	0.00%

@@ -1,0 +1,82 @@
+{"results":[653],"iterations":1,"worstCaseCount":0}
+PERF	vm_ops	36402764
+PERF	ast_stmt_execs	3
+PERF	ast_expr_evals	2
+PERF	ast_work_units	5
+PERF	body_dispatch_compiled	2466227
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	14.76
+PERF	ast_units_in_functions	0
+PERF	compile_ok	17
+PERF	compile_bail	0
+PERF	calls_from_vm	2815111
+PERF	calls_to_native	348885
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	2466227
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	15359461
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	3
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	1044536
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	369
+PERF	atom_lookup_calls	418
+PERF	key_intern_calls	1440
+FALLBACK	lexical declaration	2
+FALLBACK	statement:ClassDeclaration	1
+BODY	<script body>	5	100.00%	1	-
+OP	LoadLocal	10722189	29.45%
+OP	LocalBinConst	3889623	10.68%
+OP	LoadCalleeName	2466267	6.77%
+OP	Return	2466202	6.77%
+OP	Call	2116699	5.81%
+OP	Add	1767480	4.86%
+OP	BinConst	1420782	3.90%
+OP	LoadConst	1047876	2.88%
+OP	LoadName	1044507	2.87%
+OP	BitOr	959222	2.64%
+OP	StoreLocalPop	747186	2.05%
+OP	ReturnCall	698412	1.92%
+OP	GetElement	698038	1.92%
+OP	Shl	697356	1.92%
+OP	BitAnd	697312	1.92%
+OP	Jump	354047	0.97%
+OP	CmpJumpIfFalse	354033	0.97%
+OP	GetProp	354032	0.97%
+OP	Sub	349187	0.96%
+OP	UShr	349184	0.96%
+OP	LoadMethod	348843	0.96%
+OP	Pop	348197	0.96%
+OP	Mul	348172	0.96%
+OP	SetElement	348172	0.96%
+OP	DupN	348150	0.96%
+OP	ToPrimitiveKey	348150	0.96%
+OP	Div	348128	0.96%
+OP	BitXor	261888	0.72%
+OP	BitNot	261888	0.72%
+OP	Neg	240108	0.66%
+OP	Shr	704	0.00%
+OP	UpdateLocal	463	0.00%
+OP	JumpIfFalse	158	0.00%
+OP	ReturnUndefined	25	0.00%
+OP	SetCompletion	16	0.00%
+OP	LoadUndefined	8	0.00%
+OP	SetProp	8	0.00%
+OP	InitLexical	8	0.00%
+OP	MakeClosure	8	0.00%
+OP	ResolveName	5	0.00%
+OP	StoreResolvedNamePop	5	0.00%
+OP	NewObject	5	0.00%
+OP	TypeofName	4	0.00%
+OP	PushEnv	4	0.00%
+OP	PopEnv	4	0.00%
+OP	Typeof	3	0.00%
+OP	ExecAst	3	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	Construct	1	0.00%
+OP	NewArrayConst	1	0.00%

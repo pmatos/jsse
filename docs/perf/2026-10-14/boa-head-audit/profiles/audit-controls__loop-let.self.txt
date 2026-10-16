@@ -1,0 +1,26 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 543  of event 'cpu-clock:u'
+# Event count (approx.): 1088176344
+#
+# Overhead  Shared Object         Symbol                                                                                                     IPC   [IPC Coverage]
+# ........  ....................  .........................................................................................................  ....................
+#
+    64.09%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                       -      -            
+     9.76%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                          -      -            
+     5.71%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                 -      -            
+     5.34%  jsse                  [.] <jsse::interpreter::Interpreter>::get_identifier_value_by_ref_hinted::<jsse::interpreter::atom::Atom>  -      -            
+     5.34%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                    -      -            
+     3.50%  jsse                  [.] <jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>       -      -            
+     2.76%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                      -      -            
+     0.92%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                         -      -            
+     0.74%  jsse                  [.] <jsse::interpreter::types::Environment>::resolve_indirect_binding                                      -      -            
+     0.55%  jsse                  [.] core::ptr::drop_glue::<core::result::Result<jsse::types::NanBoxedValue, jsse::types::NanBoxedValue>>   -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

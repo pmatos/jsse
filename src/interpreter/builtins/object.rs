@@ -49,7 +49,7 @@ fn enumerable_own_values(
                 let Some(key_string) = key_val.as_string() else {
                     continue;
                 };
-                let k = JsPropertyKey::from_js_string(&key_string);
+                let k = crate::interpreter::key_intern::key_from_js_string(&key_string);
                 let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -1073,7 +1073,7 @@ impl Interpreter {
                     // objects and preserves the trap order for proxies.
                     for kv in &all_keys {
                         if let Some(s) = kv.as_string() {
-                            let key = JsPropertyKey::from_js_string(&s);
+                            let key = crate::interpreter::key_intern::key_from_js_string(&s);
                             if !extra_str_keys.contains(&key) {
                                 result.push(JsValue::string(s));
                             }
@@ -1087,7 +1087,7 @@ impl Interpreter {
                     }
                     for kv in result.iter().skip(extra_str_keys.len()) {
                         if let Some(s) = kv.as_string() {
-                            let k = JsPropertyKey::from_js_string(&s);
+                            let k = crate::interpreter::key_intern::key_from_js_string(&s);
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &k) {
                                     Ok(v) => v,

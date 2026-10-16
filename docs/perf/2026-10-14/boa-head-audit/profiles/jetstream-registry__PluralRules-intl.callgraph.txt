@@ -1,0 +1,56 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 490  of event 'cpu-clock:u'
+# Event count (approx.): 981963920
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                 IPC   [IPC Coverage]
+# ........  ........  ....................  .....................................................................................................................................................................................................  ....................
+#
+    32.65%    32.45%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                                   -      -            
+            |          
+            |--4.49%--0x6
+            |          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+            |--3.67%--0x1
+            |          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --2.65%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     8.57%     0.20%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                       -      -            
+            |          
+             --8.37%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     8.16%     8.16%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                                -      -            
+            |          
+             --2.04%--jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>
+
+     5.10%     5.10%  jsse                  [.] zerotrie::reader::step_parameterized::<zerotrie::zerotrie::ZeroTrieSimpleAscii<[u8]>>                                                                                                              -      -            
+     4.69%     0.00%  [unknown]             [.] 0x0000000000000006                                                                                                                                                                                 -      -            
+            |
+            ---0x6
+               |          
+                --4.49%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     4.29%     0.00%  [unknown]             [.] 0x0000000000000001                                                                                                                                                                                 -      -            
+            |
+            ---0x1
+               |          
+                --3.88%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.88%     3.88%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                             -      -            
+     3.88%     2.65%  jsse                  [.] <icu_locale::fallback::LocaleFallbackIteratorInner>::get_explicit_parent                                                                                                                           -      -            
+     2.24%     2.24%  libc.so.6             [.] malloc                                                                                                                                                                                             -      -            
+     2.04%     1.22%  jsse                  [.] <jsse::interpreter::Interpreter>::setup_intl_plural_rules::{closure#0}                                                                                                                             -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

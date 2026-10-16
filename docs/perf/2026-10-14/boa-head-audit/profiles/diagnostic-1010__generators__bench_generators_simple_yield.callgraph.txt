@@ -1,0 +1,90 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 569  of event 'cpu-clock:u'
+# Event count (approx.): 1140280552
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    18.45%    11.60%  jsse              [.] <str as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                                                 -      -            
+            |          
+             --12.13%--<str as jsse::interpreter::binding_map::BindingKey>::find_in
+
+    13.88%     9.49%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl                                                                                                                          -      -            
+            |          
+            |--6.50%--<jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+            |          |          
+            |           --2.46%--<jsse::interpreter::Interpreter>::exec_prepared_statements
+            |          
+             --5.45%--<jsse::interpreter::Interpreter>::generator_step_value
+                       <jsse::interpreter::Interpreter>::generator_next_state_machine_with
+                       <jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+
+     9.84%     1.41%  jsse              [.] <jsse::interpreter::Interpreter>::generator_step_value                                                                                                                                       -      -            
+            |          
+             --9.49%--<jsse::interpreter::Interpreter>::generator_step_value
+                       |          
+                        --8.26%--<jsse::interpreter::Interpreter>::generator_next_state_machine_with
+                                  |          
+                                   --8.08%--<jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+                                             |          
+                                              --2.46%--<jsse::interpreter::Interpreter>::exec_prepared_statements
+
+     8.79%     8.44%  jsse              [.] <jsse::interpreter::Interpreter>::eval_expr                                                                                                                                                  -      -            
+            |          
+             --3.69%--<jsse::interpreter::Interpreter>::eval_expr
+
+     8.61%     0.53%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_with                                                                                                                          -      -            
+            |          
+             --8.08%--<jsse::interpreter::Interpreter>::generator_next_state_machine_with
+                       <jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+                       |          
+                        --2.46%--<jsse::interpreter::Interpreter>::exec_prepared_statements
+
+     5.62%     5.62%  jsse              [.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>                                                                                                                -      -            
+     4.75%     2.11%  jsse              [.] <jsse::interpreter::Interpreter>::resolve_identifier_hinted::<alloc::string::String>                                                                                                         -      -            
+            |          
+             --2.81%--<jsse::interpreter::Interpreter>::resolve_identifier_hinted::<alloc::string::String>
+                       |          
+                        --2.46%--<jsse::interpreter::Interpreter>::generator_next_state_machine_impl
+
+     4.57%     4.39%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>                                                                                                                  -      -            
+            |          
+             --2.99%--jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>
+
+     3.34%     0.00%  [unknown]         [.] 0xfff7ffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfff7ffffffffffff
+
+     3.16%     2.64%  jsse              [.] <jsse::interpreter::Interpreter>::exec_prepared_statements                                                                                                                                   -      -            
+     3.16%     3.16%  libc.so.6         [.] 0x0000000000185deb                                                                                                                                                                           -      -            
+            |          
+             --2.11%--<str as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     3.16%     0.00%  [unknown]         [.] 0x0000000000000001                                                                                                                                                                           -      -            
+            |
+            ---0x1
+               |          
+                --2.11%--<str as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     2.99%     2.99%  jsse              [.] <jsse::interpreter::Interpreter>::eval_binary                                                                                                                                                -      -            
+            |          
+             --2.28%--<jsse::interpreter::Interpreter>::eval_binary
+
+     2.81%     2.81%  jsse              [.] <jsse::interpreter::Interpreter>::sync_generator_scope_stack                                                                                                                                 -      -            
+     2.64%     2.64%  jsse              [.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write                                                                                                         -      -            
+     2.11%     2.11%  jsse              [.] <jsse::interpreter::Interpreter>::exec_statement                                                                                                                                             -      -            
+     2.11%     1.58%  jsse              [.] <jsse::interpreter::Interpreter>::exec_for_of                                                                                                                                                -      -            
+     2.11%     0.00%  [unknown]         [.] 0x0000000000000002                                                                                                                                                                           -      -            
+            |
+            ---0x2
+
+     2.11%     1.58%  jsse              [.] <jsse::interpreter::Interpreter>::stash_pending_iter_close                                                                                                                                   -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

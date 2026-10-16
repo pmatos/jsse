@@ -160,6 +160,13 @@ impl JsString {
         self.view.ptr == other.view.ptr && self.view.len == other.view.len
     }
 
+    /// Address of the first code unit. Together with the length it is the
+    /// identity [`Self::ptr_eq`] compares, so it is a cheap identity hash.
+    #[inline]
+    pub(crate) fn units_addr(&self) -> usize {
+        self.view.ptr as usize
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.view.len == 0
     }
@@ -482,7 +489,12 @@ impl JsPropertyKey {
     }
 
     pub(crate) fn is_symbol(&self) -> bool {
-        self.bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
+        Self::is_symbol_encoding(&self.bytes)
+    }
+
+    #[inline]
+    fn is_symbol_encoding(bytes: &[u8]) -> bool {
+        bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
     }
 
     /// The bytes after the symbol sigil. The description inside is WTF-8, so
@@ -590,6 +602,18 @@ impl fmt::Display for JsPropertyKey {
 pub(crate) trait PropertyKeyLike {
     fn as_property_key_bytes(&self) -> &[u8];
 
+    /// Whether this is a Symbol key rather than a String key.
+    #[inline]
+    fn is_symbol_key(&self) -> bool {
+        JsPropertyKey::is_symbol_encoding(self.as_property_key_bytes())
+    }
+
+    /// The String value of a non-Symbol key as a Proxy trap argument, shared
+    /// across repeated requests for the same name.
+    fn to_trap_key_string(&self) -> JsString {
+        crate::interpreter::key_intern::key_to_trap_js_string(&self.to_interned_property_key())
+    }
+
     fn as_property_key_str(&self) -> Option<&str> {
         std::str::from_utf8(self.as_property_key_bytes()).ok()
     }
@@ -622,6 +646,10 @@ impl PropertyKeyLike for str {
     fn to_interned_property_key(&self) -> JsPropertyKey {
         crate::interpreter::key_intern::intern_key(self)
     }
+
+    fn to_trap_key_string(&self) -> JsString {
+        crate::interpreter::key_intern::name_to_js_string(self)
+    }
 }
 
 impl PropertyKeyLike for String {
@@ -640,6 +668,10 @@ impl PropertyKeyLike for String {
     #[inline]
     fn to_interned_property_key(&self) -> JsPropertyKey {
         crate::interpreter::key_intern::intern_key(self)
+    }
+
+    fn to_trap_key_string(&self) -> JsString {
+        crate::interpreter::key_intern::name_to_js_string(self)
     }
 }
 
@@ -660,6 +692,10 @@ impl PropertyKeyLike for JsPropertyKey {
     fn to_interned_property_key(&self) -> JsPropertyKey {
         crate::interpreter::key_intern::intern_js_key(self.clone())
     }
+
+    fn to_trap_key_string(&self) -> JsString {
+        crate::interpreter::key_intern::key_to_trap_js_string(self)
+    }
 }
 
 impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
@@ -678,6 +714,10 @@ impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
     #[inline]
     fn to_interned_property_key(&self) -> JsPropertyKey {
         (*self).to_interned_property_key()
+    }
+
+    fn to_trap_key_string(&self) -> JsString {
+        (*self).to_trap_key_string()
     }
 }
 

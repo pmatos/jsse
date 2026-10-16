@@ -1,0 +1,47 @@
+simple_yield 1855563824
+PERF	vm_ops	32
+PERF	ast_stmt_execs	1800008
+PERF	ast_expr_evals	9900023
+PERF	ast_work_units	11700031
+PERF	body_dispatch_compiled	0
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	3600013
+PERF	ast_units_in_functions	0
+PERF	compile_ok	1
+PERF	compile_bail	0
+PERF	calls_from_vm	1
+PERF	calls_to_native	4
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	3
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	7
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	5
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	0
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	93
+PERF	atom_lookup_calls	6300339
+PERF	key_intern_calls	1178
+FALLBACK	lexical declaration	2
+FALLBACK	statement:ForOf	1
+BODY	<script body>	9900025	84.62%	1	-
+BODY	count	1800006	15.38%	3600012	-
+OP	ExecAst	5	15.62%
+OP	JumpIfFalse	4	12.50%
+OP	LocalBinConst	4	12.50%
+OP	Jump	3	9.38%
+OP	UpdateLocal	3	9.38%
+OP	LoadConst	2	6.25%
+OP	LoadName	2	6.25%
+OP	SetCompletion	2	6.25%
+OP	LoadUndefined	1	3.12%
+OP	Call	1	3.12%
+OP	ReturnCompletion	1	3.12%
+OP	LoadMethod	1	3.12%
+OP	InitLexical	1	3.12%
+OP	PushEnv	1	3.12%
+OP	PopEnv	1	3.12%

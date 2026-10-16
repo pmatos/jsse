@@ -1,0 +1,59 @@
+199996000000
+PERF	vm_ops	48500131
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	5
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	9700026.20
+PERF	ast_units_in_functions	0
+PERF	compile_ok	2
+PERF	compile_bail	0
+PERF	calls_from_vm	6
+PERF	calls_to_native	1
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	5
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	15000025
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	29
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	97
+PERF	atom_lookup_calls	333
+PERF	key_intern_calls	1196
+BODY	<script body>	0	0.00%	1	-
+OP	LoadLocal	7000015	14.43%
+OP	Jump	5500005	11.34%
+OP	LoadConst	4500024	9.28%
+OP	StrictEq	4500000	9.28%
+OP	JumpIfTrue	4500000	9.28%
+OP	DupN	4500000	9.28%
+OP	LocalBinConst	4000000	8.25%
+OP	CmpJumpIfFalse	2000012	4.12%
+OP	StoreLocalPop	2000010	4.12%
+OP	Pop	2000000	4.12%
+OP	UpdateLocal	2000000	4.12%
+OP	InitLexical	1500000	3.09%
+OP	PushEnv	1500000	3.09%
+OP	PopEnv	1500000	3.09%
+OP	Add	1000005	2.06%
+OP	Sub	500000	1.03%
+OP	SetCompletion	8	0.00%
+OP	LoadName	7	0.00%
+OP	ResolveName	7	0.00%
+OP	LoadCalleeName	6	0.00%
+OP	Call	6	0.00%
+OP	Return	5	0.00%
+OP	LoadResolvedName	5	0.00%
+OP	StoreResolvedName	5	0.00%
+OP	UpdateName	5	0.00%
+OP	LoadUndefined	2	0.00%
+OP	StoreResolvedNamePop	2	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	TypeofName	1	0.00%

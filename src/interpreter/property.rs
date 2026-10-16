@@ -2063,7 +2063,7 @@ impl Interpreter {
             let own_keys = self.proxy_own_keys(cid)?;
             for key in &own_keys {
                 if let Some(s) = key.as_string() {
-                    let key_str = JsPropertyKey::from_js_string(&s);
+                    let key_str = crate::interpreter::key_intern::key_from_js_string(&s);
                     if seen.contains(&key_str) {
                         continue;
                     }

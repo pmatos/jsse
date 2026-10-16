@@ -1,0 +1,24 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 868  of event 'cpu-clock:u'
+# Event count (approx.): 1739478944
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ....................  ...............................................................................................................................................................................................  ....................
+#
+    27.88%    27.88%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+     3.46%     3.46%  jsse                  [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+     3.11%     3.11%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     3.11%     3.11%  jsse                  [.] <jsse::interpreter::property_map::PropertyMap>::append                                                                                                                                       -      -            
+     2.88%     2.88%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyMapInner>                                                                                                                    -      -            
+     2.65%     2.65%  jsse                  [.] <alloc::sync::Arc<[u8]>>::drop_slow                                                                                                                                                          -      -            
+     2.42%     2.42%  jsse                  [.] <jsse::interpreter::property_map::PropertyMap>::insert                                                                                                                                       -      -            
+     2.07%     2.07%  jsse                  [.] <jsse::interpreter::key_intern::KeyCache>::intern                                                                                                                                            -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

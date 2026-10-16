@@ -1,0 +1,26 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 614  of event 'cpu-clock:u'
+# Event count (approx.): 1230460912
+#
+# Children      Self  Shared Object     Symbol                                                                                                                          IPC   [IPC Coverage]
+# ........  ........  ................  ..............................................................................................................................  ....................
+#
+    48.86%    48.86%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                            -      -            
+     5.54%     5.54%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                  -      -            
+     3.75%     3.75%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                      -      -            
+     3.58%     3.58%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                                               -      -            
+     3.42%     3.42%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                             -      -            
+     3.09%     3.09%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                         -      -            
+     2.77%     2.77%  jsse              [.] <jsse::interpreter::Interpreter>::numeric_index_fast_get                                                                    -      -            
+     2.44%     2.44%  jsse              [.] <jsse::interpreter::Interpreter>::global_object_own_data                                                                    -      -            
+     2.12%     2.12%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                           -      -            
+     2.12%     2.12%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                              -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

@@ -30,16 +30,28 @@
 //! being retained. This keeps thread-lifetime memory bounded without adding
 //! recency bookkeeping to cache hits.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::types::{JsPropertyKey, JsString};
 
 thread_local! {
     static KEY_CACHE: RefCell<KeyCache> = RefCell::new(KeyCache::new());
     static KEY_STRING_CACHE: RefCell<KeyStringCache> = RefCell::new(KeyStringCache::new());
+    /// First-unit address of each `KeyStringCache::by_string` entry (0 when
+    /// empty). Const-initialised `Cell`s have no lazy-init or borrow check, so
+    /// the lookup that misses stays a few instructions.
+    static REVERSE_TAGS: [Cell<usize>; KEY_STRING_CACHE_SLOTS] =
+        const { [const { Cell::new(0) }; KEY_STRING_CACHE_SLOTS] };
 }
 
 const KEY_STRING_CACHE_SLOTS: usize = 1024;
+
+/// Multiplicative hash of an address into a power-of-two direct-mapped table.
+#[inline]
+fn address_slot(addr: usize, slots: usize) -> usize {
+    let h = (addr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h >> (usize::BITS - slots.trailing_zeros())
+}
 
 /// Direct-mapped `JsPropertyKey` -> `JsString` cache, indexed by the key's
 /// backing-allocation address. Property keys are interned, so the same name
@@ -48,45 +60,156 @@ const KEY_STRING_CACHE_SLOTS: usize = 1024;
 /// for-in step and similar. A slot holds a clone of the key, which keeps the
 /// address from being recycled while the entry lives; a hit is verified by
 /// allocation identity, so a colliding key simply replaces the slot.
+///
+/// `by_string` maps back, by the string's first-unit address, for the strings
+/// handed to a Proxy trap (`key_to_trap_js_string`): `Reflect.get(t, k)` then
+/// gets the key without re-encoding `k`. A hit is confirmed by `ptr_eq` (same
+/// units and length); the slot's clone keeps the units alive and unchanged.
+///
+/// `by_name` serves a name given as `&str`, found by address and length and
+/// confirmed by its bytes, so it needs no interner hashing (and still hits
+/// once the interner is full and returns a fresh key per call).
 struct KeyStringCache {
     slots: Vec<Option<(JsPropertyKey, JsString)>>,
+    by_string: Vec<Option<(JsString, JsPropertyKey)>>,
+    by_name: Vec<Option<NameEntry>>,
+}
+
+struct NameEntry {
+    addr: usize,
+    len: usize,
+    key: JsPropertyKey,
+    string: JsString,
 }
 
 impl KeyStringCache {
     fn new() -> Self {
         Self {
             slots: vec![None; KEY_STRING_CACHE_SLOTS],
+            by_string: vec![None; KEY_STRING_CACHE_SLOTS],
+            by_name: std::iter::repeat_with(|| None)
+                .take(KEY_STRING_CACHE_SLOTS)
+                .collect(),
         }
     }
 
     #[inline]
-    fn slot_index(key: &JsPropertyKey) -> usize {
-        let h = (key.allocation_addr() >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        h >> (usize::BITS - KEY_STRING_CACHE_SLOTS.trailing_zeros())
+    fn slot_index(addr: usize) -> usize {
+        address_slot(addr, KEY_STRING_CACHE_SLOTS)
     }
+
+    fn record_reverse(&mut self, string: &JsString, key: &JsPropertyKey) {
+        let addr = string.units_addr();
+        let idx = Self::slot_index(addr);
+        let stale = REVERSE_TAGS.with(|t| t[idx].replace(addr) != addr);
+        if stale {
+            self.by_string[idx] = Some((string.clone(), key.clone()));
+        }
+    }
+
+    fn string_for(&mut self, key: &JsPropertyKey) -> JsString {
+        let idx = Self::slot_index(key.allocation_addr());
+        match &self.slots[idx] {
+            Some((k, s)) if k.same_allocation(key) => s.clone(),
+            _ => {
+                let s = key.to_js_string();
+                self.slots[idx] = Some((key.clone(), s.clone()));
+                s
+            }
+        }
+    }
+}
+
+fn is_cacheable(key: &JsPropertyKey) -> bool {
+    !key.is_symbol() && key.as_bytes().len() <= MAX_CACHEABLE_KEY_BYTES
 }
 
 /// The String value of a non-Symbol property key. Repeated requests for the
 /// same interned key share one `JsString`.
 #[inline]
 pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
-    if key.is_symbol() || key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
+    if !is_cacheable(key) {
+        return key.to_js_string();
+    }
+    KEY_STRING_CACHE
+        .try_with(|c| c.borrow_mut().string_for(key))
+        .unwrap_or_else(|_| key.to_js_string())
+}
+
+/// [`key_to_js_string`] for a key that is about to be shown to user code as a
+/// Proxy trap argument, which also lets `key_from_js_string` map it back.
+#[inline]
+pub(crate) fn key_to_trap_js_string(key: &JsPropertyKey) -> JsString {
+    if !is_cacheable(key) {
         return key.to_js_string();
     }
     KEY_STRING_CACHE
         .try_with(|c| {
             let mut c = c.borrow_mut();
-            let idx = KeyStringCache::slot_index(key);
-            if let Some((k, s)) = &c.slots[idx]
-                && k.same_allocation(key)
-            {
-                return s.clone();
-            }
-            let s = key.to_js_string();
-            c.slots[idx] = Some((key.clone(), s.clone()));
-            s
+            let string = c.string_for(key);
+            c.record_reverse(&string, key);
+            string
         })
         .unwrap_or_else(|_| key.to_js_string())
+}
+
+/// The trap-argument String of a property name given as text.
+pub(crate) fn name_to_js_string(name: &str) -> JsString {
+    if name.len() > MAX_CACHEABLE_KEY_BYTES {
+        return key_to_trap_js_string(&intern_key(name));
+    }
+    let addr = name.as_ptr() as usize;
+    let idx = KeyStringCache::slot_index(addr);
+    let hit = KEY_STRING_CACHE
+        .try_with(|c| match &c.borrow().by_name[idx] {
+            Some(e)
+                if e.addr == addr && e.len == name.len() && e.key.as_bytes() == name.as_bytes() =>
+            {
+                Some(e.string.clone())
+            }
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(string) = hit {
+        return string;
+    }
+    let key = intern_key(name);
+    let string = key_to_trap_js_string(&key);
+    let _ = KEY_STRING_CACHE.try_with(|c| {
+        c.borrow_mut().by_name[idx] = Some(NameEntry {
+            addr,
+            len: name.len(),
+            key,
+            string: string.clone(),
+        });
+    });
+    string
+}
+
+/// `ToPropertyKey` of a String value: the key a trap argument was built from
+/// while it is still cached, else a fresh encoding.
+#[inline]
+pub(crate) fn key_from_js_string(s: &JsString) -> JsPropertyKey {
+    let addr = s.units_addr();
+    let idx = KeyStringCache::slot_index(addr);
+    if REVERSE_TAGS.with(|t| t[idx].get()) == addr
+        && let Some(key) = reverse_lookup(s, idx)
+    {
+        return key;
+    }
+    JsPropertyKey::from_js_string(s)
+}
+
+#[inline(never)]
+fn reverse_lookup(s: &JsString, idx: usize) -> Option<JsPropertyKey> {
+    KEY_STRING_CACHE
+        .try_with(|c| match &c.borrow().by_string[idx] {
+            Some((cached, key)) if cached.ptr_eq(s) => Some(key.clone()),
+            _ => None,
+        })
+        .ok()
+        .flatten()
 }
 
 /// Randomly seeded hasher; see `IndexState` in `property_map.rs`.
@@ -159,8 +282,7 @@ impl KeyCache {
 
     #[inline]
     fn canonical_slot(key: &JsPropertyKey) -> usize {
-        let h = (key.allocation_addr() >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        h >> (usize::BITS - CANONICAL_SLOTS.trailing_zeros())
+        address_slot(key.allocation_addr(), CANONICAL_SLOTS)
     }
 
     #[inline]
@@ -294,6 +416,58 @@ mod tests {
         let k = JsPropertyKey::from_js_string(&s);
         assert_eq!(key_to_js_string(&k).as_units(), s.as_units());
         assert_eq!(key_to_js_string(&k).as_units(), s.as_units());
+    }
+
+    #[test]
+    fn string_built_from_a_key_converts_back_to_that_key() {
+        let k = intern_key("reverseCachedName");
+        let s = key_to_trap_js_string(&k);
+        assert!(key_from_js_string(&s).same_allocation(&k));
+        assert!(key_from_js_string(&s.clone()).same_allocation(&k));
+        let equal = JsString::from_str("reverseCachedName");
+        let back = key_from_js_string(&equal);
+        assert_eq!(back, k);
+        assert!(!back.same_allocation(&k), "only the built string hits");
+    }
+
+    #[test]
+    fn reverse_cache_is_exact_for_lone_surrogates_and_index_keys() {
+        for units in [
+            vec![0xD800u16],
+            vec![0xDC00, 0x61],
+            vec![0x61, 0xD83D, 0xDE00, 0xD83D],
+            vec![0x31, 0x32, 0x38],
+            vec![],
+        ] {
+            let original = JsString::from_vec(units.clone());
+            let k = JsPropertyKey::from_js_string(&original);
+            let built = key_to_trap_js_string(&k);
+            assert_eq!(built.as_units(), units.as_slice());
+            assert_eq!(key_from_js_string(&built), k);
+        }
+    }
+
+    #[test]
+    fn reverse_cache_distinguishes_views_sharing_a_buffer() {
+        let k = intern_key("sharedBufferStem");
+        let stem = key_to_trap_js_string(&k);
+        let longer = stem.concat_units(&"Suffix".encode_utf16().collect::<Vec<u16>>());
+        assert_eq!(
+            key_from_js_string(&longer).as_bytes(),
+            b"sharedBufferStemSuffix"
+        );
+        assert_eq!(key_from_js_string(&stem), k);
+    }
+
+    #[test]
+    fn name_strings_follow_the_text_not_its_address() {
+        let mut text = String::from("nameCacheAAAA");
+        let first = name_to_js_string(&text);
+        assert_eq!(first.to_rust_string(), "nameCacheAAAA");
+        assert!(name_to_js_string(&text).ptr_eq(&first));
+        assert!(first.ptr_eq(&key_to_js_string(&intern_key("nameCacheAAAA"))));
+        text.replace_range(.., "nameCacheBBBB");
+        assert_eq!(name_to_js_string(&text).to_rust_string(), "nameCacheBBBB");
     }
 
     #[test]

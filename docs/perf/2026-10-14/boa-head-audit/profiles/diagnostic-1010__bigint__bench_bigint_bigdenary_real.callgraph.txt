@@ -1,0 +1,39 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 587  of event 'cpu-clock:u'
+# Event count (approx.): 1176352696
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    20.44%    19.76%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+     7.16%     7.16%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     6.13%     5.62%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+     5.11%     1.36%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |          
+             --3.92%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --3.75%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.75%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                                                                                           -      -            
+            |
+            ---0x7
+
+     3.75%     3.58%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+     2.90%     2.56%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                          -      -            
+     2.90%     2.56%  jsse              [.] <jsse::interpreter::atom::Atom>::intern                                                                                                                                                      -      -            
+     2.90%     2.90%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                     -      -            
+     2.73%     2.73%  jsse              [.] jsse::interpreter::bytecode::vm::binary_slow                                                                                                                                                 -      -            
+     2.21%     0.00%  [unknown]         [.] 0xfff7ffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfff7ffffffffffff
+
+     2.21%     2.21%  libc.so.6         [.] malloc                                                                                                                                                                                       -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

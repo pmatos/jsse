@@ -183,11 +183,11 @@ impl Interpreter {
         if let Some(n) = (val).as_number() {
             let trunc = n.trunc();
             if n == trunc && trunc >= 0.0 && trunc <= u32::MAX as f64 {
-                return Ok(JsPropertyKey::from((trunc as u32).to_string()));
+                return Ok(JsPropertyKey::from_index(trunc as usize));
             }
         }
         if let Some(s) = val.as_string() {
-            Ok(JsPropertyKey::from_js_string(&s))
+            Ok(crate::interpreter::key_intern::key_from_js_string(&s))
         } else if let Some(s) = val.as_symbol() {
             Ok(s.to_property_key())
         } else if val.is_object() {
@@ -196,7 +196,7 @@ impl Interpreter {
                 return Ok(s.to_property_key());
             }
             if let Some(s) = prim.as_string() {
-                Ok(JsPropertyKey::from_js_string(&s))
+                Ok(crate::interpreter::key_intern::key_from_js_string(&s))
             } else {
                 self.to_string_lossy(&prim).map(JsPropertyKey::from)
             }

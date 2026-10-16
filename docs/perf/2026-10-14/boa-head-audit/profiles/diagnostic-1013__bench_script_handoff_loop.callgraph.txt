@@ -1,0 +1,68 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 833  of event 'cpu-clock:u'
+# Event count (approx.): 1669338664
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                     IPC   [IPC Coverage]
+# ........  ........  ....................  .........................................................................................................................................................  ....................
+#
+    10.80%    10.80%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_expr                                                                                                            -      -            
+    10.32%     7.20%  jsse                  [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                   -      -            
+            |          
+             --3.60%--<hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>
+
+     8.76%     8.76%  jsse                  [.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>                                                                          -      -            
+            |          
+             --4.08%--0x79b55e1cfe45398b
+                       <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>
+
+     7.68%     7.44%  jsse                  [.] <str as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                           -      -            
+            |          
+             --2.40%--<str as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     5.52%     4.92%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>                                                                            -      -            
+            |          
+             --2.28%--jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>
+
+     5.04%     4.08%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_statement                                                                                                       -      -            
+     4.56%     4.32%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                       -      -            
+     4.08%     0.00%  [unknown]             [.] 0x79b55e1cfe45398b                                                                                                                                     -      -            
+            |
+            ---0x79b55e1cfe45398b
+               <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>
+
+     3.36%     1.92%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_assign                                                                                                          -      -            
+            |          
+             --2.64%--<jsse::interpreter::Interpreter>::eval_assign
+
+     3.24%     0.60%  jsse                  [.] <jsse::interpreter::types::Environment>::new                                                                                                           -      -            
+            |          
+             --2.88%--<jsse::interpreter::types::Environment>::new
+
+     3.24%     3.24%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                                                                                          -      -            
+            |          
+             --2.04%--<jsse::interpreter::Interpreter>::eval_binary
+
+     3.00%     0.00%  [unknown]             [.] 0x4646464646464645                                                                                                                                     -      -            
+            |
+            ---0x4646464646464645
+               <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>
+
+     3.00%     2.52%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_prepared_statements                                                                                             -      -            
+     2.28%     2.28%  libc.so.6             [.] 0x0000000000185dde                                                                                                                                     -      -            
+     2.28%     1.92%  jsse                  [.] <jsse::interpreter::Interpreter>::global_object_store_own_data                                                                                         -      -            
+     2.28%     2.04%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_switch_block                                                                                                    -      -            
+     2.16%     2.16%  jsse                  [.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write                                                                   -      -            
+     2.04%     0.00%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                           -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

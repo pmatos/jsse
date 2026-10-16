@@ -1,0 +1,170 @@
+[
+  {
+    "number": 1021,
+    "url": "https://github.com/pmatos/jsse/issues/1021",
+    "title": "bug(host): console is disconnected from globalThis.console, so SSR replacement is ignored",
+    "state": "open",
+    "labels": [
+      "bug",
+      "runtime",
+      "needs-triage"
+    ],
+    "body_sha256": "daf9e71c0f8b75f38f60101b09476a6df87db43bd83f289d14c21fc808121df0"
+  },
+  {
+    "number": 1022,
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "024e701e71612ccc60858a350afabbdf75259c8dc032fdb89be080a0a9e0e9ee"
+  },
+  {
+    "number": 1023,
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "e354d16bb5ede2f5de7c6187ea13f8f72fa74d095cdb59c8557e09e90175378d"
+  },
+  {
+    "number": 1024,
+    "url": "https://github.com/pmatos/jsse/issues/1024",
+    "title": "perf(function): default parameters re-intern names and allocate a body environment on every call",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "34aaaecd225368735dbc061a4fe49e5a8668c97afa695ad4b4046460f4b01b6d"
+  },
+  {
+    "number": 1025,
+    "url": "https://github.com/pmatos/jsse/issues/1025",
+    "title": "perf(arguments): arguments-only calls still materialize property maps and re-intern the arguments binding",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "af054add082147cc6b6722fa5ac0de9a668e86a5774597b07f775cce873476a8"
+  },
+  {
+    "number": 1026,
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "2f495f22176b00c960cd35bb44fe953a0e6ce744b60bc4e107f33ece9a2e1691"
+  },
+  {
+    "number": 1027,
+    "url": "https://github.com/pmatos/jsse/issues/1027",
+    "title": "perf(gc): nursery collections repeatedly trace large environment/object graphs in Three.js and deep promise queues",
+    "state": "open",
+    "labels": [
+      "gc",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "1f5198a46fd387d39c95446696a281b25a54de75f02520bbbf7239de2d9c0901"
+  },
+  {
+    "number": 1028,
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "f4b122df78a4a5136ac50d0c62a68bd0364f2d914759253e2d6ffac08f53a3b4"
+  },
+  {
+    "number": 1029,
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "a8618279521710d90d21413e57fe72db063ff0448d1016dc0e6fbabbb5588435"
+  },
+  {
+    "number": 1030,
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "19c157a4df4dc09f8ca3894a001441456161253eb24b8c54978fa9e8e7d88605"
+  },
+  {
+    "number": 1031,
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "0a74ce81f260dc657435e8a004c81a62f7c1cfd77c789339f0f50e0059b07bdc"
+  },
+  {
+    "number": 1032,
+    "url": "https://github.com/pmatos/jsse/issues/1032",
+    "title": "bug(hoisting): state-machine functions lose declarations in later fragments, breaking Prettier",
+    "state": "open",
+    "labels": [
+      "bug",
+      "spec-compliance",
+      "runtime",
+      "needs-triage"
+    ],
+    "body_sha256": "5964546111cd98b4288aba0b8154da6c1574ba527dba835f224bee860402c160"
+  },
+  {
+    "number": 1033,
+    "url": "https://github.com/pmatos/jsse/issues/1033",
+    "title": "perf(intl): cache ICU plural rules instead of rebuilding locale data on every select",
+    "state": "open",
+    "labels": [
+      "runtime",
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "872be02e0e90737d623db366899f2f0d6a395abd1d5fcbf9625d64598255699f"
+  },
+  {
+    "number": 1034,
+    "url": "https://github.com/pmatos/jsse/issues/1034",
+    "title": "perf: track JSSE versus Boa HEAD benchmark audit findings",
+    "state": "open",
+    "labels": [
+      "performance",
+      "needs-triage"
+    ],
+    "body_sha256": "af9d700498e6c2a1c9ab1edfb55ee87007f26d49c69bfce9e984799148504a51"
+  }
+]

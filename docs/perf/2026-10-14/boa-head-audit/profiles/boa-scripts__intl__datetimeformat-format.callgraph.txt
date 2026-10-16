@@ -1,0 +1,81 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 173  of event 'cpu-clock:u'
+# Event count (approx.): 346693384
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ....................  ...............................................................................................................................................................................................................................................................................................................................................................................................................................................................................  ....................
+#
+     7.51%     7.51%  jsse                  [.] zerotrie::reader::step_parameterized::<zerotrie::zerotrie::ZeroTrieSimpleAscii<[u8]>>                                                                                                                                                                                                                                                                                                                                                                                        -      -            
+            |          
+             --6.94%--zerotrie::reader::step_parameterized::<zerotrie::zerotrie::ZeroTrieSimpleAscii<[u8]>>
+
+     6.36%     5.78%  jsse                  [.] jsse::interpreter::builtins::intl::datetimeformat::canonicalize_timezone                                                                                                                                                                                                                                                                                                                                                                                                     -      -            
+            |
+            ---jsse::interpreter::builtins::intl::datetimeformat::canonicalize_timezone
+
+     5.20%     0.00%  jsse                  [.] jsse::cli::new_interp                                                                                                                                                                                                                                                                                                                                                                                                                                                        -      -            
+            |
+            ---jsse::cli::new_interp
+               <jsse::interpreter::Interpreter>::new
+               <jsse::interpreter::Interpreter>::setup_globals
+
+     5.20%     0.00%  jsse                  [.] <jsse::interpreter::Interpreter>::new                                                                                                                                                                                                                                                                                                                                                                                                                                        -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::new
+               <jsse::interpreter::Interpreter>::setup_globals
+
+     5.20%     0.58%  jsse                  [.] <jsse::interpreter::Interpreter>::setup_globals                                                                                                                                                                                                                                                                                                                                                                                                                              -      -            
+            |          
+             --4.62%--<jsse::interpreter::Interpreter>::setup_globals
+
+     4.62%     1.73%  jsse                  [.] <jsse::interpreter::Interpreter>::create_function_with_name                                                                                                                                                                                                                                                                                                                                                                                                                  -      -            
+            |          
+             --4.05%--<jsse::interpreter::Interpreter>::create_function_with_name
+                       |          
+                        --2.89%--<jsse::types::JsString>::from_vec_grown
+
+     4.05%     4.05%  libc.so.6             [.] malloc                                                                                                                                                                                                                                                                                                                                                                                                                                                                       -      -            
+     4.05%     2.89%  libc.so.6             [.] realloc                                                                                                                                                                                                                                                                                                                                                                                                                                                                      -      -            
+     4.05%     1.16%  jsse                  [.] <jsse::interpreter::builtins::intl::datetimeformat::IcuDateTimePartsWriter as core::fmt::Write>::write_str                                                                                                                                                                                                                                                                                                                                                                   -      -            
+            |          
+             --2.89%--<jsse::interpreter::builtins::intl::datetimeformat::IcuDateTimePartsWriter as core::fmt::Write>::write_str
+
+     4.05%     0.00%  jsse                  [.] <alloc::raw_vec::RawVecInner>::finish_grow                                                                                                                                                                                                                                                                                                                                                                                                                                   -      -            
+            |
+            ---<alloc::raw_vec::RawVecInner>::finish_grow
+
+     3.47%     3.47%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                                                                                                                                                                                                                                                                                                   -      -            
+     3.47%     1.16%  jsse                  [.] <jsse::types::JsString>::from_vec_grown                                                                                                                                                                                                                                                                                                                                                                                                                                      -      -            
+            |          
+             --2.31%--<jsse::types::JsString>::from_vec_grown
+
+     2.89%     2.89%  libc.so.6             [.] cfree                                                                                                                                                                                                                                                                                                                                                                                                                                                                        -      -            
+     2.89%     2.89%  libc.so.6             [.] 0x00000000000a79dd                                                                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+     2.89%     0.58%  jsse                  [.] jsse::interpreter::builtins::intl::datetimeformat::format_with_icu                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+            |          
+             --2.31%--jsse::interpreter::builtins::intl::datetimeformat::format_with_icu
+
+     2.89%     0.00%  [unknown]             [.] 0x000000000000000c                                                                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+            |
+            ---0xc
+               <jsse::interpreter::builtins::intl::datetimeformat::IcuDateTimePartsWriter as core::fmt::Write>::write_str
+
+     2.31%     2.31%  libc.so.6             [.] 0x00000000000a79f9                                                                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+     2.31%     1.73%  jsse                  [.] <jsse::interpreter::property_map::PropertyMap>::append                                                                                                                                                                                                                                                                                                                                                                                                                       -      -            
+     2.31%     0.00%  [unknown]             [.] 0xfff7ffffffffffff                                                                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+            |
+            ---0xfff7ffffffffffff
+
+     2.31%     0.00%  [unknown]             [.] 0xfffbffffffffffff                                                                                                                                                                                                                                                                                                                                                                                                                                                           -      -            
+            |
+            ---0xfffbffffffffffff
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

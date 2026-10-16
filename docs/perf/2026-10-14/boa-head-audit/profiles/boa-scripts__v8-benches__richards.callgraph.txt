@@ -1,0 +1,99 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'cpu-clock:u'
+# Event count (approx.): 2008016016
+#
+# Children      Self  Shared Object     Symbol                                                                                                                  IPC   [IPC Coverage]
+# ........  ........  ................  ......................................................................................................................  ....................
+#
+    30.54%    29.74%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                    -      -            
+            |          
+            |--3.59%--jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+            |--2.99%--0xfff7ffffffffffff
+            |          |          
+            |           --2.10%--0xf
+            |                     jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |                     jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --2.30%--0xfff9ffffffffffff
+                       |          
+                        --2.10%--0x12
+                                  jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                                  jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    14.87%     1.80%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                        -      -            
+            |          
+             --14.17%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --13.07%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    10.28%     8.78%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                       -      -            
+            |          
+             --4.59%--0x7
+                       <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     8.08%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                  -      -            
+            |
+            ---0x7
+               |          
+                --5.89%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     7.78%     0.00%  [unknown]         [.] 0x0000000000000012                                                                                                  -      -            
+            |
+            ---0x12
+               jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     6.39%     6.19%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                          -      -            
+     3.49%     2.40%  jsse              [.] <jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>              -      -            
+            |          
+             --2.20%--<jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>
+
+     3.09%     0.00%  [unknown]         [.] 0xfff7ffffffffffff                                                                                                  -      -            
+            |
+            ---0xfff7ffffffffffff
+               |          
+                --2.10%--0xf
+                          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.09%     2.89%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                            -      -            
+            |          
+             --2.10%--<jsse::interpreter::Interpreter>::bind_simple_parameters
+
+     2.69%     0.00%  [unknown]         [.] 0xfff9ffffffffffff                                                                                                  -      -            
+            |
+            ---0xfff9ffffffffffff
+               |          
+                --2.30%--0x12
+                          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.69%     0.60%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_ic_validated                                                        -      -            
+            |          
+             --2.10%--<jsse::interpreter::Interpreter>::call_function_ic_validated
+
+     2.40%     0.00%  [unknown]         [.] 0x0000000000000009                                                                                                  -      -            
+            |
+            ---0x9
+               |          
+                --2.30%--<jsse::interpreter::Interpreter>::call_function_ic_validated
+
+     2.30%     1.60%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>                            -      -            
+     2.20%     0.00%  [unknown]         [.] 0x000000000000000f                                                                                                  -      -            
+            |
+            ---0xf
+               |          
+                --2.10%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.20%     2.10%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                         -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

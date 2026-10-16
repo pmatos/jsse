@@ -1,0 +1,140 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 137  of event 'cpu-clock:u'
+# Event count (approx.): 274549096
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                                                                                                                                                                                              IPC   [IPC Coverage]
+# ........  ........  ....................  ..................................................................................................................................................................................................................................................................................................................................................................................  ....................
+#
+    11.68%     5.84%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyRecord>                                                                                                                                                                                                                                                                                                         -      -            
+            |          
+            |--5.84%--core::ptr::drop_glue::<jsse::interpreter::Interpreter>
+            |          core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyRecord>
+            |          
+             --5.84%--core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyRecord>
+
+    11.68%     0.00%  jsse                  [.] <jsse::interpreter::object_arena::ObjectHandle>::drop_slow                                                                                                                                                                                                                                                                                                                      -      -            
+            |
+            ---<jsse::interpreter::object_arena::ObjectHandle>::drop_slow
+               |          
+                --10.95%--<alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow
+
+    11.68%     0.00%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::Interpreter>                                                                                                                                                                                                                                                                                                                          -      -            
+            |
+            ---core::ptr::drop_glue::<jsse::interpreter::Interpreter>
+               core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyRecord>
+
+    10.95%     5.84%  jsse                  [.] <alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow                                                                                                                                                                                                                                                                                                                              -      -            
+            |          
+            |--5.84%--<jsse::interpreter::object_arena::ObjectHandle>::drop_slow
+            |          <alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow
+            |          
+             --5.11%--<alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow
+
+     9.49%     5.84%  jsse                  [.] <alloc::sync::Arc<jsse::types::StrView>>::drop_slow                                                                                                                                                                                                                                                                                                                             -      -            
+            |
+            ---<alloc::sync::Arc<jsse::types::StrView>>::drop_slow
+
+     8.03%     8.03%  libc.so.6             [.] 0x00000000000a633f                                                                                                                                                                                                                                                                                                                                                              -      -            
+            |          
+            |--2.92%--<jsse::interpreter::object_arena::ObjectHandle>::drop_slow
+            |          <alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow
+            |          
+             --2.19%--core::ptr::drop_glue::<jsse::interpreter::types::JsObjectData>
+
+     5.11%     1.46%  jsse                  [.] <jsse::interpreter::Interpreter>::create_function_with_name                                                                                                                                                                                                                                                                                                                     -      -            
+            |          
+             --4.38%--<jsse::interpreter::Interpreter>::create_function_with_name
+                       |          
+                        --2.92%--<jsse::types::JsString>::from_vec_grown
+
+     5.11%     1.46%  jsse                  [.] <jsse::types::JsString>::from_vec_grown                                                                                                                                                                                                                                                                                                                                         -      -            
+            |          
+             --3.65%--<jsse::types::JsString>::from_vec_grown
+
+     5.11%     0.00%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::types::JsObjectData>                                                                                                                                                                                                                                                                                                                  -      -            
+            |
+            ---core::ptr::drop_glue::<jsse::interpreter::types::JsObjectData>
+               |          
+                --2.19%--core::ptr::drop_glue::<jsse::interpreter::types::JsFunction>
+
+     4.38%     4.38%  libc.so.6             [.] cfree                                                                                                                                                                                                                                                                                                                                                                           -      -            
+     4.38%     2.92%  jsse                  [.] <jsse::interpreter::key_intern::KeyCache>::intern                                                                                                                                                                                                                                                                                                                               -      -            
+            |          
+             --2.92%--<jsse::interpreter::key_intern::KeyCache>::intern
+
+     4.38%     0.00%  jsse                  [.] jsse::cli::new_interp                                                                                                                                                                                                                                                                                                                                                           -      -            
+            |
+            ---jsse::cli::new_interp
+               <jsse::interpreter::Interpreter>::new
+               <jsse::interpreter::Interpreter>::setup_globals
+               |          
+                --2.19%--<jsse::interpreter::Interpreter>::setup_regexp
+
+     4.38%     0.00%  jsse                  [.] <jsse::interpreter::Interpreter>::new                                                                                                                                                                                                                                                                                                                                           -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::new
+               <jsse::interpreter::Interpreter>::setup_globals
+               |          
+                --2.19%--<jsse::interpreter::Interpreter>::setup_regexp
+
+     4.38%     0.00%  jsse                  [.] <jsse::interpreter::Interpreter>::setup_globals                                                                                                                                                                                                                                                                                                                                 -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::setup_globals
+               |          
+                --2.19%--<jsse::interpreter::Interpreter>::setup_regexp
+
+     3.65%     3.65%  libc.so.6             [.] 0x00000000000a6328                                                                                                                                                                                                                                                                                                                                                              -      -            
+            |          
+             --2.19%--<jsse::interpreter::object_arena::ObjectHandle>::drop_slow
+
+     3.65%     3.65%  libc.so.6             [.] 0x00000000000a79dd                                                                                                                                                                                                                                                                                                                                                              -      -            
+     3.65%     0.00%  jsse                  [.] <alloc::raw_vec::RawVecInner>::finish_grow                                                                                                                                                                                                                                                                                                                                      -      -            
+            |
+            ---<alloc::raw_vec::RawVecInner>::finish_grow
+               |          
+                --2.92%--realloc
+
+     3.65%     0.00%  [unknown]             [.] 0x0000000000000007                                                                                                                                                                                                                                                                                                                                                              -      -            
+            |
+            ---0x7
+
+     2.92%     2.92%  jsse                  [.] <hashbrown::map::HashMap<alloc::boxed::Box<[u8]>, jsse::types::JsPropertyKey, foldhash::fast::RandomState>>::get::<[u8]>                                                                                                                                                                                                                                                        -      -            
+     2.92%     2.19%  libc.so.6             [.] realloc                                                                                                                                                                                                                                                                                                                                                                         -      -            
+     2.92%     1.46%  jsse                  [.] <jsse::interpreter::Interpreter>::setup_function_constructors                                                                                                                                                                                                                                                                                                                   -      -            
+            |          
+             --2.19%--<jsse::interpreter::Interpreter>::setup_function_constructors
+
+     2.92%     0.00%  [unknown]             [.] 0xfff7ffffffffffff                                                                                                                                                                                                                                                                                                                                                              -      -            
+            |
+            ---0xfff7ffffffffffff
+               <jsse::interpreter::Interpreter>::create_function_with_name
+               <jsse::types::JsString>::from_vec_grown
+
+     2.19%     2.19%  jsse                  [.] <jsse::interpreter::property_map::PropertyMap>::append                                                                                                                                                                                                                                                                                                                          -      -            
+     2.19%     2.19%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyMapInner>                                                                                                                                                                                                                                                                                                       -      -            
+            |
+            ---core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyMapInner>
+
+     2.19%     2.19%  ld-linux-x86-64.so.2  [.] 0x00000000000105d5                                                                                                                                                                                                                                                                                                                                                              -      -            
+     2.19%     2.19%  libc.so.6             [.] malloc                                                                                                                                                                                                                                                                                                                                                                          -      -            
+     2.19%     1.46%  jsse                  [.] <core::iter::adapters::flatten::FlatMap<core::iter::adapters::map::Map<jsse::interpreter::property_map::PropertyMapIter, <jsse::interpreter::property_map::PropertyMap>::values::{closure#0}>, alloc::vec::Vec<jsse::types::NanBoxedValue>, <jsse::interpreter::Interpreter>::install_function_prototype::collect_pd_objects> as core::iter::traits::iterator::Iterator>::next  -      -            
+     2.19%     0.73%  jsse                  [.] <alloc::vec::Vec<u16> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<u16, core::str::iter::EncodeUtf16>>::from_iter                                                                                                                                                                                                                                                   -      -            
+     2.19%     0.73%  jsse                  [.] <jsse::interpreter::Interpreter>::setup_regexp                                                                                                                                                                                                                                                                                                                                  -      -            
+     2.19%     0.00%  jsse                  [.] <jsse::interpreter::Interpreter>::setup_intl_date_time_format::{closure#4}                                                                                                                                                                                                                                                                                                      -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::setup_intl_date_time_format::{closure#4}
+               <jsse::types::JsString>::from_vec_grown
+
+     2.19%     0.00%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::types::JsFunction>                                                                                                                                                                                                                                                                                                                    -      -            
+            |
+            ---core::ptr::drop_glue::<jsse::interpreter::types::JsFunction>
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

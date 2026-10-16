@@ -1,0 +1,30 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 537  of event 'cpu-clock:u'
+# Event count (approx.): 1076152296
+#
+# Overhead  Shared Object         Symbol                                                                                      IPC   [IPC Coverage]
+# ........  ....................  ..........................................................................................  ....................
+#
+    48.04%  jsse                  [.] num_bigint::biguint::division::div_rem_core                                             -      -            
+    15.46%  jsse                  [.] num_bigint::biguint::multiplication::mac3                                               -      -            
+    10.24%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                        -      -            
+     7.45%  jsse                  [.] jsse::interpreter::bytecode::vm::binary_slow                                            -      -            
+     2.61%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}       -      -            
+     2.42%  jsse                  [.] <jsse::interpreter::Interpreter>::bigint_binary                                         -      -            
+     2.23%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                           -      -            
+     1.68%  jsse                  [.] <num_bigint::bigint::BigInt as num_integer::Integer>::div_rem                           -      -            
+     1.49%  jsse                  [.] <alloc::sync::Arc<num_bigint::bigint::BigInt>>::drop_slow                               -      -            
+     1.30%  libc.so.6             [.] malloc                                                                                  -      -            
+     1.12%  jsse                  [.] <&num_bigint::bigint::BigInt as core::ops::arith::Rem>::rem                             -      -            
+     1.12%  jsse                  [.] num_bigint::biguint::division::div_rem_cow                                              -      -            
+     0.74%  jsse                  [.] <num_bigint::big_digit::BigDigits>::normalize                                           -      -            
+     0.56%  libc.so.6             [.] cfree                                                                                   -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

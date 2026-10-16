@@ -1,0 +1,121 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 561  of event 'cpu-clock:u'
+# Event count (approx.): 1124248488
+#
+# Children      Self  Shared Object     Symbol                                                                                                      IPC   [IPC Coverage]
+# ........  ........  ................  ..........................................................................................................  ....................
+#
+    26.02%    26.02%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                        -      -            
+            |          
+            |--18.89%--0x2
+            |          |          
+            |          |--16.40%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          |          
+            |           --2.50%--jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --3.39%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    21.39%     1.25%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                            -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               |          
+                --20.14%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    19.43%     0.00%  [unknown]         [.] 0x0000000000000002                                                                                      -      -            
+            |
+            ---0x2
+               |          
+               |--16.40%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               |          jsse::interpreter::bytecode::vm::run_chunk_inner
+               |          
+                --2.50%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    11.59%    10.87%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                              -      -            
+            |          
+            |--5.53%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+            |          
+             --5.35%--0x1
+                       <jsse::interpreter::Interpreter>::call_function_ic_validated
+                       <jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     8.91%     0.00%  [unknown]         [.] 0x0000000000000001                                                                                      -      -            
+            |
+            ---0x1
+               |          
+                --6.60%--<jsse::interpreter::Interpreter>::call_function_ic_validated
+                          |          
+                           --6.06%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     8.02%     5.88%  jsse              [.] <jsse::interpreter::atom::Atom>::intern                                                                 -      -            
+            |          
+             --7.66%--<jsse::interpreter::atom::Atom>::intern
+
+     7.13%     1.07%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_ic_validated                                            -      -            
+            |          
+             --6.60%--<jsse::interpreter::Interpreter>::call_function_ic_validated
+                       |          
+                        --6.06%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     6.24%     5.88%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                     -      -            
+            |          
+             --4.99%--jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>
+
+     5.35%     2.32%  jsse              [.] <str as jsse::interpreter::binding_map::BindingKey>::find_in                                            -      -            
+            |          
+             --4.99%--<str as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     4.28%     0.00%  [unknown]         [.] 0x0000000000000003                                                                                      -      -            
+            |
+            ---0x3
+               |          
+                --3.74%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.39%     1.07%  jsse              [.] <jsse::interpreter::Interpreter>::bind_function_parameters                                              -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::bind_function_parameters
+
+     3.21%     3.03%  jsse              [.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>                           -      -            
+     2.85%     2.85%  jsse              [.] <jsse::interpreter::hoist_cache::HoistCache>::analysis_for                                              -      -            
+            |          
+             --2.67%--<jsse::interpreter::hoist_cache::HoistCache>::analysis_for
+
+     2.85%     0.53%  jsse              [.] <jsse::interpreter::types::Environment>::new_function_scope_with_capacity                               -      -            
+            |          
+             --2.32%--<jsse::interpreter::types::Environment>::new_function_scope_with_capacity
+
+     2.67%     2.67%  jsse              [.] <jsse::interpreter::DeferredCallArguments>::new                                                         -      -            
+            |          
+             --2.50%--0x3fefffffffffffff
+                       <jsse::interpreter::DeferredCallArguments>::new
+
+     2.67%     0.00%  [unknown]         [.] 0x3fefffffffffffff                                                                                      -      -            
+            |
+            ---0x3fefffffffffffff
+               |          
+                --2.50%--<jsse::interpreter::DeferredCallArguments>::new
+
+     2.50%     2.50%  jsse              [.] core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>                     -      -            
+            |          
+             --2.14%--core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>
+
+     2.50%     2.50%  jsse              [.] jsse::interpreter::bytecode::vm::pop_operands                                                           -      -            
+            |          
+             --2.32%--jsse::interpreter::bytecode::vm::pop_operands
+
+     2.50%     0.00%  [unknown]         [.] 0x6526481c8f107444                                                                                      -      -            
+            |
+            ---0x6526481c8f107444
+
+     2.32%     2.32%  jsse              [.] <jsse::interpreter::Interpreter>::bind_pattern                                                          -      -            
+     2.32%     1.25%  jsse              [.] <jsse::interpreter::Interpreter>::env_set::<alloc::string::String>                                      -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

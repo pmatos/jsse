@@ -1,0 +1,85 @@
+{"results":[1329],"iterations":1,"worstCaseCount":4}
+PERF	vm_ops	78704367
+PERF	ast_stmt_execs	1
+PERF	ast_expr_evals	0
+PERF	ast_work_units	1
+PERF	body_dispatch_compiled	3330067
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	23.63
+PERF	ast_units_in_functions	0
+PERF	compile_ok	30
+PERF	compile_bail	0
+PERF	calls_from_vm	3060070
+PERF	calls_to_native	29
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	3330067
+PERF	gc_minor	8
+PERF	gc_major	4
+PERF	gc_ms	12
+PERF	gc_minor_us	4650
+PERF	local_slot_hits	22503487
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	1
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	37
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	446
+PERF	atom_lookup_calls	346
+PERF	key_intern_calls	1622
+FALLBACK	statement:ClassDeclaration	1
+BODY	<script body>	1	100.00%	1	-
+OP	LoadLocal	17617701	22.38%
+OP	GetProp	6948568	8.83%
+OP	LoadThis	5818732	7.39%
+OP	LoadConst	3690064	4.69%
+OP	StrictEq	3600000	4.57%
+OP	JumpIfTrue	3600000	4.57%
+OP	DupN	3600000	4.57%
+OP	StoreLocalPop	3576220	4.54%
+OP	Pop	3518880	4.47%
+OP	Return	3060024	3.89%
+OP	Call	2610070	3.32%
+OP	LoadMethod	2070048	2.63%
+OP	CmpJumpIfFalse	2062216	2.62%
+OP	JumpIfFalse	1980510	2.52%
+OP	Jump	1931540	2.45%
+OP	Typeof	1890003	2.40%
+OP	GetElement	1170462	1.49%
+OP	LoadCalleeName	990020	1.26%
+OP	Not	941089	1.20%
+OP	SetProp	908383	1.15%
+OP	UpdateLocal	671077	0.85%
+OP	LocalBinConst	638489	0.81%
+OP	BitAnd	638319	0.81%
+OP	Add	630000	0.80%
+OP	BinConst	540038	0.69%
+OP	JumpIfFalsyKeep	540000	0.69%
+OP	Eq	450000	0.57%
+OP	NotEq	450000	0.57%
+OP	JumpIfTruthyKeep	450000	0.57%
+OP	ReturnCall	450000	0.57%
+OP	LoadNull	401093	0.51%
+OP	SetElement	319390	0.41%
+OP	UpdateProp	311072	0.40%
+OP	ReturnUndefined	270043	0.34%
+OP	LoadTrue	180000	0.23%
+OP	LoadName	90067	0.11%
+OP	Construct	90022	0.11%
+OP	BitOr	90	0.00%
+OP	MakeClosure	52	0.00%
+OP	Mul	21	0.00%
+OP	SetCompletion	13	0.00%
+OP	NewObject	11	0.00%
+OP	LoadUndefined	9	0.00%
+OP	InitLexical	7	0.00%
+OP	Sub	4	0.00%
+OP	TypeofName	4	0.00%
+OP	ResolveName	3	0.00%
+OP	StoreResolvedNamePop	3	0.00%
+OP	PushEnv	3	0.00%
+OP	PopEnv	3	0.00%
+OP	LoadFalse	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	ExecAst	1	0.00%
+OP	NewArrayConst	1	0.00%

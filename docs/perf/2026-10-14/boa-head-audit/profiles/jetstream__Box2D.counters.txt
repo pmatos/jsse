@@ -1,0 +1,100 @@
+{"results":[475],"iterations":1,"worstCaseCount":4}
+PERF	vm_ops	36079584
+PERF	ast_stmt_execs	266
+PERF	ast_expr_evals	3712
+PERF	ast_work_units	3978
+PERF	body_dispatch_compiled	429514
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	84.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	335
+PERF	compile_bail	0
+PERF	calls_from_vm	499904
+PERF	calls_to_native	176520
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	429514
+PERF	gc_minor	3
+PERF	gc_major	3
+PERF	gc_ms	4
+PERF	gc_minor_us	1938
+PERF	local_slot_hits	13672792
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	267
+PERF	ast_units_in_fallbacks	3975
+PERF	global_prop_fast_hits	144474
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	30482
+PERF	atom_lookup_calls	1063
+PERF	key_intern_calls	71188
+FALLBACK	expression:Delete	1
+FALLBACK	nested tail call	1
+FALLBACK	statement:ClassDeclaration	1
+BODY	<anonymous#1544>	3975	99.92%	353	-
+BODY	<script body>	3	0.08%	1	-
+OP	LoadLocal	10651939	29.52%
+OP	GetProp	8211140	22.76%
+OP	StoreLocalPop	2666058	7.39%
+OP	Mul	2639125	7.31%
+OP	Pop	1370104	3.80%
+OP	Add	1273248	3.53%
+OP	Sub	1152459	3.19%
+OP	LoadThis	1115080	3.09%
+OP	SetProp	1018713	2.82%
+OP	CmpJumpIfFalse	818343	2.27%
+OP	LoadName	804147	2.23%
+OP	Call	494011	1.37%
+OP	LoadMethod	438641	1.22%
+OP	GetElement	401127	1.11%
+OP	DupN	372354	1.03%
+OP	LoadConst	356845	0.99%
+OP	Jump	327749	0.91%
+OP	Neg	218646	0.61%
+OP	ReturnUndefined	217062	0.60%
+OP	UpdateLocal	216438	0.60%
+OP	Return	212187	0.59%
+OP	BinConst	163490	0.45%
+OP	JumpIfFalse	158764	0.44%
+OP	LocalBinConst	104868	0.29%
+OP	JumpIfFalsyKeep	81041	0.22%
+OP	Eq	76845	0.21%
+OP	BitAnd	63870	0.18%
+OP	LoadCalleeName	61228	0.17%
+OP	JumpIfTruthyKeep	45455	0.13%
+OP	SetElement	38595	0.11%
+OP	StrictEq	38194	0.11%
+OP	LoadFalse	34427	0.10%
+OP	Not	33585	0.09%
+OP	StoreLocal	33489	0.09%
+OP	BitOr	23729	0.07%
+OP	Construct	22427	0.06%
+OP	LoadTrue	21546	0.06%
+OP	JumpIfTrue	20884	0.06%
+OP	Div	16821	0.05%
+OP	BitNot	11307	0.03%
+OP	LoadNull	9860	0.03%
+OP	Gt	8705	0.02%
+OP	LtEq	7857	0.02%
+OP	NotEq	7823	0.02%
+OP	ReturnCall	5893	0.02%
+OP	Instanceof	5156	0.01%
+OP	UpdateProp	5017	0.01%
+OP	Lt	1702	0.00%
+OP	MakeClosure	1056	0.00%
+OP	ExecAst	266	0.00%
+OP	SetCompletion	67	0.00%
+OP	Plus	50	0.00%
+OP	LoadUndefined	30	0.00%
+OP	NewObject	26	0.00%
+OP	UpdateName	22	0.00%
+OP	LoadMethodElement	22	0.00%
+OP	Typeof	11	0.00%
+OP	InitLexical	9	0.00%
+OP	ResolveName	8	0.00%
+OP	StoreResolvedNamePop	8	0.00%
+OP	TypeofName	5	0.00%
+OP	PushEnv	3	0.00%
+OP	PopEnv	3	0.00%
+OP	NewArrayConst	2	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	EvalAst	1	0.00%

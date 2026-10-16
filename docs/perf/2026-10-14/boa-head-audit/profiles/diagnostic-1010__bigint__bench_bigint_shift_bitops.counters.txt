@@ -1,0 +1,67 @@
+shift_bitops 16908 650215718
+PERF	vm_ops	7047870
+PERF	ast_stmt_execs	4
+PERF	ast_expr_evals	6
+PERF	ast_work_units	10
+PERF	body_dispatch_compiled	49500
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	142.38
+PERF	ast_units_in_functions	0
+PERF	compile_ok	3
+PERF	compile_bail	0
+PERF	calls_from_vm	97502
+PERF	calls_to_native	97503
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	49500
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	1781309
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	4
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	48001
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	1605
+PERF	atom_lookup_calls	345
+PERF	key_intern_calls	1200
+FALLBACK	lexical declaration	4
+BODY	<script body>	10	100.00%	1	-
+OP	LoadLocal	1286106	18.25%
+OP	LoadConst	1101609	15.63%
+OP	SetCompletion	764314	10.84%
+OP	Jump	444202	6.30%
+OP	JumpIfFalse	397703	5.64%
+OP	CmpJumpIfFalse	397702	5.64%
+OP	LoadUndefined	349703	4.96%
+OP	BitAnd	348202	4.94%
+OP	Shr	348202	4.94%
+OP	StoreLocal	346702	4.92%
+OP	LoadName	198003	2.81%
+OP	BinConst	192000	2.72%
+OP	ResolveName	99000	1.40%
+OP	Call	97502	1.38%
+OP	LoadCalleeName	97500	1.38%
+OP	UpdateLocal	97500	1.38%
+OP	StoreResolvedNamePop	96000	1.36%
+OP	LocalBinConst	51001	0.72%
+OP	Shl	51000	0.72%
+OP	Return	49500	0.70%
+OP	BitOr	49500	0.70%
+OP	GetProp	49500	0.70%
+OP	GetElement	48000	0.68%
+OP	SetElement	48000	0.68%
+OP	UpdateName	16908	0.24%
+OP	InitLexical	6001	0.09%
+OP	PushEnv	4501	0.06%
+OP	PopEnv	4501	0.06%
+OP	StoreResolvedName	3000	0.04%
+OP	Sub	1500	0.02%
+OP	BitXor	1500	0.02%
+OP	LoadResolvedName	1500	0.02%
+OP	ExecAst	4	0.00%
+OP	LoadMethod	2	0.00%
+OP	Mod	1	0.00%
+OP	ReturnCompletion	1	0.00%

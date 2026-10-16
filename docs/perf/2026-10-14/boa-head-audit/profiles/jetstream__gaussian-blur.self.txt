@@ -1,0 +1,29 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 578  of event 'cpu-clock:u'
+# Event count (approx.): 1158316624
+#
+# Overhead  Shared Object     Symbol                                                                                                    IPC   [IPC Coverage]
+# ........  ................  ........................................................................................................  ....................
+#
+    79.58%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                      -      -            
+     4.15%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                     -      -            
+     2.42%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                        -      -            
+     1.90%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                         -      -            
+     1.73%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                   -      -            
+     1.38%  jsse              [.] <jsse::interpreter::Interpreter>::numeric_index_fast_get                                              -      -            
+     0.87%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                            -      -            
+     0.87%  jsse              [.] jsse::interpreter::types::typed_array_get_index                                                       -      -            
+     0.69%  jsse              [.] trunc                                                                                                 -      -            
+     0.52%  jsse              [.] <jsse::interpreter::Interpreter>::setup_typed_array_base_prototype::{closure#2}                       -      -            
+     0.52%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                -      -            
+     0.52%  jsse              [.] jsse::interpreter::types::decode_ta_element                                                           -      -            
+     0.52%  jsse              [.] jsse::interpreter::types::typed_array_set_index                                                       -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

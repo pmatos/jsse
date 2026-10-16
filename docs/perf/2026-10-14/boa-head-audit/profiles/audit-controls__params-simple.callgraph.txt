@@ -1,0 +1,98 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 523  of event 'cpu-clock:u'
+# Event count (approx.): 1048096184
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                       IPC   [IPC Coverage]
+# ........  ........  ................  ...........................................................................................................................................................................................  ....................
+#
+    36.90%    36.90%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                         -      -            
+            |          
+            |--21.22%--0x2
+            |          |          
+            |          |--16.63%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          |          
+            |           --4.59%--jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --3.63%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    25.05%     3.63%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                             -      -            
+            |          
+             --24.47%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --21.41%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    21.22%     0.00%  [unknown]         [.] 0x0000000000000002                                                                                                                                                                       -      -            
+            |
+            ---0x2
+               |          
+               |--16.63%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               |          jsse::interpreter::bytecode::vm::run_chunk_inner
+               |          
+                --4.59%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    14.53%    14.15%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                               -      -            
+            |          
+            |--6.31%--0x1
+            |          <jsse::interpreter::Interpreter>::call_function_ic_validated
+            |          <jsse::interpreter::Interpreter>::call_function_inner_impl
+            |          
+             --5.16%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     9.94%     0.00%  [unknown]         [.] 0x0000000000000001                                                                                                                                                                       -      -            
+            |
+            ---0x1
+               |          
+                --7.46%--<jsse::interpreter::Interpreter>::call_function_ic_validated
+                          |          
+                           --6.69%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     7.84%     1.15%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_ic_validated                                                                                                                             -      -            
+            |          
+             --6.69%--<jsse::interpreter::Interpreter>::call_function_ic_validated
+                       <jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     5.74%     0.00%  [unknown]         [.] 0x0000000000000003                                                                                                                                                                       -      -            
+            |
+            ---0x3
+               |          
+                --4.78%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     5.35%     5.35%  jsse              [.] <jsse::interpreter::DeferredCallArguments>::new                                                                                                                                          -      -            
+            |          
+             --4.78%--0x3fefffffffffffff
+                       <jsse::interpreter::DeferredCallArguments>::new
+
+     4.78%     0.00%  [unknown]         [.] 0x3fefffffffffffff                                                                                                                                                                       -      -            
+            |
+            ---0x3fefffffffffffff
+               <jsse::interpreter::DeferredCallArguments>::new
+
+     4.59%     2.68%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                 -      -            
+            |          
+             --3.63%--<jsse::interpreter::Interpreter>::bind_simple_parameters
+
+     3.44%     3.44%  jsse              [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                                                                                                                -      -            
+            |          
+             --2.68%--<alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut
+
+     3.06%     3.06%  jsse              [.] jsse::interpreter::bytecode::vm::pop_operands                                                                                                                                            -      -            
+            |          
+             --2.49%--jsse::interpreter::bytecode::vm::pop_operands
+
+     2.68%     2.68%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                                                                                          -      -            
+            |          
+             --2.10%--0x1
+
+     2.29%     2.29%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                                                                                        -      -            
+     2.10%     1.91%  jsse              [.] <jsse::interpreter::types::Environment>::reset_scope                                                                                                                                     -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

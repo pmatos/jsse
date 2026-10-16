@@ -1,0 +1,157 @@
+{"results":[472],"iterations":1,"worstCaseCount":4}
+PERF	vm_ops	19122634
+PERF	ast_stmt_execs	51925
+PERF	ast_expr_evals	642457
+PERF	ast_work_units	694382
+PERF	body_dispatch_compiled	760129
+PERF	body_dispatch_ast	778
+PERF	body_non_function_execs	880
+PERF	vm_ops_per_compiled_body	25.16
+PERF	ast_units_in_functions	176168
+PERF	ast_units_per_ast_body	226.44
+PERF	compile_ok	299
+PERF	compile_bail	6
+PERF	calls_from_vm	770282
+PERF	calls_to_native	137782
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	761193
+PERF	gc_minor	2
+PERF	gc_major	3
+PERF	gc_ms	6
+PERF	gc_minor_us	2289
+PERF	local_slot_hits	4390924
+PERF	local_slot_misses	7101
+PERF	ast_fallback_execs	32731
+PERF	ast_units_in_fallbacks	509062
+PERF	global_prop_fast_hits	38307
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	1037793
+PERF	atom_lookup_calls	408551
+PERF	key_intern_calls	12572
+BAIL	construct needs tree-walked frame	3
+BAIL	fallback-only body	3
+FALLBACK	lexical binding pattern	42
+FALLBACK	expression:Template	20
+FALLBACK	statement:ClassDeclaration	12
+FALLBACK	nested tail call	3
+FALLBACK	spread call argument	2
+FALLBACK	object literal: spread	1
+BODY	<anonymous#3361>	368916	53.39%	10677	-
+BODY	HMAC	150100	21.72%	100	construct needs tree-walked frame
+BODY	<anonymous#3360>	68090	9.85%	3095	-
+BODY	<anonymous#3367>	55896	8.09%	4658	-
+BODY	SHA256	14070	2.04%	201	construct needs tree-walked frame
+BODY	SHA2	10050	1.45%	201	construct needs tree-walked frame
+BODY	<anonymous#3366>	5326	0.77%	102	-
+BODY	<anonymous#3674>	1836	0.27%	106	-
+BODY	<anonymous#3196>	1680	0.24%	60	-
+BODY	<anonymous#3562>	1200	0.17%	400	-
+BODY	<anonymous#3563>	1000	0.14%	200	-
+BODY	ensureBytes	928	0.13%	116	fallback-only body
+BODY	<anonymous#3358>	900	0.13%	45	-
+BODY	<anonymous#3656>	880	0.13%	440	-
+BODY	<anonymous#3385>	704	0.10%	88	-
+BODY	weistrass	690	0.10%	115	-
+BODY	pow2	648	0.09%	324	-
+BODY	<anonymous#3418>	600	0.09%	100	fallback-only body
+BODY	hexToNumber	594	0.09%	297	-
+BODY	<anonymous#1642>	556	0.08%	139	-
+BODY	<anonymous#3673>	500	0.07%	100	-
+BODY	<anonymous#3450>	480	0.07%	300	-
+BODY	splitScalarEndo	468	0.07%	117	-
+BODY	<anonymous#3417>	420	0.06%	60	fallback-only body
+BODY	<anonymous#3654>	400	0.06%	200	-
+BODY	<anonymous#3421>	396	0.06%	72	-
+BODY	<anonymous#3382>	339	0.05%	63	-
+BODY	finalizeSig	320	0.05%	32	-
+BODY	sign	312	0.05%	60	-
+BODY	kmdToSig	256	0.04%	32	-
+BODY	<anonymous#3197>	240	0.03%	60	-
+BODY	<anonymous#3195>	228	0.03%	19	-
+BODY	<anonymous#3404>	192	0.03%	32	-
+BODY	<anonymous#3392>	168	0.02%	15	-
+BODY	<anonymous#3400>	144	0.02%	72	-
+BODY	signSync	140	0.02%	20	-
+BODY	<anonymous#3363>	138	0.02%	15	-
+BODY	<anonymous#3423>	120	0.02%	24	-
+BODY	<anonymous#3439>	117	0.02%	18	-
+BODY	<anonymous#3451>	103	0.01%	44	-
+OP	LoadName	3509323	18.35%
+OP	LoadLocal	3191259	16.69%
+OP	LoadConst	820355	4.29%
+OP	LocalBinConst	796818	4.17%
+OP	InitLexical	789693	4.13%
+OP	Call	750223	3.92%
+OP	Return	702847	3.68%
+OP	Add	535867	2.80%
+OP	Pop	526587	2.75%
+OP	BitOr	488096	2.55%
+OP	BitXor	461987	2.42%
+OP	LoadCalleeName	420557	2.20%
+OP	ResolveName	410989	2.15%
+OP	StoreResolvedNamePop	410969	2.15%
+OP	Jump	409500	2.14%
+OP	CmpJumpIfFalse	385128	2.01%
+OP	Sub	381165	1.99%
+OP	GetProp	337986	1.77%
+OP	GetElement	324555	1.70%
+OP	Mul	308747	1.61%
+OP	BinConst	288444	1.51%
+OP	Mod	266240	1.39%
+OP	LoadUndefined	254668	1.33%
+OP	UShr	254336	1.33%
+OP	Shl	253440	1.33%
+OP	StoreLocalPop	246433	1.29%
+OP	BitAnd	208945	1.09%
+OP	JumpIfFalse	188860	0.99%
+OP	UpdateLocal	163515	0.86%
+OP	LoadThis	150063	0.78%
+OP	SetElement	118559	0.62%
+OP	PushEnv	97820	0.51%
+OP	PopEnv	97567	0.51%
+OP	LoadMethod	95399	0.50%
+OP	SetProp	86011	0.45%
+OP	StrictEq	45476	0.24%
+OP	JumpIfTruthyKeep	44630	0.23%
+OP	ReturnUndefined	37324	0.20%
+OP	ExecAst	32167	0.17%
+OP	BitNot	28160	0.15%
+OP	Not	27975	0.15%
+OP	Construct	27337	0.14%
+OP	LoadResolvedName	25092	0.13%
+OP	Div	24094	0.13%
+OP	ReturnCall	20059	0.10%
+OP	Instanceof	17641	0.09%
+OP	LoadFalse	8679	0.05%
+OP	Shr	8250	0.04%
+OP	JumpIfFalsyKeep	7062	0.04%
+OP	Pow	5996	0.03%
+OP	Typeof	4107	0.02%
+OP	Gt	3731	0.02%
+OP	Lt	3208	0.02%
+OP	Neg	3139	0.02%
+OP	LoadNull	3001	0.02%
+OP	LoadTrue	2456	0.01%
+OP	StrictNotEq	1858	0.01%
+OP	MakeClosure	1573	0.01%
+OP	NotEq	1492	0.01%
+OP	Plus	1251	0.01%
+OP	NewObject	934	0.00%
+OP	DupN	891	0.00%
+OP	EvalAst	564	0.00%
+OP	NewArray	466	0.00%
+OP	LtEq	463	0.00%
+OP	UpdateName	200	0.00%
+OP	GtEq	120	0.00%
+OP	TypeofName	69	0.00%
+OP	NewArrayConst	69	0.00%
+OP	UpdateProp	60	0.00%
+OP	In	24	0.00%
+OP	StoreResolvedName	20	0.00%
+OP	SetCompletion	16	0.00%
+OP	ForInStep	12	0.00%
+OP	CheckExit	12	0.00%
+OP	Eq	2	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	NewRegExp	1	0.00%
+OP	ForInHead	1	0.00%

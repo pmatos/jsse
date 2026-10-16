@@ -1,0 +1,48 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 641  of event 'cpu-clock:u'
+# Event count (approx.): 1284569128
+#
+# Children      Self  Shared Object         Symbol                                                                                                      IPC   [IPC Coverage]
+# ........  ........  ....................  ..........................................................................................................  ....................
+#
+    46.02%    45.87%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                        -      -            
+            |          
+             --3.28%--0xfff7ffffffffffff
+                       0x7
+                       jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    12.64%    12.17%  jsse                  [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                           -      -            
+     5.46%     5.15%  jsse                  [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>                -      -            
+     4.37%     0.00%  [unknown]             [.] 0x0000000000000007                                                                                      -      -            
+            |
+            ---0x7
+               |          
+                --3.28%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     4.37%     4.21%  jsse                  [.] <jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>  -      -            
+     3.59%     3.43%  jsse                  [.] jsse::interpreter::bytecode::vm::member_get                                                             -      -            
+     3.43%     0.00%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                            -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.28%     0.00%  [unknown]             [.] 0xfff7ffffffffffff                                                                                      -      -            
+            |
+            ---0xfff7ffffffffffff
+               0x7
+               jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.81%     2.81%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                       -      -            
+     2.65%     2.65%  libc.so.6             [.] 0x0000000000185deb                                                                                      -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

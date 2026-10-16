@@ -1,0 +1,1 @@
+[{"number":1021,"title":"bug(host): console is disconnected from globalThis.console, so SSR replacement is ignored","url":"https://github.com/pmatos/jsse/issues/1021"}]

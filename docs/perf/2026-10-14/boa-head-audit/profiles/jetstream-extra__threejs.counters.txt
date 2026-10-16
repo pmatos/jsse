@@ -1,0 +1,148 @@
+{"results":[26419],"iterations":1,"worstCaseCount":0}
+PERF	vm_ops	356222153
+PERF	ast_stmt_execs	5481552
+PERF	ast_expr_evals	31934591
+PERF	ast_work_units	37416143
+PERF	body_dispatch_compiled	10978578
+PERF	body_dispatch_ast	264105
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	32.45
+PERF	ast_units_in_functions	37086198
+PERF	ast_units_per_ast_body	140.42
+PERF	compile_ok	355
+PERF	compile_bail	30
+PERF	calls_from_vm	16106104
+PERF	calls_to_native	12219308
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	11242683
+PERF	gc_minor	850
+PERF	gc_major	33
+PERF	gc_ms	14699
+PERF	gc_minor_us	13614235
+PERF	local_slot_hits	53477825
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	262
+PERF	ast_units_in_fallbacks	17850
+PERF	global_prop_fast_hits	5744750
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	13249056
+PERF	atom_lookup_calls	4355959
+PERF	key_intern_calls	4766008
+BAIL	construct needs tree-walked frame	28
+BAIL	fallback-only body	2
+FALLBACK	statement:ClassDeclaration	226
+FALLBACK	lexical declaration	13
+FALLBACK	expression:Template	10
+FALLBACK	object literal: computed key	8
+FALLBACK	lexical binding pattern	1
+BODY	CircleGeometry	25208000	67.37%	8000	construct needs tree-walked frame
+BODY	Object3D	4057859	10.85%	24011	construct needs tree-walked frame
+BODY	Material	3329248	8.90%	16006	construct needs tree-walked frame
+BODY	SRGBToLinear	1128528	3.02%	96051	fallback-only body
+BODY	BufferGeometry	1088204	2.91%	16003	construct needs tree-walked frame
+BODY	MeshBasicMaterial	760190	2.03%	8002	construct needs tree-walked frame
+BODY	LineBasicMaterial	328000	0.88%	8000	construct needs tree-walked frame
+BODY	<script body>	312095	0.83%	1	-
+BODY	Mesh	264099	0.71%	8003	construct needs tree-walked frame
+BODY	Float32BufferAttribute	256000	0.68%	32000	construct needs tree-walked frame
+BODY	Line	232000	0.62%	8000	construct needs tree-walked frame
+BODY	<anonymous#1948>	192000	0.51%	16000	fallback-only body
+BODY	LineLoop	96000	0.26%	8000	construct needs tree-walked frame
+BODY	Group	80000	0.21%	8000	construct needs tree-walked frame
+BODY	Uint16BufferAttribute	64000	0.17%	8000	construct needs tree-walked frame
+BODY	<anonymous#2283>	16000	0.04%	16005	-
+BODY	<anonymous#1105>	1362	0.00%	1	-
+BODY	Texture	818	0.00%	5	construct needs tree-walked frame
+BODY	WebXRManager	219	0.00%	1	construct needs tree-walked frame
+BODY	PerspectiveCamera	196	0.00%	4	construct needs tree-walked frame
+BODY	ShaderMaterial	193	0.00%	2	construct needs tree-walked frame
+BODY	Camera	174	0.00%	6	construct needs tree-walked frame
+BODY	generatePrecision	140	0.00%	4	-
+BODY	WebGLRenderer	89	0.00%	1	-
+BODY	<anonymous#2486>	76	0.00%	1	construct needs tree-walked frame
+BODY	WebGLState	72	0.00%	1	-
+BODY	WebGLShadowMap	66	0.00%	1	-
+BODY	Scene	62	0.00%	1	construct needs tree-walked frame
+BODY	WebGLTextures	56	0.00%	1	-
+BODY	DataArrayTexture	55	0.00%	1	construct needs tree-walked frame
+BODY	Data3DTexture	50	0.00%	1	construct needs tree-walked frame
+BODY	MeshDepthMaterial	46	0.00%	1	construct needs tree-walked frame
+BODY	OrthographicCamera	45	0.00%	1	construct needs tree-walked frame
+BODY	DepthTexture	44	0.00%	1	construct needs tree-walked frame
+BODY	MeshDistanceMaterial	34	0.00%	1	construct needs tree-walked frame
+BODY	CubeTexture	29	0.00%	1	construct needs tree-walked frame
+BODY	createColorManagement	23	0.00%	1	-
+BODY	getTexelEncodingFunction	18	0.00%	2	-
+BODY	ArrayCamera	18	0.00%	1	construct needs tree-walked frame
+BODY	getLuminanceFunction	14	0.00%	2	-
+OP	LoadName	49242194	13.82%
+OP	LoadLocal	46821372	13.14%
+OP	GetProp	37190042	10.44%
+OP	LoadThis	33188439	9.32%
+OP	Pop	22435805	6.30%
+OP	Call	15681559	4.40%
+OP	LoadMethod	15457720	4.34%
+OP	InitLexical	13182365	3.70%
+OP	GetElement	12100564	3.40%
+OP	SetProp	11202956	3.14%
+OP	BinConst	10180924	2.86%
+OP	Mul	10089574	2.83%
+OP	Return	8513193	2.39%
+OP	JumpIfFalse	8501394	2.39%
+OP	LoadConst	7227010	2.03%
+OP	Add	7123201	2.00%
+OP	Jump	4887492	1.37%
+OP	CmpJumpIfFalse	4828241	1.36%
+OP	SetElement	3285960	0.92%
+OP	UpdateLocal	3147346	0.88%
+OP	JumpIfTruthyKeep	3011031	0.85%
+OP	LocalBinConst	2670869	0.75%
+OP	PushEnv	2315394	0.65%
+OP	PopEnv	2315394	0.65%
+OP	ResolveName	2136864	0.60%
+OP	StoreResolvedNamePop	2136864	0.60%
+OP	ReturnUndefined	2040840	0.57%
+OP	Sub	2032358	0.57%
+OP	JumpIfFalsyKeep	1912688	0.54%
+OP	ForInStep	1362187	0.38%
+OP	LoadTrue	1288743	0.36%
+OP	Not	992040	0.28%
+OP	StoreLocalPop	838238	0.24%
+OP	BitXor	792360	0.22%
+OP	StrictEq	736279	0.21%
+OP	NewObject	672951	0.19%
+OP	LoadCalleeName	648381	0.18%
+OP	Construct	528548	0.15%
+OP	LoadNull	520134	0.15%
+OP	ForInHead	496661	0.14%
+OP	ReturnCall	424545	0.12%
+OP	LoadFalse	424112	0.12%
+OP	NewArrayConst	360300	0.10%
+OP	StrictNotEq	216433	0.06%
+OP	DupN	208118	0.06%
+OP	LoadUndefined	184076	0.05%
+OP	Div	88048	0.02%
+OP	JumpIfTrue	80040	0.02%
+OP	Neg	73587	0.02%
+OP	UpdateName	56009	0.02%
+OP	Instanceof	56000	0.02%
+OP	BitOr	49026	0.01%
+OP	Lt	48000	0.01%
+OP	Shl	48000	0.01%
+OP	UpdateProp	47999	0.01%
+OP	BitAnd	41024	0.01%
+OP	Plus	40000	0.01%
+OP	Typeof	32028	0.01%
+OP	TypeofName	8013	0.00%
+OP	ExecAst	240	0.00%
+OP	MakeClosure	195	0.00%
+OP	NewRegExp	60	0.00%
+OP	NewArray	44	0.00%
+OP	Shr	26	0.00%
+OP	EvalAst	22	0.00%
+OP	SetCompletion	21	0.00%
+OP	LoadResolvedName	7	0.00%
+OP	CheckExit	2	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	In	1	0.00%
+OP	ObjectAppend	1	0.00%

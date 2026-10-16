@@ -360,7 +360,7 @@ pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
 /// format to ensure uniqueness. For other types, same as to_js_string.
 pub(crate) fn to_property_key_string(val: &JsValue) -> JsPropertyKey {
     if let Some(s) = val.as_string() {
-        return JsPropertyKey::from_js_string(&s);
+        return crate::interpreter::key_intern::key_from_js_string(&s);
     }
     if let Some(key) = val.with_symbol(|s| s.to_property_key()) {
         return key;
@@ -549,7 +549,7 @@ pub(crate) fn enumerable_own_keys(
         let Some(key_string) = key_value.as_string() else {
             continue;
         };
-        let key = JsPropertyKey::from_js_string(&key_string);
+        let key = crate::interpreter::key_intern::key_from_js_string(&key_string);
         if interp.proxy_own_property_is_enumerable(obj_id, &key)? {
             enumerable_keys.push(key);
         }
