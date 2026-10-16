@@ -30,13 +30,20 @@
 //! being retained. This keeps thread-lifetime memory bounded without adding
 //! recency bookkeeping to cache hits.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::types::{JsPropertyKey, JsString};
 
 thread_local! {
     static KEY_CACHE: RefCell<KeyCache> = RefCell::new(KeyCache::new());
     static KEY_STRING_CACHE: RefCell<KeyStringCache> = RefCell::new(KeyStringCache::new());
+    /// First-unit address of the string held by each `KeyStringCache::by_string`
+    /// slot (0 when empty). Plain `Cell`s in a const-initialised thread local
+    /// cost no lazy-init or borrow check, so the reverse lookup that misses -
+    /// every `ToPropertyKey` of a string that no key built - stays a few
+    /// instructions.
+    static REVERSE_TAGS: [Cell<usize>; KEY_STRING_CACHE_SLOTS] =
+        const { [const { Cell::new(0) }; KEY_STRING_CACHE_SLOTS] };
 }
 
 const KEY_STRING_CACHE_SLOTS: usize = 1024;
@@ -48,20 +55,46 @@ const KEY_STRING_CACHE_SLOTS: usize = 1024;
 /// for-in step and similar. A slot holds a clone of the key, which keeps the
 /// address from being recycled while the entry lives; a hit is verified by
 /// allocation identity, so a colliding key simply replaces the slot.
+///
+/// `by_string` is the reverse direction, indexed by the string's first-unit
+/// address and filled whenever a string is built here: a name handed to user
+/// code (a Proxy trap argument, an `Object.keys` entry) usually comes back
+/// through `ToPropertyKey` (`Reflect.get(t, k)`, `o[k]`), which then reuses
+/// the key instead of re-encoding the string. A slot holds a clone of the
+/// string, so its units cannot be freed or rewritten while it lives, and a
+/// hit is verified by `ptr_eq` (same units, same length).
+///
+/// `by_name` fronts both for a name that arrives as `&str` (the name operand of
+/// a member access): hashing it through the interner costs more than the rest
+/// of the conversion, and an interner that has reached its entry limit hands
+/// out a fresh key every time. A slot is found by the `&str`'s address and
+/// length and then confirmed by comparing its bytes, so a recycled address
+/// only ever misses.
 struct KeyStringCache {
     slots: Vec<Option<(JsPropertyKey, JsString)>>,
+    by_string: Vec<Option<(JsString, JsPropertyKey)>>,
+    by_name: Vec<Option<NameEntry>>,
+}
+
+struct NameEntry {
+    addr: usize,
+    len: usize,
+    key: JsPropertyKey,
+    string: JsString,
 }
 
 impl KeyStringCache {
     fn new() -> Self {
         Self {
             slots: vec![None; KEY_STRING_CACHE_SLOTS],
+            by_string: vec![None; KEY_STRING_CACHE_SLOTS],
+            by_name: (0..KEY_STRING_CACHE_SLOTS).map(|_| None).collect(),
         }
     }
 
     #[inline]
-    fn slot_index(key: &JsPropertyKey) -> usize {
-        let h = (key.allocation_addr() >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    fn slot_index(addr: usize) -> usize {
+        let h = (addr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         h >> (usize::BITS - KEY_STRING_CACHE_SLOTS.trailing_zeros())
     }
 }
@@ -76,17 +109,80 @@ pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
     KEY_STRING_CACHE
         .try_with(|c| {
             let mut c = c.borrow_mut();
-            let idx = KeyStringCache::slot_index(key);
+            let idx = KeyStringCache::slot_index(key.allocation_addr());
             if let Some((k, s)) = &c.slots[idx]
                 && k.same_allocation(key)
             {
                 return s.clone();
             }
             let s = key.to_js_string();
+            let rev = KeyStringCache::slot_index(s.units_addr());
+            REVERSE_TAGS.with(|t| t[rev].set(s.units_addr()));
+            c.by_string[rev] = Some((s.clone(), key.clone()));
             c.slots[idx] = Some((key.clone(), s.clone()));
             s
         })
         .unwrap_or_else(|_| key.to_js_string())
+}
+
+/// The String value of a property name given as text; the same JsString
+/// `key_to_js_string` returns for the name's interned key.
+pub(crate) fn name_to_js_string(name: &str) -> JsString {
+    if name.len() > MAX_CACHEABLE_KEY_BYTES {
+        return key_to_js_string(&intern_key(name));
+    }
+    let addr = name.as_ptr() as usize;
+    let idx = KeyStringCache::slot_index(addr);
+    let hit = KEY_STRING_CACHE
+        .try_with(|c| match &c.borrow().by_name[idx] {
+            Some(e)
+                if e.addr == addr && e.len == name.len() && e.key.as_bytes() == name.as_bytes() =>
+            {
+                Some(e.string.clone())
+            }
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(string) = hit {
+        return string;
+    }
+    let key = intern_key(name);
+    let string = key_to_js_string(&key);
+    let _ = KEY_STRING_CACHE.try_with(|c| {
+        c.borrow_mut().by_name[idx] = Some(NameEntry {
+            addr,
+            len: name.len(),
+            key,
+            string: string.clone(),
+        });
+    });
+    string
+}
+
+/// `ToPropertyKey` of a String value: the key `key_to_js_string` built it
+/// from when it still is in the reverse cache, else a fresh encoding.
+#[inline]
+pub(crate) fn key_from_js_string(s: &JsString) -> JsPropertyKey {
+    let addr = s.units_addr();
+    let idx = KeyStringCache::slot_index(addr);
+    if REVERSE_TAGS.with(|t| t[idx].get()) == addr
+        && let Some(key) = reverse_lookup(s, idx)
+    {
+        return key;
+    }
+    JsPropertyKey::from_js_string(s)
+}
+
+#[inline(never)]
+fn reverse_lookup(s: &JsString, idx: usize) -> Option<JsPropertyKey> {
+    KEY_STRING_CACHE
+        .try_with(|c| match &c.borrow().by_string[idx] {
+            Some((cached, key)) if cached.ptr_eq(s) => Some(key.clone()),
+            _ => None,
+        })
+        .ok()
+        .flatten()
 }
 
 /// Randomly seeded hasher; see `IndexState` in `property_map.rs`.
@@ -294,6 +390,58 @@ mod tests {
         let k = JsPropertyKey::from_js_string(&s);
         assert_eq!(key_to_js_string(&k).as_units(), s.as_units());
         assert_eq!(key_to_js_string(&k).as_units(), s.as_units());
+    }
+
+    #[test]
+    fn string_built_from_a_key_converts_back_to_that_key() {
+        let k = intern_key("reverseCachedName");
+        let s = key_to_js_string(&k);
+        assert!(key_from_js_string(&s).same_allocation(&k));
+        assert!(key_from_js_string(&s.clone()).same_allocation(&k));
+        let equal = JsString::from_str("reverseCachedName");
+        let back = key_from_js_string(&equal);
+        assert_eq!(back, k);
+        assert!(!back.same_allocation(&k), "only the built string hits");
+    }
+
+    #[test]
+    fn reverse_cache_is_exact_for_lone_surrogates_and_index_keys() {
+        for units in [
+            vec![0xD800u16],
+            vec![0xDC00, 0x61],
+            vec![0x61, 0xD83D, 0xDE00, 0xD83D],
+            vec![0x31, 0x32, 0x38],
+            vec![],
+        ] {
+            let original = JsString::from_vec(units.clone());
+            let k = JsPropertyKey::from_js_string(&original);
+            let built = key_to_js_string(&k);
+            assert_eq!(built.as_units(), units.as_slice());
+            assert_eq!(key_from_js_string(&built), k);
+        }
+    }
+
+    #[test]
+    fn reverse_cache_distinguishes_views_sharing_a_buffer() {
+        let k = intern_key("sharedBufferStem");
+        let stem = key_to_js_string(&k);
+        let longer = stem.concat_units(&"Suffix".encode_utf16().collect::<Vec<u16>>());
+        assert_eq!(
+            key_from_js_string(&longer).as_bytes(),
+            b"sharedBufferStemSuffix"
+        );
+        assert_eq!(key_from_js_string(&stem), k);
+    }
+
+    #[test]
+    fn name_strings_follow_the_text_not_its_address() {
+        let mut text = String::from("nameCacheAAAA");
+        let first = name_to_js_string(&text);
+        assert_eq!(first.to_rust_string(), "nameCacheAAAA");
+        assert!(name_to_js_string(&text).ptr_eq(&first));
+        assert!(first.ptr_eq(&key_to_js_string(&intern_key("nameCacheAAAA"))));
+        text.replace_range(.., "nameCacheBBBB");
+        assert_eq!(name_to_js_string(&text).to_rust_string(), "nameCacheBBBB");
     }
 
     #[test]

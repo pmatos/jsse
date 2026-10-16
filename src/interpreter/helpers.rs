@@ -360,7 +360,7 @@ pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
 /// format to ensure uniqueness. For other types, same as to_js_string.
 pub(crate) fn to_property_key_string(val: &JsValue) -> JsPropertyKey {
     if let Some(s) = val.as_string() {
-        return JsPropertyKey::from_js_string(&s);
+        return crate::interpreter::key_intern::key_from_js_string(&s);
     }
     if let Some(key) = val.with_symbol(|s| s.to_property_key()) {
         return key;

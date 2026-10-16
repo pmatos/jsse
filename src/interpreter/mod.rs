@@ -2494,6 +2494,9 @@ impl Interpreter {
         &mut self,
         property_key: &K,
     ) -> JsValue {
+        if !property_key.is_symbol_key() {
+            return JsValue::string(property_key.to_key_js_string());
+        }
         let exact_key = property_key.to_js_property_key();
         if let Some(name) = exact_key.well_known_symbol_name()
             && let Some(symbol) = self.well_known_symbols.get(name)
