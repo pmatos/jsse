@@ -280,7 +280,7 @@ impl Interpreter {
         match analysis {
             Some(analysis) => {
                 let mut env = env.borrow_mut();
-                for (name, kind) in &analysis.lexical_names {
+                for (name, kind) in analysis.lexical_names(stmts) {
                     env.declare_atom(name, *kind);
                 }
             }
@@ -649,12 +649,8 @@ impl Interpreter {
     /// uninitialized (TDZ) bindings at the top of a block scope.
     fn hoist_lexical_declarations(stmts: &[Statement], env: &EnvRef) {
         for (name, is_const) in super::hoisting::collect_lexical_names(stmts) {
-            let kind = if is_const {
-                BindingKind::Const
-            } else {
-                BindingKind::Let
-            };
-            env.borrow_mut().declare(&name, kind);
+            env.borrow_mut()
+                .declare(&name, BindingKind::lexical(is_const));
         }
     }
 

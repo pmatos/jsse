@@ -548,18 +548,17 @@ pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
     }
 }
 
-/// Declares the body's top-level `let`/`const`/class bindings in TDZ, in
-/// source order, when `Chunk::top_level_lexicals` says that is all its
-/// declaration instantiation consists of.
-pub(crate) fn declare_top_level_lexicals(lexicals: &[(u16, bool)], chunk: &Chunk, env: &EnvRef) {
+/// Declares `Chunk::top_level_lexicals` in TDZ, in source order.
+pub(crate) fn declare_top_level_lexicals(chunk: &Chunk, env: &EnvRef) {
+    let Some(lexicals) = &chunk.top_level_lexicals else {
+        return;
+    };
     let mut scope = env.borrow_mut();
     for &(name_idx, is_const) in lexicals {
-        let kind = if is_const {
-            BindingKind::Const
-        } else {
-            BindingKind::Let
-        };
-        scope.declare_atom(&chunk.names[usize::from(name_idx)], kind);
+        scope.declare_atom(
+            &chunk.names[usize::from(name_idx)],
+            BindingKind::lexical(is_const),
+        );
     }
 }
 
@@ -1963,12 +1962,10 @@ fn run_chunk_inner(
                     if !scope.lexicals.is_empty() {
                         let mut declared = block_env.borrow_mut();
                         for &(name_idx, is_const) in &scope.lexicals {
-                            let kind = if is_const {
-                                BindingKind::Const
-                            } else {
-                                BindingKind::Let
-                            };
-                            declared.declare_atom(&chunk.names[name_idx as usize], kind);
+                            declared.declare_atom(
+                                &chunk.names[name_idx as usize],
+                                BindingKind::lexical(is_const),
+                            );
                         }
                     }
                     scopes.push(block_env);

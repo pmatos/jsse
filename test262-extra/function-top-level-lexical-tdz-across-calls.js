@@ -164,3 +164,25 @@ function lexicalNamedArguments() {
 for (var i = 0; i < 3; i++) {
   assert.sameValue(lexicalNamedArguments(1, 2), "object:2", "arguments object beside lexicals, call " + i);
 }
+
+function lexicalNamedArguments2() {
+  let arguments = "shadow";
+  return arguments;
+}
+for (var i = 0; i < 3; i++) {
+  assert.sameValue(lexicalNamedArguments2(1, 2), "shadow", "let arguments, call " + i);
+}
+
+function varOnlyInDestructuringForOf(list) {
+  const first = list[0];
+  for (var [a, b] of list) {}
+  for (var k in { p: 1 }) {}
+  return typeof a + ":" + typeof b + ":" + k + ":" + first[0];
+}
+for (var i = 0; i < 3; i++) {
+  assert.sameValue(
+    varOnlyInDestructuringForOf([[1, 2], [3, 4]]),
+    "number:number:p:1",
+    "var names introduced by hand-off nodes beside a lexical, call " + i
+  );
+}

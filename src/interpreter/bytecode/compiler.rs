@@ -3468,7 +3468,7 @@ fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chun
     if !c.ast.is_empty() && c.native_ops == 0 {
         return Err(CompileError::Ineligible("fallback-only body"));
     }
-    let top_level_lexicals = lexical_only_instantiation(&mut c, body)?;
+    let top_level_lexicals = lexical_only_instantiation(&mut c, body);
     let mut chunk = c.finish();
     chunk.needs_instantiation = body_needs_instantiation(body);
     chunk.top_level_lexicals = top_level_lexicals;
@@ -3479,32 +3479,32 @@ fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chun
 /// instantiation would do nothing else: no function declaration (so no
 /// Annex B name either), and every `var` name the tree-walker would hoist is
 /// one the chunk's own var prologue declares. `None` keeps the generic path.
-fn lexical_only_instantiation(
-    c: &mut Compiler,
-    body: &[Statement],
-) -> Result<Option<Vec<(u16, bool)>>, CompileError> {
+fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Vec<(u16, bool)>> {
     if stmts_contain(body, &|s| is_function_declaration(s)) {
-        return Ok(None);
+        return None;
     }
     let lexicals = crate::interpreter::hoisting::collect_lexical_names(body);
     if lexicals.is_empty() {
-        return Ok(None);
+        return None;
     }
     let mut vars = std::collections::HashSet::new();
     crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
-    let declared_by_prologue = |name: &String| {
-        c.var_names
-            .iter()
-            .any(|&idx| c.names[usize::from(idx)].as_str() == name)
-    };
-    if !vars.iter().all(declared_by_prologue) {
-        return Ok(None);
-    }
-    lexicals
+    let prologue: std::collections::HashSet<&str> = c
+        .var_names
         .iter()
-        .map(|(name, is_const)| Ok((c.add_name(name)?, *is_const)))
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .map(|&idx| c.names[usize::from(idx)].as_str())
+        .collect();
+    if !vars.iter().all(|name| prologue.contains(name.as_str())) {
+        return None;
+    }
+    let mut indices = Vec::with_capacity(lexicals.len());
+    for (name, is_const) in &lexicals {
+        match c.add_name(name) {
+            Ok(idx) => indices.push((idx, *is_const)),
+            Err(_) => return None,
+        }
+    }
+    Some(indices)
 }
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {

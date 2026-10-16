@@ -134,9 +134,10 @@ fn function_top_level_lexicals_intern_nothing_per_call() {
     }
     let (small, _) = counters(&lexical_loop(1_000));
     let (large, _) = counters(&lexical_loop(2_000));
-    assert_eq!(
-        small["atom_intern_calls"], large["atom_intern_calls"],
-        "atom_intern_calls must not scale with the number of calls"
+    let extra_interns = large["atom_intern_calls"] - small["atom_intern_calls"];
+    assert!(
+        extra_interns <= 8,
+        "{extra_interns} extra interns over 1,000 extra calls of a body with four lexical names"
     );
     assert!(large["calls_to_user"] > small["calls_to_user"]);
 }

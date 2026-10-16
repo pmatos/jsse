@@ -11,6 +11,7 @@
 //! remain bounded for dead dynamic-function and eval Bodies to be freed
 //! (#165, #468).
 
+use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -32,10 +33,23 @@ pub(crate) struct HoistAnalysis {
     /// `blocked` accumulator is internal to the walk and discarded afterwards
     /// by the original code, so it is intentionally not cached.)
     pub(crate) annexb_names: Vec<String>,
-    /// The `let`/`const`/class names the Body declares at its top level, in
-    /// declaration order and already interned: BlockDeclarationInstantiation's
-    /// TDZ bindings, declared per call without re-hashing the names (#1052).
-    pub(crate) lexical_names: Vec<(Atom, BindingKind)>,
+    /// The Body's top-level `let`/`const`/class names, interned on first use
+    /// (#1052); see `lexical_names`.
+    lexical_names: OnceCell<Vec<(Atom, BindingKind)>>,
+}
+
+impl HoistAnalysis {
+    /// The Body's top-level lexical names in declaration order, already
+    /// interned, so declaring them per call hashes nothing. `stmts` must be
+    /// the Body this analysis was collected from.
+    pub(crate) fn lexical_names(&self, stmts: &[Statement]) -> &[(Atom, BindingKind)] {
+        self.lexical_names.get_or_init(|| {
+            super::hoisting::collect_lexical_names(stmts)
+                .into_iter()
+                .map(|(name, is_const)| (Atom::intern(&name), BindingKind::lexical(is_const)))
+                .collect()
+        })
+    }
 }
 
 /// Capacity-bounded, approximate-LRU memo of `HoistAnalysis`, keyed by
@@ -98,17 +112,7 @@ fn collect_names(stmts: &[Statement]) -> HoistAnalysis {
     HoistAnalysis {
         var_names: var_set.into_iter().collect(),
         annexb_names,
-        lexical_names: super::hoisting::collect_lexical_names(stmts)
-            .into_iter()
-            .map(|(name, is_const)| {
-                let kind = if is_const {
-                    BindingKind::Const
-                } else {
-                    BindingKind::Let
-                };
-                (Atom::intern(&name), kind)
-            })
-            .collect(),
+        lexical_names: OnceCell::new(),
     }
 }
 
