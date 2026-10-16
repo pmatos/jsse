@@ -1,5 +1,13 @@
 use super::*;
 
+/// Outcome of evaluating a computed member key: the key, or a completion that
+/// ends the access early (an abrupt key expression, the nullish-base
+/// TypeError, or the numeric-index fast read).
+enum ComputedKey {
+    Key(JsPropertyKey),
+    Done(Completion),
+}
+
 impl Interpreter {
     /// Evaluate an OptionalChain expression and return (value, this_context).
     /// Used when the optional chain result feeds into a call or nested chain.
@@ -67,14 +75,7 @@ impl Interpreter {
                     let key = match member_prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
-                            let v = match self.eval_expr(expr, env) {
-                                Completion::Normal(v) => v,
-                                other => return Err(other),
-                            };
-                            match self.to_property_key(&v) {
-                                Ok(s) => s,
-                                Err(e) => return Err(Completion::Throw(e)),
-                            }
+                            self.eval_member_key_rooted(&obj_val, expr, env)?
                         }
                         MemberProperty::Private(name) => {
                             return self
@@ -277,13 +278,9 @@ impl Interpreter {
                 let key = match mp {
                     MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(expr) => {
-                        let v = match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        match self.to_property_key(&v) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
+                        match self.eval_member_key_rooted(&inner_val, expr, env) {
+                            Ok(key) => key,
+                            Err(done) => return done,
                         }
                     }
                     MemberProperty::Private(_) => {
@@ -614,6 +611,23 @@ impl Interpreter {
         }
     }
 
+    /// Evaluates a computed member's key expression and `ToPropertyKey` with
+    /// `base` rooted, since either can run user code that collects.
+    pub(super) fn eval_member_key_rooted(
+        &mut self,
+        base: &JsValue,
+        expr: &Expression,
+        env: &EnvRef,
+    ) -> Result<JsPropertyKey, Completion> {
+        self.with_gc_root_scope(|this| {
+            this.gc_root_value(base);
+            let v = this
+                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
+                .into_abrupt()?;
+            this.to_property_key(&v).into_abrupt()
+        })
+    }
+
     pub(super) fn eval_member(
         &mut self,
         obj: &Expression,
@@ -693,33 +707,37 @@ impl Interpreter {
         // For computed properties, evaluate the expression but defer ToPropertyKey
         // until after we check that the base is not null/undefined (spec: ToObject
         // precedes ToPropertyKey per §6.2.5.5 GetValue step 3.a vs 3.c.i).
-        let (key, computed_raw) = match prop {
-            MemberProperty::Dot(name) => (JsPropertyKey::from(name.clone()), None),
+        let key = match prop {
+            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
             MemberProperty::Computed(expr) => {
-                let v = match self.eval_expr(expr, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if obj_val.is_nullish() {
-                    let err = self.create_type_error(&format!(
-                        "Cannot read properties of {obj_val} (reading property)"
-                    ));
-                    return Completion::Throw(err);
+                let keyed = self.with_gc_root_scope(|this| {
+                    this.gc_root_value(&obj_val);
+                    let v = match this.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        other => return ComputedKey::Done(other),
+                    };
+                    if obj_val.is_nullish() {
+                        return ComputedKey::Done(Completion::Throw(this.create_type_error(
+                            &format!("Cannot read properties of {obj_val} (reading property)"),
+                        )));
+                    }
+                    if let Some(index) = v.as_number()
+                        && let Some(result) = this.numeric_index_fast_get(&obj_val, index)
+                    {
+                        return ComputedKey::Done(Completion::Normal(result));
+                    }
+                    match this.to_property_key(&v) {
+                        Ok(key) => ComputedKey::Key(key),
+                        Err(e) => ComputedKey::Done(Completion::Throw(e)),
+                    }
+                });
+                match keyed {
+                    ComputedKey::Key(key) => key,
+                    ComputedKey::Done(done) => return done,
                 }
-                if let Some(index) = v.as_number()
-                    && let Some(result) = self.numeric_index_fast_get(&obj_val, index)
-                {
-                    return Completion::Normal(result);
-                }
-                let key = match self.to_property_key(&v) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                };
-                (key, Some(()))
             }
             MemberProperty::Private(_) => unreachable!(),
         };
-        let _ = computed_raw;
         if let Some(obj_id) = obj_val.as_object_id() {
             let o = crate::types::JsObject { id: obj_id };
             // Phase 2 IC: probe + record for Dot access only (v1 scope).

@@ -777,14 +777,9 @@ impl Interpreter {
                     let key = match prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
-                            match self
-                                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
-                            {
-                                Completion::Normal(v) => match self.to_property_key(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                },
-                                other => return other,
+                            match self.eval_member_key_rooted(&obj_val, expr, env) {
+                                Ok(key) => key,
+                                Err(done) => return done,
                             }
                         }
                         MemberProperty::Private(_) => {
@@ -1206,13 +1201,9 @@ impl Interpreter {
                         let key = match prop {
                             MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(expr) => {
-                                let v = match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                match self.to_property_key(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
+                                match self.eval_member_key_rooted(&obj_val, expr, env) {
+                                    Ok(key) => key,
+                                    Err(done) => return done,
                                 }
                             }
                             MemberProperty::Private(_) => {
@@ -2683,34 +2674,33 @@ impl Interpreter {
                 let branded = self.resolve_private_name(name, env);
                 return self.update_private_resolved(&obj_val, branded, name, op, prefix);
             }
-            let key = match prop {
-                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                MemberProperty::Computed(expr) => {
-                    let v = match self.eval_expr(expr, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    // ToObject(base) must precede ToPropertyKey(prop) per spec
-                    if obj_val.is_nullish() {
-                        let err = self.create_type_error(&format!(
-                            "Cannot read properties of {obj_val} (reading property)"
-                        ));
-                        return Completion::Throw(err);
+            // The base lives only in this frame while the key expression and
+            // `ToPropertyKey` run user code that can collect.
+            self.with_gc_root_scope(|this| {
+                this.gc_root_value(&obj_val);
+                let key = match prop {
+                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                    MemberProperty::Computed(expr) => {
+                        let v = propagate!(this.eval_expr(expr, env));
+                        // ToObject(base) must precede ToPropertyKey(prop) per spec
+                        if obj_val.is_nullish() {
+                            let err = this.create_type_error(&format!(
+                                "Cannot read properties of {obj_val} (reading property)"
+                            ));
+                            return Completion::Throw(err);
+                        }
+                        propagate!(this.to_property_key(&v))
                     }
-                    match self.to_property_key(&v) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
-                    }
+                    MemberProperty::Private(_) => unreachable!(),
+                };
+                if obj_val.is_nullish() {
+                    return Completion::Throw(this.create_type_error(&format!(
+                        "Cannot read properties of {obj_val} (reading '{key}')"
+                    )));
                 }
-                MemberProperty::Private(_) => unreachable!(),
-            };
-            if obj_val.is_nullish() {
-                return Completion::Throw(self.create_type_error(&format!(
-                    "Cannot read properties of {obj_val} (reading '{key}')"
-                )));
-            }
-            let strict = env.borrow().strict;
-            self.update_member_value(&obj_val, &key, op, prefix, strict)
+                let strict = env.borrow().strict;
+                this.update_member_value(&obj_val, &key, op, prefix, strict)
+            })
         } else if let Expression::Call(_, _, _) = arg {
             match self.eval_expr(arg, env) {
                 Completion::Normal(_) => {}
@@ -3111,6 +3101,7 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
+                            interp.gc_root_value(&v);
                             Some(v)
                         }
                         _ => None,
@@ -3167,6 +3158,7 @@ impl Interpreter {
                                 _ => JsValue::UNDEFINED,
                             }
                         };
+                        interp.gc_root_value(&lval);
                         (key, Some(lval))
                     } else {
                         (JsPropertyKey::from_str(""), None) // key computed after RHS for simple assign
@@ -3176,6 +3168,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    interp.gc_root_value(&rval);
                     // For simple assign, compute key now
                     let key = if op == AssignOp::Assign {
                         match prop {
@@ -4811,13 +4804,9 @@ impl Interpreter {
                 let key = match prop {
                     MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(expr) => {
-                        let v = match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        match self.to_property_key(&v) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
+                        match self.eval_member_key_rooted(&obj_val, expr, env) {
+                            Ok(key) => key,
+                            Err(done) => return done,
                         }
                     }
                     MemberProperty::Private(name) => {
