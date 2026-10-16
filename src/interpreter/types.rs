@@ -3408,6 +3408,17 @@ impl JsObjectData {
             }
             return Some(d);
         }
+        self.get_own_exotic_property(key)
+    }
+
+    /// The own properties that never reach `properties`: Array elements,
+    /// TypedArray integer-indexed elements and String-wrapper `length`/indices.
+    /// [`Self::get_own_property_full`] without its `properties` lookup, for
+    /// callers that just missed there and must not scan the list twice.
+    pub(crate) fn get_own_exotic_property<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         if let Some(elems) = self.array_elements()
             && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
@@ -3438,8 +3449,8 @@ impl JsObjectData {
             }
             return None;
         }
-        if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+        if let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && self.class_name == "String"
         {
             let units = s.as_units();
             if key.as_property_key_bytes() == b"length" {
