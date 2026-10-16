@@ -1267,10 +1267,10 @@ fn is_self_contained_isolatable(stmt: &Statement) -> bool {
 
 /// A statement list that owns a scope frame of its own (a plain block that
 /// declares a binding or sits under `with`, or a `try` clause body: the
-/// transform opens `OpenBlock` for it; a declaration-free block is lowered in
-/// place and has no declaration to confine), so a lexical
-/// declaration beside an isolatable block stays confined to that frame and
-/// does not block the lowering. A sibling `function` declaration still
+/// transform opens `OpenBlock` for it), so a lexical declaration beside an
+/// isolatable block stays confined to that frame and does not block the
+/// lowering. A declaration-free block is lowered in place, but then has no
+/// lexical declaration to confine. A sibling `function` declaration still
 /// blocks regardless of the frame, the same Annex-B gap `scan_flattened_list`
 /// guards against — except when the only isolatable reach is through a
 /// self-contained `disposes_at_head` loop (`is_self_contained_isolatable`),
