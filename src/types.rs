@@ -697,10 +697,9 @@ struct JsSymbolData {
 /// Live symbols by id, for the key-to-symbol direction of a property key
 /// round trip. A symbol enters when its key is first built, so every user
 /// symbol key in existence has a table entry for as long as the symbol lives.
-/// The table is per thread: a symbol is `Arc`-shared but an interpreter (and so
-/// every symbol it can reach) is confined to the thread that runs it.
 /// The entries are `Weak`: the table never keeps a symbol alive, and dead
-/// entries are swept whenever the table doubles.
+/// entries are swept whenever the table doubles. The table is per thread: an
+/// interpreter, and so every symbol it can reach, is confined to one thread.
 struct SymbolIndex {
     by_id: std::collections::HashMap<u64, Weak<JsSymbolData>, foldhash::fast::RandomState>,
     sweep_at: usize,
@@ -849,7 +848,7 @@ impl JsSymbol {
         // Another interpreter on this thread may have reused the id; an entry
         // whose key differs is not this key's symbol.
         let own_key = data.key.get()?;
-        (own_key.same_allocation(key) || own_key == key).then_some(Self { data })
+        (own_key == key).then_some(Self { data })
     }
 
     pub(crate) fn descriptive_string(&self) -> JsString {
@@ -1867,17 +1866,14 @@ mod tests {
     }
 
     #[test]
-    fn symbol_property_key_is_built_once_and_interned() {
-        let symbol = JsSymbol::new(501, Some(JsString::from_str("memo")));
-        let first = symbol.to_property_key();
-        let second = symbol.to_property_key();
-        assert!(first.same_allocation(&second));
-        assert!(
-            first.same_allocation(&crate::interpreter::key_intern::intern_js_key(
-                first.clone()
-            ))
-        );
-        assert!(symbol.clone().to_property_key().same_allocation(&first));
+    fn symbol_property_key_is_built_once_per_symbol() {
+        let long = JsString::from_str(&"m".repeat(1000));
+        for description in [JsString::from_str("memo"), long] {
+            let symbol = JsSymbol::new(501, Some(description));
+            let first = symbol.to_property_key();
+            assert!(first.same_allocation(&symbol.to_property_key()));
+            assert!(first.same_allocation(&symbol.clone().to_property_key()));
+        }
     }
 
     #[test]
