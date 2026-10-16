@@ -603,9 +603,9 @@ pub(crate) trait PropertyKeyLike {
         self.as_property_key_bytes().first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
     }
 
-    /// The String value of a non-Symbol key, shared across repeated requests
-    /// for the same name (see `key_intern::key_to_js_string`).
-    fn to_key_js_string(&self) -> JsString;
+    /// The String value of a non-Symbol key as a Proxy trap argument, shared
+    /// across repeated requests for the same name.
+    fn to_trap_key_string(&self) -> JsString;
 
     fn as_property_key_str(&self) -> Option<&str> {
         std::str::from_utf8(self.as_property_key_bytes()).ok()
@@ -640,7 +640,7 @@ impl PropertyKeyLike for str {
         crate::interpreter::key_intern::intern_key(self)
     }
 
-    fn to_key_js_string(&self) -> JsString {
+    fn to_trap_key_string(&self) -> JsString {
         crate::interpreter::key_intern::name_to_js_string(self)
     }
 }
@@ -663,7 +663,7 @@ impl PropertyKeyLike for String {
         crate::interpreter::key_intern::intern_key(self)
     }
 
-    fn to_key_js_string(&self) -> JsString {
+    fn to_trap_key_string(&self) -> JsString {
         crate::interpreter::key_intern::name_to_js_string(self)
     }
 }
@@ -686,8 +686,8 @@ impl PropertyKeyLike for JsPropertyKey {
         crate::interpreter::key_intern::intern_js_key(self.clone())
     }
 
-    fn to_key_js_string(&self) -> JsString {
-        crate::interpreter::key_intern::key_to_js_string(self)
+    fn to_trap_key_string(&self) -> JsString {
+        crate::interpreter::key_intern::key_to_trap_js_string(self)
     }
 }
 
@@ -709,8 +709,8 @@ impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
         (*self).to_interned_property_key()
     }
 
-    fn to_key_js_string(&self) -> JsString {
-        (*self).to_key_js_string()
+    fn to_trap_key_string(&self) -> JsString {
+        (*self).to_trap_key_string()
     }
 }
 

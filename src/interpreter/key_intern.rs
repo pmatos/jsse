@@ -37,11 +37,9 @@ use crate::types::{JsPropertyKey, JsString};
 thread_local! {
     static KEY_CACHE: RefCell<KeyCache> = RefCell::new(KeyCache::new());
     static KEY_STRING_CACHE: RefCell<KeyStringCache> = RefCell::new(KeyStringCache::new());
-    /// First-unit address of the string held by each `KeyStringCache::by_string`
-    /// slot (0 when empty). Plain `Cell`s in a const-initialised thread local
-    /// cost no lazy-init or borrow check, so the reverse lookup that misses -
-    /// every `ToPropertyKey` of a string that no key built - stays a few
-    /// instructions.
+    /// First-unit address of each `KeyStringCache::by_string` entry (0 when
+    /// empty). Const-initialised `Cell`s have no lazy-init or borrow check, so
+    /// the lookup that misses stays a few instructions.
     static REVERSE_TAGS: [Cell<usize>; KEY_STRING_CACHE_SLOTS] =
         const { [const { Cell::new(0) }; KEY_STRING_CACHE_SLOTS] };
 }
@@ -56,20 +54,14 @@ const KEY_STRING_CACHE_SLOTS: usize = 1024;
 /// address from being recycled while the entry lives; a hit is verified by
 /// allocation identity, so a colliding key simply replaces the slot.
 ///
-/// `by_string` is the reverse direction, indexed by the string's first-unit
-/// address and filled whenever a string is built here: a name handed to user
-/// code (a Proxy trap argument, an `Object.keys` entry) usually comes back
-/// through `ToPropertyKey` (`Reflect.get(t, k)`, `o[k]`), which then reuses
-/// the key instead of re-encoding the string. A slot holds a clone of the
-/// string, so its units cannot be freed or rewritten while it lives, and a
-/// hit is verified by `ptr_eq` (same units, same length).
+/// `by_string` maps back, by the string's first-unit address, for the strings
+/// handed to a Proxy trap (`key_to_trap_js_string`): `Reflect.get(t, k)` then
+/// gets the key without re-encoding `k`. A hit is confirmed by `ptr_eq` (same
+/// units and length); the slot's clone keeps the units alive and unchanged.
 ///
-/// `by_name` fronts both for a name that arrives as `&str` (the name operand of
-/// a member access): hashing it through the interner costs more than the rest
-/// of the conversion, and an interner that has reached its entry limit hands
-/// out a fresh key every time. A slot is found by the `&str`'s address and
-/// length and then confirmed by comparing its bytes, so a recycled address
-/// only ever misses.
+/// `by_name` serves a name given as `&str`, found by address and length and
+/// confirmed by its bytes, so it needs no interner hashing (and still hits
+/// once the interner is full and returns a fresh key per call).
 struct KeyStringCache {
     slots: Vec<Option<(JsPropertyKey, JsString)>>,
     by_string: Vec<Option<(JsString, JsPropertyKey)>>,
@@ -97,39 +89,60 @@ impl KeyStringCache {
         let h = (addr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         h >> (usize::BITS - KEY_STRING_CACHE_SLOTS.trailing_zeros())
     }
+
+    fn record_reverse(&mut self, string: &JsString, key: &JsPropertyKey) {
+        let addr = string.units_addr();
+        let idx = Self::slot_index(addr);
+        if REVERSE_TAGS.with(|t| t[idx].get()) != addr {
+            REVERSE_TAGS.with(|t| t[idx].set(addr));
+            self.by_string[idx] = Some((string.clone(), key.clone()));
+        }
+    }
+
+    fn string_for(&mut self, key: &JsPropertyKey, record_reverse: bool) -> JsString {
+        let idx = Self::slot_index(key.allocation_addr());
+        let string = match &self.slots[idx] {
+            Some((k, s)) if k.same_allocation(key) => s.clone(),
+            _ => {
+                let s = key.to_js_string();
+                self.slots[idx] = Some((key.clone(), s.clone()));
+                s
+            }
+        };
+        if record_reverse {
+            self.record_reverse(&string, key);
+        }
+        string
+    }
+}
+
+fn cached_key_string(key: &JsPropertyKey, record_reverse: bool) -> JsString {
+    if key.is_symbol() || key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
+        return key.to_js_string();
+    }
+    KEY_STRING_CACHE
+        .try_with(|c| c.borrow_mut().string_for(key, record_reverse))
+        .unwrap_or_else(|_| key.to_js_string())
 }
 
 /// The String value of a non-Symbol property key. Repeated requests for the
 /// same interned key share one `JsString`.
 #[inline]
 pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
-    if key.is_symbol() || key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
-        return key.to_js_string();
-    }
-    KEY_STRING_CACHE
-        .try_with(|c| {
-            let mut c = c.borrow_mut();
-            let idx = KeyStringCache::slot_index(key.allocation_addr());
-            if let Some((k, s)) = &c.slots[idx]
-                && k.same_allocation(key)
-            {
-                return s.clone();
-            }
-            let s = key.to_js_string();
-            let rev = KeyStringCache::slot_index(s.units_addr());
-            REVERSE_TAGS.with(|t| t[rev].set(s.units_addr()));
-            c.by_string[rev] = Some((s.clone(), key.clone()));
-            c.slots[idx] = Some((key.clone(), s.clone()));
-            s
-        })
-        .unwrap_or_else(|_| key.to_js_string())
+    cached_key_string(key, false)
 }
 
-/// The String value of a property name given as text; the same JsString
-/// `key_to_js_string` returns for the name's interned key.
+/// [`key_to_js_string`] for a key that is about to be shown to user code as a
+/// Proxy trap argument, which also lets `key_from_js_string` map it back.
+#[inline]
+pub(crate) fn key_to_trap_js_string(key: &JsPropertyKey) -> JsString {
+    cached_key_string(key, true)
+}
+
+/// The trap-argument String of a property name given as text.
 pub(crate) fn name_to_js_string(name: &str) -> JsString {
     if name.len() > MAX_CACHEABLE_KEY_BYTES {
-        return key_to_js_string(&intern_key(name));
+        return key_to_trap_js_string(&intern_key(name));
     }
     let addr = name.as_ptr() as usize;
     let idx = KeyStringCache::slot_index(addr);
@@ -148,7 +161,7 @@ pub(crate) fn name_to_js_string(name: &str) -> JsString {
         return string;
     }
     let key = intern_key(name);
-    let string = key_to_js_string(&key);
+    let string = key_to_trap_js_string(&key);
     let _ = KEY_STRING_CACHE.try_with(|c| {
         c.borrow_mut().by_name[idx] = Some(NameEntry {
             addr,
@@ -160,8 +173,8 @@ pub(crate) fn name_to_js_string(name: &str) -> JsString {
     string
 }
 
-/// `ToPropertyKey` of a String value: the key `key_to_js_string` built it
-/// from when it still is in the reverse cache, else a fresh encoding.
+/// `ToPropertyKey` of a String value: the key a trap argument was built from
+/// while it is still cached, else a fresh encoding.
 #[inline]
 pub(crate) fn key_from_js_string(s: &JsString) -> JsPropertyKey {
     let addr = s.units_addr();
@@ -395,7 +408,7 @@ mod tests {
     #[test]
     fn string_built_from_a_key_converts_back_to_that_key() {
         let k = intern_key("reverseCachedName");
-        let s = key_to_js_string(&k);
+        let s = key_to_trap_js_string(&k);
         assert!(key_from_js_string(&s).same_allocation(&k));
         assert!(key_from_js_string(&s.clone()).same_allocation(&k));
         let equal = JsString::from_str("reverseCachedName");
@@ -415,7 +428,7 @@ mod tests {
         ] {
             let original = JsString::from_vec(units.clone());
             let k = JsPropertyKey::from_js_string(&original);
-            let built = key_to_js_string(&k);
+            let built = key_to_trap_js_string(&k);
             assert_eq!(built.as_units(), units.as_slice());
             assert_eq!(key_from_js_string(&built), k);
         }
@@ -424,7 +437,7 @@ mod tests {
     #[test]
     fn reverse_cache_distinguishes_views_sharing_a_buffer() {
         let k = intern_key("sharedBufferStem");
-        let stem = key_to_js_string(&k);
+        let stem = key_to_trap_js_string(&k);
         let longer = stem.concat_units(&"Suffix".encode_utf16().collect::<Vec<u16>>());
         assert_eq!(
             key_from_js_string(&longer).as_bytes(),

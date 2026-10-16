@@ -549,7 +549,7 @@ pub(crate) fn enumerable_own_keys(
         let Some(key_string) = key_value.as_string() else {
             continue;
         };
-        let key = JsPropertyKey::from_js_string(&key_string);
+        let key = crate::interpreter::key_intern::key_from_js_string(&key_string);
         if interp.proxy_own_property_is_enumerable(obj_id, &key)? {
             enumerable_keys.push(key);
         }

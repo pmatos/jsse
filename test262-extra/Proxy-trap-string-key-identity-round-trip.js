@@ -101,3 +101,25 @@ var orderProxy = new Proxy({ converted: 'ok' }, {
 });
 assert.sameValue(orderProxy[keyObject], 'ok', 'object key is converted once');
 assert.sameValue(order.join(), 'toString,get:string', 'ToPropertyKey runs before the trap, which sees a String');
+
+var many = {};
+var manyNames = [];
+for (var m = 0; m < 5000; m++) {
+  var name = (m % 3 === 0 ? 'key' : m % 3 === 1 ? 'k\ud800' : '') + m;
+  manyNames.push(name);
+  many[name] = 'v' + m;
+}
+var seenMany = [];
+var manyProxy = new Proxy(many, {
+  get: function(t, k, r) { seenMany.push(k); return Reflect.get(t, k, r); },
+  has: function(t, k) { return Reflect.has(t, k); }
+});
+for (var pass = 0; pass < 3; pass++) {
+  seenMany.length = 0;
+  for (var q = 0; q < manyNames.length; q++) {
+    var pick = manyNames[(q * (pass * 2 + 1)) % manyNames.length];
+    assert.sameValue(manyProxy[pick], many[pick], 'eviction pass ' + pass + ' get ' + q);
+    assert.sameValue(seenMany[seenMany.length - 1] === pick, true, 'eviction pass ' + pass + ' argument ' + q);
+    assert.sameValue(pick in manyProxy, true, 'eviction pass ' + pass + ' has ' + q);
+  }
+}

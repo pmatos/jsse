@@ -2495,7 +2495,7 @@ impl Interpreter {
         property_key: &K,
     ) -> JsValue {
         if !property_key.is_symbol_key() {
-            return JsValue::string(property_key.to_key_js_string());
+            return JsValue::string(property_key.to_trap_key_string());
         }
         let exact_key = property_key.to_js_property_key();
         if let Some(name) = exact_key.well_known_symbol_name()
