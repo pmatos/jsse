@@ -2718,25 +2718,6 @@ impl Interpreter {
         }
     }
 
-    /// GetValue of a member reference whose base is non-nullish: a primitive
-    /// base is read through its ToObject wrapper with the primitive as receiver.
-    fn get_member_value<K: PropertyKeyLike + ?Sized>(
-        &mut self,
-        base: &JsValue,
-        key: &K,
-    ) -> Completion {
-        match base.as_object_id() {
-            Some(id) => self.get_object_property(id, key, base),
-            None => match self.to_object(base) {
-                Completion::Normal(wrapper) => match wrapper.as_object_id() {
-                    Some(id) => self.get_object_property(id, key, base),
-                    None => Completion::Normal(JsValue::UNDEFINED),
-                },
-                abrupt => abrupt,
-            },
-        }
-    }
-
     /// The GetValue → ToNumeric → ±1 → PutValue tail of `++`/`--` on a member
     /// reference whose base is already known non-nullish and whose key is
     /// already a property key (sec-postfix-increment-operator-runtime-
@@ -2751,7 +2732,7 @@ impl Interpreter {
         prefix: bool,
         strict: bool,
     ) -> Completion {
-        let current = match self.get_member_value(base, key) {
+        let current = match self.access_property_on_value(base, key) {
             Completion::Normal(v) => v,
             abrupt => return abrupt,
         };
@@ -2786,23 +2767,27 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             };
             if !self.numeric_index_fast_set(base, index, &new_val) {
-                let key = match self.to_property_key(key_val) {
-                    Ok(key) => key,
-                    Err(e) => return Completion::Throw(e),
-                };
-                if let Err(e) =
-                    self.set_object_with_key(base.clone(), &key, new_val.clone(), strict)
-                {
-                    return Completion::Throw(e);
-                }
+                let key = propagate!(self.to_property_key(key_val));
+                propagate!(self.set_object_with_key(base.clone(), &key, new_val.clone(), strict));
             }
             return Completion::Normal(if prefix { new_val } else { old_val });
         }
-        let key = match self.to_property_key(key_val) {
-            Ok(key) => key,
-            Err(e) => return Completion::Throw(e),
-        };
+        let key = propagate!(self.to_property_key(key_val));
         self.update_member_value(base, &key, op, prefix, strict)
+    }
+
+    /// The property key of a non-private member: the identifier name, or
+    /// ToPropertyKey of the evaluated computed key.
+    fn member_key(
+        &mut self,
+        prop: &MemberProperty,
+        key_val: Option<&JsValue>,
+    ) -> Result<JsPropertyKey, JsValue> {
+        match (prop, key_val) {
+            (MemberProperty::Dot(name), _) => Ok(JsPropertyKey::from(name.clone())),
+            (MemberProperty::Computed(_), Some(v)) => self.to_property_key(v),
+            _ => unreachable!("a private or unevaluated member has no property key"),
+        }
     }
 
     pub(crate) fn assign_to_expr(
@@ -3159,12 +3144,7 @@ impl Interpreter {
                     // A Number key is converted lazily: ToPropertyKey of a Number is pure,
                     // so a store that `numeric_index_fast_set` completes never builds
                     // the key string (the key stays `None`).
-                    let numeric_key = match prop {
-                        MemberProperty::Computed(_) => {
-                            key_val.as_ref().and_then(JsValue::as_number)
-                        }
-                        _ => None,
-                    };
+                    let numeric_key = key_val.as_ref().and_then(JsValue::as_number);
                     // For compound ops, read the current value before the RHS
                     let (key, lval_for_compound) = if op != AssignOp::Assign {
                         // §6.2.5.5 GetValue: if base is null/undefined, throw TypeError
@@ -3186,17 +3166,8 @@ impl Interpreter {
                             interp.gc_root_value(&current);
                             (None, Some(current))
                         } else {
-                            let key = match prop {
-                                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                                MemberProperty::Computed(_) => {
-                                    match interp.to_property_key(key_val.as_ref().unwrap()) {
-                                        Ok(s) => s,
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                }
-                                MemberProperty::Private(_) => unreachable!(),
-                            };
-                            let lval = match interp.get_member_value(&obj_val, &key) {
+                            let key = propagate!(interp.member_key(prop, key_val.as_ref()));
+                            let lval = match interp.access_property_on_value(&obj_val, &key) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -3214,29 +3185,17 @@ impl Interpreter {
                     interp.gc_root_value(&rval);
                     // A Number key reaches ToPropertyKey only on a declined fast store
                     // or the null-base message; every other key is converted here.
-                    let key = match (key, numeric_key) {
-                        (Some(key), _) => Some(key),
-                        (None, Some(_)) => None,
-                        (None, None) => Some(match prop {
-                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                            MemberProperty::Computed(_) => {
-                                match interp.to_property_key(key_val.as_ref().unwrap()) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
-                            MemberProperty::Private(_) => unreachable!(),
-                        }),
+                    let key = if key.is_none() && numeric_key.is_none() {
+                        Some(propagate!(interp.member_key(prop, key_val.as_ref())))
+                    } else {
+                        key
                     };
                     // Note: super[key] = val is handled by the early return above
                     // Throw for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
                         let key = match key {
                             Some(key) => key,
-                            None => match interp.to_property_key(key_val.as_ref().unwrap()) {
-                                Ok(key) => key,
-                                Err(e) => return Completion::Throw(e),
-                            },
+                            None => propagate!(interp.member_key(prop, key_val.as_ref())),
                         };
                         return Completion::Throw(interp.create_type_error(&format!(
                             "Cannot set properties of {} (setting '{}')",
@@ -3265,7 +3224,7 @@ impl Interpreter {
                         if interp.numeric_index_fast_set(&obj_val, index, &final_val) {
                             return Completion::Normal(final_val);
                         }
-                    } else if matches!(prop, MemberProperty::Computed(_))
+                    } else if key_val.is_some()
                         && let Some(key) = &key
                         && let Some(index) = parse_array_index(key)
                         && interp.numeric_index_fast_set(&obj_val, f64::from(index), &final_val)
@@ -3274,10 +3233,7 @@ impl Interpreter {
                     }
                     let key = match key {
                         Some(key) => key,
-                        None => match interp.to_property_key(key_val.as_ref().unwrap()) {
-                            Ok(key) => key,
-                            Err(e) => return Completion::Throw(e),
-                        },
+                        None => propagate!(interp.member_key(prop, key_val.as_ref())),
                     };
                     let strict = env.borrow().strict;
                     let set_outcome = match interp.set_object_with_key_result(

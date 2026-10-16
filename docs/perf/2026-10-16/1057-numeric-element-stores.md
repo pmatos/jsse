@@ -26,20 +26,20 @@ paid the same twice (read and write).
 
 cachegrind `--cache-sim=no`, whole-process `I refs`, runs executed sequentially (parallel runs of `array-fn` showed
 about 2% run-to-run variance). base = `origin/main` at `1abeab07` (binary sha256 `55c531db28c8...`), new = base plus this
-change (`0d893f754d33...`). The issue's reproducer, per-op Ir = (mode - baseline) / 300,000 with the issue's baselines
+change (`a346c1cb51e4...`). The issue's reproducer, per-op Ir = (mode - baseline) / 300,000 with the issue's baselines
 (`noop` for store/array/compound, `empty` for update/load):
 
 | op | base | new | issue target |
 |---|---:|---:|---:|
-| `view[i] = v`, generator body (tree-walker) | 2,069 | 129 | <= 700 |
-| `view[i] = v`, `--no-bytecode` | 2,069 | 129 | <= 700 |
-| `arr[i] = v`, generator body | 635 | 41 | <= 450 |
+| `view[i] = v`, generator body (tree-walker) | 2,069 | 126 | <= 700 |
+| `view[i] = v`, `--no-bytecode` | 2,069 | 126 | <= 700 |
+| `arr[i] = v`, generator body | 635 | 38 | <= 450 |
 | `arr[i] = v`, `--no-bytecode` | 637 | 44 | |
-| `view[i] += v`, generator body | 3,473 | 541 | <= 1,500 |
+| `view[i] += v`, generator body | 3,473 | 533 | <= 1,500 |
 | `view[i] += v`, `--no-bytecode` | 3,477 | 546 | |
 | `view[i]++`, generator body | 2,926 | 210 | <= 1,300 |
-| `view[i]++`, `--no-bytecode` | 2,930 | 214 | |
-| `view[i]++`, bytecode VM | 3,278 | 563 | <= 1,000 |
+| `view[i]++`, `--no-bytecode` | 2,930 | 208 | |
+| `view[i]++`, bytecode VM | 3,278 | 565 | <= 1,000 |
 | `view[i] = v`, bytecode VM (control) | 223 | 224 | within 3% |
 | `arr[i] = v`, bytecode VM (control) | 137 | 140 | |
 | `view[i] += v`, bytecode VM (control) | 920 | 913 | |
@@ -58,13 +58,13 @@ JetStream drivers at `--iterations 1`, whole-process Ir:
 
 | benchmark | base | new | delta | criterion |
 |---|---:|---:|---:|---|
-| sync-fs | 12,870,451,742 | 10,447,211,153 | -18.8% | >= 15% |
-| async-fs | 9,889,843,234 | 8,276,601,088 | -16.3% | >= 8% |
-| gaussian-blur | 31,845,170,690 | 31,321,226,203 | -1.6% | within 1% (no regression) |
-| richards | 13,878,352,052 | 13,794,693,432 | -0.6% | within 1% |
-| fib | 7,600,596,601 | 7,511,743,167 | -1.2% | within 1% |
-| delta-blue | 9,141,792,154 | 9,094,892,115 | -0.5% | |
-| Box2D | 8,490,672,921 | 8,423,750,597 | -0.8% | |
+| sync-fs | 12,870,451,742 | 10,420,681,689 | -19.0% | >= 15% |
+| async-fs | 9,889,843,234 | 8,257,822,921 | -16.5% | >= 8% |
+| gaussian-blur | 31,845,170,690 | 31,367,718,543 | -1.5% | within 1% (no regression) |
+| richards | 13,878,352,052 | 13,676,806,466 | -1.5% | within 1% |
+| fib | 7,600,596,601 | 7,515,773,093 | -1.1% | within 1% |
+| delta-blue | 9,141,792,154 | 9,004,972,124 | -1.5% | |
+| Box2D | 8,490,672,921 | 8,296,796,720 | -2.3% | |
 
 Item 4 of the issue (an exact-integer branch in `number_ops::to_string`) is not done: nothing in the acceptance criteria
 needs it once the typed-array round trip is gone.
