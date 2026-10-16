@@ -2438,9 +2438,9 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
 }
 
 #[test]
-fn nested_tail_positions_and_unsupported_member_callees_remain_ineligible() {
+fn unsupported_member_callees_remain_ineligible() {
     use super::compiler::CompileError;
-    use crate::ast::{CallSiteId, LogicalOp, MemberProperty, PropSiteId};
+    use crate::ast::{CallSiteId, MemberProperty, PropSiteId};
 
     let callee = Expression::Member(
         ExprBox::new(Expression::Super),
@@ -2456,20 +2456,36 @@ fn nested_tail_positions_and_unsupported_member_callees_remain_ineligible() {
         compile_body(&call),
         Err(CompileError::Ineligible(_))
     ));
+}
 
-    let nested_tail_call = Expression::Logical(
-        LogicalOp::And,
-        ExprBox::new(Expression::Identifier("condition".to_string())),
-        ExprBox::new(Expression::Call(
-            ExprBox::new(Expression::Identifier("f".to_string())),
-            vec![],
-            CallSiteId::UNASSIGNED,
-        )),
-    );
-    assert!(matches!(
-        compile_body(&[Statement::Return(Some(nested_tail_call))]),
-        Err(CompileError::Ineligible(_))
-    ));
+#[test]
+fn nested_tail_positions_lower_to_return_call_leaves() {
+    let count = |source: &str| {
+        let chunk = compile_function_source(source, &["a", "b"]);
+        let ops = decode_ops(&chunk);
+        (
+            ops.iter().filter(|(op, _)| *op == Op::ReturnCall).count(),
+            ops.iter().any(|(op, _)| matches!(op, Op::ExecAst)),
+        )
+    };
+    assert_eq!(count("return a && f(b);"), (1, false));
+    assert_eq!(count("return a || f(b);"), (1, false));
+    assert_eq!(count("return a ?? f(b);"), (1, false));
+    assert_eq!(count("return a ? f(b) : g(b);"), (2, false));
+    assert_eq!(count("return a, f(b);"), (1, false));
+    assert_eq!(count("return a ? (b && f(a)) : g(b);"), (2, false));
+    assert_eq!(count("return a ? 1 : f(b);"), (1, false));
+}
+
+#[test]
+fn nested_tail_call_leaf_compile_failures_keep_the_tree_walker() {
+    let chunk = compile_function_source("var x = 1; return a && f(...b);", &["a", "b"]);
+    let ops = decode_ops(&chunk);
+    assert!(ops.iter().any(|(op, _)| *op == Op::ExecAst), "{ops:?}");
+    assert!(!ops.iter().any(|(op, _)| *op == Op::ReturnCall), "{ops:?}");
+    let chunk = compile_function_source("var x = 1; return a && g`t`;", &["a"]);
+    let ops = decode_ops(&chunk);
+    assert!(ops.iter().any(|(op, _)| *op == Op::ExecAst), "{ops:?}");
 }
 
 #[test]
@@ -2919,11 +2935,15 @@ fn try_compile_function_source(
     use super::compiler::{FrameShape, compile_function_body};
     use crate::parser::Parser;
 
-    let mut parser = Parser::new(source).expect("parser init");
+    let wrapped = format!("function wrapper() {{ {source}\n}}");
+    let mut parser = Parser::new(&wrapped).expect("parser init");
     let program = parser.parse_program().expect("parse");
+    let Some(Statement::FunctionDeclaration(decl)) = program.body.as_slice().first() else {
+        panic!("wrapper function declaration");
+    };
     let params: Vec<String> = params.iter().map(|p| p.to_string()).collect();
     compile_function_body(
-        program.body.as_slice(),
+        decl.body.statements.as_slice(),
         &FrameShape {
             arguments_slot: false,
             simple_params: &params,
