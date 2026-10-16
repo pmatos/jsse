@@ -7,6 +7,7 @@
 //! `ast::assign_ic_sites`; this module creates a `BodyIcStore` per body on
 //! first execution and shares it across all closures of that body.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
@@ -135,6 +136,35 @@ impl IcStore {
             slot: slot_idx,
             generation,
         }
+    }
+
+    /// [`enter_body`](Self::enter_body) through a handle the caller remembered
+    /// from an earlier entry of the same Body, skipping the index probe.
+    ///
+    /// The handle is used only if its slot still holds this Body's store (the
+    /// generation and the store's Body identity both match); otherwise the
+    /// index is consulted and `cached` is refreshed. Either way the entry is
+    /// ticked and counted in flight exactly as `enter_body` does.
+    #[inline]
+    pub(crate) fn enter_body_cached(
+        &mut self,
+        body: &Body,
+        cached: &Cell<Option<BodyStoreHandle>>,
+    ) -> BodyStoreHandle {
+        let tick = self.next_tick();
+        if let Some(handle) = cached.get()
+            && let Some(slot) = self.stores.get_mut(handle.slot)
+            && slot.generation == handle.generation
+            && let Some(entry) = slot.entry.as_mut()
+            && entry.store.body_key() == body.key()
+        {
+            entry.last_used = tick;
+            entry.in_flight += 1;
+            return handle;
+        }
+        let handle = self.enter_body(body);
+        cached.set(Some(handle));
+        handle
     }
 
     /// Release one in-flight use. If all capacity slots were active during a
@@ -299,6 +329,28 @@ impl Interpreter {
         execute: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let active = self.ic_store.enter_body(body);
+        self.run_in_ic_body(active, execute)
+    }
+
+    /// [`with_ic_body`](Self::with_ic_body) for a function body, entering its
+    /// store through the handle remembered on the literal's frame (#1062).
+    #[inline]
+    pub(crate) fn with_ic_body_cached<T>(
+        &mut self,
+        body: &Body,
+        cached: &Cell<Option<BodyStoreHandle>>,
+        execute: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let active = self.ic_store.enter_body_cached(body, cached);
+        self.run_in_ic_body(active, execute)
+    }
+
+    #[inline]
+    fn run_in_ic_body<T>(
+        &mut self,
+        active: BodyStoreHandle,
+        execute: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         let previous = self.current_ic_handle.replace(active);
         let result = execute(self);
         let current = self
@@ -379,6 +431,60 @@ mod tests {
         assert_eq!(h1, h2, "cloned body must share the same IC store");
         store.exit_body(h2);
         store.exit_body(h1);
+    }
+
+    #[test]
+    fn cached_entry_reuses_the_remembered_handle_and_counts_in_flight() {
+        let mut store = IcStore::new();
+        let body = body_with_calls_props(1, 0);
+        let cell = Cell::new(None);
+        let first = store.enter_body_cached(&body, &cell);
+        assert_eq!(cell.get(), Some(first), "a miss records the handle");
+        let nested = store.enter_body_cached(&body, &cell);
+        assert_eq!(nested, first);
+        assert_eq!(
+            store.entry_mut(first).in_flight,
+            2,
+            "a hit is counted in flight like any other entry"
+        );
+        store.exit_body(nested);
+        store.exit_body(first);
+        assert_eq!(store.entry_mut(first).in_flight, 0);
+    }
+
+    #[test]
+    fn cached_entry_refreshes_after_eviction() {
+        let mut store = IcStore::with_capacity(2);
+        let body = body_with_calls_props(1, 0);
+        let cell = Cell::new(None);
+        let stale = store.enter_body_cached(&body, &cell);
+        store.exit_body(stale);
+        for _ in 0..4 {
+            let other = body_with_calls_props(1, 0);
+            let handle = store.enter_body(&other);
+            store.exit_body(handle);
+        }
+        let fresh = store.enter_body_cached(&body, &cell);
+        assert_eq!(cell.get(), Some(fresh));
+        assert_eq!(store.store_mut(fresh).body_key(), body.key());
+        store.exit_body(fresh);
+    }
+
+    #[test]
+    fn cached_handle_for_another_body_is_rejected() {
+        let mut store = IcStore::new();
+        let a = body_with_calls_props(1, 0);
+        let b = body_with_calls_props(1, 0);
+        let cell = Cell::new(None);
+        let ha = store.enter_body_cached(&a, &cell);
+        store.exit_body(ha);
+        let hb = store.enter_body_cached(&b, &cell);
+        assert_ne!(
+            hb, ha,
+            "a cell remembered for one Body must not serve another"
+        );
+        assert_eq!(store.store_mut(hb).body_key(), b.key());
+        store.exit_body(hb);
     }
 
     #[test]
