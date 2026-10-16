@@ -7,7 +7,6 @@ info: |
   The typeof Operator, Runtime Semantics: Evaluation (13.5.3.1), Table 41:
   typeof Operator Results.
 esid: sec-typeof-operator-runtime-semantics-evaluation
-flags: [noStrict]
 features: [Symbol, BigInt, class, Proxy]
 ---*/
 

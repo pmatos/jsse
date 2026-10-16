@@ -8,7 +8,7 @@ and an `Arc<StrView>`, and the matching frees on drop), although the result is o
 - `helpers.rs`: `typeof_val` (returned `&str`) became `typeof_index` (same match order: HTMLDDA is `undefined`, a callable
   is `function`, `null` is `object`) plus `TYPEOF_NAMES: [&str; 8]` and `TYPEOF_UNDEFINED`.
 - `CommonKeys.typeof_results: [JsValue; 8]`, built once in `CommonKeys::new()` from exact-fit buffers
-  (`shrink_to_fit`, so in-place concat tail claiming can never succeed on a shared result). `typeof_value` and the
+  (`shrink_to_fit`; best effort, since claiming spare capacity of a shared buffer is memory-safe in any case). `typeof_value` and the
   unresolvable-identifier arm of `eval_typeof_identifier` clone from it.
 - No GC change: primitive strings are `Arc`-backed and live outside the object arena, so the table needs no root and
   serves every realm (ShadowRealm shares the interpreter). No `unsafe`.
