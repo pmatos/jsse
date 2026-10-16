@@ -39,6 +39,10 @@ pub(super) fn dense_element(interp: &Interpreter, o: &JsValue, idx: usize) -> Op
 /// array-index key. Holes then stay absent, and writes of new indices need no
 /// setter, non-writable or proxy-trap consultation.
 pub(crate) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -> bool {
+    walk_index_free_chain(interp, start, true)
+}
+
+fn walk_index_free_chain(interp: &Interpreter, start: Option<u64>, scan_keys: bool) -> bool {
     let mut next = start;
     let mut hops = 0usize;
     while let Some(id) = next {
@@ -54,7 +58,8 @@ pub(crate) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -
             ObjectKind::Array(_) if b.array_elements().is_some_and(Vec::is_empty) => {}
             _ => return false,
         }
-        if b.properties.may_hold_index_key() && b.properties.keys().any(is_array_index_property_key)
+        if b.properties.may_hold_index_key()
+            && (!scan_keys || b.properties.keys().any(is_array_index_property_key))
         {
             return false;
         }
@@ -65,6 +70,12 @@ pub(crate) fn proto_chain_index_free(interp: &Interpreter, start: Option<u64>) -
         }
     }
     true
+}
+
+/// [`proto_chain_index_free`] for per-read use: a link owning any digit-leading
+/// key declines instead of scanning its key list.
+pub(crate) fn proto_chain_without_index_keys(interp: &Interpreter, start: Option<u64>) -> bool {
+    walk_index_free_chain(interp, start, false)
 }
 
 fn has_hole(elements: &[JsValue]) -> bool {

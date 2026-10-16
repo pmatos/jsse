@@ -167,20 +167,35 @@ impl Interpreter {
         if let Some(elems) = obj_borrow.array_elements() {
             let trunc = index.trunc();
             // -0 reaches here too: ToPropertyKey(-0) is "0", element zero.
-            if index == trunc && index >= 0.0 && (index as usize) < elems.len() {
+            // 2^32 - 1 and above are ordinary string keys, not elements.
+            if index == trunc && (0.0..4_294_967_295.0).contains(&index) {
                 let idx = index as usize;
-                let value = &elems[idx];
-                if value.is_undefined() {
-                    return None;
-                }
-                // No index-keyed descriptor exists, so none shadows the element.
-                if !obj_borrow.properties.may_hold_index_key() {
-                    return Some(value.clone());
-                }
-                let mut buf = [0u8; 10];
-                let key_str = format_u32_stack(idx as u32, &mut buf);
-                if !obj_borrow.properties.contains_key(key_str) {
-                    return Some(value.clone());
+                let may_hold_index_key = obj_borrow.properties.may_hold_index_key();
+                match elems.get(idx) {
+                    Some(value) if !value.is_undefined() => {
+                        // No index-keyed descriptor exists, so none shadows the element.
+                        if !may_hold_index_key {
+                            return Some(value.clone());
+                        }
+                        let mut buf = [0u8; 10];
+                        let key_str = format_u32_stack(idx as u32, &mut buf);
+                        if !obj_borrow.properties.contains_key(key_str) {
+                            return Some(value.clone());
+                        }
+                    }
+                    // A hole, or an index past the backing vector: with no own
+                    // index descriptor it is absent, and with nothing inherited
+                    // that could answer an index [[Get]] it reads undefined.
+                    _ => {
+                        if !may_hold_index_key
+                            && crate::interpreter::builtins::array_dense::proto_chain_without_index_keys(
+                                self,
+                                obj_borrow.prototype_id,
+                            )
+                        {
+                            return Some(JsValue::UNDEFINED);
+                        }
+                    }
                 }
             }
         }
@@ -285,15 +300,17 @@ impl Interpreter {
                     return Completion::Normal(JsValue::UNDEFINED);
                 }
 
-                let own = match b.parameter_map() {
-                    None => b.properties.get(key),
-                    Some(_) => None,
-                }
-                .map(|record| (record.getter().cloned(), record.value().cloned()))
-                .or_else(|| {
+                let own = if b.parameter_map().is_none() {
+                    match b.properties.get(key) {
+                        Some(record) => Some((record.getter().cloned(), record.value().cloned())),
+                        None => b
+                            .get_own_exotic_property(key)
+                            .map(|desc| (desc.get, desc.value)),
+                    }
+                } else {
                     b.get_own_property_full(key)
                         .map(|desc| (desc.get, desc.value))
-                });
+                };
                 match own {
                     Some((Some(getter), _)) if !getter.is_undefined() => {
                         drop(b);

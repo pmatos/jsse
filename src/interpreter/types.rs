@@ -3408,6 +3408,15 @@ impl JsObjectData {
             }
             return Some(d);
         }
+        self.get_own_exotic_property(key)
+    }
+
+    /// [`Self::get_own_property_full`] without its `properties` lookup: Array
+    /// elements, TypedArray indices and String-wrapper `length`/indices.
+    pub(crate) fn get_own_exotic_property<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         if let Some(elems) = self.array_elements()
             && let Some(key_str) = key.as_property_key_str()
             && let Some(idx) = array_element_index(key_str)
@@ -3438,8 +3447,8 @@ impl JsObjectData {
             }
             return None;
         }
-        if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+        if let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && self.class_name == "String"
         {
             let units = s.as_units();
             if key.as_property_key_bytes() == b"length" {
