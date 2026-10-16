@@ -1730,6 +1730,52 @@ fn await_on_a_pending_promise_registers_typed_resume_reactions() {
 }
 
 #[test]
+fn async_generator_requests_and_awaits_create_no_function_objects() {
+    // A request promise is settled through `PromiseResolvers::Internal`, so
+    // `next()` records no resolving-function pair, and an `await` or a
+    // `yield` of a pending promise leaves handler-less typed reactions on it.
+    let interp = run_script(
+        r#"
+        globalThis.awaited = new Promise(function () {});
+        globalThis.yielded = new Promise(function () {});
+        async function* awaiting() { await awaited; }
+        async function* yielding() { yield yielded; }
+        globalThis.awaitingRequest = awaiting().next();
+        globalThis.yieldingRequest = yielding().next();
+        "#,
+    );
+    assert_eq!(
+        global_resolving_function_count(&interp, "awaitingRequest"),
+        0
+    );
+    assert_eq!(
+        global_resolving_function_count(&interp, "yieldingRequest"),
+        0
+    );
+    for (name, expected) in [
+        ("awaited", AsyncGenStep::Await),
+        ("yielded", AsyncGenStep::Yield),
+    ] {
+        let id = interp
+            .get_global_var_ref(name)
+            .and_then(|value| value.as_object_id())
+            .expect("global must be an object");
+        let cell = interp.get_object_cell(id).expect("promise must be live");
+        let obj = cell.borrow();
+        let data = obj.promise_data().expect("global must be a promise");
+        for reactions in [&data.fulfill_reactions, &data.reject_reactions] {
+            assert_eq!(reactions.len(), 1);
+            assert!(reactions[0].handler.is_none());
+            assert!(
+                matches!(reactions[0].target, ReactionTarget::AsyncGen(_, step) if step == expected),
+                "{name}: {:?}",
+                reactions[0].target
+            );
+        }
+    }
+}
+
+#[test]
 fn internal_resolvers_ignore_settlement_after_the_first_claim() {
     let mut interp = Interpreter::new();
     let promise = interp.create_promise_object();

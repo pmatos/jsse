@@ -1076,6 +1076,15 @@ impl Interpreter {
                 reaction_type == PromiseReactionType::Reject,
             );
         }
+        if let ReactionTarget::AsyncGen(gen_id, step) = target {
+            self.async_gen_reaction(
+                gen_id,
+                step,
+                argument,
+                reaction_type == PromiseReactionType::Reject,
+            );
+            return Completion::Normal(JsValue::UNDEFINED);
+        }
         let handler_result = match handler {
             Some(ref handler) if self.is_callable(handler) => {
                 match self.call_function(
@@ -1100,7 +1109,9 @@ impl Interpreter {
         };
 
         match target {
-            ReactionTarget::None | ReactionTarget::AsyncResume(_) => {}
+            ReactionTarget::None
+            | ReactionTarget::AsyncResume(_)
+            | ReactionTarget::AsyncGen(..) => {}
             ReactionTarget::Internal(promise_id) => match handler_result {
                 Ok(value) => self.resolve_promise_internal(promise_id, value),
                 Err(reason) => self.reject_promise(promise_id, reason),
@@ -1292,26 +1303,6 @@ impl Interpreter {
                 reaction_type,
             },
             argument,
-        );
-    }
-
-    /// §6.2.3.1 Await steps 5-6: PerformPromiseThen with no result capability.
-    /// Unlike `promise_then` it never consults `promise.constructor`
-    /// (SpeciesConstructor) and allocates no derived promise.
-    pub(crate) fn perform_await_then(
-        &mut self,
-        promise_val: &JsValue,
-        on_fulfilled: JsValue,
-        on_rejected: JsValue,
-    ) {
-        let Some(promise_id) = promise_val.as_object_id() else {
-            return;
-        };
-        self.perform_promise_then_internal(
-            promise_id,
-            Some(on_fulfilled),
-            Some(on_rejected),
-            ReactionTarget::None,
         );
     }
 

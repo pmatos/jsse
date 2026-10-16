@@ -683,8 +683,6 @@ pub(crate) struct AsyncGenRequest {
     pub kind: AsyncGenRequestKind,
     pub value: JsValue,
     pub promise: JsValue,
-    pub resolve_fn: JsValue,
-    pub reject_fn: JsValue,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -5506,6 +5504,14 @@ impl Interpreter {
                 thenable,
                 then_fn,
             } => self.run_promise_resolve_thenable_job(promise_id, thenable, then_fn),
+            Microtask::AsyncGenYield {
+                gen_id,
+                value,
+                rejected,
+            } => {
+                self.async_gen_reaction(gen_id, AsyncGenStep::Yield, value, rejected);
+                Completion::Normal(JsValue::UNDEFINED)
+            }
         };
         self.gc_assert_root_depth(rooted_depth, "a microtask job");
         self.gc_unroot_frame(frame);

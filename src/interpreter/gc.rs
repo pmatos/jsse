@@ -2175,8 +2175,6 @@ mod tests {
                 kind: crate::interpreter::AsyncGenRequestKind::Next,
                 value: JsValue::UNDEFINED,
                 promise: obj(promise),
-                resolve_fn: JsValue::UNDEFINED,
-                reject_fn: JsValue::UNDEFINED,
             });
     }
 

@@ -40,6 +40,14 @@ pub(crate) enum Microtask {
         thenable: JsValue,
         then_fn: JsValue,
     },
+    /// The continuation of an async generator `yield` whose operand is already
+    /// settled: completes the front request of `gen_id`'s queue with
+    /// `{ value, done: false }`, or rejects it with `value` when `rejected`.
+    AsyncGenYield {
+        gen_id: u64,
+        value: JsValue,
+        rejected: bool,
+    },
 }
 
 impl Microtask {
@@ -66,6 +74,10 @@ impl Microtask {
                 visit(thenable);
                 visit(then_fn);
                 visit(&JsValue::object(*promise_id));
+            }
+            Microtask::AsyncGenYield { gen_id, value, .. } => {
+                visit(&JsValue::object(*gen_id));
+                visit(value);
             }
         }
     }
@@ -284,6 +296,14 @@ impl JobScheduler {
         });
     }
 
+    pub(crate) fn enqueue_async_gen_yield(&mut self, gen_id: u64, value: JsValue, rejected: bool) {
+        self.microtask_queue.push_back(Microtask::AsyncGenYield {
+            gen_id,
+            value,
+            rejected,
+        });
+    }
+
     pub(crate) fn pop_microtask(&mut self) -> Option<Microtask> {
         self.microtask_queue.pop_front()
     }
@@ -307,8 +327,6 @@ impl JobScheduler {
             for request in queue {
                 visit(&request.value);
                 visit(&request.promise);
-                visit(&request.resolve_fn);
-                visit(&request.reject_fn);
             }
         }
         for (callback, args) in self.timers.iter_roots() {
@@ -530,8 +548,6 @@ mod tests {
             kind: super::super::AsyncGenRequestKind::Next,
             value: JsValue::number(tag),
             promise: JsValue::UNDEFINED,
-            resolve_fn: JsValue::UNDEFINED,
-            reject_fn: JsValue::UNDEFINED,
         }
     }
 
@@ -567,8 +583,6 @@ mod tests {
             .push_back(super::super::AsyncGenRequest {
                 value: JsValue::object(10),
                 promise: JsValue::object(11),
-                resolve_fn: JsValue::object(12),
-                reject_fn: JsValue::object(13),
                 ..next_request(0.0)
             });
 
@@ -577,7 +591,7 @@ mod tests {
             .filter_map(|v| v.as_object_id())
             .collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec![7, 10, 11, 12, 13]);
+        assert_eq!(ids, vec![7, 10, 11]);
     }
 
     #[test]
