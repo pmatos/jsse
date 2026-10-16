@@ -2050,8 +2050,7 @@ impl Interpreter {
                 // Function and lexical declarations are instantiated before
                 // the chunk runs, exactly as the tree-walker does, so the
                 // nodes handed back to it find their bindings in place.
-                let analysis = chunk
-                    .needs_instantiation
+                let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
                     .then(|| self.hoist_cache.analysis_for(body));
                 #[cfg(feature = "perf-counters")]
                 let has_fallback = !chunk.ast.is_empty();
@@ -2070,6 +2069,9 @@ impl Interpreter {
                         ) {
                             return err;
                         }
+                    } else if let Some(lexicals) = &chunk.top_level_lexicals {
+                        vm::declare_var_prologue(&chunk, exec_env);
+                        vm::declare_top_level_lexicals(lexicals, &chunk, exec_env);
                     }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });

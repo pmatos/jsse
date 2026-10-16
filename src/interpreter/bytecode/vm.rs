@@ -548,6 +548,21 @@ pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
     }
 }
 
+/// Declares the body's top-level `let`/`const`/class bindings in TDZ, in
+/// source order, when `Chunk::top_level_lexicals` says that is all its
+/// declaration instantiation consists of.
+pub(crate) fn declare_top_level_lexicals(lexicals: &[(u16, bool)], chunk: &Chunk, env: &EnvRef) {
+    let mut scope = env.borrow_mut();
+    for &(name_idx, is_const) in lexicals {
+        let kind = if is_const {
+            BindingKind::Const
+        } else {
+            BindingKind::Let
+        };
+        scope.declare_atom(&chunk.names[usize::from(name_idx)], kind);
+    }
+}
+
 /// `GetIterator` / the for-in head: `[value]` -> `[iterator]`.
 #[inline(never)]
 fn iteration_head(

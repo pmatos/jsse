@@ -127,3 +127,40 @@ function bindingOrder() {
 for (var i = 0; i < 3; i++) {
   assert.sameValue(bindingOrder(), "1,2,function,4,5", "mixed lexical declarations, call " + i);
 }
+
+function varsAndLexicals(n) {
+  var seen = [typeof early, typeof inLoop, typeof inTry, typeof inSwitch, typeof inLabel];
+  let total = 0;
+  for (var inLoop = 0; inLoop < n; inLoop++) total += inLoop;
+  try { var inTry = 1; } catch (e) {}
+  switch (n) { case 1: var inSwitch = 2; }
+  lbl: { var inLabel = 3; }
+  const sum = total + (inTry | 0);
+  var early = 4;
+  return seen.join() + ":" + sum + ":" + early;
+}
+for (var i = 0; i < 3; i++) {
+  assert.sameValue(
+    varsAndLexicals(4),
+    "undefined,undefined,undefined,undefined,undefined:7:4",
+    "var hoisting beside top-level lexicals, call " + i
+  );
+}
+
+function lexicalShadowsParameterNameInNestedBlock(p) {
+  const q = p + 1;
+  { let p = "inner"; q; }
+  return p + ":" + q;
+}
+for (var i = 0; i < 3; i++) {
+  assert.sameValue(lexicalShadowsParameterNameInNestedBlock(i), i + ":" + (i + 1), "call " + i);
+}
+
+function lexicalNamedArguments() {
+  let arguments_ = typeof arguments;
+  const result = arguments_ + ":" + arguments.length;
+  return result;
+}
+for (var i = 0; i < 3; i++) {
+  assert.sameValue(lexicalNamedArguments(1, 2), "object:2", "arguments object beside lexicals, call " + i);
+}

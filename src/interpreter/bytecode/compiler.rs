@@ -3058,6 +3058,7 @@ impl Compiler {
             object_shapes: self.object_shapes,
             regexps: self.regexps,
             needs_instantiation: false,
+            top_level_lexicals: None,
             handlers: self.handlers,
             finally_tables: self.finally_tables,
             head_bindings: self.head_bindings,
@@ -3467,9 +3468,43 @@ fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chun
     if !c.ast.is_empty() && c.native_ops == 0 {
         return Err(CompileError::Ineligible("fallback-only body"));
     }
+    let top_level_lexicals = lexical_only_instantiation(&mut c, body)?;
     let mut chunk = c.finish();
     chunk.needs_instantiation = body_needs_instantiation(body);
+    chunk.top_level_lexicals = top_level_lexicals;
     Ok(chunk)
+}
+
+/// The body's top-level lexical names as `names` indices, when declaration
+/// instantiation would do nothing else: no function declaration (so no
+/// Annex B name either), and every `var` name the tree-walker would hoist is
+/// one the chunk's own var prologue declares. `None` keeps the generic path.
+fn lexical_only_instantiation(
+    c: &mut Compiler,
+    body: &[Statement],
+) -> Result<Option<Vec<(u16, bool)>>, CompileError> {
+    if stmts_contain(body, &|s| is_function_declaration(s)) {
+        return Ok(None);
+    }
+    let lexicals = crate::interpreter::hoisting::collect_lexical_names(body);
+    if lexicals.is_empty() {
+        return Ok(None);
+    }
+    let mut vars = std::collections::HashSet::new();
+    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
+    let declared_by_prologue = |name: &String| {
+        c.var_names
+            .iter()
+            .any(|&idx| c.names[usize::from(idx)].as_str() == name)
+    };
+    if !vars.iter().all(declared_by_prologue) {
+        return Ok(None);
+    }
+    lexicals
+        .iter()
+        .map(|(name, is_const)| Ok((c.add_name(name)?, *is_const)))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
