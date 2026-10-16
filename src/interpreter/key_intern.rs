@@ -407,15 +407,13 @@ mod tests {
     #[test]
     fn oversized_symbol_keys_preserve_their_exact_encoding() {
         let mut cache = KeyCache::new();
-        let symbol = crate::types::JsSymbol::new(
-            99,
-            Some(crate::types::JsString::from_str(
-                &"s".repeat(MAX_CACHEABLE_KEY_BYTES),
-            )),
+        let description = crate::types::JsString::from_str(&"s".repeat(MAX_CACHEABLE_KEY_BYTES));
+        let original = crate::types::JsSymbol::new(99, Some(description.clone())).to_property_key();
+        let again = crate::types::JsSymbol::new(99, Some(description));
+        let a = cache.intern(again.to_property_key());
+        let b = cache.intern(
+            crate::types::JsSymbol::new(99, again.description().cloned()).to_property_key(),
         );
-        let original = symbol.to_property_key();
-        let a = cache.intern(symbol.to_property_key());
-        let b = cache.intern(symbol.to_property_key());
 
         assert_eq!(a, original);
         assert!(a.is_symbol());

@@ -3,7 +3,7 @@ use std::fmt;
 use std::mem::ManuallyDrop;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 /// One-word ECMAScript value representation.
 ///
@@ -688,6 +688,39 @@ struct JsSymbolData {
     /// Index into `WELL_KNOWN_SYMBOL_NAMES` for a realm intrinsic well-known
     /// symbol (§6.1.5.1); `None` for every other symbol.
     well_known: Option<u8>,
+    /// The Symbol-valued property key of a non-well-known symbol, built on
+    /// first use. It holds bytes only, never the symbol, so there is no
+    /// reference cycle.
+    key: OnceLock<JsPropertyKey>,
+}
+
+/// Live symbols by id, for the key-to-symbol direction of a property key
+/// round trip. A symbol enters when its key is first built, so every user
+/// symbol key in existence has a table entry for as long as the symbol lives.
+/// The entries are `Weak`: the table never keeps a symbol alive, and dead
+/// entries are swept whenever the table doubles.
+struct SymbolIndex {
+    by_id: std::collections::HashMap<u64, Weak<JsSymbolData>, foldhash::fast::RandomState>,
+    sweep_at: usize,
+}
+
+impl SymbolIndex {
+    const MIN_SWEEP: usize = 1024;
+
+    fn insert(&mut self, data: &Arc<JsSymbolData>) {
+        if self.by_id.len() >= self.sweep_at {
+            self.by_id.retain(|_, weak| weak.strong_count() > 0);
+            self.sweep_at = (self.by_id.len() * 2).max(Self::MIN_SWEEP);
+        }
+        self.by_id.insert(data.id, Arc::downgrade(data));
+    }
+}
+
+thread_local! {
+    static SYMBOL_INDEX: std::cell::RefCell<SymbolIndex> = std::cell::RefCell::new(SymbolIndex {
+        by_id: Default::default(),
+        sweep_at: SymbolIndex::MIN_SWEEP,
+    });
 }
 
 #[derive(Clone, Debug)]
@@ -702,6 +735,7 @@ impl JsSymbol {
                 id,
                 description,
                 well_known: None,
+                key: OnceLock::new(),
             }),
         }
     }
@@ -718,6 +752,7 @@ impl JsSymbol {
                 id,
                 description: Some(JsString::from_str(&format!("Symbol.{name}"))),
                 well_known: Some(index as u8),
+                key: OnceLock::new(),
             }),
         }
     }
@@ -739,11 +774,23 @@ impl JsSymbol {
     /// use a stable key without an id, so bootstrap lookups can construct the
     /// same key directly; every other symbol includes its unique id. The key
     /// also carries the description (WTF-8) so it can be recovered from the key
-    /// alone; identity is the id, never the description.
+    /// alone; identity is the id, never the description. A user symbol builds
+    /// its key once, through the property-key interner, so later conversions
+    /// are a refcount bump and later stores hit the interner's address fast path.
     pub(crate) fn to_property_key(&self) -> JsPropertyKey {
         if let Some(index) = self.data.well_known {
             return WELL_KNOWN_SYMBOL_KEYS[index as usize].clone();
         }
+        self.data
+            .key
+            .get_or_init(|| {
+                let _ = SYMBOL_INDEX.try_with(|index| index.borrow_mut().insert(&self.data));
+                crate::interpreter::key_intern::intern_js_key(self.build_property_key())
+            })
+            .clone()
+    }
+
+    fn build_property_key(&self) -> JsPropertyKey {
         use std::io::Write as _;
         let description_len = self.description().map_or(0, |d| d.len() * 3);
         let mut bytes = Vec::with_capacity(description_len + 32);
@@ -760,6 +807,25 @@ impl JsSymbol {
         JsPropertyKey {
             bytes: Arc::from(bytes),
         }
+    }
+
+    /// The live symbol that `key` was built from, if it still exists. The
+    /// result is the original symbol, so identity and description survive a
+    /// round trip through a property key; `None` for a string key, a
+    /// well-known symbol key, or a symbol that has since been dropped.
+    pub(crate) fn from_property_key(key: &JsPropertyKey) -> Option<Self> {
+        let encoding = key.symbol_encoding()?;
+        let hash = encoding.iter().rposition(|&b| b == b'#')?;
+        let id: u64 = std::str::from_utf8(&encoding[hash + 1..])
+            .ok()?
+            .parse()
+            .ok()?;
+        let data = SYMBOL_INDEX
+            .try_with(|index| index.borrow().by_id.get(&id)?.upgrade())
+            .ok()??;
+        // Another interpreter on this thread may have reused the id.
+        let own_key = data.key.get()?;
+        (own_key.same_allocation(key) || own_key == key).then_some(Self { data })
     }
 
     pub(crate) fn descriptive_string(&self) -> JsString {
@@ -1774,6 +1840,75 @@ mod tests {
             constructed,
             JsPropertyKey::from_str("Symbol(Symbol.iterator)")
         );
+    }
+
+    #[test]
+    fn symbol_property_key_is_built_once_and_interned() {
+        let symbol = JsSymbol::new(501, Some(JsString::from_str("memo")));
+        let first = symbol.to_property_key();
+        let second = symbol.to_property_key();
+        assert!(first.same_allocation(&second));
+        assert!(
+            first.same_allocation(&crate::interpreter::key_intern::intern_js_key(
+                first.clone()
+            ))
+        );
+        assert!(symbol.clone().to_property_key().same_allocation(&first));
+    }
+
+    #[test]
+    fn property_key_round_trips_to_the_original_symbol() {
+        let descriptions = [
+            None,
+            Some(vec![]),
+            Some(vec![0xD800, 0x62]),
+            Some("x)#9".encode_utf16().collect::<Vec<u16>>()),
+        ];
+        for (i, description) in descriptions.into_iter().enumerate() {
+            let symbol = JsSymbol::new(600 + i as u64, description.map(JsString::from_vec));
+            let key = symbol.to_property_key();
+            let back = JsSymbol::from_property_key(&key).expect("symbol is alive");
+            assert!(back.shares_storage_with(&symbol));
+        }
+        assert!(JsSymbol::from_property_key(&JsPropertyKey::from_str("Symbol#600")).is_none());
+        let well_known = JsSymbol::new_well_known(700, "iterator").to_property_key();
+        assert!(JsSymbol::from_property_key(&well_known).is_none());
+    }
+
+    #[test]
+    fn symbol_index_does_not_keep_symbols_alive() {
+        let symbol = JsSymbol::new(800, Some(JsString::from_str("transient")));
+        let key = symbol.to_property_key();
+        let weak = Arc::downgrade(&symbol.data);
+        drop(symbol);
+        assert_eq!(weak.strong_count(), 0);
+        assert!(JsSymbol::from_property_key(&key).is_none());
+        // The key alone still decodes to the description and id.
+        let (description, id) = key.user_symbol_parts().expect("user symbol key");
+        assert_eq!(id, 800);
+        assert_eq!(description.map(|d| d.to_string()), Some("transient".into()));
+    }
+
+    #[test]
+    fn symbol_index_ignores_a_reused_id() {
+        let first = JsSymbol::new(900, Some(JsString::from_str("first")));
+        let second = JsSymbol::new(900, Some(JsString::from_str("second")));
+        let first_key = first.to_property_key();
+        let second_key = second.to_property_key();
+        assert!(JsSymbol::from_property_key(&second_key).is_some());
+        assert!(JsSymbol::from_property_key(&first_key).is_none());
+    }
+
+    #[test]
+    fn symbol_index_sweeps_dead_entries() {
+        let live = JsSymbol::new(1_000_000, None);
+        live.to_property_key();
+        for id in 0..(SymbolIndex::MIN_SWEEP as u64 * 4) {
+            JsSymbol::new(2_000_000 + id, None).to_property_key();
+        }
+        let size = SYMBOL_INDEX.with(|index| index.borrow().by_id.len());
+        assert!(size < SymbolIndex::MIN_SWEEP * 2, "{size} entries retained");
+        assert!(JsSymbol::from_property_key(&live.to_property_key()).is_some());
     }
 
     #[test]
