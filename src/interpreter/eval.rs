@@ -5973,9 +5973,13 @@ impl Interpreter {
                                     // reference, declaration or direct eval), so no
                                     // binding is created; sloppy frames keep the args
                                     // for the legacy `fn.arguments` accessor.
+                                    // SAFETY: the frame is pushed below and popped
+                                    // after `dispatch_body`, inside this activation,
+                                    // while `args` and `func_env` are still live.
                                     call_frame_arguments = CallFrameArguments::Deferred {
-                                        args: DeferredCallArguments::new(args),
-                                        func_env: func_env.clone(),
+                                        args: unsafe {
+                                            DeferredCallArguments::new(args, &func_env)
+                                        },
                                         mapped: is_simple,
                                     };
                                 }
