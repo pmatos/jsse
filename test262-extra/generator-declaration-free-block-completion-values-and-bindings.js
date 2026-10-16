@@ -23,7 +23,7 @@ cases.generatorArgumentsAndThis = () => {
   function* g() { { yield arguments.length; yield this === undefined ? "u" : typeof this; } }
   return drain(g.call(undefined, 1, 2));
 };
-cases.newTargetAndHomeObject = () => {
+cases.superPropertyInElidedBlock = () => {
   const o = { *g() { { yield typeof super.toString; } } };
   return drain(o.g());
 };
@@ -38,6 +38,6 @@ cases.sendValuesThroughElided = () => {
 };
 
 assert.sameValue(cases.generatorArgumentsAndThis(), "Y:2,Y:object,R:undefined", "generatorArgumentsAndThis");
-assert.sameValue(cases.newTargetAndHomeObject(), "Y:function,R:undefined", "newTargetAndHomeObject");
+assert.sameValue(cases.superPropertyInElidedBlock(), "Y:function,R:undefined", "superPropertyInElidedBlock");
 assert.sameValue(cases.yieldStarInElidedBlock(), "Y:a,Y:r,R:undefined", "yieldStarInElidedBlock");
 assert.sameValue(cases.sendValuesThroughElided(), "Y:first,Y:got S,R:undefined", "sendValuesThroughElided");

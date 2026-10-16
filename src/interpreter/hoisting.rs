@@ -24,7 +24,8 @@ pub(crate) fn unwrap_labeled_function(stmt: &Statement) -> Option<&FunctionDecl>
 
 /// Whether a statement list directly declares a binding that a block scopes to
 /// itself: `let`/`const`/`using`, a class, or a (possibly labelled) function
-/// declaration. A block without one has an environment nothing can observe.
+/// declaration. A block without one binds nothing, so its environment is
+/// unobservable and a consumer may skip creating it.
 pub(crate) fn block_declares_lexical(stmts: &[Statement]) -> bool {
     stmts.iter().any(|stmt| match stmt {
         Statement::Variable(decl) => decl.kind != VarKind::Var,

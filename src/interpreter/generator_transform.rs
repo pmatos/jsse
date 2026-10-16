@@ -5364,6 +5364,30 @@ mod tests {
     }
 
     #[test]
+    fn declaration_free_block_opens_no_scope_or_extra_states() {
+        // Issue #1046: a block that declares nothing is lowered in place, so
+        // it costs exactly what the same statements without braces cost.
+        let count_scopes = |src: &str| {
+            let sm = transform_generator(&parse_fn_body(src), &[]);
+            let scopes = sm
+                .states
+                .iter()
+                .filter(|s| s.scope_action.is_some())
+                .count();
+            (sm.states.len(), scopes)
+        };
+        let braced = count_scopes("function* g() { for (var i = 0; i < 3; i++) { { yield i; } } }");
+        let plain = count_scopes("function* g() { for (var i = 0; i < 3; i++) { yield i; } }");
+        assert_eq!(braced, plain);
+        assert_eq!(braced.1, 0, "no scope action expected: {braced:?}");
+
+        let (_, scopes) = count_scopes("function* g() { { yield 1; function f() {} } }");
+        assert_eq!(scopes, 1, "a function declaration keeps the block scope");
+        let (_, scopes) = count_scopes("function* g(o) { with (o) { { yield 1; } } }");
+        assert_eq!(scopes, 1, "a block under `with` keeps its scope");
+    }
+
+    #[test]
     fn enter_catch_carries_post_yield_shadowing_declaration() {
         // Regression for issue #738: a catch body's own `const x`, declared
         // after the `yield`, must show up in `EnterCatch`'s `lexical_decls`.
