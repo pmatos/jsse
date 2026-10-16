@@ -1,0 +1,77 @@
+hashmap_js 5040000 1799970000 2520000 60000
+PERF	vm_ops	34664186
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	1320063
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	26.26
+PERF	ast_units_in_functions	0
+PERF	compile_ok	27
+PERF	compile_bail	0
+PERF	calls_from_vm	1140061
+PERF	calls_to_native	23
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	1320063
+PERF	gc_minor	5
+PERF	gc_major	3
+PERF	gc_ms	6
+PERF	gc_minor_us	3044
+PERF	local_slot_hits	9423462
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	20
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	409
+PERF	atom_lookup_calls	327
+PERF	key_intern_calls	1580
+BODY	<script body>	0	0.00%	1	-
+OP	LoadLocal	7207687	20.79%
+OP	GetProp	4098563	11.82%
+OP	LoadThis	3508733	10.12%
+OP	Pop	1778876	5.13%
+OP	StoreLocalPop	1626217	4.69%
+OP	LoadConst	1200052	3.46%
+OP	Return	1140024	3.29%
+OP	StrictEq	1140000	3.29%
+OP	JumpIfTrue	1140000	3.29%
+OP	DupN	1140000	3.29%
+OP	JumpIfFalse	1080504	3.12%
+OP	Call	1020061	2.94%
+OP	CmpJumpIfFalse	922201	2.66%
+OP	Jump	911536	2.63%
+OP	LoadMethod	840041	2.42%
+OP	GetElement	720462	2.08%
+OP	SetProp	638378	1.84%
+OP	Typeof	540000	1.56%
+OP	Not	491089	1.42%
+OP	LoadNull	311093	0.90%
+OP	UpdateLocal	311073	0.90%
+OP	LoadCalleeName	300019	0.87%
+OP	SetElement	289390	0.83%
+OP	LocalBinConst	278485	0.80%
+OP	BitAnd	278319	0.80%
+OP	UpdateProp	251072	0.72%
+OP	Add	240006	0.69%
+OP	ReturnUndefined	180039	0.52%
+OP	BinConst	180036	0.52%
+OP	JumpIfFalsyKeep	180000	0.52%
+OP	Eq	120000	0.35%
+OP	NotEq	120000	0.35%
+OP	LoadTrue	120000	0.35%
+OP	JumpIfTruthyKeep	120000	0.35%
+OP	ReturnCall	120000	0.35%
+OP	LoadName	60040	0.17%
+OP	Construct	60021	0.17%
+OP	BitOr	90	0.00%
+OP	MakeClosure	46	0.00%
+OP	Mul	18	0.00%
+OP	NewObject	9	0.00%
+OP	LoadUndefined	1	0.00%
+OP	LoadFalse	1	0.00%
+OP	ResolveName	1	0.00%
+OP	SetCompletion	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	StoreResolvedNamePop	1	0.00%

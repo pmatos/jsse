@@ -1,0 +1,23 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 548  of event 'cpu-clock:u'
+# Event count (approx.): 1098196384
+#
+# Overhead  Shared Object         Symbol                                                                                                                                                                                                                                                                                                                                                                              IPC   [IPC Coverage]
+# ........  ....................  ..................................................................................................................................................................................................................................................................................................................................................................................  ....................
+#
+    88.50%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                                                                                                                                                                                                                -      -            
+     4.20%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                                                                                                                                                                                                                                                                               -      -            
+     1.82%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                                                                                                                                                                                                                                                                  -      -            
+     1.28%  jsse                  [.] <jsse::interpreter::Interpreter>::to_boolean_val                                                                                                                                                                                                                                                                                                                                -      -            
+     0.91%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                                                                                                                                                                                                                                                                                                   -      -            
+     0.73%  jsse                  [.] jsse::interpreter::helpers::to_boolean                                                                                                                                                                                                                                                                                                                                          -      -            
+     0.55%  jsse                  [.] core::ptr::drop_glue::<core::result::Result<jsse::types::NanBoxedValue, jsse::types::NanBoxedValue>>                                                                                                                                                                                                                                                                            -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

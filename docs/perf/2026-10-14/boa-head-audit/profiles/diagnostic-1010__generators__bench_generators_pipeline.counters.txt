@@ -1,0 +1,74 @@
+pipeline 2020130816
+PERF	vm_ops	3920140
+PERF	ast_stmt_execs	400016
+PERF	ast_expr_evals	4480046
+PERF	ast_work_units	4880062
+PERF	body_dispatch_compiled	800010
+PERF	body_dispatch_ast	6
+PERF	body_non_function_execs	3760027
+PERF	vm_ops_per_compiled_body	4.90
+PERF	ast_units_in_functions	30
+PERF	ast_units_per_ast_body	5.00
+PERF	compile_ok	10
+PERF	compile_bail	3
+PERF	calls_from_vm	160019
+PERF	calls_to_native	3
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	800024
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	1120009
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	2
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	6
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	640169
+PERF	atom_lookup_calls	351
+PERF	key_intern_calls	1223
+BAIL	fallback-only body	3
+FALLBACK	lexical declaration	2
+BODY	<script body>	3440016	70.49%	1	-
+BODY	range	480004	9.84%	960008	-
+BODY	<anonymous#1131>	480002	9.84%	400003	-
+BODY	<anonymous#1106>	480002	9.84%	400003	-
+BODY	<anonymous#1091>	5	0.00%	1	fallback-only body
+BODY	<anonymous#1094>	5	0.00%	1	fallback-only body
+BODY	<anonymous#1122>	5	0.00%	1	fallback-only body
+BODY	<anonymous#1116>	5	0.00%	1	fallback-only body
+BODY	<anonymous#1119>	5	0.00%	1	fallback-only body
+BODY	<anonymous#1097>	5	0.00%	1	fallback-only body
+BODY	<anonymous#1103>	2	0.00%	640003	-
+BODY	<anonymous#1100>	2	0.00%	360003	-
+BODY	<anonymous#1128>	2	0.00%	640003	-
+BODY	<anonymous#1125>	2	0.00%	360003	-
+OP	Return	800010	20.41%
+OP	LocalBinConst	640003	16.33%
+OP	LoadLocal	480004	12.24%
+OP	BinConst	400002	10.20%
+OP	Call	160019	4.08%
+OP	LoadName	160010	4.08%
+OP	LoadCalleeName	160010	4.08%
+OP	InitLexical	160007	4.08%
+OP	Add	160002	4.08%
+OP	Jump	160002	4.08%
+OP	ResolveName	160002	4.08%
+OP	IterStep	160002	4.08%
+OP	UpdateName	160000	4.08%
+OP	StoreResolvedNamePop	160000	4.08%
+OP	MakeClosure	16	0.00%
+OP	LoadUndefined	9	0.00%
+OP	LoadConst	8	0.00%
+OP	PushEnv	7	0.00%
+OP	PopEnv	7	0.00%
+OP	SetCompletion	4	0.00%
+OP	JumpIfFalse	3	0.00%
+OP	CopyIterEnv	3	0.00%
+OP	StoreResolvedName	2	0.00%
+OP	UpdateLocal	2	0.00%
+OP	ExecAst	2	0.00%
+OP	GetIterator	2	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	LoadMethod	1	0.00%

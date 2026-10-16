@@ -1,0 +1,58 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 480  of event 'cpu-clock:u'
+# Event count (approx.): 961923840
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    25.62%    25.21%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+            |          
+            |--2.71%--0xfff7ffffffffffff
+            |          
+            |--2.29%--jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --2.29%--0xfffaffffffffffff
+
+    13.33%     1.25%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |          
+             --12.50%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --11.88%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     7.50%     5.42%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+            |          
+             --2.50%--<hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>
+
+     7.29%     5.83%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+            |          
+             --2.92%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     3.96%     3.96%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     3.75%     3.54%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                                                                                                  -      -            
+     3.54%     0.83%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                                                                                              -      -            
+            |          
+             --2.92%--<jsse::interpreter::Interpreter>::dispatch_body
+                       |          
+                        --2.71%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     3.12%     0.00%  [unknown]         [.] 0xfffaffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfffaffffffffffff
+
+     2.71%     1.88%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                          -      -            
+     2.71%     2.71%  libc.so.6         [.] 0x0000000000185dde                                                                                                                                                                           -      -            
+     2.71%     0.00%  [unknown]         [.] 0xfff7ffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfff7ffffffffffff
+
+     2.08%     2.08%  libc.so.6         [.] 0x0000000000185de5                                                                                                                                                                           -      -            
+     2.08%     1.67%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                     -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

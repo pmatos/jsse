@@ -1,0 +1,59 @@
+BENCH	arith	133	71992
+BENCH	elem	249	4004000
+BENCH	called	398	5
+BENCH	mixed	434	5
+BENCH	labeledLoop	210	4004005
+BENCH	labeledControl	1439	50000000
+PERF	vm_ops	403158375
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	3003018
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	134.25
+PERF	ast_units_in_functions	0
+PERF	compile_ok	9
+PERF	compile_bail	0
+PERF	calls_from_vm	3003036
+PERF	calls_to_native	19
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	3003018
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	239592602
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	11011027
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	186
+PERF	atom_lookup_calls	350
+PERF	key_intern_calls	1276
+BODY	<script body>	0	0.00%	1	-
+OP	LoadLocal	133535564	33.12%
+OP	CmpJumpIfFalse	56007012	13.89%
+OP	Jump	55006004	13.64%
+OP	UpdateLocal	55006000	13.64%
+OP	StoreLocalPop	27527538	6.83%
+OP	LocalBinConst	23523500	5.83%
+OP	LoadName	11011037	2.73%
+OP	BinConst	10510502	2.61%
+OP	Pop	5505512	1.37%
+OP	GetElement	5505506	1.37%
+OP	SetElement	5505500	1.37%
+OP	Add	4504534	1.12%
+OP	Call	3003036	0.74%
+OP	LoadCalleeName	3003018	0.74%
+OP	Return	3003012	0.74%
+OP	LoadConst	1001058	0.25%
+OP	LoadMethod	18	0.00%
+OP	ReturnUndefined	6	0.00%
+OP	Sub	6	0.00%
+OP	SetCompletion	6	0.00%
+OP	ResolveName	2	0.00%
+OP	StoreResolvedNamePop	2	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	Construct	1	0.00%

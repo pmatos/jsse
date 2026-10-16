@@ -1,0 +1,86 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 573  of event 'cpu-clock:u'
+# Event count (approx.): 1148296584
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    14.83%    14.14%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+            |          
+            |--9.42%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --5.41%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    11.52%     1.40%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |          
+             --10.12%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     9.08%     9.08%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                       -      -            
+            |          
+            |--3.66%--<jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+            |          
+             --2.09%--<jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>
+                       <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     5.76%     4.54%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+            |          
+             --2.79%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     5.24%     5.24%  jsse              [.] <jsse::interpreter::Interpreter>::add_reflect_mutation_methods::{closure#1}                                                                                                                  -      -            
+     4.71%     0.00%  [unknown]         [.] 0x0000000000000001                                                                                                                                                                           -      -            
+            |
+            ---0x1
+               |          
+                --2.27%--<jsse::interpreter::Interpreter>::call_function_inner_impl
+
+     4.54%     0.00%  [unknown]         [.] 0x0000000000000433                                                                                                                                                                           -      -            
+            |
+            ---0x433
+               |          
+                --2.09%--<jsse::interpreter::Interpreter>::call_function
+
+     4.36%     0.00%  [unknown]         [.] 0x0000000000000003                                                                                                                                                                           -      -            
+            |
+            ---0x3
+
+     4.36%     4.36%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+            |          
+             --3.14%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     3.84%     2.97%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>                                                                                                     -      -            
+            |          
+             --2.97%--<jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>
+
+     3.49%     3.14%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                          -      -            
+     3.14%     2.79%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                     -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::bind_simple_parameters
+
+     2.97%     0.52%  jsse              [.] <jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>                                                                                             -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>
+               |          
+                --2.09%--<jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     2.44%     0.00%  [unknown]         [.] 0xfffc00000000020d                                                                                                                                                                           -      -            
+            |
+            ---0xfffc00000000020d
+
+     2.44%     2.44%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+     2.44%     1.57%  jsse              [.] <jsse::interpreter::Interpreter>::to_property_key                                                                                                                                            -      -            
+     2.44%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                                                                                           -      -            
+            |
+            ---0x7
+
+     2.27%     0.70%  jsse              [.] <jsse::interpreter::Interpreter>::call_function                                                                                                                                              -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

@@ -1,0 +1,123 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 482  of event 'cpu-clock:u'
+# Event count (approx.): 965931856
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    20.95%    16.39%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+            |          
+            |--5.81%--jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          |          
+            |           --2.70%--<jsse::types::JsString>::concat_units
+            |          
+             --4.15%--0xfff9ffffffffffff
+                       |          
+                        --2.28%--0x5
+                                  jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                                  jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    17.22%     0.83%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |          
+             --16.60%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --16.39%--jsse::interpreter::bytecode::vm::run_chunk_inner
+                                  |          
+                                   --2.70%--<jsse::types::JsString>::concat_units
+
+     9.54%     9.54%  jsse              [.] <jsse::interpreter::Interpreter>::trace_object_fields_in                                                                                                                                     -      -            
+            |          
+            |--3.73%--<jsse::interpreter::Interpreter>::trace_object_fields_in
+            |          
+             --2.07%--0x25fff
+                       <jsse::interpreter::Interpreter>::trace_object_fields_in
+
+     5.60%     5.60%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                                                                               -      -            
+     4.77%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                                                                                           -      -            
+            |
+            ---0x7
+
+     4.77%     4.77%  jsse              [.] <jsse::interpreter::Interpreter>::trace_mark_worklist                                                                                                                                        -      -            
+            |          
+             --4.36%--<jsse::interpreter::Interpreter>::trace_mark_worklist
+
+     4.15%     2.90%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+            |          
+             --3.53%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     4.15%     0.00%  [unknown]         [.] 0xfff9ffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfff9ffffffffffff
+               |          
+                --2.28%--0x5
+                          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.94%     3.94%  jsse              [.] <jsse::interpreter::Interpreter>::enqueue_young::<alloc::vec::drain::Drain<u64>>                                                                                                             -      -            
+            |          
+             --3.11%--<jsse::interpreter::Interpreter>::enqueue_young::<alloc::vec::drain::Drain<u64>>
+
+     3.73%     0.00%  [unknown]         [.] 0x0000000000000001                                                                                                                                                                           -      -            
+            |
+            ---0x1
+
+     3.73%     0.00%  [unknown]         [.] 0x0000000000000005                                                                                                                                                                           -      -            
+            |
+            ---0x5
+               |          
+                --3.32%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     3.11%     3.11%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     2.70%     0.00%  jsse              [.] <jsse::types::JsString>::concat_units                                                                                                                                                        -      -            
+            |
+            ---<jsse::types::JsString>::concat_units
+
+     2.70%     0.00%  [unknown]         [.] 0x0000000000000006                                                                                                                                                                           -      -            
+            |
+            ---0x6
+
+     2.49%     0.00%  [unknown]         [.] 0x0000000000000004                                                                                                                                                                           -      -            
+            |
+            ---0x4
+               |          
+                --2.07%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.49%     1.45%  jsse              [.] <jsse::interpreter::Interpreter>::alloc_object                                                                                                                                               -      -            
+            |
+            ---<jsse::interpreter::Interpreter>::alloc_object
+
+     2.49%     2.49%  jsse              [.] <jsse::interpreter::Interpreter>::to_boolean_val                                                                                                                                             -      -            
+            |          
+             --2.07%--<jsse::interpreter::Interpreter>::to_boolean_val
+
+     2.28%     0.00%  [unknown]         [.] 0x000000000000000a                                                                                                                                                                           -      -            
+            |
+            ---0xa
+               jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.28%     2.28%  jsse              [.] <jsse::interpreter::property_map::PropertyMap>::append                                                                                                                                       -      -            
+     2.28%     2.28%  jsse              [.] core::ptr::drop_glue::<jsse::interpreter::property_map::PropertyMapInner>                                                                                                                    -      -            
+     2.07%     0.00%  [unknown]         [.] 0x0000000000000009                                                                                                                                                                           -      -            
+            |
+            ---0x9
+               jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.07%     0.21%  jsse              [.] <jsse::types::JsString>::from_vec_grown                                                                                                                                                      -      -            
+     2.07%     0.00%  [unknown]         [.] 0x0000000000025fff                                                                                                                                                                           -      -            
+            |
+            ---0x25fff
+               <jsse::interpreter::Interpreter>::trace_object_fields_in
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

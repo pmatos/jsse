@@ -1,0 +1,29 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 531  of event 'cpu-clock:u'
+# Event count (approx.): 1064128248
+#
+# Overhead  Shared Object         Symbol                                                                                                                   IPC   [IPC Coverage]
+# ........  ....................  .......................................................................................................................  ....................
+#
+    69.30%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                     -      -            
+     7.16%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                                        -      -            
+     6.21%  jsse                  [.] jsse::interpreter::helpers::to_boolean                                                                               -      -            
+     3.01%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                       -      -            
+     2.07%  jsse                  [.] jsse::interpreter::bytecode::vm::unwind_scopes                                                                       -      -            
+     1.88%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                    -      -            
+     1.69%  jsse                  [.] <jsse::interpreter::types::Environment>::reset_scope                                                                 -      -            
+     1.32%  jsse                  [.] <jsse::interpreter::Interpreter>::recycle_block_environment                                                          -      -            
+     1.32%  jsse                  [.] core::ptr::drop_glue::<(jsse::interpreter::atom::Atom, jsse::interpreter::types::Binding)>                           -      -            
+     1.13%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                  -      -            
+     1.13%  jsse                  [.] core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>                                  -      -            
+     0.75%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::push_unique                                                            -      -            
+     0.56%  jsse                  [.] <jsse::interpreter::types::Environment>::declare_atom                                                                -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

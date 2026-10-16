@@ -1,0 +1,50 @@
+147607886
+PERF	vm_ops	17542984
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	300001
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	58.48
+PERF	ast_units_in_functions	0
+PERF	compile_ok	4
+PERF	compile_bail	0
+PERF	calls_from_vm	300002
+PERF	calls_to_native	1
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	300001
+PERF	gc_minor	18
+PERF	gc_major	19
+PERF	gc_ms	19
+PERF	gc_minor_us	8806
+PERF	local_slot_hits	9900004
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	0
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	105
+PERF	atom_lookup_calls	328
+PERF	key_intern_calls	1199
+BODY	<script body>	0	0.00%	1	-
+OP	LoadLocal	4650001	26.51%
+OP	LocalBinConst	3000001	17.10%
+OP	Add	2550000	14.54%
+OP	StoreLocalPop	2100002	11.97%
+OP	Sub	900000	5.13%
+OP	CmpJumpIfFalse	900000	5.13%
+OP	BinConst	600000	3.42%
+OP	Jump	592969	3.38%
+OP	LoadConst	450002	2.57%
+OP	Call	300002	1.71%
+OP	Return	300001	1.71%
+OP	LoadCalleeName	300001	1.71%
+OP	BitXor	300000	1.71%
+OP	JumpIfFalse	150001	0.86%
+OP	LoadName	150001	0.86%
+OP	UpdateLocal	150000	0.86%
+OP	MakeClosure	150000	0.86%
+OP	SetCompletion	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	LoadMethod	1	0.00%

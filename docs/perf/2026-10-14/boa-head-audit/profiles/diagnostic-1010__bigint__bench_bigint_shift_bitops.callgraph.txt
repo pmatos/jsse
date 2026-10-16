@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 503  of event 'cpu-clock:u'
+# Event count (approx.): 1008016024
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                            IPC   [IPC Coverage]
+# ........  ........  ....................  ................................................................................................................................................................................................................  ....................
+#
+    31.01%    29.62%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                                              -      -            
+            |          
+             --9.54%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    12.92%    12.92%  jsse                  [.] jsse::interpreter::bytecode::vm::binary_slow                                                                                                                                                                  -      -            
+            |          
+             --4.77%--0x7
+                       jsse::interpreter::bytecode::vm::binary_slow
+
+    12.72%     0.40%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                                  -      -            
+            |          
+             --12.52%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --12.33%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     6.96%     6.36%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                                                                                                                                                 -      -            
+            |          
+             --3.18%--<jsse::interpreter::Interpreter>::eval_binary
+
+     6.16%     6.16%  jsse                  [.] jsse::interpreter::bytecode::vm::set_script_completion                                                                                                                                                        -      -            
+            |          
+             --2.98%--jsse::interpreter::bytecode::vm::set_script_completion
+
+     5.57%     5.17%  jsse                  [.] <alloc::sync::Arc<num_bigint::bigint::BigInt>>::drop_slow                                                                                                                                                     -      -            
+     5.17%     0.00%  [unknown]             [.] 0x0000000000000007                                                                                                                                                                                            -      -            
+            |
+            ---0x7
+               |          
+                --4.77%--jsse::interpreter::bytecode::vm::binary_slow
+
+     4.97%     3.78%  jsse                  [.] <jsse::interpreter::Interpreter>::bigint_binary                                                                                                                                                               -      -            
+            |          
+             --2.98%--<jsse::interpreter::Interpreter>::bigint_binary
+
+     3.78%     3.78%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                                                                                                             -      -            
+     3.18%     0.00%  [unknown]             [.] 0x0000000000000001                                                                                                                                                                                            -      -            
+            |
+            ---0x1
+
+     2.98%     2.98%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                                        -      -            
+     2.98%     2.98%  libc.so.6             [.] malloc                                                                                                                                                                                                        -      -            
+     2.58%     2.19%  jsse                  [.] num_bigint::biguint::shift::biguint_shr2                                                                                                                                                                      -      -            
+     2.19%     1.79%  jsse                  [.] <&num_bigint::bigint::BigInt as core::ops::bit::Shr<u64>>::shr                                                                                                                                                -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

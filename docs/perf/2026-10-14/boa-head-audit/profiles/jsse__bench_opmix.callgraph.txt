@@ -1,0 +1,22 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'cpu-clock:u'
+# Event count (approx.): 2398797576
+#
+# Children      Self  Shared Object         Symbol                                                                                                      IPC   [IPC Coverage]
+# ........  ........  ....................  ..........................................................................................................  ....................
+#
+    65.83%    65.83%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                        -      -            
+     6.35%     6.35%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                          -      -            
+     3.76%     3.76%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                       -      -            
+     3.01%     3.01%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                              -      -            
+     2.34%     2.34%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                           -      -            
+     2.01%     2.01%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                     -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

@@ -1,0 +1,63 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 474  of event 'cpu-clock:u'
+# Event count (approx.): 949899792
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                                                  IPC   [IPC Coverage]
+# ........  ........  ....................  ......................................................................................................................................................................................................................................  ....................
+#
+    42.41%    42.41%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                                                                    -      -            
+            |          
+             --25.53%--0x3
+                       jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    25.95%     0.00%  [unknown]             [.] 0x0000000000000003                                                                                                                                                                                                                  -      -            
+            |
+            ---0x3
+               |          
+                --25.53%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                          jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    25.53%     0.00%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                                                        -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    14.56%     9.92%  jsse                  [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                                                       -      -            
+            |          
+            |--6.12%--0x7
+            |          <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+            |          
+             --4.85%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+    11.18%     0.00%  [unknown]             [.] 0x0000000000000007                                                                                                                                                                                                                  -      -            
+            |
+            ---0x7
+               |          
+                --10.76%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     6.96%     6.12%  jsse                  [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>                                                                                                                                            -      -            
+     6.54%     4.64%  jsse                  [.] <jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>                                                                                                                              -      -            
+            |          
+             --4.43%--<jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>
+
+     4.85%     4.85%  jsse                  [.] <jsse::interpreter::types::Environment>::get_this                                                                                                                                                                                   -      -            
+            |          
+             --3.59%--<jsse::interpreter::types::Environment>::get_this
+
+     3.59%     3.38%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                                                                 -      -            
+     2.95%     2.11%  jsse                  [.] <jsse::interpreter::types::JsObjectData>::set_property_value::<jsse::types::JsPropertyKey>                                                                                                                                          -      -            
+     2.32%     2.32%  libc.so.6             [.] 0x0000000000185deb                                                                                                                                                                                                                  -      -            
+     2.32%     2.11%  jsse                  [.] jsse::interpreter::bytecode::vm::member_get                                                                                                                                                                                         -      -            
+     2.32%     1.48%  jsse                  [.] <jsse::interpreter::Interpreter>::set_object_with_key_result::<jsse::types::JsPropertyKey>                                                                                                                                          -      -            
+     2.11%     2.11%  jsse                  [.] <jsse::interpreter::property_map::PropertyRecord>::to_descriptor                                                                                                                                                                    -      -            
+     2.11%     2.11%  libc.so.6             [.] 0x0000000000185de5                                                                                                                                                                                                                  -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

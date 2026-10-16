@@ -1,0 +1,27 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 526  of event 'cpu-clock:u'
+# Event count (approx.): 1054108208
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................  ....................
+#
+    20.72%    20.72%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                             -      -            
+     6.65%     6.65%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                          -      -            
+     4.37%     4.37%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                       -      -            
+     4.18%     4.18%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                   -      -            
+     3.42%     3.42%  libc.so.6         [.] malloc                                                                                                                                                                       -      -            
+            |
+            ---malloc
+
+     3.04%     3.04%  jsse              [.] num_bigint::biguint::division::div_rem_core                                                                                                                                  -      -            
+     3.04%     3.04%  jsse              [.] jsse::interpreter::bytecode::vm::binary_slow                                                                                                                                 -      -            
+     2.47%     2.47%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

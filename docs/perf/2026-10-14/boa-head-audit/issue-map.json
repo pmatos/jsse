@@ -1,0 +1,555 @@
+{
+  "jetstream-extra/web-ssr": {
+    "url": "https://github.com/pmatos/jsse/issues/1021",
+    "title": "Console is disconnected from the global object"
+  },
+  "host-console-global": {
+    "url": "https://github.com/pmatos/jsse/issues/1021",
+    "title": "Console is disconnected from the global object"
+  },
+  "boa-scripts/basic/closure": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "boa-scripts/basic/nested-loop": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "diagnostic-1010/bigint/bench_bigint_compare": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "diagnostic-1010/bigint/bench_bigint_compare_numeric_control": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_map_lookup": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "diagnostic-1013/bench_script_let_loop": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "audit-controls/loop-let": {
+    "url": "https://github.com/pmatos/jsse/issues/1022",
+    "title": "perf(bytecode): verified slots miss function lexicals and captured/global lexical bindings",
+    "category": "lexicals"
+  },
+  "jsse/bench_fib": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "boa-scripts/basic/call-loop": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "boa-scripts/closures/invoke": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "jetstream/bigint-bigdenary": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/bigint/bench_bigint_bigdenary_numeric_control": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/bigint/bench_bigint_bigdenary_real": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/calls/bench_calls_closure_call": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/calls/bench_calls_fib": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/calls/bench_calls_leaf": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/calls/bench_calls_method": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/calls/bench_calls_nested": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_sort_cmp": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_sort_cmp": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/args-parameters": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/call-sloppy-captured": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/call-sloppy-local": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/call-strict-captured": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/call-strict-local": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/opmix-called": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "audit-controls/params-simple": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames",
+    "category": "calls"
+  },
+  "diagnostic-1010/bigint/bench_bigint_mulmod256": {
+    "url": "https://github.com/pmatos/jsse/issues/1024",
+    "title": "perf(function): default parameters re-intern names and allocate a body environment on every call",
+    "category": "parameters"
+  },
+  "audit-controls/params-default-omitted": {
+    "url": "https://github.com/pmatos/jsse/issues/1024",
+    "title": "perf(function): default parameters re-intern names and allocate a body environment on every call",
+    "category": "parameters"
+  },
+  "audit-controls/params-default-supplied": {
+    "url": "https://github.com/pmatos/jsse/issues/1024",
+    "title": "perf(function): default parameters re-intern names and allocate a body environment on every call",
+    "category": "parameters"
+  },
+  "diagnostic-1010/calls/bench_calls_args": {
+    "url": "https://github.com/pmatos/jsse/issues/1025",
+    "title": "perf(arguments): arguments-only calls still materialize property maps and re-intern the arguments binding",
+    "category": "arguments"
+  },
+  "audit-controls/args-object": {
+    "url": "https://github.com/pmatos/jsse/issues/1025",
+    "title": "perf(arguments): arguments-only calls still materialize property maps and re-intern the arguments binding",
+    "category": "arguments"
+  },
+  "jetstream/bigint-noble-bls12-381": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "jetstream/bigint-noble-ed25519": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "jetstream/bigint-noble-secp256k1": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_invert": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_literal": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_modpow": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_mulmod256_vm": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_ops_vm_add": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_shift_bitops": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "diagnostic-1010/bigint/bench_bigint_small": {
+    "url": "https://github.com/pmatos/jsse/issues/1026",
+    "title": "perf(bigint): VM BigInt operators still pay generic dispatch and ownership costs in fully compiled loops",
+    "category": "bigint"
+  },
+  "jetstream/splay": {
+    "url": "https://github.com/pmatos/jsse/issues/1027",
+    "title": "perf(gc): nursery collections repeatedly trace large environment/object graphs in Three.js and deep promise queues",
+    "category": "gc"
+  },
+  "diagnostic-1010/alloc-gc/bench_alloc-gc_splay_mini": {
+    "url": "https://github.com/pmatos/jsse/issues/1027",
+    "title": "perf(gc): nursery collections repeatedly trace large environment/object graphs in Three.js and deep promise queues",
+    "category": "gc"
+  },
+  "diagnostic-1010/promises/bench_promises_queue_deep": {
+    "url": "https://github.com/pmatos/jsse/issues/1027",
+    "title": "perf(gc): nursery collections repeatedly trace large environment/object graphs in Three.js and deep promise queues",
+    "category": "gc"
+  },
+  "jetstream-extra/threejs": {
+    "url": "https://github.com/pmatos/jsse/issues/1027",
+    "title": "perf(gc): nursery collections repeatedly trace large environment/object graphs in Three.js and deep promise queues",
+    "category": "gc"
+  },
+  "jsse/bench_closure_create": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "boa-scripts/closures/create": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "diagnostic-1010/calls/bench_calls_closure_bigbody": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "diagnostic-1010/calls/bench_calls_closure_create": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_field_arrow_fn": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_literals": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "diagnostic-1013/bench_array_literal": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "diagnostic-1013/bench_closure_literal": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage",
+    "category": "allocation"
+  },
+  "boa-scripts/properties/access": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "boa-scripts/v8-benches/deltablue": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "boa-scripts/v8-benches/raytrace": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "boa-scripts/v8-benches/richards": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "jetstream/Babylon": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "jetstream/Box2D": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "jetstream/delta-blue": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "jetstream/hash-map": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "jetstream/proxy-mobx": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "jetstream/richards": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_control_trap_direct": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_getter_setter": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_get": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_notrap": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_ownkeys_has": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_set": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_set_plain": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_vue_reactive": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/proxy-classes/bench_proxy-classes_public_access": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths",
+    "category": "properties"
+  },
+  "diagnostic-1010/alloc-gc/bench_alloc-gc_hashmap_js": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/bigint/bench_bigint_ops_vm_numadd": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_arrayliteral": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_letconst": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_memberupdate": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_none": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_switch": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_throw": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_bail_typeof": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/numeric/bench_numeric_intarith": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_sort_default": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_ctl_scalar_fn": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_str_keys_control": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "diagnostic-1013/bench_script_handoff_loop": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "audit-controls/opmix-arith": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "audit-controls/opmix-mixed": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs",
+    "category": "vm"
+  },
+  "jetstream/lazy-collections": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "jetstream/sync-fs": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "diagnostic-1010/generators/bench_generators_lazy_collections": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "diagnostic-1010/generators/bench_generators_manual_next": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "diagnostic-1010/generators/bench_generators_pipeline": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "diagnostic-1010/generators/bench_generators_simple_yield": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "diagnostic-1010/generators/bench_generators_tokenizer": {
+    "url": "https://github.com/pmatos/jsse/issues/1031",
+    "title": "perf(generator): state payload execution and resume bookkeeping retain a 2x gap on lazy/manual iteration",
+    "category": "generators"
+  },
+  "jetstream-registry/prettier-wtb": {
+    "url": "https://github.com/pmatos/jsse/issues/1032",
+    "title": "Function declarations lost across state fragments",
+    "category": "bug-hoisting"
+  },
+  "jetstream-registry/PluralRules-intl": {
+    "url": "https://github.com/pmatos/jsse/issues/1033",
+    "title": "perf(intl): cache ICU plural rules instead of rebuilding locale data on every select"
+  },
+  "boa-scripts/intl/datetimeformat-format": {
+    "url": "https://github.com/pmatos/jsse/issues/1033",
+    "title": "perf(intl): cache ICU plural rules instead of rebuilding locale data on every select"
+  },
+  "boa-scripts/intl/datetimeformat_resolved_options": {
+    "url": "https://github.com/pmatos/jsse/issues/1033",
+    "title": "perf(intl): cache ICU plural rules instead of rebuilding locale data on every select"
+  },
+  "jetstream-registry/3d-raytrace-SP": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths"
+  },
+  "jetstream-registry/crypto-md5-SP": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames"
+  },
+  "jetstream-registry/crypto-sha1-SP": {
+    "url": "https://github.com/pmatos/jsse/issues/1023",
+    "title": "perf(function): compiled leaf calls still spend substantial time building and tearing down frames"
+  },
+  "jetstream-registry/date-format-tofte-SP": {
+    "url": "https://github.com/pmatos/jsse/issues/1028",
+    "title": "perf(runtime): closure and small-array construction still eagerly allocate metadata and property storage"
+  },
+  "jetstream-registry/esprima-next-wtb": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths"
+  },
+  "jetstream-registry/n-body-SP": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths"
+  },
+  "diagnostic-1013/bench_block_let": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs"
+  },
+  "diagnostic-1013/bench_switch_let": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs"
+  },
+  "jsse/bench_opmix": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs"
+  },
+  "jetstream/string-unpack-code-SP": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs"
+  },
+  "jetstream/gaussian-blur": {
+    "url": "https://github.com/pmatos/jsse/issues/1030",
+    "title": "perf(vm): fully native arithmetic loops still trail Boa after removing fallback, hashing and GC costs"
+  },
+  "jetstream/proxy-vue": {
+    "url": "https://github.com/pmatos/jsse/issues/1029",
+    "title": "perf(property): bytecode named property access bypasses property ICs and repeatedly enters generic MOP/key paths"
+  }
+}

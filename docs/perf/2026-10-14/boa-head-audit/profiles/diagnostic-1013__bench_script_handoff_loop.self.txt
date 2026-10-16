@@ -1,0 +1,58 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 833  of event 'cpu-clock:u'
+# Event count (approx.): 1669338664
+#
+# Overhead  Shared Object         Symbol                                                                                                                                                     IPC   [IPC Coverage]
+# ........  ....................  .........................................................................................................................................................  ....................
+#
+    10.80%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_expr                                                                                                            -      -            
+     8.76%  jsse                  [.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>                                                                          -      -            
+     7.44%  jsse                  [.] <str as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                           -      -            
+     7.20%  jsse                  [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                   -      -            
+     4.92%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<alloc::string::String>                                                                            -      -            
+     4.32%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                       -      -            
+     4.08%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_statement                                                                                                       -      -            
+     3.24%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                                                                                          -      -            
+     2.52%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_prepared_statements                                                                                             -      -            
+     2.28%  libc.so.6             [.] 0x0000000000185dde                                                                                                                                     -      -            
+     2.16%  jsse                  [.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write                                                                   -      -            
+     2.04%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_switch_block                                                                                                    -      -            
+     1.92%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_assign                                                                                                          -      -            
+     1.92%  jsse                  [.] <jsse::interpreter::Interpreter>::global_object_store_own_data                                                                                         -      -            
+     1.80%  libc.so.6             [.] malloc                                                                                                                                                 -      -            
+     1.68%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::types::Completion>                                                                                           -      -            
+     1.68%  jsse                  [.] jsse::interpreter::global_access::locate                                                                                                               -      -            
+     1.56%  jsse                  [.] <jsse::interpreter::Interpreter>::instantiate_body_declarations                                                                                        -      -            
+     1.44%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                 -      -            
+     1.32%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_identifier_update_hinted::<jsse::interpreter::atom::Atom>                                                       -      -            
+     1.32%  jsse                  [.] <jsse::interpreter::Interpreter>::resolve_identifier_hinted::<alloc::string::String>                                                                   -      -            
+     1.32%  libc.so.6             [.] 0x0000000000185de5                                                                                                                                     -      -            
+     1.20%  jsse                  [.] <jsse::interpreter::Interpreter>::global_object_own_data                                                                                               -      -            
+     1.20%  jsse                  [.] <jsse::interpreter::Interpreter>::hoist_vars_from_stmt                                                                                                 -      -            
+     1.08%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                                         -      -            
+     0.96%  jsse                  [.] <jsse::interpreter::Interpreter>::hoist_lexical_declarations                                                                                           -      -            
+     0.96%  jsse                  [.] core::ptr::drop_glue::<core::result::Result<jsse::types::NanBoxedValue, jsse::types::NanBoxedValue>>                                                   -      -            
+     0.84%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_literal                                                                                                         -      -            
+     0.84%  jsse                  [.] <jsse::interpreter::Interpreter>::exec_switch_cases                                                                                                    -      -            
+     0.84%  jsse                  [.] jsse::interpreter::helpers::strict_equality                                                                                                            -      -            
+     0.84%  libc.so.6             [.] 0x0000000000185deb                                                                                                                                     -      -            
+     0.72%  jsse                  [.] <jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<alloc::string::String>                                                               -      -            
+     0.72%  jsse                  [.] <jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>                                                       -      -            
+     0.72%  jsse                  [.] <jsse::types::NanBoxedValue as core::clone::Clone>::clone                                                                                              -      -            
+     0.72%  jsse                  [.] jsse::interpreter::hoisting::collect_lexical_names                                                                                                     -      -            
+     0.60%  jsse                  [.] <jsse::interpreter::Interpreter>::apply_update_numeric                                                                                                 -      -            
+     0.60%  jsse                  [.] <jsse::interpreter::Interpreter>::with_gc_root_scope::<jsse::interpreter::types::Completion, <jsse::interpreter::Interpreter>::exec_try::{closure#0}>  -      -            
+     0.60%  jsse                  [.] <jsse::interpreter::types::Completion>::update_empty                                                                                                   -      -            
+     0.60%  jsse                  [.] <jsse::interpreter::types::Environment>::find_var_scope                                                                                                -      -            
+     0.60%  jsse                  [.] <jsse::interpreter::types::Environment>::new                                                                                                           -      -            
+     0.60%  jsse                  [.] jsse::interpreter::helpers::to_boolean                                                                                                                 -      -            
+     0.60%  libc.so.6             [.] cfree                                                                                                                                                  -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

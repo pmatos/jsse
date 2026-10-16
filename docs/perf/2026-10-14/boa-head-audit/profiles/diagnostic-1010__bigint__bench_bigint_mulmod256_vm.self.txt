@@ -1,0 +1,52 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 517  of event 'cpu-clock:u'
+# Event count (approx.): 1036072136
+#
+# Overhead  Shared Object         Symbol                                                                                                                          IPC   [IPC Coverage]
+# ........  ....................  ..............................................................................................................................  ....................
+#
+    16.05%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                            -      -            
+     9.86%  jsse                  [.] num_bigint::biguint::division::div_rem_core                                                                                 -      -            
+     8.51%  jsse                  [.] jsse::interpreter::bytecode::vm::binary_slow                                                                                -      -            
+     6.38%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                           -      -            
+     4.26%  jsse                  [.] core::ptr::drop_glue::<(jsse::interpreter::atom::Atom, jsse::interpreter::types::Binding)>                                  -      -            
+     3.68%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                  -      -            
+     3.29%  jsse                  [.] jsse::interpreter::bytecode::vm::pop_operands                                                                               -      -            
+     2.90%  jsse                  [.] num_bigint::biguint::multiplication::mac3                                                                                   -      -            
+     2.32%  jsse                  [.] <alloc::sync::Arc<num_bigint::bigint::BigInt>>::drop_slow                                                                   -      -            
+     2.32%  jsse                  [.] <jsse::interpreter::DeferredCallArguments>::new                                                                             -      -            
+     2.32%  jsse                  [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                    -      -            
+     2.13%  jsse                  [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                             -      -            
+     2.13%  jsse                  [.] core::ptr::drop_glue::<jsse::interpreter::CallFrameArguments>                                                               -      -            
+     1.93%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_binary                                                                               -      -            
+     1.93%  jsse                  [.] <jsse::types::NanBoxedValue as core::clone::Clone>::clone                                                                   -      -            
+     1.93%  jsse                  [.] <num_bigint::bigint::BigInt as num_integer::Integer>::div_rem                                                               -      -            
+     1.74%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                      -      -            
+     1.74%  libc.so.6             [.] malloc                                                                                                                      -      -            
+     1.55%  jsse                  [.] <jsse::interpreter::Interpreter>::bigint_binary                                                                             -      -            
+     1.55%  jsse                  [.] <jsse::interpreter::types::Environment>::reset_scope                                                                        -      -            
+     1.55%  libc.so.6             [.] cfree                                                                                                                       -      -            
+     1.16%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                         -      -            
+     1.16%  jsse                  [.] num_bigint::biguint::division::div_rem_cow                                                                                  -      -            
+     0.97%  jsse                  [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                                          -      -            
+     0.97%  jsse                  [.] num_bigint::biguint::multiplication::mul3                                                                                   -      -            
+     0.77%  jsse                  [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                                                   -      -            
+     0.77%  jsse                  [.] <jsse::interpreter::Interpreter>::dispose_resources                                                                         -      -            
+     0.77%  jsse                  [.] <jsse::interpreter::types::Environment>::find_var_scope                                                                     -      -            
+     0.77%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                -      -            
+     0.58%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                              -      -            
+     0.58%  jsse                  [.] <jsse::interpreter::Interpreter>::ordinary_call_bind_this                                                                   -      -            
+     0.58%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                         -      -            
+     0.58%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::push_unique                                                                   -      -            
+     0.58%  jsse                  [.] <num_bigint::big_digit::BigDigits>::normalize                                                                               -      -            
+     0.58%  libc.so.6             [.] __libc_calloc                                                                                                               -      -            
+     0.58%  python3.13            [.] _PyEval_EvalFrameDefault                                                                                                    -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

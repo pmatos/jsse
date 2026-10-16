@@ -1,0 +1,22 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 543  of event 'cpu-clock:u'
+# Event count (approx.): 1088176344
+#
+# Overhead  Shared Object     Symbol                                                                                                    IPC   [IPC Coverage]
+# ........  ................  ........................................................................................................  ....................
+#
+    83.61%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                      -      -            
+     6.81%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                         -      -            
+     4.05%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                     -      -            
+     2.39%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                        -      -            
+     0.74%  jsse              [.] <jsse::interpreter::Interpreter>::eval_unary                                                          -      -            
+     0.55%  python3.13        [.] type_new                                                                                              -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

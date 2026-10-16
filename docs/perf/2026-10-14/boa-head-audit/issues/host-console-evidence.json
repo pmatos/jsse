@@ -1,0 +1,26 @@
+[
+  {
+    "engine": "node",
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "engine": "boa",
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "engine": "jsse",
+    "rc": 1,
+    "stdout": "",
+    "stderr": "Error: console is not the globalThis.console property\n"
+  },
+  {
+    "engine": "jsse-no-bytecode",
+    "rc": 1,
+    "stdout": "",
+    "stderr": "Error: console is not the globalThis.console property\n"
+  }
+]

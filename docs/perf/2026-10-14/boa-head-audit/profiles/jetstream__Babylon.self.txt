@@ -1,0 +1,52 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 480  of event 'cpu-clock:u'
+# Event count (approx.): 961923840
+#
+# Overhead  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    25.21%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+     5.83%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+     5.42%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+     3.96%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     3.54%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                                                                                                  -      -            
+     2.71%  libc.so.6         [.] 0x0000000000185dde                                                                                                                                                                           -      -            
+     2.08%  libc.so.6         [.] 0x0000000000185de5                                                                                                                                                                           -      -            
+     1.88%  jsse              [.] <jsse::interpreter::Interpreter>::trace_mark_worklist                                                                                                                                        -      -            
+     1.88%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                                          -      -            
+     1.67%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                     -      -            
+     1.67%  jsse              [.] jsse::interpreter::bytecode::vm::pop_operands                                                                                                                                                -      -            
+     1.25%  jsse              [.] <jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>                                                                                       -      -            
+     1.25%  jsse              [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                                                                                                           -      -            
+     1.25%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+     1.25%  libc.so.6         [.] malloc                                                                                                                                                                                       -      -            
+     1.04%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                                                                               -      -            
+     1.04%  jsse              [.] <jsse::interpreter::types::JsObjectData>::set_property_value::<jsse::types::JsPropertyKey>                                                                                                   -      -            
+     1.04%  jsse              [.] jsse::interpreter::helpers::to_boolean                                                                                                                                                       -      -            
+     1.04%  libc.so.6         [.] cfree                                                                                                                                                                                        -      -            
+     1.04%  libc.so.6         [.] 0x0000000000185dc4                                                                                                                                                                           -      -            
+     0.83%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                                                                                              -      -            
+     0.83%  jsse              [.] <jsse::interpreter::Interpreter>::recycle_function_environment                                                                                                                               -      -            
+     0.83%  jsse              [.] <jsse::interpreter::Interpreter>::to_boolean_val                                                                                                                                             -      -            
+     0.83%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                       -      -            
+     0.83%  jsse              [.] <jsse::interpreter::atom::Atom>::intern                                                                                                                                                      -      -            
+     0.83%  jsse              [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                                                                                          -      -            
+     0.83%  jsse              [.] <jsse::interpreter::types::Environment>::get_this                                                                                                                                            -      -            
+     0.83%  libc.so.6         [.] 0x0000000000185deb                                                                                                                                                                           -      -            
+     0.62%  jsse              [.] <jsse::interpreter::Interpreter>::alloc_object                                                                                                                                               -      -            
+     0.62%  jsse              [.] <jsse::interpreter::Interpreter>::set_object_property_with_outcome::<jsse::types::JsPropertyKey>                                                                                             -      -            
+     0.62%  jsse              [.] <jsse::interpreter::Interpreter>::trace_object_fields_in                                                                                                                                     -      -            
+     0.62%  jsse              [.] <jsse::interpreter::Interpreter>::with_gc_root_scope::<jsse::interpreter::types::Completion, <jsse::interpreter::Interpreter>::construct_from_evaluated::{closure#0}>                        -      -            
+     0.62%  jsse              [.] <jsse::interpreter::property_map::PropertyMap>::append                                                                                                                                       -      -            
+     0.62%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property_full::<str>                                                                                                                       -      -            
+     0.62%  jsse              [.] jsse::interpreter::bytecode::vm::unwind_scopes                                                                                                                                               -      -            
+     0.62%  libc.so.6         [.] 0x0000000000185dc0                                                                                                                                                                           -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

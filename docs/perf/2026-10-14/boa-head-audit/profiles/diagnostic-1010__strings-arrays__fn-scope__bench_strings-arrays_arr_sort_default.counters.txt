@@ -1,0 +1,55 @@
+200
+PERF	vm_ops	12600579
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	600001
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	21.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	3
+PERF	compile_bail	0
+PERF	calls_from_vm	1200022
+PERF	calls_to_native	600021
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	600001
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	1800225
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	0
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	100
+PERF	atom_lookup_calls	322
+PERF	key_intern_calls	1198
+BODY	<script body>	0	0.00%	1	-
+OP	BinConst	2400020	19.05%
+OP	Call	1200022	9.52%
+OP	LoadName	1200001	9.52%
+OP	LoadLocal	600101	4.76%
+OP	LoadConst	600043	4.76%
+OP	JumpIfFalse	600041	4.76%
+OP	LocalBinConst	600041	4.76%
+OP	Add	600040	4.76%
+OP	Pop	600021	4.76%
+OP	LoadMethod	600021	4.76%
+OP	Jump	600020	4.76%
+OP	UpdateLocal	600020	4.76%
+OP	Return	600000	4.76%
+OP	ResolveName	600000	4.76%
+OP	LoadCalleeName	600000	4.76%
+OP	StoreResolvedNamePop	600000	4.76%
+OP	StoreLocalPop	63	0.00%
+OP	GetProp	60	0.00%
+OP	GetElement	40	0.00%
+OP	NewArrayConst	20	0.00%
+OP	LoadUndefined	1	0.00%
+OP	ReturnUndefined	1	0.00%
+OP	SetCompletion	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	MakeClosure	1	0.00%

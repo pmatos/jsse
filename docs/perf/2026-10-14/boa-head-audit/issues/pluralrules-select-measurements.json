@@ -1,0 +1,50 @@
+[
+  {
+    "engine": "jsse",
+    "repeat": 0,
+    "wall_s": 0.2645854880101979,
+    "rc": 0,
+    "stdout": "2498000\n",
+    "stderr": ""
+  },
+  {
+    "engine": "boa",
+    "repeat": 0,
+    "wall_s": 0.13592625700403005,
+    "rc": 0,
+    "stdout": "2498000\n",
+    "stderr": ""
+  },
+  {
+    "engine": "boa",
+    "repeat": 1,
+    "wall_s": 0.13828146597370505,
+    "rc": 0,
+    "stdout": "2498000\n",
+    "stderr": ""
+  },
+  {
+    "engine": "jsse",
+    "repeat": 1,
+    "wall_s": 0.2654335469705984,
+    "rc": 0,
+    "stdout": "2498000\n",
+    "stderr": ""
+  },
+  {
+    "engine": "jsse",
+    "repeat": 2,
+    "wall_s": 0.26985095196869224,
+    "rc": 0,
+    "stdout": "2498000\n",
+    "stderr": ""
+  },
+  {
+    "engine": "boa",
+    "repeat": 2,
+    "wall_s": 0.1446879410650581,
+    "rc": 0,
+    "stdout": "2498000\n",
+    "stderr": ""
+  }
+]

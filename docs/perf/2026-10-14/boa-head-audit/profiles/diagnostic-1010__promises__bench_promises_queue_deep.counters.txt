@@ -1,0 +1,58 @@
+queue-deep sum=200090000
+PERF	vm_ops	2100114
+PERF	ast_stmt_execs	3
+PERF	ast_expr_evals	4
+PERF	ast_work_units	7
+PERF	body_dispatch_compiled	120008
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	17.50
+PERF	ast_units_in_functions	0
+PERF	compile_ok	4
+PERF	compile_bail	0
+PERF	calls_from_vm	140016
+PERF	calls_to_native	140015
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	120008
+PERF	gc_minor	29
+PERF	gc_major	5
+PERF	gc_ms	661
+PERF	gc_minor_us	608854
+PERF	local_slot_hits	620001
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	3
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	20007
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	106
+PERF	atom_lookup_calls	338
+PERF	key_intern_calls	1198
+FALLBACK	lexical declaration	3
+BODY	<script body>	7	100.00%	1	-
+OP	LoadLocal	300001	14.28%
+OP	LoadName	180025	8.57%
+OP	Call	140016	6.67%
+OP	LoadMethod	140015	6.67%
+OP	CmpJumpIfFalse	140009	6.67%
+OP	SetCompletion	140002	6.67%
+OP	CopyIterEnv	140001	6.67%
+OP	MakeClosure	120001	5.71%
+OP	Jump	120000	5.71%
+OP	UpdateLocal	120000	5.71%
+OP	Return	100000	4.76%
+OP	StoreLocal	100000	4.76%
+OP	LocalBinConst	100000	4.76%
+OP	InitLexical	40001	1.90%
+OP	PushEnv	40001	1.90%
+OP	PopEnv	40001	1.90%
+OP	ReturnUndefined	20008	0.95%
+OP	BinConst	20008	0.95%
+OP	LoadConst	20002	0.95%
+OP	LoadUndefined	20002	0.95%
+OP	Add	20001	0.95%
+OP	ResolveName	20000	0.95%
+OP	StoreResolvedNamePop	20000	0.95%
+OP	Pop	8	0.00%
+OP	UpdateName	8	0.00%
+OP	ExecAst	3	0.00%
+OP	ReturnCompletion	1	0.00%

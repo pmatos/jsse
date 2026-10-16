@@ -1,0 +1,61 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 2K of event 'cpu-clock:u'
+# Event count (approx.): 4032064096
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                                           IPC   [IPC Coverage]
+# ........  ........  ................  ...............................................................................................................................................................................................  ....................
+#
+    21.37%    20.43%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                             -      -            
+            |          
+             --2.49%--0xfff9ffffffffffff
+
+    10.83%     0.60%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                 -      -            
+            |          
+             --10.34%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --10.24%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     9.24%     7.21%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                         -      -            
+            |          
+             --2.49%--<hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>
+
+     5.42%     5.17%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                -      -            
+            |          
+             --2.24%--<jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>
+
+     4.62%     4.17%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                   -      -            
+     3.53%     3.38%  jsse              [.] <jsse::interpreter::Interpreter>::trace_object_fields_in                                                                                                                                     -      -            
+     3.08%     0.00%  [unknown]         [.] 0x0000000000000007                                                                                                                                                                           -      -            
+            |
+            ---0x7
+
+     2.88%     0.00%  [unknown]         [.] 0xfff9ffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfff9ffffffffffff
+
+     2.34%     1.94%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                                                                                                  -      -            
+     2.34%     2.34%  jsse              [.] jsse::interpreter::bytecode::vm::pop_operands                                                                                                                                                -      -            
+     2.29%     0.00%  [unknown]         [.] 0x0000000000000004                                                                                                                                                                           -      -            
+            |
+            ---0x4
+
+     2.24%     0.00%  [unknown]         [.] 0xfffaffffffffffff                                                                                                                                                                           -      -            
+            |
+            ---0xfffaffffffffffff
+
+     2.19%     2.19%  libc.so.6         [.] 0x0000000000185dde                                                                                                                                                                           -      -            
+     2.19%     0.00%  libc.so.6         [.] 0x000073b7f8f85dde                                                                                                                                                                           -      -            
+            |
+            ---0x73b7f8f85dde
+
+     2.09%     1.89%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                                                     -      -            
+     2.04%     1.64%  jsse              [.] <jsse::interpreter::Interpreter>::eval_expr                                                                                                                                                  -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

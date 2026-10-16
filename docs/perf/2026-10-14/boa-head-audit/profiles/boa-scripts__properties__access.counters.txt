@@ -1,0 +1,67 @@
+AUDIT_RESULT number 8 1076324868
+AUDIT_TIME_MS 43
+PERF	vm_ops	3053031
+PERF	ast_stmt_execs	7
+PERF	ast_expr_evals	25
+PERF	ast_work_units	32
+PERF	body_dispatch_compiled	150001
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	20.35
+PERF	ast_units_in_functions	0
+PERF	compile_ok	4
+PERF	compile_bail	0
+PERF	calls_from_vm	150042
+PERF	calls_to_native	41
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	150001
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	751284
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	7
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	91
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	141
+PERF	atom_lookup_calls	377
+PERF	key_intern_calls	1444
+FALLBACK	lexical declaration	7
+BODY	<script body>	32	100.00%	1	-
+OP	LoadLocal	501033	16.41%
+OP	Add	350198	11.47%
+OP	GetProp	350010	11.46%
+OP	LoadName	300092	9.83%
+OP	CmpJumpIfFalse	150224	4.92%
+OP	Jump	150218	4.92%
+OP	UpdateLocal	150210	4.92%
+OP	Call	150042	4.91%
+OP	ResolveName	150014	4.91%
+OP	StoreResolvedNamePop	150006	4.91%
+OP	Return	150001	4.91%
+OP	LoadCalleeName	150001	4.91%
+OP	LoadResolvedName	150000	4.91%
+OP	LocalBinConst	100041	3.28%
+OP	GetElement	100000	3.28%
+OP	SetCompletion	244	0.01%
+OP	LoadConst	228	0.01%
+OP	SetElement	190	0.01%
+OP	InitLexical	46	0.00%
+OP	PushEnv	44	0.00%
+OP	PopEnv	44	0.00%
+OP	LoadMethod	41	0.00%
+OP	LoadUndefined	24	0.00%
+OP	JumpIfFalse	22	0.00%
+OP	NewObject	20	0.00%
+OP	StoreResolvedName	8	0.00%
+OP	UpdateName	8	0.00%
+OP	BinConst	8	0.00%
+OP	ExecAst	7	0.00%
+OP	TypeofName	2	0.00%
+OP	Sub	1	0.00%
+OP	StrictNotEq	1	0.00%
+OP	JumpIfFalsyKeep	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	NewArray	1	0.00%

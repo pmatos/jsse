@@ -1,0 +1,47 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 602  of event 'cpu-clock:u'
+# Event count (approx.): 1206412816
+#
+# Overhead  Shared Object     Symbol                                                                                                                          IPC   [IPC Coverage]
+# ........  ................  ..............................................................................................................................  ....................
+#
+    25.42%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                            -      -            
+    10.63%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                  -      -            
+     6.64%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                      -      -            
+     4.32%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                    -      -            
+     3.99%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                               -      -            
+     3.99%  jsse              [.] <jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>                      -      -            
+     3.49%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>                                    -      -            
+     2.66%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                             -      -            
+     2.66%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                -      -            
+     2.49%  jsse              [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                                                   -      -            
+     2.49%  jsse              [.] <jsse::interpreter::Interpreter>::recycle_function_environment                                                              -      -            
+     2.49%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                         -      -            
+     1.99%  jsse              [.] core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>                                         -      -            
+     1.83%  jsse              [.] <jsse::interpreter::types::Environment>::reset_scope                                                                        -      -            
+     1.66%  jsse              [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                                          -      -            
+     1.33%  jsse              [.] <jsse::interpreter::Interpreter>::set_object_with_key_result::<jsse::types::JsPropertyKey>                                  -      -            
+     1.16%  jsse              [.] <jsse::interpreter::Interpreter>::call_function                                                                             -      -            
+     1.16%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                                 -      -            
+     1.00%  jsse              [.] <jsse::interpreter::Interpreter>::call_trivial_private_getter                                                               -      -            
+     1.00%  jsse              [.] <jsse::interpreter::Interpreter>::put_member_value::<jsse::types::JsPropertyKey>                                            -      -            
+     1.00%  jsse              [.] <jsse::interpreter::property_map::PropertyRecord>::to_descriptor                                                            -      -            
+     1.00%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property_full::<str>                                                      -      -            
+     1.00%  jsse              [.] <jsse::interpreter::types::JsObjectData>::set_property_value::<jsse::types::JsPropertyKey>                                  -      -            
+     1.00%  jsse              [.] jsse::interpreter::bytecode::vm::set_script_completion                                                                      -      -            
+     1.00%  libc.so.6         [.] 0x0000000000185deb                                                                                                          -      -            
+     0.83%  jsse              [.] <jsse::interpreter::Interpreter>::dispose_resources                                                                         -      -            
+     0.83%  jsse              [.] <jsse::interpreter::types::Environment>::get_this                                                                           -      -            
+     0.83%  libc.so.6         [.] 0x0000000000185df7                                                                                                          -      -            
+     0.66%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                              -      -            
+     0.66%  jsse              [.] <jsse::interpreter::Interpreter>::set_object_property_with_outcome::<jsse::types::JsPropertyKey>                            -      -            
+     0.66%  libc.so.6         [.] 0x0000000000185de5                                                                                                          -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

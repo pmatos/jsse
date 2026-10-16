@@ -1,0 +1,55 @@
+AUDIT_RESULT undefined 0 0
+AUDIT_TIME_MS 13
+PERF	vm_ops	800063
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	100001
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	8.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	3
+PERF	compile_bail	0
+PERF	calls_from_vm	100006
+PERF	calls_to_native	5
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	100001
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	200001
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	15
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	100
+PERF	atom_lookup_calls	346
+PERF	key_intern_calls	1206
+BODY	<script body>	0	0.00%	1	-
+OP	Call	100006	12.50%
+OP	JumpIfFalse	100002	12.50%
+OP	ReturnUndefined	100001	12.50%
+OP	Jump	100001	12.50%
+OP	LoadCalleeName	100001	12.50%
+OP	LocalBinConst	100001	12.50%
+OP	Pop	100000	12.50%
+OP	UpdateLocal	100000	12.50%
+OP	LoadName	13	0.00%
+OP	LoadConst	6	0.00%
+OP	ResolveName	5	0.00%
+OP	LoadMethod	5	0.00%
+OP	StoreResolvedNamePop	5	0.00%
+OP	SetCompletion	4	0.00%
+OP	LoadUndefined	2	0.00%
+OP	TypeofName	2	0.00%
+OP	CmpJumpIfFalse	2	0.00%
+OP	Sub	1	0.00%
+OP	StrictNotEq	1	0.00%
+OP	JumpIfFalsyKeep	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	InitLexical	1	0.00%
+OP	PushEnv	1	0.00%
+OP	PopEnv	1	0.00%

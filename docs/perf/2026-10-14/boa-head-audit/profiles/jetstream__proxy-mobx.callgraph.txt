@@ -1,0 +1,42 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 458  of event 'cpu-clock:u'
+# Event count (approx.): 917835664
+#
+# Children      Self  Shared Object         Symbol                                                                                                                                                                                                                                                                                    IPC   [IPC Coverage]
+# ........  ........  ....................  ........................................................................................................................................................................................................................................................................................  ....................
+#
+    11.57%    10.70%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                                                                                                                                      -      -            
+     7.42%     5.68%  jsse                  [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                                                                                                                                  -      -            
+            |          
+             --2.18%--<hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>
+
+     7.21%     0.87%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                                                                                                                                          -      -            
+            |          
+             --6.55%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       |          
+                        --6.33%--jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     6.11%     6.11%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                                                                                                                                            -      -            
+     5.02%     4.80%  jsse                  [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                                                                                                                                         -      -            
+     3.28%     2.18%  jsse                  [.] <jsse::interpreter::Interpreter>::eval_expr                                                                                                                                                                                                                                           -      -            
+     2.84%     2.18%  jsse                  [.] <jsse::interpreter::Interpreter>::trace_object_fields_in                                                                                                                                                                                                                              -      -            
+     2.40%     0.87%  libc.so.6             [.] realloc                                                                                                                                                                                                                                                                               -      -            
+     2.40%     0.00%  [unknown]             [.] 0x0000000000000007                                                                                                                                                                                                                                                                    -      -            
+            |
+            ---0x7
+
+     2.18%     2.18%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                                                                                                                                -      -            
+     2.18%     0.00%  [unknown]             [.] 0x0000000000000001                                                                                                                                                                                                                                                                    -      -            
+            |
+            ---0x1
+
+     2.18%     2.18%  libc.so.6             [.] 0x0000000000185dde                                                                                                                                                                                                                                                                    -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

@@ -1,0 +1,93 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 631  of event 'cpu-clock:u'
+# Event count (approx.): 1264529048
+#
+# Children      Self  Shared Object         Symbol                                                                                                                             IPC   [IPC Coverage]
+# ........  ........  ....................  .................................................................................................................................  ....................
+#
+    58.80%    56.26%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                               -      -            
+            |          
+            |--28.53%--0x423f0b4a39bfffff
+            |          jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+            |--7.45%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+            |--2.69%--0xb8d915eaa990e8c9
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+            |--2.54%--jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          jsse::interpreter::bytecode::vm::unwind_scopes
+            |          
+            |--2.54%--0x47dc2fb3327b83b4
+            |          jsse::interpreter::bytecode::vm::run_chunk_inner
+            |          
+             --2.54%--0x31b254a6698ca30b
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+    38.51%     0.00%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                   -      -            
+            |
+            ---jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+               |          
+                --2.54%--jsse::interpreter::bytecode::vm::unwind_scopes
+
+    30.43%     0.00%  [unknown]             [.] 0x423f0b4a39bfffff                                                                                                             -      -            
+            |
+            ---0x423f0b4a39bfffff
+               jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     8.87%     8.87%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                                                  -      -            
+            |          
+             --6.66%--0x5
+                       jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}
+
+     6.66%     0.00%  [unknown]             [.] 0x0000000000000005                                                                                                             -      -            
+            |
+            ---0x5
+               jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}
+
+     4.12%     4.12%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                         -      -            
+            |          
+             --2.38%--<jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in
+
+     3.96%     3.96%  jsse                  [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                 -      -            
+            |          
+             --2.38%--<jsse::interpreter::Interpreter>::gc_safepoint
+
+     3.49%     2.38%  jsse                  [.] jsse::interpreter::bytecode::vm::unwind_scopes                                                                                 -      -            
+     3.01%     3.01%  jsse                  [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                            -      -            
+     2.69%     0.00%  [unknown]             [.] 0xb8d915eaa990e8c9                                                                                                             -      -            
+            |
+            ---0xb8d915eaa990e8c9
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.54%     2.22%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                            -      -            
+     2.54%     0.00%  [unknown]             [.] 0x31b254a6698ca30b                                                                                                             -      -            
+            |
+            ---0x31b254a6698ca30b
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.54%     0.00%  [unknown]             [.] 0x47dc2fb3327b83b4                                                                                                             -      -            
+            |
+            ---0x47dc2fb3327b83b4
+               jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     2.38%     2.22%  jsse                  [.] <jsse::interpreter::types::Environment>::reset_scope                                                                           -      -            
+     2.22%     2.06%  jsse                  [.] <jsse::interpreter::Interpreter>::get_identifier_value_by_ref_hinted::<jsse::interpreter::atom::Atom>                          -      -            
+     2.06%     0.00%  [unknown]             [.] 0x000000000000009a                                                                                                             -      -            
+            |
+            ---0x9a
+
+     2.06%     2.06%  jsse                  [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                              -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

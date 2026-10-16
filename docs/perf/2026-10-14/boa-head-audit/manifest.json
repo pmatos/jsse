@@ -1,0 +1,3198 @@
+[
+  {
+    "name": "jsse/bench_array",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_array.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_array.js",
+    "sha256": "6b91acbe37f79af931c5a86aa7d016e831ed0fdc5814cec1a5e2b0fae9b526ae"
+  },
+  {
+    "name": "jsse/bench_closure_create",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_closure_create.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_closure_create.js",
+    "sha256": "17b815e46a95a4377c27005ffd7744df8ed7631880fe53e3a53756d0e4308880"
+  },
+  {
+    "name": "jsse/bench_closures",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_closures.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_closures.js",
+    "sha256": "45fba2d70af95b7db939159fe01f863412bbce9adbd04c5497185ef10226f00c"
+  },
+  {
+    "name": "jsse/bench_fib",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_fib.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_fib.js",
+    "sha256": "c32e587f9163d43c0cbf89592ad85a74993ff3e245157128b90e9227804768bc"
+  },
+  {
+    "name": "jsse/bench_json",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_json.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_json.js",
+    "sha256": "2843f3092e6dedac5c3d15ef70ffffd1274e444113215e6a0f1306c9e4060539"
+  },
+  {
+    "name": "jsse/bench_loop",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_loop.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_loop.js",
+    "sha256": "60f21479d75e6c1aeddfe19be5930784a64747eff91abc34046d20046d1bcffe"
+  },
+  {
+    "name": "jsse/bench_object",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_object.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_object.js",
+    "sha256": "abee84f0c93fab2f7ad373968231d7c49f517a9e8cae654388e0fb8171c9e5f7"
+  },
+  {
+    "name": "jsse/bench_opmix",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_opmix.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_opmix.js",
+    "sha256": "d5d3368b8e98cb9b52e36441c85d29ceeeb117234bddd45de259b9cd1e5faa7b"
+  },
+  {
+    "name": "jsse/bench_promise_new",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_promise_new.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_promise_new.js",
+    "sha256": "24b2818a5845705b2162fbd4c47ab885a10799aeec254b97df4229485fe81bf4"
+  },
+  {
+    "name": "jsse/bench_regex",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_regex.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_regex.js",
+    "sha256": "cf2f7c15f060bd5a5ca523cb34ebe9b9c75027f0fd98b1a99cb833a78f4d387d"
+  },
+  {
+    "name": "jsse/bench_string",
+    "group": "jsse",
+    "path": "workloads/jsse__bench_string.js",
+    "source": "/home/pmatos/dev/jsse/benchmarks/scripts/bench_string.js",
+    "sha256": "6a0a4cb308501cb60f0881be7808b6c9ddf5c665a3a26f83f80b6366d991571d"
+  },
+  {
+    "name": "boa-scripts/basic/call-loop",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__basic__call-loop.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/basic/call-loop.js",
+    "sha256": "6a7abdb79b0b2e34f05c53ce417d463d4e19fe8b222c3d89e14103bebe90ac36"
+  },
+  {
+    "name": "boa-scripts/basic/closure",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__basic__closure.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/basic/closure.js",
+    "sha256": "d93b3df1b8bcd15dee3e39a5909d30a2d217089c563733f820cf9a5eb8a2276e"
+  },
+  {
+    "name": "boa-scripts/basic/nested-loop",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__basic__nested-loop.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/basic/nested-loop.js",
+    "sha256": "df5cf5f97180c5a53e4c74e4ad7b09adefc4b41106f2ffd0f98b4b421be45c48"
+  },
+  {
+    "name": "boa-scripts/closures/create",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__closures__create.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/closures/create.js",
+    "sha256": "518ff96b50e4332149a9d4a2a7ab80f9fb835506dfa4888a784dcb641229d81f"
+  },
+  {
+    "name": "boa-scripts/closures/invoke",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__closures__invoke.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/closures/invoke.js",
+    "sha256": "759d21118456d7ffd4bac02c7975bc4d12c7bdf2692a69ad2bf59674e90b9c95"
+  },
+  {
+    "name": "boa-scripts/intl/collator-compare",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__collator-compare.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/collator-compare.js",
+    "sha256": "e62160bd7abffbe915cd144a810f610297a56a46329a864e9ee79bce0ebffac5"
+  },
+  {
+    "name": "boa-scripts/intl/collator-construction",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__collator-construction.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/collator-construction.js",
+    "sha256": "af5fead0b84e20b8da0df44a977c18082cef8fe314078b320b62c956d858b9f5"
+  },
+  {
+    "name": "boa-scripts/intl/datetimeformat-construction",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__datetimeformat-construction.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/datetimeformat-construction.js",
+    "sha256": "0fe4dd8ed7ec10e9a2504e2aa93a14def3cd2cdcd621ded9560e900a9582bd42"
+  },
+  {
+    "name": "boa-scripts/intl/datetimeformat-format",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__datetimeformat-format.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/datetimeformat-format.js",
+    "sha256": "19cf49a3280855f81c140ef82cdede940fa268d9be634a6daeb7b89772bdca69"
+  },
+  {
+    "name": "boa-scripts/intl/datetimeformat-with-options",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__datetimeformat-with-options.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/datetimeformat-with-options.js",
+    "sha256": "d99e72d1e5e71708c7a81bc17881916dca38fed673c1162eafdb1155d834bb07"
+  },
+  {
+    "name": "boa-scripts/intl/datetimeformat_resolved_options",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__datetimeformat_resolved_options.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/datetimeformat_resolved_options.js",
+    "sha256": "a4709dd529a3feb2ff9f37660b9d10616316a2abf4573f55e9e08eb1413e5677"
+  },
+  {
+    "name": "boa-scripts/intl/listformat-construction",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__listformat-construction.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/listformat-construction.js",
+    "sha256": "661a87b5ae6508a5702f9472fa22bdfd246e72d3b4cc5eec44b571b96bd2eeac"
+  },
+  {
+    "name": "boa-scripts/intl/listformat-format",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__listformat-format.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/listformat-format.js",
+    "sha256": "ec6f297f8fd1aba1185282bda3e25a6e78521b5bfa1030f53351d77bf130e3f2"
+  },
+  {
+    "name": "boa-scripts/intl/numberformat-construction",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__numberformat-construction.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/numberformat-construction.js",
+    "sha256": "5416a0f3c6e0be5af6533dd5f5212b57560ab1d9db20a0a9bd7b32f8c95c850e"
+  },
+  {
+    "name": "boa-scripts/intl/numberformat-different-options",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__numberformat-different-options.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/numberformat-different-options.js",
+    "sha256": "5135e70302cff871e2501364e1cd37ba9be6af1b7178d79e5762e50f6c6e0457"
+  },
+  {
+    "name": "boa-scripts/intl/pluralrules-construction",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__pluralrules-construction.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/pluralrules-construction.js",
+    "sha256": "2ed8af80f6fe891fe0fbce50395a12b680e8e31614d67845404e9d688d7f0715"
+  },
+  {
+    "name": "boa-scripts/intl/pluralrules-select",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__pluralrules-select.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/pluralrules-select.js",
+    "sha256": "7e0ef2b9eb07cd757dd6f168f41092bef198b28d7211437d9740b44370714846"
+  },
+  {
+    "name": "boa-scripts/intl/segmenter-construction",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__segmenter-construction.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/segmenter-construction.js",
+    "sha256": "e83713424d997ffdd95a6ab3e7252fa665bfc63dc4caf4b371dac0ead0a4da5a"
+  },
+  {
+    "name": "boa-scripts/intl/segmenter-segment",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__intl__segmenter-segment.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/intl/segmenter-segment.js",
+    "sha256": "365f9deb29fbcef56e3aa88a59f8afb96dfca54bc9ad21a3921ee6fe0fffc804"
+  },
+  {
+    "name": "boa-scripts/json/stringify_circular",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__json__stringify_circular.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/json/stringify_circular.js",
+    "sha256": "934a0e38a07e3d708b06e1ef9a76a8b1c772ccdf1ea68c45e0e6307e041433c8"
+  },
+  {
+    "name": "boa-scripts/json/stringify_deep",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__json__stringify_deep.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/json/stringify_deep.js",
+    "sha256": "9b4e7546c05e19a715b1b3e9c1c0732fbd1b3b5a7109d14c045d87903f2b2718"
+  },
+  {
+    "name": "boa-scripts/properties/access",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__properties__access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/properties/access.js",
+    "sha256": "1507e1a197b749b298265ecf18407c89f886130c5ec8274224acca7cf262cac8"
+  },
+  {
+    "name": "boa-scripts/prototypes/chain",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__prototypes__chain.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/prototypes/chain.js",
+    "sha256": "79edac715ffac8104c85d8d0329caaf650e6a4cf4077c6b36c2c7a4f39177498"
+  },
+  {
+    "name": "boa-scripts/strings/concat",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__strings__concat.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/strings/concat.js",
+    "sha256": "98441cac2ef6aeb4ad2efd41957ffc19819e2628698eb71260bac161ac0c68f8"
+  },
+  {
+    "name": "boa-scripts/strings/replace",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__strings__replace.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/strings/replace.js",
+    "sha256": "2c08fb301a6851a21f0ee939580ef7100db2606efc5239f1e114918f5cc4aaf8"
+  },
+  {
+    "name": "boa-scripts/strings/slice",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__strings__slice.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/strings/slice.js",
+    "sha256": "53e691b07b093f08a92e4ca13f217ae55e37ef942b79336238631a885d4e1005"
+  },
+  {
+    "name": "boa-scripts/strings/split",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__strings__split.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/strings/split.js",
+    "sha256": "93ec7b739dc2beef8e93c1fc7f6177d06e2fa04369ee7b9badc0f59adb8dda94"
+  },
+  {
+    "name": "boa-scripts/v8-benches/crypto",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__crypto.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/crypto.js",
+    "sha256": "47df904906aa1abd8d59b62f312928608fc559afc9b70ae31e3b06b4435721ff"
+  },
+  {
+    "name": "boa-scripts/v8-benches/deltablue",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__deltablue.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/deltablue.js",
+    "sha256": "086c890e01f2292adea9ce670dac2cef7aebf49ba1fbb7e779b1ce69a51c837a"
+  },
+  {
+    "name": "boa-scripts/v8-benches/earley-boyer",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__earley-boyer.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/earley-boyer.js",
+    "sha256": "def09e3edbf03d397855fe08e5766aa3b92a923c964eee790719ba7cab92d5cb"
+  },
+  {
+    "name": "boa-scripts/v8-benches/navier-stokes",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__navier-stokes.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/navier-stokes.js",
+    "sha256": "531b5b3822a18163e0e7475165f8e1611810bb6c0cf28a2a8ac929ece195b414"
+  },
+  {
+    "name": "boa-scripts/v8-benches/raytrace",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__raytrace.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/raytrace.js",
+    "sha256": "158ffddca0af233c6d57dbd113826d793156f63187f9e4437c0a4edd1f5de82c"
+  },
+  {
+    "name": "boa-scripts/v8-benches/regexp",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__regexp.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/regexp.js",
+    "sha256": "5ec9c18a860a5ef48edf2d9271c75d08a362f5d816c8ecf5897a4445e84e298e"
+  },
+  {
+    "name": "boa-scripts/v8-benches/richards",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__richards.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/richards.js",
+    "sha256": "15cea775823c6b25c45b639be44d6bddbaf1bca0a17fc9d52f43da6a33594fb0"
+  },
+  {
+    "name": "boa-scripts/v8-benches/splay",
+    "group": "boa-scripts",
+    "path": "workloads/boa-scripts__v8-benches__splay.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/benches/scripts/v8-benches/splay.js",
+    "sha256": "5b4a570f80aee5e3677627bd569aadec38ada554698677428bcb9d544228946f"
+  },
+  {
+    "name": "boa-engine/arithmetic_operations",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__arithmetic_operations.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/arithmetic_operations.js",
+    "sha256": "31878ec5590488acc73d591a38947ffc7500c65793f4e29925118351503c14fc"
+  },
+  {
+    "name": "boa-engine/array_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__array_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/array_access.js",
+    "sha256": "fea64fede471e17e3bf6fac2832e38a298f3cade5ef929d6846525e099f4fb85"
+  },
+  {
+    "name": "boa-engine/array_create",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__array_create.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/array_create.js",
+    "sha256": "ef5fe35e9a45f1ebff41bc4d734c7a85930d83c7ed51d486a722a60303028687"
+  },
+  {
+    "name": "boa-engine/array_pop",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__array_pop.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/array_pop.js",
+    "sha256": "521c1ee7bb276894779644ed245873706270449bb78b99bf33b9e8e0cf7c10a7"
+  },
+  {
+    "name": "boa-engine/boolean_object_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__boolean_object_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/boolean_object_access.js",
+    "sha256": "a1a950baae259dd3ead8d024f9386afba1001b51cbc3159f0b79c9436943302a"
+  },
+  {
+    "name": "boa-engine/clean_js",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__clean_js.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/clean_js.js",
+    "sha256": "7c986f00658792dce58d7e7ac6ef247d2a7012a86826fbc25dbac0cf7d77157c"
+  },
+  {
+    "name": "boa-engine/fibonacci",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__fibonacci.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/fibonacci.js",
+    "sha256": "c58086f1dd4152d61f1bb7a7f65e49cca90c50653a372d175db7ab183bdcdbc7"
+  },
+  {
+    "name": "boa-engine/for_loop",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__for_loop.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/for_loop.js",
+    "sha256": "eb4f7fa95e86b126b18bd5501b9168891adf85731bda37def8b08938153b1026"
+  },
+  {
+    "name": "boa-engine/mini_js",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__mini_js.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/mini_js.js",
+    "sha256": "4bc224e10ea9e5287817d0640a33cafa20c0de09200e351faaf3456554f0c155"
+  },
+  {
+    "name": "boa-engine/number_object_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__number_object_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/number_object_access.js",
+    "sha256": "17c34ffdb32167795e4f3854c33dab7ac5bca01ca83e2b84094a37690ad82c83"
+  },
+  {
+    "name": "boa-engine/object_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__object_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/object_creation.js",
+    "sha256": "d6f8c5c45ace1fe107e58a6eed1d9a476e9889000cb5ce4d0b0b3a47cb62b6d7"
+  },
+  {
+    "name": "boa-engine/object_prop_access_const",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__object_prop_access_const.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/object_prop_access_const.js",
+    "sha256": "8d1b1f07634bf5e87f9c9ab28ff8c6eb716f01f4045c3953ab97dad46d3926ce"
+  },
+  {
+    "name": "boa-engine/object_prop_access_dyn",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__object_prop_access_dyn.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/object_prop_access_dyn.js",
+    "sha256": "31a4c64fbae0675bf0d783cdb0ff8ab5544baf3aca4123d6095f7de45ccaff43"
+  },
+  {
+    "name": "boa-engine/regexp",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__regexp.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp.js",
+    "sha256": "70940d51304afdc0e0176cd54b0b5ef7df5ba674dbf2efb91abeb671328fe252"
+  },
+  {
+    "name": "boa-engine/regexp_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__regexp_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp_creation.js",
+    "sha256": "fc9281541b248279191d887755eec4b11ad6428fcf2ec7acdf47af9e89809a2a"
+  },
+  {
+    "name": "boa-engine/regexp_literal",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__regexp_literal.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp_literal.js",
+    "sha256": "28a239ccb15008248a35e20b5dda250d8f77444598bc4e7acfe04f2775b5969c"
+  },
+  {
+    "name": "boa-engine/regexp_literal_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__regexp_literal_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp_literal_creation.js",
+    "sha256": "98fa8802a5f8529ce1fcf3a9041ba54e2fd291f874807ec0b84a7df08d22eac8"
+  },
+  {
+    "name": "boa-engine/string_code_point_sum",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__string_code_point_sum.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_code_point_sum.js",
+    "sha256": "57edb32de6fc5a43350c621af56507f78dfa8c3580719c12ced139dc37e406eb"
+  },
+  {
+    "name": "boa-engine/string_compare",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__string_compare.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_compare.js",
+    "sha256": "c9648c0290e514a75a860ecf2f03538f8763636043b91afb4f6c181e3f56436d"
+  },
+  {
+    "name": "boa-engine/string_concat",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__string_concat.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_concat.js",
+    "sha256": "58b30ea21e88b8e9cc2d91b91c46a221f5f39d171009b4b77d1055669d9452ad"
+  },
+  {
+    "name": "boa-engine/string_copy",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__string_copy.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_copy.js",
+    "sha256": "05808eab72a4f1ea23e476e6076a4b618492a0cdb0c8a88cdfcd5c1ab1ff97ca"
+  },
+  {
+    "name": "boa-engine/string_object_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__string_object_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_object_access.js",
+    "sha256": "398f94e621db48afcf4b395bf15066b43d99116c586aea82d38d9e677cb2a823"
+  },
+  {
+    "name": "boa-engine/symbol_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-engine__symbol_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/symbol_creation.js",
+    "sha256": "8f6c22a450196f17f1d0b0bab354c6e1e176fbef551926a000c5df089a7731dd"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_array_literal",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_array_literal.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_array_literal.js",
+    "sha256": "773ab8a2da5f5af883866057723952beee2b11e6a44bf7b231d2a8602dae022c"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_ctor_churn",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_ctor_churn.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_ctor_churn.js",
+    "sha256": "50d6d7e0faa818d53dfae7ea468ff5d256f0ac32ae403122d84ecd61b987b7aa"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_hashmap_js",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_hashmap_js.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_hashmap_js.js",
+    "sha256": "a6f2b28084a5872b376584178941e06fc974b4096c4c79a581a69d1e14957a73"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_liveset",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_liveset.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_liveset.js",
+    "sha256": "b51527b73af1e60e99ef47e6c31eb69eec08c82eed24158e1534c8d02edbd5e0"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_map_rolling",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_map_rolling.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_map_rolling.js",
+    "sha256": "2abe5acbb4a7b73892609bce1ee0596e1e1f93b5c2bebb67d652de964e6004dc"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_native_map",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_native_map.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_native_map.js",
+    "sha256": "395e39c95394a17e2f710c5def0f22db3e6145c897554f4990110b94439bf839"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_objlit_churn",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_objlit_churn.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_objlit_churn.js",
+    "sha256": "f19dc2d67c272046862a8c5a4a903da140cbb5018394981c2e3ef499b3cd6c31"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_retain_grow",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_retain_grow.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_retain_grow.js",
+    "sha256": "4108bc1fc95531465977941f63ceb05c6f3be6e92c9c44fcf9fa546b8ce2dfad"
+  },
+  {
+    "name": "diagnostic-1010/alloc-gc/bench_alloc-gc_splay_mini",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__alloc-gc__bench_alloc-gc_splay_mini.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/alloc-gc/bench_alloc-gc_splay_mini.js",
+    "sha256": "b631e805eeefb54a6d94483d32da2f4f4459bdf27fec2dc5236671f1919afd05"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_bigdenary_numeric_control",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_bigdenary_numeric_control.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_bigdenary_numeric_control.js",
+    "sha256": "e057ba0859acbd3e343b1e6c49021ba88e58379c8706ffa83d45e7bc5680bb9d"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_bigdenary_real",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_bigdenary_real.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_bigdenary_real.js",
+    "sha256": "054ff52d2fdeda01b8d3290b933f56f731c77ca5dc20f5833552325f10aef22b"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_compare",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_compare.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_compare.js",
+    "sha256": "2ea0824bd72476153f744356eec060436a4829210cbf28a11f39c843f885a87d"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_compare_numeric_control",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_compare_numeric_control.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_compare_numeric_control.js",
+    "sha256": "7d09252f4a1c7f1eb8aa7fb28d13a9086595ac20e8312d2c44305d3b4892208d"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_convert",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_convert.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_convert.js",
+    "sha256": "b961c300c9c70734693d3494477da4a29f0e32a42c28738242d45c52986b7533"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_invert",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_invert.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_invert.js",
+    "sha256": "a61865d4e9b54bf0bf16af3c34132abae4ab845dc6a845d21b99f52836353dc9"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_literal",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_literal.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_literal.js",
+    "sha256": "802db2ebfd130e8982d73af1a2afd6b9c8fbc82b4a0cbc870ffbf290ad934c99"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_modpow",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_modpow.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_modpow.js",
+    "sha256": "454cf3883c3cb82f5447e920e06ac8f125272a5b894b992f40ce798e320cf948"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_mulmod256",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_mulmod256.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_mulmod256.js",
+    "sha256": "968968bf527fa101082a434e907d5fa70d3b927f4e41f2d672975b3dcb310552"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_mulmod256_vm",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_mulmod256_vm.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_mulmod256_vm.js",
+    "sha256": "e0992a30dff84844c280ce5f212755f9393df803521a72eff6c304ffbf4c0dba"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_ops_vm_add",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_ops_vm_add.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_ops_vm_add.js",
+    "sha256": "7ec0200bdc50fe6336cdb0517ce7c247a7f8f10559b62eed70e7b3e7136572fa"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_ops_vm_numadd",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_ops_vm_numadd.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_ops_vm_numadd.js",
+    "sha256": "0e7574cd5f84d25464bc358e3339bc72f84739a2132f9a545f70872c96611aba"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_shift_bitops",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_shift_bitops.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_shift_bitops.js",
+    "sha256": "a2af32bdeb0775586de7a323a601c4cac7c2df297fdffe566da6d2857ab3e5a7"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_small",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_small.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_small.js",
+    "sha256": "d01cbf4098ce7f44d6013d3ad052b6f7fb1ad8c4ecccb2be277be97295c5f7ea"
+  },
+  {
+    "name": "diagnostic-1010/bigint/bench_bigint_tostring",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__bigint__bench_bigint_tostring.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/bigint/bench_bigint_tostring.js",
+    "sha256": "ca91a589a8a200821f18a4acde4c5d2b07f2cbe1055f13a09faa5cb1a5f864fb"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_args",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_args.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_args.js",
+    "sha256": "28cde7cc241e7fe73d8ccc7827523007f9c9f37399932c39cdc9eb29f68cac53"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_closure_bigbody",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_closure_bigbody.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_closure_bigbody.js",
+    "sha256": "62d049b4e084a7c3d008a00757b0973fec24d9c31a5281a2790412330ec7fe4b"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_closure_call",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_closure_call.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_closure_call.js",
+    "sha256": "4238c78306efe2577c3c7f4c16895517410c537b177509f3924a94487c1b0a48"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_closure_create",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_closure_create.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_closure_create.js",
+    "sha256": "0e1235a2473ce92eec5aaae50b48a56e18f6d8fb0c4b6bf67ef7b2648ddd2162"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_ctor",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_ctor.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_ctor.js",
+    "sha256": "f12feea9053d4fe8c55cde77663b228f84155bddfc358519d042f7de3b594298"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_fib",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_fib.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_fib.js",
+    "sha256": "a45dc025e286830c57428c4c1592be72a452345aa2eda791e67dd2d7a0fd7580"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_global_loop",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_global_loop.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_global_loop.js",
+    "sha256": "3b5403a18c768efdab94f7c1a9aa70fdeb1e4f0115b428d88dcf80ce661015f2"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_leaf",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_leaf.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_leaf.js",
+    "sha256": "f053a5f27a1e3a37f987ff30be0c72cea32b8951054e07798acd64820362e1ba"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_method",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_method.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_method.js",
+    "sha256": "339abef9d28eadb067421824a66557f0129f62b88b4d956629b43a1fb386b370"
+  },
+  {
+    "name": "diagnostic-1010/calls/bench_calls_nested",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__calls__bench_calls_nested.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/calls/bench_calls_nested.js",
+    "sha256": "76f9c11272b62a2eafe14745e03bb46e0b652fd6e86df9af187c16b91ed265f8"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_array_forof_control",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_array_forof_control.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_array_forof_control.js",
+    "sha256": "6651fe26b9fd9e774d4971cb4008f0bb71155d571c69316d13957109f12e7227"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_lazy_collections",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_lazy_collections.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_lazy_collections.js",
+    "sha256": "52f99ea1dba7fbc712284f88ea99c2ecad1c2254e17dc23ae2b54367a041b97f"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_manual_next",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_manual_next.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_manual_next.js",
+    "sha256": "4ce32f83fff4f37f6cd841e91231035bce29ee47aea6b75df7b025660cc6e4b8"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_map_set_iteration",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_map_set_iteration.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_map_set_iteration.js",
+    "sha256": "b6b7bf8041b4cb0a88703832a3e0e36217d3c7578f7d68ac20ef4c8c328bf620"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_pipeline",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_pipeline.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_pipeline.js",
+    "sha256": "ad89f57c84506f6bf415dd1f33fa2cc4bcdbb1539f376f0121df7c874e81d6f5"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_simple_yield",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_simple_yield.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_simple_yield.js",
+    "sha256": "c8ed3a02e2a0427a46403c989b5e5da8358cb5d0d8297add1b571a1100879c1c"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_spread_from",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_spread_from.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_spread_from.js",
+    "sha256": "ab8c92c92e6b8631a31a145cbfd08097dbb7e2c32ea67ad1788f42705687832d"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_sticky_lookahead",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_sticky_lookahead.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_sticky_lookahead.js",
+    "sha256": "403309430abd4f725122e663179facfd6d06478e6c8c696fcece705c2f60e479"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_sticky_regex",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_sticky_regex.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_sticky_regex.js",
+    "sha256": "b29e5958dc63d853910f44a44c80367fc4b8f0860668cb92244c49a9945a6807"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_tokenizer",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_tokenizer.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_tokenizer.js",
+    "sha256": "536a5d0ce627f9a7abc511409195285b73eba3a2c3803a17bbb1551c8748e435"
+  },
+  {
+    "name": "diagnostic-1010/generators/bench_generators_yield_star_tree",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__generators__bench_generators_yield_star_tree.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/generators/bench_generators_yield_star_tree.js",
+    "sha256": "4c33f29d22b62ac13d88e0942c1dcd39becb143a3662497a7f7ef2d340a5c2fc"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_array",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_array.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_array.js",
+    "sha256": "c5fe586d6337b1a7841351d326c0a73af3246e4b1ff8afd1a86d471965ac9afc"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_arrayliteral",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_arrayliteral.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_arrayliteral.js",
+    "sha256": "403d616f9a4630fa6365862473087fdfe1b191f9c6a940d6a26163dd7ebe1614"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_letconst",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_letconst.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_letconst.js",
+    "sha256": "9e248ae5dfc07fb92e5dbcbac8054e0518f82a6fe70a1f915b2689ab6960707d"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_memberupdate",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_memberupdate.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_memberupdate.js",
+    "sha256": "11cfb22d531af4e806697ee99cd60b0090abcd32ddbf2c4d7af179c6d9978e30"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_none",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_none.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_none.js",
+    "sha256": "c7f3ae4b71946a9ce3302052824b470c3f387fee58cc63940cf33244950a3ea6"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_switch",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_switch.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_switch.js",
+    "sha256": "c808f93e67797f1cebba8e6b31053e47acaa5c44bfe0c5cf585e9c6f39648116"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_throw",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_throw.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_throw.js",
+    "sha256": "a497d4f68588cdb90d4d832ebbf64cda17dcafb35fc1967556c747ecd2585571"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_bail_typeof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_bail_typeof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_bail_typeof.js",
+    "sha256": "b588dec6ad98b4990864f50b223edd9a2ae42becf7fd4ad813c6d82dc3adec5d"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_closurevars",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_closurevars.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_closurevars.js",
+    "sha256": "2ec24ad097381467928331fb8c0db303fa7bb21677a4f87b81b48b16674c097e"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_gaussblur",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_gaussblur.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_gaussblur.js",
+    "sha256": "ab8d5e0904e19c24f15a431e80b3e8afb8475985425247e01efbbcfa8b907b4d"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_globalvars",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_globalvars.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_globalvars.js",
+    "sha256": "ea25d7fa181b90902ba1cc5f98502ce8963f393cc65850cd9dcd99430907fed8"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_intarith",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_intarith.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_intarith.js",
+    "sha256": "741968401b1cafa329d4fc333852fbcf8ebe444238c506d6b20fde3684220923"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_math",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_math.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_math.js",
+    "sha256": "a2864b835edecbc6ae79cb0f4a9b7c31d91740446ca11e9f7ce07b8406f10dbc"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_typedarray_global",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_typedarray_global.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_typedarray_global.js",
+    "sha256": "86b9990653569529f20774e13485f7cd31cfcc8f3d15c2806e7657fcfb5dbd32"
+  },
+  {
+    "name": "diagnostic-1010/numeric/bench_numeric_typedarray_local",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__numeric__bench_numeric_typedarray_local.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/numeric/bench_numeric_typedarray_local.js",
+    "sha256": "c5157039d42f2e0fb8cadb4d6747a9d7dc6290d94be7b8d4d47c93675cd2b8d0"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_async_call",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_async_call.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_async_call.js",
+    "sha256": "beee8c0a99a47759bc0a304ca48089403ca5d3566ec26bac9bda8c6dbb0b8959"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_async_fs",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_async_fs.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_async_fs.js",
+    "sha256": "e977d2d616209f25fb5f6fab874f86e513b4f115d2735a939d61f761e408e635"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_await_loop",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_await_loop.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_await_loop.js",
+    "sha256": "a13f2782ff4ddef9a83d290f17383bf65bd0ffaa18c10ac42e27acabff359c41"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_doxbee_async",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_doxbee_async.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_doxbee_async.js",
+    "sha256": "49113eb0d4ca33c97555df9e63f169b83cd30d39c3e23655eb899515ac348d95"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_doxbee_promise",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_doxbee_promise.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_doxbee_promise.js",
+    "sha256": "7e507da7234eb3023ebb857e0f0c6acd1d50a5cdd669142bc95ed84e39e25710"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_for_await",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_for_await.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_for_await.js",
+    "sha256": "c87632344c3200096c8c1dde055f01212699ef292af5d429e0c7d67f2b3d12e5"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_new_promise",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_new_promise.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_new_promise.js",
+    "sha256": "b015b4b84754d130a239b5b893a5af84b01e3ba5784c4e2d384e23eda3df0cd4"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_queue_deep",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_queue_deep.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_queue_deep.js",
+    "sha256": "3170c8dd555893b2b5839c8879efcaf55e00ac5a366ec385695c8f6f852d236a"
+  },
+  {
+    "name": "diagnostic-1010/promises/bench_promises_then_chain",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__promises__bench_promises_then_chain.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/promises/bench_promises_then_chain.js",
+    "sha256": "fc7d9765e5c7c291b33c050d8d13c9fe9f7506ace4a4874d368924f63534fb23"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_control_trap_direct",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_control_trap_direct.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_control_trap_direct.js",
+    "sha256": "558290a76996ba8f6af0222bac3e2adbd557c2b81d304478a4979c75f6c68fd0"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_derived_super",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_derived_super.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_derived_super.js",
+    "sha256": "fa0510d61f721cc107acc68c8df39268a66a0b666232bd14f8ddf47b2939deb2"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_field_arrow_fn",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_field_arrow_fn.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_field_arrow_fn.js",
+    "sha256": "08bd5621f2cfb9c7b136de5eaf2b7d88bb9d6d46fd7001e2f65ea7c873725771"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_getter_setter",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_getter_setter.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_getter_setter.js",
+    "sha256": "5bd02752de28892d309895825b0a5851520c7e7b489ece1a862e8a6b74507882"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_map_iterate",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_map_iterate.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_map_iterate.js",
+    "sha256": "aadd81e549dc98245d113f22a709661579c7cb577670d941ede1f3976d5bffbe"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_map_lookup",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_map_lookup.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_map_lookup.js",
+    "sha256": "7b1c6faa0a482cccf4ef3c3bbc85a172436b0d84e09f6b434729a548650315a6"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_new_class_ctor",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_new_class_ctor.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_new_class_ctor.js",
+    "sha256": "d3d9210fbf84918de6c38f6d0f5828cb6fd46519e9bc5584a774449ab6a2e7a9"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_new_class_private_fields",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_new_class_private_fields.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_new_class_private_fields.js",
+    "sha256": "44f1d8516b5cc31e39119a2731a0f38c38921238a7437c26b45a1eece5238733"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_new_class_public_fields",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_new_class_public_fields.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_new_class_public_fields.js",
+    "sha256": "97dccdd45798e286902653fa8ef42bb263b77244da825cd0e29b58865050d038"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_new_function_ctor",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_new_function_ctor.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_new_function_ctor.js",
+    "sha256": "36d3cd450b539f715d212017e1b81b4dd2c4e28fc96f6dabf1643d749596150f"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_private_access",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_private_access.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_private_access.js",
+    "sha256": "dc1c20ed5e7566fc99763ad412cb1f057f5fba781507541551800d6f11906311"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_get",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_proxy_get.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_proxy_get.js",
+    "sha256": "a533771fe420d9c8c1b0ebd2e6fb1063cf6a3a2dfa5126441ae17b711c809c65"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_notrap",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_proxy_notrap.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_proxy_notrap.js",
+    "sha256": "75b6125d1e31c4488ef8594818ebb320944d838f98fb095efe3ae975346c5203"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_ownkeys_has",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_proxy_ownkeys_has.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_proxy_ownkeys_has.js",
+    "sha256": "f0b1289dade2ad9a1d74e7dbe217668a59d2da00d131dbf3b46494e0a3b9b963"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_set",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_proxy_set.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_proxy_set.js",
+    "sha256": "332161b33414cbe19a5e3c62551a7abaed59fc8f387e2c0a32ea32b93210217a"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_set_plain",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_proxy_set_plain.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_proxy_set_plain.js",
+    "sha256": "d9d8871b0789ef86603b5a58c1e046c9319a107a6074691a76f53e2d341dab52"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_proxy_vue_reactive",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_proxy_vue_reactive.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_proxy_vue_reactive.js",
+    "sha256": "386b25842d66b0dde01093c48c6af542742cf0dc3198f85f5779c14163fe044c"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_public_access",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_public_access.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_public_access.js",
+    "sha256": "fb005b519a3c8717edc3ee7864285f879fe4290071b8299ab558093e57509bf4"
+  },
+  {
+    "name": "diagnostic-1010/proxy-classes/bench_proxy-classes_weakmap_lookup",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__proxy-classes__bench_proxy-classes_weakmap_lookup.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/proxy-classes/bench_proxy-classes_weakmap_lookup.js",
+    "sha256": "56865673c9f5cc7cad76486179a7d3a3c554037de01dba8b0ece27d513650beb"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_hof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_arr_hof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_arr_hof.js",
+    "sha256": "bcc2199ab750308d2d6f48d5963ba61195b676d54ee654e717446baa5b35c780"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_join",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_arr_join.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_arr_join.js",
+    "sha256": "92eb58e7350bf275903509c754fff98b0b83bc2c41790a7801d341859eeeee68"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_literals",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_arr_literals.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_arr_literals.js",
+    "sha256": "c1bf41e05f886836e75b88f197008bfd2ab40a819a912f1cb3a235435e3c705d"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_sort_cmp",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_arr_sort_cmp.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_arr_sort_cmp.js",
+    "sha256": "f34838355a105df96fca4b0720e6608338e17029593bcd4c7fa0c291a1a088df"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_sort_default",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_arr_sort_default.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_arr_sort_default.js",
+    "sha256": "33b6de66fcb0cb221668bdde24d3c73d521b1d10e2279b54a73b81897e41bf59"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_arr_spread_destructure",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_arr_spread_destructure.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_arr_spread_destructure.js",
+    "sha256": "954e85dbff7d6f4667b3c093ee5ff177fc68229db8c45fbbe3495d6e840ba3b3"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_ctl_scalar_global",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_ctl_scalar_global.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_ctl_scalar_global.js",
+    "sha256": "164de869a7b35164cc4c26f7a5c970e1fb4ad7dc8a92c7027cf2723e4c801e00"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_obj_assign_spread",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_obj_assign_spread.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_obj_assign_spread.js",
+    "sha256": "68dc578beb80e47424a68a9096ef3f95cd60159e616399aef0d63d1837333c1e"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_obj_forin_entries",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_obj_forin_entries.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_obj_forin_entries.js",
+    "sha256": "62ea7b059db2a4d70f59cb8f22b6f7f185c4d59b1d7f613f15db32c2e7c8b861"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_obj_keys",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_obj_keys.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_obj_keys.js",
+    "sha256": "c64e891e1d953dcb03bdf61a204f70d6e627019c1b49097c172a47b8adf0537e"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_str_append",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_str_append.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_str_append.js",
+    "sha256": "1df92b4364d40a1959f10b01b8a0d21a183c16afaef984f58522eabe267f2e97"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_str_concat3",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_str_concat3.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_str_concat3.js",
+    "sha256": "40eea6c112416e90eadaabccaf860f4396e685b6455e8fbec45bb0b5e6b38dc1"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/bench_strings-arrays_str_indexof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__bench_strings-arrays_str_indexof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/bench_strings-arrays_str_indexof.js",
+    "sha256": "2105bf9a8d00408c602400873a85cadbe67fcd86807a4f4cf42e2c0c487355c4"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_hof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_arr_hof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_arr_hof.js",
+    "sha256": "741ad9d53a3fc920c1ab68f313bb16a9612728931320cca43a3c7071406c248f"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_join",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_arr_join.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_arr_join.js",
+    "sha256": "192b38de55a1e94627d80055a8fcbbe6227f7067ef4de9d2c39d752d554c1221"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_literals",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_arr_literals.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_arr_literals.js",
+    "sha256": "da02f7e97e94111988c085628de46cb5cf91e2a596931a79e1c8ee07ed1178ba"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_sort_cmp",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_arr_sort_cmp.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_arr_sort_cmp.js",
+    "sha256": "6c7804b51e90368542d47d08502bfcf465d416cc1082d28d74216771dd779efd"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_sort_default",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_arr_sort_default.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_arr_sort_default.js",
+    "sha256": "a8b07dea09c78ec51875b92ec16a45588d9d1476b1c602f281a5378d73f85a64"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_arr_spread_destructure",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_arr_spread_destructure.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_arr_spread_destructure.js",
+    "sha256": "07c87534ae10a0c23c7c4989d9941f7611efd13f508ea54f686c1cc4cffd8e6a"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_ctl_scalar_fn",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_ctl_scalar_fn.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_ctl_scalar_fn.js",
+    "sha256": "538a7794a15b479a55168c1004e007e9b991a250ea103dcf0e5d9e3bd5794883"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_obj_assign_spread",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_obj_assign_spread.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_obj_assign_spread.js",
+    "sha256": "f6780b6f755720e507fc1b5fbdcc7012a016a20459e14f52256dce8d50bcc495"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_obj_forin_entries",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_obj_forin_entries.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_obj_forin_entries.js",
+    "sha256": "864e93a5d10f4694edebb3a48e57812793ac04fd3184188e2135334c6fba83a2"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_obj_keys",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_obj_keys.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_obj_keys.js",
+    "sha256": "e8f7814083cb2eebb22d6c2402ab05c92eef7c8693c984fe042a994fa3414fb2"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_str_append",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_str_append.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_str_append.js",
+    "sha256": "bade066f324f812be917e1721c589b1dc1545f7d5a74cff6785b3d9fea0ec13d"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_str_concat3",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_str_concat3.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_str_concat3.js",
+    "sha256": "b5838b9be0e1b14515326f48cbe9fdf7de98f9f3435310a70b60b2e2c7d6e3dd"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/fn-scope/bench_strings-arrays_str_indexof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__fn-scope__bench_strings-arrays_str_indexof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/fn-scope/bench_strings-arrays_str_indexof.js",
+    "sha256": "b25f879f48fc9a663a69f0e1309e6f3b37be6e6926d143974ddce4f093599c8f"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_arr_forof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_arr_forof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_arr_forof.js",
+    "sha256": "ce64335232ff508ea829a6da8a821f587d4091d38cf796f4a8a11bbdd18615eb"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_arr_grid",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_arr_grid.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_arr_grid.js",
+    "sha256": "9f40610bbc231ff34fc15e7faef237a474eb35a695d9d9f69dd1a2de09f799ff"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_arr_indexof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_arr_indexof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_arr_indexof.js",
+    "sha256": "6ce7566da1e2040c3acbb4c4151431017f6e1571f9919ab458ced4b2e0f7e267"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_arr_pushindex",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_arr_pushindex.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_arr_pushindex.js",
+    "sha256": "d65e5f42fffb3399535fc938c1746f4c542f7801dbe1ca6c68848ba6dbc9ba51"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_arr_queue",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_arr_queue.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_arr_queue.js",
+    "sha256": "d857085983c9bd187932a7b7f672cdcc1e643a2e57b6c021d6f8d20bb88cb6bc"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_arr_slice_concat",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_arr_slice_concat.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_arr_slice_concat.js",
+    "sha256": "4689bbf8c88a122ab35f0b7efd80ef4e254fb7f484c1a51bfda5dc6c1cf100ed"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_str_keys_control",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_str_keys_control.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_str_keys_control.js",
+    "sha256": "517b7df658e3f4e0779863f96bd88fa1674d57d4d540c0d7b61ddf2e32b33646"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/bench_strings-arrays_str_scan",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__bench_strings-arrays_str_scan.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/bench_strings-arrays_str_scan.js",
+    "sha256": "474ee7be7070b41d56130d0f943336d15397c5632e9a52c14811033c8be3d904"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_forof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_arr_forof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_forof.js",
+    "sha256": "da8c9075cbe148a2ac9c07ba9827c1220d31757c2106306bfbbafbc62d97cf95"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_grid",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_arr_grid.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_grid.js",
+    "sha256": "7f2cf65f17670e03bb3593f72eaa20faf5780faf831ab8ce2ceabf9d9077e599"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_indexof",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_arr_indexof.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_indexof.js",
+    "sha256": "7ca52450a14bbe164b3070ed7d1c7e76b0e49aeebd8be38e7b50fa70a1b353be"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_pushindex",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_arr_pushindex.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_pushindex.js",
+    "sha256": "ebfe88257ef060811e48ea71e18f6d00892063893a6bb93f2a8b7802f692c1cd"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_queue",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_arr_queue.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_queue.js",
+    "sha256": "87560cdca0a9adf7b1c4a3ab8e5ef58e64ef043b10baf0b3af7485658d461e52"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_slice_concat",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_arr_slice_concat.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_arr_slice_concat.js",
+    "sha256": "92ed28f5c9164c4b6a45df1e04daabacc64f45898d57a2876d391fc4897c6aa4"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_str_keys_control",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_str_keys_control.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_str_keys_control.js",
+    "sha256": "885f68ef08328ff40f7bd70d5cfbd357ac7b94afbbe69ef962222546c62035d7"
+  },
+  {
+    "name": "diagnostic-1010/strings-arrays/no-gap/fn-scope/bench_strings-arrays_str_scan",
+    "group": "diagnostic-1010",
+    "path": "workloads/diagnostic-1010__strings-arrays__no-gap__fn-scope__bench_strings-arrays_str_scan.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-10/repros/strings-arrays/no-gap/fn-scope/bench_strings-arrays_str_scan.js",
+    "sha256": "ea8ac094804974f60f3f19cd64d1d333f360790dc8202adcea383534ef7a1930"
+  },
+  {
+    "name": "diagnostic-1013/bench_array_const_literal",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_array_const_literal.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_array_const_literal.js",
+    "sha256": "7452ae15b4d65cde63770a54379ef9a71acb23804f31c40cd608f6e5e73e208d"
+  },
+  {
+    "name": "diagnostic-1013/bench_array_literal",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_array_literal.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_array_literal.js",
+    "sha256": "fcdf31073864e549491ccbe08d1d47b4ecc45c371c623fb1d9162796aa902de8"
+  },
+  {
+    "name": "diagnostic-1013/bench_block_let",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_block_let.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_block_let.js",
+    "sha256": "6f97a877839ab81788a44512c3c5c5ce4f148cd5bfa6345728cbe767a592e1aa"
+  },
+  {
+    "name": "diagnostic-1013/bench_closure_literal",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_closure_literal.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_closure_literal.js",
+    "sha256": "a1455062bda17643a833820f065b5d47612ad276db295cb8b54bcee2da9182ee"
+  },
+  {
+    "name": "diagnostic-1013/bench_for_in",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_for_in.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_for_in.js",
+    "sha256": "33ff0729fa423d0a9922c02c493aa67a3dba5b99fde71146c8764c64cb9b9962"
+  },
+  {
+    "name": "diagnostic-1013/bench_for_let_closure",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_for_let_closure.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_for_let_closure.js",
+    "sha256": "6ac09c411d0dee683d964a781b5c9148e2c3b9ca88aea982652be9818e15ff42"
+  },
+  {
+    "name": "diagnostic-1013/bench_for_of_array",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_for_of_array.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_for_of_array.js",
+    "sha256": "2d572bd496ef2e203fcf2bfdec86ee20a15e2e84af2640edffa0a208ac7af8cf"
+  },
+  {
+    "name": "diagnostic-1013/bench_for_of_map_set",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_for_of_map_set.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_for_of_map_set.js",
+    "sha256": "d0c9bb461f35374af7fb490af42654617c86ab0f200de37c6d81d61beaef6a1e"
+  },
+  {
+    "name": "diagnostic-1013/bench_literal_mix",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_literal_mix.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_literal_mix.js",
+    "sha256": "dd4df5d2a753f8db1e65c36b06afc4d2f4f7db06dd7623e254e8f234f2398a59"
+  },
+  {
+    "name": "diagnostic-1013/bench_object_literal",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_object_literal.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_object_literal.js",
+    "sha256": "b8d92f49c827b9018e865d1ff7fd7a06bbcfbbb1558e7b0bd15efc8580222460"
+  },
+  {
+    "name": "diagnostic-1013/bench_script_handoff_loop",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_script_handoff_loop.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_script_handoff_loop.js",
+    "sha256": "afe9196429fff0c191243ac5c9146be8555406bddea31e3c14bbabe662d3d1b7"
+  },
+  {
+    "name": "diagnostic-1013/bench_script_let_loop",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_script_let_loop.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_script_let_loop.js",
+    "sha256": "1831597a8483b7f371c19938b8a319237f458b2e56b5b24a34c8740527ca5bb6"
+  },
+  {
+    "name": "diagnostic-1013/bench_script_loop_decl",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_script_loop_decl.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_script_loop_decl.js",
+    "sha256": "d855e631c04440f7c86c8286062e7db4b5cd7ef4103a24dd21f0586136e0278d"
+  },
+  {
+    "name": "diagnostic-1013/bench_switch_let",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_switch_let.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_switch_let.js",
+    "sha256": "f2f6664b40ba1d24f21c2b6700b9cebfc6a8f746d056db644da10b8e539dad40"
+  },
+  {
+    "name": "diagnostic-1013/bench_try_catch",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_try_catch.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_try_catch.js",
+    "sha256": "65bd800ad9279c6492723fc25840073767fc7d119071d2e51d6ee96ff6873957"
+  },
+  {
+    "name": "diagnostic-1013/bench_try_finally",
+    "group": "diagnostic-1013",
+    "path": "workloads/diagnostic-1013__bench_try_finally.js",
+    "source": "/home/pmatos/dev/jsse/docs/perf/2026-10-13/repros/bench_try_finally.js",
+    "sha256": "07fd0f524d4fa73eb8266d93023ae64b52b7e432dedad0887ae6321ac2ca6402"
+  },
+  {
+    "name": "jetstream/Air",
+    "group": "jetstream",
+    "path": "workloads/jetstream__Air.js",
+    "source": [
+      "ARES-6/Air/symbols.js",
+      "ARES-6/Air/tmp_base.js",
+      "ARES-6/Air/arg.js",
+      "ARES-6/Air/basic_block.js",
+      "ARES-6/Air/code.js",
+      "ARES-6/Air/frequented_block.js",
+      "ARES-6/Air/inst.js",
+      "ARES-6/Air/opcode.js",
+      "ARES-6/Air/reg.js",
+      "ARES-6/Air/stack_slot.js",
+      "ARES-6/Air/tmp.js",
+      "ARES-6/Air/util.js",
+      "ARES-6/Air/custom.js",
+      "ARES-6/Air/liveness.js",
+      "ARES-6/Air/insertion_set.js",
+      "ARES-6/Air/allocate_stack.js",
+      "ARES-6/Air/payload-gbemu-executeIteration.js",
+      "ARES-6/Air/payload-imaging-gaussian-blur-gaussianBlur.js",
+      "ARES-6/Air/payload-airjs-ACLj8C.js",
+      "ARES-6/Air/payload-typescript-scanIdentifier.js",
+      "ARES-6/Air/benchmark.js"
+    ],
+    "sha256": "f8152bb0905168e63e913b9fc88f1e2ced34da58a4d14c1acf013f48d78e64e1",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/Basic",
+    "group": "jetstream",
+    "path": "workloads/jetstream__Basic.js",
+    "source": [
+      "ARES-6/Basic/ast.js",
+      "ARES-6/Basic/basic.js",
+      "ARES-6/Basic/caseless_map.js",
+      "ARES-6/Basic/lexer.js",
+      "ARES-6/Basic/number.js",
+      "ARES-6/Basic/parser.js",
+      "ARES-6/Basic/random.js",
+      "ARES-6/Basic/state.js",
+      "ARES-6/Basic/benchmark.js"
+    ],
+    "sha256": "990c33f50dadf3ea7584791c8dfeea9a542396f50d305c22c7717587d9b5d095",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/ML",
+    "group": "jetstream",
+    "path": "workloads/jetstream__ML.js",
+    "source": [
+      "ARES-6/ml/index.js",
+      "ARES-6/ml/benchmark.js"
+    ],
+    "sha256": "b6df32e0cd2d747f94b0c05192fe955f11bc182bd5c00ee914ca2fd5d5c3d08b",
+    "official_iterations": 60,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/Babylon",
+    "group": "jetstream",
+    "path": "workloads/jetstream__Babylon.js",
+    "source": [
+      "ARES-6/Babylon/index.js",
+      "ARES-6/Babylon/benchmark.js"
+    ],
+    "sha256": "61c82c6ee949e8d7e52137e3bdf950aef143eaf0104c5c0134f4c872fc14a7fd",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/cdjs",
+    "group": "jetstream",
+    "path": "workloads/jetstream__cdjs.js",
+    "source": [
+      "cdjs/constants.js",
+      "cdjs/util.js",
+      "cdjs/red_black_tree.js",
+      "cdjs/call_sign.js",
+      "cdjs/vector_2d.js",
+      "cdjs/vector_3d.js",
+      "cdjs/motion.js",
+      "cdjs/reduce_collision_set.js",
+      "cdjs/simulator.js",
+      "cdjs/collision.js",
+      "cdjs/collision_detector.js",
+      "cdjs/benchmark.js"
+    ],
+    "sha256": "c08672f66dcdb84beccebc57de2bda0a4aca53c3378e7e6c75222bc46dd22385",
+    "official_iterations": 60,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/first-inspector-code-load",
+    "group": "jetstream",
+    "path": "workloads/jetstream__first-inspector-code-load.js",
+    "source": [
+      "code-load/code-first-load.js"
+    ],
+    "sha256": "72c2d557ee3746775d65e94304eb14da62353e960d700c5d4cd0d99cc36039ce",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/multi-inspector-code-load",
+    "group": "jetstream",
+    "path": "workloads/jetstream__multi-inspector-code-load.js",
+    "source": [
+      "code-load/code-multi-load.js"
+    ],
+    "sha256": "07583191c17ccb0054e02d4815c82a55db8c1a879ea83762fe75394028c3df49",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/Box2D",
+    "group": "jetstream",
+    "path": "workloads/jetstream__Box2D.js",
+    "source": [
+      "Octane/box2d.js"
+    ],
+    "sha256": "d1226537649d6b7268b2c1284f6280372d539074d00b5f0fd3cb4bbc0990283e",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/octane-code-load",
+    "group": "jetstream",
+    "path": "workloads/jetstream__octane-code-load.js",
+    "source": [
+      "Octane/code-first-load.js"
+    ],
+    "sha256": "1feaf17582db0fbbbf009ed4b09ffad63c12b73ce09cf55efee76875bccaa095",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/crypto",
+    "group": "jetstream",
+    "path": "workloads/jetstream__crypto.js",
+    "source": [
+      "Octane/crypto.js"
+    ],
+    "sha256": "895674532a10dcf8b32848564cda32d3fcc2e67d60ca0744b71f95df272776d7",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/delta-blue",
+    "group": "jetstream",
+    "path": "workloads/jetstream__delta-blue.js",
+    "source": [
+      "Octane/deltablue.js"
+    ],
+    "sha256": "8c0eecf1315c97df3d942dc8a8dfce14c5f4edc7302d35399fc44632b89ceb9b",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/earley-boyer",
+    "group": "jetstream",
+    "path": "workloads/jetstream__earley-boyer.js",
+    "source": [
+      "Octane/earley-boyer.js"
+    ],
+    "sha256": "8cd6536433804a935d37342d5c071d057a8aeac10de09f3af0cc2850c14ea58d",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/gbemu",
+    "group": "jetstream",
+    "path": "workloads/jetstream__gbemu.js",
+    "source": [
+      "Octane/gbemu-part1.js",
+      "Octane/gbemu-part2.js"
+    ],
+    "sha256": "c36803e4e2e75d1ff2703aad716263ee36e5d42da7938cdc38dd85a5472e472c",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/mandreel",
+    "group": "jetstream",
+    "path": "workloads/jetstream__mandreel.js",
+    "source": [
+      "Octane/mandreel.js"
+    ],
+    "sha256": "b0068a349c67dd370afc0de52fef5c7719bda393b7a60bd7afe2420dc3c7e292",
+    "official_iterations": 80,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/navier-stokes",
+    "group": "jetstream",
+    "path": "workloads/jetstream__navier-stokes.js",
+    "source": [
+      "Octane/navier-stokes.js"
+    ],
+    "sha256": "315d43445bcf99b91b3b3e16f1e38321b9e17c2b7a3261874d27344fee9323a3",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/pdfjs",
+    "group": "jetstream",
+    "path": "workloads/jetstream__pdfjs.js",
+    "source": [
+      "Octane/pdfjs.js"
+    ],
+    "sha256": "9e05c04189b15a5d5f64debb6016c8fdb3b859a7a3ca811dccfd23cbb46dc17e",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/raytrace",
+    "group": "jetstream",
+    "path": "workloads/jetstream__raytrace.js",
+    "source": [
+      "Octane/raytrace.js"
+    ],
+    "sha256": "ee1cf1f55e423a7b0c5a5d5b913d72a65fa826d9c504b9de892cb8deecc36515",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/regexp-octane",
+    "group": "jetstream",
+    "path": "workloads/jetstream__regexp-octane.js",
+    "source": [
+      "Octane/regexp.js"
+    ],
+    "sha256": "b78ad88ead04a42b07ddc2e1533d2098b5ac73170da1a809ef7c3704021953eb",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/richards",
+    "group": "jetstream",
+    "path": "workloads/jetstream__richards.js",
+    "source": [
+      "Octane/richards.js"
+    ],
+    "sha256": "b92637b41a5231a710cc8439be1891ad55c22b1714d487c7ccab801b2abf8def",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/splay",
+    "group": "jetstream",
+    "path": "workloads/jetstream__splay.js",
+    "source": [
+      "Octane/splay.js"
+    ],
+    "sha256": "e4e394a6851cd3751c558a6d3bebe0978f9e4088769371b6b5aff465330691ea",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/typescript-octane",
+    "group": "jetstream",
+    "path": "workloads/jetstream__typescript-octane.js",
+    "source": [
+      "Octane/typescript-compiler.js",
+      "Octane/typescript-input.js",
+      "Octane/typescript.js"
+    ],
+    "sha256": "139e46afd90b40ee5547586fca6c23edcac5c5051d82bc90853cc290e54d6d80",
+    "official_iterations": 15,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/FlightPlanner",
+    "group": "jetstream",
+    "path": "workloads/jetstream__FlightPlanner.js",
+    "source": [
+      "RexBench/FlightPlanner/airways.js",
+      "RexBench/FlightPlanner/waypoints.js",
+      "RexBench/FlightPlanner/flight_planner.js",
+      "RexBench/FlightPlanner/expectations.js",
+      "RexBench/FlightPlanner/benchmark.js"
+    ],
+    "sha256": "2a2262d8e5050daa9f8a9d3674179e245ef56f47c58f4688674d0f9eed299cc9",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/OfflineAssembler",
+    "group": "jetstream",
+    "path": "workloads/jetstream__OfflineAssembler.js",
+    "source": [
+      "RexBench/OfflineAssembler/registers.js",
+      "RexBench/OfflineAssembler/instructions.js",
+      "RexBench/OfflineAssembler/ast.js",
+      "RexBench/OfflineAssembler/parser.js",
+      "RexBench/OfflineAssembler/file.js",
+      "RexBench/OfflineAssembler/LowLevelInterpreter.js",
+      "RexBench/OfflineAssembler/LowLevelInterpreter32_64.js",
+      "RexBench/OfflineAssembler/LowLevelInterpreter64.js",
+      "RexBench/OfflineAssembler/InitBytecodes.js",
+      "RexBench/OfflineAssembler/expected.js",
+      "RexBench/OfflineAssembler/benchmark.js"
+    ],
+    "sha256": "b18702df9539670d1d1639527bc3690ed52a830d51dc951f13c4602bd9d2b249",
+    "official_iterations": 80,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/UniPoker",
+    "group": "jetstream",
+    "path": "workloads/jetstream__UniPoker.js",
+    "source": [
+      "RexBench/UniPoker/poker.js",
+      "RexBench/UniPoker/expected.js",
+      "RexBench/UniPoker/benchmark.js"
+    ],
+    "sha256": "45f82c8c007b41c00344ddeb301cd6dcda634ba666a0165101c5306386ae3bcc",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/validatorjs",
+    "group": "jetstream",
+    "path": "workloads/jetstream__validatorjs.js",
+    "source": [
+      "validatorjs/dist/bundle.es6.js",
+      "validatorjs/dist/bundle.es6.min.js",
+      "validatorjs/benchmark.js"
+    ],
+    "sha256": "fc1263e24c94bd52e1c56727f891fe1130d2aad6a5da12364baf56d490dbccaa",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/hash-map",
+    "group": "jetstream",
+    "path": "workloads/jetstream__hash-map.js",
+    "source": [
+      "simple/hash-map.js"
+    ],
+    "sha256": "3461352e498033b6b87ba55f553e23a6a462bcc8f5b3782d6a65a0b0bb9cb57e",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/doxbee-promise",
+    "group": "jetstream",
+    "path": "workloads/jetstream__doxbee-promise.js",
+    "source": [
+      "simple/doxbee-promise.js"
+    ],
+    "sha256": "7d32978c223ee7d70972c949c1cca7b6378fdb3e28b43190569b604528a8331b",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/doxbee-async",
+    "group": "jetstream",
+    "path": "workloads/jetstream__doxbee-async.js",
+    "source": [
+      "simple/doxbee-async.js"
+    ],
+    "sha256": "ad0f1d5bfb0e7e70e79c57d938bb9f1bb42b40ecfb74991d67df3eeb18932ad5",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/ai-astar",
+    "group": "jetstream",
+    "path": "workloads/jetstream__ai-astar.js",
+    "source": [
+      "SeaMonster/ai-astar.js"
+    ],
+    "sha256": "88efab1e7d64f5a9245e670be67b621dfaaa61309232c6022196279d51983f2a",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/gaussian-blur",
+    "group": "jetstream",
+    "path": "workloads/jetstream__gaussian-blur.js",
+    "source": [
+      "SeaMonster/gaussian-blur.js"
+    ],
+    "sha256": "64e31d7c7af5b5cc64000cd5e4b1e5ceb85376887ad9d53e7d0fc19a243f07fc",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/stanford-crypto-aes",
+    "group": "jetstream",
+    "path": "workloads/jetstream__stanford-crypto-aes.js",
+    "source": [
+      "SeaMonster/sjlc.js",
+      "SeaMonster/stanford-crypto-aes.js"
+    ],
+    "sha256": "8988786dac739119684cbe6c22cf0d401925467c7a0473d2fdc48941b8393228",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/stanford-crypto-pbkdf2",
+    "group": "jetstream",
+    "path": "workloads/jetstream__stanford-crypto-pbkdf2.js",
+    "source": [
+      "SeaMonster/sjlc.js",
+      "SeaMonster/stanford-crypto-pbkdf2.js"
+    ],
+    "sha256": "3271e6e1211fb7021f98c7c9f77ab5b85a9f6a5d686713b5fdf7957a36978e52",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/stanford-crypto-sha256",
+    "group": "jetstream",
+    "path": "workloads/jetstream__stanford-crypto-sha256.js",
+    "source": [
+      "SeaMonster/sjlc.js",
+      "SeaMonster/stanford-crypto-sha256.js"
+    ],
+    "sha256": "fc53d510958f0883cfba5641a7b39b36ba21182364173936f75a8f07320b7b42",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/json-stringify-inspector",
+    "group": "jetstream",
+    "path": "workloads/jetstream__json-stringify-inspector.js",
+    "source": [
+      "SeaMonster/inspector-json-payload.js",
+      "SeaMonster/json-stringify-inspector.js"
+    ],
+    "sha256": "793c879d3586ef176f8ebcc0d973644b3ba466096412bf62cf29dff005b35c46",
+    "official_iterations": 20,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/json-parse-inspector",
+    "group": "jetstream",
+    "path": "workloads/jetstream__json-parse-inspector.js",
+    "source": [
+      "SeaMonster/inspector-json-payload.js",
+      "SeaMonster/json-parse-inspector.js"
+    ],
+    "sha256": "3a20bf1ea61e1b7d008946e034d6a82f0d6e0fd95522733d5edd7036857df5e9",
+    "official_iterations": 20,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/bigint-noble-bls12-381",
+    "group": "jetstream",
+    "path": "workloads/jetstream__bigint-noble-bls12-381.js",
+    "source": [
+      "bigint/web-crypto-sham.js",
+      "bigint/noble-bls12-381-bundle.js",
+      "bigint/noble-benchmark.js"
+    ],
+    "sha256": "baee6f02b19e3f4eafd40110cf74bcbd6803d953a6da303d8d1cd0cc494e8f27",
+    "official_iterations": 4,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/bigint-noble-secp256k1",
+    "group": "jetstream",
+    "path": "workloads/jetstream__bigint-noble-secp256k1.js",
+    "source": [
+      "bigint/web-crypto-sham.js",
+      "bigint/noble-secp256k1-bundle.js",
+      "bigint/noble-benchmark.js"
+    ],
+    "sha256": "31e1131bca2492eea2c7bc7d10165157baefb5637fbb4f8c35db8290f60c503a",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/bigint-noble-ed25519",
+    "group": "jetstream",
+    "path": "workloads/jetstream__bigint-noble-ed25519.js",
+    "source": [
+      "bigint/web-crypto-sham.js",
+      "bigint/noble-ed25519-bundle.js",
+      "bigint/noble-benchmark.js"
+    ],
+    "sha256": "c822c254401e80b20ea1531bf9810e5156fd2f37eceb04460d6d295672e34c10",
+    "official_iterations": 30,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/bigint-paillier",
+    "group": "jetstream",
+    "path": "workloads/jetstream__bigint-paillier.js",
+    "source": [
+      "bigint/web-crypto-sham.js",
+      "bigint/paillier-bundle.js",
+      "bigint/paillier-benchmark.js"
+    ],
+    "sha256": "735d58a1e410c3f1baeb9f1ab9eeb062c5646c580e4b9ffdd834318009dc8fae",
+    "official_iterations": 10,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/bigint-bigdenary",
+    "group": "jetstream",
+    "path": "workloads/jetstream__bigint-bigdenary.js",
+    "source": [
+      "bigint/bigdenary-bundle.js",
+      "bigint/bigdenary-benchmark.js"
+    ],
+    "sha256": "0682023445cfa881ceb84a0fe67d05268ba4c1bbbc7a0bb553b33e6c0d4d4bf9",
+    "official_iterations": 160,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/proxy-mobx",
+    "group": "jetstream",
+    "path": "workloads/jetstream__proxy-mobx.js",
+    "source": [
+      "proxy/common.js",
+      "proxy/mobx-bundle.js",
+      "proxy/mobx-benchmark.js"
+    ],
+    "sha256": "8e163474cb436ef96b8a06756ed47e2a0e4318a8b743fbcdbabb6f043471cca1",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/proxy-vue",
+    "group": "jetstream",
+    "path": "workloads/jetstream__proxy-vue.js",
+    "source": [
+      "proxy/common.js",
+      "proxy/vue-bundle.js",
+      "proxy/vue-benchmark.js"
+    ],
+    "sha256": "d6dc98f52db06331706b379465d0e15e8956387f427150d57a4f608aa9afcb3d",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/raytrace-public-class-fields",
+    "group": "jetstream",
+    "path": "workloads/jetstream__raytrace-public-class-fields.js",
+    "source": [
+      "class-fields/raytrace-public-class-fields.js"
+    ],
+    "sha256": "b65307743f810062206187590827571b98f3fa054002e615114ff7be09c1627f",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/raytrace-private-class-fields",
+    "group": "jetstream",
+    "path": "workloads/jetstream__raytrace-private-class-fields.js",
+    "source": [
+      "class-fields/raytrace-private-class-fields.js"
+    ],
+    "sha256": "ed633e156e08460d45327403944b5373baada193c948dc7932a489912a6200a6",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/async-fs",
+    "group": "jetstream",
+    "path": "workloads/jetstream__async-fs.js",
+    "source": [
+      "generators/async-file-system.js"
+    ],
+    "sha256": "309a5aaf9b58cdb0ff212d9239f9d4e35ae700b6ead94a694a00a56734e4e1b2",
+    "official_iterations": 80,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/sync-fs",
+    "group": "jetstream",
+    "path": "workloads/jetstream__sync-fs.js",
+    "source": [
+      "generators/sync-file-system.js"
+    ],
+    "sha256": "fd3c1f92591caf43f0637adbcb720d58e87937c4c17b765ae54302d99e1426f1",
+    "official_iterations": 80,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/lazy-collections",
+    "group": "jetstream",
+    "path": "workloads/jetstream__lazy-collections.js",
+    "source": [
+      "generators/lazy-collections.js"
+    ],
+    "sha256": "ef69ded2aa34b765aae40b6c524f6f70de5998e2a538408f91cc30e6ca9c6317",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream/js-tokens",
+    "group": "jetstream",
+    "path": "workloads/jetstream__js-tokens.js",
+    "source": [
+      "generators/js-tokens.js"
+    ],
+    "sha256": "e5dc3fc38c25c9d90854831e2ca25d995d9a4a6e2dc1f70af80ba410c5bcf614",
+    "official_iterations": 120,
+    "audit_iterations": 1
+  },
+  {
+    "name": "jetstream-extra/mobx-startup",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__mobx-startup.js",
+    "source": [
+      "utils/StartupBenchmark.js",
+      "mobx/benchmark.js"
+    ],
+    "sha256": "339812b91f8f4ef92c5e431370a67340cc8c291b773deed5ca0723a58120963d"
+  },
+  {
+    "name": "jetstream-extra/jsdom-d3-startup",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__jsdom-d3-startup.js",
+    "source": [
+      "utils/StartupBenchmark.js",
+      "jsdom-d3-startup/benchmark.js"
+    ],
+    "sha256": "63335922d29616e93bd4e1f8ff02e6ad211130f62e18e92b55b6a226eb362797"
+  },
+  {
+    "name": "jetstream-extra/web-ssr",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__web-ssr.js",
+    "source": [
+      "utils/StartupBenchmark.js",
+      "web-ssr/benchmark.js"
+    ],
+    "sha256": "d6b38b9fca7a13848b2aa353371af488bf4347c65c7d2e4e5e43689d660b094b"
+  },
+  {
+    "name": "jetstream-extra/typescript-lib",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__typescript-lib.js",
+    "source": [
+      "TypeScript/src/mock/sys.js",
+      "TypeScript/dist/bundle.js",
+      "TypeScript/benchmark.js"
+    ],
+    "sha256": "4b11894c0f7fed444465076f3a2b99103a6a0a72ae56e468d7626e663f1d63d3"
+  },
+  {
+    "name": "jetstream-extra/babylonjs-startup-es5",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__babylonjs-startup-es5.js",
+    "source": [
+      "utils/StartupBenchmark.js",
+      "babylonjs/benchmark/startup.js"
+    ],
+    "sha256": "cc9b6a6726fb5f98ccd530d2ca475d56860047d4be966623d4708ed55755afda"
+  },
+  {
+    "name": "jetstream-extra/babylonjs-startup-es6",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__babylonjs-startup-es6.js",
+    "source": [
+      "utils/StartupBenchmark.js",
+      "babylonjs/benchmark/startup.js"
+    ],
+    "sha256": "6bc08be8682abc9ce4f5314bf3b2ec1c9f4713a1dbad05db24cc6a77679649d3"
+  },
+  {
+    "name": "jetstream-extra/babylonjs-scene-es5",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__babylonjs-scene-es5.js",
+    "source": [
+      "babylonjs/dist/bundle.es5.min.js",
+      "babylonjs/benchmark/scene.js"
+    ],
+    "sha256": "9cc5f970a87876063f651fba52aba9596de1e8b4781769dc5ffe9c5c931f775d"
+  },
+  {
+    "name": "jetstream-extra/babylonjs-scene-es6",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__babylonjs-scene-es6.js",
+    "source": [
+      "babylonjs/dist/bundle.es6.min.js",
+      "babylonjs/benchmark/scene.js"
+    ],
+    "sha256": "c95206c96cbfd1bb42832391f87e75a65b914986b84fd392ceef74d9ca2c5bf2"
+  },
+  {
+    "name": "jetstream-extra/threejs",
+    "group": "jetstream",
+    "path": "workloads/jetstream-extra__threejs.js",
+    "source": [
+      "threejs/three.js",
+      "threejs/benchmark.js"
+    ],
+    "sha256": "804ee0c7a5347d458b96cc33c4d8936dc94a7f2507efe468d5369c3d325b0e3b"
+  },
+  {
+    "name": "boa-validation/arithmetic_operations",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__arithmetic_operations.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/arithmetic_operations.js",
+    "sha256": "980865dba03388f1b78902466f11e1d2b0eb6d6a2d87cf844fc457550e60fc28"
+  },
+  {
+    "name": "boa-validation/array_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__array_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/array_access.js",
+    "sha256": "2d7c20b808310045ac80284bd6ec8f116da8330c7dde118d470009992a10e682"
+  },
+  {
+    "name": "boa-validation/array_create",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__array_create.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/array_create.js",
+    "sha256": "2fa6385ed12f97881263e32396eb35f81fd8739c0937f38cbe21418ab4849e01"
+  },
+  {
+    "name": "boa-validation/array_pop",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__array_pop.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/array_pop.js",
+    "sha256": "8225e810d9c2d3afa4b7c2892ba9b30e3310719b6d08bda7bf99deb82b2f1b55"
+  },
+  {
+    "name": "boa-validation/boolean_object_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__boolean_object_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/boolean_object_access.js",
+    "sha256": "99f25a7a842c1e566be61ea923d3fcbc180944b58ad7d69cc4fb4c87f6641605"
+  },
+  {
+    "name": "boa-validation/clean_js",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__clean_js.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/clean_js.js",
+    "sha256": "2943a0b8db47ecbcd103c74f5e72d04729cf66a7c845d232bc06e273e5068444"
+  },
+  {
+    "name": "boa-validation/fibonacci",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__fibonacci.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/fibonacci.js",
+    "sha256": "357159c775ce531cc0ed31b4318c09407a21d014a9b69c740a8957fd18debcef"
+  },
+  {
+    "name": "boa-validation/for_loop",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__for_loop.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/for_loop.js",
+    "sha256": "5ea202a1775ea7ac067e1231c921042190e85a4584e23a487f33e0eda7f616e9"
+  },
+  {
+    "name": "boa-validation/mini_js",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__mini_js.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/mini_js.js",
+    "sha256": "947278390dabbd443253d1a205c9e75a18d15a19f1220f2ed79d530b10ae7373"
+  },
+  {
+    "name": "boa-validation/number_object_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__number_object_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/number_object_access.js",
+    "sha256": "25b93b8089dc05f9b9bc1c6c7f2d2790e5b889caf13b73b98e7f0e7a7504c1c7"
+  },
+  {
+    "name": "boa-validation/object_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__object_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/object_creation.js",
+    "sha256": "cbb13b251625881dedf4fc3ed185a2b3cdc1722df4fd721876d6174c1f043849"
+  },
+  {
+    "name": "boa-validation/object_prop_access_const",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__object_prop_access_const.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/object_prop_access_const.js",
+    "sha256": "d40f2d9e1a414f6c5ba2b92f54beca27f3a8a8d6673e8d7cdb5f106f87f25983"
+  },
+  {
+    "name": "boa-validation/object_prop_access_dyn",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__object_prop_access_dyn.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/object_prop_access_dyn.js",
+    "sha256": "da701e9c98d831d979ab140ea13e6918bda46cfe9562514c12c9b1e28ab2e9f2"
+  },
+  {
+    "name": "boa-validation/regexp",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__regexp.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp.js",
+    "sha256": "ad6bf0fa5cde456451f7ed3bfc0618fc531f79b76cbd41bc79c8f4765bd5bc2f"
+  },
+  {
+    "name": "boa-validation/regexp_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__regexp_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp_creation.js",
+    "sha256": "fae19b777ea8b465d59946a58043f29fac461d22d70ee47882a199fffe35ebeb"
+  },
+  {
+    "name": "boa-validation/regexp_literal",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__regexp_literal.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp_literal.js",
+    "sha256": "a6bc5bb237103f62a2feb1da6d01f2eddef8ef8cced2533a7baeede8daf56f51"
+  },
+  {
+    "name": "boa-validation/regexp_literal_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__regexp_literal_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/regexp_literal_creation.js",
+    "sha256": "e26f7a2bbd435698cc15f556fd99354a089992e691aff6ec93d51cdc9309c5e5"
+  },
+  {
+    "name": "boa-validation/string_code_point_sum",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__string_code_point_sum.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_code_point_sum.js",
+    "sha256": "65e656ed55f5132a99dd3fad919ea669c0d7759f52586311aee387c44e32ccb2"
+  },
+  {
+    "name": "boa-validation/string_compare",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__string_compare.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_compare.js",
+    "sha256": "63da6cfcffdf3370450c23c7a6d474a56691147d36bc72e90d9204173300018d"
+  },
+  {
+    "name": "boa-validation/string_concat",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__string_concat.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_concat.js",
+    "sha256": "ba9fa040d69439c1b311db1e1314082cda367f680880108472f0a567a6ad74d4"
+  },
+  {
+    "name": "boa-validation/string_copy",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__string_copy.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_copy.js",
+    "sha256": "3d4837091b429e5a6bae48285a695dc53344a1a1633f7994bd0bbe00d93fe3da"
+  },
+  {
+    "name": "boa-validation/string_object_access",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__string_object_access.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/string_object_access.js",
+    "sha256": "e4b3a0479885559d75defa5638ee75bdd3334fa7a8ea867e69471392da84f3db"
+  },
+  {
+    "name": "boa-validation/symbol_creation",
+    "group": "boa-engine",
+    "path": "workloads/boa-validation__symbol_creation.js",
+    "source": "/tmp/jsse-boa-audit-20261014.KrlUv3/boa/core/engine/benches/bench_scripts/symbol_creation.js",
+    "sha256": "9c1edf6482e847c98f9a7df9a8ccd50e55e494e695b8f63f8a136ce8f21b8e8e"
+  },
+  {
+    "name": "audit-controls/opmix-arith",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__opmix-arith.js",
+    "source": "benchmarks/scripts/bench_opmix.js",
+    "sha256": "7c9c8d9558bd9fafbb5bced43e58284f6e66df6ffc0d61d243b2c6ca59d4a6ae"
+  },
+  {
+    "name": "audit-controls/opmix-elem",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__opmix-elem.js",
+    "source": "benchmarks/scripts/bench_opmix.js",
+    "sha256": "1213f3b8d0d6f22366d43f82f2bd15580bd4b2db27c2703789d804193bf4c344"
+  },
+  {
+    "name": "audit-controls/opmix-called",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__opmix-called.js",
+    "source": "benchmarks/scripts/bench_opmix.js",
+    "sha256": "9bc60d972dba0d5e31c90094a166d9bce8db71bee85de551bb5d61ac0491488e"
+  },
+  {
+    "name": "audit-controls/opmix-mixed",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__opmix-mixed.js",
+    "source": "benchmarks/scripts/bench_opmix.js",
+    "sha256": "c7c978cf5026cf051f7ebd317a7378d85569a84df5ec1baea39c8b054697a72a"
+  },
+  {
+    "name": "audit-controls/opmix-labeledLoop",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__opmix-labeledLoop.js",
+    "source": "benchmarks/scripts/bench_opmix.js",
+    "sha256": "80a1fe7f1dd3d1604e3ae74c8136eb909d5d229bd942f094ab8df5801fdc0c4e"
+  },
+  {
+    "name": "audit-controls/opmix-labeledControl",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__opmix-labeledControl.js",
+    "source": "benchmarks/scripts/bench_opmix.js",
+    "sha256": "aaca61d1a198fedc2e313f221f7f75a766a595e12cb52361020c87b3eaaf8f55"
+  },
+  {
+    "name": "audit-controls/loop-var",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__loop-var.js",
+    "source": "paired local loop control",
+    "sha256": "1da3310c04b6cf55cb543c954b829a7d395c00970f5b5f962a01cbcc70b5da71"
+  },
+  {
+    "name": "audit-controls/loop-let",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__loop-let.js",
+    "source": "paired local loop control",
+    "sha256": "f11bb297f21a46cd10e1405ab06964a4ffcce681aaac044dd58160fcb4e68a14"
+  },
+  {
+    "name": "audit-controls/call-sloppy-local",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__call-sloppy-local.js",
+    "source": "paired call control",
+    "sha256": "e07f4fc22e0fd859927ea5052478ecb75b210dc862a5daa1f0f86b91aa755a5b"
+  },
+  {
+    "name": "audit-controls/call-sloppy-captured",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__call-sloppy-captured.js",
+    "source": "paired call control",
+    "sha256": "0b2bfd45f80d2b01f5a6d64f61c02f015ea627eb4f1df314e5c0a69d713d0197"
+  },
+  {
+    "name": "audit-controls/call-strict-local",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__call-strict-local.js",
+    "source": "paired call control",
+    "sha256": "90901faa31d9b61c5430a3dda56749cee8b178b467ce5dd1ae0b19292f933811"
+  },
+  {
+    "name": "audit-controls/call-strict-captured",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__call-strict-captured.js",
+    "source": "paired call control",
+    "sha256": "de362a4bd19302565bfe20af55b359da95fc08fad546e6e7da018006d9911ede"
+  },
+  {
+    "name": "audit-controls/params-simple",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__params-simple.js",
+    "source": "paired parameter control",
+    "sha256": "b8fffa398e2e625f29ab89e8febfffd55e94c11487b20fe401391a6a3157992d"
+  },
+  {
+    "name": "audit-controls/params-default-supplied",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__params-default-supplied.js",
+    "source": "paired parameter control",
+    "sha256": "bd24cab77861fb25de42358ab16a26dc4c309c395b48cc3c65a1fd9ba5cfcdb3"
+  },
+  {
+    "name": "audit-controls/params-default-omitted",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__params-default-omitted.js",
+    "source": "paired parameter control",
+    "sha256": "ffe7607b696dc79917bbdb78514e1615220fa001c1f125776e40264e2cf89f84"
+  },
+  {
+    "name": "audit-controls/args-parameters",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__args-parameters.js",
+    "source": "paired parameter control",
+    "sha256": "2b4e60163254c053d919265be737d6ecc584a8730f64b30648c7b3d20ec6fa39"
+  },
+  {
+    "name": "audit-controls/args-object",
+    "group": "diagnostic-1013",
+    "path": "workloads/audit-controls__args-object.js",
+    "source": "paired parameter control",
+    "sha256": "6cb28116da284060f91f60b4f0b2749773ac54041f035f5bc26ff38053479662"
+  },
+  {
+    "name": "jetstream-registry/WSL",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__WSL.js",
+    "source": [
+      "./WSL/Node.js",
+      "./WSL/Type.js",
+      "./WSL/ReferenceType.js",
+      "./WSL/Value.js",
+      "./WSL/Expression.js",
+      "./WSL/Rewriter.js",
+      "./WSL/Visitor.js",
+      "./WSL/CreateLiteral.js",
+      "./WSL/CreateLiteralType.js",
+      "./WSL/PropertyAccessExpression.js",
+      "./WSL/AddressSpace.js",
+      "./WSL/AnonymousVariable.js",
+      "./WSL/ArrayRefType.js",
+      "./WSL/ArrayType.js",
+      "./WSL/Assignment.js",
+      "./WSL/AutoWrapper.js",
+      "./WSL/Block.js",
+      "./WSL/BoolLiteral.js",
+      "./WSL/Break.js",
+      "./WSL/CallExpression.js",
+      "./WSL/CallFunction.js",
+      "./WSL/Check.js",
+      "./WSL/CheckLiteralTypes.js",
+      "./WSL/CheckLoops.js",
+      "./WSL/CheckRecursiveTypes.js",
+      "./WSL/CheckRecursion.js",
+      "./WSL/CheckReturns.js",
+      "./WSL/CheckUnreachableCode.js",
+      "./WSL/CheckWrapped.js",
+      "./WSL/Checker.js",
+      "./WSL/CloneProgram.js",
+      "./WSL/CommaExpression.js",
+      "./WSL/ConstexprFolder.js",
+      "./WSL/ConstexprTypeParameter.js",
+      "./WSL/Continue.js",
+      "./WSL/ConvertPtrToArrayRefExpression.js",
+      "./WSL/DereferenceExpression.js",
+      "./WSL/DoWhileLoop.js",
+      "./WSL/DotExpression.js",
+      "./WSL/DoubleLiteral.js",
+      "./WSL/DoubleLiteralType.js",
+      "./WSL/EArrayRef.js",
+      "./WSL/EBuffer.js",
+      "./WSL/EBufferBuilder.js",
+      "./WSL/EPtr.js",
+      "./WSL/EnumLiteral.js",
+      "./WSL/EnumMember.js",
+      "./WSL/EnumType.js",
+      "./WSL/EvaluationCommon.js",
+      "./WSL/Evaluator.js",
+      "./WSL/ExpressionFinder.js",
+      "./WSL/ExternalOrigin.js",
+      "./WSL/Field.js",
+      "./WSL/FindHighZombies.js",
+      "./WSL/FlattenProtocolExtends.js",
+      "./WSL/FlattenedStructOffsetGatherer.js",
+      "./WSL/FloatLiteral.js",
+      "./WSL/FloatLiteralType.js",
+      "./WSL/FoldConstexprs.js",
+      "./WSL/ForLoop.js",
+      "./WSL/Func.js",
+      "./WSL/FuncDef.js",
+      "./WSL/FuncInstantiator.js",
+      "./WSL/FuncParameter.js",
+      "./WSL/FunctionLikeBlock.js",
+      "./WSL/HighZombieFinder.js",
+      "./WSL/IdentityExpression.js",
+      "./WSL/IfStatement.js",
+      "./WSL/IndexExpression.js",
+      "./WSL/InferTypesForCall.js",
+      "./WSL/Inline.js",
+      "./WSL/Inliner.js",
+      "./WSL/InstantiateImmediates.js",
+      "./WSL/IntLiteral.js",
+      "./WSL/IntLiteralType.js",
+      "./WSL/Intrinsics.js",
+      "./WSL/LateChecker.js",
+      "./WSL/Lexer.js",
+      "./WSL/LexerToken.js",
+      "./WSL/LiteralTypeChecker.js",
+      "./WSL/LogicalExpression.js",
+      "./WSL/LogicalNot.js",
+      "./WSL/LoopChecker.js",
+      "./WSL/MakeArrayRefExpression.js",
+      "./WSL/MakePtrExpression.js",
+      "./WSL/NameContext.js",
+      "./WSL/NameFinder.js",
+      "./WSL/NameResolver.js",
+      "./WSL/NativeFunc.js",
+      "./WSL/NativeFuncInstance.js",
+      "./WSL/NativeType.js",
+      "./WSL/NativeTypeInstance.js",
+      "./WSL/NormalUsePropertyResolver.js",
+      "./WSL/NullLiteral.js",
+      "./WSL/NullType.js",
+      "./WSL/OriginKind.js",
+      "./WSL/OverloadResolutionFailure.js",
+      "./WSL/Parse.js",
+      "./WSL/Prepare.js",
+      "./WSL/Program.js",
+      "./WSL/ProgramWithUnnecessaryThingsRemoved.js",
+      "./WSL/PropertyResolver.js",
+      "./WSL/Protocol.js",
+      "./WSL/ProtocolDecl.js",
+      "./WSL/ProtocolFuncDecl.js",
+      "./WSL/ProtocolRef.js",
+      "./WSL/PtrType.js",
+      "./WSL/ReadModifyWriteExpression.js",
+      "./WSL/RecursionChecker.js",
+      "./WSL/RecursiveTypeChecker.js",
+      "./WSL/ResolveNames.js",
+      "./WSL/ResolveOverloadImpl.js",
+      "./WSL/ResolveProperties.js",
+      "./WSL/ResolveTypeDefs.js",
+      "./WSL/Return.js",
+      "./WSL/ReturnChecker.js",
+      "./WSL/ReturnException.js",
+      "./WSL/StandardLibrary.js",
+      "./WSL/StatementCloner.js",
+      "./WSL/StructLayoutBuilder.js",
+      "./WSL/StructType.js",
+      "./WSL/Substitution.js",
+      "./WSL/SwitchCase.js",
+      "./WSL/SwitchStatement.js",
+      "./WSL/SynthesizeEnumFunctions.js",
+      "./WSL/SynthesizeStructAccessors.js",
+      "./WSL/TrapStatement.js",
+      "./WSL/TypeDef.js",
+      "./WSL/TypeDefResolver.js",
+      "./WSL/TypeOrVariableRef.js",
+      "./WSL/TypeParameterRewriter.js",
+      "./WSL/TypeRef.js",
+      "./WSL/TypeVariable.js",
+      "./WSL/TypeVariableTracker.js",
+      "./WSL/TypedValue.js",
+      "./WSL/UintLiteral.js",
+      "./WSL/UintLiteralType.js",
+      "./WSL/UnificationContext.js",
+      "./WSL/UnreachableCodeChecker.js",
+      "./WSL/VariableDecl.js",
+      "./WSL/VariableRef.js",
+      "./WSL/VisitingSet.js",
+      "./WSL/WSyntaxError.js",
+      "./WSL/WTrapError.js",
+      "./WSL/WTypeError.js",
+      "./WSL/WhileLoop.js",
+      "./WSL/WrapChecker.js",
+      "./WSL/Test.js"
+    ],
+    "sha256": "cf38268fa3afaf7731e618b7604c79abc131fd4a09213453e0373fe6b3abb62d",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "WSLBenchmark",
+    "tags": [
+      "default",
+      "js",
+      "wsl",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/prismjs-startup-es6",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__prismjs-startup-es6.js",
+    "source": [
+      "./utils/StartupBenchmark.js",
+      "./prismjs/benchmark.js"
+    ],
+    "sha256": "c3196152aa4e0e98715768db21e48dee6cd592ecb63d56a40b15cab19c8522af",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "js",
+      "parser",
+      "regexp",
+      "startup",
+      "prismjs",
+      "es6",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/prismjs-startup-es5",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__prismjs-startup-es5.js",
+    "source": [
+      "./utils/StartupBenchmark.js",
+      "./prismjs/benchmark.js"
+    ],
+    "sha256": "5831bbe5a9103ce17fb1b53b3140245154b709fc0a562f44f4fdb57d4f350c75",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "parser",
+      "regexp",
+      "startup",
+      "prismjs",
+      "es5",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/RelativeTimeFormat-intl",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__RelativeTimeFormat-intl.js",
+    "source": [
+      "./intl/src/helper.js",
+      "./intl/src/RelativeTimeFormat.js",
+      "./intl/benchmark.js"
+    ],
+    "sha256": "2b809b7ea9f133c817bd8e63d4a81ac8f7a47da2cd67d591ea844d833e61cf48",
+    "official_iterations": 2,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "internationalization",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/PluralRules-intl",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__PluralRules-intl.js",
+    "source": [
+      "./intl/src/helper.js",
+      "./intl/src/PluralRules.js",
+      "./intl/benchmark.js"
+    ],
+    "sha256": "af49dc26cc7c07c7c2a958aa7de4400025972ac36bed5d22262ae91058bd093b",
+    "official_iterations": 2,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "internationalization",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/NumberFormat-intl",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__NumberFormat-intl.js",
+    "source": [
+      "./intl/src/helper.js",
+      "./intl/src/NumberFormat.js",
+      "./intl/benchmark.js"
+    ],
+    "sha256": "ed920107db7c1f139fccf6861c57c4cc30d592e04c6d453e95cc90b45122838a",
+    "official_iterations": 2,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "internationalization",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/ListFormat-intl",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__ListFormat-intl.js",
+    "source": [
+      "./intl/src/helper.js",
+      "./intl/src/ListFormat.js",
+      "./intl/benchmark.js"
+    ],
+    "sha256": "bb9ef5383d9247c0770f044f864d623088d156e8653dc036a07824577f00d8a1",
+    "official_iterations": 2,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "internationalization",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/DateTimeFormat-intl",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__DateTimeFormat-intl.js",
+    "source": [
+      "./intl/src/helper.js",
+      "./intl/src/DateTimeFormat.js",
+      "./intl/benchmark.js"
+    ],
+    "sha256": "b56b923c05805affd5d5e35d71454c94b013072201e9b701db32267d29ec6bdb",
+    "official_iterations": 2,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "internationalization",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/tagcloud-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__tagcloud-SP.js",
+    "source": [
+      "./SunSpider/tagcloud.js"
+    ],
+    "sha256": "2285b36a45969e5a1af964eefc07affcda456a4c9b7c9a3e4f412bd4b4f6cd72",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/string-unpack-code-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__string-unpack-code-SP.js",
+    "source": [
+      "./SunSpider/string-unpack-code.js"
+    ],
+    "sha256": "809442b1021f59b6a4a05c60a5ae93fa5fc5a662efe1df4bb0dc37dc09d6ef85",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/regex-dna-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__regex-dna-SP.js",
+    "source": [
+      "./SunSpider/regex-dna.js"
+    ],
+    "sha256": "158f9ce3beef42df85a2020069098c485ba27770c9223e24599b54a339d1383b",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/n-body-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__n-body-SP.js",
+    "source": [
+      "./SunSpider/n-body.js"
+    ],
+    "sha256": "0e5b5584851c0ec2d23584d2e9444488da7d5b3d1f67c0efb73a776e8f00e949",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/date-format-xparb-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__date-format-xparb-SP.js",
+    "source": [
+      "./SunSpider/date-format-xparb.js"
+    ],
+    "sha256": "6cf7b50d33ac133d7624ae8dbd9dd7b19c250d27365dbbf2fe86d01448f0cb8f",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/date-format-tofte-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__date-format-tofte-SP.js",
+    "source": [
+      "./SunSpider/date-format-tofte.js"
+    ],
+    "sha256": "33491ef7b05ed2318209da6f2740d5878018be0c11cf3f071db498b815a5aa17",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/crypto-sha1-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__crypto-sha1-SP.js",
+    "source": [
+      "./SunSpider/crypto-sha1.js"
+    ],
+    "sha256": "4b29b8e36eb4bb55258cd35376c04912e1765f005e0aff18c542d013799c22e9",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/crypto-md5-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__crypto-md5-SP.js",
+    "source": [
+      "./SunSpider/crypto-md5.js"
+    ],
+    "sha256": "c6958a8e1a8e1fe8434332c070ef84c209c8ab8145920789e9c8cdc3a6ffc5a9",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/crypto-aes-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__crypto-aes-SP.js",
+    "source": [
+      "./SunSpider/crypto-aes.js"
+    ],
+    "sha256": "d09205a0fcdc8c935d9c69f983f2dd8763ae66bbf9049a15d291412316f9546f",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/base64-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__base64-SP.js",
+    "source": [
+      "./SunSpider/base64.js"
+    ],
+    "sha256": "30b7ec4ed83405ab6bb2fba4d74fdc2b86eb518cbccc6f08e2c000415c83d7c6",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/3d-raytrace-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__3d-raytrace-SP.js",
+    "source": [
+      "./SunSpider/3d-raytrace.js"
+    ],
+    "sha256": "dbb5d134c25810f3f0c8c63b13a9db75b7d1d19f2ac7d7239faf0d340a0f0295",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/3d-cube-SP",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__3d-cube-SP.js",
+    "source": [
+      "./SunSpider/3d-cube.js"
+    ],
+    "sha256": "6c83a27aff4404dda7b272d691d648b556b705416acff5430c578c3df01448d6",
+    "official_iterations": 120,
+    "audit_iterations": 1,
+    "upstream_kind": "DefaultBenchmark",
+    "tags": [
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/acorn-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__acorn-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/acorn.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "a0d7928639f694b64dfa9bcd8fe7791569aa462d7333adb35fb217f4ede3afcc",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/babel-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__babel-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/babel.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "d7c775e706ee9894d0c4e5006621a8274b8d57c7e9a642dde75f85fca30b81f6",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/babel-minify-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__babel-minify-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/babel-minify.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "fb27bd93cbc66055c73ad68e95537b27eebb58d8fefad5e174a58551794b6204",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/babylon-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__babylon-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/babylon.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "e2ea7425c1a7e3b6eac2c5aca62c4b439a2f4f8777a4a5872a38939696a5b822",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/chai-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__chai-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/chai.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "08f44bffdae03c2d65435bf96faa873d60f9347ce68b1e7997f52db1f3ddcb5f",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/espree-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__espree-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/espree.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "2fbddb09a9d015f243422579fd8b1e0119a748ce079f2bcaa8e5cb688978d487",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/esprima-next-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__esprima-next-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/esprima-next.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "a7da1a15f8fd9746834cf7dbd44f0d243efe31ea7b47f2957376ea32836aab3f",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/lebab-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__lebab-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/lebab.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "86fd121c746036a827c6f320536b353ac12fe41c6531d6b8f87764cc465f3acd",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "jetstream-registry/postcss-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__postcss-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/postcss.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "9180289547577aedd5d6cf144fd82da1e68489c860c77d71f0af65af792fc951",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/prettier-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__prettier-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/prettier.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "c0ccc97f120953b86c7c50d324595cd0f7b8c6414b25b9864e1d72f2f21c1155",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  },
+  {
+    "name": "jetstream-registry/source-map-wtb",
+    "group": "jetstream",
+    "path": "workloads/jetstream-registry__source-map-wtb.js",
+    "source": [
+      "./web-tooling-benchmark/dist/source-map.bundle.js",
+      "./web-tooling-benchmark/benchmark.js"
+    ],
+    "sha256": "675717aabe11c2e47461f8d8017dbe431c841c6ff4484e6267b198bcf1058f6f",
+    "official_iterations": 15,
+    "audit_iterations": 1,
+    "upstream_kind": "AsyncBenchmark",
+    "tags": [
+      "js",
+      "wtb",
+      "default",
+      "all"
+    ]
+  }
+]

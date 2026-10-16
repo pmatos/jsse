@@ -1,0 +1,218 @@
+[
+  {
+    "name": "HashSet-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "wasm",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "quicksort-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "wasm",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "gcc-loops-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "wasm",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "tsf-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "richards-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "sqlite3-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "Dart-flute-complex-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "wasm",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "Dart-flute-todomvc-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "Kotlin-compose-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "transformersjs-bert-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "transformersjs",
+      "all"
+    ]
+  },
+  {
+    "name": "transformersjs-whisper-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "wasm",
+      "transformersjs",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "tfjs-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncWasmLegacyBenchmark",
+    "tags": [
+      "wasm",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "tfjs-wasm-simd",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncWasmLegacyBenchmark",
+    "tags": [
+      "wasm",
+      "all",
+      "disabled"
+    ]
+  },
+  {
+    "name": "argon2-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "bomb-workers",
+    "reason": "Web Workers unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "js",
+      "workertests",
+      "all"
+    ]
+  },
+  {
+    "name": "segmentation",
+    "reason": "Web Workers unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "js",
+      "workertests",
+      "all"
+    ]
+  },
+  {
+    "name": "8bitbench-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "zlib-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "WasmEMCCBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  },
+  {
+    "name": "dotnet-interp-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "dotnet",
+      "all"
+    ]
+  },
+  {
+    "name": "dotnet-aot-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "dotnet",
+      "all"
+    ]
+  },
+  {
+    "name": "j2cl-box2d-wasm",
+    "reason": "WebAssembly unavailable",
+    "kind": "AsyncBenchmark",
+    "tags": [
+      "default",
+      "wasm",
+      "all"
+    ]
+  }
+]

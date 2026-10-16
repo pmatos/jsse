@@ -1,0 +1,62 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 592  of event 'cpu-clock:u'
+# Event count (approx.): 1186372736
+#
+# Overhead  Shared Object     Symbol                                                                                                                                                                     IPC   [IPC Coverage]
+# ........  ................  .........................................................................................................................................................................  ....................
+#
+    30.74%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                       -      -            
+     7.77%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                          -      -            
+     7.43%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                             -      -            
+     3.55%  jsse              [.] jsse::interpreter::bytecode::vm::binary_slow                                                                                                                           -      -            
+     2.03%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                                                                   -      -            
+     2.03%  jsse              [.] core::ptr::drop_glue::<jsse::interpreter::CallFrameArguments>                                                                                                          -      -            
+     1.86%  jsse              [.] <jsse::interpreter::DeferredCallArguments>::new                                                                                                                        -      -            
+     1.52%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                               -      -            
+     1.35%  jsse              [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                                                                                              -      -            
+     1.35%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                                                                 -      -            
+     1.35%  libc.so.6         [.] 0x0000000000185de5                                                                                                                                                     -      -            
+     1.18%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_ic_validated                                                                                                           -      -            
+     1.18%  jsse              [.] <jsse::interpreter::binding_map::BindingMap>::push_unique                                                                                                              -      -            
+     1.18%  libc.so.6         [.] 0x0000000000185dc0                                                                                                                                                     -      -            
+     1.01%  jsse              [.] <alloc::vec::Vec<u16>>::extend_desugared::<core::str::iter::EncodeUtf16>                                                                                               -      -            
+     1.01%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                                                                        -      -            
+     1.01%  jsse              [.] <jsse::interpreter::Interpreter>::eval_binary                                                                                                                          -      -            
+     1.01%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                                                                      -      -            
+     1.01%  jsse              [.] <jsse::interpreter::Interpreter>::to_boolean_val                                                                                                                       -      -            
+     1.01%  libc.so.6         [.] malloc                                                                                                                                                                 -      -            
+     1.01%  libc.so.6         [.] 0x0000000000185dde                                                                                                                                                     -      -            
+     1.01%  libc.so.6         [.] 0x0000000000185deb                                                                                                                                                     -      -            
+     0.84%  jsse              [.] <alloc::sync::Arc<jsse::types::StrView>>::drop_slow                                                                                                                    -      -            
+     0.84%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                                                                         -      -            
+     0.84%  jsse              [.] <jsse::interpreter::Interpreter>::recycle_function_environment                                                                                                         -      -            
+     0.84%  jsse              [.] <jsse::interpreter::types::JsObjectData>::set_property_value::<jsse::types::JsPropertyKey>                                                                             -      -            
+     0.84%  jsse              [.] core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>                                                                                    -      -            
+     0.84%  jsse              [.] jsse::interpreter::bytecode::vm::declare_var_prologue                                                                                                                  -      -            
+     0.84%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                                                                            -      -            
+     0.84%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                           -      -            
+     0.84%  jsse              [.] jsse::interpreter::helpers::strict_equality                                                                                                                            -      -            
+     0.68%  jsse              [.] <jsse::interpreter::Interpreter>::acquire_function_environment                                                                                                         -      -            
+     0.68%  jsse              [.] <jsse::interpreter::Interpreter>::numeric_index_fast_get                                                                                                               -      -            
+     0.68%  jsse              [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                                                                    -      -            
+     0.68%  libc.so.6         [.] 0x0000000000185dc4                                                                                                                                                     -      -            
+     0.68%  libc.so.6         [.] 0x0000000000185de9                                                                                                                                                     -      -            
+     0.51%  jsse              [.] <jsse::interpreter::Interpreter>::call_function                                                                                                                        -      -            
+     0.51%  jsse              [.] <jsse::interpreter::Interpreter>::proxy_set_with_outcome_and_proxy_depth::<jsse::types::JsPropertyKey>                                                                 -      -            
+     0.51%  jsse              [.] <jsse::interpreter::Interpreter>::trace_mark_worklist                                                                                                                  -      -            
+     0.51%  jsse              [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                                                                                     -      -            
+     0.51%  jsse              [.] <jsse::interpreter::types::Environment>::reset_scope                                                                                                                   -      -            
+     0.51%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<jsse::types::JsPropertyKey>                                                                               -      -            
+     0.51%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<str>                                                                                                      -      -            
+     0.51%  jsse              [.] <jsse::types::JsString>::from_vec_grown                                                                                                                                -      -            
+     0.51%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                                                                    -      -            
+     0.51%  jsse              [.] jsse::interpreter::helpers::to_boolean                                                                                                                                 -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

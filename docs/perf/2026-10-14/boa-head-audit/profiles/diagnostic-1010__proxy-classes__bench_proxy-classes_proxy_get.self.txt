@@ -1,0 +1,62 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 795  of event 'cpu-clock:u'
+# Event count (approx.): 1593186360
+#
+# Overhead  Shared Object     Symbol                                                                                                                          IPC   [IPC Coverage]
+# ........  ................  ..............................................................................................................................  ....................
+#
+    19.75%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                            -      -            
+     9.06%  jsse              [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                                      -      -            
+     8.43%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                  -      -            
+     4.40%  libc.so.6         [.] malloc                                                                                                                      -      -            
+     3.02%  jsse              [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                                         -      -            
+     2.89%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                               -      -            
+     2.77%  jsse              [.] <jsse::interpreter::Interpreter>::add_reflect_query_methods::{closure#0}                                                    -      -            
+     2.64%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                    -      -            
+     2.64%  jsse              [.] <jsse::interpreter::Interpreter>::call_function                                                                             -      -            
+     2.39%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                             -      -            
+     1.64%  jsse              [.] <alloc::sync::Arc<jsse::types::StrView>>::drop_slow                                                                         -      -            
+     1.64%  jsse              [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                                                   -      -            
+     1.64%  jsse              [.] <jsse::interpreter::Interpreter>::to_property_key                                                                           -      -            
+     1.64%  jsse              [.] <jsse::interpreter::ic_store::IcStore>::enter_body                                                                          -      -            
+     1.51%  jsse              [.] <alloc::sync::Arc<[u8]>>::drop_slow                                                                                         -      -            
+     1.51%  jsse              [.] <hashbrown::map::HashMap<jsse::types::JsPropertyKey, u32, foldhash::fast::RandomState>>::get::<[u8]>                        -      -            
+     1.51%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                -      -            
+     1.38%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<jsse::types::JsPropertyKey>                        -      -            
+     1.38%  jsse              [.] <jsse::interpreter::types::Environment>::reset_scope                                                                        -      -            
+     1.26%  jsse              [.] <jsse::interpreter::Interpreter>::global_object_own_data                                                                    -      -            
+     1.13%  jsse              [.] <jsse::interpreter::Interpreter>::eval_identifier_update_hinted::<jsse::interpreter::atom::Atom>                            -      -            
+     1.13%  jsse              [.] <jsse::interpreter::Interpreter>::is_callable                                                                               -      -            
+     1.13%  jsse              [.] <jsse::interpreter::binding_map::BindingMap>::clear                                                                         -      -            
+     1.01%  jsse              [.] <jsse::interpreter::Interpreter>::generator_next_state_machine_impl::{closure#10}                                           -      -            
+     1.01%  jsse              [.] core::ptr::drop_glue::<core::option::Option<jsse::interpreter::types::ThisBinding>>                                         -      -            
+     1.01%  libc.so.6         [.] cfree                                                                                                                       -      -            
+     0.88%  jsse              [.] <jsse::interpreter::Interpreter>::invoke_proxy_trap                                                                         -      -            
+     0.88%  jsse              [.] <jsse::interpreter::Interpreter>::recycle_function_environment                                                              -      -            
+     0.88%  jsse              [.] <jsse::interpreter::Interpreter>::symbol_key_to_jsvalue::<str>                                                              -      -            
+     0.88%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property::<str>                                                           -      -            
+     0.88%  jsse              [.] jsse::interpreter::bytecode::vm::member_get                                                                                 -      -            
+     0.75%  jsse              [.] <alloc::sync::Arc<jsse::types::StrBuf>>::drop_slow                                                                          -      -            
+     0.75%  jsse              [.] <jsse::types::JsPropertyKey>::from_js_string                                                                                -      -            
+     0.75%  libc.so.6         [.] 0x0000000000185de5                                                                                                          -      -            
+     0.63%  jsse              [.] <jsse::interpreter::Interpreter>::gc_safepoint                                                                              -      -            
+     0.63%  jsse              [.] <jsse::interpreter::Interpreter>::resolve_identifier_ref_hinted::<jsse::interpreter::atom::Atom>                            -      -            
+     0.63%  jsse              [.] core::ptr::drop_glue::<(jsse::interpreter::atom::Atom, jsse::interpreter::types::Binding)>                                  -      -            
+     0.50%  jsse              [.] <jsse::interpreter::Interpreter>::dispose_resources                                                                         -      -            
+     0.50%  jsse              [.] <jsse::interpreter::Interpreter>::env_set::<jsse::interpreter::atom::Atom>                                                  -      -            
+     0.50%  jsse              [.] <jsse::interpreter::Interpreter>::get_identifier_value_by_ref_hinted::<jsse::interpreter::atom::Atom>                       -      -            
+     0.50%  jsse              [.] <jsse::interpreter::types::Environment>::resolve_indirect_binding                                                           -      -            
+     0.50%  jsse              [.] core::ptr::drop_glue::<jsse::interpreter::CallFrameArguments>                                                               -      -            
+     0.50%  jsse              [.] core::ptr::drop_glue::<jsse::interpreter::global_access::NameWalk>                                                          -      -            
+     0.50%  jsse              [.] jsse::interpreter::helpers::to_number                                                                                       -      -            
+     0.50%  libc.so.6         [.] 0x0000000000185dde                                                                                                          -      -            
+     0.50%  libc.so.6         [.] 0x000000000018f400                                                                                                          -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

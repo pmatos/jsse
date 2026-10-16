@@ -1,0 +1,26 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 656  of event 'cpu-clock:u'
+# Event count (approx.): 1314629248
+#
+# Children      Self  Shared Object         Symbol                                                                                                      IPC   [IPC Coverage]
+# ........  ........  ....................  ..........................................................................................................  ....................
+#
+    42.68%    42.68%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                        -      -            
+     9.60%     9.60%  jsse                  [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                              -      -            
+     3.66%     3.66%  jsse                  [.] <jsse::interpreter::atom::Atom as jsse::interpreter::binding_map::BindingKey>::find_in                  -      -            
+     3.05%     3.05%  jsse                  [.] <jsse::interpreter::DeferredCallArguments>::new                                                         -      -            
+     2.90%     2.90%  jsse                  [.] jsse::interpreter::bytecode::vm::run_chunk_inner::{closure#2}                                           -      -            
+     2.59%     2.59%  jsse                  [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                -      -            
+     2.44%     2.44%  jsse                  [.] jsse::interpreter::global_access::walk_scope_chain::<jsse::interpreter::atom::Atom>                     -      -            
+     2.29%     2.29%  jsse                  [.] <alloc::vec::Vec<jsse::interpreter::CallFrame>>::push_mut                                               -      -            
+     2.29%     2.29%  jsse                  [.] <jsse::interpreter::Interpreter>::dispatch_body                                                         -      -            
+     2.29%     2.29%  jsse                  [.] jsse::interpreter::bytecode::vm::pop_operands                                                           -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

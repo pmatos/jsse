@@ -1,0 +1,50 @@
+59999700000
+PERF	vm_ops	9400047
+PERF	ast_stmt_execs	0
+PERF	ast_expr_evals	0
+PERF	ast_work_units	0
+PERF	body_dispatch_compiled	1
+PERF	body_dispatch_ast	0
+PERF	body_non_function_execs	1
+PERF	vm_ops_per_compiled_body	9400047.00
+PERF	ast_units_in_functions	0
+PERF	compile_ok	2
+PERF	compile_bail	0
+PERF	calls_from_vm	2
+PERF	calls_to_native	1
+PERF	trivial_getter_hits	0
+PERF	calls_to_user	1
+PERF	gc_minor	0
+PERF	gc_major	0
+PERF	gc_ms	0
+PERF	gc_minor_us	0
+PERF	local_slot_hits	4600019
+PERF	local_slot_misses	0
+PERF	ast_fallback_execs	0
+PERF	ast_units_in_fallbacks	0
+PERF	global_prop_fast_hits	0
+PERF	global_prop_fast_misses	0
+PERF	atom_intern_calls	88
+PERF	atom_lookup_calls	322
+PERF	key_intern_calls	201187
+BODY	<script body>	0	0.00%	1	-
+OP	LoadLocal	2400001	25.53%
+OP	Add	1400000	14.89%
+OP	JumpIfFalse	800008	8.51%
+OP	LocalBinConst	800008	8.51%
+OP	LoadConst	800006	8.51%
+OP	Jump	800003	8.51%
+OP	UpdateLocal	800003	8.51%
+OP	StoreLocalPop	600007	6.38%
+OP	GetElement	600000	6.38%
+OP	Pop	200001	2.13%
+OP	SetElement	200000	2.13%
+OP	Call	2	0.00%
+OP	LoadUndefined	1	0.00%
+OP	ReturnUndefined	1	0.00%
+OP	LoadName	1	0.00%
+OP	SetCompletion	1	0.00%
+OP	ReturnCompletion	1	0.00%
+OP	LoadMethod	1	0.00%
+OP	NewObject	1	0.00%
+OP	MakeClosure	1	0.00%

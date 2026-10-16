@@ -1,0 +1,27 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'cpu-clock:u'
+# Event count (approx.): 2026052088
+#
+# Children      Self  Shared Object     Symbol                                                                                                                                                                     IPC   [IPC Coverage]
+# ........  ........  ................  .........................................................................................................................................................................  ....................
+#
+    30.76%    30.76%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_inner                                                                                                                       -      -            
+    11.28%    10.68%  jsse              [.] <jsse::interpreter::Interpreter>::get_object_property_with_proxy_depth::<str>                                                                                          -      -            
+     9.89%     9.79%  jsse              [.] <jsse::interpreter::Interpreter>::call_function_inner_impl                                                                                                             -      -            
+     6.33%     1.78%  jsse              [.] jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue                                                                                                           -      -            
+            |          
+             --4.55%--jsse::interpreter::bytecode::vm::run_chunk_with_var_prologue
+                       jsse::interpreter::bytecode::vm::run_chunk_inner
+
+     5.24%     5.14%  jsse              [.] <jsse::interpreter::Interpreter>::bind_simple_parameters                                                                                                               -      -            
+     3.76%     2.47%  jsse              [.] <jsse::interpreter::Interpreter>::dispatch_body                                                                                                                        -      -            
+     2.37%     2.27%  jsse              [.] <jsse::interpreter::types::JsObjectData>::get_own_property_full::<str>                                                                                                 -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#
