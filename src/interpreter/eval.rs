@@ -1983,7 +1983,7 @@ impl Interpreter {
 
     /// The `typeof` result string for an evaluated value (HTMLDDA aware).
     pub(super) fn typeof_value(&self, value: &JsValue) -> JsValue {
-        JsValue::string(JsString::from_str(typeof_val(value, &self.objects)))
+        self.common_keys.typeof_results[typeof_index(value, &self.objects)].clone()
     }
 
     /// `typeof <identifier>`: an unresolvable reference yields `"undefined"`,
@@ -2016,7 +2016,7 @@ impl Interpreter {
                     "Cannot access '{name}' before initialization"
                 )))
             }
-            None => Completion::Normal(JsValue::string(JsString::from_str("undefined"))),
+            None => Completion::Normal(self.common_keys.typeof_results[TYPEOF_UNDEFINED].clone()),
         }
     }
 

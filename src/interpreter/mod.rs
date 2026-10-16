@@ -266,6 +266,10 @@ struct CommonKeys {
     done: JsPropertyKey,
     /// Shared `name` value of anonymous functions.
     empty_name: JsString,
+    /// `typeof` results, indexed like `helpers::TYPEOF_NAMES`. Primitive
+    /// strings are `Arc`-backed and outside the object arena, so these need no
+    /// GC root and serve every realm.
+    typeof_results: [JsValue; 8],
 }
 
 impl CommonKeys {
@@ -281,6 +285,7 @@ impl CommonKeys {
             value: intern_key("value"),
             done: intern_key("done"),
             empty_name: JsString::from_str(""),
+            typeof_results: helpers::TYPEOF_NAMES.map(JsValue::from_str),
         }
     }
 }

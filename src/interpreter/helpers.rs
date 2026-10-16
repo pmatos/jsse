@@ -404,28 +404,53 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
-pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::ObjectArena) -> &'a str {
+/// Indices into `TYPEOF_NAMES`, the eight `typeof` result strings
+/// (sec-typeof-operator-runtime-semantics-evaluation, table 41).
+pub(crate) const TYPEOF_UNDEFINED: usize = 0;
+const TYPEOF_OBJECT: usize = 1;
+const TYPEOF_BOOLEAN: usize = 2;
+const TYPEOF_NUMBER: usize = 3;
+const TYPEOF_STRING: usize = 4;
+const TYPEOF_SYMBOL: usize = 5;
+const TYPEOF_BIGINT: usize = 6;
+const TYPEOF_FUNCTION: usize = 7;
+
+pub(crate) const TYPEOF_NAMES: [&str; 8] = {
+    let mut names = [""; 8];
+    names[TYPEOF_UNDEFINED] = "undefined";
+    names[TYPEOF_OBJECT] = "object";
+    names[TYPEOF_BOOLEAN] = "boolean";
+    names[TYPEOF_NUMBER] = "number";
+    names[TYPEOF_STRING] = "string";
+    names[TYPEOF_SYMBOL] = "symbol";
+    names[TYPEOF_BIGINT] = "bigint";
+    names[TYPEOF_FUNCTION] = "function";
+    names
+};
+
+/// Index into `TYPEOF_NAMES` for a value (HTMLDDA reports "undefined").
+pub(crate) fn typeof_index(val: &JsValue, objects: &super::object_arena::ObjectArena) -> usize {
     match val.kind() {
-        ValueKind::Undefined => "undefined",
-        ValueKind::Null => "object",
-        ValueKind::Boolean => "boolean",
-        ValueKind::Number => "number",
-        ValueKind::String => "string",
-        ValueKind::Symbol => "symbol",
-        ValueKind::BigInt => "bigint",
+        ValueKind::Undefined => TYPEOF_UNDEFINED,
+        ValueKind::Null => TYPEOF_OBJECT,
+        ValueKind::Boolean => TYPEOF_BOOLEAN,
+        ValueKind::Number => TYPEOF_NUMBER,
+        ValueKind::String => TYPEOF_STRING,
+        ValueKind::Symbol => TYPEOF_SYMBOL,
+        ValueKind::BigInt => TYPEOF_BIGINT,
         ValueKind::Object => {
             if let Some(id) = val.as_object_id()
                 && let Some(obj) = objects.get(id)
             {
                 let b = obj.borrow();
                 if b.is_htmldda {
-                    return "undefined";
+                    return TYPEOF_UNDEFINED;
                 }
                 if b.callable.is_some() {
-                    return "function";
+                    return TYPEOF_FUNCTION;
                 }
             }
-            "object"
+            TYPEOF_OBJECT
         }
     }
 }
