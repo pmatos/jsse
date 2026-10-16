@@ -14,8 +14,8 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use super::body_memo::{BodyMemo, DEFAULT_CAPACITY};
 use super::atom::Atom;
+use super::body_memo::{BodyMemo, DEFAULT_CAPACITY};
 use super::types::BindingKind;
 use crate::ast::{Body, Statement};
 use crate::interpreter::Interpreter;
