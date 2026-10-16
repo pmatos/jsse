@@ -15,7 +15,7 @@ info: |
   (14.12.3), in a function body (bytecode) and in a generator body
   (tree-walker under default flags).
 esid: sec-isstrictlyequal
-features: [Symbol, BigInt, Reflect, generators]
+features: [Symbol, BigInt, Reflect, generators, IsHTMLDDA]
 includes: [compareArray.js]
 ---*/
 

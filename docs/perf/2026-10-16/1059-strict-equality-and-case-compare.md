@@ -9,7 +9,7 @@ both operands and went `binary_slow` -> `eval_binary` -> `bigint_binary` (dead p
 
 - `NanBoxedValue::strict_equal_non_number` (`types.rs`): `None` for two Numbers (IEEE rules stay with the Number path),
   `false` for different kinds (a Number against a non-Number included), identical bits `true`, Objects by id, Strings by
-  content, Symbols by `id` (a symbol rebuilt by own-key enumeration is a different `Arc` with the same id), BigInts by
+  content, Symbols by `id` (compared out of line in `symbol_or_bigint_equal`; a symbol rebuilt by own-key enumeration is a different `Arc` with the same id), BigInts by
   value. `strict_equality` (`helpers.rs`, used by the tree-walker, `SameValueZero`, `Array.prototype.includes`, ...) is
   now that helper plus the Number case. `with_string`/`with_symbol`/`with_bigint` are `#[inline(always)]` so the
   nested closures fold into the compare.
@@ -26,17 +26,17 @@ both operands and went `binary_slow` -> `eval_binary` -> `bigint_binary` (dead p
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
 cachegrind `--cache-sim=no`, whole-process `I refs`. base = `origin/main` at `5784ea97` (binary sha256 `a346c1cb51e4...`),
-new = base plus this change (`17749d0b025c...`). Repro = the issue's `repro.js` (switch Ir per 8-case iteration, net of
+new = base plus this change (`345caacfc876...`). Repro = the issue's `repro.js` (switch Ir per 8-case iteration, net of
 the N=0 run; direct loop Ir per compare, two compares per iteration).
 
 | operands | switch base | switch new | delta | `a === b; a !== b` base | new | delta |
 |---|---:|---:|---:|---:|---:|---:|
-| Number (control) | 4,060 | 2,738 | -32.6% | 662 | 669 | +1.1% |
-| strings (locals) | 6,143 | 3,282 | -46.6% | 973 | 798 | -18.0% |
-| string literals | 5,528 | 2,654 | -52.0% | 973 | 798 | -18.0% |
-| Symbols | 5,839 | 2,889 | -50.5% | 938 | 739 | -21.2% |
-| objects | 6,198 | 3,041 | -50.9% | 981 | 786 | -19.9% |
-| mixed tags | 5,737 | 2,811 | -51.0% | 941 | 764 | -18.8% |
+| Number (control) | 4,060 | 2,735 | -32.6% | 662 | 669 | +1.1% |
+| strings (locals) | 6,143 | 3,168 | -48.4% | 973 | 790 | -18.8% |
+| string literals | 5,528 | 2,541 | -54.0% | 973 | 790 | -18.8% |
+| Symbols | 5,839 | 2,982 | -48.9% | 938 | 738 | -21.3% |
+| objects | 6,198 | 3,065 | -50.6% | 981 | 785 | -20.0% |
+| mixed tags | 5,737 | 2,808 | -51.1% | 941 | 763 | -18.9% |
 
 The Number direct loop is the only row that moved the wrong way: +7 Ir per compare in every build of this change,
 including builds that leave the Number arm byte-identical in source (an out-of-line strict helper gave +17). It is
@@ -46,17 +46,17 @@ JetStream drivers at `--iterations 1`, whole-process Ir:
 
 | benchmark | base | new | delta |
 |---|---:|---:|---:|
-| Air | 2,751,217,125 | 2,388,453,035 | -13.2% |
-| hash-map | 22,337,705,990 | 21,009,059,759 | -5.9% |
-| proxy-mobx | 782,569,966 | 770,775,202 | -1.5% |
-| Babylon | 3,466,135,005 | 3,401,094,247 | -1.9% |
-| fib | 7,515,772,271 | 7,424,233,343 | -1.2% |
-| Box2D | 8,296,152,067 | 8,227,264,778 | -0.8% |
-| richards | 13,675,239,099 | 13,613,417,380 | -0.5% |
-| bigint-noble-ed25519 | 7,858,884,522 | 7,838,986,916 | -0.3% |
-| splay | 10,467,163,823 | 10,435,267,830 | -0.3% |
-| delta-blue | 9,005,883,018 | 9,004,236,302 | -0.0% |
-| gaussian-blur | 31,362,316,548 | 31,345,726,711 | -0.1% |
+| Air | 2,751,217,125 | 2,401,750,600 | -12.7% |
+| hash-map | 22,337,705,990 | 20,998,547,187 | -6.0% |
+| proxy-mobx | 782,569,966 | 760,465,379 | -2.8% |
+| Babylon | 3,466,135,005 | 3,397,469,558 | -2.0% |
+| fib | 7,515,772,271 | 7,425,572,871 | -1.2% |
+| Box2D | 8,296,152,067 | 8,237,207,639 | -0.7% |
+| richards | 13,675,239,099 | 13,598,433,175 | -0.6% |
+| splay | 10,467,163,823 | 10,430,969,212 | -0.3% |
+| bigint-noble-ed25519 | 7,858,884,522 | 7,844,951,127 | -0.2% |
+| gaussian-blur | 31,362,316,548 | 31,302,467,906 | -0.2% |
+| delta-blue | 9,005,883,018 | 8,999,112,847 | -0.1% |
 
 ## Correctness gates
 
