@@ -4,6 +4,17 @@ use std::process::ExitCode;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+/// Transparent huge pages make every fresh 2 MiB extent a zeroed huge page on
+/// hosts with THP=always: ~17% more wall time over a test262 run of short
+/// processes, and no benefit for the long benchmarks (#1047).
+#[cfg(all(
+    feature = "jemalloc",
+    target_os = "linux",
+    not(any(target_family = "wasm", miri))
+))]
+#[unsafe(export_name = "_rjem_malloc_conf")]
+pub static MALLOC_CONF: Option<&'static u8> = Some(&b"thp:never\0"[0]);
+
 /// jemalloc serves every Rust allocation, but glibc still backs libc's own
 /// (per-thread TLS blocks) and gives each thread an arena that reserves 64 MiB
 /// of address space. A multi-agent Atomics test then exhausts the test

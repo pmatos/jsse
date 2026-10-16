@@ -1,7 +1,7 @@
 # #1047: jemalloc as the shipped binary's global allocator
 
 Decision: adopt jemalloc (`tikv-jemallocator` 0.6, default feature `jemalloc`, `#[global_allocator]` in
-`src/main.rs` only). Step 0 (glibc `mallopt` trim tuning) was built and measured first; it is not shipped.
+`src/main.rs` only, `thp:never` embedded via `_rjem_malloc_conf` on Linux). Step 0 (glibc `mallopt` trim tuning) was built and measured first; it is not shipped.
 
 Measured on buildbox3 (AMD EPYC 7501, one pinned core `taskset -c 60`, loadavg 1.5-2.4 from other users),
 `jsse` built from `660c5a17` with nightly 1.100.0-nightly, shipped profile (fat LTO, cgu=1), `--locked`.
@@ -9,35 +9,47 @@ base = the same tree without the allocator (`--no-default-features`, byte-for-by
 final = default features. One unrecorded warmup run, then 5 rounds with the variant order rotated each round;
 wall = process wall clock including startup.
 
-## Wall time (median seconds, 5 rounds)
+## Wall time (median seconds, 5 rounds, shipped config: `thp:never`, one arena for glibc)
 
 | benchmark | base | jemalloc | ratio | maxrss base -> jemalloc |
 |---|---:|---:|---:|---:|
-| bigint-noble-ed25519 | 2.244 | 2.080 | 0.927 | 43 -> 47 MB |
-| bigint-noble-bls12-381 | 22.452 | 21.159 | 0.942 | 36 -> 44 MB |
-| proxy-mobx | 0.328 | 0.295 | 0.902 | 33 -> 43 MB |
-| proxy-vue | 0.562 | 0.519 | 0.922 | 36 -> 41 MB |
-| async-fs | 2.987 | 2.740 | 0.917 | 27 -> 35 MB |
-| splay | 3.163 | 2.584 | 0.817 | 538 -> 564 MB (+4.8%) |
-| richards | 3.553 | 3.523 | 0.992 | 19 -> 27 MB |
-| delta-blue | 2.291 | 2.247 | 0.981 | 21 -> 31 MB |
-| hash-map | 5.511 | 5.492 | 0.997 | 66 -> 76 MB |
-| fib | 1.513 | 1.505 | 0.995 | 15 -> 25 MB |
+| bigint-noble-ed25519 | 2.238 | 2.123 | 0.949 | 42 -> 42 MB |
+| bigint-noble-bls12-381 | 23.685 | 22.790 | 0.962 | 37 -> 35 MB |
+| proxy-mobx | 0.322 | 0.303 | 0.942 | 36 -> 35 MB |
+| proxy-vue | 0.571 | 0.528 | 0.926 | 36 -> 34 MB |
+| async-fs | 2.989 | 2.765 | 0.925 | 30 -> 27 MB |
+| splay | 3.378 | 3.095 | 0.916 | 526 -> 537 MB (+2.1%) |
+| richards | 3.727 | 3.730 | 1.001 | 20 -> 17 MB |
+| delta-blue | 2.438 | 2.439 | 1.001 | 24 -> 21 MB |
+| hash-map | 5.859 | 5.948 | 1.015 | 68 -> 66 MB |
+| fib | 1.646 | 1.623 | 0.985 | 18 -> 16 MB |
 
-Geomean of the six allocation-heavy rows: 0.904 (-9.6%); all ten: 0.938 (-6.2%). No row regresses. Run-to-run
-spread (max-min)/median was 0.7-6%. An earlier build without the `M_ARENA_MAX` call below measured 0.909
-(six) and the same pattern per row.
+Geomean of the six allocation-heavy rows: 0.937 (-6.3%); all ten:
+0.962 (-3.8%). hash-map's +1.5% is inside its 0.8-1.1% spread plus layout noise (richards, delta-blue and
+fib, the same interpreter loop, are flat or faster). Run-to-run spread (max-min)/median was 0.8-5%.
 
-## Where it comes from (splay, `/usr/bin/time`)
+## Transparent huge pages decide how much you get
 
-| variant | wall | user | sys | minor faults | maxrss |
-|---|---:|---:|---:|---:|---:|
-| glibc | 3.42 / 3.15 | 2.93 / 2.75 | 0.48 / 0.39 | 252,822 / 191,686 | 550 MB |
-| jemalloc | 2.59 / 2.60 | 2.49 / 2.49 | 0.10 / 0.10 | 20,691 / 16,456 | 577 MB |
+buildbox3 (and this laptop) run with THP `enabled=always`; Ubuntu/GitHub runners use `madvise`. jemalloc's
+default (`thp:default`) never calls `madvise`, so on an `always` host the kernel backs every 2 MiB-aligned
+extent with a zeroed huge page:
 
-glibc trims the engine thread's heap after each collection and refaults it for the next allocation burst:
-kernel time and page faults that callgrind does not model. ed25519 minor faults 13.7k -> 6.5k, proxy-mobx
-6.4k -> 3.9k, async-fs 7.1k -> 5.3k.
+| config (buildbox3, THP=always) | six-row geomean | splay | test262 10% sample, 8 cores |
+|---|---:|---:|---:|
+| glibc (base) | 1.000 | 3.163 s | 41.5 s |
+| jemalloc `thp:default` | 0.904 | 0.817x, 15-20k minor faults | 48.7 s (+17%) |
+| jemalloc `thp:never` (shipped) | 0.937 | 0.916x, 183-228k faults | 42.8 s (+3%) |
+
+`thp:default` is 3.3 points better on the long benchmarks (a 550 MB heap takes 15k huge-page faults instead of
+140k+ small ones) and it pays for that in every short process: each `jsse` run zeroes huge pages it hardly
+touches, which costs 17% on a test262 run (one process per scenario). The shipped `thp:never` behaves the same
+on `always` and `madvise` hosts, so CI (Ubuntu, `madvise`) sees what these numbers show. The test262 wall
+times for base vs the shipped binary alternated at 52.7/54.9, 52.7/52.9 and 43.4/44.2 s under external load 35-75
+(+0.4% to +4%); the quiet-host pair before the final build was 41.5 vs 42.8 s.
+
+The splay minor-fault drop that the issue attributed to jemalloc is therefore mostly THP: with `thp:never`
+splay still takes 183-228k faults (floor for 537 MB of 4 KiB pages is 137k). What jemalloc gives without THP
+is less kernel time (sys 0.43-0.51 s -> 0.30-0.33 s on splay) and fewer user-space instructions.
 
 ## glibc arenas under RLIMIT_AS
 
@@ -62,23 +74,26 @@ Built as a temporary feature and measured in the same rounds (5 rounds, same hos
 | bigint-noble-bls12-381 | 23.683 | 23.351 | 0.986 | 0.926 |
 | fib | 1.649 | 1.775 | 1.076 | 0.987 |
 
-Geomean of the six: 0.940 (jemalloc 0.897 in the same rounds). It clears the 5% bar on the six rows, but it
-is not shipped:
+Geomean of the six: 0.940 (THP-default jemalloc 0.897 in the same rounds). It clears the 5% bar on the six
+rows, but it is not shipped:
 
 - fib came out 7.6% slower in that binary (9 rounds, 1.775 vs 1.649 s) and richards/hash-map got nothing.
   The regression is code layout, not allocation: callgrind `bench_fib.js` is 8,503,128,501 Ir (base) vs
   8,503,717,485 (mallopt) vs 8,476,964,995 (jemalloc), and the same `GLIBC_TUNABLES` values on the unmodified
   binary measure 1.62-1.70 s. A one-function change in `main.rs` moved the interpreter loop's alignment in a
   fat-LTO binary; chasing that is not a fix.
-- It recovers only about 60% of jemalloc's geomean (6.0% vs 10.3% on the same rounds) and ed25519, async-fs
-  and bls12-381 keep most of their cost.
+- Against the shipped `thp:never` jemalloc it is a wash on the geomean (6.0% vs 6.3%, different rounds) but
+  loses on ed25519 (0.985 vs 0.949), async-fs (0.970 vs 0.925), vue, and bls12-381, and wins only on splay
+  (0.863 vs 0.916) and mobx; it also leaves jemalloc's lower user time on the table. Against jemalloc with
+  THP (what the issue's numbers measured) it recovers about 60% (6.0% vs 10.3% in the same rounds).
 - It is glibc-only, turns off glibc's dynamic mmap threshold, and never returns top-of-heap memory to the OS.
 
 ## Startup and size
 
-- `jsse -e 1`: 13.10 ms -> 13.89 ms per spawn (+0.8 ms, 10 rotated rounds of 30 spawns, medians).
-- `jsse -e 1` maxrss: 16 MB -> 27 MB.
-- Binary: 31,391,592 -> 31,960,688 bytes (+0.57 MB).
+- `jsse -e 1`: 13.04 ms -> 13.88 ms per spawn (+0.8 ms, 10 rotated rounds of 30 spawns, medians, host under
+  load 37-58 so the absolute numbers are noisy; minima 12.33 vs 12.53 ms).
+- `jsse -e 1` maxrss: 15.8 MB -> 18.3 MB (27 MB with THP).
+- Binary: 31,391,592 -> 31,960,752 bytes (+0.57 MB).
 - Full test262 (99,911 scenarios, `-j 22`): 100% on the default and `--no-bytecode` runs; test262-extra 1399/1399
   including `JSSE_GC_STRESS=7` in both modes; `tests/` custom 19/19.
 
