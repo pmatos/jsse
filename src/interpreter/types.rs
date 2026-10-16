@@ -3009,7 +3009,7 @@ impl JsObjectData {
     /// data property and every `undefined` slot is a hole. A present
     /// `undefined` is never stored here: the vector cannot tell it from a
     /// hole, so it needs the descriptor the generic path creates.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn dense_array_set_plan(
         &self,
         index: usize,
@@ -4707,10 +4707,30 @@ pub(crate) fn is_array_index_property_key<K: crate::types::PropertyKeyLike + ?Si
         && parse_array_index(key).is_some()
 }
 
+/// 1 to 15 ASCII digits, no leading zero (or exactly `"0"`): always its own
+/// canonical numeric spelling, so the `f64` parse and `ToString` round trip are skipped.
+fn plain_decimal_integer(key: &str) -> Option<f64> {
+    let bytes = key.as_bytes();
+    if bytes.is_empty() || bytes.len() > 15 || (bytes[0] == b'0' && bytes.len() > 1) {
+        return None;
+    }
+    let mut value: u64 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u64::from(b - b'0');
+    }
+    Some(value as f64)
+}
+
 pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + ?Sized>(
     key: &K,
 ) -> Option<f64> {
     let key = key.as_property_key_str()?;
+    if let Some(n) = plain_decimal_integer(key) {
+        return Some(n);
+    }
     if key == "-0" {
         return Some(-0.0_f64);
     }
@@ -6124,5 +6144,66 @@ mod typed_array_codec_tests {
                 kind.name()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod canonical_numeric_index_tests {
+    use super::canonical_numeric_index_string;
+
+    #[test]
+    fn plain_digit_strings_are_their_own_canonical_form() {
+        for (key, expected) in [
+            ("0", 0.0),
+            ("7", 7.0),
+            ("10", 10.0),
+            ("4294967295", 4294967295.0),
+            ("999999999999999", 999_999_999_999_999.0),
+        ] {
+            assert_eq!(canonical_numeric_index_string(key), Some(expected), "{key}");
+        }
+    }
+
+    #[test]
+    fn non_canonical_spellings_stay_rejected() {
+        for key in [
+            "",
+            "00",
+            "01",
+            "+1",
+            "1.0",
+            "1e3",
+            "0x10",
+            " 1",
+            "1 ",
+            "1_0",
+            "abc",
+            "Infinity1",
+        ] {
+            assert_eq!(canonical_numeric_index_string(key), None, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn sixteen_digit_strings_take_the_general_path() {
+        assert_eq!(
+            canonical_numeric_index_string("1000000000000000"),
+            Some(1e15)
+        );
+        assert_eq!(
+            canonical_numeric_index_string("9007199254740993"),
+            None,
+            "not the shortest round-trip spelling of its double"
+        );
+        assert_eq!(
+            canonical_numeric_index_string("-0").map(f64::is_sign_negative),
+            Some(true)
+        );
+        assert_eq!(canonical_numeric_index_string("-5"), Some(-5.0));
+        assert_eq!(canonical_numeric_index_string("1.5"), Some(1.5));
+        assert_eq!(
+            canonical_numeric_index_string("NaN").map(f64::is_nan),
+            Some(true)
+        );
     }
 }

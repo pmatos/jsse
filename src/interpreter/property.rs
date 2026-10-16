@@ -195,7 +195,20 @@ impl Interpreter {
     /// can own it. Returns `false` with no side effect when the generic
     /// [[Set]] must run (accessors, Proxies, frozen or sealed arrays,
     /// read-only `length`, `undefined` values, inherited setters).
+    #[inline(never)]
     pub(super) fn numeric_index_fast_set(
+        &self,
+        obj_val: &JsValue,
+        index: f64,
+        value: &JsValue,
+    ) -> bool {
+        self.numeric_index_fast_set_inlined(obj_val, index, value)
+    }
+
+    /// `numeric_index_fast_set` expanded at the call site, for the bytecode
+    /// VM's `SetElement`, where an out-of-line call costs about 7 Ir per store.
+    #[inline(always)]
+    pub(super) fn numeric_index_fast_set_inlined(
         &self,
         obj_val: &JsValue,
         index: f64,
@@ -1067,9 +1080,7 @@ impl Interpreter {
                     let obj_ref = obj.borrow();
                     let ta = obj_ref.typed_array_info().unwrap();
                     if is_valid_integer_index(ta, index) {
-                        let ta_clone = ta.clone();
-                        drop(obj_ref);
-                        typed_array_set_index(&ta_clone, index as usize, &num_val);
+                        typed_array_set_index(ta, index as usize, &num_val);
                     }
                     return Ok(SetOutcome::Succeeded);
                 } else {

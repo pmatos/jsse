@@ -543,10 +543,7 @@ fn member_update_computed(
             "Cannot read properties of {base} (reading property)"
         )));
     }
-    match interp.to_property_key(key_val) {
-        Ok(key) => interp.update_member_value(base, &key, op, prefix, strict),
-        Err(e) => Completion::Throw(e),
-    }
+    interp.update_member_computed(base, key_val, op, prefix, strict)
 }
 
 /// Declares the chunk's `var` names in first-use order, which is the order
@@ -1372,7 +1369,11 @@ fn run_chunk_inner(
                     let len = stack.len();
                     if len >= 3
                         && let Some(index) = stack[len - 2].as_number()
-                        && interp.numeric_index_fast_set(&stack[len - 3], index, &stack[len - 1])
+                        && interp.numeric_index_fast_set_inlined(
+                            &stack[len - 3],
+                            index,
+                            &stack[len - 1],
+                        )
                     {
                         let rhs = pop_value(interp, stack, "stack underflow on SetElement rhs");
                         pop_value(interp, stack, "stack underflow on SetElement key");
