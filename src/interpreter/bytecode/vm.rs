@@ -422,6 +422,21 @@ fn take_literal_values(
     values
 }
 
+/// Discards the top `count` operands, which the caller has just read with
+/// `as_number`. A Number owns nothing, so lowering the length is a complete
+/// drop; unlike `Vec::truncate` it does not depend on the optimizer inlining
+/// the slice drop glue into the dispatch loop.
+///
+/// # Safety
+/// `count <= stack.len()` and the top `count` operands are Numbers.
+#[inline(always)]
+unsafe fn discard_number_operands(stack: &mut Vec<JsValue>, count: usize) {
+    let len = stack.len();
+    debug_assert!(count <= len && stack[len - count..].iter().all(JsValue::is_number));
+    // SAFETY: the caller guarantees `count <= len`; Numbers own nothing.
+    unsafe { stack.set_len(len - count) };
+}
+
 /// Pops and unroots `count` operands, innermost first (LIFO with the pushes).
 fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize) {
     for _ in 0..count {
@@ -926,7 +941,8 @@ fn run_chunk_inner(
                 && let (Some(l), Some(r)) = (stack[len - 2].as_number(), stack[len - 1].as_number())
             {
                 // Numbers are never rooted, so nothing needs unrooting.
-                stack.truncate(len - 1);
+                // SAFETY: `len >= 2` and `stack[len - 1]` was just read as a Number.
+                unsafe { discard_number_operands(stack, 1) };
                 stack[len - 2] = number_binop($bop, l, r);
             } else {
                 let r = stack.pop().expect("stack underflow on binop rhs");
@@ -1650,7 +1666,8 @@ fn run_chunk_inner(
                         && let (Some(l), Some(r)) =
                             (stack[len - 2].as_number(), stack[len - 1].as_number())
                     {
-                        stack.truncate(len - 2);
+                        // SAFETY: `len >= 2` and both operands were just read as Numbers.
+                        unsafe { discard_number_operands(stack, 2) };
                         !number_compare(cmp, l, r)
                     } else {
                         let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");

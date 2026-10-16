@@ -2486,8 +2486,12 @@ impl Interpreter {
         {
             return JsValue::symbol(symbol.clone());
         }
+        if let Some(symbol) = crate::types::JsSymbol::from_property_key(&exact_key) {
+            return JsValue::symbol(symbol);
+        }
         if let Some((description, id)) = exact_key.user_symbol_parts() {
-            // Symbol.for() symbols keep their registry entry as the original.
+            // The symbol is gone (only its key survives): rebuild it. A
+            // Symbol.for() symbol keeps its registry entry as the original.
             for sym in self.global_symbol_registry.values() {
                 if sym.id() == id {
                     return JsValue::symbol(sym.clone());

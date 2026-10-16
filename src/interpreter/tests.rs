@@ -6771,3 +6771,23 @@ fn global_object_helpers_refuse_a_proxy_receiver() {
         .and_then(|v| v.as_number());
     assert_eq!(target_x, Some(1.0));
 }
+
+#[test]
+fn symbol_key_round_trip_returns_the_live_symbol_and_rebuilds_a_dead_one() {
+    let mut interp = Interpreter::new();
+    let description = crate::types::JsString::from_str("round trip");
+    let live = crate::types::JsSymbol::new(9_000, Some(description.clone()));
+    let key = live.to_property_key();
+    let back = interp.symbol_key_to_jsvalue(&key);
+    let back = back.as_symbol().expect("a symbol");
+    assert!(back.shares_storage_with(&live));
+
+    drop(live);
+    let rebuilt = interp.symbol_key_to_jsvalue(&key);
+    let rebuilt = rebuilt.as_symbol().expect("a symbol");
+    assert_eq!(rebuilt.id(), 9_000);
+    assert_eq!(
+        rebuilt.description().map(|d| d.as_units().to_vec()),
+        Some(description.as_units().to_vec())
+    );
+}
