@@ -548,12 +548,8 @@ pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
     }
 }
 
-/// Declares `Chunk::top_level_lexicals` in TDZ, in source order.
-pub(crate) fn declare_top_level_lexicals(chunk: &Chunk, env: &EnvRef) {
-    let Some(lexicals) = &chunk.top_level_lexicals else {
-        return;
-    };
-    let mut scope = env.borrow_mut();
+/// Declares `lexicals` (`names` index, immutable) in TDZ, in order.
+fn declare_lexicals(scope: &mut Environment, chunk: &Chunk, lexicals: &[(u16, bool)]) {
     for &(name_idx, is_const) in lexicals {
         scope.declare_atom(
             &chunk.names[usize::from(name_idx)],
@@ -854,6 +850,9 @@ fn run_chunk_inner(
     interp.bytecode_chunks_executed += 1;
     if declare_chunk_vars {
         declare_var_prologue(chunk, frame_env);
+        if let Some(lexicals) = &chunk.top_level_lexicals {
+            declare_lexicals(&mut frame_env.borrow_mut(), chunk, lexicals);
+        }
     }
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;
@@ -1960,13 +1959,7 @@ fn run_chunk_inner(
                         interp.hoist_block_function_declaration(stmt, &block_env);
                     }
                     if !scope.lexicals.is_empty() {
-                        let mut declared = block_env.borrow_mut();
-                        for &(name_idx, is_const) in &scope.lexicals {
-                            declared.declare_atom(
-                                &chunk.names[name_idx as usize],
-                                BindingKind::lexical(is_const),
-                            );
-                        }
+                        declare_lexicals(&mut block_env.borrow_mut(), chunk, &scope.lexicals);
                     }
                     scopes.push(block_env);
                     debug_assert_eq!(interp.call_stack_envs.len(), envs_base + scopes.len());

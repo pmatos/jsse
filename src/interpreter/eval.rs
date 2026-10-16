@@ -2069,9 +2069,6 @@ impl Interpreter {
                         ) {
                             return err;
                         }
-                    } else if chunk.top_level_lexicals.is_some() {
-                        vm::declare_var_prologue(&chunk, exec_env);
-                        vm::declare_top_level_lexicals(&chunk, exec_env);
                     }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });

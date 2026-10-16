@@ -3352,13 +3352,6 @@ fn body_has_poison(body: &[Statement], poison: PoisonFn) -> bool {
         })
 }
 
-/// Whether the body needs declaration instantiation before the chunk runs:
-/// function declarations (anywhere — Annex B hoists block-level ones) and
-/// top-level lexical bindings, which the VM itself never declares.
-fn body_needs_instantiation(body: &[Statement]) -> bool {
-    block_declares_lexical(body) || stmts_contain(body, &|s| is_function_declaration(s))
-}
-
 fn contains_tail_call(expr: &Expression) -> bool {
     match expr {
         Expression::Call(..) | Expression::TaggedTemplate(..) => true,
@@ -3468,21 +3461,23 @@ fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chun
     if !c.ast.is_empty() && c.native_ops == 0 {
         return Err(CompileError::Ineligible("fallback-only body"));
     }
-    let top_level_lexicals = lexical_only_instantiation(&mut c, body);
+    let has_function_declaration = stmts_contain(body, &|s| is_function_declaration(s));
+    let top_level_lexicals = if has_function_declaration {
+        None
+    } else {
+        lexical_only_instantiation(&mut c, body)
+    };
     let mut chunk = c.finish();
-    chunk.needs_instantiation = body_needs_instantiation(body);
+    chunk.needs_instantiation = block_declares_lexical(body) || has_function_declaration;
     chunk.top_level_lexicals = top_level_lexicals;
     Ok(chunk)
 }
 
 /// The body's top-level lexical names as `names` indices, when declaration
-/// instantiation would do nothing else: no function declaration (so no
-/// Annex B name either), and every `var` name the tree-walker would hoist is
+/// instantiation would do nothing else: the caller has ruled out function
+/// declarations (so no Annex B name either), and every `var` name the tree-walker would hoist is
 /// one the chunk's own var prologue declares. `None` keeps the generic path.
 fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Vec<(u16, bool)>> {
-    if stmts_contain(body, &|s| is_function_declaration(s)) {
-        return None;
-    }
     let lexicals = crate::interpreter::hoisting::collect_lexical_names(body);
     if lexicals.is_empty() {
         return None;
@@ -3497,14 +3492,11 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
     if !vars.iter().all(|name| prologue.contains(name.as_str())) {
         return None;
     }
-    let mut indices = Vec::with_capacity(lexicals.len());
-    for (name, is_const) in &lexicals {
-        match c.add_name(name) {
-            Ok(idx) => indices.push((idx, *is_const)),
-            Err(_) => return None,
-        }
-    }
-    Some(indices)
+    lexicals
+        .iter()
+        .map(|(name, is_const)| c.add_name(name).map(|idx| (idx, *is_const)))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
 }
 
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
