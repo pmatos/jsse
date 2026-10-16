@@ -489,7 +489,12 @@ impl JsPropertyKey {
     }
 
     pub(crate) fn is_symbol(&self) -> bool {
-        self.bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
+        Self::is_symbol_encoding(&self.bytes)
+    }
+
+    #[inline]
+    fn is_symbol_encoding(bytes: &[u8]) -> bool {
+        bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
     }
 
     /// The bytes after the symbol sigil. The description inside is WTF-8, so
@@ -600,12 +605,14 @@ pub(crate) trait PropertyKeyLike {
     /// Whether this is a Symbol key rather than a String key.
     #[inline]
     fn is_symbol_key(&self) -> bool {
-        self.as_property_key_bytes().first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
+        JsPropertyKey::is_symbol_encoding(self.as_property_key_bytes())
     }
 
     /// The String value of a non-Symbol key as a Proxy trap argument, shared
     /// across repeated requests for the same name.
-    fn to_trap_key_string(&self) -> JsString;
+    fn to_trap_key_string(&self) -> JsString {
+        crate::interpreter::key_intern::key_to_trap_js_string(&self.to_interned_property_key())
+    }
 
     fn as_property_key_str(&self) -> Option<&str> {
         std::str::from_utf8(self.as_property_key_bytes()).ok()

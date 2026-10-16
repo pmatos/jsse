@@ -46,6 +46,13 @@ thread_local! {
 
 const KEY_STRING_CACHE_SLOTS: usize = 1024;
 
+/// Multiplicative hash of an address into a power-of-two direct-mapped table.
+#[inline]
+fn address_slot(addr: usize, slots: usize) -> usize {
+    let h = (addr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h >> (usize::BITS - slots.trailing_zeros())
+}
+
 /// Direct-mapped `JsPropertyKey` -> `JsString` cache, indexed by the key's
 /// backing-allocation address. Property keys are interned, so the same name
 /// keeps hitting the same allocation; materialising its string (a UTF-16
@@ -80,63 +87,70 @@ impl KeyStringCache {
         Self {
             slots: vec![None; KEY_STRING_CACHE_SLOTS],
             by_string: vec![None; KEY_STRING_CACHE_SLOTS],
-            by_name: (0..KEY_STRING_CACHE_SLOTS).map(|_| None).collect(),
+            by_name: std::iter::repeat_with(|| None)
+                .take(KEY_STRING_CACHE_SLOTS)
+                .collect(),
         }
     }
 
     #[inline]
     fn slot_index(addr: usize) -> usize {
-        let h = (addr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        h >> (usize::BITS - KEY_STRING_CACHE_SLOTS.trailing_zeros())
+        address_slot(addr, KEY_STRING_CACHE_SLOTS)
     }
 
     fn record_reverse(&mut self, string: &JsString, key: &JsPropertyKey) {
         let addr = string.units_addr();
         let idx = Self::slot_index(addr);
-        if REVERSE_TAGS.with(|t| t[idx].get()) != addr {
-            REVERSE_TAGS.with(|t| t[idx].set(addr));
+        let stale = REVERSE_TAGS.with(|t| t[idx].replace(addr) != addr);
+        if stale {
             self.by_string[idx] = Some((string.clone(), key.clone()));
         }
     }
 
-    fn string_for(&mut self, key: &JsPropertyKey, record_reverse: bool) -> JsString {
+    fn string_for(&mut self, key: &JsPropertyKey) -> JsString {
         let idx = Self::slot_index(key.allocation_addr());
-        let string = match &self.slots[idx] {
+        match &self.slots[idx] {
             Some((k, s)) if k.same_allocation(key) => s.clone(),
             _ => {
                 let s = key.to_js_string();
                 self.slots[idx] = Some((key.clone(), s.clone()));
                 s
             }
-        };
-        if record_reverse {
-            self.record_reverse(&string, key);
         }
-        string
     }
 }
 
-fn cached_key_string(key: &JsPropertyKey, record_reverse: bool) -> JsString {
-    if key.is_symbol() || key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
-        return key.to_js_string();
-    }
-    KEY_STRING_CACHE
-        .try_with(|c| c.borrow_mut().string_for(key, record_reverse))
-        .unwrap_or_else(|_| key.to_js_string())
+fn is_cacheable(key: &JsPropertyKey) -> bool {
+    !key.is_symbol() && key.as_bytes().len() <= MAX_CACHEABLE_KEY_BYTES
 }
 
 /// The String value of a non-Symbol property key. Repeated requests for the
 /// same interned key share one `JsString`.
 #[inline]
 pub(crate) fn key_to_js_string(key: &JsPropertyKey) -> JsString {
-    cached_key_string(key, false)
+    if !is_cacheable(key) {
+        return key.to_js_string();
+    }
+    KEY_STRING_CACHE
+        .try_with(|c| c.borrow_mut().string_for(key))
+        .unwrap_or_else(|_| key.to_js_string())
 }
 
 /// [`key_to_js_string`] for a key that is about to be shown to user code as a
 /// Proxy trap argument, which also lets `key_from_js_string` map it back.
 #[inline]
 pub(crate) fn key_to_trap_js_string(key: &JsPropertyKey) -> JsString {
-    cached_key_string(key, true)
+    if !is_cacheable(key) {
+        return key.to_js_string();
+    }
+    KEY_STRING_CACHE
+        .try_with(|c| {
+            let mut c = c.borrow_mut();
+            let string = c.string_for(key);
+            c.record_reverse(&string, key);
+            string
+        })
+        .unwrap_or_else(|_| key.to_js_string())
 }
 
 /// The trap-argument String of a property name given as text.
@@ -268,8 +282,7 @@ impl KeyCache {
 
     #[inline]
     fn canonical_slot(key: &JsPropertyKey) -> usize {
-        let h = (key.allocation_addr() >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        h >> (usize::BITS - CANONICAL_SLOTS.trailing_zeros())
+        address_slot(key.allocation_addr(), CANONICAL_SLOTS)
     }
 
     #[inline]
