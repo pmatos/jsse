@@ -26,7 +26,9 @@ The String-exotic test checks `primitive_value` before `class_name`.
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
 cachegrind `--cache-sim=no`, whole-process `I refs`, sequential. base = `origin/main` at `02d92938`
-(sha256 `97f59a65624d...`), new = base plus this change (`e7cbea797c10...`).
+(sha256 `97f59a65624d...`), new = base plus this change (`e7cbea797c10...`). The final PR head (`f2e43bead9f2...`; a
+clippy-driven range check and comment edits only) was re-measured: hole read 1,891, past-vector 1,890, present 1,695,
+2 own misses 5,101 Ir/iter; hash-map 18,500,243,167; delta-blue 8,777,564,079; richards 13,390,303,206.
 
 Issue reproducer, Ir per iteration = (N=250,000 minus N=50,000) / 200,000:
 
