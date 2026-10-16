@@ -1060,6 +1060,7 @@ impl NanBoxedValue {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn with_string<R>(&self, f: impl FnOnce(&[u16]) -> R) -> Option<R> {
         if self.tag() != Some(NanTag::String) {
             return None;
@@ -1069,6 +1070,7 @@ impl NanBoxedValue {
         Some(f(unsafe { &*ptr }.units()))
     }
 
+    #[inline(always)]
     pub(crate) fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
         if self.tag() != Some(NanTag::Symbol) {
             return None;
@@ -1083,6 +1085,7 @@ impl NanBoxedValue {
         Some(f(&symbol))
     }
 
+    #[inline(always)]
     pub(crate) fn with_bigint<R>(&self, f: impl FnOnce(&num_bigint::BigInt) -> R) -> Option<R> {
         if self.tag() != Some(NanTag::BigInt) {
             return None;
@@ -1177,6 +1180,49 @@ impl NanBoxedValue {
 
     pub(crate) fn is_nullish(&self) -> bool {
         matches!(self.tag(), Some(NanTag::Undefined | NanTag::Null))
+    }
+
+    /// `===` for every pair except two Numbers, which return `None` so the
+    /// caller applies the IEEE comparison (NaN, `-0`). Values of different
+    /// kinds are never strictly equal; a Number against a non-Number is one
+    /// such pair. Strings compare by content, Symbols by id (a symbol rebuilt
+    /// from its id is a different allocation), BigInts by value, Objects by
+    /// id.
+    #[inline]
+    pub(crate) fn strict_equal_non_number(&self, other: &Self) -> Option<bool> {
+        let (Some(a), Some(b)) = (self.tag(), other.tag()) else {
+            return if self.is_number() && other.is_number() {
+                None
+            } else {
+                Some(false)
+            };
+        };
+        if self.0 == other.0 {
+            return Some(true);
+        }
+        if a != b {
+            return Some(false);
+        }
+        // Same tag, different bits: singletons cannot get here, an Object's id
+        // differs, and the heap kinds may still hold equal contents.
+        Some(match a {
+            NanTag::Undefined | NanTag::Null | NanTag::True | NanTag::False | NanTag::Object => {
+                false
+            }
+            NanTag::String => self
+                .with_string(|x| other.with_string(|y| x == y).unwrap_or(false))
+                .unwrap_or(false),
+            NanTag::Symbol => self
+                .with_symbol(|x| other.with_symbol(|y| x.id() == y.id()).unwrap_or(false))
+                .unwrap_or(false),
+            NanTag::BigInt => self
+                .with_bigint(|x| {
+                    other
+                        .with_bigint(|y| bigint_ops::equal(x, y))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+        })
     }
 }
 

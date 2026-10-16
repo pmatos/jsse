@@ -2900,6 +2900,7 @@ fn operand_layout(op: Op) -> &'static [usize] {
         | Op::Jump
         | Op::JumpIfFalse
         | Op::JumpIfTrue
+        | Op::CaseStrictEq
         | Op::JumpIfTruthyKeep
         | Op::JumpIfFalsyKeep
         | Op::JumpIfNotNullishKeep => &[2],
@@ -3256,6 +3257,19 @@ fn switch_compiles_without_a_tree_walker_hand_off() {
         "switch must compile natively, got fallbacks {:?}",
         chunk.fallback_reasons
     );
+}
+
+#[test]
+fn switch_case_tests_fuse_into_case_strict_eq() {
+    let chunk = compile_function_source(
+        "switch (a) { case 1: b = 1; break; case c: b = 2; break; default: b = 3; }",
+        &["a", "b", "c"],
+    );
+    let ops = work_ops(&chunk);
+    assert_eq!(ops.iter().filter(|op| **op == Op::CaseStrictEq).count(), 2);
+    assert!(!ops.contains(&Op::DupN));
+    assert!(!ops.contains(&Op::StrictEq));
+    assert!(!ops.contains(&Op::JumpIfTrue));
 }
 
 #[test]

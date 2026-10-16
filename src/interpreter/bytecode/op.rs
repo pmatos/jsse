@@ -223,6 +223,9 @@ pub(crate) enum Op {
     /// `#name in object`: `[..., object]` → `[..., boolean]`. Operand:
     /// private-name index (u16).
     PrivateIn = 101,
+    /// `switch` case test: `[..., discriminant, selector]` → `[..., discriminant]`,
+    /// jumping when the selector `===` the discriminant. Operand: i16 offset.
+    CaseStrictEq = 102,
 }
 
 impl Op {
@@ -330,6 +333,7 @@ impl Op {
             99 => Some(Op::UpdatePrivate),
             100 => Some(Op::LoadMethodPrivate),
             101 => Some(Op::PrivateIn),
+            102 => Some(Op::CaseStrictEq),
             _ => None,
         }
     }

@@ -5,6 +5,7 @@ use super::chunk::{
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
+use crate::interpreter::helpers::strict_equality;
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment, PrivateId};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
@@ -941,6 +942,11 @@ fn run_chunk_inner(
                 // SAFETY: `len >= 2` and `stack[len - 1]` was just read as a Number.
                 unsafe { discard_number_operands(stack, 1) };
                 stack[len - 2] = number_binop($bop, l, r);
+            } else if matches!($bop, Op::StrictEq | Op::StrictNotEq) {
+                let r = pop_value(interp, stack, "stack underflow on binop rhs");
+                let l = pop_value(interp, stack, "stack underflow on binop lhs");
+                let equal = strict_equality(&l, &r);
+                stack.push(JsValue::boolean(equal == matches!($bop, Op::StrictEq)));
             } else {
                 let r = stack.pop().expect("stack underflow on binop rhs");
                 let l = stack.pop().expect("stack underflow on binop lhs");
@@ -1670,6 +1676,10 @@ fn run_chunk_inner(
                         // SAFETY: `len >= 2` and both operands were just read as Numbers.
                         unsafe { discard_number_operands(stack, 2) };
                         !number_compare(cmp, l, r)
+                    } else if matches!(cmp, Op::StrictEq | Op::StrictNotEq) {
+                        let r = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
+                        let l = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
+                        strict_equality(&l, &r) != (cmp == Op::StrictEq)
                     } else {
                         let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
                         let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
@@ -1898,6 +1908,15 @@ fn run_chunk_inner(
                     pc += 2;
                     let v = pop_value(interp, stack, "stack underflow on JumpIfTrue");
                     if interp.to_boolean_val(&v) {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::CaseStrictEq => {
+                    let offset = decode_i16(chunk, pc) as i32;
+                    pc += 2;
+                    let selector = pop_value(interp, stack, "stack underflow on CaseStrictEq");
+                    let discriminant = stack.last().expect("stack underflow on CaseStrictEq");
+                    if strict_equality(discriminant, &selector) {
                         pc = (pc as i32 + offset) as usize;
                     }
                 }
