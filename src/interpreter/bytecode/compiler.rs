@@ -184,7 +184,7 @@ enum EscapingJump {
     Continue(Option<String>),
 }
 
-/// Name pools up to this size are searched linearly by atom identity.
+/// Name pools up to this size are searched linearly; a larger one gets an index.
 const NAME_SCAN_LIMIT: usize = 16;
 
 type NameIndex = std::collections::HashMap<
@@ -198,8 +198,6 @@ struct Compiler {
     code: Vec<u8>,
     constants: Vec<Constant>,
     names: Vec<crate::interpreter::Atom>,
-    /// Atom to index in `names`, built once the pool outgrows
-    /// `NAME_SCAN_LIMIT` so a large body does not rescan it per lookup.
     name_index: Option<NameIndex>,
     private_names: Vec<String>,
     var_names: Vec<u16>,
@@ -321,18 +319,21 @@ impl Compiler {
     // `Atom` hashes and compares by identity, never through its `OnceCell`.
     #[allow(clippy::mutable_key_type)]
     fn add_name(&mut self, name: &str) -> Result<u16, CompileError> {
-        let atom = crate::interpreter::Atom::intern(name);
-        let found = match &self.name_index {
-            Some(index) => index.get(&atom).copied(),
-            None => self
-                .names
-                .iter()
-                .position(|n| n.ptr_eq(&atom))
-                .map(|i| i as u16),
-        };
-        if let Some(i) = found {
-            return Ok(i);
+        if let Some(index) = &self.name_index {
+            let atom = crate::interpreter::Atom::intern(name);
+            if let Some(&i) = index.get(&atom) {
+                return Ok(i);
+            }
+            return self.push_name(atom);
         }
+        if let Some(i) = self.names.iter().position(|n| n.as_str() == name) {
+            return Ok(i as u16);
+        }
+        self.push_name(crate::interpreter::Atom::intern(name))
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    fn push_name(&mut self, atom: crate::interpreter::Atom) -> Result<u16, CompileError> {
         let idx = self.names.len();
         if idx > u16::MAX as usize {
             return Err(CompileError::Ineligible("name pool overflow"));

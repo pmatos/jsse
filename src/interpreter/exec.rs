@@ -1633,9 +1633,7 @@ impl Interpreter {
                 // before every property has been consumed.
                 self.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&val);
-                    let has_rest = props
-                        .iter()
-                        .any(|p| matches!(p, ObjectPatternProperty::Rest(_)));
+                    let has_rest = matches!(props.last(), Some(ObjectPatternProperty::Rest(_)));
                     let mut excluded_keys = Vec::new();
                     for prop in props {
                         match prop {

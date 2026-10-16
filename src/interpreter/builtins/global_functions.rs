@@ -16,8 +16,7 @@ impl Interpreter {
             JsFunction::native("parseInt".to_string(), 2, |interp, _this, args| {
                 let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let radix_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                // A Number prints in plain decimal for 1e-6 <= |n| < 1e21, so
-                // the digit prefix of its string is the integer part.
+                // Plain decimal for 1e-6 <= |n| < 1e21: the digit prefix is the integer part.
                 if let Some(n) = input.as_number()
                     && radix_val.is_undefined()
                 {

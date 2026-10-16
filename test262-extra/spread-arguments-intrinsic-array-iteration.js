@@ -142,3 +142,44 @@ Object.defineProperty(withAccessor, 1, {
 });
 sameList(collect(...withAccessor), [1, "got", 3], "accessor element");
 assert.sameValue(accessorReads, 1, "accessor element read once");
+
+sameList([...[1, 2, 3]], [1, 2, 3], "array literal spread");
+sameList([0, ...[1, , 3]], [0, 1, undefined, 3], "array literal spread with a hole");
+assert.sameValue(new AggregateError([1, 2, 3]).errors.length, 3, "AggregateError errors list");
+sameList(new AggregateError([4, 5]).errors, [4, 5], "AggregateError errors values");
+
+var literalCalls = 0;
+Array.prototype[Symbol.iterator] = function () {
+  literalCalls++;
+  return savedValues.call(this);
+};
+sameList([...[1, 2]], [1, 2], "array literal spread through a patched @@iterator");
+assert.sameValue(literalCalls, 1, "array literal spread observes the patched @@iterator");
+sameList(new AggregateError([7, 8]).errors, [7, 8], "AggregateError through a patched @@iterator");
+assert.sameValue(literalCalls, 2, "AggregateError observes the patched @@iterator");
+Array.prototype[Symbol.iterator] = savedValues;
+
+ArrayIteratorPrototype.next = function () {
+  nextCalls++;
+  return savedNext.call(this);
+};
+nextCalls = 0;
+sameList([...[1]], [1], "array literal spread through a patched next");
+assert.sameValue(nextCalls, 2, "array literal spread observes the patched next");
+ArrayIteratorPrototype.next = savedNext;
+
+var objectGetterCalls = 0;
+Object.defineProperty(Object.prototype, 1, {
+  get: function () {
+    objectGetterCalls++;
+    return "from-object-prototype";
+  },
+  configurable: true
+});
+try {
+  sameList(collect(...[0, , 2]), [0, "from-object-prototype", 2], "hole answered by Object.prototype");
+  sameList([...[0, , 2]], [0, "from-object-prototype", 2], "literal hole answered by Object.prototype");
+  assert.sameValue(objectGetterCalls, 2, "Object.prototype getter ran once per spread");
+} finally {
+  delete Object.prototype[1];
+}

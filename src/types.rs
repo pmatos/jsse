@@ -94,7 +94,11 @@ const INLINE_UNITS: usize = 40;
 
 enum Units {
     Inline([u16; INLINE_UNITS]),
-    Shared { ptr: *const u16, buf: Arc<StrBuf> },
+    /// `ptr` is `buf.ptr`, kept here to save the `Arc` hop on every read.
+    Shared {
+        ptr: *const u16,
+        buf: Arc<StrBuf>,
+    },
 }
 
 pub(crate) struct StrView {
@@ -102,7 +106,8 @@ pub(crate) struct StrView {
     units: Units,
 }
 
-// SAFETY: `ptr` points into `buf`, which is `Send + Sync` and kept alive by it.
+// SAFETY: a `Shared` `ptr` points into its `buf`, which is `Send + Sync` and kept
+// alive by it; `Inline` is plain data.
 unsafe impl Send for StrView {}
 unsafe impl Sync for StrView {}
 
@@ -159,6 +164,21 @@ pub(crate) struct JsString {
 impl JsString {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
+        // UTF-16 never has more units than the UTF-8 text has bytes.
+        if s.len() <= INLINE_UNITS {
+            let mut units = [0u16; INLINE_UNITS];
+            let mut len = 0;
+            for unit in s.encode_utf16() {
+                units[len] = unit;
+                len += 1;
+            }
+            return Self {
+                view: Arc::new(StrView {
+                    len,
+                    units: Units::Inline(units),
+                }),
+            };
+        }
         Self::from_vec(s.encode_utf16().collect())
     }
 

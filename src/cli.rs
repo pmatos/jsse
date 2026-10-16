@@ -148,11 +148,8 @@ fn execute_code(
     exit
 }
 
-/// Ends the process-lifetime interpreter. Tearing the heap down object by
-/// object only returns memory the OS reclaims at exit, and nothing in the
-/// arena's `Drop` has an observable effect (finalization callbacks are jobs,
-/// output is already flushed), so release builds skip it. Debug builds, which
-/// include `release-checked`, keep the teardown so its assertions still run.
+/// Release builds skip the heap teardown (nothing in it is observable at exit); debug builds,
+/// including `release-checked`, keep it for the arena assertions. Leak checkers see the heap as leaked.
 fn retire_interpreter(interp: interpreter::Interpreter) {
     if cfg!(debug_assertions) {
         drop(interp);

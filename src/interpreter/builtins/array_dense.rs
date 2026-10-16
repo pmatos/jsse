@@ -78,12 +78,9 @@ pub(crate) fn proto_chain_without_index_keys(interp: &Interpreter, start: Option
     walk_index_free_chain(interp, start, false)
 }
 
-/// The values `iterable` yields when it is a plain dense Array whose iteration
-/// protocol is entirely intrinsic: `@@iterator` resolves to the realm's
-/// original `Array.prototype.values` and `%ArrayIteratorPrototype%.next` is the
-/// original `next`. Nothing observable runs in that iteration, so the elements
-/// can be copied without creating an iterator. A hole reads `undefined` only
-/// when no prototype can answer the index.
+/// The values a plain dense Array yields when its iteration is entirely intrinsic (original
+/// `@@iterator` and `%ArrayIteratorPrototype%.next`), copied without creating an iterator.
+/// A hole reads `undefined` only when no prototype can answer the index.
 pub(crate) fn try_intrinsic_iteration(
     interp: &Interpreter,
     iterable: &JsValue,
