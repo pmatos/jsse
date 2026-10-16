@@ -117,7 +117,7 @@ impl IcStore {
             self.evict_inactive_older_half();
         }
 
-        let tick = self.next_tick();
+        let tick = tick_clock(&mut self.clock);
         let entry = StoreEntry {
             store: BodyIcStore::new(body.ic, body.statements.clone()),
             last_used: tick,
@@ -214,10 +214,6 @@ impl IcStore {
         slot.entry
             .as_mut()
             .expect("stale BodyStoreHandle: slot was evicted")
-    }
-
-    fn next_tick(&mut self) -> u64 {
-        tick_clock(&mut self.clock)
     }
 
     /// Evict enough old inactive entries to retain roughly the newer half.

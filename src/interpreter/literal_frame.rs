@@ -52,9 +52,8 @@ pub(crate) struct LiteralFrame {
 }
 
 impl LiteralFrame {
-    /// The parameter atoms, interned on first use. `params` must be the
-    /// literal's simple parameter list: the frame is only ever paired with the
-    /// one list it was created beside.
+    /// The parameter atoms, interned on first use from the literal's simple
+    /// parameter list (the one list this frame is paired with).
     #[inline]
     pub(crate) fn param_atoms(&self, params: &[Pattern]) -> &ParamAtoms {
         let atoms = self.param_atoms.get_or_init(|| ParamAtoms::new(params));
