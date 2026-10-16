@@ -643,11 +643,10 @@ impl Interpreter {
                 CallFrameArguments::Materialized(arguments) => {
                     Self::collect_value_roots(arguments, &mut roots);
                 }
-                CallFrameArguments::Deferred { args, func_env, .. } => {
+                CallFrameArguments::Deferred { args, .. } => {
                     for argument in args.values() {
                         Self::collect_value_roots(argument, &mut roots);
                     }
-                    Self::collect_env_roots(func_env, &mut roots, &mut seen_envs);
                 }
             }
         }

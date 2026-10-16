@@ -252,7 +252,7 @@ fn non_construct_call_leaves_last_call_this_value_unset() {
 }
 
 #[test]
-fn functions_that_never_mention_arguments_get_no_binding_and_inline_frame_args() {
+fn functions_that_never_mention_arguments_get_no_binding_and_borrowed_frame_args() {
     let mut interp = Interpreter::new();
     let global_id = interp.realm().global_object.expect("global object");
     interp.define_method(global_id, "probe", 0, |interp, _this, _args| {
@@ -263,12 +263,12 @@ fn functions_that_never_mention_arguments_get_no_binding_and_inline_frame_args()
             .borrow()
             .bindings
             .contains_key("arguments");
-        let (deferred, spilled) = match interp.call_stack_frames.last().map(|f| &f.arguments) {
-            Some(CallFrameArguments::Deferred { args, .. }) => (true, args.is_spilled()),
-            _ => (false, false),
+        let (deferred, count) = match interp.call_stack_frames.last().map(|f| &f.arguments) {
+            Some(CallFrameArguments::Deferred { args, .. }) => (true, args.values().len()),
+            _ => (false, 0),
         };
         Completion::Normal(JsValue::from_str(&format!(
-            "{has_binding}:{deferred}:{spilled}"
+            "{has_binding}:{deferred}:{count}"
         )))
     });
     run_step(
@@ -282,13 +282,10 @@ fn functions_that_never_mention_arguments_get_no_binding_and_inline_frame_args()
         globalThis.manyArgs = plain(1, 2, 3, 4, 5, 6, 7, 8);
         "#,
     );
-    assert_eq!(global_string(&interp, "noMention"), "false:true:false");
-    assert_eq!(
-        global_string(&interp, "withMention"),
-        "true:false:falseobject"
-    );
-    assert_eq!(global_string(&interp, "fewArgs"), "false:true:false");
-    assert_eq!(global_string(&interp, "manyArgs"), "false:true:true");
+    assert_eq!(global_string(&interp, "noMention"), "false:true:2");
+    assert_eq!(global_string(&interp, "withMention"), "true:false:0object");
+    assert_eq!(global_string(&interp, "fewArgs"), "false:true:6");
+    assert_eq!(global_string(&interp, "manyArgs"), "false:true:8");
 }
 
 #[test]

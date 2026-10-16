@@ -8,6 +8,7 @@ use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -632,31 +633,46 @@ const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 /// registry key, so it never reaches a real file of the same name.
 pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 
-/// Arguments a sloppy frame keeps for the legacy `fn.arguments` accessor.
-/// Inline for the common arities so a call that never reads them does not
-/// allocate.
+/// What a sloppy frame exposes to the legacy `fn.arguments` accessor: the
+/// activation's own argument slice and function environment, borrowed rather
+/// than copied.
+///
+/// Invariant (the contract of `new`): the `CallFrame` holding this value is
+/// pushed after, and popped before, the end of the borrows it was built from,
+/// by the same `call_function_inner_impl` activation, and nothing else
+/// truncates `call_stack_frames`. The arguments stay rooted for the frame's
+/// lifetime because the borrowed slice is what the GC walk reads; the
+/// environment is rooted through `call_stack_envs`.
 pub(crate) struct DeferredCallArguments {
-    values: smallvec::SmallVec<[JsValue; 6]>,
+    values: NonNull<[JsValue]>,
+    func_env: NonNull<RefCell<Environment>>,
 }
 
 impl DeferredCallArguments {
-    pub(crate) fn new(args: &[JsValue]) -> Self {
+    /// # Safety
+    /// The caller must pop the frame that stores the result before `args` or
+    /// `func_env` is dropped, moved or mutated.
+    pub(crate) unsafe fn new(args: &[JsValue], func_env: &EnvRef) -> Self {
         Self {
-            values: args.iter().cloned().collect(),
+            values: NonNull::from(args),
+            // SAFETY: `Rc::as_ptr` is never null.
+            func_env: unsafe { NonNull::new_unchecked(Rc::as_ptr(func_env).cast_mut()) },
         }
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &JsValue> {
-        self.values.iter()
+    pub(crate) fn values(&self) -> &[JsValue] {
+        // SAFETY: the type invariant keeps the slice alive and unchanged.
+        unsafe { self.values.as_ref() }
     }
 
-    fn to_vec(&self) -> Vec<JsValue> {
-        self.values.to_vec()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_spilled(&self) -> bool {
-        self.values.spilled()
+    fn func_env(&self) -> EnvRef {
+        let ptr = self.func_env.as_ptr().cast_const();
+        // SAFETY: the type invariant keeps the `Rc` allocation alive, and
+        // `func_env` was derived from an `Rc<RefCell<Environment>>`.
+        unsafe {
+            Rc::increment_strong_count(ptr);
+            Rc::from_raw(ptr)
+        }
     }
 }
 
@@ -665,7 +681,6 @@ pub(crate) enum CallFrameArguments {
     Materialized(JsValue),
     Deferred {
         args: DeferredCallArguments,
-        func_env: EnvRef,
         mapped: bool,
     },
 }
@@ -2342,11 +2357,12 @@ impl Interpreter {
         let (args, func_env, mapped, func_obj_id) = match &frame.arguments {
             CallFrameArguments::None => return JsValue::NULL,
             CallFrameArguments::Materialized(arguments) => return arguments.clone(),
-            CallFrameArguments::Deferred {
-                args,
-                func_env,
-                mapped,
-            } => (args.to_vec(), func_env.clone(), *mapped, frame.func_obj_id),
+            CallFrameArguments::Deferred { args, mapped } => (
+                args.values().to_vec(),
+                mapped.then(|| args.func_env()),
+                *mapped,
+                frame.func_obj_id,
+            ),
         };
 
         let params = if mapped {
@@ -2364,7 +2380,7 @@ impl Interpreter {
             &args,
             callee,
             false,
-            mapped.then_some(&func_env),
+            func_env.as_ref(),
             params.as_deref().map_or(&[], |p| p.as_slice()),
         );
         self.call_stack_frames[frame_index].arguments =

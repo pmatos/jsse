@@ -5962,9 +5962,11 @@ impl Interpreter {
                                     // reference, declaration or direct eval), so no
                                     // binding is created; sloppy frames keep the args
                                     // for the legacy `fn.arguments` accessor.
+                                    // SAFETY: popped right after `dispatch_body`.
                                     call_frame_arguments = CallFrameArguments::Deferred {
-                                        args: DeferredCallArguments::new(args),
-                                        func_env: func_env.clone(),
+                                        args: unsafe {
+                                            DeferredCallArguments::new(args, &func_env)
+                                        },
                                         mapped: is_simple,
                                     };
                                 }
@@ -6021,6 +6023,7 @@ impl Interpreter {
                                 arguments: call_frame_arguments,
                                 is_eval: false,
                             });
+                            let frame_depth = self.call_stack_frames.len();
                             self.call_stack_envs.push(exec_env.clone());
                             self.in_tail_position = false;
                             // A fresh function body: its tail positions are
@@ -6037,6 +6040,7 @@ impl Interpreter {
                             );
                             self.tco_suppress_depth = saved_tco_suppress;
                             self.call_stack_envs.pop();
+                            debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
                             self.call_stack_frames.pop();
                             let result = self.dispose_resources(&exec_env, result);
                             if was_construct {
