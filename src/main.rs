@@ -30,8 +30,10 @@ fn limit_glibc_arenas() {
     unsafe extern "C" {
         fn mallopt(param: i32, value: i32) -> i32;
     }
-    unsafe {
-        mallopt(M_ARENA_MAX, 1);
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        unsafe {
+            mallopt(M_ARENA_MAX, 1);
+        }
     }
 }
 
