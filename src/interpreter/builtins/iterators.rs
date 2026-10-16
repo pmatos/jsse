@@ -4916,6 +4916,9 @@ impl Interpreter {
     }
 
     pub(crate) fn iterate_to_vec(&mut self, iterable: &JsValue) -> Result<Vec<JsValue>, JsValue> {
+        if let Some(values) = super::array_dense::try_intrinsic_iteration(self, iterable) {
+            return Ok(values);
+        }
         let gc_frame = self.gc_root_frame();
         self.gc_root_value(iterable);
         let result = (|| {

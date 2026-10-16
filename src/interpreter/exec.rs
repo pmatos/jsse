@@ -1633,11 +1633,16 @@ impl Interpreter {
                 // before every property has been consumed.
                 self.with_gc_root_scope(|interp| {
                     interp.gc_root_value(&val);
+                    let has_rest = props
+                        .iter()
+                        .any(|p| matches!(p, ObjectPatternProperty::Rest(_)));
                     let mut excluded_keys = Vec::new();
                     for prop in props {
                         match prop {
                             ObjectPatternProperty::Shorthand(name) => {
-                                excluded_keys.push(JsPropertyKey::from(name.clone()));
+                                if has_rest {
+                                    excluded_keys.push(JsPropertyKey::from(name.clone()));
+                                }
                                 let v = propagate!(interp.access_property_on_value(&val, name));
                                 if kind == BindingKind::Var {
                                     let var_scope = Environment::find_var_scope(env);
@@ -1669,7 +1674,9 @@ impl Interpreter {
                                         ));
                                     }
                                 };
-                                excluded_keys.push(key_str.clone());
+                                if has_rest {
+                                    excluded_keys.push(key_str.clone());
+                                }
 
                                 // Spec §14.3.3.3: For SingleNameBinding, ResolveBinding
                                 // must happen BEFORE GetV (property access).
