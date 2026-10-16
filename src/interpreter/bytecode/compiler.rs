@@ -851,12 +851,7 @@ impl Compiler {
             Expression::Logical(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
                 // lhs stays on stack via *Keep variants
-                let short_circuit_op = match op {
-                    LogicalOp::And => Op::JumpIfFalsyKeep,
-                    LogicalOp::Or => Op::JumpIfTruthyKeep,
-                    LogicalOp::NullishCoalescing => Op::JumpIfNotNullishKeep,
-                };
-                let to_end = self.emit_jump(short_circuit_op);
+                let to_end = self.emit_jump(Self::logical_keep_jump(*op));
                 // Short-circuit not taken: drop lhs and use rhs
                 self.emit(Op::Pop);
                 self.pop_n(1);
@@ -2008,27 +2003,77 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Statement::Return(Some(Expression::Call(callee, args, site_id))) => {
-                if self.tail_call_allowed() {
-                    self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
-                } else {
-                    self.compile_call(callee, args, Op::Call, *site_id)?;
-                }
-                self.compile_jump(Terminal::Return, true)?;
-                self.pop_n(1);
-                Ok(())
-            }
             Statement::Return(Some(expr)) => {
                 if self.tail_call_allowed() && contains_tail_call(expr) {
-                    return Err(CompileError::Unsupported("nested tail call"));
+                    return self.compile_tail_return(expr);
                 }
-                self.compile_expr(expr)?;
-                self.compile_jump(Terminal::Return, true)?;
-                self.pop_n(1);
-                Ok(())
+                self.compile_return_value(expr)
             }
             _ => Err(CompileError::Unsupported(statement_kind(stmt))),
         }
+    }
+
+    /// The jump taken when `lhs` already decides the result; it leaves `lhs`
+    /// on the operand stack.
+    fn logical_keep_jump(op: LogicalOp) -> Op {
+        match op {
+            LogicalOp::And => Op::JumpIfFalsyKeep,
+            LogicalOp::Or => Op::JumpIfTruthyKeep,
+            LogicalOp::NullishCoalescing => Op::JumpIfNotNullishKeep,
+        }
+    }
+
+    /// `return expr` where a call sits in a nested tail position (`?:`
+    /// branch, right operand of `&&`/`||`/`??`, last element of a comma
+    /// sequence). Each tail leaf ends in its own return, so a call leaf can
+    /// leave the chunk as a `TailCall` exactly like a direct `return f(x)`.
+    /// The operand stack is unchanged on exit and control never falls
+    /// through. Only entered when `tail_call_allowed()`.
+    fn compile_tail_return(&mut self, expr: &Expression) -> Result<(), CompileError> {
+        match expr {
+            Expression::Call(callee, args, site_id) => {
+                self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
+                self.compile_jump(Terminal::Return, true)?;
+                self.pop_n(1);
+                Ok(())
+            }
+            Expression::TaggedTemplate(..) => Err(CompileError::Unsupported("nested tail call")),
+            Expression::Conditional(test, then_e, else_e) => {
+                let to_else = self.compile_cond_jump(test)?;
+                self.compile_tail_return(then_e)?;
+                self.patch_jump(to_else)?;
+                self.compile_tail_return(else_e)
+            }
+            Expression::Logical(op, lhs, rhs) => {
+                self.compile_expr(lhs)?;
+                let to_return = self.emit_jump(Self::logical_keep_jump(*op));
+                self.emit(Op::Pop);
+                self.pop_n(1);
+                self.compile_tail_return(rhs)?;
+                self.patch_jump(to_return)?;
+                self.push_n(1);
+                self.compile_jump(Terminal::Return, true)?;
+                self.pop_n(1);
+                Ok(())
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs)
+                if let Some((last, prefix)) = exprs.split_last() =>
+            {
+                for e in prefix {
+                    self.compile_effect(e)?;
+                }
+                self.compile_tail_return(last)
+            }
+            _ => self.compile_return_value(expr),
+        }
+    }
+
+    /// Evaluates `expr` and returns it through any open cleanups.
+    fn compile_return_value(&mut self, expr: &Expression) -> Result<(), CompileError> {
+        self.compile_expr(expr)?;
+        self.compile_jump(Terminal::Return, true)?;
+        self.pop_n(1);
+        Ok(())
     }
 
     /// A literal `true` has no side effects and cannot end the loop. In
