@@ -205,10 +205,8 @@ impl Interpreter {
         self.numeric_index_fast_set_inlined(obj_val, index, value)
     }
 
-    /// `numeric_index_fast_set` expanded at the call site: the bytecode VM's
-    /// `SetElement` is hot enough that the call and its argument spills show
-    /// up in per-store instruction counts, while the tree-walker's callers
-    /// share one out-of-line copy.
+    /// `numeric_index_fast_set` expanded at the call site, for the bytecode
+    /// VM's `SetElement`, where an out-of-line call costs about 7 Ir per store.
     #[inline(always)]
     pub(super) fn numeric_index_fast_set_inlined(
         &self,

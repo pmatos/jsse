@@ -2718,6 +2718,25 @@ impl Interpreter {
         }
     }
 
+    /// GetValue of a member reference whose base is non-nullish: a primitive
+    /// base is read through its ToObject wrapper with the primitive as receiver.
+    fn get_member_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base: &JsValue,
+        key: &K,
+    ) -> Completion {
+        match base.as_object_id() {
+            Some(id) => self.get_object_property(id, key, base),
+            None => match self.to_object(base) {
+                Completion::Normal(wrapper) => match wrapper.as_object_id() {
+                    Some(id) => self.get_object_property(id, key, base),
+                    None => Completion::Normal(JsValue::UNDEFINED),
+                },
+                abrupt => abrupt,
+            },
+        }
+    }
+
     /// The GetValue → ToNumeric → ±1 → PutValue tail of `++`/`--` on a member
     /// reference whose base is already known non-nullish and whose key is
     /// already a property key (sec-postfix-increment-operator-runtime-
@@ -2732,17 +2751,7 @@ impl Interpreter {
         prefix: bool,
         strict: bool,
     ) -> Completion {
-        let current = match base.as_object_id() {
-            Some(id) => self.get_object_property(id, key, base),
-            None => match self.to_object(base) {
-                Completion::Normal(wrapper) => match wrapper.as_object_id() {
-                    Some(id) => self.get_object_property(id, key, base),
-                    None => Completion::Normal(JsValue::UNDEFINED),
-                },
-                abrupt => abrupt,
-            },
-        };
-        let current = match current {
+        let current = match self.get_member_value(base, key) {
             Completion::Normal(v) => v,
             abrupt => return abrupt,
         };
@@ -2757,13 +2766,10 @@ impl Interpreter {
         }
     }
 
-    /// `update_member_value` for a computed key that has not been through
-    /// `ToPropertyKey` yet (base known non-nullish). A Number key over a
-    /// plain dense Array or in-range TypedArray element reads, updates and
-    /// writes through `numeric_index_fast_get`/`numeric_index_fast_set`
-    /// without ever building the key string. Whenever either helper declines
-    /// the generic path continues from the same point: the read is not
-    /// repeated and `ToNumeric` has run exactly once on the old value.
+    /// `update_member_value` for a computed key not yet through ToPropertyKey
+    /// (base non-nullish). A Number key reads and writes through the numeric
+    /// fast paths; when either declines, the generic path continues from the
+    /// same point, so `ToNumeric` runs once and the old value is not re-read.
     pub(super) fn update_member_computed(
         &mut self,
         base: &JsValue,
@@ -3190,32 +3196,9 @@ impl Interpreter {
                                 }
                                 MemberProperty::Private(_) => unreachable!(),
                             };
-                            let lval = if let Some(o) = (obj_val)
-                                .as_object_id()
-                                .map(|id| crate::types::JsObject { id })
-                            {
-                                match interp.get_object_property(o.id, &key, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                }
-                            } else {
-                                match interp.to_object(&obj_val) {
-                                    Completion::Normal(wrapped) => {
-                                        if let Some(o) = (wrapped)
-                                            .as_object_id()
-                                            .map(|id| crate::types::JsObject { id })
-                                        {
-                                            match interp.get_object_property(o.id, &key, &obj_val) {
-                                                Completion::Normal(v) => v,
-                                                other => return other,
-                                            }
-                                        } else {
-                                            JsValue::UNDEFINED
-                                        }
-                                    }
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => JsValue::UNDEFINED,
-                                }
+                            let lval = match interp.get_member_value(&obj_val, &key) {
+                                Completion::Normal(v) => v,
+                                other => return other,
                             };
                             interp.gc_root_value(&lval);
                             (Some(key), Some(lval))

@@ -4707,10 +4707,8 @@ pub(crate) fn is_array_index_property_key<K: crate::types::PropertyKeyLike + ?Si
         && parse_array_index(key).is_some()
 }
 
-/// A key of 1 to 15 ASCII digits with no leading zero (or exactly `"0"`) is
-/// the canonical spelling of its own value: it is exactly representable and
-/// `ToString` of that Number prints it back unchanged, so the `f64` parse and
-/// the round trip through `ToString` can be skipped.
+/// 1 to 15 ASCII digits, no leading zero (or exactly `"0"`): always its own
+/// canonical numeric spelling, so the `f64` parse and `ToString` round trip are skipped.
 fn plain_decimal_integer(key: &str) -> Option<f64> {
     let bytes = key.as_bytes();
     if bytes.is_empty() || bytes.len() > 15 || (bytes[0] == b'0' && bytes.len() > 1) {

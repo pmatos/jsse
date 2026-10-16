@@ -45,6 +45,10 @@ change (`0d893f754d33...`). The issue's reproducer, per-op Ir = (mode - baseline
 | `view[i] += v`, bytecode VM (control) | 920 | 913 | |
 | `s += view[i]`, generator body / VM (control) | 1,154 / 835 | 1,154 / 828 | within 3% |
 
+The VM control rows are small differences of large totals, and the `noop`/`array` VM runs flip between two Ir values about 12M
+apart from run to run; whole-run Ir is the steadier read: `store-fn` 601.4M -> 595.0M, `load-fn` 697.8M -> 691.4M,
+`compound-fn` 810.5M -> 801.7M.
+
 The issue quoted 2,387 / 873 / 3,778 / 3,241 / 3,611 at `2ea64175`; the profile had already moved (e.g. the store was 2,069
 on current main), so the gains are measured against current main, not the issue's table. `canonical_numeric_index_string`,
 `number_ops::to_string`, `parse_array_index` and `to_property_key` are absent from the top of the `store-gen` and
