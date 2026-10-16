@@ -1,5 +1,13 @@
 use super::*;
 
+/// Outcome of evaluating a computed member key: the key, or a completion that
+/// ends the access early (an abrupt key expression, the nullish-base
+/// TypeError, or the numeric-index fast read).
+enum ComputedKey {
+    Key(JsPropertyKey),
+    Done(Completion),
+}
+
 impl Interpreter {
     /// Evaluate an OptionalChain expression and return (value, this_context).
     /// Used when the optional chain result feeds into a call or nested chain.
@@ -613,8 +621,10 @@ impl Interpreter {
     ) -> Result<JsPropertyKey, Completion> {
         self.with_gc_root_scope(|this| {
             this.gc_root_value(base);
-            let v = this.eval_expr(expr, env).into_abrupt()?;
-            this.to_property_key(&v).map_err(Completion::Throw)
+            let v = this
+                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
+                .into_abrupt()?;
+            this.to_property_key(&v).into_abrupt()
         })
     }
 
@@ -702,22 +712,28 @@ impl Interpreter {
             MemberProperty::Computed(expr) => {
                 let keyed = self.with_gc_root_scope(|this| {
                     this.gc_root_value(&obj_val);
-                    let v = this.eval_expr(expr, env).into_abrupt()?;
+                    let v = match this.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        other => return ComputedKey::Done(other),
+                    };
                     if obj_val.is_nullish() {
-                        return Err(Completion::Throw(this.create_type_error(&format!(
-                            "Cannot read properties of {obj_val} (reading property)"
-                        ))));
+                        return ComputedKey::Done(Completion::Throw(this.create_type_error(
+                            &format!("Cannot read properties of {obj_val} (reading property)"),
+                        )));
                     }
                     if let Some(index) = v.as_number()
                         && let Some(result) = this.numeric_index_fast_get(&obj_val, index)
                     {
-                        return Err(Completion::Normal(result));
+                        return ComputedKey::Done(Completion::Normal(result));
                     }
-                    this.to_property_key(&v).map_err(Completion::Throw)
+                    match this.to_property_key(&v) {
+                        Ok(key) => ComputedKey::Key(key),
+                        Err(e) => ComputedKey::Done(Completion::Throw(e)),
+                    }
                 });
                 match keyed {
-                    Ok(key) => key,
-                    Err(done) => return done,
+                    ComputedKey::Key(key) => key,
+                    ComputedKey::Done(done) => return done,
                 }
             }
             MemberProperty::Private(_) => unreachable!(),

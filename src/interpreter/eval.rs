@@ -772,14 +772,7 @@ impl Interpreter {
                     let key = match prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
-                            let keyed = self.with_gc_root_scope(|this| {
-                                this.gc_root_value(&obj_val);
-                                let v = this
-                                    .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
-                                    .into_abrupt()?;
-                                this.to_property_key(&v).map_err(Completion::Throw)
-                            });
-                            match keyed {
+                            match self.eval_member_key_rooted(&obj_val, expr, env) {
                                 Ok(key) => key,
                                 Err(done) => return done,
                             }
@@ -2686,10 +2679,7 @@ impl Interpreter {
                 let key = match prop {
                     MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(expr) => {
-                        let v = match this.eval_expr(expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
+                        let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
                         if obj_val.is_nullish() {
                             let err = this.create_type_error(&format!(
@@ -2697,10 +2687,7 @@ impl Interpreter {
                             ));
                             return Completion::Throw(err);
                         }
-                        match this.to_property_key(&v) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                        propagate!(this.to_property_key(&v))
                     }
                     MemberProperty::Private(_) => unreachable!(),
                 };
