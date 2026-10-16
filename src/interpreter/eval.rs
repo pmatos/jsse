@@ -1,7 +1,9 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
+use crate::interpreter::bytecode::BytecodeCacheState;
 use crate::interpreter::generator_analysis::block_has_await_using;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
+use crate::interpreter::literal_frame::LiteralFrame;
 use crate::interpreter::property::SetOutcome;
 
 mod access;
@@ -46,6 +48,8 @@ enum CallTarget {
         params: Rc<Vec<Pattern>>,
         body: Body,
         closure: EnvRef,
+        frame: Rc<LiteralFrame>,
+        bytecode_cache: BytecodeCacheState,
         /// The function's boolean attributes, one bit each (`CALL_*`).
         flags: u8,
     },
@@ -147,6 +151,7 @@ impl Interpreter {
         let enclosing_strict = env.borrow().strict;
         let func = JsFunction::User {
             bytecode_cache: Default::default(),
+            frame: spec.info.frame.clone(),
             name: own_name.map(str::to_string),
             params: spec.info.params.clone(),
             body: spec.body.clone(),
@@ -2019,19 +2024,16 @@ impl Interpreter {
         &mut self,
         func_obj_id: u64,
         body: &Body,
+        frame: &LiteralFrame,
+        bytecode_cache: BytecodeCacheState,
         exec_env: &EnvRef,
         this_val: &JsValue,
     ) -> Completion {
         if self.bytecode_enabled {
-            use crate::interpreter::bytecode::{BytecodeCacheState, vm};
-            let cached = self
-                .get_object(func_obj_id)
-                .map(|o| o.borrow().bytecode_cache());
-            let cache_state = match cached {
-                Some(BytecodeCacheState::Untried) | None => {
-                    self.shared_bytecode_verdict(func_obj_id, body)
-                }
-                Some(known) => known,
+            use crate::interpreter::bytecode::vm;
+            let cache_state = match bytecode_cache {
+                BytecodeCacheState::Untried => self.shared_bytecode_verdict(func_obj_id, body),
+                known => known,
             };
             if let BytecodeCacheState::Compiled(chunk) = cache_state {
                 #[cfg(feature = "perf-counters")]
@@ -2050,7 +2052,7 @@ impl Interpreter {
                     let (name, seq) = self.perf_body_name(func_obj_id);
                     self.perf.enter_ast_body(name, seq, false);
                 }
-                let result = self.with_ic_body(body, |interp| {
+                let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
                     if let Some(analysis) = &analysis {
                         vm::declare_var_prologue(&chunk, exec_env);
                         if let Some(err) = interp.instantiate_body_declarations(
@@ -2080,7 +2082,7 @@ impl Interpreter {
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
         let analysis = self.hoist_cache.analysis_for(body);
-        let result = self.with_ic_body(body, |interp| {
+        let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
             interp.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis))
         });
         #[cfg(feature = "perf-counters")]
@@ -5115,52 +5117,31 @@ impl Interpreter {
     }
 
     /// Simple-parameter binding for the hot call path: the parameter atoms
-    /// are interned once per Body, so a call hashes no names (#898).
+    /// are interned once per literal and read off its frame, so a call hashes
+    /// no names and compares no strings (#898, #1062).
     fn bind_simple_parameters(
         &mut self,
-        body: &Body,
+        frame: &LiteralFrame,
         params: &[Pattern],
         args: &[JsValue],
         func_env: &EnvRef,
     ) {
-        let atoms = match self.frame_layout_memo.get(body) {
-            Some(atoms)
-                if atoms.len() == params.len()
-                    && atoms.iter().zip(params).all(|(atom, param)| {
-                        matches!(param, Pattern::Identifier(name) if name == atom.as_str())
-                    }) =>
-            {
-                atoms
-            }
-            _ => {
-                let atoms = Rc::new(
-                    params
-                        .iter()
-                        .map(|param| {
-                            let Pattern::Identifier(name) = param else {
-                                unreachable!(
-                                    "simple parameter metadata must match the parameter list"
-                                );
-                            };
-                            Atom::intern(name)
-                        })
-                        .collect::<Vec<_>>(),
-                );
-                self.frame_layout_memo.insert(body, atoms.clone());
-                atoms
-            }
+        let names = frame.param_atoms(params);
+        let binding = |index: usize| Binding {
+            value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+            kind: BindingKind::Var,
+            initialized: true,
+            deletable: false,
         };
         let mut env = func_env.borrow_mut();
-        for (index, atom) in atoms.iter().enumerate() {
-            env.bindings.insert_atom(
-                atom,
-                Binding {
-                    value: args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
-                    kind: BindingKind::Var,
-                    initialized: true,
-                    deletable: false,
-                },
-            );
+        if names.names_are_fresh() {
+            for (index, atom) in names.atoms().iter().enumerate() {
+                env.bindings.push_unique(atom.clone(), binding(index));
+            }
+        } else {
+            for (index, atom) in names.atoms().iter().enumerate() {
+                env.bindings.insert_atom(atom, binding(index));
+            }
         }
     }
 
@@ -5511,17 +5492,21 @@ impl Interpreter {
                     params,
                     body,
                     closure,
+                    frame,
                     is_arrow,
                     is_strict,
                     is_generator,
                     is_async,
                     uses_arguments,
                     has_simple_params,
+                    bytecode_cache,
                     ..
                 }) => Some(CallTarget::User {
                     params: params.clone(),
                     body: body.clone(),
                     closure: closure.clone(),
+                    frame: frame.clone(),
+                    bytecode_cache: bytecode_cache.clone(),
                     flags: (u8::from(*is_arrow) * CALL_ARROW)
                         | (u8::from(*is_strict) * CALL_STRICT)
                         | (u8::from(*is_generator) * CALL_GENERATOR)
@@ -5587,8 +5572,9 @@ impl Interpreter {
                             params,
                             body,
                             closure,
+                            frame,
+                            bytecode_cache,
                             flags,
-                            ..
                         } => {
                             let is_arrow = flags & CALL_ARROW != 0;
                             let is_strict = flags & CALL_STRICT != 0;
@@ -5998,7 +5984,7 @@ impl Interpreter {
                             }
                             // Bind parameters (after this so default exprs can access this)
                             let bound = if is_simple {
-                                self.bind_simple_parameters(&body, &params, args, &func_env);
+                                self.bind_simple_parameters(&frame, &params, args, &func_env);
                                 Ok(())
                             } else {
                                 self.bind_function_parameters(&params, args, &func_env, is_simple)
@@ -6041,7 +6027,14 @@ impl Interpreter {
                             // independent of any try/finally region in the caller.
                             let saved_tco_suppress = self.tco_suppress_depth;
                             self.tco_suppress_depth = 0;
-                            let result = self.dispatch_body(o.id, &body, &exec_env, _this_val);
+                            let result = self.dispatch_body(
+                                o.id,
+                                &body,
+                                &frame,
+                                bytecode_cache,
+                                &exec_env,
+                                _this_val,
+                            );
                             self.tco_suppress_depth = saved_tco_suppress;
                             self.call_stack_envs.pop();
                             self.call_stack_frames.pop();
@@ -6494,6 +6487,7 @@ impl Interpreter {
             let info = f.info();
             let func = JsFunction::User {
                 bytecode_cache: Default::default(),
+                frame: info.frame.clone(),
                 name: Some(f.name.clone()),
                 params: info.params.clone(),
                 body: f.body.clone(),

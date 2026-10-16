@@ -1534,6 +1534,9 @@ pub(crate) enum JsFunction {
         /// Compile verdict for `body`, filled on the first call and shared by
         /// every closure of the literal (see `shared_bytecode_verdict`).
         bytecode_cache: super::bytecode::BytecodeCacheState,
+        /// Call-frame facts derived from the literal, shared by its closures
+        /// (#1062). Functions built without a literal carry their own.
+        frame: Rc<super::literal_frame::LiteralFrame>,
     },
     Native(
         String,
@@ -1578,6 +1581,7 @@ impl Clone for JsFunction {
                 uses_arguments,
                 has_simple_params,
                 bytecode_cache,
+                frame,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -1592,6 +1596,7 @@ impl Clone for JsFunction {
                 uses_arguments: *uses_arguments,
                 has_simple_params: *has_simple_params,
                 bytecode_cache: bytecode_cache.clone(),
+                frame: frame.clone(),
             },
             JsFunction::Native(name, arity, f, is_ctor) => {
                 JsFunction::Native(name.clone(), *arity, f.clone(), *is_ctor)
@@ -3130,15 +3135,6 @@ impl JsObjectData {
         match &mut self.kind {
             ObjectKind::Iterator(slot) => **slot = state,
             kind => *kind = ObjectKind::Iterator(Box::new(state)),
-        }
-    }
-
-    /// The compile verdict cached on a user function (`Untried` for anything
-    /// else).
-    pub(crate) fn bytecode_cache(&self) -> super::bytecode::BytecodeCacheState {
-        match self.callable.as_deref() {
-            Some(JsFunction::User { bytecode_cache, .. }) => bytecode_cache.clone(),
-            _ => super::bytecode::BytecodeCacheState::Untried,
         }
     }
 

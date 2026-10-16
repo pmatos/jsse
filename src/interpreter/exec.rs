@@ -622,6 +622,7 @@ impl Interpreter {
         let info = f.info();
         let func = JsFunction::User {
             bytecode_cache: Default::default(),
+            frame: info.frame.clone(),
             name: Some(f.name.clone()),
             params: info.params.clone(),
             body: f.body.clone(),
@@ -2805,6 +2806,7 @@ impl Interpreter {
                     let info = f.info();
                     let func = JsFunction::User {
                         bytecode_cache: Default::default(),
+                        frame: info.frame.clone(),
                         name: Some(f.name.clone()),
                         params: info.params.clone(),
                         body: f.body.clone(),
