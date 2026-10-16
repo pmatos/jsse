@@ -82,7 +82,7 @@ re-deriving it from spec text, since the tree-walker is this project's proven
 `JsValue::Object` is a bare arena `u64` id with no `Rc`/`Drop` — holding a
 Rust-local clone does not keep it alive. `gc_safepoint()` builds its root set
 from an explicit, hand-maintained list (realms, call-stack envs/frames,
-`gc_temp_roots`) and never scans the VM's native `Vec<JsValue>` operand stack.
+`gc_temp_roots`) and (originally) never scanned the VM's native `Vec<JsValue>` operand stack; the `gc_bytecode_roots` mirror of it was added later (#807).
 A collection can run **synchronously nested** inside any of the new opcodes'
 own property-access call, since a getter, a proxy trap, or `ToPropertyKey`
 coercion can itself execute arbitrary JS, and any JS function body reaches a
@@ -98,16 +98,18 @@ first and last opcode, spanning an arbitrary number of intervening,
 GC-capable opcodes — rooting only the *current* opcode's own operands misses a
 value pushed by an *earlier* opcode and consumed by a *later* one.
 
-The fix: every one of the four new opcodes roots the **entire current operand
-stack** (not just its own operands) before calling into `get_object_property`/
-`to_property_key`/`to_object`/`set_object_with_key`, via a small
-`root_operand_stack` helper built on the existing `gc_root_frame`/
-`gc_root_value`/`gc_unroot_frame` machinery (the same mechanism `eval_binary`
-already uses to root its operands across `ToPrimitive` coercion). Rooting is
-by object id and does not require continued ownership of the `JsValue`, so
-rooting before popping this opcode's own operands already covers both any
-older pending stack entry and this opcode's own soon-to-be-popped locals via
-the same ids.
+The fix as first shipped: every one of the four new opcodes rooted the
+**entire current operand stack** (not just its own operands) before calling
+into `get_object_property`/`to_property_key`/`to_object`/`set_object_with_key`,
+via a `root_operand_stack` helper over `gc_root_frame`/`gc_root_value`.
+
+Superseded (#1058): that helper duplicated the `gc_bytecode_roots` mirror,
+which `push_value` maintains for every pushed object and `collect_gc_roots`
+appends, so the helper is gone. The invariant it protected now holds by
+construction: every object on the operand stack was pushed through
+`push_value`, and an opcode keeps its popped operands rooted across its own
+call (`unroot_stack_value` after the call, in LIFO order). Debug builds check
+it before each former call site (`debug_assert_operands_rooted`).
 
 ## Error handling and limits
 

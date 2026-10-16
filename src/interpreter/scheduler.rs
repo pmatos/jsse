@@ -307,8 +307,6 @@ impl JobScheduler {
             for request in queue {
                 visit(&request.value);
                 visit(&request.promise);
-                visit(&request.resolve_fn);
-                visit(&request.reject_fn);
             }
         }
         for (callback, args) in self.timers.iter_roots() {
@@ -530,8 +528,6 @@ mod tests {
             kind: super::super::AsyncGenRequestKind::Next,
             value: JsValue::number(tag),
             promise: JsValue::UNDEFINED,
-            resolve_fn: JsValue::UNDEFINED,
-            reject_fn: JsValue::UNDEFINED,
         }
     }
 
@@ -567,8 +563,6 @@ mod tests {
             .push_back(super::super::AsyncGenRequest {
                 value: JsValue::object(10),
                 promise: JsValue::object(11),
-                resolve_fn: JsValue::object(12),
-                reject_fn: JsValue::object(13),
                 ..next_request(0.0)
             });
 
@@ -577,7 +571,7 @@ mod tests {
             .filter_map(|v| v.as_object_id())
             .collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec![7, 10, 11, 12, 13]);
+        assert_eq!(ids, vec![7, 10, 11]);
     }
 
     #[test]

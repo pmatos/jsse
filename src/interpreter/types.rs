@@ -1052,6 +1052,13 @@ pub(crate) enum BindingKind {
     ImmutableValue,
 }
 
+impl BindingKind {
+    /// The kind of a `let`/`const`/class binding created in TDZ.
+    pub(crate) fn lexical(is_const: bool) -> Self {
+        if is_const { Self::Const } else { Self::Let }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SetBindingCheck {
     Ok,
@@ -5111,6 +5118,26 @@ pub(crate) enum ReactionTarget {
     /// instead of calling a handler. Carries no handler function, so awaiting
     /// allocates no function objects.
     AsyncResume(u64),
+    /// A continuation of the async-generator request at the front of
+    /// generator `0`'s queue, resumed by the settlement of the promise it
+    /// waits on. The front request is popped only after it settles, so the job
+    /// recovers the request promise from there, and the queue being non-empty
+    /// is also what keeps the generator alive. Carries no handler function.
+    AsyncGen(u64, AsyncGenStep),
+}
+
+/// Which wait of an async-generator request an [`ReactionTarget::AsyncGen`]
+/// reaction resumes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum AsyncGenStep {
+    /// An `await` in the body (or a `for await` head): resume the state machine.
+    Await,
+    /// A `yield` of a pending promise: complete the request with
+    /// `{ value, done: false }`, or reject it.
+    Yield,
+    /// AsyncGeneratorAwaitReturn: complete the request with `{ value, done: true }`,
+    /// or reject it.
+    AwaitReturn,
 }
 
 impl ReactionTarget {
@@ -5123,13 +5150,17 @@ impl ReactionTarget {
                 visit(resolve);
                 visit(reject);
             }
-            ReactionTarget::Internal(_) | ReactionTarget::AsyncResume(_) => {}
+            ReactionTarget::Internal(_)
+            | ReactionTarget::AsyncResume(_)
+            | ReactionTarget::AsyncGen(..) => {}
         }
     }
 
     pub(crate) fn promise_id(&self) -> Option<u64> {
         match self {
-            ReactionTarget::None | ReactionTarget::AsyncResume(_) => None,
+            ReactionTarget::None
+            | ReactionTarget::AsyncResume(_)
+            | ReactionTarget::AsyncGen(..) => None,
             ReactionTarget::Capability { promise_id, .. } => Some(*promise_id),
             ReactionTarget::Internal(id) => Some(*id),
         }

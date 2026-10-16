@@ -1076,6 +1076,15 @@ impl Interpreter {
                 reaction_type == PromiseReactionType::Reject,
             );
         }
+        if let ReactionTarget::AsyncGen(gen_id, step) = target {
+            self.async_gen_reaction(
+                gen_id,
+                step,
+                argument,
+                reaction_type == PromiseReactionType::Reject,
+            );
+            return Completion::Normal(JsValue::UNDEFINED);
+        }
         let handler_result = match handler {
             Some(ref handler) if self.is_callable(handler) => {
                 match self.call_function(
@@ -1100,7 +1109,9 @@ impl Interpreter {
         };
 
         match target {
-            ReactionTarget::None | ReactionTarget::AsyncResume(_) => {}
+            ReactionTarget::None
+            | ReactionTarget::AsyncResume(_)
+            | ReactionTarget::AsyncGen(..) => {}
             ReactionTarget::Internal(promise_id) => match handler_result {
                 Ok(value) => self.resolve_promise_internal(promise_id, value),
                 Err(reason) => self.reject_promise(promise_id, reason),
@@ -1295,24 +1306,38 @@ impl Interpreter {
         );
     }
 
-    /// §6.2.3.1 Await steps 5-6: PerformPromiseThen with no result capability.
-    /// Unlike `promise_then` it never consults `promise.constructor`
-    /// (SpeciesConstructor) and allocates no derived promise.
-    pub(crate) fn perform_await_then(
+    /// §6.2.3.1 Await step 2. A non-object can only produce a promise that is
+    /// already fulfilled with it, so no promise is built for it (`None`).
+    pub(crate) fn await_promise_resolve(&mut self, await_val: &JsValue) -> Option<u64> {
+        if await_val.is_object() {
+            self.promise_resolve_value(await_val).as_object_id()
+        } else {
+            None
+        }
+    }
+
+    /// §6.2.3.1 Await steps 5-9 for a continuation with a typed `target` and no
+    /// handler: PerformPromiseThen on `awaited_promise`, or, for a non-object
+    /// (`None`), the one reaction job it would have queued, carrying the value.
+    pub(crate) fn await_then_internal(
         &mut self,
-        promise_val: &JsValue,
-        on_fulfilled: JsValue,
-        on_rejected: JsValue,
+        awaited_promise: Option<u64>,
+        await_val: &JsValue,
+        target: ReactionTarget,
     ) {
-        let Some(promise_id) = promise_val.as_object_id() else {
-            return;
-        };
-        self.perform_promise_then_internal(
-            promise_id,
-            Some(on_fulfilled),
-            Some(on_rejected),
-            ReactionTarget::None,
-        );
+        match awaited_promise {
+            Some(promise_id) => {
+                self.perform_promise_then_internal(promise_id, None, None, target);
+            }
+            None => self.scheduler.enqueue_reaction_job(
+                PromiseReaction {
+                    handler: None,
+                    target,
+                    reaction_type: PromiseReactionType::Fulfill,
+                },
+                await_val.clone(),
+            ),
+        }
     }
 
     pub(crate) fn promise_then(

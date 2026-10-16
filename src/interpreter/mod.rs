@@ -683,8 +683,6 @@ pub(crate) struct AsyncGenRequest {
     pub kind: AsyncGenRequestKind,
     pub value: JsValue,
     pub promise: JsValue,
-    pub resolve_fn: JsValue,
-    pub reject_fn: JsValue,
 }
 
 #[derive(Clone, Debug, PartialEq)]

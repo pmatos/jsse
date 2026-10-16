@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::interpreter::atom::Atom;
 use crate::interpreter::generator_analysis::*;
+use crate::interpreter::hoisting::block_declares_lexical;
 use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
 use std::borrow::Cow;
@@ -1138,6 +1139,35 @@ fn transform_scope_block_joined(
     transform_scope_block(stmts, ctx, resume_state);
 }
 
+/// §14.2.2 Block Evaluation: a fresh declarative environment per entry,
+/// discarded on the way out. Forces a state boundary (`entry_state`) so the
+/// block's own content never shares a not-yet-sealed state with statements
+/// lexically outside it — those would otherwise get stamped with the block's
+/// (bumped) `scope_depth` instead of the outer one.
+///
+/// Leaves `ctx.current_state_id` on the unsealed join state `inner_after`,
+/// which the caller bridges to its own `after_state` once `scope_depth` is
+/// back to the outer value (or seals itself when there is none).
+fn transform_scoped_plain_block(stmts: &[Statement], ctx: &mut TransformContext) {
+    let entry_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::Goto(entry_state));
+    ctx.current_state_id = entry_state;
+    ctx.scope_depth += 1;
+    ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(intern_scope_decls(
+        collect_block_lexical_decls(stmts.iter()),
+    )));
+    let with_chain = ctx.claim_with_chain(entry_state);
+
+    let inner_after = ctx.new_state();
+    transform_statements(stmts, ctx, inner_after);
+    if ctx.current_state_id != inner_after {
+        ctx.finalize_current_state(StateTerminator::Goto(inner_after));
+    }
+    ctx.current_state_id = inner_after;
+    ctx.scope_depth -= 1;
+    ctx.with_scopes = with_chain;
+}
+
 fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, after_state: usize) {
     match stmt {
         Statement::Expression(expr) => {
@@ -1158,37 +1188,22 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 // of being tree-walked intact — see issue #683.
                 transform_scope_block_joined(stmts, ctx, after_state);
             } else {
-                // §14.2.2 Block Evaluation: a fresh declarative environment per
-                // entry, discarded on the way out. Force a state boundary
-                // (`entry_state`) so the block's own content never shares a
-                // not-yet-sealed state with statements lexically outside it —
-                // those would otherwise get stamped with the block's (bumped)
-                // `scope_depth` instead of the outer one.
-                let entry_state = ctx.new_state();
-                ctx.finalize_current_state(StateTerminator::Goto(entry_state));
-                ctx.current_state_id = entry_state;
-                ctx.scope_depth += 1;
-                ctx.states[entry_state].scope_action = Some(ScopeAction::OpenBlock(
-                    intern_scope_decls(collect_block_lexical_decls(stmts.iter())),
-                ));
-                let with_chain = ctx.claim_with_chain(entry_state);
-
-                let inner_after = ctx.new_state();
-                transform_statements(stmts, ctx, inner_after);
-                if ctx.current_state_id != inner_after {
-                    ctx.finalize_current_state(StateTerminator::Goto(inner_after));
+                if ctx.with_scopes.is_empty() && !block_declares_lexical(stmts) {
+                    // No lexical declaration: the block's environment is
+                    // unobservable, so its statements are lowered in place
+                    // with no state boundary, scope action or join state.
+                    // Under a `with` chain the block keeps its scope, which
+                    // claims the chain.
+                    transform_statements(stmts, ctx, after_state);
+                } else {
+                    transform_scoped_plain_block(stmts, ctx);
                 }
-                ctx.current_state_id = inner_after;
-                ctx.scope_depth -= 1;
-                ctx.with_scopes = with_chain;
-
-                // `inner_after` must only be finalized once `scope_depth` is
-                // back to the outer value, whether that's done here (bridging
-                // to a real `after_state`) or later by our caller (the
-                // `after_state == MAX` case, where `inner_after` itself *is*
-                // the fresh join point the caller will seal).
+                // `ctx.current_state_id` is the block's open state, or
+                // `inner_after`, the fresh join point, for a scoped block.
                 if after_state != usize::MAX {
-                    ctx.finalize_current_state(StateTerminator::Goto(after_state));
+                    if ctx.current_state_id != after_state {
+                        ctx.finalize_current_state(StateTerminator::Goto(after_state));
+                    }
                     ctx.current_state_id = after_state;
                 }
             }
@@ -5347,6 +5362,30 @@ mod tests {
             "expected an OpenBlock scope_action carrying the post-yield `const x`, got {:#?}",
             sm.states
         );
+    }
+
+    #[test]
+    fn declaration_free_block_opens_no_scope_or_extra_states() {
+        // Issue #1046: a block that declares nothing is lowered in place, so
+        // it costs exactly what the same statements without braces cost.
+        let count_scopes = |src: &str| {
+            let sm = transform_generator(&parse_fn_body(src), &[]);
+            let scopes = sm
+                .states
+                .iter()
+                .filter(|s| s.scope_action.is_some())
+                .count();
+            (sm.states.len(), scopes)
+        };
+        let braced = count_scopes("function* g() { for (var i = 0; i < 3; i++) { { yield i; } } }");
+        let plain = count_scopes("function* g() { for (var i = 0; i < 3; i++) { yield i; } }");
+        assert_eq!(braced, plain);
+        assert_eq!(braced.1, 0, "no scope action expected: {braced:?}");
+
+        let (_, scopes) = count_scopes("function* g() { { yield 1; function f() {} } }");
+        assert_eq!(scopes, 1, "a function declaration keeps the block scope");
+        let (_, scopes) = count_scopes("function* g(o) { with (o) { { yield 1; } } }");
+        assert_eq!(scopes, 1, "a block under `with` keeps its scope");
     }
 
     #[test]

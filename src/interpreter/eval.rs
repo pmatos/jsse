@@ -2050,8 +2050,7 @@ impl Interpreter {
                 // Function and lexical declarations are instantiated before
                 // the chunk runs, exactly as the tree-walker does, so the
                 // nodes handed back to it find their bindings in place.
-                let analysis = chunk
-                    .needs_instantiation
+                let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
                     .then(|| self.hoist_cache.analysis_for(body));
                 #[cfg(feature = "perf-counters")]
                 let has_fallback = !chunk.ast.is_empty();
@@ -9932,13 +9931,7 @@ impl Interpreter {
         for_of_stack: &mut Vec<ForOfLoopState>,
         scope_stack: &mut Vec<ScopeFrame>,
     ) {
-        // §6.2.3.1 Await step 2. A non-object can only produce a promise that
-        // is already fulfilled with it, so its job is queued without one.
-        let awaited_promise = if await_val.is_object() {
-            self.promise_resolve_value(await_val).as_object_id()
-        } else {
-            None
-        };
+        let awaited_promise = self.await_promise_resolve(await_val);
 
         let state = self
             .scheduler
@@ -9951,20 +9944,11 @@ impl Interpreter {
         state.for_of_stack = std::mem::take(for_of_stack);
         state.scope_stack = std::mem::take(scope_stack);
 
-        let target = ReactionTarget::AsyncResume(async_id);
-        match awaited_promise {
-            Some(promise_id) => {
-                self.perform_promise_then_internal(promise_id, None, None, target);
-            }
-            None => self.scheduler.enqueue_reaction_job(
-                PromiseReaction {
-                    handler: None,
-                    target,
-                    reaction_type: PromiseReactionType::Fulfill,
-                },
-                await_val.clone(),
-            ),
-        }
+        self.await_then_internal(
+            awaited_promise,
+            await_val,
+            ReactionTarget::AsyncResume(async_id),
+        );
     }
 
     /// Spec [[Get]] — reads a property from an object, invoking getters.

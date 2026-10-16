@@ -324,34 +324,24 @@ pub(crate) struct GeneratorDisposal {
     pub(crate) cursor: DisposeCursor,
     pub(crate) then: GeneratorDisposeThen,
     pub(crate) promise: JsValue,
-    pub(crate) resolve: JsValue,
-    pub(crate) reject: JsValue,
 }
 
 impl GeneratorDisposal {
     pub(crate) fn new(
         cursor: DisposeCursor,
         then: GeneratorDisposeThen,
-        (promise, resolve, reject): (&JsValue, &JsValue, &JsValue),
+        promise: &JsValue,
     ) -> Self {
         Self {
             cursor,
             then,
             promise: promise.clone(),
-            resolve: resolve.clone(),
-            reject: reject.clone(),
         }
-    }
-
-    pub(crate) fn request(&self) -> (&JsValue, &JsValue, &JsValue) {
-        (&self.promise, &self.resolve, &self.reject)
     }
 
     pub(crate) fn for_each_value(&self, mut f: impl FnMut(&JsValue)) {
         self.cursor.for_each_value(&mut f);
         f(&self.promise);
-        f(&self.resolve);
-        f(&self.reject);
     }
 }
 
