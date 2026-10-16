@@ -285,11 +285,7 @@ impl CommonKeys {
             value: intern_key("value"),
             done: intern_key("done"),
             empty_name: JsString::from_str(""),
-            typeof_results: helpers::TYPEOF_NAMES.map(|name| {
-                let mut units: Vec<u16> = name.encode_utf16().collect();
-                units.shrink_to_fit();
-                JsValue::string(JsString::from_vec(units))
-            }),
+            typeof_results: helpers::TYPEOF_NAMES.map(JsValue::from_str),
         }
     }
 }
