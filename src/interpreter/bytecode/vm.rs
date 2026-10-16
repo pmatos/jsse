@@ -925,8 +925,11 @@ fn run_chunk_inner(
             if len >= 2
                 && let (Some(l), Some(r)) = (stack[len - 2].as_number(), stack[len - 1].as_number())
             {
-                // Numbers are never rooted, so nothing needs unrooting.
-                stack.truncate(len - 1);
+                // Numbers are never rooted, so nothing needs unrooting, and
+                // the discarded right operand owns nothing to drop.
+                debug_assert!(stack[len - 1].is_number());
+                // SAFETY: `len >= 2` and `stack[len - 1]` is a Number.
+                unsafe { stack.set_len(len - 1) };
                 stack[len - 2] = number_binop($bop, l, r);
             } else {
                 let r = stack.pop().expect("stack underflow on binop rhs");
@@ -1650,7 +1653,10 @@ fn run_chunk_inner(
                         && let (Some(l), Some(r)) =
                             (stack[len - 2].as_number(), stack[len - 1].as_number())
                     {
-                        stack.truncate(len - 2);
+                        debug_assert!(stack[len - 2].is_number() && stack[len - 1].is_number());
+                        // SAFETY: `len >= 2` and both discarded operands are
+                        // Numbers, which own nothing to drop.
+                        unsafe { stack.set_len(len - 2) };
                         !number_compare(cmp, l, r)
                     } else {
                         let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
