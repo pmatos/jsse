@@ -614,6 +614,32 @@ impl Interpreter {
         }
     }
 
+    /// Evaluates a computed member's key expression and `ToPropertyKey`.
+    /// `Err` carries a completion that ends the access early: an abrupt key
+    /// expression, the nullish-base TypeError, or the numeric-index fast read.
+    fn eval_computed_member_key(
+        &mut self,
+        obj_val: &JsValue,
+        expr: &Expression,
+        env: &EnvRef,
+    ) -> Result<JsPropertyKey, Completion> {
+        let v = match self.eval_expr(expr, env) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if obj_val.is_nullish() {
+            return Err(Completion::Throw(self.create_type_error(&format!(
+                "Cannot read properties of {obj_val} (reading property)"
+            ))));
+        }
+        if let Some(index) = v.as_number()
+            && let Some(result) = self.numeric_index_fast_get(obj_val, index)
+        {
+            return Err(Completion::Normal(result));
+        }
+        self.to_property_key(&v).map_err(Completion::Throw)
+    }
+
     pub(super) fn eval_member(
         &mut self,
         obj: &Expression,
@@ -696,26 +722,14 @@ impl Interpreter {
         let (key, computed_raw) = match prop {
             MemberProperty::Dot(name) => (JsPropertyKey::from(name.clone()), None),
             MemberProperty::Computed(expr) => {
-                let v = match self.eval_expr(expr, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if obj_val.is_nullish() {
-                    let err = self.create_type_error(&format!(
-                        "Cannot read properties of {obj_val} (reading property)"
-                    ));
-                    return Completion::Throw(err);
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let keyed = self.eval_computed_member_key(&obj_val, expr, env);
+                self.gc_unroot_frame(gc_frame);
+                match keyed {
+                    Ok(key) => (key, Some(())),
+                    Err(done) => return done,
                 }
-                if let Some(index) = v.as_number()
-                    && let Some(result) = self.numeric_index_fast_get(&obj_val, index)
-                {
-                    return Completion::Normal(result);
-                }
-                let key = match self.to_property_key(&v) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                };
-                (key, Some(()))
             }
             MemberProperty::Private(_) => unreachable!(),
         };
