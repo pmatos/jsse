@@ -29,18 +29,19 @@ default class constructors share one thread-local frame like they share one Body
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
 cachegrind `--cache-sim=no`, whole-process `I refs`. base = `origin/main` at `ede164c0` (binary sha256 `cc2bac2606e2...`),
-new = base plus this change (`c66578f24850...`; the committed tree differs only by `cargo fmt`). JetStream drivers at
-`--iterations 1`.
+new = base plus this change at the final commit (`0d2f77ffde33...`). JetStream drivers at `--iterations 1`. The hash-map,
+ed25519, Babylon and megamorphic rows were taken with the pre-review build (`c66578f24850...`), which differs from the
+final one by a refactor of the IC store bookkeeping and the hoisted fresh-name check only.
 
 | benchmark | base Ir | new Ir | delta | criterion |
 |---|---:|---:|---:|---|
-| fib (micro) | 8,394,884,195 | 7,985,615,821 | -4.88% | >= 2.0% |
-| richards | 14,391,090,388 | 14,129,967,615 | -1.81% | >= 1.0% |
-| delta-blue | 9,714,688,307 | 9,413,675,207 | -3.10% | >= 1.5% |
+| fib (micro) | 8,394,884,195 | 7,964,074,092 | -5.14% | >= 2.0% |
+| richards | 14,391,090,388 | 14,132,682,449 | -1.80% | >= 1.0% |
+| delta-blue | 9,714,688,307 | 9,417,159,102 | -3.07% | >= 1.5% |
 | hash-map | 23,748,902,144 | 23,161,403,569 | -2.47% | |
 | bigint-noble-ed25519 | 8,144,108,386 | 8,007,838,950 | -1.67% | |
 | Babylon | 3,583,057,271 | 3,534,930,844 | -1.34% | |
-| proxy-mobx (median of 5) | 823,851,904 | 807,393,669 | -2.00% | noise ~4% |
+| proxy-mobx (median of 5) | 823,851,904 | 803,003,220 | -2.53% | noise ~4% |
 
 proxy-mobx's total Ir is not run-to-run stable (randomised interner), so only the median means anything.
 
@@ -48,8 +49,8 @@ Reproducer (the issue's leaf-call script, Ir per iteration = (N=250,000 minus N=
 
 | | base | atoms + IC handle | + verdict pass-through (shipped) | criterion |
 |---|---:|---:|---:|---|
-| 1 parameter `inc(s)` | 3,479 | 3,359 (-3.4%) | 3,328 (-4.3%) | <= 3,440 (-2.3% of the issue's 3,522) |
-| 4 parameters `inc(s,1,2,3)` | 4,263 | 4,042 (-5.2%) | 4,011 (-5.9%) | <= 4,170 (-3.2% of 4,308) |
+| 1 parameter `inc(s)` | 3,479 | 3,359 (-3.4%) | 3,319 (-4.6%) | <= 3,440 (-2.3% of the issue's 3,522) |
+| 4 parameters `inc(s,1,2,3)` | 4,263 | 4,042 (-5.2%) | 3,980 (-6.6%) | <= 4,170 (-3.2% of 4,308) |
 | call-free control | 854 | 853 | 853 | within 0.5% |
 
 Megamorphic IC-store eviction path (9,000 `new Function` bodies, then 20,000 calls of one hot function, 20 rounds):
