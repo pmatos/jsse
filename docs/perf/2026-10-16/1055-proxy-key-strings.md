@@ -17,7 +17,7 @@ freed after the call.
 - `name_to_js_string` fronts the cache for a name given as text (`get_object_property(.., name: &str)` from `Op::GetProp`, the
   `K = str` instantiation). It is found by the `&str`'s address and length and confirmed by comparing its bytes, so a recycled
   address only misses, and it needs no interner hashing. Hashing through the interner was the dominant remaining cost, and
-  an interner at its entry limit hands out a fresh key every time (proxy-vue is in that state), so the cache would never hit.
+  an interner at its entry limit hands out a fresh key every time, so a cache keyed by the interned key would never hit for such a name.
 - `symbol_key_to_jsvalue` takes the new `PropertyKeyLike::to_key_js_string` for every non-Symbol key and no longer builds
   an exact key first; the Symbol path (#1054) is untouched (`is_symbol_key`, the 0xFF sigil test).
 - `Interpreter::to_property_key` and `to_property_key_string` use `key_from_js_string`; the integer fast path uses
@@ -56,7 +56,7 @@ are 15 runs each (and proxy-vue 40 more), others 3:
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
 | proxy-vue, 40 runs (median / mean) | 1,391,939,799 / 1,395,172,637 | 1,377,998,345 / 1,387,293,392 | -1.00% / -0.56% |
-| proxy-vue, 15 runs (median / min) | 1,392,684,665 / | 1,389,411,105 / | -0.24% / -0.84% |
+| proxy-vue, 15 other runs (median) | 1,392,684,665 | 1,389,411,105 | -0.24% |
 | proxy-mobx, 15 runs | 749,839,994 | 748,724,595 | -0.15% |
 | fib | 7,425,598,503 | 7,425,605,186 | 0% |
 | richards | 13,390,401,592 | 13,390,625,674 | 0% |
@@ -65,8 +65,8 @@ are 15 runs each (and proxy-vue 40 more), others 3:
 | object | 1,555,925,454 | 1,557,420,079 | +0.10% |
 
 proxy-vue's callgrind view (flat, proflto): the hops the issue costed at 34.7M were already 36M inclusive on main
-(`to_property_key` 14.7M of which the Reflect closures ~6.5M, `symbol_key_to_jsvalue::<str>` 11.1M, the string/key drops
-~9M) and are ~24M now, which is the 0.6-1.0% of the run measured above. malloc calls under callgrind fall from 489,381 to
+(`to_property_key` 14.7M, `symbol_key_to_jsvalue::<str>` 11.1M, `<JsPropertyKey>` 1.1M, `Arc<StrView>`/`Arc<[u8]>` drops 9.4M,
+not all of them trap-side) and are ~24M now. malloc calls under callgrind fall from 489,381 to
 350,830 (-28%, -138.5k), against the issue's 183k round-trip blocks.
 
 ## Correctness gates
