@@ -9,7 +9,6 @@ description: >
   only reachable as a key on an object keeps its description after the
   original value is dropped.
 features: [Symbol, Proxy, Reflect, Symbol.prototype.description]
-includes: [compareArray.js]
 ---*/
 
 var named = Symbol('mobx administration');

@@ -697,6 +697,8 @@ struct JsSymbolData {
 /// Live symbols by id, for the key-to-symbol direction of a property key
 /// round trip. A symbol enters when its key is first built, so every user
 /// symbol key in existence has a table entry for as long as the symbol lives.
+/// The table is per thread: a symbol is `Arc`-shared but an interpreter (and so
+/// every symbol it can reach) is confined to the thread that runs it.
 /// The entries are `Weak`: the table never keeps a symbol alive, and dead
 /// entries are swept whenever the table doubles.
 struct SymbolIndex {
@@ -787,8 +789,9 @@ impl JsSymbol {
     /// same key directly; every other symbol includes its unique id. The key
     /// also carries the description (WTF-8) so it can be recovered from the key
     /// alone; identity is the id, never the description. A user symbol builds
-    /// its key once, through the property-key interner, so later conversions
-    /// are a refcount bump and later stores hit the interner's address fast path.
+    /// its key once, so later conversions are a refcount bump. The memo is
+    /// deliberately not interned: reads must not fill the bounded interner, so
+    /// only a property store admits a symbol key to it, as before.
     #[inline]
     pub(crate) fn to_property_key(&self) -> JsPropertyKey {
         if let Some(index) = self.data.well_known {
@@ -807,7 +810,7 @@ impl JsSymbol {
             .key
             .get_or_init(|| {
                 register_symbol(&self.data);
-                crate::interpreter::key_intern::intern_js_key(self.build_property_key())
+                self.build_property_key()
             })
             .clone()
     }
@@ -843,7 +846,8 @@ impl JsSymbol {
             .parse()
             .ok()?;
         let data = registered_symbol(id)?;
-        // Another interpreter on this thread may have reused the id.
+        // Another interpreter on this thread may have reused the id; an entry
+        // whose key differs is not this key's symbol.
         let own_key = data.key.get()?;
         (own_key.same_allocation(key) || own_key == key).then_some(Self { data })
     }
