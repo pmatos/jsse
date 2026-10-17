@@ -415,6 +415,7 @@ impl<'a> Parser<'a> {
             source_text,
             body_is_strict,
             info: Default::default(),
+            phase: Default::default(),
         })
     }
 
@@ -444,6 +445,7 @@ impl<'a> Parser<'a> {
             source_text,
             body_is_strict,
             info: Default::default(),
+            phase: Default::default(),
         })
     }
 

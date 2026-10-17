@@ -434,6 +434,16 @@ pub(crate) enum Expression {
     ImportMeta,
     NewTarget,
     PrivateIdentifier(String),
+    /// Callee form emitted only by the generator/async lowering: the function
+    /// value and `this` a call or tagged template already resolved, so the
+    /// call made after a suspension performs no property lookup. Evaluated
+    /// anywhere else it is the function value.
+    BoundCallee(ExprBox, ExprBox),
+    /// Spread operand emitted only by the generator/async lowering: a fresh
+    /// array already built by iterating the source, spread by copying its
+    /// elements instead of iterating it again. Evaluated anywhere else it is
+    /// the array.
+    PreIterated(ExprBox),
 }
 
 /// Owning link to a child `Expression`, used everywhere the AST used to hold
@@ -555,6 +565,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         Expression::Unary(_, e)
         | Expression::Update(_, _, e)
         | Expression::Spread(e)
+        | Expression::PreIterated(e)
         | Expression::Await(e)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -565,6 +576,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         Expression::Binary(_, l, r)
         | Expression::Logical(_, l, r)
         | Expression::Assign(_, l, r)
+        | Expression::BoundCallee(l, r)
         | Expression::OptionalChain(l, r) => {
             stack.push(take(l));
             stack.push(take(r));
@@ -1117,6 +1129,7 @@ impl<'a> CaptureWalk<'a> {
             Expression::Unary(_, e)
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
+            | Expression::PreIterated(e)
             | Expression::Await(e)
             | Expression::Typeof(e)
             | Expression::Void(e)
@@ -1129,6 +1142,7 @@ impl<'a> CaptureWalk<'a> {
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
             | Expression::Assign(_, l, r)
+            | Expression::BoundCallee(l, r)
             | Expression::OptionalChain(l, r) => {
                 self.push_expr(l);
                 self.push_expr(r);
@@ -1254,6 +1268,20 @@ pub(crate) struct FunctionDecl {
     pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
     pub info: LiteralInfoCell,
+    pub phase: DeclPhase,
+}
+
+/// Which half of a block-level function declaration's evaluation a statement
+/// performs. The generator/async lowering splits a declaration in two:
+/// BlockDeclarationInstantiation creates the function when the block is
+/// entered, and the Annex B.3.3 copy to the var scope happens where the
+/// declaration is reached. The parser only produces `Whole`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DeclPhase {
+    #[default]
+    Whole,
+    InstantiateOnly,
+    CopyOnly,
 }
 
 impl FunctionDecl {
@@ -1586,6 +1614,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             Expression::Unary(_, e)
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
+            | Expression::PreIterated(e)
             | Expression::Yield(Some(e), _)
             | Expression::Await(e)
             | Expression::Typeof(e)
@@ -1594,7 +1623,8 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             Expression::Yield(None, _) => {}
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
+            | Expression::Assign(_, l, r)
+            | Expression::BoundCallee(l, r) => {
                 stack.push(l);
                 stack.push(r);
             }
@@ -1825,12 +1855,14 @@ pub(crate) fn expr_contains_matching(
         }
         Expression::Binary(_, l, r)
         | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r) => {
+        | Expression::Assign(_, l, r)
+        | Expression::BoundCallee(l, r) => {
             expr_contains_matching(l, pred) || expr_contains_matching(r, pred)
         }
         Expression::Unary(_, e)
         | Expression::Update(_, _, e)
         | Expression::Spread(e)
+        | Expression::PreIterated(e)
         | Expression::Await(e)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -2171,6 +2203,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
             Expression::Unary(_, e)
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
+            | Expression::PreIterated(e)
             | Expression::Yield(Some(e), _)
             | Expression::Await(e)
             | Expression::Typeof(e)
@@ -2179,7 +2212,8 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
             Expression::Yield(None, _) => {}
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
+            | Expression::Assign(_, l, r)
+            | Expression::BoundCallee(l, r) => {
                 stack.push(SiteWork::Expr(r));
                 stack.push(SiteWork::Expr(l));
             }
@@ -2313,6 +2347,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             Expression::Unary(_, e)
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
+            | Expression::PreIterated(e)
             | Expression::Yield(Some(e), _)
             | Expression::Await(e)
             | Expression::Typeof(e)
@@ -2321,7 +2356,8 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             Expression::Yield(None, _) => {}
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
+            | Expression::Assign(_, l, r)
+            | Expression::BoundCallee(l, r) => {
                 stack.push(l);
                 stack.push(r);
             }

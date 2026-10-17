@@ -680,7 +680,11 @@ fn transform_generator_inner_opts(
 
     let end_state = ctx.new_state();
 
-    transform_statements(&function_declarations_first(body), &mut ctx, end_state);
+    transform_statements(
+        &function_declarations_first(body, false),
+        &mut ctx,
+        end_state,
+    );
 
     if !matches!(
         ctx.states[ctx.current_state_id].terminator,
@@ -713,11 +717,12 @@ fn is_function_declaration(stmt: &Statement) -> bool {
 /// after a `return`/`yield`/`await` would land in a state that has not run (or
 /// never runs). Moving the declarations to the head of the first fragment, in
 /// source order (last duplicate wins), instantiates them once when the first
-/// fragment starts; they are removed from their original positions. For a
-/// function body that is the whole effect of evaluating a declaration; for a
-/// sloppy block-level declaration the Annex B.3.3 var-scope copy, normally made
-/// when the declaration is reached, moves to the block's entry with it.
-fn function_declarations_first(body: &[Statement]) -> Cow<'_, [Statement]> {
+/// fragment starts. For a function body that is the whole effect of evaluating
+/// a declaration, so they are removed from their original positions. A sloppy
+/// block-level declaration also has the Annex B.3.3 var-scope copy, made when
+/// the declaration is reached (`block_level`): the moved declaration only
+/// instantiates, and a copy-only declaration stays where it was.
+fn function_declarations_first(body: &[Statement], block_level: bool) -> Cow<'_, [Statement]> {
     let leading = body
         .iter()
         .take_while(|s| is_function_declaration(s))
@@ -725,10 +730,40 @@ fn function_declarations_first(body: &[Statement]) -> Cow<'_, [Statement]> {
     if !body[leading..].iter().any(is_function_declaration) {
         return Cow::Borrowed(body);
     }
-    let (mut reordered, others): (Vec<_>, Vec<_>) =
-        body.iter().cloned().partition(is_function_declaration);
-    reordered.extend(others);
+    let has_annex_b_copy = |s: &Statement| {
+        block_level
+            && crate::interpreter::hoisting::unwrap_labeled_function(s)
+                .is_some_and(|f| !f.is_generator && !f.is_async)
+    };
+    let mut reordered = Vec::with_capacity(body.len());
+    reordered.extend(body.iter().filter(|s| is_function_declaration(s)).map(|s| {
+        if has_annex_b_copy(s) {
+            with_decl_phase(s, DeclPhase::InstantiateOnly)
+        } else {
+            s.clone()
+        }
+    }));
+    for stmt in body {
+        if !is_function_declaration(stmt) {
+            reordered.push(stmt.clone());
+        } else if has_annex_b_copy(stmt) {
+            reordered.push(with_decl_phase(stmt, DeclPhase::CopyOnly));
+        }
+    }
     Cow::Owned(reordered)
+}
+
+/// `stmt`, a possibly labelled function declaration, with its `phase` set.
+fn with_decl_phase(stmt: &Statement, phase: DeclPhase) -> Statement {
+    match stmt {
+        Statement::FunctionDeclaration(f) => {
+            Statement::FunctionDeclaration(FunctionDecl { phase, ..f.clone() })
+        }
+        Statement::Labeled(label, inner) => {
+            Statement::Labeled(label.clone(), Box::new(with_decl_phase(inner, phase)))
+        }
+        other => other.clone(),
+    }
 }
 
 fn create_simple_machine(
@@ -1124,7 +1159,7 @@ fn transform_scope_block(stmts: &[Statement], ctx: &mut TransformContext, after_
     // lexically after the scope but still inside the same enclosing `with`
     // keep the rewrap.
     let saved_with_scopes = std::mem::take(&mut ctx.with_scopes);
-    transform_statements(&function_declarations_first(stmts), ctx, exit_state);
+    transform_statements(&function_declarations_first(stmts, true), ctx, exit_state);
     if ctx.current_state_id != exit_state {
         ctx.finalize_current_state(StateTerminator::Goto(exit_state));
     }
@@ -1172,7 +1207,7 @@ fn transform_scoped_plain_block(stmts: &[Statement], ctx: &mut TransformContext)
     let with_chain = ctx.claim_with_chain(entry_state);
 
     let inner_after = ctx.new_state();
-    transform_statements(&function_declarations_first(stmts), ctx, inner_after);
+    transform_statements(&function_declarations_first(stmts, true), ctx, inner_after);
     if ctx.current_state_id != inner_after {
         ctx.finalize_current_state(StateTerminator::Goto(inner_after));
     }
@@ -1722,7 +1757,7 @@ fn transform_yielding_expression(
                     value: new_value,
                     kind: prop.kind,
                     computed: prop.computed,
-                    shorthand: false,
+                    shorthand: prop.shorthand,
                     method: prop.method,
                 });
             }
@@ -1843,7 +1878,7 @@ fn transform_yielding_expression(
                 .iter()
                 .any(|e| expr_has_suspension(e, ctx.is_async));
             let temp_tag = if matches!(&**tag, Expression::Member(..)) {
-                lower_reference_operand(tag, exprs_suspend, ctx)
+                lower_member_callee(tag, exprs_suspend, ctx)
             } else {
                 let settle = exprs_suspend && callee_can_be_settled(tag, ctx);
                 lower_operand(tag, settle, "tag_fn", ctx)
@@ -1900,9 +1935,26 @@ fn transform_yielding_expression(
     }
 }
 
+/// Whether the first operation applied to an optional chain's base is a call.
+fn chain_starts_with_call(chain: &Expression) -> bool {
+    match chain {
+        Expression::Call(callee, ..) => {
+            matches!(&**callee, Expression::Identifier(name) if name.is_empty())
+                || chain_starts_with_call(callee)
+        }
+        Expression::Member(inner, ..) => chain_starts_with_call(inner),
+        _ => false,
+    }
+}
+
 /// Convert an OptionalChain's chain expression into a regular expression
-/// by substituting the base placeholder with a variable reference.
-fn oc_chain_to_regular_expr(chain: &Expression, base_var: &str) -> Expression {
+/// by substituting the base placeholder with a variable reference. A call made
+/// directly on the base uses `this` as its receiver when one is given.
+fn oc_chain_to_regular_expr(
+    chain: &Expression,
+    base_var: &str,
+    this: Option<&Expression>,
+) -> Expression {
     match chain {
         Expression::Identifier(name) if name.is_empty() => {
             Expression::Identifier(base_var.to_string())
@@ -1913,7 +1965,7 @@ fn oc_chain_to_regular_expr(chain: &Expression, base_var: &str) -> Expression {
             PropSiteId::UNASSIGNED,
         ),
         Expression::Member(inner, prop, _) => {
-            let inner_expr = oc_chain_to_regular_expr(inner, base_var);
+            let inner_expr = oc_chain_to_regular_expr(inner, base_var, this);
             Expression::Member(
                 ExprBox::new(inner_expr),
                 prop.clone(),
@@ -1921,7 +1973,15 @@ fn oc_chain_to_regular_expr(chain: &Expression, base_var: &str) -> Expression {
             )
         }
         Expression::Call(callee, args, _) => {
-            let callee_expr = oc_chain_to_regular_expr(callee, base_var);
+            let callee_expr = match this {
+                Some(this) if matches!(&**callee, Expression::Identifier(name) if name.is_empty()) => {
+                    Expression::BoundCallee(
+                        ExprBox::new(Expression::Identifier(base_var.to_string())),
+                        ExprBox::new(this.clone()),
+                    )
+                }
+                _ => oc_chain_to_regular_expr(callee, base_var, this),
+            };
             Expression::Call(
                 ExprBox::new(callee_expr),
                 args.clone(),
@@ -1939,10 +1999,8 @@ fn transform_call_expression(
     ctx: &mut TransformContext,
 ) {
     let args_suspend = args.iter().any(|a| expr_has_suspension(a, ctx.is_async));
-    // A member callee stays a Reference so the call keeps its `this`; the
-    // function is read from the captured base when the call is made.
     let temp_callee = if matches!(callee, Expression::Member(..)) {
-        lower_reference_operand(callee, args_suspend, ctx)
+        lower_member_callee(callee, args_suspend, ctx)
     } else {
         let settle = args_suspend && callee_can_be_settled(callee, ctx);
         lower_operand(callee, settle, "call_callee", ctx)
@@ -2744,7 +2802,18 @@ fn lower_optional_chain(
     ctx: &mut TransformContext,
 ) {
     let base_var = ctx.new_temp_var("oc_bv");
-    bind_expression_to_temp(base, &base_var, ctx);
+    // `o.f?.(...)` calls `f` with `this` = `o`, so `o` is captured beside `f`.
+    let this = match base {
+        Expression::Member(..) if chain_starts_with_call(chain) => {
+            let (member, this) = capture_member_callee(base, ctx);
+            bind_expression_to_temp(&member, &base_var, ctx);
+            Some(this)
+        }
+        _ => {
+            bind_expression_to_temp(base, &base_var, ctx);
+            None
+        }
+    };
     let after_oc = ctx.new_state();
     let eval_chain_state = ctx.new_state();
     let skip_state = ctx.new_state();
@@ -2757,7 +2826,7 @@ fn lower_optional_chain(
     emit_expression_with_binding(&skip_value, &binding, ctx);
     ctx.finalize_current_state(StateTerminator::Goto(after_oc));
     ctx.current_state_id = eval_chain_state;
-    let regular = wrap(oc_chain_to_regular_expr(chain, &base_var));
+    let regular = wrap(oc_chain_to_regular_expr(chain, &base_var, this.as_ref()));
     if expr_has_suspension(&regular, ctx.is_async) {
         transform_yielding_expression(&regular, ctx, usize::MAX, binding);
     } else {
@@ -2839,7 +2908,9 @@ fn lower_operand(
 
 /// Lower `...inner` in an argument list, array literal (`as_object` false) or
 /// object literal (`as_object` true). When a later sibling suspends, the source
-/// is iterated or copied now into a fresh array/object that is spread instead.
+/// is iterated or copied now into a fresh array/object that is spread instead:
+/// the array is marked `PreIterated` so that spreading it again copies its
+/// elements, where iterating it would run user-visible `@@iterator` code twice.
 fn lower_spread(
     inner: &Expression,
     later_suspends: bool,
@@ -2866,7 +2937,12 @@ fn lower_spread(
     } else {
         Expression::Array(vec![Some(spread)], false)
     };
-    Expression::Spread(ExprBox::new(settle_operand(&copy, prefix, ctx)))
+    let settled = settle_operand(&copy, prefix, ctx);
+    Expression::Spread(ExprBox::new(if as_object {
+        settled
+    } else {
+        Expression::PreIterated(ExprBox::new(settled))
+    }))
 }
 
 /// Lower one element of an argument list or array literal, in source order.
@@ -2907,9 +2983,78 @@ fn lower_argument_list(
 fn callee_can_be_settled(callee: &Expression, ctx: &TransformContext) -> bool {
     match callee {
         Expression::Identifier(name) => name != "eval" && ctx.with_depth == 0,
-        Expression::Super | Expression::OptionalChain(..) | Expression::Member(..) => false,
+        Expression::Super
+        | Expression::OptionalChain(..)
+        | Expression::Member(..)
+        | Expression::BoundCallee(..) => false,
         _ => true,
     }
+}
+
+/// Evaluate `expr` into a temp now unless it is a literal or already a temp,
+/// so that using the result twice (as a base and as a `this`) cannot evaluate
+/// it twice.
+fn capture_operand(expr: &Expression, prefix: &str, ctx: &mut TransformContext) -> Expression {
+    if matches!(expr, Expression::Literal(_))
+        || matches!(expr, Expression::Identifier(name) if ctx.generated_temps.contains(name))
+    {
+        return expr.clone();
+    }
+    let temp = ctx.new_temp_var(prefix);
+    bind_expression_to_temp(expr, &temp, ctx);
+    Expression::Identifier(temp)
+}
+
+/// The base of a member callee and its member expression with the suspension
+/// points lowered out: the base is captured once (`super` stays `super`), then
+/// the computed key. The member's own read is left to the caller.
+fn capture_member_callee(
+    callee: &Expression,
+    ctx: &mut TransformContext,
+) -> (Expression, Expression) {
+    let Expression::Member(obj, prop, _) = callee else {
+        unreachable!("callers pass a member callee");
+    };
+    let base = match &**obj {
+        Expression::Super => Expression::Super,
+        other => capture_operand(other, "ref_obj", ctx),
+    };
+    let prop = match prop {
+        MemberProperty::Computed(key) => {
+            MemberProperty::Computed(ExprBox::new(settle_operand(key, "ref_key", ctx)))
+        }
+        other => other.clone(),
+    };
+    let member = Expression::Member(ExprBox::new(base.clone()), prop, PropSiteId::UNASSIGNED);
+    let this = if matches!(base, Expression::Super) {
+        Expression::This
+    } else {
+        base
+    };
+    (member, this)
+}
+
+/// Lower a call or tagged-template callee that is a member expression.
+/// EvaluateCall reads the function before it evaluates the arguments, so when
+/// `later_suspends` is set (an argument suspends) the base is captured, the
+/// function is read into a temp now, and the call uses a `BoundCallee` that
+/// performs no further lookup. Otherwise the callee stays a Reference whose
+/// own suspension points are lowered.
+fn lower_member_callee(
+    callee: &Expression,
+    later_suspends: bool,
+    ctx: &mut TransformContext,
+) -> Expression {
+    if !later_suspends {
+        return lower_reference_operand(callee, false, ctx);
+    }
+    let (member, this) = capture_member_callee(callee, ctx);
+    let func = ctx.new_temp_var("call_fn");
+    emit_temp_assignment(&func, member, ctx);
+    Expression::BoundCallee(
+        ExprBox::new(Expression::Identifier(func)),
+        ExprBox::new(this),
+    )
 }
 
 /// Lower the suspension points out of a member Reference (the operand of
@@ -3634,7 +3779,7 @@ fn transform_clause_body(stmts: &[Statement], ctx: &mut TransformContext, after_
     if ctx.scopes_disposables(stmts) {
         transform_scope_block(stmts, ctx, after_state);
     } else {
-        transform_statements(&function_declarations_first(stmts), ctx, after_state);
+        transform_statements(&function_declarations_first(stmts, true), ctx, after_state);
     }
 }
 
@@ -3725,7 +3870,7 @@ fn transform_try_statement(
         ctx.scope_depth += 1;
         let with_chain = ctx.claim_with_chain(try_body_state);
         transform_statements(
-            &function_declarations_first(&try_stmt.block),
+            &function_declarations_first(&try_stmt.block, true),
             ctx,
             clause_completion_state,
         );
@@ -3792,7 +3937,7 @@ fn transform_try_statement(
                 ctx.scope_depth += 1;
                 let with_chain = ctx.claim_with_chain(finally_body_state);
                 transform_statements(
-                    &function_declarations_first(finalizer),
+                    &function_declarations_first(finalizer, true),
                     ctx,
                     finally_exit_state,
                 );
@@ -3944,7 +4089,7 @@ fn transform_switch_statement(
             case.consequent
                 .iter()
                 .filter(|s| is_function_declaration(s))
-                .cloned()
+                .map(|s| with_decl_phase(s, DeclPhase::InstantiateOnly))
         })
         .collect();
 
@@ -3999,14 +4144,21 @@ fn transform_switch_statement(
             after_switch
         };
 
+        // The functions were instantiated on entry to the case block; the
+        // Annex B.3.3 copy to the var scope happens where each is reached.
         let consequent: Cow<'_, [Statement]> = if case_functions.is_empty() {
             Cow::Borrowed(case.consequent.as_slice())
         } else {
             Cow::Owned(
                 case.consequent
                     .iter()
-                    .filter(|s| !is_function_declaration(s))
-                    .cloned()
+                    .map(|s| {
+                        if is_function_declaration(s) {
+                            with_decl_phase(s, DeclPhase::CopyOnly)
+                        } else {
+                            s.clone()
+                        }
+                    })
                     .collect(),
             )
         };
@@ -4322,6 +4474,11 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         ),
         Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
         Expression::Spread(e) => Expression::Spread(ExprBox::new(rewrite_expr(e))),
+        Expression::PreIterated(e) => Expression::PreIterated(ExprBox::new(rewrite_expr(e))),
+        Expression::BoundCallee(func, this) => Expression::BoundCallee(
+            ExprBox::new(rewrite_expr(func)),
+            ExprBox::new(rewrite_expr(this)),
+        ),
         Expression::Yield(inner, delegate) => Expression::Yield(
             inner.as_ref().map(|e| ExprBox::new(rewrite_expr(e))),
             *delegate,
@@ -5590,6 +5747,48 @@ mod tests {
         assert_eq!(
             after_switch_depth, outer_depth,
             "the state after the switch must be back at the outer scope depth"
+        );
+    }
+
+    fn function_phases(sm: &GeneratorStateMachine) -> Vec<DeclPhase> {
+        sm.states
+            .iter()
+            .flat_map(|s| s.body.as_slice())
+            .filter_map(|stmt| match stmt {
+                Statement::FunctionDeclaration(f) => Some(f.phase),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn block_function_after_suspension_splits_instantiation_from_annex_b_copy() {
+        let sm = async_machine("{ await 0; function f() {} }");
+        assert_eq!(
+            function_phases(&sm),
+            [DeclPhase::InstantiateOnly, DeclPhase::CopyOnly],
+            "created at block entry, copied to the var scope where reached"
+        );
+    }
+
+    #[test]
+    fn leading_block_function_stays_whole() {
+        let sm = async_machine("{ function f() {} await 0; }");
+        assert_eq!(function_phases(&sm), [DeclPhase::Whole]);
+    }
+
+    #[test]
+    fn function_body_declaration_is_moved_not_split() {
+        let sm = async_machine("await 0; function f() {}");
+        assert_eq!(function_phases(&sm), [DeclPhase::Whole]);
+    }
+
+    #[test]
+    fn switch_case_function_keeps_a_copy_at_its_position() {
+        let sm = async_machine("switch (1) { case 1: await 0; case 2: function f() {} }");
+        assert_eq!(
+            function_phases(&sm),
+            [DeclPhase::InstantiateOnly, DeclPhase::CopyOnly]
         );
     }
 }
