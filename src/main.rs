@@ -48,7 +48,5 @@ fn limit_glibc_arenas() {}
 
 fn main() -> ExitCode {
     limit_glibc_arenas();
-    #[cfg(all(feature = "jemalloc", target_os = "linux", not(miri)))]
-    jsse::thp::settle_deferral();
     jsse::run_cli()
 }

@@ -221,7 +221,6 @@ impl GcPacer {
     /// surviving live set and reset both allocation cycles.
     pub(crate) fn end_major_collection(&mut self, live_object_count: usize) {
         let live_bytes = live_object_count * GC_OBJECT_OVERHEAD + self.external_bytes;
-        crate::thp::after_major_collection();
         let growth_debt = live_bytes.saturating_mul(GC_GROWTH_FACTOR.saturating_sub(1));
         self.major_threshold_bytes = std::cmp::max(GC_MAJOR_MIN_THRESHOLD_BYTES, growth_debt);
         self.major_bytes_since_gc = 0;
@@ -1283,6 +1282,7 @@ impl Interpreter {
         }
         let live_count = self.objects.live_count();
         self.gc.end_major_collection(live_count);
+        crate::thp::after_major_collection();
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
     }

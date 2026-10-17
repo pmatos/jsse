@@ -1,5 +1,6 @@
-//! The shipped binary runs on jemalloc (#1047); huge pages are handled by
-//! `thp::defer_huge_pages` (#1075, see `tests/thp_defer.rs`).
+//! The shipped binary runs on jemalloc (#1047). Its huge-page policy is set at
+//! runtime by `thp::disable_at_startup` and `thp::after_major_collection`
+//! (#1075, covered by `tests/thp_defer.rs`), not by an embedded `malloc_conf`.
 #![cfg(all(feature = "jemalloc", target_os = "linux"))]
 
 use std::process::Command;

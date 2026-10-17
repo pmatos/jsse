@@ -9,8 +9,8 @@
 //! on after a major collection finds the process resident set past
 //! [`RESIDENT_THRESHOLD_BYTES`] ([`after_major_collection`]). Memory faulted
 //! before that stays on 4 KiB pages; memory faulted after it may use huge
-//! pages. On a host with THP `madvise` or `never` [`settle_deferral`] lifts the
-//! early disable, which had nothing to prevent there.
+//! pages. On a host with THP `madvise` or `never` the disable changes nothing:
+//! jemalloc's default `thp:default` never calls `madvise`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,15 +27,10 @@ static DEFERRAL: Deferral = Deferral {
 };
 
 impl Deferral {
+    /// Leaves a flag that a parent process set on purpose alone.
     fn start(&self) {
-        if set_thp_disable(true) {
+        if !thp_disabled() && set_thp_disable(true) {
             self.active.store(true, Ordering::Relaxed);
-        }
-    }
-
-    fn cancel(&self) {
-        if self.active.swap(false, Ordering::Relaxed) {
-            set_thp_disable(false);
         }
     }
 
@@ -63,33 +58,39 @@ fn set_thp_disable(_disable: bool) -> bool {
     false
 }
 
-/// Only `always` makes the kernel hand out huge pages unasked. An unreadable
-/// setting is treated as `always`: disabling is harmless where it is moot.
+/// The flag survives `fork` and `exec`, so a launcher may have set it already.
 #[cfg(target_os = "linux")]
-fn host_uses_huge_pages_unasked() -> bool {
-    std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled")
-        .map(|mode| mode.contains("[always]"))
-        .unwrap_or(true)
+fn thp_disabled() -> bool {
+    const PR_GET_THP_DISABLE: i32 = 42;
+    unsafe extern "C" {
+        fn prctl(option: i32, ...) -> i32;
+    }
+    unsafe { prctl(PR_GET_THP_DISABLE, 0usize, 0usize, 0usize, 0usize) > 0 }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn host_uses_huge_pages_unasked() -> bool {
+fn thp_disabled() -> bool {
     false
 }
 
 #[cfg(target_os = "linux")]
 fn resident_bytes() -> usize {
     use std::io::Read;
+    const SC_PAGESIZE: i32 = 30;
+    unsafe extern "C" {
+        fn sysconf(name: i32) -> isize;
+    }
     let mut buf = [0u8; 128];
     let Ok(mut file) = std::fs::File::open("/proc/self/statm") else {
         return 0;
     };
     let n = file.read(&mut buf).unwrap_or(0);
+    let page_size = usize::try_from(unsafe { sysconf(SC_PAGESIZE) }).unwrap_or(4096);
     std::str::from_utf8(&buf[..n])
         .ok()
         .and_then(|s| s.split_whitespace().nth(1))
         .and_then(|pages| pages.parse::<usize>().ok())
-        .map_or(0, |pages| pages * 4096)
+        .map_or(0, |pages| pages * page_size)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -102,14 +103,6 @@ fn resident_bytes() -> usize {
 /// first use, when a pre-`main` allocation would otherwise fault a huge page.
 pub fn disable_at_startup() {
     DEFERRAL.start();
-}
-
-/// Lift [`disable_at_startup`] on a host that does not hand out huge pages
-/// unasked, so that a `madvise` or `never` host behaves exactly as before.
-pub fn settle_deferral() {
-    if !host_uses_huge_pages_unasked() {
-        DEFERRAL.cancel();
-    }
 }
 
 /// Called after every major collection; re-enables huge pages once the process
@@ -130,7 +123,7 @@ mod tests {
 
     #[test]
     fn huge_pages_return_once_the_resident_set_reaches_the_threshold() {
-        if thp_enabled().is_none() {
+        if thp_enabled() != Some(true) {
             return;
         }
         let deferral = Deferral {
