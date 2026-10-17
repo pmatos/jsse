@@ -713,10 +713,10 @@ impl Interpreter {
         let Some(chunk) = self.generator_chunk(func_obj_id, body) else {
             return Ok(None);
         };
-        match self.chunk_instantiation_analysis(&chunk, body) {
+        match self.chunk_instantiation_analysis(&chunk, body, frame) {
             Some(analysis) => {
                 let failed = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
-                    interp.instantiate_chunk_declarations(&chunk, body, exec_env, &analysis)
+                    interp.instantiate_chunk_declarations(&chunk, body, exec_env, analysis)
                 });
                 match failed {
                     Some(Completion::Throw(error)) => return Err(error),

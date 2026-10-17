@@ -1103,16 +1103,23 @@ pub(crate) enum SetBindingCheck {
 }
 
 impl Environment {
-    pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
-        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
-        Rc::new(RefCell::new(Environment {
-            bindings: BindingMap::new(),
+    /// An environment with every field at its initial value except the ones
+    /// a constructor chooses; `release_to_pool` restores the same state.
+    fn blank(
+        bindings: BindingMap,
+        parent: Option<EnvRef>,
+        strict: bool,
+        is_function_scope: bool,
+        with_object: Option<WithObject>,
+    ) -> Environment {
+        Environment {
+            bindings,
             this_binding: None,
             parent,
             strict,
-            is_function_scope: false,
+            is_function_scope,
             is_arrow_scope: false,
-            with_object: None,
+            with_object,
             dispose_stack: None,
             global_object_id: None,
             annexb_function_names: None,
@@ -1125,34 +1132,31 @@ impl Environment {
             is_derived_constructor_scope: false,
             indirect_bindings: None,
             module_path: None,
-        }))
+        }
+    }
+
+    pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
+        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
+        Rc::new(RefCell::new(Self::blank(
+            BindingMap::new(),
+            parent,
+            strict,
+            false,
+            None,
+        )))
     }
 
     /// §9.1.2.3 NewObjectEnvironment: a with-environment over `obj_id`, whose
     /// `[[OuterEnv]]` is `parent`.
     pub(crate) fn new_with_object(parent: EnvRef, obj_id: u64) -> EnvRef {
         let strict = parent.borrow().strict;
-        Rc::new(RefCell::new(Environment {
-            bindings: BindingMap::new(),
-            this_binding: None,
-            parent: Some(parent),
+        Rc::new(RefCell::new(Self::blank(
+            BindingMap::new(),
+            Some(parent),
             strict,
-            is_function_scope: false,
-            is_arrow_scope: false,
-            with_object: Some(WithObject { obj_id }),
-            dispose_stack: None,
-            global_object_id: None,
-            annexb_function_names: None,
-            class_private_names: None,
-            is_field_initializer: false,
-            arguments_immutable: false,
-            has_parameter_expressions: false,
-            has_simple_params: true,
-            is_simple_catch_scope: false,
-            is_derived_constructor_scope: false,
-            indirect_bindings: None,
-            module_path: None,
-        }))
+            false,
+            Some(WithObject { obj_id }),
+        )))
     }
 
     pub(crate) fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
@@ -1164,78 +1168,79 @@ impl Environment {
         binding_capacity: usize,
     ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
-        Rc::new(RefCell::new(Environment {
-            bindings: BindingMap::with_capacity(binding_capacity),
-            this_binding: None,
+        Rc::new(RefCell::new(Self::blank(
+            BindingMap::with_capacity(binding_capacity),
             parent,
             strict,
-            is_function_scope: true,
-            is_arrow_scope: false,
-            with_object: None,
-            dispose_stack: None,
-            global_object_id: None,
-            annexb_function_names: None,
-            class_private_names: None,
-            is_field_initializer: false,
-            arguments_immutable: false,
-            has_parameter_expressions: false,
-            has_simple_params: true,
-            is_simple_catch_scope: false,
-            is_derived_constructor_scope: false,
-            indirect_bindings: None,
-            module_path: None,
-        }))
+            true,
+            None,
+        )))
     }
 
-    pub(crate) fn reset_function_scope(&mut self, parent: Option<EnvRef>, binding_capacity: usize) {
-        self.reset_scope(parent, binding_capacity, true);
+    /// Returns this environment to the state a pooled one holds: no
+    /// bindings (their storage is kept), no parent, no `this`, and every
+    /// other field as `Environment::new` builds it. Paired with
+    /// [`Environment::adopt_pooled`], which then only sets what differs per
+    /// use, so a call resets the environment once instead of on both sides of
+    /// the pool.
+    pub(crate) fn release_to_pool(&mut self) {
+        // Naming every field makes a new one a compile error here, so the
+        // pooled state cannot silently miss it.
+        let Environment {
+            bindings,
+            this_binding,
+            parent,
+            strict,
+            is_function_scope,
+            is_arrow_scope,
+            with_object,
+            dispose_stack,
+            global_object_id,
+            annexb_function_names,
+            class_private_names,
+            is_field_initializer,
+            arguments_immutable,
+            has_parameter_expressions,
+            has_simple_params,
+            is_simple_catch_scope,
+            is_derived_constructor_scope,
+            indirect_bindings,
+            module_path,
+        } = self;
+        bindings.clear();
+        *this_binding = None;
+        *parent = None;
+        *strict = false;
+        *is_function_scope = false;
+        *is_arrow_scope = false;
+        *with_object = None;
+        *dispose_stack = None;
+        *global_object_id = None;
+        *annexb_function_names = None;
+        *class_private_names = None;
+        *is_field_initializer = false;
+        *arguments_immutable = false;
+        *has_parameter_expressions = false;
+        *has_simple_params = true;
+        *is_simple_catch_scope = false;
+        *is_derived_constructor_scope = false;
+        *indirect_bindings = None;
+        *module_path = None;
     }
 
-    /// Drops what a pooled environment holds on to (its parent chain and
-    /// bindings); every other field is rewritten when it is next acquired.
-    pub(crate) fn release_block_scope(&mut self) {
-        self.bindings.clear();
-        self.parent = None;
-        self.this_binding = None;
-        self.dispose_stack = None;
-        self.annexb_function_names = None;
-        self.class_private_names = None;
-        self.indirect_bindings = None;
-    }
-
-    /// Reinitialises a pooled environment as a fresh block scope under
-    /// `parent`, as `Environment::new` would build one.
-    pub(crate) fn reset_block_scope(&mut self, parent: EnvRef, binding_capacity: usize) {
-        self.reset_scope(Some(parent), binding_capacity, false);
-    }
-
-    fn reset_scope(
+    /// Makes a pooled environment (see [`Environment::release_to_pool`]) a
+    /// fresh scope under `parent`, as `Environment::new` or
+    /// `new_function_scope_with_capacity` would build one.
+    pub(crate) fn adopt_pooled(
         &mut self,
         parent: Option<EnvRef>,
         binding_capacity: usize,
         is_function_scope: bool,
     ) {
-        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
-        self.bindings.clear();
-        self.bindings.reserve(binding_capacity);
-        self.this_binding = None;
+        self.strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         self.parent = parent;
-        self.strict = strict;
         self.is_function_scope = is_function_scope;
-        self.is_arrow_scope = false;
-        self.with_object = None;
-        self.dispose_stack = None;
-        self.global_object_id = None;
-        self.annexb_function_names = None;
-        self.class_private_names = None;
-        self.is_field_initializer = false;
-        self.arguments_immutable = false;
-        self.has_parameter_expressions = false;
-        self.has_simple_params = true;
-        self.is_simple_catch_scope = false;
-        self.is_derived_constructor_scope = false;
-        self.indirect_bindings = None;
-        self.module_path = None;
+        self.bindings.reserve(binding_capacity);
     }
 
     pub(crate) fn find_module_path(env: &EnvRef) -> Option<super::ModuleKey> {
@@ -1310,9 +1315,16 @@ impl Environment {
 
     /// The value of the nearest `this` binding up the chain, or `None` when
     /// that binding is uninitialized (or absent).
+    /// The `this` value this environment itself binds, when it is initialized.
+    #[inline]
+    pub(crate) fn bound_this(&self) -> Option<JsValue> {
+        let this = self.this_binding.as_ref()?;
+        this.initialized.then(|| this.value.clone())
+    }
+
     pub(crate) fn get_this(&self) -> Option<JsValue> {
-        if let Some(this) = &self.this_binding {
-            return this.initialized.then(|| this.value.clone());
+        if self.this_binding.is_some() {
+            return self.bound_this();
         }
         self.parent.as_ref().and_then(|p| p.borrow().get_this())
     }

@@ -26,6 +26,7 @@ use crate::interpreter::Interpreter;
 /// Only the raw name collection is cached. The Annex-B post-processing that
 /// inspects live env/parameter/lexical state still runs per call, and function
 /// declarations are never cached as values (fresh closures are built per call).
+#[derive(Debug)]
 pub(crate) struct HoistAnalysis {
     /// Deduped output of `collect_var_names_from_stmts`.
     pub(crate) var_names: Vec<String>,

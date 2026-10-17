@@ -291,8 +291,9 @@ fn carry_script_completion(
 /// Drops operand-stack values (unrooting them, innermost first) until
 /// `height` remain.
 fn truncate_stack(interp: &mut Interpreter, stack: &mut Vec<JsValue>, height: usize) {
-    while stack.len() > height {
-        pop_value(interp, stack, "stack underflow truncating operands");
+    if stack.len() > height {
+        unroot_stack_values(interp, &stack[height..]);
+        stack.truncate(height);
     }
 }
 
@@ -321,7 +322,7 @@ fn unwind_scopes(
     interp.call_stack_envs.truncate(envs_base + depth);
     while scopes.len() > depth {
         let env = scopes.pop().expect("length checked above");
-        interp.recycle_block_environment(env);
+        interp.recycle_environment(env);
     }
 }
 
@@ -371,6 +372,15 @@ fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
     if let Some(object_id) = value.as_object_id() {
         interp.gc_bytecode_roots.pop_expected(object_id);
     }
+}
+
+/// Unroots the operands in `values` (bottom first, as they were pushed),
+/// innermost first. Only object operands hold a root.
+#[inline(always)]
+fn unroot_stack_values(interp: &mut Interpreter, values: &[JsValue]) {
+    interp
+        .gc_bytecode_roots
+        .pop_expected_batch(values.iter().rev().filter_map(JsValue::as_object_id));
 }
 
 #[inline(always)]
@@ -440,9 +450,12 @@ unsafe fn discard_number_operands(stack: &mut Vec<JsValue>, count: usize) {
 
 /// Pops and unroots `count` operands, innermost first (LIFO with the pushes).
 fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize) {
-    for _ in 0..count {
-        pop_value(interp, stack, "stack underflow releasing call operands");
-    }
+    let base = stack
+        .len()
+        .checked_sub(count)
+        .expect("stack underflow releasing call operands");
+    unroot_stack_values(interp, &stack[base..]);
+    stack.truncate(base);
 }
 
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
@@ -770,13 +783,8 @@ fn resume_at_handler(
     Ok(handler.target as usize)
 }
 
-pub(crate) fn run_chunk(
-    interp: &mut Interpreter,
-    chunk: &Chunk,
-    env: &EnvRef,
-    this_value: JsValue,
-) -> Completion {
-    run_chunk_with_var_prologue(interp, chunk, env, this_value, true)
+pub(crate) fn run_chunk(interp: &mut Interpreter, chunk: &Chunk, env: &EnvRef) -> Completion {
+    run_chunk_with_var_prologue(interp, chunk, env, true)
 }
 
 /// Run a Script chunk after its caller has completed
@@ -787,9 +795,8 @@ pub(crate) fn run_script_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
     env: &EnvRef,
-    this_value: JsValue,
 ) -> Completion {
-    run_chunk_with_var_prologue(interp, chunk, env, this_value, false)
+    run_chunk_with_var_prologue(interp, chunk, env, false)
 }
 
 /// How a suspended generator body is resumed (`Generator.prototype.next`,
@@ -890,7 +897,6 @@ pub(crate) fn run_generator_chunk(
         interp,
         chunk,
         env,
-        JsValue::UNDEFINED,
         false,
         stack,
         refs,
@@ -926,7 +932,6 @@ fn run_chunk_with_var_prologue(
     interp: &mut Interpreter,
     chunk: &Chunk,
     env: &EnvRef,
-    this_value: JsValue,
     declare_chunk_vars: bool,
 ) -> Completion {
     let gc_frame = interp.gc_bytecode_roots.len();
@@ -943,14 +948,15 @@ fn run_chunk_with_var_prologue(
         interp,
         chunk,
         env,
-        this_value,
         declare_chunk_vars,
         &mut stack,
         &mut refs,
         None,
     );
     recycle_vm_buffer(&mut interp.vm_stack_pool, stack);
-    recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
+    if chunk.max_refs != 0 {
+        recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
+    }
     // `Throw`/`Exit` are abrupt and can leave operands from an
     // outer-in-progress expression still on the stack (issue #331) — every
     // other completion is produced only after the chunk's own opcode
@@ -986,7 +992,6 @@ fn run_chunk_inner<const GENERATOR: bool>(
     interp: &mut Interpreter,
     chunk: &Chunk,
     frame_env: &EnvRef,
-    _this: JsValue,
     declare_chunk_vars: bool,
     stack: &mut Vec<JsValue>,
     refs: &mut Vec<IdentifierRef>,
@@ -1275,10 +1280,17 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         }
                     }
                 }
-                Op::LoadThis => match interp.resolve_this_binding(cur_env!()) {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => bail!('dispatch, abrupt),
-                },
+                Op::LoadThis => {
+                    // Block environments never carry a `this` binding.
+                    if let Some(value) = frame_env.borrow().bound_this() {
+                        push_value(interp, stack, value);
+                    } else {
+                        match interp.resolve_this_binding(cur_env!()) {
+                            Completion::Normal(v) => push_value(interp, stack, v),
+                            abrupt => bail!('dispatch, abrupt),
+                        }
+                    }
+                }
                 Op::LoadCalleeName => {
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
@@ -2221,7 +2233,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let top = scopes.len() - 1;
                     interp.call_stack_envs[envs_base + top] = fresh.clone();
                     let replaced = std::mem::replace(&mut scopes[top], fresh);
-                    interp.recycle_block_environment(replaced);
+                    interp.recycle_environment(replaced);
                 }
                 Op::MakeClosure => {
                     let idx = decode_u16(chunk, pc);

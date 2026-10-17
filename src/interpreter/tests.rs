@@ -154,7 +154,7 @@ fn function_environment_pool_reuses_and_resets_unescaped_storage() {
         env.arguments_immutable = true;
     }
 
-    interp.recycle_function_environment(env);
+    interp.recycle_environment(env);
     assert_eq!(interp.function_env_pool.len(), 1);
 
     let second_parent = Environment::new(None);
@@ -175,7 +175,7 @@ fn function_environment_pool_does_not_pin_the_previous_receiver() {
     let mut interp = Interpreter::new();
     let env = interp.acquire_function_environment(Environment::new(None), 1);
     env.borrow_mut().set_this(JsValue::object(4242));
-    interp.recycle_function_environment(env);
+    interp.recycle_environment(env);
 
     let reused = interp.acquire_function_environment(Environment::new(None), 1);
     assert!(reused.borrow().this_binding.is_none());
@@ -189,7 +189,7 @@ fn function_environment_pool_rejects_escaped_storage() {
     env.borrow_mut().declare("captured", BindingKind::Var);
     let escaped = env.clone();
 
-    interp.recycle_function_environment(env);
+    interp.recycle_environment(env);
 
     assert!(interp.function_env_pool.is_empty());
     assert!(escaped.borrow().bindings.contains_key("captured"));
@@ -3815,7 +3815,7 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
 }
 
 #[test]
-fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
+fn hoist_analysis_is_read_off_the_literal_frame_across_repeated_calls() {
     let interp = run_script_tree_walker(
         r#"
         function f(n) { var acc = 0; for (var i = 0; i < n; i++) { acc += i; } return acc; }
@@ -3826,8 +3826,9 @@ fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
     );
     assert_eq!(global_number(&interp, "__total"), 150.0);
     assert!(
-        interp.hoist_cache.hits() >= 49,
-        "expected the repeatedly-called body to be memoised, got {} hits",
+        interp.hoist_cache.hits() < 5,
+        "expected the analysis to be kept on the literal's frame after its first call, \
+         but the Body-keyed memo was consulted {} times for 50 calls",
         interp.hoist_cache.hits()
     );
 }
