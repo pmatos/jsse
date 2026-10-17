@@ -3350,7 +3350,9 @@ fn constant_array_template(elements: &[Option<Expression>]) -> Option<ArrayTempl
 /// `Super` and private names only make sense inside their parent expression;
 /// `Spread` is an argument/element form, not an expression of its own, and a
 /// `BoundCallee` or `PreIterated` is meaningful only to the call or spread that
-/// contains it, so that parent runs on the tree-walker as a whole.
+/// contains it: `compile_call` lowers a `BoundCallee` callee itself, and a
+/// spread (which the compiler declines) hands its whole parent to the
+/// tree-walker.
 fn is_standalone_expression(expr: &Expression) -> bool {
     !matches!(
         expr,

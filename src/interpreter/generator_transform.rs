@@ -730,15 +730,10 @@ fn function_declarations_first(body: &[Statement], block_level: bool) -> Cow<'_,
     if !body[leading..].iter().any(is_function_declaration) {
         return Cow::Borrowed(body);
     }
-    let has_annex_b_copy = |s: &Statement| {
-        block_level
-            && crate::interpreter::hoisting::unwrap_labeled_function(s)
-                .is_some_and(|f| !f.is_generator && !f.is_async)
-    };
     let mut reordered = Vec::with_capacity(body.len());
     reordered.extend(body.iter().filter(|s| is_function_declaration(s)).map(|s| {
-        if has_annex_b_copy(s) {
-            with_decl_phase(s, DeclPhase::InstantiateOnly)
+        if block_level {
+            instantiate_at_block_entry(s)
         } else {
             s.clone()
         }
@@ -746,16 +741,53 @@ fn function_declarations_first(body: &[Statement], block_level: bool) -> Cow<'_,
     for stmt in body {
         if !is_function_declaration(stmt) {
             reordered.push(stmt.clone());
-        } else if has_annex_b_copy(stmt) {
-            reordered.push(with_decl_phase(stmt, DeclPhase::CopyOnly));
+        } else if block_level && let Some(copy) = annex_b_copy_in_place(stmt) {
+            reordered.push(copy);
         }
     }
     Cow::Owned(reordered)
 }
 
+/// Whether a block-level function declaration has an Annex B.3.3 var-scope
+/// copy: plain functions only, not generators or async functions.
+fn has_annex_b_copy(stmt: &Statement) -> bool {
+    crate::interpreter::hoisting::unwrap_labeled_function(stmt)
+        .is_some_and(|f| !f.is_generator && !f.is_async)
+}
+
+/// The declaration as moved to the head of its block: it instantiates there,
+/// and leaves the Annex B copy to `annex_b_copy_in_place`.
+fn instantiate_at_block_entry(stmt: &Statement) -> Statement {
+    if has_annex_b_copy(stmt) {
+        with_decl_phase(stmt, DeclPhase::InstantiateOnly)
+    } else {
+        stmt.clone()
+    }
+}
+
+/// The statement that stays where the declaration was, to make the Annex B
+/// copy when it is reached; `None` when the declaration has no copy.
+fn annex_b_copy_in_place(stmt: &Statement) -> Option<Statement> {
+    has_annex_b_copy(stmt).then(|| with_decl_phase(stmt, DeclPhase::CopyOnly))
+}
+
 /// `stmt`, a possibly labelled function declaration, with its `phase` set.
 fn with_decl_phase(stmt: &Statement, phase: DeclPhase) -> Statement {
     match stmt {
+        // The copy only reads the name, so it does not carry the signature.
+        Statement::FunctionDeclaration(f) if phase == DeclPhase::CopyOnly => {
+            Statement::FunctionDeclaration(FunctionDecl {
+                name: f.name.clone(),
+                params: Vec::new(),
+                body: f.body.clone(),
+                is_async: f.is_async,
+                is_generator: f.is_generator,
+                source_text: None,
+                body_is_strict: f.body_is_strict,
+                info: Default::default(),
+                phase,
+            })
+        }
         Statement::FunctionDeclaration(f) => {
             Statement::FunctionDeclaration(FunctionDecl { phase, ..f.clone() })
         }
@@ -1877,16 +1909,7 @@ fn transform_yielding_expression(
                 .expressions
                 .iter()
                 .any(|e| expr_has_suspension(e, ctx.is_async));
-            let temp_tag = if matches!(&**tag, Expression::Member(..)) {
-                lower_member_callee(tag, exprs_suspend, ctx)
-            } else if let Expression::OptionalChain(base, chain) = &**tag
-                && (exprs_suspend || expr_has_suspension(tag, ctx.is_async))
-            {
-                lower_parenthesized_chain_callee(base, chain, ctx)
-            } else {
-                let settle = exprs_suspend && callee_can_be_settled(tag, ctx);
-                lower_operand(tag, settle, "tag_fn", ctx)
-            };
+            let temp_tag = lower_callee(tag, exprs_suspend, "tag_fn", ctx);
             let new_exprs = lower_argument_list(&tpl.expressions, "ttpl", ctx);
             let combined = Expression::TaggedTemplate(
                 ExprBox::new(temp_tag),
@@ -2006,16 +2029,7 @@ fn transform_call_expression(
     ctx: &mut TransformContext,
 ) {
     let args_suspend = args.iter().any(|a| expr_has_suspension(a, ctx.is_async));
-    let temp_callee = if matches!(callee, Expression::Member(..)) {
-        lower_member_callee(callee, args_suspend, ctx)
-    } else if let Expression::OptionalChain(base, chain) = callee
-        && (args_suspend || expr_has_suspension(callee, ctx.is_async))
-    {
-        lower_parenthesized_chain_callee(base, chain, ctx)
-    } else {
-        let settle = args_suspend && callee_can_be_settled(callee, ctx);
-        lower_operand(callee, settle, "call_callee", ctx)
-    };
+    let temp_callee = lower_callee(callee, args_suspend, "call_callee", ctx);
     let temp_args = lower_argument_list(args, "call_arg", ctx);
 
     let combined = Expression::Call(ExprBox::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
@@ -2783,10 +2797,13 @@ fn nullish_test(var: &str) -> Expression {
     Expression::Logical(
         LogicalOp::Or,
         ExprBox::new(is(Expression::Literal(Literal::Null))),
-        ExprBox::new(is(Expression::Void(ExprBox::new(Expression::Literal(
-            Literal::Number(0.0),
-        ))))),
+        ExprBox::new(is(void_zero())),
     )
+}
+
+/// `void 0`, an `undefined` that user code cannot shadow.
+fn void_zero() -> Expression {
+    Expression::Void(ExprBox::new(Expression::Literal(Literal::Number(0.0))))
 }
 
 /// The condition under which `var <op> rhs` goes on to evaluate `rhs`.
@@ -2813,9 +2830,7 @@ fn bind_chain_base(
     if chain_starts_with_call(chain) {
         match base {
             Expression::Member(..) => {
-                let base_var = ctx.new_temp_var("oc_bv");
-                let (member, this) = capture_member_callee(base, ctx);
-                bind_expression_to_temp(&member, &base_var, ctx);
+                let (base_var, this) = read_member_callee(base, "oc_bv", ctx);
                 return (base_var, Some(this));
             }
             Expression::OptionalChain(inner_base, inner_chain) => {
@@ -2830,18 +2845,32 @@ fn bind_chain_base(
     (base_var, None)
 }
 
-/// A parenthesised optional chain used as a call or tag, `(o?.f)(...)`, keeps
-/// the receiver of the reference it ends in.
-fn lower_parenthesized_chain_callee(
-    base: &Expression,
-    chain: &Expression,
+/// Lower the callee of a call or tagged template whose arguments (or
+/// substitutions) suspend when `later_suspends`. A member callee, or a
+/// parenthesised optional chain `(o?.f)(...)`, is a Reference: its function is
+/// read before the arguments and called with the receiver it was read from.
+fn lower_callee(
+    callee: &Expression,
+    later_suspends: bool,
+    prefix: &str,
     ctx: &mut TransformContext,
 ) -> Expression {
-    let (func, this) = lower_chain_reference(base, chain, ctx);
-    Expression::BoundCallee(
-        ExprBox::new(Expression::Identifier(func)),
-        ExprBox::new(this),
-    )
+    match callee {
+        Expression::Member(..) => lower_member_callee(callee, later_suspends, ctx),
+        Expression::OptionalChain(base, chain)
+            if later_suspends || expr_has_suspension(callee, ctx.is_async) =>
+        {
+            let (func, this) = lower_chain_reference(base, chain, ctx);
+            Expression::BoundCallee(
+                ExprBox::new(Expression::Identifier(func)),
+                ExprBox::new(this),
+            )
+        }
+        _ => {
+            let settle = later_suspends && callee_can_be_settled(callee, ctx);
+            lower_operand(callee, settle, prefix, ctx)
+        }
+    }
 }
 
 /// Evaluate the optional chain `base?.chain` as a Reference whose function
@@ -2865,10 +2894,9 @@ fn lower_chain_reference(
         false_state: eval_state,
     });
 
-    let undefined = || Expression::Void(ExprBox::new(Expression::Literal(Literal::Number(0.0))));
     ctx.current_state_id = skip_state;
-    emit_temp_assignment(&func, undefined(), ctx);
-    emit_temp_assignment(&this, undefined(), ctx);
+    emit_temp_assignment(&func, void_zero(), ctx);
+    emit_temp_assignment(&this, void_zero(), ctx);
     ctx.finalize_current_state(StateTerminator::Goto(after));
 
     ctx.current_state_id = eval_state;
@@ -2881,12 +2909,7 @@ fn lower_chain_reference(
         Expression::Member(inner, prop, _) => {
             let receiver = oc_chain_to_regular_expr(inner, &base_var, base_this.as_ref());
             bind_expression_to_temp(&receiver, &this, ctx);
-            let prop = match prop {
-                MemberProperty::Computed(key) => {
-                    MemberProperty::Computed(ExprBox::new(settle_operand(key, "ref_key", ctx)))
-                }
-                other => other.clone(),
-            };
+            let prop = settle_member_property(prop, ctx);
             let read = Expression::Member(
                 ExprBox::new(Expression::Identifier(this.clone())),
                 prop,
@@ -2897,7 +2920,7 @@ fn lower_chain_reference(
         _ => {
             let value = oc_chain_to_regular_expr(chain, &base_var, base_this.as_ref());
             bind_expression_to_temp(&value, &func, ctx);
-            emit_temp_assignment(&this, undefined(), ctx);
+            emit_temp_assignment(&this, void_zero(), ctx);
         }
     }
     ctx.finalize_current_state(StateTerminator::Goto(after));
@@ -3108,6 +3131,16 @@ fn capture_operand(expr: &Expression, prefix: &str, ctx: &mut TransformContext) 
     Expression::Identifier(temp)
 }
 
+/// A member property with a computed key evaluated into a temp now.
+fn settle_member_property(prop: &MemberProperty, ctx: &mut TransformContext) -> MemberProperty {
+    match prop {
+        MemberProperty::Computed(key) => {
+            MemberProperty::Computed(ExprBox::new(settle_operand(key, "ref_key", ctx)))
+        }
+        other => other.clone(),
+    }
+}
+
 /// The base of a member callee and its member expression with the suspension
 /// points lowered out: the base is captured once (`super` stays `super`), then
 /// the computed key. The member's own read is left to the caller.
@@ -3122,12 +3155,7 @@ fn capture_member_callee(
         Expression::Super => Expression::Super,
         other => capture_operand(other, "ref_obj", ctx),
     };
-    let prop = match prop {
-        MemberProperty::Computed(key) => {
-            MemberProperty::Computed(ExprBox::new(settle_operand(key, "ref_key", ctx)))
-        }
-        other => other.clone(),
-    };
+    let prop = settle_member_property(prop, ctx);
     let member = Expression::Member(ExprBox::new(base.clone()), prop, PropSiteId::UNASSIGNED);
     let this = if matches!(base, Expression::Super) {
         Expression::This
@@ -3135,6 +3163,19 @@ fn capture_member_callee(
         base
     };
     (member, this)
+}
+
+/// Capture a member callee's base and key, read its function into a new temp
+/// now, and return the temp's name with the receiver.
+fn read_member_callee(
+    callee: &Expression,
+    prefix: &str,
+    ctx: &mut TransformContext,
+) -> (String, Expression) {
+    let (member, this) = capture_member_callee(callee, ctx);
+    let func = ctx.new_temp_var(prefix);
+    emit_temp_assignment(&func, member, ctx);
+    (func, this)
 }
 
 /// Lower a call or tagged-template callee that is a member expression.
@@ -3151,9 +3192,7 @@ fn lower_member_callee(
     if !later_suspends {
         return lower_reference_operand(callee, false, ctx);
     }
-    let (member, this) = capture_member_callee(callee, ctx);
-    let func = ctx.new_temp_var("call_fn");
-    emit_temp_assignment(&func, member, ctx);
+    let (func, this) = read_member_callee(callee, "call_fn", ctx);
     Expression::BoundCallee(
         ExprBox::new(Expression::Identifier(func)),
         ExprBox::new(this),
@@ -4192,7 +4231,7 @@ fn transform_switch_statement(
             case.consequent
                 .iter()
                 .filter(|s| is_function_declaration(s))
-                .map(|s| with_decl_phase(s, DeclPhase::InstantiateOnly))
+                .map(instantiate_at_block_entry)
         })
         .collect();
 
@@ -4255,11 +4294,11 @@ fn transform_switch_statement(
             Cow::Owned(
                 case.consequent
                     .iter()
-                    .map(|s| {
+                    .filter_map(|s| {
                         if is_function_declaration(s) {
-                            with_decl_phase(s, DeclPhase::CopyOnly)
+                            annex_b_copy_in_place(s)
                         } else {
-                            s.clone()
+                            Some(s.clone())
                         }
                     })
                     .collect(),

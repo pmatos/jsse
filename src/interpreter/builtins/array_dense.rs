@@ -114,7 +114,8 @@ pub(crate) fn try_intrinsic_iteration(
 }
 
 /// The elements of an Array the generator lowering built to spread without
-/// iterating it again: a fresh plain dense Array with no holes.
+/// iterating it again. Such an array is built from iterated values, so it has
+/// no holes and the plain-dense check is enough.
 pub(crate) fn fresh_array_values(interp: &Interpreter, o: &JsValue) -> Option<Vec<JsValue>> {
     let b = array_cell(interp, o)?.borrow();
     let elements = b.array_elements()?;
