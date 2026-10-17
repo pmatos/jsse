@@ -17,6 +17,11 @@ fn thp_enabled(child: &Child) -> Option<bool> {
     Some(line.split_whitespace().nth(1)? == "1")
 }
 
+fn stop(mut child: Child) {
+    child.kill().expect("kill jsse");
+    child.wait().expect("reap jsse");
+}
+
 fn spawn(script: &str) -> Child {
     Command::new(env!("CARGO_BIN_EXE_jsse"))
         .args(["-e", script])
@@ -33,11 +38,10 @@ fn a_small_process_runs_without_huge_pages() {
     if !host_uses_huge_pages_unasked() {
         return;
     }
-    let mut child = spawn(SPIN);
+    let child = spawn(SPIN);
     std::thread::sleep(Duration::from_millis(500));
     let state = thp_enabled(&child);
-    child.kill().expect("kill jsse");
-    child.wait().expect("reap jsse");
+    stop(child);
     if state.is_some() {
         assert_eq!(state, Some(false));
     }
@@ -51,10 +55,9 @@ fn huge_pages_return_once_the_heap_has_grown() {
     let script = format!(
         "var keep = []; for (var i = 0; i < 400000; i++) keep.push({{ a: i, b: [i] }}); {SPIN}"
     );
-    let mut child = spawn(&script);
+    let child = spawn(&script);
     if thp_enabled(&child).is_none() {
-        child.kill().expect("kill jsse");
-        child.wait().expect("reap jsse");
+        stop(child);
         return;
     }
     let deadline = Instant::now() + Duration::from_secs(25);
@@ -66,8 +69,7 @@ fn huge_pages_return_once_the_heap_has_grown() {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    child.kill().expect("kill jsse");
-    child.wait().expect("reap jsse");
+    stop(child);
     assert!(
         enabled,
         "huge pages were not re-enabled after the heap grew"

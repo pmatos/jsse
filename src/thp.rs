@@ -45,27 +45,29 @@ impl Deferral {
 }
 
 #[cfg(target_os = "linux")]
-fn set_thp_disable(disable: bool) -> bool {
-    const PR_SET_THP_DISABLE: i32 = 41;
+fn thp_prctl(option: i32, arg: usize) -> i32 {
     unsafe extern "C" {
         fn prctl(option: i32, ...) -> i32;
     }
-    unsafe { prctl(PR_SET_THP_DISABLE, disable as usize, 0usize, 0usize, 0usize) == 0 }
+    unsafe { prctl(option, arg, 0usize, 0usize, 0usize) }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn set_thp_disable(_disable: bool) -> bool {
-    false
+#[cfg(target_os = "linux")]
+fn set_thp_disable(disable: bool) -> bool {
+    const PR_SET_THP_DISABLE: i32 = 41;
+    thp_prctl(PR_SET_THP_DISABLE, disable as usize) == 0
 }
 
 /// The flag survives `fork` and `exec`, so a launcher may have set it already.
 #[cfg(target_os = "linux")]
 fn thp_disabled() -> bool {
     const PR_GET_THP_DISABLE: i32 = 42;
-    unsafe extern "C" {
-        fn prctl(option: i32, ...) -> i32;
-    }
-    unsafe { prctl(PR_GET_THP_DISABLE, 0usize, 0usize, 0usize, 0usize) > 0 }
+    thp_prctl(PR_GET_THP_DISABLE, 0) > 0
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_thp_disable(_disable: bool) -> bool {
+    false
 }
 
 #[cfg(not(target_os = "linux"))]
