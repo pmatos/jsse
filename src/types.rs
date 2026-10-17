@@ -1335,8 +1335,21 @@ impl NanBoxedValue {
     }
 }
 
-impl Clone for NanBoxedValue {
-    fn clone(&self) -> Self {
+impl NanBoxedValue {
+    /// The smallest bit pattern whose tag is String, Symbol or BigInt, the
+    /// three tags that own an `Arc` strong count. Every boxed pattern with a
+    /// larger tag is at least this large, and no Number reaches it because
+    /// NaNs are canonicalised away from the boxed range, so "owns a heap
+    /// pointer" is one unsigned comparison.
+    const FIRST_HEAP_BITS: u64 = Self::BOX_SIGNATURE | ((NanTag::String as u64) << Self::TAG_SHIFT);
+
+    #[inline(always)]
+    fn owns_heap_pointer(&self) -> bool {
+        self.0 >= Self::FIRST_HEAP_BITS
+    }
+
+    #[inline(never)]
+    fn retain_heap_pointer(&self) {
         match self.tag() {
             Some(NanTag::String) => {
                 let ptr = self.payload_ptr::<StrView>();
@@ -1353,31 +1366,48 @@ impl Clone for NanBoxedValue {
                 // SAFETY: this value owns a live strong count for `ptr`.
                 unsafe { Arc::increment_strong_count(ptr) };
             }
-            _ => {}
+            _ => unreachable!("only heap-tagged values reach retain_heap_pointer"),
+        }
+    }
+
+    #[inline(never)]
+    fn release_heap_pointer(&mut self) {
+        match self.tag() {
+            Some(NanTag::String) => {
+                let ptr = self.payload_ptr::<StrView>();
+                // SAFETY: this value owns exactly one strong count for `ptr`.
+                unsafe { drop(Arc::from_raw(ptr)) };
+            }
+            Some(NanTag::Symbol) => {
+                let ptr = self.payload_ptr::<JsSymbolData>();
+                // SAFETY: this value owns exactly one strong count for `ptr`.
+                unsafe { drop(Arc::from_raw(ptr)) };
+            }
+            Some(NanTag::BigInt) => {
+                let ptr = self.payload_ptr::<num_bigint::BigInt>();
+                // SAFETY: this value owns exactly one strong count for `ptr`.
+                unsafe { drop(Arc::from_raw(ptr)) };
+            }
+            _ => unreachable!("only heap-tagged values reach release_heap_pointer"),
+        }
+    }
+}
+
+impl Clone for NanBoxedValue {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        if self.owns_heap_pointer() {
+            self.retain_heap_pointer();
         }
         Self(self.0)
     }
 }
 
 impl Drop for NanBoxedValue {
+    #[inline(always)]
     fn drop(&mut self) {
-        match self.tag() {
-            Some(NanTag::String) => {
-                let ptr = self.payload_ptr::<StrView>();
-                // SAFETY: this value owns exactly one strong count for `ptr`.
-                unsafe { drop(Arc::from_raw(ptr)) };
-            }
-            Some(NanTag::Symbol) => {
-                let ptr = self.payload_ptr::<JsSymbolData>();
-                // SAFETY: this value owns exactly one strong count for `ptr`.
-                unsafe { drop(Arc::from_raw(ptr)) };
-            }
-            Some(NanTag::BigInt) => {
-                let ptr = self.payload_ptr::<num_bigint::BigInt>();
-                // SAFETY: this value owns exactly one strong count for `ptr`.
-                unsafe { drop(Arc::from_raw(ptr)) };
-            }
-            _ => {}
+        if self.owns_heap_pointer() {
+            self.release_heap_pointer();
         }
     }
 }
