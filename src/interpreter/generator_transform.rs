@@ -1133,8 +1133,9 @@ fn in_class_scope(expr: &Expression, class_name: Option<&str>, is_async: bool) -
 /// runs later is observable before it. Keys after the last suspension stay in
 /// the class: they are evaluated when it is built, in order, after every temp.
 ///
-/// The heritage checks (IsConstructor, the `prototype` read) still run when the
-/// class is built, after the captured keys rather than before them (#1110).
+/// When a key is captured, the heritage checks (IsConstructor, the `prototype`
+/// read) run right after the heritage, before any key, and the rebuilt class
+/// takes the resulting `protoParent` instead of reading `prototype` again.
 fn hoist_class_suspensions(
     class_name: Option<&str>,
     super_class: &mut Option<Box<Expression>>,
@@ -1163,6 +1164,17 @@ fn hoist_class_suspensions(
     let Some(last_key) = last_key else {
         return;
     };
+    if let Some(sc) = super_class
+        && !matches!(**sc, Expression::Literal(Literal::Null))
+    {
+        let proto_var = ctx.new_temp_var("class_proto_parent");
+        let check = Expression::ClassProtoParent(ExprBox::new((**sc).clone()));
+        bind_expression_to_temp(&check, &proto_var, ctx);
+        **sc = Expression::ResolvedHeritage(
+            ExprBox::new((**sc).clone()),
+            ExprBox::new(Expression::Identifier(proto_var)),
+        );
+    }
     for key in elements[..=last_key]
         .iter_mut()
         .filter_map(ClassElement::key_mut)
@@ -4687,9 +4699,16 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
         Expression::Spread(e) => Expression::Spread(ExprBox::new(rewrite_expr(e))),
         Expression::PreIterated(e) => Expression::PreIterated(ExprBox::new(rewrite_expr(e))),
+        Expression::ClassProtoParent(e) => {
+            Expression::ClassProtoParent(ExprBox::new(rewrite_expr(e)))
+        }
         Expression::BoundCallee(func, this) => Expression::BoundCallee(
             ExprBox::new(rewrite_expr(func)),
             ExprBox::new(rewrite_expr(this)),
+        ),
+        Expression::ResolvedHeritage(sup, proto) => Expression::ResolvedHeritage(
+            ExprBox::new(rewrite_expr(sup)),
+            ExprBox::new(rewrite_expr(proto)),
         ),
         Expression::Yield(inner, delegate) => Expression::Yield(
             inner.as_ref().map(|e| ExprBox::new(rewrite_expr(e))),

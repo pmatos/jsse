@@ -3640,6 +3640,8 @@ fn expression_kind(node: &Expression) -> &'static str {
         Expression::PrivateIdentifier { .. } => "expression:PrivateIdentifier",
         Expression::BoundCallee { .. } => "expression:BoundCallee",
         Expression::PreIterated { .. } => "expression:PreIterated",
+        Expression::ClassProtoParent { .. } => "expression:ClassProtoParent",
+        Expression::ResolvedHeritage { .. } => "expression:ResolvedHeritage",
     }
 }
 

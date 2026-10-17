@@ -801,8 +801,9 @@ impl<'a> Parser<'a> {
             }
             Expression::Spread(inner)
             | Expression::PreIterated(inner)
+            | Expression::ClassProtoParent(inner)
             | Expression::Await(inner) => Self::expr_contains_await_identifier(inner),
-            Expression::BoundCallee(func, this) => {
+            Expression::BoundCallee(func, this) | Expression::ResolvedHeritage(func, this) => {
                 Self::expr_contains_await_identifier(func) || Self::expr_contains_await_identifier(this)
             }
             Expression::Yield(opt_e, _) => {

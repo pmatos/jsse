@@ -444,6 +444,17 @@ pub(crate) enum Expression {
     /// elements instead of iterating it again. Evaluated anywhere else it is
     /// the array.
     PreIterated(ExprBox),
+    /// Emitted only by the generator/async lowering, right after a class
+    /// heritage was evaluated into a temp: ClassDefinitionEvaluation's checks
+    /// on that value (§15.7.14 step 8). Yields `protoParent`: `null` for a
+    /// `null` heritage, otherwise the object or `null` read from the
+    /// superclass's `prototype`; throws a TypeError for a non-constructor.
+    ClassProtoParent(ExprBox),
+    /// Heritage of a class rebuilt by the generator/async lowering: the
+    /// superclass and the `protoParent` that `ClassProtoParent` already
+    /// computed. Evaluating the class skips both checks and the `prototype`
+    /// read. Evaluated anywhere else it is the superclass.
+    ResolvedHeritage(ExprBox, ExprBox),
 }
 
 /// Owning link to a child `Expression`, used everywhere the AST used to hold
@@ -566,6 +577,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         | Expression::Update(_, _, e)
         | Expression::Spread(e)
         | Expression::PreIterated(e)
+        | Expression::ClassProtoParent(e)
         | Expression::Await(e)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -577,6 +589,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         | Expression::Logical(_, l, r)
         | Expression::Assign(_, l, r)
         | Expression::BoundCallee(l, r)
+        | Expression::ResolvedHeritage(l, r)
         | Expression::OptionalChain(l, r) => {
             stack.push(take(l));
             stack.push(take(r));
@@ -1130,6 +1143,7 @@ impl<'a> CaptureWalk<'a> {
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
             | Expression::PreIterated(e)
+            | Expression::ClassProtoParent(e)
             | Expression::Await(e)
             | Expression::Typeof(e)
             | Expression::Void(e)
@@ -1143,6 +1157,7 @@ impl<'a> CaptureWalk<'a> {
             | Expression::Logical(_, l, r)
             | Expression::Assign(_, l, r)
             | Expression::BoundCallee(l, r)
+            | Expression::ResolvedHeritage(l, r)
             | Expression::OptionalChain(l, r) => {
                 self.push_expr(l);
                 self.push_expr(r);
@@ -1615,6 +1630,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
             | Expression::PreIterated(e)
+            | Expression::ClassProtoParent(e)
             | Expression::Yield(Some(e), _)
             | Expression::Await(e)
             | Expression::Typeof(e)
@@ -1624,7 +1640,8 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
             | Expression::Assign(_, l, r)
-            | Expression::BoundCallee(l, r) => {
+            | Expression::BoundCallee(l, r)
+            | Expression::ResolvedHeritage(l, r) => {
                 stack.push(l);
                 stack.push(r);
             }
@@ -1856,13 +1873,15 @@ pub(crate) fn expr_contains_matching(
         Expression::Binary(_, l, r)
         | Expression::Logical(_, l, r)
         | Expression::Assign(_, l, r)
-        | Expression::BoundCallee(l, r) => {
+        | Expression::BoundCallee(l, r)
+        | Expression::ResolvedHeritage(l, r) => {
             expr_contains_matching(l, pred) || expr_contains_matching(r, pred)
         }
         Expression::Unary(_, e)
         | Expression::Update(_, _, e)
         | Expression::Spread(e)
         | Expression::PreIterated(e)
+        | Expression::ClassProtoParent(e)
         | Expression::Await(e)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -2204,6 +2223,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
             | Expression::PreIterated(e)
+            | Expression::ClassProtoParent(e)
             | Expression::Yield(Some(e), _)
             | Expression::Await(e)
             | Expression::Typeof(e)
@@ -2213,7 +2233,8 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
             | Expression::Assign(_, l, r)
-            | Expression::BoundCallee(l, r) => {
+            | Expression::BoundCallee(l, r)
+            | Expression::ResolvedHeritage(l, r) => {
                 stack.push(SiteWork::Expr(r));
                 stack.push(SiteWork::Expr(l));
             }
@@ -2348,6 +2369,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             | Expression::Update(_, _, e)
             | Expression::Spread(e)
             | Expression::PreIterated(e)
+            | Expression::ClassProtoParent(e)
             | Expression::Yield(Some(e), _)
             | Expression::Await(e)
             | Expression::Typeof(e)
@@ -2357,7 +2379,8 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             Expression::Binary(_, l, r)
             | Expression::Logical(_, l, r)
             | Expression::Assign(_, l, r)
-            | Expression::BoundCallee(l, r) => {
+            | Expression::BoundCallee(l, r)
+            | Expression::ResolvedHeritage(l, r) => {
                 stack.push(l);
                 stack.push(r);
             }

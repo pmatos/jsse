@@ -893,9 +893,13 @@ impl Interpreter {
                 Completion::Normal(result)
             }
             Expression::Spread(_) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
-            Expression::BoundCallee(func, _) | Expression::PreIterated(func) => {
-                self.eval_expr(func, env)
-            }
+            Expression::BoundCallee(func, _)
+            | Expression::PreIterated(func)
+            | Expression::ResolvedHeritage(func, _) => self.eval_expr(func, env),
+            Expression::ClassProtoParent(heritage) => match self.eval_expr(heritage, env) {
+                Completion::Normal(sv) => self.class_proto_parent(&sv),
+                other => other,
+            },
             Expression::Yield(expr, delegate) => {
                 if *delegate {
                     if self.in_async_generator_body {

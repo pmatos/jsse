@@ -323,6 +323,40 @@ impl Interpreter {
         result
     }
 
+    /// Get(superclass, "prototype") of ClassDefinitionEvaluation step 8, which
+    /// must be an Object or null.
+    fn superclass_prototype(&mut self, super_id: u64, superclass: &JsValue) -> Completion {
+        let proto = match self.get_object_property(super_id, "prototype", superclass) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        if !proto.is_object() && !proto.is_null() {
+            return Completion::Throw(
+                self.create_type_error(
+                    "Class extends value does not have valid prototype property",
+                ),
+            );
+        }
+        Completion::Normal(proto)
+    }
+
+    /// `protoParent` for an evaluated ClassHeritage (§15.7.14 step 8), with
+    /// the checks that precede any ClassElement.
+    pub(crate) fn class_proto_parent(&mut self, superclass: &JsValue) -> Completion {
+        if superclass.is_null() {
+            return Completion::Normal(JsValue::NULL);
+        }
+        let Some(super_id) = superclass
+            .as_object_id()
+            .filter(|_| self.is_constructor(superclass))
+        else {
+            return Completion::Throw(
+                self.create_type_error("Class extends value is not a constructor or null"),
+            );
+        };
+        self.superclass_prototype(super_id, superclass)
+    }
+
     pub(super) fn eval_class_inner(
         &mut self,
         name: &str,
@@ -354,18 +388,30 @@ impl Interpreter {
                 .declare(class_binding_name, BindingKind::Const);
         }
 
-        // Evaluate super class in class_env context (spec step 6a-6b)
-        let super_val = if let Some(sc) = super_class {
-            match self.eval_expr(sc, &class_env) {
-                Completion::Normal(v) => Some(v),
-                other => return other,
+        // Evaluate super class in class_env context (spec step 6a-6b). A
+        // heritage the generator lowering already checked carries its
+        // `protoParent`.
+        let (super_val, resolved_proto) = match super_class.as_deref() {
+            Some(Expression::ResolvedHeritage(sup, proto)) => {
+                let sv = match self.eval_expr(sup, &class_env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                match self.eval_expr(proto, &class_env) {
+                    Completion::Normal(pv) => (Some(sv), Some(pv)),
+                    other => return other,
+                }
             }
-        } else {
-            None
+            Some(sc) => match self.eval_expr(sc, &class_env) {
+                Completion::Normal(v) => (Some(v), None),
+                other => return other,
+            },
+            None => (None, None),
         };
 
         // Validate super class: must be null or a constructor
-        if let Some(ref sv) = super_val
+        if resolved_proto.is_none()
+            && let Some(ref sv) = super_val
             && !(sv).is_null()
             && !self.is_constructor(sv)
         {
@@ -475,20 +521,14 @@ impl Interpreter {
             && let Some(super_o) = (sv).as_object_id().map(|id| crate::types::JsObject { id })
         {
             let super_o_id = super_o.id;
-            let sv_clone = sv.clone();
             // Step 5.e: proto.[[Prototype]] = superclass.prototype_id
-            // Must use Get() to invoke accessor properties (e.g. getter-defined prototype)
-            let super_proto_val = match self.get_object_property(super_o_id, "prototype", &sv_clone)
-            {
-                Completion::Normal(v) => v,
-                other => return other,
+            let super_proto_val = match resolved_proto {
+                Some(pv) => pv,
+                None => match self.superclass_prototype(super_o_id, sv) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                },
             };
-            // Validate: must be Object or null
-            if !super_proto_val.is_object() && !super_proto_val.is_null() {
-                return Completion::Throw(self.create_type_error(
-                    "Class extends value does not have valid prototype property",
-                ));
-            }
             if let Some(sp) = (super_proto_val)
                 .as_object_id()
                 .map(|id| crate::types::JsObject { id })
@@ -496,6 +536,10 @@ impl Interpreter {
                 && let Some(ref proto) = proto_obj
             {
                 proto.borrow_mut().prototype_id = Some(super_proto.borrow().id.unwrap());
+            } else if super_proto_val.is_null()
+                && let Some(ref proto) = proto_obj
+            {
+                proto.borrow_mut().prototype_id = None;
             }
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
             if let Some(o) = (ctor_val)
