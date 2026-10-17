@@ -575,6 +575,16 @@ fn declare_lexicals(scope: &mut Environment, chunk: &Chunk, lexicals: &[(u16, bo
     }
 }
 
+/// A generator chunk's own `var` and top-level `let`/`const`/class bindings,
+/// declared when the generator is created (FunctionDeclarationInstantiation)
+/// rather than at its first `next()`.
+pub(crate) fn declare_chunk_prologue(chunk: &Chunk, env: &EnvRef) {
+    declare_var_prologue(chunk, env);
+    if let Some(lexicals) = &chunk.top_level_lexicals {
+        declare_lexicals(&mut env.borrow_mut(), chunk, lexicals);
+    }
+}
+
 /// `GetIterator` / the for-in head: `[value]` -> `[iterator]`.
 #[inline(never)]
 fn iteration_head(
@@ -781,6 +791,97 @@ pub(crate) fn run_script_chunk(
     run_chunk_with_var_prologue(interp, chunk, env, this_value, false)
 }
 
+/// How a suspended generator body is resumed (`Generator.prototype.next`,
+/// `throw` and `return`). The first run of a body has no resumption.
+pub(crate) enum Resume {
+    Next(JsValue),
+    Throw(JsValue),
+    Return(JsValue),
+}
+
+/// The part of a generator body's frame the dispatch loop keeps in locals: the
+/// code position and the block environments `PushEnv` opened.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct GeneratorControl {
+    pc: usize,
+    scopes: SmallVec<[EnvRef; 4]>,
+}
+
+/// A generator body's suspended VM frame. The operand and reference stacks
+/// are the ones `run_chunk` would have kept on its Rust frame; between
+/// resumptions the generator object owns them, and the collector reaches them
+/// through `IteratorState::BytecodeGenerator`.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct GeneratorFrame {
+    control: GeneratorControl,
+    pub(crate) stack: Vec<JsValue>,
+    refs: Vec<IdentifierRef>,
+}
+
+impl GeneratorFrame {
+    pub(crate) fn for_chunk(chunk: &Chunk) -> Self {
+        Self {
+            control: GeneratorControl::default(),
+            stack: Vec::with_capacity(usize::from(chunk.max_stack)),
+            refs: Vec::with_capacity(usize::from(chunk.max_refs)),
+        }
+    }
+
+    /// Every environment the frame holds: the block environments in scope and
+    /// those of the pending identifier references (`with` is not hosted, so
+    /// none of them names an object).
+    pub(crate) fn environments(&self) -> impl Iterator<Item = &EnvRef> {
+        self.control
+            .scopes
+            .iter()
+            .chain(self.refs.iter().filter_map(|r| match r {
+                IdentifierRef::SpecificEnv(env) => Some(env),
+                IdentifierRef::WithObject(_) | IdentifierRef::Unresolvable => None,
+            }))
+    }
+}
+
+/// Runs a generator body from its start (`resume` is `None`) or from the
+/// `Op::Yield` it is suspended at. Returns `Completion::Yield(value)` when the
+/// body yields again, leaving the frame ready for the next resumption; any
+/// other completion ends the generator and the frame must be discarded.
+///
+/// The caller has put the body's frame environment on `call_stack_envs` and
+/// instantiated the body's declarations (`declare_chunk_prologue`).
+pub(crate) fn run_generator_chunk(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    env: &EnvRef,
+    frame: &mut GeneratorFrame,
+    resume: Option<Resume>,
+) -> Completion {
+    let gc_frame = interp.gc_bytecode_roots.len();
+    let envs_frame = interp.call_stack_envs.len();
+    let GeneratorFrame {
+        control,
+        stack,
+        refs,
+    } = frame;
+    let result = run_chunk_inner::<true>(
+        interp,
+        chunk,
+        env,
+        JsValue::UNDEFINED,
+        false,
+        stack,
+        refs,
+        Some((control, resume)),
+    );
+    if !matches!(result, Completion::Throw(_) | Completion::Exit(_)) {
+        interp
+            .gc_bytecode_roots
+            .assert_depth(gc_frame, "a generator chunk exit");
+    }
+    interp.gc_bytecode_roots.truncate(gc_frame);
+    interp.call_stack_envs.truncate(envs_frame);
+    result
+}
+
 const MAX_POOLED_VM_STACKS: usize = 64;
 const MAX_POOLED_VM_STACK_CAPACITY: usize = 1024;
 
@@ -814,7 +915,7 @@ fn run_chunk_with_var_prologue(
     };
     stack.reserve(chunk.max_stack as usize);
     refs.reserve(chunk.max_refs as usize);
-    let result = run_chunk_inner(
+    let result = run_chunk_inner::<false>(
         interp,
         chunk,
         env,
@@ -822,6 +923,7 @@ fn run_chunk_with_var_prologue(
         declare_chunk_vars,
         &mut stack,
         &mut refs,
+        None,
     );
     recycle_vm_buffer(&mut interp.vm_stack_pool, stack);
     recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
@@ -856,7 +958,7 @@ fn safepoint_with_empty_stacks(
     interp.gc_safepoint_poll();
 }
 
-fn run_chunk_inner(
+fn run_chunk_inner<const GENERATOR: bool>(
     interp: &mut Interpreter,
     chunk: &Chunk,
     frame_env: &EnvRef,
@@ -864,6 +966,7 @@ fn run_chunk_inner(
     declare_chunk_vars: bool,
     stack: &mut Vec<JsValue>,
     refs: &mut Vec<IdentifierRef>,
+    generator: Option<(&mut GeneratorControl, Option<Resume>)>,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
     if declare_chunk_vars {
@@ -882,6 +985,37 @@ fn run_chunk_inner(
     let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
     let envs_base = interp.call_stack_envs.len();
     let roots_base = interp.gc_bytecode_roots.len();
+    // A generator body resumes with the position, environments and operands it
+    // suspended with; each re-enters the roots a running frame keeps.
+    let mut generator_control: Option<&mut GeneratorControl> = None;
+    let mut resume_throw: Option<JsValue> = None;
+    if GENERATOR && let Some((control, resume)) = generator {
+        pc = control.pc;
+        scopes = std::mem::take(&mut control.scopes);
+        for scope in &scopes {
+            interp.call_stack_envs.push(scope.clone());
+        }
+        for value in stack.iter() {
+            root_stack_value(interp, value);
+        }
+        match resume {
+            None => {}
+            Some(Resume::Next(value)) => {
+                let discard = chunk.code[pc - 3] != 0;
+                pc = (pc as isize + isize::from(decode_i16(chunk, pc - 2))) as usize;
+                if !discard {
+                    push_value(interp, stack, value);
+                }
+            }
+            Some(Resume::Return(value)) => {
+                truncate_stack(interp, stack, usize::from(decode_u16(chunk, pc - 5)));
+                refs.clear();
+                push_value(interp, stack, value);
+            }
+            Some(Resume::Throw(error)) => resume_throw = Some(error),
+        }
+        generator_control = Some(control);
+    }
     // Before an opcode that can run user code with operands pending.
     macro_rules! assert_operands_rooted {
         () => {
@@ -956,6 +1090,23 @@ fn run_chunk_inner(
                 }
             }
         }};
+    }
+    if GENERATOR && let Some(thrown) = resume_throw {
+        // The error is raised by the `Yield` op the body is suspended at.
+        match resume_at_handler(
+            interp,
+            chunk,
+            stack,
+            refs,
+            &mut scopes,
+            envs_base,
+            roots_base,
+            (pc - 1) as u32,
+            thrown,
+        ) {
+            Ok(target) => pc = target,
+            Err(completion) => return completion,
+        }
     }
     loop {
         let thrown: JsValue = 'dispatch: loop {
@@ -2171,6 +2322,19 @@ fn run_chunk_inner(
                     if let Some(code) = interp.pending_exit {
                         return Completion::Exit(code);
                     }
+                }
+                Op::Yield => {
+                    debug_assert!(GENERATOR, "Yield outside a generator frame");
+                    pc += 5;
+                    let value = pop_value(interp, stack, "stack underflow on Yield");
+                    let control = generator_control
+                        .as_mut()
+                        .expect("Yield outside a generator frame");
+                    control.pc = pc;
+                    control.scopes = std::mem::take(&mut scopes);
+                    interp.gc_bytecode_roots.truncate(roots_base);
+                    interp.call_stack_envs.truncate(envs_base);
+                    return Completion::Yield(value);
                 }
                 Op::Safepoint => {
                     safepoint_with_empty_stacks(

@@ -263,12 +263,16 @@ struct Compiler {
     /// *around* that construct, and handlers of the constructs it just left
     /// must not see it (see `push_handler`).
     unwind_segments: Vec<(usize, usize, usize)>,
+    /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
+    /// handed to the tree-walker must not contain one (it could not suspend).
+    generator: bool,
 }
 
 impl Compiler {
     fn new(goal: CompileGoal) -> Self {
         Self {
             goal,
+            generator: false,
             locals: Vec::new(),
             last_op_at: 0,
             code: Vec::new(),
@@ -305,6 +309,14 @@ impl Compiler {
             kind_constants: Vec::new(),
             unwind_segments: Vec::new(),
         }
+    }
+
+    fn new_generator() -> Self {
+        let mut c = Self::new(CompileGoal::Function);
+        c.generator = true;
+        // A generator body has no tail position (sec-isintailposition).
+        c.no_tail = 1;
+        c
     }
 
     fn add_constant(&mut self, c: Constant) -> Result<u16, CompileError> {
@@ -702,6 +714,9 @@ impl Compiler {
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
+        if self.generator && node_contains_yield(&node) {
+            return Err(CompileError::Ineligible("yield in tree-walked node"));
+        }
         let idx = self.ast.len();
         if idx >= usize::from(NO_ESCAPE_TABLE) {
             return Err(CompileError::Ineligible("ast node pool overflow"));
@@ -1006,8 +1021,46 @@ impl Compiler {
             Expression::Function(_) | Expression::ArrowFunction(_) => {
                 self.compile_closure(expr, None, false)
             }
+            Expression::Yield(argument, false) if self.generator => {
+                self.compile_yield(argument.as_deref(), false)
+            }
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
+    }
+
+    /// `yield argument`: `[..., value]` → `[..., sent]`, or `[...]` when the
+    /// sent value is `discard`ed (an expression statement). A `next(v)`
+    /// resumption pushes `v` and jumps over the stub that follows; `return(v)`
+    /// resumes at the stub with the operand stack cut back to the persistent
+    /// height, so the stub is the same exit a `return v` statement emits
+    /// (running `finally` blocks and closing iterators on the way out);
+    /// `throw(e)` resumes at the enclosing handler like a throw raised by the
+    /// op itself.
+    fn compile_yield(
+        &mut self,
+        argument: Option<&Expression>,
+        discard: bool,
+    ) -> Result<(), CompileError> {
+        match argument {
+            Some(argument) => self.compile_expr(argument)?,
+            None => {
+                self.emit(Op::LoadUndefined);
+                self.push_n(1);
+            }
+        }
+        self.emit(Op::Yield);
+        self.emit_u16(self.stack_base);
+        self.code.push(u8::from(discard));
+        let skip = self.code.len();
+        self.code.extend_from_slice(&[0, 0]);
+        let (stack, refs) = (self.current_stack, self.current_refs);
+        self.current_stack = self.stack_base + 1;
+        self.current_refs = 0;
+        self.max_stack = self.max_stack.max(self.current_stack);
+        self.compile_jump(Terminal::Return, true)?;
+        self.current_stack = if discard { stack - 1 } else { stack };
+        self.current_refs = refs;
+        self.patch_jump(skip)
     }
 
     /// `MakeClosure` for a function or arrow literal. `inferred_name` is the
@@ -1248,6 +1301,9 @@ impl Compiler {
                     self.compile_effect(e)?;
                 }
                 return Ok(());
+            }
+            Expression::Yield(argument, false) if self.generator => {
+                return self.compile_yield(argument.as_deref(), true);
             }
             _ => {}
         }
@@ -2656,6 +2712,11 @@ impl Compiler {
     }
 
     fn emit_bind_head(&mut self, head: HeadBinding) -> Result<(), CompileError> {
+        if self.generator && head_binding_contains_yield(&head) {
+            return Err(CompileError::Ineligible(
+                "yield in tree-walked head binding",
+            ));
+        }
         let idx = u16::try_from(self.head_bindings.len())
             .map_err(|_| CompileError::Ineligible("head binding pool overflow"))?;
         self.head_bindings.push(head);
@@ -3332,6 +3393,55 @@ fn stmts_contain(stmts: &[Statement], pred: &dyn Fn(&Statement) -> bool) -> bool
 
 type PoisonFn = fn(&Expression) -> bool;
 
+fn is_yield_expression(expr: &Expression) -> bool {
+    matches!(expr, Expression::Yield(..))
+}
+
+/// What a generator chunk cannot host: `yield*` delegates through the
+/// delegation protocol, which only the state machine implements.
+fn is_generator_unsupported_expression(expr: &Expression) -> bool {
+    matches!(expr, Expression::Yield(_, true))
+}
+
+/// A `using`/`await using` declaration anywhere in `stmt` (not nested
+/// functions): the resources are disposed by the generator driver, which the
+/// state machine implements.
+fn declares_using(stmt: &Statement) -> bool {
+    use crate::ast::{ForInOfLeft, VarKind};
+    let is_using = |kind: VarKind| matches!(kind, VarKind::Using | VarKind::AwaitUsing);
+    match stmt {
+        Statement::Variable(decl) => is_using(decl.kind),
+        Statement::For(f) => {
+            matches!(&f.init, Some(ForInit::Variable(decl)) if is_using(decl.kind))
+        }
+        Statement::ForIn(f) => {
+            matches!(&f.left, ForInOfLeft::Variable(decl) if is_using(decl.kind))
+        }
+        Statement::ForOf(f) => {
+            matches!(&f.left, ForInOfLeft::Variable(decl) if is_using(decl.kind))
+        }
+        _ => false,
+    }
+}
+
+/// Whether handing `node` to the tree-walker would strand a `yield`.
+fn node_contains_yield(node: &AstNode) -> bool {
+    match node {
+        AstNode::Expr(expr) => expr_has_poison(expr, is_yield_expression),
+        AstNode::Stmt(stmt) => {
+            body_has_poison(std::slice::from_ref(stmt.as_ref()), is_yield_expression)
+        }
+    }
+}
+
+fn head_binding_contains_yield(head: &HeadBinding) -> bool {
+    match head {
+        HeadBinding::Declare { pattern, .. } | HeadBinding::Assign { pattern } => {
+            pattern_has_poison(pattern, is_yield_expression)
+        }
+    }
+}
+
 /// The Script goal's poison: direct `eval`, dynamic `import()` and
 /// `import.meta`. `yield`, `await`, `new.target` and `super`
 /// cannot occur in a Script's own code: the traversal only meets them inside
@@ -3527,13 +3637,21 @@ fn expression_kind(node: &Expression) -> &'static str {
 /// worth taking when some native work remains in the chunk; a body that is
 /// nothing but tree-walker hand-offs would pay chunk-entry cost for nothing.
 /// Callers pass plain function bodies only (see `is_poison_expression`).
-fn compile_function_goal(body: &[Statement], locals: Vec<String>) -> Result<Chunk, CompileError> {
+fn compile_function_goal(
+    body: &[Statement],
+    locals: Vec<String>,
+    generator: bool,
+) -> Result<Chunk, CompileError> {
     if body_has_poison(body, is_poison_expression) {
         return Err(CompileError::Ineligible(
             "construct needs tree-walked frame",
         ));
     }
-    let mut c = Compiler::new(CompileGoal::Function);
+    let mut c = if generator {
+        Compiler::new_generator()
+    } else {
+        Compiler::new(CompileGoal::Function)
+    };
     c.locals = locals;
     c.compile_statements(body, true, true)?;
     if !c.ast.is_empty() && c.native_ops == 0 {
@@ -3577,8 +3695,9 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
         .ok()
 }
 
+#[cfg(test)]
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
-    compile_function_goal(body, Vec::new())
+    compile_function_goal(body, Vec::new(), false)
 }
 
 /// What the call path will have put in the frame before the chunk runs: the
@@ -3598,7 +3717,33 @@ pub(crate) fn compile_function_body(
     body: &[Statement],
     shape: &FrameShape<'_>,
 ) -> Result<Chunk, CompileError> {
-    let mut first = compile_body(body)?;
+    compile_function_body_as(body, shape, false)
+}
+
+/// [`compile_function_body`] for a sync generator body, whose `yield`s
+/// suspend the chunk (`Op::Yield`). Anything that would have to suspend from
+/// inside the tree-walker, or that the generator driver cannot host (`yield*`,
+/// `using` declarations), is `Ineligible` and keeps the state machine.
+pub(crate) fn compile_generator_body(
+    body: &[Statement],
+    shape: &FrameShape<'_>,
+) -> Result<Chunk, CompileError> {
+    if body_has_poison(body, is_generator_unsupported_expression)
+        || stmts_contain(body, &|stmt| declares_using(stmt))
+    {
+        return Err(CompileError::Ineligible(
+            "construct needs the generator state machine",
+        ));
+    }
+    compile_function_body_as(body, shape, true)
+}
+
+fn compile_function_body_as(
+    body: &[Statement],
+    shape: &FrameShape<'_>,
+    generator: bool,
+) -> Result<Chunk, CompileError> {
+    let mut first = compile_function_goal(body, Vec::new(), generator)?;
     let mut locals: Vec<String> = Vec::new();
     let mut push = |name: &str| {
         if !locals.iter().any(|n| n == name) {
@@ -3618,7 +3763,7 @@ pub(crate) fn compile_function_body(
         first.trivial_private_getter = first.detect_trivial_private_getter();
         return Ok(first);
     }
-    let mut chunk = compile_function_goal(body, locals)?;
+    let mut chunk = compile_function_goal(body, locals, generator)?;
     chunk.trivial_private_getter = chunk.detect_trivial_private_getter();
     Ok(chunk)
 }

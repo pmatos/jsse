@@ -3611,12 +3611,20 @@ impl Interpreter {
                 if let Some(this_id) = this.as_object_id()
                     && let Some(obj_rc) = interp.get_object_cell(this_id)
                 {
-                    let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state(),
-                        Some(IteratorState::StateMachineGenerator { .. })
-                    );
-                    if is_state_machine {
+                    let kind = match obj_rc.borrow().iterator_state() {
+                        Some(IteratorState::StateMachineGenerator { .. }) => 1,
+                        Some(IteratorState::BytecodeGenerator(_)) => 2,
+                        _ => 0,
+                    };
+                    if kind == 1 {
                         return interp.generator_next_state_machine(this, value);
+                    }
+                    if kind == 2 {
+                        return interp.bytecode_generator_resume(
+                            this,
+                            crate::interpreter::bytecode::vm::Resume::Next(value),
+                            false,
+                        );
                     }
                 }
                 interp.generator_next(this, value)
@@ -3640,12 +3648,20 @@ impl Interpreter {
                 if let Some(this_id) = this.as_object_id()
                     && let Some(obj_rc) = interp.get_object_cell(this_id)
                 {
-                    let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state(),
-                        Some(IteratorState::StateMachineGenerator { .. })
-                    );
-                    if is_state_machine {
+                    let kind = match obj_rc.borrow().iterator_state() {
+                        Some(IteratorState::StateMachineGenerator { .. }) => 1,
+                        Some(IteratorState::BytecodeGenerator(_)) => 2,
+                        _ => 0,
+                    };
+                    if kind == 1 {
                         return interp.generator_return_state_machine(this, value);
+                    }
+                    if kind == 2 {
+                        return interp.bytecode_generator_resume(
+                            this,
+                            crate::interpreter::bytecode::vm::Resume::Return(value),
+                            false,
+                        );
                     }
                 }
                 interp.generator_return(this, value)
@@ -3668,12 +3684,20 @@ impl Interpreter {
                 if let Some(this_id) = this.as_object_id()
                     && let Some(obj_rc) = interp.get_object_cell(this_id)
                 {
-                    let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state(),
-                        Some(IteratorState::StateMachineGenerator { .. })
-                    );
-                    if is_state_machine {
+                    let kind = match obj_rc.borrow().iterator_state() {
+                        Some(IteratorState::StateMachineGenerator { .. }) => 1,
+                        Some(IteratorState::BytecodeGenerator(_)) => 2,
+                        _ => 0,
+                    };
+                    if kind == 1 {
                         return interp.generator_throw_state_machine(this, exception);
+                    }
+                    if kind == 2 {
+                        return interp.bytecode_generator_resume(
+                            this,
+                            crate::interpreter::bytecode::vm::Resume::Throw(exception),
+                            false,
+                        );
                     }
                 }
                 interp.generator_throw(this, exception)

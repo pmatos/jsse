@@ -2925,6 +2925,7 @@ fn operand_layout(op: Op) -> &'static [usize] {
         | Op::ObjectAppend
         | Op::NewRegExp => &[2],
         Op::MakeClosure => &[2, 1],
+        Op::Yield => &[2, 1, 2],
         _ => &[],
     }
 }
@@ -4392,4 +4393,102 @@ fn body_without_lexicals_has_no_declaration_prologue() {
     let chunk = compile_function_source("var a = 1; a;", &[]);
     assert!(!chunk.needs_instantiation);
     assert!(chunk.top_level_lexicals.is_none());
+}
+
+fn try_compile_generator_source(source: &str) -> Result<Chunk, super::compiler::CompileError> {
+    use super::compiler::{FrameShape, compile_generator_body};
+    use crate::parser::Parser;
+
+    let wrapped = format!("function* g(a) {{ {source}\n}}");
+    let mut parser = Parser::new(&wrapped).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let Some(Statement::FunctionDeclaration(decl)) = program.body.as_slice().first() else {
+        panic!("function declaration");
+    };
+    compile_generator_body(
+        decl.body.statements.as_slice(),
+        &FrameShape {
+            arguments_slot: false,
+            simple_params: &["a".to_string()],
+        },
+    )
+}
+
+#[test]
+fn generator_yield_compiles_to_a_suspension_followed_by_a_return_stub() {
+    let chunk = try_compile_generator_source("yield a; return 1;").expect("compile");
+    let ops = decode_ops(&chunk);
+    let at = ops
+        .iter()
+        .position(|(op, _)| *op == Op::Yield)
+        .expect("yield op");
+    // The persistent stack height is 0 and the skip lands after the stub,
+    // which is the unwind a `return` statement emits.
+    assert_eq!(ops[at].1[0], 0);
+    assert_eq!(ops[at + 1].0, Op::Return, "return stub follows the yield");
+}
+
+#[test]
+fn generator_yield_inside_a_for_of_records_the_iterator_as_persistent() {
+    let chunk = try_compile_generator_source("for (const x of a) { yield x; }").expect("compile");
+    let (_, operands) = decode_ops(&chunk)
+        .into_iter()
+        .find(|(op, _)| *op == Op::Yield)
+        .expect("yield op");
+    assert_eq!(
+        operands[0], 1,
+        "the for-of iterator slot stays on the stack"
+    );
+    let ops = work_ops(&chunk);
+    assert!(
+        ops.contains(&Op::IterClose),
+        "a return completion closes the iterator"
+    );
+}
+
+#[test]
+fn generator_chunk_rejects_what_a_suspending_frame_cannot_host() {
+    for source in [
+        "yield* a;",
+        "var [x = yield] = a;",
+        "var { x = yield } = a;",
+        "return `${yield}`;",
+        "return f(...[yield]);",
+        "return { [yield]: 1 };",
+        "class C extends (yield) {}",
+        "for (const [x = yield] of a) {}",
+        "try {} catch ([x = yield]) {}",
+        "using r = a;",
+        "for (using r of a) {}",
+        "with (a) { yield 1; }",
+        "eval('1'); yield 1;",
+        "return new.target;",
+    ] {
+        assert!(
+            try_compile_generator_source(source).is_err(),
+            "expected {source} to stay on the state machine"
+        );
+    }
+}
+
+#[test]
+fn generator_chunk_accepts_statement_and_expression_yields() {
+    for source in [
+        "yield;",
+        "var x = yield a;",
+        "x = (yield a) + (yield a);",
+        "try { yield 1; } finally { yield 2; }",
+        "for (;;) { switch (yield) { case yield: break; } }",
+        "while (yield) { if (yield) continue; }",
+        "a.b = yield a;",
+        "return f(1, yield, 3);",
+        "label: for (const x of a) { try { yield x; } catch (e) { break label; } }",
+    ] {
+        let chunk =
+            try_compile_generator_source(source).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        assert!(
+            decode_ops(&chunk).iter().any(|(op, _)| *op == Op::Yield),
+            "{source}"
+        );
+    }
 }

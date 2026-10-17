@@ -6153,6 +6153,7 @@ mod generator_retirement_tests {
             r#"
             globalThis.gen = (function* () {
               { let a = 1; yield a; throw new Error("boom"); }
+              yield* [];
             })();
             gen.next();
             try { gen.next(); } catch (e) { globalThis.err = e.message; }

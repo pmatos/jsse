@@ -226,6 +226,16 @@ pub(crate) enum Op {
     /// `switch` case test: `[..., discriminant, selector]` → `[..., discriminant]`,
     /// jumping when the selector `===` the discriminant. Operand: i16 offset.
     CaseStrictEq = 102,
+    /// Generator `yield`: `[..., value]` → suspends the chunk, handing `value`
+    /// to the caller of `next`. A `next(v)` resumption continues with
+    /// `[..., v]` (`[...]` when the discard flag is set) after jumping over
+    /// the stub that follows this op; a `return(v)` resumption cuts the
+    /// operand stack back to the persistent height and continues at the stub
+    /// with `[..., v]`; a `throw(e)` resumption raises `e` at this op.
+    /// Operands: persistent stack height (u16), discard flag (u8), offset
+    /// (i16, last so `patch_jump` applies unchanged) from the end of the
+    /// operands to the code after the stub.
+    Yield = 103,
 }
 
 impl Op {
@@ -334,6 +344,7 @@ impl Op {
             100 => Some(Op::LoadMethodPrivate),
             101 => Some(Op::PrivateIn),
             102 => Some(Op::CaseStrictEq),
+            103 => Some(Op::Yield),
             _ => None,
         }
     }

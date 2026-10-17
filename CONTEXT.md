@@ -73,12 +73,16 @@ The static label a compile attempt carries when it does not produce a whole-body
 _Avoid_: bail code, unsupported flag.
 
 **Eligibility Membrane**:
-The boundary the bytecode compiler draws around what the VM can run natively. Since #902 it is per node, not per function: a node outside the membrane is handed to the tree-walker (AST Fallback) and only constructs that need the whole frame tree-walked (direct `eval`, `with`, `super`, `new.target`, `yield`/`await`) keep a body wholly outside it.
+The boundary the bytecode compiler draws around what the VM can run natively. Since #902 it is per node, not per function: a node outside the membrane is handed to the tree-walker (AST Fallback) and only constructs that need the whole frame tree-walked (direct `eval`, `with`, `super`, `new.target`, `await`, and a generator's `yield*`) keep a body wholly outside it.
 _Avoid_: eligibility cliff, compile gate.
 
 **AST Fallback**:
 A syntax node a compiled body hands back to the tree-walker: `Op::EvalAst` for an expression (result pushed) or `Op::ExecAst` for a statement (break/continue routed through an escape table). The node is a clone stored in `Chunk.ast`; semantics are the tree-walker's by construction. See ADR-2026-10-12-2214.
 _Avoid_: deopt, interpreter escape, slow path.
+
+**Bytecode Generator**:
+A sync generator whose body is one bytecode chunk that suspends at `Op::Yield` (`IteratorState::BytecodeGenerator`), as opposed to a generator lowered to a state machine. The generator object owns the suspended `GeneratorFrame` (position, operand and reference stacks, block environments); `next`/`return`/`throw` resume it through `bytecode_generator_resume`, and a `return(v)` re-enters at the stub after the yield so the exit runs enclosing `finally` blocks and iterator closes like a `return` statement. A body with `yield*`, `using`, or a `yield` inside an AST Fallback node is outside the membrane and keeps the state machine. See ADR-2026-10-17-0640.
+_Avoid_: native generator, VM generator.
 
 ## Parsing
 

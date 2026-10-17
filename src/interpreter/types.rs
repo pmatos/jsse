@@ -380,6 +380,40 @@ pub(crate) enum StateMachineExecutionState {
     Completed,
 }
 
+/// Where a [`BytecodeGenerator`] stands in its lifecycle
+/// (sec-generatorstart, sec-generatorresume).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BytecodeGeneratorStatus {
+    SuspendedStart,
+    SuspendedYield,
+    Executing,
+    Completed,
+}
+
+/// What every resumption of one bytecode generator shares: the compiled body,
+/// the body's environment and the `Body` whose inline-cache store it runs in.
+#[derive(Debug)]
+pub(crate) struct BytecodeGeneratorCode {
+    pub(crate) chunk: Rc<crate::interpreter::bytecode::chunk::Chunk>,
+    pub(crate) body: Body,
+    /// The literal's call-frame facts, whose handle caches the Body's
+    /// inline-cache store.
+    pub(crate) frame: Rc<crate::interpreter::literal_frame::LiteralFrame>,
+    pub(crate) func_env: EnvRef,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) perf_key: crate::interpreter::perf_counters::BodyKey,
+}
+
+/// A sync generator whose body runs as a bytecode chunk and suspends at
+/// `Op::Yield`, keeping its frame here between resumptions. `frame` is `None`
+/// before the first start and while the body runs (the VM owns it then).
+#[derive(Debug, Clone)]
+pub(crate) struct BytecodeGenerator {
+    pub(crate) code: Rc<BytecodeGeneratorCode>,
+    pub(crate) status: BytecodeGeneratorStatus,
+    pub(crate) frame: Option<Box<crate::interpreter::bytecode::vm::GeneratorFrame>>,
+}
+
 /// A Completion Record intercepted by a running `finally`, owned by the
 /// `TryContextInfo` whose finalizer is running it (issue #719). ECMAScript
 /// carries exactly one Completion Record at a time, so this is a tagged union
@@ -1838,6 +1872,9 @@ pub(crate) enum IteratorState {
         pending_exception: Option<JsValue>,
         pending_return: Option<JsValue>,
     },
+    /// A generator whose body is a bytecode chunk (`Op::Yield`); the state
+    /// machine drives the rest.
+    BytecodeGenerator(Box<BytecodeGenerator>),
     StateMachineAsyncGenerator {
         state_machine: Rc<GeneratorStateMachine>,
         func_env: EnvRef,
