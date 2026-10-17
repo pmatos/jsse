@@ -702,17 +702,23 @@ fn transform_generator_inner_opts(
     }
 }
 
+fn is_function_declaration(stmt: &Statement) -> bool {
+    crate::interpreter::hoisting::unwrap_labeled_function(stmt).is_some()
+}
+
 /// FunctionDeclarationInstantiation (and BlockDeclarationInstantiation for a
-/// block) initializes every function declaration before the body runs, wherever it sits in the statement list.
+/// block) initializes every function declaration before the body runs,
+/// wherever it sits in the statement list.
 /// Lowering puts each statement in the fragment it appears in, so a declaration
 /// after a `return`/`yield`/`await` would land in a state that has not run (or
 /// never runs). Moving the declarations to the head of the first fragment, in
 /// source order (last duplicate wins), instantiates them once when the first
-/// fragment starts; they are removed from their original positions, where
-/// evaluating them would be a no-op anyway.
+/// fragment starts; they are removed from their original positions. For a
+/// function body that is the whole effect of evaluating a declaration; for a
+/// sloppy block-level declaration the Annex B.3.3 var-scope copy, normally made
+/// when the declaration is reached, moves to the block's entry with it.
 fn function_declarations_first(body: &[Statement]) -> Cow<'_, [Statement]> {
-    let is_function =
-        |s: &Statement| crate::interpreter::hoisting::unwrap_labeled_function(s).is_some();
+    let is_function = is_function_declaration;
     let leading = body.iter().take_while(|s| is_function(s)).count();
     if !body[leading..].iter().any(is_function) {
         return Cow::Borrowed(body);
@@ -1865,8 +1871,8 @@ fn transform_yielding_expression(
                 .expressions
                 .iter()
                 .any(|e| expr_has_suspension(e, ctx.is_async));
-            let temp_tag = if matches!(&**tag, Expression::Member(..)) && exprs_suspend {
-                lower_reference_operand(tag, true, ctx)
+            let temp_tag = if matches!(&**tag, Expression::Member(..)) {
+                lower_reference_operand(tag, exprs_suspend, ctx)
             } else if let Some(hoisted) = hoist_suspending_expr(tag, "tag_fn", ctx) {
                 hoisted
             } else if exprs_suspend && callee_can_be_settled(tag, ctx) {
@@ -2813,7 +2819,6 @@ fn lower_optional_chain(
 fn is_settled_operand(expr: &Expression, ctx: &TransformContext) -> bool {
     match expr {
         Expression::Super
-        | Expression::This
         | Expression::Literal(_)
         | Expression::PrivateIdentifier(_)
         | Expression::Function(_)
@@ -3958,12 +3963,15 @@ fn transform_switch_statement(
             .flat_map(|case| case.consequent.iter()),
     );
 
-    let is_function =
-        |s: &Statement| crate::interpreter::hoisting::unwrap_labeled_function(s).is_some();
     let case_functions: Vec<Statement> = switch_stmt
         .cases
         .iter()
-        .flat_map(|case| case.consequent.iter().filter(|s| is_function(s)).cloned())
+        .flat_map(|case| {
+            case.consequent
+                .iter()
+                .filter(|s| is_function_declaration(s))
+                .cloned()
+        })
         .collect();
 
     let case_states = if tests_suspend {
@@ -4017,12 +4025,17 @@ fn transform_switch_statement(
             after_switch
         };
 
-        let consequent: Vec<Statement> = case
-            .consequent
-            .iter()
-            .filter(|s| !is_function(s))
-            .cloned()
-            .collect();
+        let consequent: Cow<'_, [Statement]> = if case_functions.is_empty() {
+            Cow::Borrowed(case.consequent.as_slice())
+        } else {
+            Cow::Owned(
+                case.consequent
+                    .iter()
+                    .filter(|s| !is_function_declaration(s))
+                    .cloned()
+                    .collect(),
+            )
+        };
         // A yield-free body is emitted verbatim, where a `break`/`continue` would
         // surface as a raw completion the state driver drops, falling through.
         if consequent.iter().any(|s| {
@@ -4031,8 +4044,8 @@ fn transform_switch_statement(
         }) {
             transform_statements(&consequent, ctx, next_state);
         } else {
-            for stmt in consequent {
-                ctx.emit_statement(stmt);
+            for stmt in consequent.iter() {
+                ctx.emit_statement(stmt.clone());
             }
         }
         if ctx.current_state_id != next_state {

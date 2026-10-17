@@ -69,6 +69,7 @@ var cases = [
     "get p,2|{\"p\":1,\"q\":2}"],
   ["templateConvertsFirst", "return `${to}-${@note(2)}-${to}`;", "ts,2,ts|S-2-S"],
   ["taggedTemplateKeepsThis", "return gt.t`${note(1)}${@note(2)}`;", "1,2|G1,2"],
+  ["taggedTemplateSuspendingBaseKeepsThis", "return (@gt).t`${note(1)}`;", "1|G1"],
 ];
 
 function variants(src) {
