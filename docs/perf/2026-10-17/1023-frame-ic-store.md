@@ -20,7 +20,11 @@ in, an `entry_mut` with three asserts on the way out, and the same validation on
 - The IC table keeps script, module and eval bodies, so its eviction bound still applies to them. Function bodies,
   including every `new Function`, no longer enter it; their stores are freed with their literal.
 
-No `unsafe`.
+Also in this change, measured separately at -21 Ir per call: `declare_var_prologue` tests for an empty `var` list inline and
+the VM's `recycle_vm_buffer` skips clearing an empty buffer.
+
+No `unsafe`. A frame is paired with one literal's Body for its whole life (debug builds assert it on entry and exit); the
+thread-local default-constructor frames are shared by interpreters on one thread, but their bodies have no assigned IC sites.
 
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
@@ -75,6 +79,9 @@ Reproducer (the issue's leaf-call script, Ir per iteration = (N=250,000 minus N=
 | sort comparator (64 elements, per iteration) | 13,890 | 13,421 | -469 |
 | reads `arguments` (control) | 9,224 | 9,113 | -111 |
 | call-free loop (control) | 734 | 734 | +0 |
+
+`js-tokens` moves by +2% in the table above; the same binary varies between 5.03G and 5.29G Ir from run to run on that
+benchmark (randomised interner), so it is noise.
 
 Wall (hyperfine, 15 runs twice, pinned to one CPU, load average 1.5-11; medians of each pair): fib 1.126 s -> 1.045 s
 (-7.2%), richards 2.832 s -> 2.757 s (-2.6%), delta-blue 1.696 s -> 1.630 s (-3.9%), hash-map 3.751 s -> 3.666 s (-2.3%).

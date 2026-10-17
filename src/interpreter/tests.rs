@@ -3807,6 +3807,32 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
     );
 }
 
+// The IC table still bounds the stores of script, module and eval bodies.
+#[test]
+fn ic_table_stays_bounded_across_many_distinct_eval_bodies() {
+    let bodies = super::ic_store::DEFAULT_CAPACITY + 2000;
+    let interp = run_script(&format!(
+        r#"
+        var sum = 0;
+        for (var i = 0; i < {bodies}; i++) {{
+          sum += eval("var e" + i + " = 1; e" + i);
+        }}
+        globalThis.__sum = sum;
+        "#
+    ));
+    assert_eq!(global_number(&interp, "__sum"), bodies as f64);
+    assert!(
+        interp.ic_store.len() <= super::ic_store::DEFAULT_CAPACITY,
+        "IC store grew to {} entries for {bodies} eval bodies",
+        interp.ic_store.len()
+    );
+    assert!(
+        interp.ic_store.len() > super::ic_store::DEFAULT_CAPACITY / 2,
+        "expected the eval bodies to fill the IC store, got {} entries",
+        interp.ic_store.len()
+    );
+}
+
 #[test]
 fn hoist_analysis_is_read_off_the_literal_frame_across_repeated_calls() {
     let interp = run_script_tree_walker(

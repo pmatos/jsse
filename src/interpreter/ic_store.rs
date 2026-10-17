@@ -1,11 +1,13 @@
 //! Interpreter-side inline-cache store.
 //!
 //! Inline-cache slots used to live on the AST nodes in `Cell`s. The ADR in
-//! `docs/adr/0001-inline-cache-ast-seam.md` moved them into the interpreter,
-//! keyed by the identity of the executing `Body`. Each `Body` gets a dense
-//! namespace of `CallSiteId` / `PropSiteId` values assigned by
-//! `ast::assign_ic_sites`; this module creates a `BodyIcStore` per body on
-//! first execution and shares it across all closures of that body.
+//! `docs/adr/0001-inline-cache-ast-seam.md` moved them into the interpreter.
+//! Each `Body` gets a dense namespace of `CallSiteId` / `PropSiteId` values
+//! assigned by `ast::assign_ic_sites`, and a `BodyIcStore` holds the slots.
+//! A function body's store belongs to its literal's `LiteralFrame` and is
+//! shared by every closure of the literal; script, module and eval bodies keep
+//! theirs in the `IcStore` table, keyed by the identity of the executing
+//! `Body`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -280,6 +282,8 @@ impl BodyIcStore {
         }
     }
 
+    /// A frame is paired with one literal's Body for its whole life; the
+    /// frame's entry points assert it in debug builds.
     pub(crate) fn for_frame(body: &Body) -> FrameIcStore {
         Rc::new(Self::new(body.ic, body.statements.clone()))
     }
@@ -342,7 +346,7 @@ impl Interpreter {
     }
 
     /// [`with_ic_body`](Self::with_ic_body) for a function body, whose store
-    /// the literal's frame owns (#1089).
+    /// the literal's frame owns (#1023).
     #[inline]
     pub(crate) fn with_ic_body_in_frame<T>(
         &mut self,
@@ -353,7 +357,11 @@ impl Interpreter {
         let store = frame.ic_store(body).clone();
         let previous = std::mem::replace(&mut self.current_ic, CurrentIc::Frame(store));
         let result = execute(self);
-        self.current_ic = previous;
+        let current = std::mem::replace(&mut self.current_ic, previous);
+        debug_assert!(
+            matches!(&current, CurrentIc::Frame(store) if store.body_key() == body.key()),
+            "IC Body scope exited with a different active Body"
+        );
         result
     }
 
@@ -377,7 +385,9 @@ impl Interpreter {
         self.current_store().set_call_slot(id, slot);
     }
 
-    /// Runs `access` on the current body's property slot for `id`.
+    /// Runs `access` on the current body's property slot for `id`. `access`
+    /// must not run script or touch another IC slot: a frame store holds its
+    /// property slots behind a `RefCell` for the duration.
     #[inline]
     pub(crate) fn with_prop_slot<R>(
         &mut self,
