@@ -5635,7 +5635,6 @@ impl Interpreter {
                                 );
                                 let closure_strict = closure.borrow().strict;
                                 func_env.borrow_mut().strict = is_strict;
-                                // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
                                 let effective_this = self.ordinary_call_bind_this(
                                     _this_val,
                                     is_strict,

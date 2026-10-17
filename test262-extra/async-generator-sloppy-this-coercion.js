@@ -28,7 +28,7 @@ info: |
   8. Perform ! localEnv.BindThisValue(thisValue).
 flags: [noStrict, async]
 includes: [asyncHelpers.js]
-features: [async-iteration]
+features: [async-iteration, cross-realm]
 ---*/
 
 var AsyncGeneratorFunction = Object.getPrototypeOf(async function* () {}).constructor;
@@ -60,6 +60,10 @@ var holder = {
   async *method() { yield this; },
   async *detachedMethod() { yield this; }
 };
+
+class StrictContext {
+  static async *method() { yield this; }
+}
 
 async function firstValues(it, count) {
   var values = [];
@@ -108,4 +112,13 @@ asyncTest(async function () {
   assert.sameValue((await holder.method().next()).value, holder, 'method keeps its receiver');
   var detached = holder.detachedMethod;
   assert.sameValue((await detached().next()).value, global, 'detached method');
+
+  var strictMethod = StrictContext.method;
+  assert.sameValue((await strictMethod().next()).value, undefined, 'strict through the enclosing class');
+
+  var other = $262.createRealm();
+  var otherSloppy = other.evalScript('(async function* () { yield this; })');
+  assert.sameValue((await otherSloppy.call(undefined).next()).value, other.global, 'cross-realm: global object');
+  var otherWrapped = (await otherSloppy.call(1).next()).value;
+  assert.sameValue(Object.getPrototypeOf(otherWrapped), other.global.Number.prototype, 'cross-realm: wrapper');
 });
