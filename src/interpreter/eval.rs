@@ -2165,8 +2165,7 @@ impl Interpreter {
         {
             self.perf.body_compiled += 1;
         }
-        let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
-            .then(|| frame.hoist_analysis(|| self.hoist_cache.analysis_for(body)));
+        let analysis = self.chunk_instantiation_analysis(chunk, body, frame);
         #[cfg(feature = "perf-counters")]
         let has_fallback = !chunk.ast.is_empty();
         #[cfg(feature = "perf-counters")]
@@ -5488,8 +5487,7 @@ impl Interpreter {
             && self.bytecode_enabled
             && let Some(id) = func_val.as_object_id()
             && let Some(obj) = self.get_object_cell(id)
-            && let Some((frame, closure, function_realm)) =
-                Self::compiled_call_target(obj, !skip_entry_checks)
+            && let Some((frame, closure, function_realm)) = Self::compiled_call_target(obj)
         {
             return self.call_compiled_function(
                 id,
@@ -5960,8 +5958,10 @@ impl Interpreter {
                             }
                             if has_simple_params
                                 && !uses_arguments
-                                && !is_class_ctor
                                 && self.bytecode_enabled
+                                && self
+                                    .get_object_cell(o.id)
+                                    .is_some_and(|callee| !callee.borrow().is_class_constructor())
                                 && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
                             {
                                 frame.install_compiled_call(|| CompiledCall {
@@ -6118,9 +6118,6 @@ impl Interpreter {
         Completion::Throw(err)
     }
 
-    /// The completion an ordinary user function call reports, and the
-    /// side channel `[[Construct]]` reads to tell an explicit `return` from
-    /// falling off the end.
     #[inline]
     fn finish_user_call(&mut self, result: Completion) -> Completion {
         match result {
@@ -6141,25 +6138,23 @@ impl Interpreter {
         }
     }
 
-    /// The frame, closure environment and realm of a function whose [[Call]]
-    /// can take `call_compiled_function`, or `None` when it has not (yet)
-    /// proved eligible. Class constructors never do (they throw when called);
-    /// a Proxy or wrapped function copies its target's callable, so unless an
-    /// inline cache already ruled those out (`check_kind` false) they are
-    /// excluded here.
+    /// The frame, closure environment and realm of a function that can take
+    /// `call_compiled_function`, or `None` when it has not (yet) proved
+    /// eligible. A Proxy or wrapped function copies its target's callable
+    /// (and so its frame), and a class constructor throws when called, so
+    /// neither is eligible.
     #[inline]
     fn compiled_call_target(
         obj: &ObjectHandle,
-        check_kind: bool,
     ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>)> {
         let data = obj.borrow();
         match data.callable.as_deref() {
             Some(JsFunction::User { frame, closure, .. })
                 if frame.compiled_call().is_some()
-                    && !(check_kind
-                        && (data.is_proxy()
-                            || data.is_proxy_revoked()
-                            || data.wrapped().is_some())) =>
+                    && !(data.is_proxy()
+                        || data.is_proxy_revoked()
+                        || data.wrapped().is_some()
+                        || data.is_class_constructor()) =>
             {
                 Some((frame.clone(), closure.clone(), data.function_realm()))
             }
@@ -6172,7 +6167,7 @@ impl Interpreter {
     /// construction (so no NewTarget and no derived-constructor `this`). It
     /// does what the general path of `call_function_inner_impl` does for such
     /// a function, without rebuilding the call's invariants from the function
-    /// object.
+    /// object. Keep it in step with that path's ordinary-call tail.
     fn call_compiled_function(
         &mut self,
         func_obj_id: u64,

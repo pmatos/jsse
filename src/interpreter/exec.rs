@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::{Body, DeclPhase};
+use crate::interpreter::literal_frame::LiteralFrame;
 use std::borrow::Cow;
 
 impl Interpreter {
@@ -309,13 +310,14 @@ impl Interpreter {
     /// before its chunk runs, or `None` when the chunk declares everything it
     /// owns itself (`declare_chunk_prologue`).
     #[inline(always)]
-    pub(super) fn chunk_instantiation_analysis(
+    pub(super) fn chunk_instantiation_analysis<'f>(
         &mut self,
         chunk: &crate::interpreter::bytecode::chunk::Chunk,
         body: &Body,
-    ) -> Option<Rc<HoistAnalysis>> {
+        frame: &'f LiteralFrame,
+    ) -> Option<&'f Rc<HoistAnalysis>> {
         (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
-            .then(|| self.hoist_cache.analysis_for(body))
+            .then(|| frame.hoist_analysis(|| self.hoist_cache.analysis_for(body)))
     }
 
     /// Declaration instantiation for a compiled function body whose chunk does

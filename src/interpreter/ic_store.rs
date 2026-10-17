@@ -63,17 +63,20 @@ struct StoreEntry {
     in_flight: usize,
 }
 
-/// A `u64` recency clock and in-flight count cannot overflow in the life of a
-/// process, so the hot entry path adds without a checked-overflow branch.
 fn tick_clock(clock: &mut u64) -> u64 {
-    *clock += 1;
+    *clock = clock
+        .checked_add(1)
+        .expect("IcStore recency clock overflowed");
     *clock
 }
 
 impl StoreEntry {
     fn mark_entered(&mut self, tick: u64) {
         self.last_used = tick;
-        self.in_flight += 1;
+        self.in_flight = self
+            .in_flight
+            .checked_add(1)
+            .expect("IcStore in-flight count overflowed");
     }
 }
 
