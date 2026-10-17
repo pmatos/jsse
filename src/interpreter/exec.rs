@@ -2648,7 +2648,13 @@ impl Interpreter {
                     }
                 },
             }
+            // A `return f()` in the body leaves the loop through IteratorClose, so
+            // the call is not in tail position (HasCallInTailPosition has no
+            // clause for iteration statements).
+            let saved_tco = self.tco_suppress_depth;
+            self.tco_suppress_depth = saved_tco + 1;
             let body_result = self.exec_statement(&fo.body, &for_env);
+            self.tco_suppress_depth = saved_tco;
             let body_result = self.dispose_resources(&for_env, body_result);
             match body_result {
                 Completion::Normal(val) => {
