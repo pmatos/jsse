@@ -893,6 +893,9 @@ impl Interpreter {
                 Completion::Normal(result)
             }
             Expression::Spread(_) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
+            Expression::BoundCallee(func, _) | Expression::PreIterated(func) => {
+                self.eval_expr(func, env)
+            }
             Expression::Yield(expr, delegate) => {
                 if *delegate {
                     if self.in_async_generator_body {
@@ -1194,6 +1197,12 @@ impl Interpreter {
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
                 let (func_val, this_val) = match tag_expr.as_ref() {
+                    Expression::BoundCallee(func, this) => {
+                        match self.eval_bound_callee(func, this, env) {
+                            Ok(pair) => pair,
+                            Err(done) => return done,
+                        }
+                    }
                     Expression::Member(obj_expr, prop, _) => {
                         let obj_val = match self.eval_expr(obj_expr, env) {
                             Completion::Normal(v) => v,
@@ -4800,6 +4809,10 @@ impl Interpreter {
 
         // Handle member calls: obj.method()
         let (func_val, this_val) = match callee {
+            Expression::BoundCallee(func, this) => match self.eval_bound_callee(func, this, env) {
+                Ok(pair) => pair,
+                Err(done) => return done,
+            },
             Expression::Member(obj_expr, prop, _) => {
                 let is_super_call = matches!(obj_expr.as_ref(), Expression::Super);
                 let obj_val = match self.eval_expr(obj_expr, env) {
@@ -6073,6 +6086,44 @@ impl Interpreter {
         }
     }
 
+    /// The function and `this` of a `BoundCallee`, both already resolved.
+    fn eval_bound_callee(
+        &mut self,
+        func: &Expression,
+        this: &Expression,
+        env: &EnvRef,
+    ) -> Result<(JsValue, JsValue), Completion> {
+        let func_val = match self.eval_expr(func, env) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&func_val);
+        let this_val = self.eval_expr(this, env);
+        self.gc_unroot_frame(gc_frame);
+        match this_val {
+            Completion::Normal(v) => Ok((func_val, v)),
+            other => Err(other),
+        }
+    }
+
+    /// The values a spread element contributes: its operand's iteration, or,
+    /// for the lowering's `PreIterated` array, that array's elements.
+    fn spread_values(
+        &mut self,
+        inner: &Expression,
+        value: &JsValue,
+    ) -> Result<Vec<JsValue>, JsValue> {
+        if matches!(inner, Expression::PreIterated(_)) {
+            match super::builtins::array_dense::fresh_array_values(self, value) {
+                Some(values) => Ok(values),
+                None => self.create_list_from_array_like(value),
+            }
+        } else {
+            self.iterate_to_vec(value)
+        }
+    }
+
     fn eval_spread_args(
         &mut self,
         args: &[Expression],
@@ -6086,7 +6137,7 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
-                let items = self.iterate_to_vec(&val)?;
+                let items = self.spread_values(inner, &val)?;
                 for item in &items {
                     self.gc_root_value(item);
                 }

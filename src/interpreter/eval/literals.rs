@@ -257,7 +257,7 @@ impl Interpreter {
                             other => return other,
                         };
                         self.gc_root_value(&val);
-                        match self.iterate_to_vec(&val) {
+                        match self.spread_values(inner, &val) {
                             Ok(spread_items) => {
                                 for item in spread_items {
                                     self.gc_root_value(&item);

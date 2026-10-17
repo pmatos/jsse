@@ -1,5 +1,5 @@
 use super::*;
-use crate::ast::Body;
+use crate::ast::{Body, DeclPhase};
 use std::borrow::Cow;
 
 impl Interpreter {
@@ -646,6 +646,9 @@ impl Interpreter {
     }
 
     fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
+        if f.phase == DeclPhase::CopyOnly {
+            return;
+        }
         let enclosing_strict = env.borrow().strict;
         let info = f.info();
         let func = JsFunction::User {
@@ -1224,7 +1227,11 @@ impl Interpreter {
             Statement::FunctionDeclaration(f) => {
                 // Annex B.3.3: in sloppy-mode blocks, copy block-scoped value to var scope
                 // Only for regular functions (not generators or async)
-                if !f.is_generator && !f.is_async && !env.borrow().strict {
+                if !f.is_generator
+                    && !f.is_async
+                    && f.phase != DeclPhase::InstantiateOnly
+                    && !env.borrow().strict
+                {
                     let is_block =
                         !env.borrow().is_function_scope && env.borrow().global_object_id.is_none();
                     if is_block {

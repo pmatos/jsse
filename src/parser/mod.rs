@@ -800,7 +800,11 @@ impl<'a> Parser<'a> {
                     || opts.as_ref().is_some_and(|e| Self::expr_contains_await_identifier(e))
             }
             Expression::Spread(inner)
+            | Expression::PreIterated(inner)
             | Expression::Await(inner) => Self::expr_contains_await_identifier(inner),
+            Expression::BoundCallee(func, this) => {
+                Self::expr_contains_await_identifier(func) || Self::expr_contains_await_identifier(this)
+            }
             Expression::Yield(opt_e, _) => {
                 opt_e.as_ref().is_some_and(|e| Self::expr_contains_await_identifier(e))
             }

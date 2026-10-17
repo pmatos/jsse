@@ -6,10 +6,10 @@ use super::chunk::{
 };
 use super::op::{Op, UPDATE_DISCARD};
 use crate::ast::{
-    AssignOp, BinaryOp, CallSiteId, CatchClause, DoWhileStatement, Expression, ForInOfLeft,
-    ForInit, ForStatement, Literal, LogicalOp, MemberProperty, Pattern, Property, PropertyKey,
-    PropertyKind, Statement, SwitchStatement, TryStatement, UnaryOp, UpdateOp, VarKind,
-    VariableDeclaration, WhileStatement,
+    AssignOp, BinaryOp, CallSiteId, CatchClause, DeclPhase, DoWhileStatement, Expression,
+    ForInOfLeft, ForInit, ForStatement, Literal, LogicalOp, MemberProperty, Pattern, Property,
+    PropertyKey, PropertyKind, Statement, SwitchStatement, TryStatement, UnaryOp, UpdateOp,
+    VarKind, VariableDeclaration, WhileStatement,
 };
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
@@ -1519,6 +1519,10 @@ impl Compiler {
                 self.emit_u16(idx);
                 self.push_n(1);
             }
+            Expression::BoundCallee(func, this) => {
+                self.compile_expr(func)?;
+                self.compile_expr(this)?;
+            }
             // `super(...)` and a parenthesised optional chain pick their
             // `this` from the callee reference.
             Expression::Super | Expression::OptionalChain(..) => {
@@ -1796,7 +1800,9 @@ impl Compiler {
         owns_lexicals: bool,
     ) -> Result<(), CompileError> {
         for stmt in body {
-            if skip_hoisted && matches!(stmt, Statement::FunctionDeclaration(_)) {
+            if skip_hoisted
+                && matches!(stmt, Statement::FunctionDeclaration(f) if f.phase != DeclPhase::CopyOnly)
+            {
                 continue;
             }
             debug_assert_eq!(self.current_stack, self.stack_base);
@@ -3342,11 +3348,19 @@ fn constant_array_template(elements: &[Option<Expression>]) -> Option<ArrayTempl
 }
 
 /// `Super` and private names only make sense inside their parent expression;
-/// `Spread` is an argument/element form, not an expression of its own.
+/// `Spread` is an argument/element form, not an expression of its own, and a
+/// `BoundCallee` or `PreIterated` is meaningful only to the call or spread that
+/// contains it: `compile_call` lowers a `BoundCallee` callee itself, and a
+/// spread (which the compiler declines) hands its whole parent to the
+/// tree-walker.
 fn is_standalone_expression(expr: &Expression) -> bool {
     !matches!(
         expr,
-        Expression::Super | Expression::PrivateIdentifier(_) | Expression::Spread(_)
+        Expression::Super
+            | Expression::PrivateIdentifier(_)
+            | Expression::Spread(_)
+            | Expression::BoundCallee(..)
+            | Expression::PreIterated(_)
     )
 }
 
@@ -3624,6 +3638,8 @@ fn expression_kind(node: &Expression) -> &'static str {
         Expression::ImportMeta => "expression:ImportMeta",
         Expression::NewTarget => "expression:NewTarget",
         Expression::PrivateIdentifier { .. } => "expression:PrivateIdentifier",
+        Expression::BoundCallee { .. } => "expression:BoundCallee",
+        Expression::PreIterated { .. } => "expression:PreIterated",
     }
 }
 
