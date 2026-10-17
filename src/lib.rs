@@ -7,6 +7,7 @@ pub(crate) mod emoji_strings;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
+pub mod thp;
 pub mod types;
 pub(crate) mod unicode_tables;
 

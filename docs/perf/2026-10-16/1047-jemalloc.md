@@ -30,6 +30,8 @@ fib, the same interpreter loop, are flat or faster). Run-to-run spread (max-min)
 
 ## Transparent huge pages decide how much you get
 
+(Update: #1075 replaced the embedded `thp:never` with a process-wide `PR_SET_THP_DISABLE` that the collector lifts once the heap has grown, see docs/perf/2026-10-17/1075-thp-defer.md. The measurements below are the #1047 comparison.)
+
 buildbox3 (and this laptop) run with THP `enabled=always`; Ubuntu/GitHub runners use `madvise`. jemalloc's
 default (`thp:default`) never calls `madvise`, so on an `always` host the kernel backs every 2 MiB-aligned
 extent with a zeroed huge page:
