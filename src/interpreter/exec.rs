@@ -1913,6 +1913,11 @@ impl Interpreter {
 
     fn exec_for(&mut self, f: &ForStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         let for_env = Environment::new(Some(env.clone()));
+        // Keeps the head's bindings (and a `using` head's resources) reachable
+        // while later initializers run, and across the loop-head safepoints;
+        // `iter_env` is `for_env` itself whenever the head can hold a dispose
+        // stack.
+        self.call_stack_envs.push(for_env.clone());
         // Collect lexical binding names for per-iteration freshness (§14.7.4.2).
         // A loop that cannot capture or `eval` its scope never observes the
         // copies' identity, so it keeps running in `for_env`.
@@ -1960,12 +1965,15 @@ impl Interpreter {
                     };
                     let comp = self.exec_variable_declaration(decl, decl_env);
                     if comp.is_abrupt() {
-                        return self.dispose_resources(&for_env, comp);
+                        let comp = self.dispose_resources(&for_env, comp);
+                        self.call_stack_envs.pop();
+                        return comp;
                     }
                 }
                 ForInit::Expression(expr) => {
                     let comp = self.eval_expr(expr, &for_env);
                     if comp.is_abrupt() {
+                        self.call_stack_envs.pop();
                         return comp;
                     }
                 }
@@ -1987,10 +1995,6 @@ impl Interpreter {
         };
 
         let mut v = JsValue::UNDEFINED;
-        // Keeps a `using` head's resources reachable across the loop-head
-        // safepoints; `iter_env` is `for_env` itself whenever the head can
-        // hold a dispose stack.
-        self.call_stack_envs.push(for_env.clone());
         let result = 'for_loop: {
             loop {
                 self.gc_root_value(&v);
