@@ -34,7 +34,7 @@ function plain() {
 }
 
 function nested() {
-  outer: for (var a of iterable) {
+  for (var a of iterable) {
     for (var b of iterable) { return leaf(); }
   }
 }
@@ -43,6 +43,18 @@ function insideTry() {
   eval("");
   for (var x of iterable) {
     try { return leaf(); } finally { }
+  }
+}
+
+function labeled() {
+  eval("");
+  lbl: for (var x of iterable) { return leaf(); }
+}
+
+function insideCatch() {
+  eval("");
+  for (var x of iterable) {
+    try { throw 1; } catch (e) { return leaf(); }
   }
 }
 
@@ -57,6 +69,12 @@ assert.sameValue(closed, 4, "both iterators are closed");
 
 assert.sameValue(insideTry(), "leaf", "insideTry result");
 assert.sameValue(closed, 5, "return of a call from try inside for-of closes the iterator");
+
+assert.sameValue(labeled(), "leaf", "labeled result");
+assert.sameValue(closed, 6, "return of a call from a labeled for-of closes the iterator");
+
+assert.sameValue(insideCatch(), "leaf", "insideCatch result");
+assert.sameValue(closed, 7, "return of a call from a catch block inside for-of closes the iterator");
 
 function count(n, acc) {
   if (n <= 0) return acc;
