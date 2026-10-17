@@ -18,7 +18,9 @@ proportional to the live function literals.
   verdict, the frame keeps the parameter list, `Body`, chunk and the arrow/strict flags. A later [[Call]] clones only the
   frame and the closure environment. The hoisting analysis moved to the frame as well (`LiteralFrame::hoist_analysis`), so
   neither the compiled nor the tree-walker path probes the Body-keyed memo per call.
-- **`call_compiled_function`** is the ordinary-call tail of the general path without its constructs: no NewTarget swap, no
+- **`call_compiled_function`** is the ordinary-call tail of the general path without its constructs (the frame and environment
+  push, tail-call and dispose bookkeeping, and the `fn.arguments` record are shared helpers, `run_activation` and
+  `deferred_arguments_record`, so the two paths cannot drift): no NewTarget swap, no
   derived-`this` TDZ, no async or generator arm, and `dispatch_body`'s verdict match replaced by the shared
   `run_compiled_body`. It runs only when `!calling_as_construct && new_target.is_none() && !constructing_derived`, so
   constructions, tail-call chains inside constructors and `arguments`-reading functions keep the general path,
@@ -39,63 +41,63 @@ No `unsafe` is added; the `DeferredCallArguments` constructor from #1063 keeps i
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
 cachegrind `--cache-sim=no`, whole-process `I refs`. base = `origin/main` `01ace55b` (binary sha256 `4e8618fea9dfa4...`),
-new = base plus this change (`976faa894aba3d...`). JetStream drivers at `--iterations 1`.
+new = base plus this change (`cf0ffba93d3de9...`). JetStream drivers at `--iterations 1`.
 
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
-| fib (micro) | 6,907,891,002 | 5,945,309,121 | -13.93% |
-| delta-blue | 8,115,026,548 | 7,228,378,844 | -10.93% |
-| hash-map | 16,798,932,910 | 15,431,473,135 | -8.14% |
-| array (micro) | 850,369,305 | 782,337,901 | -8.00% |
-| richards | 12,423,758,576 | 11,440,150,893 | -7.92% |
-| bigint-bigdenary | 5,257,105,172 | 4,873,282,267 | -7.30% |
-| proxy-mobx | 690,834,348 | 644,546,384 | -6.70% |
-| Babylon | 3,080,501,956 | 2,908,487,822 | -5.58% |
-| Air | 2,064,530,390 | 1,963,156,955 | -4.91% |
-| lazy-collections | 4,727,886,613 | 4,512,188,827 | -4.56% |
-| raytrace | 15,749,322,884 | 15,063,870,906 | -4.35% |
-| splay | 9,254,269,613 | 8,863,723,361 | -4.22% |
-| ai-astar | 13,102,358,770 | 12,646,422,573 | -3.48% |
-| Box2D | 7,285,234,611 | 7,052,858,361 | -3.19% |
-| earley-boyer | 5,811,182,096 | 5,628,263,219 | -3.15% |
-| opmix (micro) | 54,233,211,514 | 52,562,287,205 | -3.08% |
-| bigint-noble-ed25519 | 7,523,314,082 | 7,301,512,090 | -2.95% |
-| Basic | 3,654,602,784 | 3,558,139,374 | -2.64% |
-| crypto | 5,013,142,889 | 4,883,546,217 | -2.59% |
-| closures (micro) | 6,085,341,941 | 5,950,649,721 | -2.21% |
-| gaussian-blur | 27,245,352,710 | 26,705,240,660 | -1.98% |
-| stanford-crypto-sha256 | 4,570,437,048 | 4,487,532,766 | -1.81% |
-| navier-stokes | 3,867,315,008 | 3,801,916,583 | -1.69% |
-| doxbee-promise | 4,088,926,249 | 4,032,775,292 | -1.37% |
-| string (micro) | 343,182,806 | 341,079,339 | -0.61% |
-| js-tokens | 5,128,575,599 | 5,107,328,897 | -0.41% |
-| object (micro) | 1,466,719,421 | 1,465,065,822 | -0.11% |
-| json-parse-inspector | 9,159,585,824 | 9,160,003,019 | +0.00% |
-| json (micro) | 313,585,440 | 313,983,787 | +0.13% |
-| regex (micro) | 117,168,421 | 117,344,538 | +0.15% |
-| promise_new (micro) | 5,885,240,170 | 5,913,074,154 | +0.47% |
+| fib (micro) | 6,907,891,002 | 5,938,576,794 | -14.03% |
+| delta-blue | 8,115,026,548 | 7,230,708,359 | -10.90% |
+| array (micro) | 850,369,305 | 782,135,660 | -8.02% |
+| hash-map | 16,798,932,910 | 15,478,878,980 | -7.86% |
+| richards | 12,423,758,576 | 11,476,361,812 | -7.63% |
+| bigint-bigdenary | 5,257,105,172 | 4,886,382,481 | -7.05% |
+| proxy-mobx | 690,834,348 | 645,635,362 | -6.54% |
+| Babylon | 3,080,501,956 | 2,916,089,646 | -5.34% |
+| Air | 2,064,530,390 | 1,966,033,831 | -4.77% |
+| lazy-collections | 4,727,886,613 | 4,525,509,355 | -4.28% |
+| splay | 9,254,269,613 | 8,878,679,202 | -4.06% |
+| raytrace | 15,749,322,884 | 15,126,960,025 | -3.95% |
+| ai-astar | 13,102,358,770 | 12,700,651,113 | -3.07% |
+| earley-boyer | 5,811,182,096 | 5,646,044,768 | -2.84% |
+| Basic | 3,654,602,784 | 3,558,002,933 | -2.64% |
+| Box2D | 7,285,234,611 | 7,094,546,266 | -2.62% |
+| bigint-noble-ed25519 | 7,523,314,082 | 7,336,529,059 | -2.48% |
+| closures (micro) | 6,085,341,941 | 5,946,599,287 | -2.28% |
+| opmix (micro) | 54,233,211,514 | 53,064,441,721 | -2.16% |
+| js-tokens | 5,128,575,599 | 5,058,215,697 | -1.37% |
+| crypto | 5,013,142,889 | 4,950,437,233 | -1.25% |
+| doxbee-promise | 4,088,926,249 | 4,042,440,512 | -1.14% |
+| gaussian-blur | 27,245,352,710 | 27,017,269,705 | -0.84% |
+| stanford-crypto-sha256 | 4,570,437,048 | 4,537,645,306 | -0.72% |
+| navier-stokes | 3,867,315,008 | 3,844,591,582 | -0.59% |
+| string (micro) | 343,182,806 | 342,277,683 | -0.26% |
+| object (micro) | 1,466,719,421 | 1,465,667,891 | -0.07% |
+| json-parse-inspector | 9,159,585,824 | 9,162,802,606 | +0.04% |
+| json (micro) | 313,585,440 | 314,100,843 | +0.16% |
+| regex (micro) | 117,168,421 | 117,578,082 | +0.35% |
+| promise_new (micro) | 5,885,240,170 | 5,921,805,533 | +0.62% |
 
 Call counts are `acquire_function_environment` call edges from callgrind: fib 2,692,537, richards 2,024,357, delta-blue 2,266,466.
-Whole-process Ir per fib call: 2,768 on `252429a7` (before #1119), 2,566 on `01ace55b`, 2,208 with this change.
+Whole-process Ir per fib call: 2,768 on `252429a7` (before #1119), 2,566 on `01ace55b`, 2,206 with this change.
 
 Reproducer (the issue's leaf-call script, Ir per iteration = (N=250,000 minus N=50,000) / 200,000):
 
 | shape | base | new | delta |
 |---|---:|---:|---:|
-| sloppy, 1 argument | 2,868 | 2,506 | -362 |
-| strict, 1 argument | 2,847 | 2,485 | -362 |
-| sloppy, 4 arguments | 3,312 | 2,932 | -380 |
-| method call `o.inc(s)` | 3,340 | 2,952 | -388 |
-| captured-variable closure call | 3,110 | 2,747 | -363 |
-| `new P(i)` | 6,108 | 6,051 | -57 |
-| sort comparator (64 elements, per iteration) | 15,814 | 13,905 | -1,909 |
-| reads `arguments` (control, general path) | 9,166 | 9,220 | +54 |
-| call-free loop (control) | 735 | 724 | -11 |
+| sloppy, 1 argument | 2,868 | 2,509 | -359 |
+| strict, 1 argument | 2,847 | 2,488 | -359 |
+| sloppy, 4 arguments | 3,312 | 2,938 | -374 |
+| method call `o.inc(s)` | 3,340 | 2,960 | -380 |
+| captured-variable closure call | 3,110 | 2,751 | -359 |
+| `new P(i)` | 6,108 | 6,040 | -68 |
+| sort comparator (64 elements, per iteration) | 15,814 | 13,890 | -1,924 |
+| reads `arguments` (control, general path) | 9,166 | 9,224 | +58 |
+| call-free loop (control) | 735 | 734 | -1 |
 
 Sloppy minus strict stays at 21 Ir.
 
-Wall (hyperfine, 9 runs, pinned to one CPU, load average 3-5; medians): fib 1.330 s -> 1.117 s (-16.0%), richards
-3.074 s -> 2.800 s (-8.9%), delta-blue 1.919 s -> 1.715 s (-10.6%), hash-map 4.137 s -> 3.808 s (-8.0%).
+Wall (hyperfine, 9 runs, pinned to one CPU; medians): fib 1.322 s -> 1.116 s (-15.6%), richards
+3.077 s -> 2.821 s (-8.3%), delta-blue 1.925 s -> 1.703 s (-11.5%), hash-map 4.117 s -> 3.753 s (-8.8%).
 
 ## Correctness gates
 

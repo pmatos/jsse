@@ -2153,6 +2153,7 @@ impl Interpreter {
     /// declarations are instantiated before the chunk runs, exactly as the
     /// tree-walker does, so the nodes handed back to it find their bindings in
     /// place.
+    #[cfg_attr(not(feature = "perf-counters"), allow(unused_variables))]
     fn run_compiled_body(
         &mut self,
         func_obj_id: u64,
@@ -2173,8 +2174,6 @@ impl Interpreter {
             let (name, seq) = self.perf_body_name(func_obj_id);
             self.perf.enter_ast_body(name, seq, false);
         }
-        #[cfg(not(feature = "perf-counters"))]
-        let _ = func_obj_id;
         let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
             if let Some(analysis) = analysis
                 && let Some(err) =
@@ -5155,11 +5154,10 @@ impl Interpreter {
     /// are interned once per literal and read off its frame, so a call hashes
     /// no names and compares no strings (#898, #1062).
     fn bind_simple_parameters(
-        &mut self,
         frame: &LiteralFrame,
         params: &[Pattern],
         args: &[JsValue],
-        func_env: &EnvRef,
+        env: &mut Environment,
     ) {
         let names = frame.param_atoms(params);
         let binding = |index: usize| Binding {
@@ -5168,7 +5166,6 @@ impl Interpreter {
             initialized: true,
             deletable: false,
         };
-        let mut env = func_env.borrow_mut();
         if names.names_are_fresh() {
             for (index, atom) in names.atoms().iter().enumerate() {
                 env.bindings.push_unique(atom.clone(), binding(index));
@@ -5956,13 +5953,14 @@ impl Interpreter {
                                 self.current_realm_id = caller_realm;
                                 break 'call Completion::Normal(JsValue::object(gen_id));
                             }
-                            if has_simple_params
+                            if frame.compiled_call().is_none()
+                                && has_simple_params
                                 && !uses_arguments
                                 && self.bytecode_enabled
+                                && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
                                 && self
                                     .get_object_cell(o.id)
                                     .is_some_and(|callee| !callee.borrow().is_class_constructor())
-                                && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
                             {
                                 frame.install_compiled_call(|| CompiledCall {
                                     params: params.clone(),
@@ -6024,13 +6022,8 @@ impl Interpreter {
                                     // reference, declaration or direct eval), so no
                                     // binding is created; sloppy frames keep the args
                                     // for the legacy `fn.arguments` accessor.
-                                    // SAFETY: popped right after `dispatch_body`.
-                                    call_frame_arguments = CallFrameArguments::Deferred {
-                                        args: unsafe {
-                                            DeferredCallArguments::new(args, &func_env)
-                                        },
-                                        mapped: is_simple,
-                                    };
+                                    call_frame_arguments =
+                                        Self::deferred_arguments_record(args, &func_env, is_simple);
                                 }
                             }
                             // For arrows with non-simple params and "arguments" parameter,
@@ -6048,7 +6041,12 @@ impl Interpreter {
                             }
                             // Bind parameters (after this so default exprs can access this)
                             let bound = if is_simple {
-                                self.bind_simple_parameters(&frame, &params, args, &func_env);
+                                Self::bind_simple_parameters(
+                                    &frame,
+                                    &params,
+                                    args,
+                                    &mut func_env.borrow_mut(),
+                                );
                                 Ok(())
                             } else {
                                 self.bind_function_parameters(&params, args, &func_env, is_simple)
@@ -6080,25 +6078,20 @@ impl Interpreter {
                                 func_env.clone()
                             };
                             exec_env.borrow_mut().strict = is_strict;
-                            self.call_stack_frames.push(CallFrame {
-                                func_obj_id: o.id,
-                                arguments: call_frame_arguments,
-                                is_eval: false,
-                            });
-                            let frame_depth = self.call_stack_frames.len();
-                            self.call_stack_envs.push(exec_env.clone());
-                            self.in_tail_position = false;
-                            // A fresh function body: its tail positions are
-                            // independent of any try/finally region in the caller.
-                            let saved_tco_suppress = self.tco_suppress_depth;
-                            self.tco_suppress_depth = 0;
-                            let result =
-                                self.dispatch_body(o.id, &body, &frame, bytecode_cache, &exec_env);
-                            self.tco_suppress_depth = saved_tco_suppress;
-                            self.call_stack_envs.pop();
-                            debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
-                            self.call_stack_frames.pop();
-                            let result = self.dispose_resources(&exec_env, result);
+                            let result = self.run_activation(
+                                o.id,
+                                call_frame_arguments,
+                                &exec_env,
+                                |interp| {
+                                    interp.dispatch_body(
+                                        o.id,
+                                        &body,
+                                        &frame,
+                                        bytecode_cache,
+                                        &exec_env,
+                                    )
+                                },
+                            );
                             if was_construct {
                                 self.last_call_this_value = func_env.borrow().get_this();
                             }
@@ -6167,7 +6160,7 @@ impl Interpreter {
     /// construction (so no NewTarget and no derived-constructor `this`). It
     /// does what the general path of `call_function_inner_impl` does for such
     /// a function, without rebuilding the call's invariants from the function
-    /// object. Keep it in step with that path's ordinary-call tail.
+    /// object.
     fn call_compiled_function(
         &mut self,
         func_obj_id: u64,
@@ -6188,50 +6181,83 @@ impl Interpreter {
         if let Some(realm) = function_realm {
             self.current_realm_id = realm;
         }
-        let closure_strict = closure.borrow().strict;
         let func_env =
             self.acquire_function_environment(closure, call.params.len().saturating_add(2));
-        let mut call_frame_arguments = CallFrameArguments::None;
-        if call.is_arrow {
-            func_env.borrow_mut().is_arrow_scope = true;
-        } else {
-            let effective_this =
-                self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
-            func_env
-                .borrow_mut()
-                .bind_this_for_call(effective_this, JsValue::UNDEFINED);
-            if !call.is_strict && !closure_strict {
-                // SAFETY: popped right after the body returns.
-                call_frame_arguments = CallFrameArguments::Deferred {
-                    args: unsafe { DeferredCallArguments::new(args, &func_env) },
-                    mapped: true,
-                };
+        let sloppy_record = {
+            let mut env = func_env.borrow_mut();
+            let closure_strict = env.strict;
+            if call.is_arrow {
+                env.is_arrow_scope = true;
+            } else {
+                let effective_this =
+                    self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
+                env.bind_this_for_call(effective_this, JsValue::UNDEFINED);
             }
-        }
-        self.bind_simple_parameters(frame, &call.params, args, &func_env);
-        func_env.borrow_mut().strict = call.is_strict;
+            Self::bind_simple_parameters(frame, &call.params, args, &mut env);
+            env.strict = call.is_strict;
+            !call.is_arrow && !call.is_strict && !closure_strict
+        };
+        let call_frame_arguments = if sloppy_record {
+            Self::deferred_arguments_record(args, &func_env, true)
+        } else {
+            CallFrameArguments::None
+        };
+        let result = self.run_activation(func_obj_id, call_frame_arguments, &func_env, |interp| {
+            interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
+        });
+        self.current_realm_id = caller_realm;
+        self.recycle_environment(func_env);
+        self.finish_user_call(result)
+    }
+
+    /// Runs `run` as the activation of `func_obj_id` in `exec_env`: the frame
+    /// and environment are visible to `fn.arguments`/`fn.caller` and the
+    /// collector for its duration, tail positions are independent of the
+    /// caller's try/finally regions, and resources declared in the body are
+    /// disposed on exit.
+    #[inline(always)]
+    fn run_activation(
+        &mut self,
+        func_obj_id: u64,
+        arguments: CallFrameArguments,
+        exec_env: &EnvRef,
+        run: impl FnOnce(&mut Self) -> Completion,
+    ) -> Completion {
         self.call_stack_frames.push(CallFrame {
             func_obj_id,
-            arguments: call_frame_arguments,
+            arguments,
             is_eval: false,
         });
         let frame_depth = self.call_stack_frames.len();
-        self.call_stack_envs.push(func_env.clone());
+        self.call_stack_envs.push(exec_env.clone());
         self.in_tail_position = false;
         let saved_tco_suppress = std::mem::take(&mut self.tco_suppress_depth);
-        let result = self.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env);
+        let result = run(self);
         self.tco_suppress_depth = saved_tco_suppress;
         self.call_stack_envs.pop();
         debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
         self.call_stack_frames.pop();
-        let result = if func_env.borrow().dispose_stack.is_some() {
-            self.dispose_resources(&func_env, result)
+        if exec_env.borrow().dispose_stack.is_some() {
+            self.dispose_resources(exec_env, result)
         } else {
             result
-        };
-        self.current_realm_id = caller_realm;
-        self.recycle_environment(func_env);
-        self.finish_user_call(result)
+        }
+    }
+
+    /// The `fn.arguments` record of a sloppy call whose body never mentions
+    /// `arguments`: it borrows the call's argument slice instead of copying it.
+    #[inline(always)]
+    fn deferred_arguments_record(
+        args: &[JsValue],
+        func_env: &EnvRef,
+        mapped: bool,
+    ) -> CallFrameArguments {
+        // SAFETY: both callers hand the record to `run_activation`, which pops
+        // it before returning, while `args` and `func_env` are still held.
+        CallFrameArguments::Deferred {
+            args: unsafe { DeferredCallArguments::new(args, func_env) },
+            mapped,
+        }
     }
 
     /// Names a non-callable value for a "... is not a function" message.

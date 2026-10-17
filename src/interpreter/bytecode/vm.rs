@@ -221,13 +221,6 @@ fn local_target<'a>(frame_env: &'a EnvRef, scopes: &'a [EnvRef], slot: u16) -> (
     }
 }
 
-#[inline(always)]
-fn initialized_this(env: &EnvRef) -> Option<JsValue> {
-    let scope = env.borrow();
-    let binding = scope.this_binding.as_ref()?;
-    binding.initialized.then(|| binding.value.clone())
-}
-
 /// The frame binding a verified slot hint names, when it is initialized and
 /// the scope is a plain declarative one; `f` sees its value in place.
 #[inline(always)]
@@ -298,8 +291,9 @@ fn carry_script_completion(
 /// Drops operand-stack values (unrooting them, innermost first) until
 /// `height` remain.
 fn truncate_stack(interp: &mut Interpreter, stack: &mut Vec<JsValue>, height: usize) {
-    while stack.len() > height {
-        pop_value(interp, stack, "stack underflow truncating operands");
+    if stack.len() > height {
+        unroot_stack_values(interp, &stack[height..]);
+        stack.truncate(height);
     }
 }
 
@@ -380,6 +374,15 @@ fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
     }
 }
 
+/// Unroots the operands in `values` (bottom first, as they were pushed),
+/// innermost first. Only object operands hold a root.
+#[inline(always)]
+fn unroot_stack_values(interp: &mut Interpreter, values: &[JsValue]) {
+    interp
+        .gc_bytecode_roots
+        .pop_expected_batch(values.iter().rev().filter_map(JsValue::as_object_id));
+}
+
 #[inline(always)]
 fn push_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, value: JsValue) {
     root_stack_value(interp, &value);
@@ -451,9 +454,7 @@ fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize
         .len()
         .checked_sub(count)
         .expect("stack underflow releasing call operands");
-    interp
-        .gc_bytecode_roots
-        .pop_expected_batch(stack[base..].iter().rev().filter_map(JsValue::as_object_id));
+    unroot_stack_values(interp, &stack[base..]);
     stack.truncate(base);
 }
 
@@ -1281,7 +1282,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 }
                 Op::LoadThis => {
                     // Block environments never carry a `this` binding.
-                    if let Some(value) = initialized_this(frame_env) {
+                    if let Some(value) = frame_env.borrow().bound_this() {
                         push_value(interp, stack, value);
                     } else {
                         match interp.resolve_this_binding(cur_env!()) {
