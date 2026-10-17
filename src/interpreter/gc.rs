@@ -1526,6 +1526,18 @@ impl Interpreter {
                     }
                 }
             }
+            IteratorState::BytecodeGenerator(generator) => {
+                Self::collect_env_roots(&generator.code.func_env, worklist, seen_envs);
+                if let Some(frame) = &generator.frame {
+                    for value in &frame.stack {
+                        Self::collect_value_roots(value, worklist);
+                    }
+                    for env in frame.environments() {
+                        Self::collect_env_roots(env, worklist, seen_envs);
+                    }
+                    worklist.extend(frame.with_objects());
+                }
+            }
             IteratorState::StateMachineGenerator {
                 func_env,
                 delegated_iterator,

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::interpreter::bytecode::vm::Resume;
 use crate::interpreter::gc::RootedSlots;
 
 type ZipState = Rc<
@@ -3607,17 +3608,9 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // Check which variant we have
-                if let Some(this_id) = this.as_object_id()
-                    && let Some(obj_rc) = interp.get_object_cell(this_id)
+                if let Some(completion) = interp.resume_generator(this, Resume::Next(value.clone()))
                 {
-                    let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state(),
-                        Some(IteratorState::StateMachineGenerator { .. })
-                    );
-                    if is_state_machine {
-                        return interp.generator_next_state_machine(this, value);
-                    }
+                    return completion;
                 }
                 interp.generator_next(this, value)
             },
@@ -3636,17 +3629,10 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // Check which variant we have
-                if let Some(this_id) = this.as_object_id()
-                    && let Some(obj_rc) = interp.get_object_cell(this_id)
+                if let Some(completion) =
+                    interp.resume_generator(this, Resume::Return(value.clone()))
                 {
-                    let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state(),
-                        Some(IteratorState::StateMachineGenerator { .. })
-                    );
-                    if is_state_machine {
-                        return interp.generator_return_state_machine(this, value);
-                    }
+                    return completion;
                 }
                 interp.generator_return(this, value)
             },
@@ -3664,17 +3650,10 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let exception = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // Check which variant we have
-                if let Some(this_id) = this.as_object_id()
-                    && let Some(obj_rc) = interp.get_object_cell(this_id)
+                if let Some(completion) =
+                    interp.resume_generator(this, Resume::Throw(exception.clone()))
                 {
-                    let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state(),
-                        Some(IteratorState::StateMachineGenerator { .. })
-                    );
-                    if is_state_machine {
-                        return interp.generator_throw_state_machine(this, exception);
-                    }
+                    return completion;
                 }
                 interp.generator_throw(this, exception)
             },

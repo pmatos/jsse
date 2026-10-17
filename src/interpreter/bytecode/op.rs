@@ -226,7 +226,23 @@ pub(crate) enum Op {
     /// `switch` case test: `[..., discriminant, selector]` → `[..., discriminant]`,
     /// jumping when the selector `===` the discriminant. Operand: i16 offset.
     CaseStrictEq = 102,
+    /// Generator `yield`: `[..., value]` → suspends the chunk, handing `value`
+    /// to the caller of `next`. A `next(v)` resumption continues with
+    /// `[..., v]` (`[...]` when the discard flag is set) after jumping over
+    /// the stub that follows this op; a `return(v)` resumption cuts the
+    /// operand stack back to the persistent height and continues at the stub
+    /// with `[..., v]`; a `throw(e)` resumption raises `e` at this op.
+    /// Operands: persistent stack height (u16), discard flag (u8), offset
+    /// (i16, last so `patch_jump` applies unchanged) from the end of the
+    /// operands to the code after the stub.
+    Yield = 103,
 }
+
+/// Where `Op::Yield`'s operands sit counted back from the end of the op, which
+/// is where a suspended generator's saved position points.
+pub(crate) const YIELD_PERSISTENT_BACK: usize = 5;
+pub(crate) const YIELD_DISCARD_BACK: usize = 3;
+pub(crate) const YIELD_SKIP_BACK: usize = 2;
 
 impl Op {
     pub(crate) fn from_u8(b: u8) -> Option<Op> {
@@ -334,6 +350,7 @@ impl Op {
             100 => Some(Op::LoadMethodPrivate),
             101 => Some(Op::PrivateIn),
             102 => Some(Op::CaseStrictEq),
+            103 => Some(Op::Yield),
             _ => None,
         }
     }

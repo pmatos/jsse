@@ -33,6 +33,7 @@ impl Drop for EvalDepthGuard {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(super) enum IdentifierRef {
     WithObject(u64),
     Unresolvable,
@@ -1903,6 +1904,86 @@ impl Interpreter {
         }
     }
 
+    /// The initial state of a generator whose body runs as a state machine
+    /// (the lowering of `generator_transform.rs`): the temporaries and
+    /// hoisted locals it needs are declared in `exec_env`.
+    fn state_machine_generator_state(
+        &mut self,
+        func_obj_id: u64,
+        body: &Body,
+        params: &[Pattern],
+        func_env: &EnvRef,
+        exec_env: EnvRef,
+        is_strict: bool,
+    ) -> IteratorState {
+        let state_machine =
+            self.state_machine_for(StateMachineKind::Generator, body, params, func_obj_id);
+        for temp_var in &state_machine.temp_vars {
+            exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
+        }
+        for lv in &state_machine.local_vars {
+            let bk = match lv.kind {
+                crate::ast::VarKind::Let
+                | crate::ast::VarKind::Const
+                | crate::ast::VarKind::Using
+                | crate::ast::VarKind::AwaitUsing => {
+                    // Block-scoped bindings must not be hoisted to function level
+                    if lv.scope_depth > 0 {
+                        continue;
+                    }
+                    BindingKind::Let
+                }
+                _ => BindingKind::Var,
+            };
+            if !exec_env.borrow().bindings.contains_key(&lv.name)
+                && !func_env.borrow().bindings.contains_key(&lv.name)
+            {
+                exec_env.borrow_mut().declare(&lv.name, bk);
+            }
+        }
+        self.hoist_annexb_at_state_machine_entry(body, &exec_env);
+        IteratorState::StateMachineGenerator {
+            state_machine,
+            func_env: exec_env,
+            is_strict,
+            execution_state: StateMachineExecutionState::SuspendedStart,
+            _sent_value: JsValue::UNDEFINED,
+            try_stack: vec![],
+            pending_binding: None,
+            delegated_iterator: None,
+            pending_exception: None,
+            pending_return: None,
+        }
+    }
+
+    /// What the call path puts in a function's frame before its body runs, in
+    /// the order the compiler's local slots assume (see `FrameShape`): whether
+    /// `arguments` is declared, and the simple parameter names. Functions
+    /// with parameter patterns have no predictable layout.
+    pub(crate) fn function_frame_shape(&self, func_obj_id: u64) -> (bool, Vec<String>) {
+        self.get_object(func_obj_id)
+            .and_then(|o| match o.borrow().callable.as_deref() {
+                Some(JsFunction::User {
+                    params,
+                    is_arrow,
+                    uses_arguments,
+                    has_simple_params,
+                    ..
+                }) if *has_simple_params => Some((
+                    !*is_arrow && *uses_arguments,
+                    params
+                        .iter()
+                        .filter_map(|p| match p {
+                            Pattern::Identifier(name) => Some(name.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<String>>(),
+                )),
+                _ => None,
+            })
+            .unwrap_or((false, Vec::new()))
+    }
+
     /// The bytecode compile verdict for `body`, recorded on the function
     /// object. It depends on the Body alone, so every closure of one function
     /// literal shares the memoised verdict (#900).
@@ -1911,8 +1992,33 @@ impl Interpreter {
         func_obj_id: u64,
         body: &Body,
     ) -> crate::interpreter::bytecode::BytecodeCacheState {
+        let state = self.memoised_bytecode_verdict(
+            func_obj_id,
+            body,
+            crate::interpreter::bytecode::compiler::compile_function_body,
+        );
+        if let Some(o) = self.get_object(func_obj_id) {
+            o.borrow_mut().set_bytecode_cache(&state);
+        }
+        state
+    }
+
+    /// The memoised verdict of compiling `body` with `compile` (a plain
+    /// function body or a generator body), compiling it on first use.
+    pub(crate) fn memoised_bytecode_verdict(
+        &mut self,
+        func_obj_id: u64,
+        body: &Body,
+        compile: fn(
+            &[Statement],
+            &crate::interpreter::bytecode::compiler::FrameShape<'_>,
+        ) -> Result<
+            crate::interpreter::bytecode::chunk::Chunk,
+            crate::interpreter::bytecode::compiler::CompileError,
+        >,
+    ) -> crate::interpreter::bytecode::BytecodeCacheState {
         use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
-        let state = match self.bytecode_memo.get(body) {
+        match self.bytecode_memo.get(body) {
             Some(state) => {
                 // BAIL counts each literal once; the BODY row of every closure
                 // still names the reason.
@@ -1926,33 +2032,12 @@ impl Interpreter {
                 state
             }
             None => {
-                let shape = self.get_object(func_obj_id).and_then(|o| {
-                    match o.borrow().callable.as_deref() {
-                        Some(JsFunction::User {
-                            params,
-                            is_arrow,
-                            uses_arguments,
-                            has_simple_params,
-                            ..
-                        }) if *has_simple_params => Some((
-                            !*is_arrow && *uses_arguments,
-                            params
-                                .iter()
-                                .filter_map(|p| match p {
-                                    Pattern::Identifier(name) => Some(name.clone()),
-                                    _ => None,
-                                })
-                                .collect::<Vec<String>>(),
-                        )),
-                        _ => None,
-                    }
-                });
-                let (arguments_slot, simple_params) = shape.unwrap_or((false, Vec::new()));
+                let (arguments_slot, simple_params) = self.function_frame_shape(func_obj_id);
                 let frame_shape = compiler::FrameShape {
                     arguments_slot,
                     simple_params: &simple_params,
                 };
-                let state = match compiler::compile_function_body(body.as_slice(), &frame_shape) {
+                let state = match compile(body.as_slice(), &frame_shape) {
                     Ok(c) => {
                         #[cfg(feature = "perf-counters")]
                         {
@@ -1974,11 +2059,7 @@ impl Interpreter {
                 self.bytecode_memo.insert(body, state.clone());
                 state
             }
-        };
-        if let Some(o) = self.get_object(func_obj_id) {
-            o.borrow_mut().set_bytecode_cache(&state);
         }
-        state
     }
 
     /// The `typeof` result string for an evaluated value (HTMLDDA aware).
@@ -2043,8 +2124,7 @@ impl Interpreter {
                 // Function and lexical declarations are instantiated before
                 // the chunk runs, exactly as the tree-walker does, so the
                 // nodes handed back to it find their bindings in place.
-                let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
-                    .then(|| self.hoist_cache.analysis_for(body));
+                let analysis = self.chunk_instantiation_analysis(&chunk, body);
                 #[cfg(feature = "perf-counters")]
                 let has_fallback = !chunk.ast.is_empty();
                 #[cfg(feature = "perf-counters")]
@@ -2053,15 +2133,11 @@ impl Interpreter {
                     self.perf.enter_ast_body(name, seq, false);
                 }
                 let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
-                    if let Some(analysis) = &analysis {
-                        vm::declare_var_prologue(&chunk, exec_env);
-                        if let Some(err) = interp.instantiate_body_declarations(
-                            body.as_slice(),
-                            exec_env,
-                            Some(analysis),
-                        ) {
-                            return err;
-                        }
+                    if let Some(analysis) = &analysis
+                        && let Some(err) =
+                            interp.instantiate_chunk_declarations(&chunk, body, exec_env, analysis)
+                    {
+                        return err;
                     }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });
@@ -5786,50 +5862,21 @@ impl Interpreter {
                                     func_env.clone()
                                 };
 
-                                let state_machine = self.state_machine_for(
-                                    StateMachineKind::Generator,
-                                    &body,
-                                    &params,
-                                    o.id,
-                                );
-                                for temp_var in &state_machine.temp_vars {
-                                    exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
-                                }
-                                for lv in &state_machine.local_vars {
-                                    let bk = match lv.kind {
-                                        crate::ast::VarKind::Let
-                                        | crate::ast::VarKind::Const
-                                        | crate::ast::VarKind::Using
-                                        | crate::ast::VarKind::AwaitUsing => {
-                                            // Block-scoped bindings must not be hoisted to function level
-                                            if lv.scope_depth > 0 {
-                                                continue;
-                                            }
-                                            BindingKind::Let
-                                        }
-                                        _ => BindingKind::Var,
-                                    };
-                                    if !exec_env.borrow().bindings.contains_key(&lv.name)
-                                        && !func_env.borrow().bindings.contains_key(&lv.name)
-                                    {
-                                        exec_env.borrow_mut().declare(&lv.name, bk);
+                                let generator_state = match self
+                                    .bytecode_generator_state(o.id, &body, &frame, &exec_env)
+                                {
+                                    Ok(Some(state)) => state,
+                                    Err(error) => {
+                                        self.current_realm_id = caller_realm;
+                                        break 'call Completion::Throw(error);
                                     }
-                                }
-                                self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
+                                    Ok(None) => self.state_machine_generator_state(
+                                        o.id, &body, &params, &func_env, exec_env, is_strict,
+                                    ),
+                                };
                                 self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .set_iterator_state(IteratorState::StateMachineGenerator {
-                                        state_machine,
-                                        func_env: exec_env,
-                                        is_strict,
-                                        execution_state: StateMachineExecutionState::SuspendedStart,
-                                        _sent_value: JsValue::UNDEFINED,
-                                        try_stack: vec![],
-                                        pending_binding: None,
-                                        delegated_iterator: None,
-                                        pending_exception: None,
-                                        pending_return: None,
-                                    });
+                                    .set_iterator_state(generator_state);
                                 let gen_id = gen_obj_id;
                                 if let Some(obj_rc) = self.get_object_cell(gen_id) {
                                     obj_rc

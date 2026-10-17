@@ -4,8 +4,14 @@
 //! `AsyncGenerator` prototype methods wired up in `builtins/iterators.rs`.
 
 use super::*;
+use crate::interpreter::bytecode::chunk::Chunk;
+use crate::interpreter::bytecode::vm::{self, GeneratorFrame, Resume};
 use crate::interpreter::dispose::GeneratorReentry;
 use crate::interpreter::generator_transform::LoopControlTarget;
+use crate::interpreter::literal_frame::LiteralFrame;
+use crate::interpreter::types::{
+    BytecodeGenerator, BytecodeGeneratorCode, BytecodeGeneratorStatus,
+};
 
 /// Which `yield*` protocol step produced the inner result being awaited.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -81,7 +87,48 @@ enum RouteExceptionOutcome {
     },
 }
 
+/// How the body of a generator object runs.
+#[derive(Clone, Copy)]
+enum GeneratorImpl {
+    StateMachine,
+    Bytecode,
+}
+
 impl Interpreter {
+    /// How `this` runs, or `None` when it is not a sync generator whose body
+    /// the state machine or a bytecode chunk drives.
+    fn generator_impl(&self, this: &JsValue) -> Option<GeneratorImpl> {
+        let cell = self.get_object_cell(this.as_object_id()?)?;
+        match cell.borrow().iterator_state() {
+            Some(IteratorState::StateMachineGenerator { .. }) => Some(GeneratorImpl::StateMachine),
+            Some(IteratorState::BytecodeGenerator(_)) => Some(GeneratorImpl::Bytecode),
+            _ => None,
+        }
+    }
+
+    /// `Generator.prototype.next`/`return`/`throw` for a generator object
+    /// driven by either implementation, or `None` when `this` is neither.
+    pub(crate) fn resume_generator(
+        &mut self,
+        this: &JsValue,
+        resume: Resume,
+    ) -> Option<Completion> {
+        Some(match (self.generator_impl(this)?, resume) {
+            (GeneratorImpl::Bytecode, resume) => {
+                self.bytecode_generator_resume(this, resume, false)
+            }
+            (GeneratorImpl::StateMachine, Resume::Next(value)) => {
+                self.generator_next_state_machine(this, value)
+            }
+            (GeneratorImpl::StateMachine, Resume::Return(value)) => {
+                self.generator_return_state_machine(this, value)
+            }
+            (GeneratorImpl::StateMachine, Resume::Throw(error)) => {
+                self.generator_throw_state_machine(this, error)
+            }
+        })
+    }
+
     /// This generator is finished and nothing will resume it: tear it down.
     ///
     /// Drops every per-generator side table the drivers root for `gen_id`
@@ -636,6 +683,214 @@ impl Interpreter {
         }
     }
 
+    /// The compiled body of a sync generator function, or `None` when its
+    /// body keeps the state machine (`compile_generator_body` found a construct
+    /// a suspending chunk cannot host). The verdict depends on the Body alone,
+    /// so every closure of one function literal shares it.
+    fn generator_chunk(&mut self, func_obj_id: u64, body: &Body) -> Option<Rc<Chunk>> {
+        use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
+        match self.memoised_bytecode_verdict(func_obj_id, body, compiler::compile_generator_body) {
+            BytecodeCacheState::Compiled(chunk) => Some(chunk),
+            BytecodeCacheState::Ineligible(_) | BytecodeCacheState::Untried => None,
+        }
+    }
+
+    /// The state of a generator object for `body` when it can run as a
+    /// bytecode chunk: the body's declarations are instantiated into
+    /// `exec_env` now (FunctionDeclarationInstantiation), the body itself
+    /// starts at the first `next()`. `Ok(None)` means the state machine
+    /// must be used.
+    pub(super) fn bytecode_generator_state(
+        &mut self,
+        func_obj_id: u64,
+        body: &Body,
+        frame: &Rc<LiteralFrame>,
+        exec_env: &EnvRef,
+    ) -> Result<Option<IteratorState>, JsValue> {
+        if !self.bytecode_enabled {
+            return Ok(None);
+        }
+        let Some(chunk) = self.generator_chunk(func_obj_id, body) else {
+            return Ok(None);
+        };
+        match self.chunk_instantiation_analysis(&chunk, body) {
+            Some(analysis) => {
+                let failed = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
+                    interp.instantiate_chunk_declarations(&chunk, body, exec_env, &analysis)
+                });
+                match failed {
+                    Some(Completion::Throw(error)) => return Err(error),
+                    Some(other) => {
+                        unreachable!("function declaration instantiation completed with {other:?}")
+                    }
+                    None => {}
+                }
+            }
+            None => vm::declare_chunk_prologue(&chunk, exec_env),
+        }
+        Ok(Some(IteratorState::BytecodeGenerator(Box::new(
+            BytecodeGenerator {
+                code: Rc::new(BytecodeGeneratorCode {
+                    chunk,
+                    body: body.clone(),
+                    frame: Rc::clone(frame),
+                    func_env: exec_env.clone(),
+                    #[cfg(feature = "perf-counters")]
+                    perf_key: self.perf_body_name(func_obj_id),
+                }),
+                status: BytecodeGeneratorStatus::SuspendedStart,
+                frame: None,
+            },
+        ))))
+    }
+
+    /// `Generator.prototype.next`/`return`/`throw` (sec-generatorresume,
+    /// sec-generatorresumeabrupt) for a generator whose body is a bytecode
+    /// chunk. `raw` asks for the `(value, done)` pair parked in
+    /// `raw_iter_step` rather than a result object (see
+    /// [`Self::generator_step_value`]).
+    pub(crate) fn bytecode_generator_resume(
+        &mut self,
+        this: &JsValue,
+        resume: Resume,
+        raw: bool,
+    ) -> Completion {
+        enum Plan {
+            Reject,
+            Finished(Completion),
+            Done(JsValue),
+            Run {
+                code: Rc<BytecodeGeneratorCode>,
+                frame: Box<GeneratorFrame>,
+                resume: Option<Resume>,
+                realm: Option<usize>,
+            },
+        }
+        let cell = this.as_object_id().and_then(|id| self.get_object(id));
+        let Some(cell) = cell else {
+            return Completion::Throw(self.create_type_error("not a generator object"));
+        };
+        let plan = {
+            let mut obj = cell.borrow_mut();
+            let realm = obj.generator_realm_id();
+            let Some(IteratorState::BytecodeGenerator(generator)) = obj.iterator_state_mut() else {
+                drop(obj);
+                return Completion::Throw(self.create_type_error("not a generator object"));
+            };
+            let status = generator.status;
+            match (status, resume) {
+                (BytecodeGeneratorStatus::Executing, _) => Plan::Reject,
+                (BytecodeGeneratorStatus::Completed, Resume::Next(_)) => {
+                    Plan::Done(JsValue::UNDEFINED)
+                }
+                (BytecodeGeneratorStatus::Completed, Resume::Return(value)) => Plan::Done(value),
+                (BytecodeGeneratorStatus::Completed, Resume::Throw(error)) => {
+                    Plan::Finished(Completion::Throw(error))
+                }
+                (BytecodeGeneratorStatus::SuspendedStart, Resume::Return(value)) => {
+                    generator.status = BytecodeGeneratorStatus::Completed;
+                    Plan::Done(value)
+                }
+                (BytecodeGeneratorStatus::SuspendedStart, Resume::Throw(error)) => {
+                    generator.status = BytecodeGeneratorStatus::Completed;
+                    Plan::Finished(Completion::Throw(error))
+                }
+                (status, resume) => {
+                    generator.status = BytecodeGeneratorStatus::Executing;
+                    let frame = generator.frame.take().unwrap_or_else(|| {
+                        Box::new(GeneratorFrame::for_chunk(self, &generator.code.chunk))
+                    });
+                    Plan::Run {
+                        code: Rc::clone(&generator.code),
+                        frame,
+                        // The first `next(v)` has no `yield` to deliver `v` to.
+                        resume: (status == BytecodeGeneratorStatus::SuspendedYield)
+                            .then_some(resume),
+                        realm,
+                    }
+                }
+            }
+        };
+        let (code, mut frame, resume, realm) = match plan {
+            Plan::Reject => {
+                return Completion::Throw(self.create_type_error("Generator is already executing"));
+            }
+            Plan::Finished(completion) => return completion,
+            Plan::Done(value) => return self.generator_step_result(raw, value, true),
+            Plan::Run {
+                code,
+                frame,
+                resume,
+                realm,
+            } => (code, frame, resume, realm),
+        };
+        let caller_realm = self.current_realm_id;
+        if let Some(realm) = realm {
+            self.current_realm_id = realm;
+        }
+        self.call_stack_envs.push(code.func_env.clone());
+        // Resumptions are executions of the body, not invocations (see
+        // `exec_state_machine_body`); tree-walker hand-offs inside are
+        // credited to the function that owns the chunk.
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_non_function += 1;
+            if !code.chunk.ast.is_empty() {
+                let (name, id) = code.perf_key.clone();
+                self.perf.enter_ast_body(name, id, false);
+            }
+        }
+        let result = self.with_ic_body_cached(&code.body, code.frame.ic_handle(), |interp| {
+            vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
+        });
+        #[cfg(feature = "perf-counters")]
+        if !code.chunk.ast.is_empty() {
+            let exclusive = self.perf.leave_ast_body();
+            self.perf.ast_units_in_fallbacks += exclusive;
+        }
+        self.call_stack_envs.pop();
+        self.current_realm_id = caller_realm;
+        let finish = |frame: Option<Box<GeneratorFrame>>| {
+            if let Some(IteratorState::BytecodeGenerator(generator)) =
+                cell.borrow_mut().iterator_state_mut()
+            {
+                generator.status = if frame.is_some() {
+                    BytecodeGeneratorStatus::SuspendedYield
+                } else {
+                    BytecodeGeneratorStatus::Completed
+                };
+                generator.frame = frame;
+            } else {
+                debug_assert!(false, "resumed bytecode generator lost its state");
+            }
+        };
+        match result {
+            Completion::Yield(value) => {
+                finish(Some(frame));
+                self.generator_step_result(raw, value, false)
+            }
+            Completion::Return(value) => {
+                finish(None);
+                frame.release(self);
+                self.generator_step_result(raw, value, true)
+            }
+            Completion::Normal(_) | Completion::Empty => {
+                finish(None);
+                frame.release(self);
+                self.generator_step_result(raw, JsValue::UNDEFINED, true)
+            }
+            other => {
+                finish(None);
+                frame.release(self);
+                debug_assert!(
+                    matches!(other, Completion::Throw(_) | Completion::Exit(_)),
+                    "a generator body completed with {other:?}"
+                );
+                other
+            }
+        }
+    }
+
     pub(crate) fn generator_next_state_machine(
         &mut self,
         this: &JsValue,
@@ -683,13 +938,7 @@ impl Interpreter {
         iterator: &JsValue,
         read_value: bool,
     ) -> Option<Result<Option<JsValue>, JsValue>> {
-        let cell = self.get_object_cell(iterator.as_object_id()?)?;
-        if !matches!(
-            cell.borrow().iterator_state(),
-            Some(IteratorState::StateMachineGenerator { .. })
-        ) {
-            return None;
-        }
+        let implementation = self.generator_impl(iterator)?;
         self.raw_iter_step = None;
         // `%GeneratorPrototype%.next` is a native [[Call]]: the body it
         // resumes sees no NewTarget, whatever constructor is running here.
@@ -698,8 +947,13 @@ impl Interpreter {
         let saved_new_target = self.new_target.take();
         // The native `next` call this replaces counted one call level; keep
         // that so recursion through generators stays bounded.
-        let completion = self.with_call_depth(|interp| {
-            interp.generator_next_state_machine_with(iterator, JsValue::UNDEFINED, true)
+        let completion = self.with_call_depth(|interp| match implementation {
+            GeneratorImpl::Bytecode => {
+                interp.bytecode_generator_resume(iterator, Resume::Next(JsValue::UNDEFINED), true)
+            }
+            GeneratorImpl::StateMachine => {
+                interp.generator_next_state_machine_with(iterator, JsValue::UNDEFINED, true)
+            }
         });
         self.new_target = saved_new_target;
         Some(match completion {

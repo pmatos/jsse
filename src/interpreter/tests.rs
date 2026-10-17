@@ -6153,6 +6153,7 @@ mod generator_retirement_tests {
             r#"
             globalThis.gen = (function* () {
               { let a = 1; yield a; throw new Error("boom"); }
+              yield* [];
             })();
             gen.next();
             try { gen.next(); } catch (e) { globalThis.err = e.message; }
@@ -6169,6 +6170,45 @@ mod generator_retirement_tests {
             })
         ));
         assert_retired(&interp, gen_id);
+    }
+
+    fn assert_completed_bytecode_generator(interp: &Interpreter, name: &str) {
+        let gen_id = global_object_id(interp, name);
+        let generator = interp.get_object(gen_id).unwrap();
+        match generator.borrow().iterator_state() {
+            Some(IteratorState::BytecodeGenerator(state)) => {
+                assert_eq!(state.status, BytecodeGeneratorStatus::Completed);
+                assert!(state.frame.is_none(), "{name} still holds its frame");
+            }
+            other => panic!("{name} is not a bytecode generator: {other:?}"),
+        }
+        assert_retired(interp, gen_id);
+    }
+
+    #[test]
+    fn completed_bytecode_generator_releases_its_frame() {
+        let interp = run_script(
+            r#"
+            globalThis.thrown = (function* () {
+              { let a = {}; yield a; throw new Error("boom"); }
+            })();
+            thrown.next();
+            try { thrown.next(); } catch (e) { globalThis.err = e.message; }
+            globalThis.returned = (function* () {
+              try { yield [1]; } finally { globalThis.ran = "yes"; }
+            })();
+            returned.next();
+            returned.return(5);
+            globalThis.drained = (function* () { yield 1; })();
+            drained.next();
+            drained.next();
+            "#,
+        );
+        assert_eq!(global_string(&interp, "err"), "boom");
+        assert_eq!(global_string(&interp, "ran"), "yes");
+        for name in ["thrown", "returned", "drained"] {
+            assert_completed_bytecode_generator(&interp, name);
+        }
     }
 
     #[test]
