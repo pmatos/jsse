@@ -5194,8 +5194,9 @@ pub(crate) enum ReactionTarget {
 pub(crate) enum AsyncGenStep {
     /// An `await` in the body (or a `for await` head): resume the state machine.
     Await,
-    /// A `yield` of a pending promise: complete the request with
-    /// `{ value, done: false }`, or reject it.
+    /// A `yield`'s Await of its operand: fulfilled completes the request with
+    /// `{ value, done: false }`; rejected resumes the state machine with that
+    /// exception thrown at the `yield`, like [`AsyncGenStep::Await`].
     Yield,
     /// AsyncGeneratorAwaitReturn: complete the request with `{ value, done: true }`,
     /// or reject it.
