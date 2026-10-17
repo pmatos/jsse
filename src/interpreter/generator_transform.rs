@@ -1168,7 +1168,7 @@ fn hoist_class_suspensions(
         .filter_map(ClassElement::key_mut)
     {
         if let PropertyKey::Computed(e) = key
-            && (expr_has_suspension(e, is_async) || !matches!(**e, Expression::Literal(_)))
+            && !matches!(**e, Expression::Literal(_))
         {
             let temp_var = ctx.new_temp_var("class_key");
             let expr = in_class_scope(e, class_name, is_async);
@@ -1180,8 +1180,8 @@ fn hoist_class_suspensions(
 }
 
 /// Clone of `class_expr` with its heritage and the computed keys up to the last
-/// suspending one captured in temps via `hoist_class_suspensions`, so the result is safe to re-embed in a
-/// non-suspending position (a plain `emit_statement`/`emit_expression_with_binding`
+/// suspending one captured in temps via `hoist_class_suspensions`, so the
+/// result is safe to re-embed in a non-suspending position (a plain `emit_statement`/`emit_expression_with_binding`
 /// call). Shared by the two call sites that need a suspension-free class to
 /// hand to the tree-walker's own (already-correct) evaluation: a bare class
 /// expression and an own-initializer class declarator.
