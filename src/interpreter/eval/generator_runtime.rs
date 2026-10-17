@@ -89,7 +89,7 @@ enum RouteExceptionOutcome {
 
 /// How the body of a generator object runs.
 #[derive(Clone, Copy)]
-pub(crate) enum GeneratorImpl {
+enum GeneratorImpl {
     StateMachine,
     Bytecode,
 }
@@ -97,13 +97,36 @@ pub(crate) enum GeneratorImpl {
 impl Interpreter {
     /// How `this` runs, or `None` when it is not a sync generator whose body
     /// the state machine or a bytecode chunk drives.
-    pub(crate) fn generator_impl(&self, this: &JsValue) -> Option<GeneratorImpl> {
+    fn generator_impl(&self, this: &JsValue) -> Option<GeneratorImpl> {
         let cell = self.get_object_cell(this.as_object_id()?)?;
         match cell.borrow().iterator_state() {
             Some(IteratorState::StateMachineGenerator { .. }) => Some(GeneratorImpl::StateMachine),
             Some(IteratorState::BytecodeGenerator(_)) => Some(GeneratorImpl::Bytecode),
             _ => None,
         }
+    }
+
+    /// `Generator.prototype.next`/`return`/`throw` for a generator object
+    /// driven by either implementation, or `None` when `this` is neither.
+    pub(crate) fn resume_generator(
+        &mut self,
+        this: &JsValue,
+        resume: Resume,
+    ) -> Option<Completion> {
+        Some(match (self.generator_impl(this)?, resume) {
+            (GeneratorImpl::Bytecode, resume) => {
+                self.bytecode_generator_resume(this, resume, false)
+            }
+            (GeneratorImpl::StateMachine, Resume::Next(value)) => {
+                self.generator_next_state_machine(this, value)
+            }
+            (GeneratorImpl::StateMachine, Resume::Return(value)) => {
+                self.generator_return_state_machine(this, value)
+            }
+            (GeneratorImpl::StateMachine, Resume::Throw(error)) => {
+                self.generator_throw_state_machine(this, error)
+            }
+        })
     }
 
     /// This generator is finished and nothing will resume it: tear it down.
@@ -692,7 +715,7 @@ impl Interpreter {
         };
         match self.chunk_instantiation_analysis(&chunk, body) {
             Some(analysis) => {
-                let failed = self.with_ic_body(body, |interp| {
+                let failed = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
                     interp.instantiate_chunk_declarations(&chunk, body, exec_env, &analysis)
                 });
                 match failed {
@@ -775,7 +798,7 @@ impl Interpreter {
                 (status, resume) => {
                     generator.status = BytecodeGeneratorStatus::Executing;
                     let frame = generator.frame.take().unwrap_or_else(|| {
-                        Box::new(GeneratorFrame::for_chunk(&generator.code.chunk))
+                        Box::new(GeneratorFrame::for_chunk(self, &generator.code.chunk))
                     });
                     Plan::Run {
                         code: Rc::clone(&generator.code),
@@ -848,14 +871,17 @@ impl Interpreter {
             }
             Completion::Return(value) => {
                 finish(None);
+                frame.release(self);
                 self.generator_step_result(raw, value, true)
             }
             Completion::Normal(_) | Completion::Empty => {
                 finish(None);
+                frame.release(self);
                 self.generator_step_result(raw, JsValue::UNDEFINED, true)
             }
             other => {
                 finish(None);
+                frame.release(self);
                 debug_assert!(
                     matches!(other, Completion::Throw(_) | Completion::Exit(_)),
                     "a generator body completed with {other:?}"

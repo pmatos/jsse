@@ -16,7 +16,6 @@ mod modules;
 mod operand;
 
 use generator_runtime::ForOfUnwindOutcome;
-pub(crate) use generator_runtime::GeneratorImpl;
 pub(crate) use operand::Operand;
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth

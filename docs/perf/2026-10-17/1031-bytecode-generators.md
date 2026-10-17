@@ -28,14 +28,14 @@ cachegrind `--cache-sim=no`, whole process, `--iterations 1` JetStream drivers:
 
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
-| lazy-collections | 8,970,659,957 | 5,222,025,140 | -41.8% |
+| lazy-collections | 8,970,659,957 | 5,239,502,127 | -41.6% |
 | js-tokens | 9,514,155,438 | 5,419,075,259 | -43.0% |
 | sync-fs | 10,609,730,338 | 7,765,783,746 | -26.8% |
 | async-fs (control, async generators/functions unchanged) | 8,401,424,332 | 8,386,668,071 | -0.2% |
 | Basic | 4,109,075,914 | 4,000,087,884 | -2.7% |
 | Babylon | 3,390,949,599 | 3,375,786,868 | -0.4% |
-| richards (no generators) | 13,864,734,038 | 13,806,775,613 | -0.4% |
-| delta-blue (no generators) | 9,054,454,045 | 9,002,149,153 | -0.6% |
+| richards (no generators) | 13,864,734,038 | 13,845,690,190 | -0.1% |
+| delta-blue (no generators) | 9,054,454,045 | 9,069,268,902 | +0.2% |
 | ML (no generators in the timed path) | 73,137,288,961 | 72,429,450,711 | -1.0% |
 
 `run_chunk_inner` is generic over `GENERATOR` so the non-generator instantiation carries none of the resume code; the

@@ -1,6 +1,5 @@
 use super::super::*;
 use crate::interpreter::bytecode::vm::Resume;
-use crate::interpreter::eval::GeneratorImpl;
 use crate::interpreter::gc::RootedSlots;
 
 type ZipState = Rc<
@@ -3609,15 +3608,9 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // Check which variant we have
-                match interp.generator_impl(this) {
-                    Some(GeneratorImpl::StateMachine) => {
-                        return interp.generator_next_state_machine(this, value);
-                    }
-                    Some(GeneratorImpl::Bytecode) => {
-                        return interp.bytecode_generator_resume(this, Resume::Next(value), false);
-                    }
-                    None => {}
+                if let Some(completion) = interp.resume_generator(this, Resume::Next(value.clone()))
+                {
+                    return completion;
                 }
                 interp.generator_next(this, value)
             },
@@ -3636,19 +3629,10 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // Check which variant we have
-                match interp.generator_impl(this) {
-                    Some(GeneratorImpl::StateMachine) => {
-                        return interp.generator_return_state_machine(this, value);
-                    }
-                    Some(GeneratorImpl::Bytecode) => {
-                        return interp.bytecode_generator_resume(
-                            this,
-                            Resume::Return(value),
-                            false,
-                        );
-                    }
-                    None => {}
+                if let Some(completion) =
+                    interp.resume_generator(this, Resume::Return(value.clone()))
+                {
+                    return completion;
                 }
                 interp.generator_return(this, value)
             },
@@ -3666,19 +3650,10 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let exception = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                // Check which variant we have
-                match interp.generator_impl(this) {
-                    Some(GeneratorImpl::StateMachine) => {
-                        return interp.generator_throw_state_machine(this, exception);
-                    }
-                    Some(GeneratorImpl::Bytecode) => {
-                        return interp.bytecode_generator_resume(
-                            this,
-                            Resume::Throw(exception),
-                            false,
-                        );
-                    }
-                    None => {}
+                if let Some(completion) =
+                    interp.resume_generator(this, Resume::Throw(exception.clone()))
+                {
+                    return completion;
                 }
                 interp.generator_throw(this, exception)
             },

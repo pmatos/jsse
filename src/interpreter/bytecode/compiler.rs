@@ -3397,12 +3397,6 @@ fn is_yield_expression(expr: &Expression) -> bool {
     matches!(expr, Expression::Yield(..))
 }
 
-/// What a generator chunk cannot host: `yield*` delegates through the
-/// delegation protocol, which only the state machine implements.
-fn is_generator_unsupported_expression(expr: &Expression) -> bool {
-    matches!(expr, Expression::Yield(_, true))
-}
-
 /// A `using`/`await using` declaration anywhere in `stmt` (not nested
 /// functions): the resources are disposed by the generator driver, which the
 /// state machine implements.
@@ -3728,9 +3722,7 @@ pub(crate) fn compile_generator_body(
     body: &[Statement],
     shape: &FrameShape<'_>,
 ) -> Result<Chunk, CompileError> {
-    if body_has_poison(body, is_generator_unsupported_expression)
-        || stmts_contain(body, &|stmt| declares_using(stmt))
-    {
+    if stmts_contain(body, &declares_using) {
         return Err(CompileError::Ineligible(
             "construct needs the generator state machine",
         ));

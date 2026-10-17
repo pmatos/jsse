@@ -44,6 +44,10 @@ fn run(source: &str) -> Report {
 
 const ITERATIONS: u64 = 500;
 
+fn keeps_state_machine(bail: &str) -> bool {
+    bail.contains("generator state machine") || bail.contains("tree-walked")
+}
+
 fn consumer(generator: &str) -> String {
     format!(
         "{generator}\n\
@@ -85,7 +89,7 @@ fn generator_with_a_yield_the_chunk_cannot_host_keeps_the_state_machine() {
         report
             .bails
             .iter()
-            .filter(|b| b.contains("generator state machine"))
+            .filter(|b| keeps_state_machine(b))
             .count(),
         1,
         "{:?}",

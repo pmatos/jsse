@@ -311,6 +311,7 @@ impl Interpreter {
     /// The hoisting analysis a compiled function body needs instantiated
     /// before its chunk runs, or `None` when the chunk declares everything it
     /// owns itself (`declare_chunk_prologue`).
+    #[inline(always)]
     pub(super) fn chunk_instantiation_analysis(
         &mut self,
         chunk: &crate::interpreter::bytecode::chunk::Chunk,

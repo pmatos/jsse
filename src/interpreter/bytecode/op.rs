@@ -238,6 +238,12 @@ pub(crate) enum Op {
     Yield = 103,
 }
 
+/// Where `Op::Yield`'s operands sit counted back from the end of the op, which
+/// is where a suspended generator's saved position points.
+pub(crate) const YIELD_PERSISTENT_BACK: usize = 5;
+pub(crate) const YIELD_DISCARD_BACK: usize = 3;
+pub(crate) const YIELD_SKIP_BACK: usize = 2;
+
 impl Op {
     pub(crate) fn from_u8(b: u8) -> Option<Op> {
         match b {

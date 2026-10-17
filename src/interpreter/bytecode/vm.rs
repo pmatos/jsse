@@ -2,7 +2,7 @@ use super::chunk::{
     ArrayTemplate, BLOCK_SLOT_FLAG, Chunk, Constant, EXEC_NO_TAIL_CALL, EXEC_SET_COMPLETION,
     HeadBinding,
 };
-use super::op::{Op, UPDATE_DISCARD};
+use super::op::{Op, UPDATE_DISCARD, YIELD_DISCARD_BACK, YIELD_PERSISTENT_BACK, YIELD_SKIP_BACK};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::helpers::strict_equality;
@@ -578,6 +578,7 @@ fn declare_lexicals(scope: &mut Environment, chunk: &Chunk, lexicals: &[(u16, bo
 /// A function chunk's own `var` and top-level `let`/`const`/class bindings:
 /// declared when the chunk starts, or, for a generator, when it is created
 /// (FunctionDeclarationInstantiation) rather than at its first `next()`.
+#[inline(always)]
 pub(crate) fn declare_chunk_prologue(chunk: &Chunk, env: &EnvRef) {
     declare_var_prologue(chunk, env);
     if let Some(lexicals) = &chunk.top_level_lexicals {
@@ -819,12 +820,27 @@ pub(crate) struct GeneratorFrame {
 }
 
 impl GeneratorFrame {
-    pub(crate) fn for_chunk(chunk: &Chunk) -> Self {
+    pub(crate) fn for_chunk(interp: &mut Interpreter, chunk: &Chunk) -> Self {
+        let mut stack = interp.vm_stack_pool.pop().unwrap_or_default();
+        stack.reserve(usize::from(chunk.max_stack));
+        let mut refs = if chunk.max_refs == 0 {
+            Vec::new()
+        } else {
+            interp.vm_ref_pool.pop().unwrap_or_default()
+        };
+        refs.reserve(usize::from(chunk.max_refs));
         Self {
             control: GeneratorControl::default(),
-            stack: Vec::with_capacity(usize::from(chunk.max_stack)),
-            refs: Vec::with_capacity(usize::from(chunk.max_refs)),
+            stack,
+            refs,
         }
+    }
+
+    /// Hands the buffers of a finished generator back to the pools that
+    /// ordinary chunk runs draw from.
+    pub(crate) fn release(self, interp: &mut Interpreter) {
+        recycle_vm_buffer(&mut interp.vm_stack_pool, self.stack);
+        recycle_vm_buffer(&mut interp.vm_ref_pool, self.refs);
     }
 
     /// Every environment the frame holds: the block environments in scope and
@@ -1006,14 +1022,18 @@ fn run_chunk_inner<const GENERATOR: bool>(
         match resume {
             None => {}
             Some(Resume::Next(value)) => {
-                let discard = chunk.code[pc - 3] != 0;
-                pc = (pc as isize + isize::from(decode_i16(chunk, pc - 2))) as usize;
+                let discard = chunk.code[pc - YIELD_DISCARD_BACK] != 0;
+                pc = (pc as isize + isize::from(decode_i16(chunk, pc - YIELD_SKIP_BACK))) as usize;
                 if !discard {
                     push_value(interp, stack, value);
                 }
             }
             Some(Resume::Return(value)) => {
-                truncate_stack(interp, stack, usize::from(decode_u16(chunk, pc - 5)));
+                truncate_stack(
+                    interp,
+                    stack,
+                    usize::from(decode_u16(chunk, pc - YIELD_PERSISTENT_BACK)),
+                );
                 refs.clear();
                 push_value(interp, stack, value);
             }
@@ -1192,7 +1212,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     let slot = decode_u16(chunk, pc + 2);
                     let mode = chunk.code[pc + 4];
-                    pc += 5;
+                    pc += YIELD_PERSISTENT_BACK;
                     let (op, prefix, discard) = update_mode(mode);
                     let name = &chunk.names[idx as usize];
                     let (target, hint_slot) = local_target(frame_env, &scopes, slot);
