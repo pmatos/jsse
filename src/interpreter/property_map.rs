@@ -21,6 +21,16 @@ const COMPACT_MIN_ENTRIES: usize = 32;
 
 type Entry = (JsPropertyKey, PropertyRecord);
 
+/// Byte equality of two property keys. Interned keys of equal text share one
+/// allocation, so the common hit is settled by comparing addresses; a
+/// mismatch of equal length is almost always settled by the first byte, which
+/// keeps the scan clear of a `memcmp` call per entry.
+#[inline(always)]
+fn key_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len()
+        && (std::ptr::eq(a.as_ptr(), b.as_ptr()) || (a.first() == b.first() && a == b))
+}
+
 const HAS_VALUE: u16 = 1 << 0;
 const HAS_GET: u16 = 1 << 1;
 const HAS_SET: u16 = 1 << 2;
@@ -30,6 +40,12 @@ const HAS_ENUMERABLE: u16 = 1 << 5;
 const IS_ENUMERABLE: u16 = 1 << 6;
 const HAS_CONFIGURABLE: u16 = 1 << 7;
 const IS_CONFIGURABLE: u16 = 1 << 8;
+
+/// What reading an own property yields, see [`PropertyRecord::read`].
+pub(crate) enum PropertyRead<'a> {
+    Value(&'a JsValue),
+    Getter(&'a JsValue),
+}
 
 /// A `PropertyDescriptor` as the map stores it: 32 bytes where the
 /// `Option`-per-field descriptor takes 56. Absent values are `undefined` and a
@@ -117,6 +133,48 @@ impl PropertyRecord {
     #[inline]
     pub(crate) fn is_accessor_descriptor(&self) -> bool {
         self.flags & (HAS_GET | HAS_SET) != 0
+    }
+
+    /// What [[Get]] reads from this own property: its value, or the getter
+    /// to call with the receiver. An accessor without a getter reads
+    /// `undefined`, like a descriptor without a value.
+    #[inline]
+    pub(crate) fn read(&self) -> PropertyRead<'_> {
+        if self.flags & (HAS_GET | HAS_SET) != 0 {
+            return match self.getter() {
+                Some(getter) if !getter.is_undefined() => PropertyRead::Getter(getter),
+                _ => PropertyRead::Value(JsValue::undefined_ref()),
+            };
+        }
+        PropertyRead::Value(self.value().unwrap_or(JsValue::undefined_ref()))
+    }
+
+    /// Adds `delta` to a writable data property that holds a Number, in
+    /// place, and returns the old and new values. `None` leaves the record
+    /// untouched.
+    #[inline]
+    pub(crate) fn add_to_writable_number(&mut self, delta: f64) -> Option<(f64, f64)> {
+        const MASK: u16 = HAS_VALUE | HAS_GET | HAS_SET | HAS_WRITABLE | IS_WRITABLE;
+        if self.flags & MASK != HAS_VALUE | HAS_WRITABLE | IS_WRITABLE {
+            return None;
+        }
+        let old = self.value.as_number()?;
+        let new = old + delta;
+        self.value = JsValue::number(new);
+        Some((old, new))
+    }
+
+    /// Replaces the value of a writable data property in place. Returns
+    /// `false`, leaving the record untouched, when it is anything else (an
+    /// accessor, or a data property that is not writable).
+    #[inline]
+    pub(crate) fn overwrite_writable_data(&mut self, value: &JsValue) -> bool {
+        const MASK: u16 = HAS_VALUE | HAS_GET | HAS_SET | HAS_WRITABLE | IS_WRITABLE;
+        if self.flags & MASK != HAS_VALUE | HAS_WRITABLE | IS_WRITABLE {
+            return false;
+        }
+        self.value = value.clone();
+        true
     }
 
     #[inline]
@@ -283,7 +341,7 @@ impl PropertyMap {
         match &self.inner {
             PropertyMapInner::Inline(v) => v
                 .iter()
-                .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes()),
+                .position(|(k, _)| key_bytes_eq(k.as_bytes(), key.as_property_key_bytes())),
             PropertyMapInner::Spilled { index, .. } => index
                 .get(key.as_property_key_bytes())
                 .map(|&slot| slot as usize),
@@ -460,7 +518,7 @@ impl PropertyMap {
             PropertyMapInner::Inline(v) => {
                 let pos = v
                     .iter()
-                    .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes())?;
+                    .position(|(k, _)| key_bytes_eq(k.as_bytes(), key.as_property_key_bytes()))?;
                 v.remove(pos).1
             }
             PropertyMapInner::Spilled {
@@ -835,6 +893,90 @@ mod tests {
         record.set_value(None);
         assert!(record.value().is_none());
         assert_eq!(record.enumerable(), Some(false));
+    }
+
+    #[test]
+    fn data_value_and_in_place_writes_respect_attributes() {
+        let mut m = PropertyMap::new();
+        m.insert(key("w"), desc(1.0));
+        m.insert(
+            key("ro"),
+            PropertyDescriptor {
+                value: Some(JsValue::number(2.0)),
+                writable: Some(false),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            },
+        );
+        m.insert(
+            key("acc"),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: Some(JsValue::UNDEFINED),
+                set: None,
+            },
+        );
+        assert!(matches!(m.get("w").unwrap().read(), PropertyRead::Value(_)));
+        assert!(matches!(
+            m.get("ro").unwrap().read(),
+            PropertyRead::Value(_)
+        ));
+        assert!(matches!(
+            m.get("acc").unwrap().read(),
+            PropertyRead::Value(v) if v.is_undefined()
+        ));
+
+        assert!(
+            m.get_mut("w")
+                .unwrap()
+                .overwrite_writable_data(&JsValue::number(5.0))
+        );
+        assert_eq!(num(m.get("w").unwrap()), 5.0);
+        assert!(
+            !m.get_mut("ro")
+                .unwrap()
+                .overwrite_writable_data(&JsValue::number(5.0))
+        );
+        assert_eq!(num(m.get("ro").unwrap()), 2.0);
+        assert!(
+            !m.get_mut("acc")
+                .unwrap()
+                .overwrite_writable_data(&JsValue::number(5.0))
+        );
+
+        assert_eq!(
+            m.get_mut("w").unwrap().add_to_writable_number(1.0),
+            Some((5.0, 6.0))
+        );
+        assert_eq!(num(m.get("w").unwrap()), 6.0);
+        assert_eq!(m.get_mut("ro").unwrap().add_to_writable_number(1.0), None);
+        assert_eq!(num(m.get("ro").unwrap()), 2.0);
+        m.get_mut("w")
+            .unwrap()
+            .set_value(Some(JsValue::string(crate::types::JsString::from_str("s"))));
+        assert_eq!(m.get_mut("w").unwrap().add_to_writable_number(1.0), None);
+    }
+
+    #[test]
+    fn key_lookup_distinguishes_equal_length_keys_and_non_interned_copies() {
+        let mut m = PropertyMap::new();
+        m.insert(key("ab"), desc(1.0));
+        m.insert(key("ac"), desc(2.0));
+        m.insert(key("bb"), desc(3.0));
+        assert_eq!(num(m.get("ab").unwrap()), 1.0);
+        assert_eq!(num(m.get("ac").unwrap()), 2.0);
+        assert_eq!(num(m.get("bb").unwrap()), 3.0);
+        assert!(m.get("ba").is_none());
+        assert!(m.get("a").is_none());
+        let fresh_copy = JsPropertyKey::from_str("ac");
+        assert_eq!(num(m.get(&fresh_copy).unwrap()), 2.0);
+        assert!(m.remove(&fresh_copy).is_some());
+        assert!(m.get("ac").is_none());
     }
 
     #[test]

@@ -61,7 +61,7 @@ pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
 mod root_stack;
-pub(crate) use property_map::{PropertyMap, PropertyRecord};
+pub(crate) use property_map::{PropertyMap, PropertyRead, PropertyRecord};
 mod scheduler;
 #[cfg(test)]
 mod tests;

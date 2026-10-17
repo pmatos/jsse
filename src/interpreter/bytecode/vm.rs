@@ -7,6 +7,7 @@ use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
 use crate::interpreter::helpers::strict_equality;
 use crate::interpreter::ic::CallIcSlot;
+use crate::interpreter::property::NamedGet;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment, PrivateId};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
@@ -456,6 +457,139 @@ fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize
         .expect("stack underflow releasing call operands");
     unroot_stack_values(interp, &stack[base..]);
     stack.truncate(base);
+}
+
+// The named-property ops (`GetProp`, `LoadMethod`, `SetProp`, `UpdateProp`)
+// live out of line, fast path and generic path together: each completes an
+// access to an ordinary object's data property in place when it can and
+// otherwise runs the full [[Get]]/[[Set]] path. Kept out of the dispatch loop
+// they cost one call per op there, and they do not enlarge the loop's frame.
+
+/// `GetProp`: replaces the base on top of the stack with the property value.
+#[inline(never)]
+fn get_prop_op(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    name: &Atom,
+) -> Result<(), Completion> {
+    let named = match stack.last() {
+        Some(base) => interp.named_get_fast(base, name.property_key()),
+        None => NamedGet::Slow,
+    };
+    if let NamedGet::Value(value) = named {
+        let slot = stack.last_mut().expect("checked above");
+        let base = std::mem::replace(slot, value);
+        unroot_stack_value(interp, &base);
+        root_stack_value(interp, slot);
+        return Ok(());
+    }
+    let base = stack.pop().expect("stack underflow on GetProp");
+    let result = match named {
+        NamedGet::Getter(getter) => interp.call_getter(&getter, &base),
+        _ => member_get(interp, &base, name),
+    };
+    unroot_stack_value(interp, &base);
+    match result {
+        Completion::Normal(v) => {
+            push_value(interp, stack, v);
+            Ok(())
+        }
+        abrupt => Err(abrupt),
+    }
+}
+
+/// `LoadMethod`: the base stays as the call's `this`, under the method.
+#[inline(never)]
+fn load_method_op(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    name: &Atom,
+) -> Result<(), Completion> {
+    let named = match stack.last() {
+        Some(base) => interp.named_get_fast(base, name.property_key()),
+        None => NamedGet::Slow,
+    };
+    if let NamedGet::Value(method) = named {
+        let base = pop_value(interp, stack, "stack underflow on LoadMethod");
+        push_value(interp, stack, method);
+        push_value(interp, stack, base);
+        return Ok(());
+    }
+    let base = stack.pop().expect("stack underflow on LoadMethod");
+    let result = match named {
+        NamedGet::Getter(getter) => interp.call_getter(&getter, &base),
+        _ => member_get(interp, &base, name),
+    };
+    unroot_stack_value(interp, &base);
+    match result {
+        Completion::Normal(method) => {
+            push_value(interp, stack, method);
+            push_value(interp, stack, base);
+            Ok(())
+        }
+        abrupt => Err(abrupt),
+    }
+}
+
+/// `SetProp`: replaces the base and right-hand side with the right-hand side.
+#[inline(never)]
+fn set_prop_op(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    name: &Atom,
+    frame_env: &EnvRef,
+) -> Result<(), JsValue> {
+    let len = stack.len();
+    if len >= 2 && interp.named_store_fast(&stack[len - 2], name.property_key(), &stack[len - 1]) {
+        let rhs = pop_value(interp, stack, "stack underflow on SetProp rhs");
+        pop_value(interp, stack, "stack underflow on SetProp base");
+        push_value(interp, stack, rhs);
+        return Ok(());
+    }
+    let rhs = stack.pop().expect("stack underflow on SetProp rhs");
+    let base = stack.pop().expect("stack underflow on SetProp base");
+    let base_root = base.clone();
+    let strict = frame_env.borrow().strict;
+    let result = member_set(interp, base, name, rhs.clone(), strict);
+    unroot_stack_value(interp, &rhs);
+    unroot_stack_value(interp, &base_root);
+    result?;
+    push_value(interp, stack, rhs);
+    Ok(())
+}
+
+/// `UpdateProp`: replaces the base with the update expression's result.
+#[inline(never)]
+fn update_prop_op(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    name: &Atom,
+    mode: u8,
+    frame_env: &EnvRef,
+) -> Result<(), Completion> {
+    let (update, prefix, _) = update_mode(mode);
+    let delta = match update {
+        UpdateOp::Increment => 1.0,
+        UpdateOp::Decrement => -1.0,
+    };
+    if let Some(slot) = stack.last_mut()
+        && let Some((old, new)) = interp.named_update_fast(slot, name.property_key(), delta)
+    {
+        let base = std::mem::replace(slot, JsValue::number(if prefix { new } else { old }));
+        unroot_stack_value(interp, &base);
+        return Ok(());
+    }
+    let base = stack.pop().expect("stack underflow on UpdateProp");
+    let strict = frame_env.borrow().strict;
+    let result = member_update_named(interp, &base, name, update, prefix, strict);
+    unroot_stack_value(interp, &base);
+    match result {
+        Completion::Normal(v) => {
+            push_value(interp, stack, v);
+            Ok(())
+        }
+        abrupt => Err(abrupt),
+    }
 }
 
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
@@ -1407,14 +1541,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 Op::GetProp => {
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
-                    let name = chunk.names[idx as usize].clone();
                     assert_operands_rooted!();
-                    let base = stack.pop().expect("stack underflow on GetProp");
-                    let result = member_get(interp, &base, &name);
-                    unroot_stack_value(interp, &base);
-                    match result {
-                        Completion::Normal(v) => push_value(interp, stack, v),
-                        abrupt => bail!('dispatch, abrupt),
+                    if let Err(abrupt) = get_prop_op(interp, stack, &chunk.names[idx as usize]) {
+                        bail!('dispatch, abrupt);
                     }
                 }
                 Op::GetPrivate | Op::LoadMethodPrivate => {
@@ -1517,17 +1646,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 Op::LoadMethod => {
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
-                    let name = &chunk.names[idx as usize];
                     assert_operands_rooted!();
-                    let base = stack.pop().expect("stack underflow on LoadMethod");
-                    let result = member_get(interp, &base, name);
-                    unroot_stack_value(interp, &base);
-                    match result {
-                        Completion::Normal(method) => {
-                            push_value(interp, stack, method);
-                            push_value(interp, stack, base);
-                        }
-                        abrupt => bail!('dispatch, abrupt),
+                    if let Err(abrupt) = load_method_op(interp, stack, &chunk.names[idx as usize]) {
+                        bail!('dispatch, abrupt);
                     }
                 }
                 Op::LoadMethodElement => {
@@ -1552,18 +1673,11 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 Op::SetProp => {
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
-                    let name = chunk.names[idx as usize].clone();
                     assert_operands_rooted!();
-                    let rhs = stack.pop().expect("stack underflow on SetProp rhs");
-                    let base = stack.pop().expect("stack underflow on SetProp base");
-                    let base_root = base.clone();
-                    let strict = frame_env.borrow().strict;
-                    let result = member_set(interp, base, &name, rhs.clone(), strict);
-                    unroot_stack_value(interp, &rhs);
-                    unroot_stack_value(interp, &base_root);
-                    match result {
-                        Ok(()) => push_value(interp, stack, rhs),
-                        Err(e) => throw!('dispatch, e),
+                    if let Err(e) =
+                        set_prop_op(interp, stack, &chunk.names[idx as usize], frame_env)
+                    {
+                        throw!('dispatch, e);
                     }
                 }
                 Op::SetElement => {
@@ -2043,15 +2157,10 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     let mode = chunk.code[pc + 2];
                     pc += 3;
-                    let (update, prefix, _) = update_mode(mode);
-                    let name = &chunk.names[idx as usize];
-                    let base = stack.pop().expect("stack underflow on UpdateProp");
-                    let strict = frame_env.borrow().strict;
-                    let result = member_update_named(interp, &base, name, update, prefix, strict);
-                    unroot_stack_value(interp, &base);
-                    match result {
-                        Completion::Normal(v) => push_value(interp, stack, v),
-                        abrupt => bail!('dispatch, abrupt),
+                    if let Err(abrupt) =
+                        update_prop_op(interp, stack, &chunk.names[idx as usize], mode, frame_env)
+                    {
+                        bail!('dispatch, abrupt);
                     }
                 }
                 Op::UpdateElement => {

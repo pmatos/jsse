@@ -1,5 +1,9 @@
 use super::*;
 
+/// Longest prototype chain the named-property fast paths walk before handing
+/// the access to the generic path (which has its own cycle and depth handling).
+const PROTO_WALK_LIMIT: usize = 16;
+
 /// Formats `n` into `buf` and returns the digits as a `&str`, without a heap
 /// allocation. Used on the dense-array numeric-read fast path, where an
 /// owned `String` per read would defeat the point of the fast path.
@@ -16,6 +20,13 @@ fn format_u32_stack(n: u32, buf: &mut [u8; 10]) -> &str {
     }
     // Safety of `unwrap`: every byte written above is one of b'0'..=b'9'.
     std::str::from_utf8(&buf[i..]).unwrap()
+}
+
+/// Result of [`Interpreter::named_get_fast`].
+pub(super) enum NamedGet {
+    Value(JsValue),
+    Getter(JsValue),
+    Slow,
 }
 
 /// The observable result of [[Set]] plus the internal write-path fact needed
@@ -266,6 +277,116 @@ impl Interpreter {
         obj_rc
             .borrow_mut_untracked()
             .apply_dense_array_set(idx, value, plan)
+    }
+
+    /// Completes the named store `base.key = value` of the bytecode VM
+    /// without the generic [[Set]] when the receiver is an ordinary object
+    /// and the outcome is one of two cases: an own writable data property is
+    /// overwritten in place, or an absent property is created on an
+    /// extensible receiver whose prototype chain is ordinary and does not
+    /// mention `key` (so no setter, read-only property or Proxy can
+    /// intervene). Returns `false` with no observable effect when the
+    /// generic path must run.
+    #[inline(always)]
+    pub(super) fn named_store_fast(
+        &self,
+        base: &JsValue,
+        key: &JsPropertyKey,
+        value: &JsValue,
+    ) -> bool {
+        let Some(cell) = base
+            .as_object_id()
+            .and_then(|object_id| self.get_object_cell(object_id))
+        else {
+            return false;
+        };
+        self.gc_write_barrier_value(cell, value);
+        let mut object = cell.borrow_mut_untracked();
+        match object.store_named_fast(key, value) {
+            NamedStore::Stored => true,
+            NamedStore::Bail => false,
+            NamedStore::Absent => {
+                if !object.can_add_named_fast()
+                    || !self.proto_chain_lacks_key(object.prototype_id, key)
+                {
+                    return false;
+                }
+                object.add_named_fast(key, value);
+                true
+            }
+        }
+    }
+
+    /// `base.key++`/`--` on an own writable Number data property, applied in
+    /// place; the old and new values. `None` leaves everything untouched and
+    /// the generic update must run.
+    #[inline(always)]
+    pub(super) fn named_update_fast(
+        &self,
+        base: &JsValue,
+        key: &JsPropertyKey,
+        delta: f64,
+    ) -> Option<(f64, f64)> {
+        let cell = self.get_object_cell(base.as_object_id()?)?;
+        cell.borrow_mut_untracked().add_to_named_number(key, delta)
+    }
+
+    /// Whether no object on the prototype chain starting at `start` owns
+    /// `key` or answers named lookups from outside its property map.
+    fn proto_chain_lacks_key(&self, start: Option<u64>, key: &JsPropertyKey) -> bool {
+        let mut next = start;
+        for _ in 0..PROTO_WALK_LIMIT {
+            let Some(proto_id) = next else {
+                return true;
+            };
+            let Some(cell) = self.get_object_cell(proto_id) else {
+                return false;
+            };
+            let proto = cell.borrow_untracked();
+            if !proto.named_miss_is_ordinary() || proto.properties.contains_key(key) {
+                return false;
+            }
+            next = proto.prototype_id;
+        }
+        false
+    }
+
+    /// The named read `base.key` resolved without the generic [[Get]] when the
+    /// receiver and every object up to the property's holder are ordinary:
+    /// the value, or the getter to call with `base`. `Slow` when the generic
+    /// path must run (a primitive base, a Proxy or other exotic object on the
+    /// way, an Array-index-like name).
+    #[inline(always)]
+    pub(super) fn named_get_fast(&self, base: &JsValue, key: &JsPropertyKey) -> NamedGet {
+        if key_may_be_array_index(key) {
+            return NamedGet::Slow;
+        }
+        let Some(mut object_id) = base.as_object_id() else {
+            return NamedGet::Slow;
+        };
+        for _ in 0..PROTO_WALK_LIMIT {
+            let Some(cell) = self.get_object_cell(object_id) else {
+                return NamedGet::Slow;
+            };
+            let object = cell.borrow_untracked();
+            if object.kind.is_named_access_exotic() {
+                return NamedGet::Slow;
+            }
+            if let Some(record) = object.properties.get(key) {
+                return match record.read() {
+                    PropertyRead::Value(value) => NamedGet::Value(value.clone()),
+                    PropertyRead::Getter(getter) => NamedGet::Getter(getter.clone()),
+                };
+            }
+            if !object.named_miss_is_ordinary() {
+                return NamedGet::Slow;
+            }
+            match object.prototype_id {
+                Some(proto_id) => object_id = proto_id,
+                None => return NamedGet::Value(JsValue::UNDEFINED),
+            }
+        }
+        NamedGet::Slow
     }
 
     fn get_object_property_with_proxy_depth<K: PropertyKeyLike + ?Sized>(

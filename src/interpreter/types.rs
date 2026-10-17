@@ -2594,6 +2594,38 @@ pub(crate) enum ObjectKind {
     ShadowRealm(usize),
 }
 
+impl ObjectKind {
+    /// Kinds whose named property access is not the ordinary algorithm for
+    /// every key: a Proxy traps it, a module namespace and a TypedArray
+    /// answer some keys from outside the property map, and a mapped
+    /// `arguments` object writes through to its parameters.
+    #[inline(always)]
+    pub(crate) fn is_named_access_exotic(&self) -> bool {
+        matches!(
+            self,
+            ObjectKind::Proxy(_)
+                | ObjectKind::ModuleNamespace(_)
+                | ObjectKind::TypedArray(_)
+                | ObjectKind::Arguments(_)
+        )
+    }
+}
+
+/// Whether `key` could name an Array element (it starts with a digit), which
+/// Arrays keep outside the property map.
+#[inline(always)]
+pub(crate) fn key_may_be_array_index(key: &JsPropertyKey) -> bool {
+    key.as_bytes().first().is_some_and(u8::is_ascii_digit)
+}
+
+/// Outcome of [`JsObjectData::store_named_fast`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NamedStore {
+    Stored,
+    Absent,
+    Bail,
+}
+
 /// See [`ObjectKind::FinalizationRegistry`].
 #[derive(Clone, Default)]
 pub(crate) struct FinalizationRegistryData {
@@ -4288,6 +4320,84 @@ impl JsObjectData {
             self.shape_id = fresh_shape_id();
             true
         }
+    }
+
+    /// The own half of a named store `obj.key = value` on the bytecode VM's
+    /// fast path: overwrite an existing own writable data property in place.
+    /// `Absent` means the receiver has no such own property (the caller may
+    /// still be able to add one); `Bail` means the generic [[Set]] must run.
+    ///
+    /// Names an Array index, a TypedArray, a mapped `arguments`, a Proxy or a
+    /// module namespace could treat specially never reach the map, and an
+    /// Array's `length` runs ArraySetLength, so all of those bail.
+    #[inline]
+    pub(crate) fn store_named_fast(&mut self, key: &JsPropertyKey, value: &JsValue) -> NamedStore {
+        if self.kind.is_named_access_exotic() || key_may_be_array_index(key) {
+            return NamedStore::Bail;
+        }
+        let is_array = matches!(self.kind, ObjectKind::Array(_));
+        let Some(record) = self.properties.get_mut(key) else {
+            return NamedStore::Absent;
+        };
+        if (is_array && key.as_bytes() == b"length") || !record.overwrite_writable_data(value) {
+            return NamedStore::Bail;
+        }
+        NamedStore::Stored
+    }
+
+    /// `obj.key += delta` on an own writable data property holding a Number,
+    /// applied in place (the VM's `UpdateProp`); the old and new values on
+    /// success. Any other shape of property or object returns `None`
+    /// untouched, for the same reasons as [`Self::store_named_fast`].
+    #[inline]
+    pub(crate) fn add_to_named_number(
+        &mut self,
+        key: &JsPropertyKey,
+        delta: f64,
+    ) -> Option<(f64, f64)> {
+        if self.kind.is_named_access_exotic() || key_may_be_array_index(key) {
+            return None;
+        }
+        let is_array = matches!(self.kind, ObjectKind::Array(_));
+        if is_array && key.as_bytes() == b"length" {
+            return None;
+        }
+        self.properties.get_mut(key)?.add_to_writable_number(delta)
+    }
+
+    /// Whether `obj.key = value` for a key this object does not own creates
+    /// an ordinary own data property (OrdinarySet's `CreateDataProperty`
+    /// step) provided no prototype owns the key. Arrays keep extra key
+    /// bookkeeping and String wrappers own exotic names, so they take the
+    /// generic path.
+    #[inline]
+    pub(crate) fn can_add_named_fast(&self) -> bool {
+        self.extensible
+            && !matches!(self.kind, ObjectKind::Array(_))
+            && !self
+                .primitive_value
+                .as_ref()
+                .is_some_and(JsValue::is_string)
+    }
+
+    /// Appends a new own data property whose absence the caller has just
+    /// established ([`Self::store_named_fast`] returned `Absent`).
+    #[inline]
+    pub(crate) fn add_named_fast(&mut self, key: &JsPropertyKey, value: &JsValue) {
+        self.properties
+            .push_fresh(key.clone(), PropertyDescriptor::data_default(value.clone()));
+        self.shape_id = fresh_shape_id();
+    }
+
+    /// Whether a named [[Get]] that misses this object's own properties can
+    /// continue to its prototype without consulting an exotic own lookup.
+    #[inline]
+    pub(crate) fn named_miss_is_ordinary(&self) -> bool {
+        !self.kind.is_named_access_exotic()
+            && !self
+                .primitive_value
+                .as_ref()
+                .is_some_and(JsValue::is_string)
     }
 
     pub(crate) fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {

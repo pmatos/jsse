@@ -2821,6 +2821,101 @@ fn set_property_value_add_bumps_shape() {
 }
 
 #[test]
+fn named_store_fast_adds_bump_shape_and_overwrites_do_not() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    let base = JsValue::object(id);
+    let key = JsPropertyKey::from_str("x");
+    let shape = |interp: &Interpreter| interp.get_object(id).unwrap().borrow().shape_id;
+
+    let before_add = shape(&interp);
+    assert!(interp.named_store_fast(&base, &key, &JsValue::number(1.0)));
+    assert!(
+        shape(&interp) > before_add,
+        "an added property bumps shape_id"
+    );
+
+    let before_overwrite = shape(&interp);
+    assert!(interp.named_store_fast(&base, &key, &JsValue::number(2.0)));
+    assert_eq!(
+        shape(&interp),
+        before_overwrite,
+        "an overwrite keeps shape_id"
+    );
+    let stored = interp
+        .get_object(id)
+        .unwrap()
+        .borrow()
+        .get_own_property("x");
+    assert_eq!(
+        stored.and_then(|d| d.value).and_then(|v| v.as_number()),
+        Some(2.0)
+    );
+}
+
+#[test]
+fn named_store_fast_declines_what_the_generic_path_must_decide() {
+    let mut interp = Interpreter::new();
+    let key = JsPropertyKey::from_str("x");
+    let value = JsValue::number(1.0);
+
+    let mut non_extensible = JsObjectData::new();
+    non_extensible.insert_value("x", JsValue::number(0.0));
+    non_extensible.extensible = false;
+    let frozen_id = interp.alloc_object(non_extensible);
+    let frozen_shape = interp.get_object(frozen_id).unwrap().borrow().shape_id;
+    assert!(interp.named_store_fast(&JsValue::object(frozen_id), &key, &value));
+    assert_eq!(
+        interp.get_object(frozen_id).unwrap().borrow().shape_id,
+        frozen_shape
+    );
+
+    let mut sealed = JsObjectData::new();
+    sealed.extensible = false;
+    let sealed_id = interp.alloc_object(sealed);
+    assert!(!interp.named_store_fast(&JsValue::object(sealed_id), &key, &value));
+    assert!(
+        interp
+            .get_object(sealed_id)
+            .unwrap()
+            .borrow()
+            .properties
+            .get("x")
+            .is_none()
+    );
+
+    let mut read_only = JsObjectData::new();
+    read_only.define_own_property(
+        key.clone(),
+        PropertyDescriptor {
+            value: Some(JsValue::number(0.0)),
+            writable: Some(false),
+            enumerable: Some(true),
+            configurable: Some(true),
+            get: None,
+            set: None,
+        },
+    );
+    let read_only_id = interp.alloc_object(read_only);
+    assert!(!interp.named_store_fast(&JsValue::object(read_only_id), &key, &value));
+
+    let proto_id = interp.alloc_object(JsObjectData::new());
+    interp
+        .get_object(proto_id)
+        .unwrap()
+        .borrow_mut()
+        .insert_value("x", JsValue::number(9.0));
+    let mut child = JsObjectData::new();
+    child.prototype_id = Some(proto_id);
+    let child_id = interp.alloc_object(child);
+    assert!(
+        !interp.named_store_fast(&JsValue::object(child_id), &key, &value),
+        "a prototype that owns the name decides the store"
+    );
+    assert!(!interp.named_store_fast(&JsValue::number(1.0), &key, &value));
+}
+
+#[test]
 fn set_property_value_update_existing_does_not_bump_shape() {
     let mut interp = Interpreter::new();
     let id = interp.alloc_object(JsObjectData::new());
