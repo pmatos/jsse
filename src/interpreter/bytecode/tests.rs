@@ -2252,7 +2252,7 @@ fn direct_call_hits_call_site_ic_in_bytecode() {
     assert!(
         interp.call_ic_hit_count() > 0,
         "expected call-IC hits from the bytecode Call opcode after a \
-         100-iteration hot loop; dispatch_body must thread current_ic_handle \
+         100-iteration hot loop; dispatch_body must thread current_ic \
          into the bytecode branch for this to fire"
     );
     assert!(

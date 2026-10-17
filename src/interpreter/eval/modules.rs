@@ -841,7 +841,7 @@ impl Interpreter {
         };
 
         // Assign the evaluated program its own dense IC-site namespace so that
-        // `exec_body` below can switch `current_ic_handle` to this body's store.
+        // `exec_body` below can switch `current_ic` to this body's store.
         // Without this the program's site ids would index the caller's IC store.
         crate::ast::assign_ic_sites(&mut program.body);
 
@@ -872,7 +872,7 @@ impl Interpreter {
             self.current_realm_id = old_realm;
             return Completion::Throw(e);
         }
-        // Execute body in lex_env via exec_eval_body: it switches current_ic_handle
+        // Execute body in lex_env via exec_eval_body: it switches current_ic
         // to this program's own IC store (keeping the seam invariant that every
         // executed body switches the handle) without re-running the hoisting pass,
         // since eval_declaration_instantiation above already performed it.

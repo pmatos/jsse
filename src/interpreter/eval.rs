@@ -2141,7 +2141,7 @@ impl Interpreter {
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
         let analysis = frame.hoist_analysis(|| self.hoist_cache.analysis_for(body));
-        let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
+        let result = self.with_ic_body_in_frame(body, frame, |interp| {
             interp.exec_statements_cached(body.as_slice(), exec_env, Some(analysis))
         });
         #[cfg(feature = "perf-counters")]
@@ -2174,7 +2174,7 @@ impl Interpreter {
             let (name, seq) = self.perf_body_name(func_obj_id);
             self.perf.enter_ast_body(name, seq, false);
         }
-        let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
+        let result = self.with_ic_body_in_frame(body, frame, |interp| {
             if let Some(analysis) = analysis
                 && let Some(err) =
                     interp.instantiate_chunk_declarations(chunk, body, exec_env, analysis)
@@ -5060,7 +5060,7 @@ impl Interpreter {
                 .map(|id| crate::types::JsObject { id })
         {
             use crate::interpreter::ic::CallIcSlot;
-            let slot = *self.call_slot(site_id);
+            let slot = self.call_slot(site_id);
             let mut probe_hit = false;
             if let CallIcSlot::Mono {
                 callee_obj_id,
@@ -5107,7 +5107,7 @@ impl Interpreter {
                     ) if prev == new => s,
                     (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
                 };
-                *self.call_slot(site_id) = next;
+                self.set_call_slot(site_id, next);
             }
             self.gc_unroot_frame(gc_frame);
             return result;

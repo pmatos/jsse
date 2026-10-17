@@ -2,10 +2,11 @@
 //!
 //! Issue #71 — see `.ultraplan/property-lookup-caching.md` for the full design.
 //!
-//! The slot values are stored in a per-`Body` `BodyIcStore` in the interpreter,
-//! keyed by the identity of the executing `Body`. The AST carries only dense
-//! `CallSiteId` / `PropSiteId` identifiers (see `src/interpreter/ic_store.rs`).
-//! The probe at `eval_member` reads the slot via `Interpreter::prop_slot`; on
+//! The slot values are stored in a per-`Body` `BodyIcStore` in the interpreter
+//! (owned by the function literal's frame, or held in the `IcStore` table for
+//! script and eval bodies). The AST carries only dense `CallSiteId` /
+//! `PropSiteId` identifiers (see `src/interpreter/ic_store.rs`).
+//! The probe at `eval_member` reads the slot via `Interpreter::with_prop_slot`; on
 //! hit it dispatches directly. On miss it falls through to the slow path which
 //! feeds the freshly classified resolution into `PropIcSlot::advance`, driving
 //! the `Empty → Mono → Poly(≤MAX_POLY_PROP) → Megamorphic` state machine.

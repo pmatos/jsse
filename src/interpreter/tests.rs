@@ -3766,9 +3766,10 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__d"), 1.0);
 }
 
-// #165 / #468: both per-Body caches pin each Body they memoise, so either
-// unbounded table would retain every `new Function` / `eval` Body the program
-// ever ran. This pins both independent bounds through the normal call path.
+// #165 / #468: the per-Body caches pin each Body they memoise, so an unbounded
+// table would retain every `new Function` / `eval` Body the program ever ran.
+// This pins the bound of the hoisting cache and shows that function bodies keep
+// their IC store out of the IC table, through the normal call path.
 #[test]
 fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
     let bodies = super::body_memo::DEFAULT_CAPACITY + 2000;
@@ -3797,19 +3798,37 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
         "expected the dynamic bodies to fill the cache, got {} entries",
         interp.hoist_cache.len()
     );
+    // A function body keeps its IC store on its literal's frame, so the table
+    // only ever holds the script and eval bodies, however many functions ran.
+    assert!(
+        interp.ic_store.len() < 20,
+        "dynamic function bodies must not enter the IC table, got {} entries",
+        interp.ic_store.len()
+    );
+}
+
+// The IC table still bounds the stores of script, module and eval bodies.
+#[test]
+fn ic_table_stays_bounded_across_many_distinct_eval_bodies() {
+    let bodies = super::ic_store::DEFAULT_CAPACITY + 2000;
+    let interp = run_script(&format!(
+        r#"
+        var sum = 0;
+        for (var i = 0; i < {bodies}; i++) {{
+          sum += eval("var e" + i + " = 1; e" + i);
+        }}
+        globalThis.__sum = sum;
+        "#
+    ));
+    assert_eq!(global_number(&interp, "__sum"), bodies as f64);
     assert!(
         interp.ic_store.len() <= super::ic_store::DEFAULT_CAPACITY,
-        "IC store grew to {} entries for {bodies} dynamic bodies",
+        "IC store grew to {} entries for {bodies} eval bodies",
         interp.ic_store.len()
     );
     assert!(
-        interp.ic_store.slot_count() <= super::ic_store::DEFAULT_CAPACITY,
-        "IC store allocated {} slots for {bodies} dynamic bodies",
-        interp.ic_store.slot_count()
-    );
-    assert!(
         interp.ic_store.len() > super::ic_store::DEFAULT_CAPACITY / 2,
-        "expected the dynamic bodies to fill the IC store, got {} entries",
+        "expected the eval bodies to fill the IC store, got {} entries",
         interp.ic_store.len()
     );
 }

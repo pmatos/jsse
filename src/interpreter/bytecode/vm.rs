@@ -564,10 +564,15 @@ fn member_update_computed(
 /// its local slot hints assume. Declaration instantiation that runs first
 /// (`Chunk::needs_instantiation`) calls this beforehand so it cannot choose a
 /// different binding order.
+#[inline(always)]
 pub(crate) fn declare_var_prologue(chunk: &Chunk, env: &EnvRef) {
-    if chunk.var_names.is_empty() {
-        return;
+    if !chunk.var_names.is_empty() {
+        declare_vars(chunk, env);
     }
+}
+
+#[inline(never)]
+fn declare_vars(chunk: &Chunk, env: &EnvRef) {
     let var_scope = Environment::find_var_scope(env);
     let mut scope = var_scope.borrow_mut();
     for &name_idx in &chunk.var_names {
@@ -919,7 +924,9 @@ const MAX_POOLED_VM_STACK_CAPACITY: usize = 1024;
 /// keeps the allocation for the next activation; empty and oversized buffers
 /// are not worth pinning.
 fn recycle_vm_buffer<T>(pool: &mut Vec<Vec<T>>, mut buf: Vec<T>) {
-    buf.clear();
+    if !buf.is_empty() {
+        buf.clear();
+    }
     if buf.capacity() != 0
         && pool.len() < MAX_POOLED_VM_STACKS
         && buf.capacity() <= MAX_POOLED_VM_STACK_CAPACITY
@@ -1665,7 +1672,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         };
                     let mut probe_hit = false;
                     if let Some(callee_id) = ic_callee_id {
-                        let slot = *interp.call_slot(site_id);
+                        let slot = interp.call_slot(site_id);
                         if let CallIcSlot::Mono {
                             callee_obj_id,
                             callee_shape_id,
@@ -1700,7 +1707,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         && !probe_hit
                         && matches!(result, Completion::Normal(_))
                     {
-                        let slot = *interp.call_slot(site_id);
+                        let slot = interp.call_slot(site_id);
                         let new_slot = interp.classify_for_call_ic(callee_id);
                         let next = match (slot, new_slot) {
                             (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
@@ -1719,7 +1726,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                             ) if prev == new => s,
                             (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
                         };
-                        *interp.call_slot(site_id) = next;
+                        interp.set_call_slot(site_id, next);
                     }
                     pop_operands(interp, stack, argc + 2);
                     match result {

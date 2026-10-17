@@ -715,7 +715,7 @@ impl Interpreter {
         };
         match self.chunk_instantiation_analysis(&chunk, body, frame) {
             Some(analysis) => {
-                let failed = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
+                let failed = self.with_ic_body_in_frame(body, frame, |interp| {
                     interp.instantiate_chunk_declarations(&chunk, body, exec_env, analysis)
                 });
                 match failed {
@@ -840,7 +840,7 @@ impl Interpreter {
                 self.perf.enter_ast_body(name, id, false);
             }
         }
-        let result = self.with_ic_body_cached(&code.body, code.frame.ic_handle(), |interp| {
+        let result = self.with_ic_body_in_frame(&code.body, &code.frame, |interp| {
             vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
         });
         #[cfg(feature = "perf-counters")]

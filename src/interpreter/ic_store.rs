@@ -1,20 +1,23 @@
 //! Interpreter-side inline-cache store.
 //!
 //! Inline-cache slots used to live on the AST nodes in `Cell`s. The ADR in
-//! `docs/adr/0001-inline-cache-ast-seam.md` moved them into the interpreter,
-//! keyed by the identity of the executing `Body`. Each `Body` gets a dense
-//! namespace of `CallSiteId` / `PropSiteId` values assigned by
-//! `ast::assign_ic_sites`; this module creates a `BodyIcStore` per body on
-//! first execution and shares it across all closures of that body.
+//! `docs/adr/0001-inline-cache-ast-seam.md` moved them into the interpreter.
+//! Each `Body` gets a dense namespace of `CallSiteId` / `PropSiteId` values
+//! assigned by `ast::assign_ic_sites`, and a `BodyIcStore` holds the slots.
+//! A function body's store belongs to its literal's `LiteralFrame` and is
+//! shared by every closure of the literal; script, module and eval bodies keep
+//! theirs in the `IcStore` table, keyed by the identity of the executing
+//! `Body`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 
-use crate::ast::{Body, BodyIcInfo, CallSiteId, PropSiteId};
+use crate::ast::{Body, CallSiteId, PropSiteId};
 use crate::interpreter::Interpreter;
 use crate::interpreter::ic::{CallIcSlot, PropIcSlot};
+use crate::interpreter::literal_frame::LiteralFrame;
 
 /// Maximum number of inactive per-Body stores retained by default. Active
 /// stores can temporarily take the table above this limit when call nesting
@@ -119,7 +122,7 @@ impl IcStore {
 
         let tick = tick_clock(&mut self.clock);
         let entry = StoreEntry {
-            store: BodyIcStore::new(body.ic, body.statements.clone()),
+            store: BodyIcStore::new(body),
             last_used: tick,
             in_flight: 1,
         };
@@ -148,30 +151,6 @@ impl IcStore {
             slot: slot_idx,
             generation,
         }
-    }
-
-    /// [`enter_body`](Self::enter_body) through a handle remembered from an
-    /// earlier entry of the same Body, skipping the index probe. The handle is
-    /// used only if its slot still holds this Body's store (generation and
-    /// Body identity both match); otherwise `cached` is refreshed.
-    #[inline]
-    pub(crate) fn enter_body_cached(
-        &mut self,
-        body: &Body,
-        cached: &Cell<Option<BodyStoreHandle>>,
-    ) -> BodyStoreHandle {
-        if let Some(handle) = cached.get()
-            && let Some(slot) = self.stores.get_mut(handle.slot)
-            && slot.generation == handle.generation
-            && let Some(entry) = slot.entry.as_mut()
-            && entry.store.body_key() == body.key()
-        {
-            entry.mark_entered(tick_clock(&mut self.clock));
-            return handle;
-        }
-        let handle = self.enter_body(body);
-        cached.set(Some(handle));
-        handle
     }
 
     /// Release one in-flight use. If all capacity slots were active during a
@@ -278,39 +257,66 @@ impl IcStore {
 
 /// Per-body cache for call and property IC slots. Sized once from the
 /// `BodyIcInfo` produced by `ast::assign_ic_sites`.
+#[derive(Debug)]
 pub(crate) struct BodyIcStore {
-    call_slots: Vec<CallIcSlot>,
-    prop_slots: Vec<PropIcSlot>,
+    call_slots: Vec<Cell<CallIcSlot>>,
+    prop_slots: RefCell<Vec<PropIcSlot>>,
     /// Pins the Body so its `Body::key` address cannot be reused by an unrelated
     /// Body after this one is dropped, which would alias a stale, wrongly-sized
     /// store.
     _body: Rc<Vec<crate::ast::Statement>>,
 }
 
+/// A function literal's IC store, owned by its `LiteralFrame` and shared by
+/// every closure of the literal: entering the body is one `Rc` clone and
+/// needs no table probe, generation check or in-flight accounting, because
+/// the store lives as long as the frame that hands it out.
+pub(crate) type FrameIcStore = Rc<BodyIcStore>;
+
 impl BodyIcStore {
-    fn new(info: BodyIcInfo, body: Rc<Vec<crate::ast::Statement>>) -> Self {
+    fn new(body: &Body) -> Self {
         Self {
-            call_slots: vec![CallIcSlot::Empty; info.call_site_count as usize],
-            prop_slots: vec![PropIcSlot::Empty; info.prop_site_count as usize],
-            _body: body,
+            call_slots: vec![Cell::new(CallIcSlot::Empty); body.ic.call_site_count as usize],
+            prop_slots: RefCell::new(vec![PropIcSlot::Empty; body.ic.prop_site_count as usize]),
+            _body: body.statements.clone(),
         }
     }
 
-    /// Return a mutable reference to the call slot for a site id.
-    #[inline]
-    pub(crate) fn call_slot(&mut self, id: CallSiteId) -> &mut CallIcSlot {
-        &mut self.call_slots[id.0 as usize]
+    /// A frame is paired with one literal's Body for its whole life; the
+    /// frame's entry points assert it in debug builds.
+    pub(crate) fn for_frame(body: &Body) -> FrameIcStore {
+        Rc::new(Self::new(body))
     }
 
-    /// Return a mutable reference to the property slot for a site id.
     #[inline]
-    pub(crate) fn prop_slot(&mut self, id: PropSiteId) -> &mut PropIcSlot {
-        &mut self.prop_slots[id.0 as usize]
+    fn call_slot(&self, id: CallSiteId) -> CallIcSlot {
+        self.call_slots[id.0 as usize].get()
+    }
+
+    #[inline]
+    fn set_call_slot(&self, id: CallSiteId, slot: CallIcSlot) {
+        self.call_slots[id.0 as usize].set(slot);
+    }
+
+    #[inline]
+    fn with_prop_slot<R>(&self, id: PropSiteId, access: impl FnOnce(&mut PropIcSlot) -> R) -> R {
+        access(&mut self.prop_slots.borrow_mut()[id.0 as usize])
     }
 
     fn body_key(&self) -> *const Vec<crate::ast::Statement> {
         Rc::as_ptr(&self._body)
     }
+}
+
+/// The IC store of the body being executed.
+#[derive(Default)]
+pub(crate) enum CurrentIc {
+    #[default]
+    None,
+    /// A script, module or eval body, held in the interpreter's table.
+    Table(BodyStoreHandle),
+    /// A function body, held by its literal's frame.
+    Frame(FrameIcStore),
 }
 
 impl Interpreter {
@@ -328,59 +334,67 @@ impl Interpreter {
         execute: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let active = self.ic_store.enter_body(body);
-        self.run_in_ic_body(active, execute)
-    }
-
-    /// [`with_ic_body`](Self::with_ic_body) for a function body, entering its
-    /// store through the handle remembered on the literal's frame (#1062).
-    #[inline]
-    pub(crate) fn with_ic_body_cached<T>(
-        &mut self,
-        body: &Body,
-        cached: &Cell<Option<BodyStoreHandle>>,
-        execute: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let active = self.ic_store.enter_body_cached(body, cached);
-        self.run_in_ic_body(active, execute)
-    }
-
-    #[inline]
-    fn run_in_ic_body<T>(
-        &mut self,
-        active: BodyStoreHandle,
-        execute: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let previous = self.current_ic_handle.replace(active);
+        let previous = std::mem::replace(&mut self.current_ic, CurrentIc::Table(active));
         let result = execute(self);
-        let current = self
-            .current_ic_handle
-            .take()
-            .expect("left an IC Body without entering one");
-        assert_eq!(
-            current, active,
+        let current = std::mem::replace(&mut self.current_ic, previous);
+        assert!(
+            matches!(current, CurrentIc::Table(handle) if handle == active),
             "IC Body scope exited with a different active Body"
         );
-        self.ic_store.exit_body(current);
-        self.current_ic_handle = previous;
+        self.ic_store.exit_body(active);
         result
     }
 
-    /// Return a mutable reference to the current body's call slot for `id`.
+    /// [`with_ic_body`](Self::with_ic_body) for a function body, whose store
+    /// the literal's frame owns (#1023).
     #[inline]
-    pub(crate) fn call_slot(&mut self, id: CallSiteId) -> &mut CallIcSlot {
-        let handle = self
-            .current_ic_handle
-            .expect("call IC site evaluated outside a Body");
-        self.ic_store.store_mut(handle).call_slot(id)
+    pub(crate) fn with_ic_body_in_frame<T>(
+        &mut self,
+        body: &Body,
+        frame: &LiteralFrame,
+        execute: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let store = frame.ic_store(body).clone();
+        let previous = std::mem::replace(&mut self.current_ic, CurrentIc::Frame(store));
+        let result = execute(self);
+        let current = std::mem::replace(&mut self.current_ic, previous);
+        debug_assert!(
+            matches!(&current, CurrentIc::Frame(store) if store.body_key() == body.key()),
+            "IC Body scope exited with a different active Body"
+        );
+        result
     }
 
-    /// Return a mutable reference to the current body's property slot for `id`.
     #[inline]
-    pub(crate) fn prop_slot(&mut self, id: PropSiteId) -> &mut PropIcSlot {
-        let handle = self
-            .current_ic_handle
-            .expect("property IC site evaluated outside a Body");
-        self.ic_store.store_mut(handle).prop_slot(id)
+    fn current_store(&mut self) -> &BodyIcStore {
+        match &self.current_ic {
+            CurrentIc::Frame(store) => store,
+            CurrentIc::Table(handle) => self.ic_store.store_mut(*handle),
+            CurrentIc::None => panic!("IC site evaluated outside a Body"),
+        }
+    }
+
+    /// The current body's call slot for `id`.
+    #[inline]
+    pub(crate) fn call_slot(&mut self, id: CallSiteId) -> CallIcSlot {
+        self.current_store().call_slot(id)
+    }
+
+    #[inline]
+    pub(crate) fn set_call_slot(&mut self, id: CallSiteId, slot: CallIcSlot) {
+        self.current_store().set_call_slot(id, slot);
+    }
+
+    /// Runs `access` on the current body's property slot for `id`. `access`
+    /// must not run script or touch another IC slot: a frame store holds its
+    /// property slots behind a `RefCell` for the duration.
+    #[inline]
+    pub(crate) fn with_prop_slot<R>(
+        &mut self,
+        id: PropSiteId,
+        access: impl FnOnce(&mut PropIcSlot) -> R,
+    ) -> R {
+        self.current_store().with_prop_slot(id, access)
     }
 }
 
@@ -408,16 +422,45 @@ mod tests {
         let body = body_with_calls_props(2, 1);
         let h = store.enter_body(&body);
         assert_eq!(h.slot, 0);
-        assert_eq!(
-            store.store_mut(h).call_slot(CallSiteId(0)) as *mut _,
-            store.store_mut(h).call_slot(CallSiteId(0)) as *mut _
-        );
-        *store.store_mut(h).call_slot(CallSiteId(0)) = CallIcSlot::Megamorphic;
         assert!(matches!(
-            *store.store_mut(h).call_slot(CallSiteId(0)),
+            store.store_mut(h).call_slot(CallSiteId(0)),
+            CallIcSlot::Empty
+        ));
+        store
+            .store_mut(h)
+            .set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
+        assert!(matches!(
+            store.store_mut(h).call_slot(CallSiteId(0)),
             CallIcSlot::Megamorphic
         ));
         store.exit_body(h);
+    }
+
+    #[test]
+    fn frame_store_is_shared_by_nested_entries_and_restores_the_outer_store() {
+        let mut interp = Interpreter::new();
+        let body = body_with_calls_props(2, 0);
+        let frame = LiteralFrame::default();
+        interp.with_ic_body_in_frame(&body, &frame, |interp| {
+            interp.set_call_slot(CallSiteId(1), CallIcSlot::Megamorphic);
+            interp.with_ic_body_in_frame(&body, &frame, |interp| {
+                assert!(matches!(
+                    interp.call_slot(CallSiteId(1)),
+                    CallIcSlot::Megamorphic
+                ));
+                assert!(matches!(interp.call_slot(CallSiteId(0)), CallIcSlot::Empty));
+            });
+            assert!(matches!(
+                interp.call_slot(CallSiteId(1)),
+                CallIcSlot::Megamorphic
+            ));
+        });
+        assert!(matches!(interp.current_ic, CurrentIc::None));
+        assert_eq!(
+            interp.ic_store.len(),
+            0,
+            "a frame store never enters the table"
+        );
     }
 
     #[test]
@@ -430,60 +473,6 @@ mod tests {
         assert_eq!(h1, h2, "cloned body must share the same IC store");
         store.exit_body(h2);
         store.exit_body(h1);
-    }
-
-    #[test]
-    fn cached_entry_reuses_the_remembered_handle_and_counts_in_flight() {
-        let mut store = IcStore::new();
-        let body = body_with_calls_props(1, 0);
-        let cell = Cell::new(None);
-        let first = store.enter_body_cached(&body, &cell);
-        assert_eq!(cell.get(), Some(first), "a miss records the handle");
-        let nested = store.enter_body_cached(&body, &cell);
-        assert_eq!(nested, first);
-        assert_eq!(
-            store.entry_mut(first).in_flight,
-            2,
-            "a hit is counted in flight like any other entry"
-        );
-        store.exit_body(nested);
-        store.exit_body(first);
-        assert_eq!(store.entry_mut(first).in_flight, 0);
-    }
-
-    #[test]
-    fn cached_entry_refreshes_after_eviction() {
-        let mut store = IcStore::with_capacity(2);
-        let body = body_with_calls_props(1, 0);
-        let cell = Cell::new(None);
-        let stale = store.enter_body_cached(&body, &cell);
-        store.exit_body(stale);
-        for _ in 0..4 {
-            let other = body_with_calls_props(1, 0);
-            let handle = store.enter_body(&other);
-            store.exit_body(handle);
-        }
-        let fresh = store.enter_body_cached(&body, &cell);
-        assert_eq!(cell.get(), Some(fresh));
-        assert_eq!(store.store_mut(fresh).body_key(), body.key());
-        store.exit_body(fresh);
-    }
-
-    #[test]
-    fn cached_handle_for_another_body_is_rejected() {
-        let mut store = IcStore::new();
-        let a = body_with_calls_props(1, 0);
-        let b = body_with_calls_props(1, 0);
-        let cell = Cell::new(None);
-        let ha = store.enter_body_cached(&a, &cell);
-        store.exit_body(ha);
-        let hb = store.enter_body_cached(&b, &cell);
-        assert_ne!(
-            hb, ha,
-            "a cell remembered for one Body must not serve another"
-        );
-        assert_eq!(store.store_mut(hb).body_key(), b.key());
-        store.exit_body(hb);
     }
 
     #[test]
@@ -505,26 +494,20 @@ mod tests {
         let child = body_with_calls_props(1, 0);
 
         interp.with_ic_body(&parent, |interp| {
-            *interp.call_slot(CallSiteId(0)) = CallIcSlot::Megamorphic;
+            interp.set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
 
             interp.with_ic_body(&child, |interp| {
-                assert!(matches!(
-                    *interp.call_slot(CallSiteId(0)),
-                    CallIcSlot::Empty
-                ));
+                assert!(matches!(interp.call_slot(CallSiteId(0)), CallIcSlot::Empty));
             });
 
             assert!(matches!(
-                *interp.call_slot(CallSiteId(0)),
+                interp.call_slot(CallSiteId(0)),
                 CallIcSlot::Megamorphic
             ));
         });
 
         interp.with_ic_body(&child, |interp| {
-            assert!(matches!(
-                *interp.call_slot(CallSiteId(0)),
-                CallIcSlot::Empty
-            ));
+            assert!(matches!(interp.call_slot(CallSiteId(0)), CallIcSlot::Empty));
         });
     }
 
@@ -540,7 +523,7 @@ mod tests {
         let h = store.enter_body(&body);
         let slots = &store.store_mut(h).call_slots;
         assert_eq!(slots.len(), 1);
-        assert!(matches!(slots[0], CallIcSlot::Empty));
+        assert!(matches!(slots[0].get(), CallIcSlot::Empty));
         store.exit_body(h);
     }
 
@@ -639,9 +622,11 @@ mod tests {
 
         assert_eq!(store.len(), 3, "all capacity entries were active");
         assert_eq!(store.slot_count(), 3);
-        *store.store_mut(ha).call_slot(CallSiteId(0)) = CallIcSlot::Megamorphic;
+        store
+            .store_mut(ha)
+            .set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
         assert!(matches!(
-            *store.store_mut(ha).call_slot(CallSiteId(0)),
+            store.store_mut(ha).call_slot(CallSiteId(0)),
             CallIcSlot::Megamorphic
         ));
 
@@ -659,7 +644,9 @@ mod tests {
         let inner = store.enter_body(&body);
         assert_eq!(inner, outer);
         store.exit_body(inner);
-        *store.store_mut(outer).call_slot(CallSiteId(0)) = CallIcSlot::Megamorphic;
+        store
+            .store_mut(outer)
+            .set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
         store.exit_body(outer);
     }
 }

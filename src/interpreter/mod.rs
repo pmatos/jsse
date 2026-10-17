@@ -471,11 +471,11 @@ pub(crate) struct Interpreter {
     /// their statement vector so closures of the same function body share the
     /// same cache. See `docs/adr/0001-inline-cache-ast-seam.md`.
     pub(crate) ic_store: ic_store::IcStore,
-    /// Handle for the body currently being executed. Updated whenever we enter
+    /// The IC store of the body currently being executed. Updated whenever we enter
     /// or leave a function body (or the top-level program). The evaluator uses
-    /// this handle to read and write per-body IC slots without threading it
+    /// this to read and write per-body IC slots without threading it
     /// through every recursive call.
-    pub(crate) current_ic_handle: Option<ic_store::BodyStoreHandle>,
+    pub(crate) current_ic: ic_store::CurrentIc,
     /// Current JS call nesting depth. Incremented on entry to every function
     /// invocation (`call_function_inner`) and decremented as the stack unwinds.
     /// When it crosses the depth limits a catchable `RangeError` is thrown
@@ -877,7 +877,7 @@ impl Interpreter {
             bytecode_memo: body_memo::BodyMemo::new(),
             state_machine_memo: body_memo::BodyMemo::new(),
             ic_store: ic_store::IcStore::new(),
-            current_ic_handle: None,
+            current_ic: ic_store::CurrentIc::None,
             call_depth: 0,
             overflow_armed: true,
             tco_suppress_depth: 0,
