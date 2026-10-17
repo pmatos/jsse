@@ -578,11 +578,13 @@ fn analyze_expression(
             }
         }
 
-        Expression::Spread(inner) | Expression::PreIterated(inner) => {
+        Expression::Spread(inner)
+        | Expression::PreIterated(inner)
+        | Expression::ClassProtoParent(inner) => {
             analyze_expression(inner, analysis, ctx, true);
         }
 
-        Expression::BoundCallee(func, this) => {
+        Expression::BoundCallee(func, this) | Expression::ResolvedHeritage(func, this) => {
             analyze_expression(func, analysis, ctx, true);
             analyze_expression(this, analysis, ctx, true);
         }
@@ -843,6 +845,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         | Expression::Delete(e)
         | Expression::Spread(e)
         | Expression::PreIterated(e)
+        | Expression::ClassProtoParent(e)
         | Expression::Update(_, _, e) => expr_contains(e, target),
         Expression::Import(e, opts)
         | Expression::ImportDefer(e, opts)
@@ -852,7 +855,10 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         Expression::Binary(_, l, r)
         | Expression::Logical(_, l, r)
         | Expression::Assign(_, l, r)
-        | Expression::BoundCallee(l, r) => expr_contains(l, target) || expr_contains(r, target),
+        | Expression::BoundCallee(l, r)
+        | Expression::ResolvedHeritage(l, r) => {
+            expr_contains(l, target) || expr_contains(r, target)
+        }
         Expression::Conditional(t, c, a) => {
             expr_contains(t, target) || expr_contains(c, target) || expr_contains(a, target)
         }
