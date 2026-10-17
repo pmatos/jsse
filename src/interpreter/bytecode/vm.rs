@@ -575,9 +575,9 @@ fn declare_lexicals(scope: &mut Environment, chunk: &Chunk, lexicals: &[(u16, bo
     }
 }
 
-/// A generator chunk's own `var` and top-level `let`/`const`/class bindings,
-/// declared when the generator is created (FunctionDeclarationInstantiation)
-/// rather than at its first `next()`.
+/// A function chunk's own `var` and top-level `let`/`const`/class bindings:
+/// declared when the chunk starts, or, for a generator, when it is created
+/// (FunctionDeclarationInstantiation) rather than at its first `next()`.
 pub(crate) fn declare_chunk_prologue(chunk: &Chunk, env: &EnvRef) {
     declare_var_prologue(chunk, env);
     if let Some(lexicals) = &chunk.top_level_lexicals {
@@ -828,8 +828,7 @@ impl GeneratorFrame {
     }
 
     /// Every environment the frame holds: the block environments in scope and
-    /// those of the pending identifier references (`with` is not hosted, so
-    /// none of them names an object).
+    /// those of the pending identifier references.
     pub(crate) fn environments(&self) -> impl Iterator<Item = &EnvRef> {
         self.control
             .scopes
@@ -838,6 +837,15 @@ impl GeneratorFrame {
                 IdentifierRef::SpecificEnv(env) => Some(env),
                 IdentifierRef::WithObject(_) | IdentifierRef::Unresolvable => None,
             }))
+    }
+
+    /// The objects of the pending references into a `with` scope enclosing the
+    /// generator function (the body itself is not hosted when it contains one).
+    pub(crate) fn with_objects(&self) -> impl Iterator<Item = u64> + '_ {
+        self.refs.iter().filter_map(|r| match r {
+            IdentifierRef::WithObject(id) => Some(*id),
+            IdentifierRef::SpecificEnv(_) | IdentifierRef::Unresolvable => None,
+        })
     }
 }
 
@@ -970,10 +978,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
     if declare_chunk_vars {
-        declare_var_prologue(chunk, frame_env);
-        if let Some(lexicals) = &chunk.top_level_lexicals {
-            declare_lexicals(&mut frame_env.borrow_mut(), chunk, lexicals);
-        }
+        declare_chunk_prologue(chunk, frame_env);
     }
     let mut completion_value: Option<JsValue> = None;
     let mut pc: usize = 0;

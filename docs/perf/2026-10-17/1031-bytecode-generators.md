@@ -67,5 +67,5 @@ Standalone fixtures from the issue (net Ir per `next()`/yield, N=30k/90k, consum
 - Async generators and async functions: still state machines with tree-walked payloads (async-fs setup, the per-await
   bookkeeping of the issue's section 4).
 - The state machine evaluates operands that precede a `yield` when it resumes, not before suspending
-  (`note(1) + (yield note(2))` logs 2,1); the hosted path is spec-correct (see
+  (`note(1) + (yield note(2))` logs 2,1, #1104); the hosted path is spec-correct (see
   `test262-extra/generator-bytecode-yield-in-expressions.js`).

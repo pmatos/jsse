@@ -16,6 +16,7 @@ mod modules;
 mod operand;
 
 use generator_runtime::ForOfUnwindOutcome;
+pub(crate) use generator_runtime::GeneratorImpl;
 pub(crate) use operand::Operand;
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth
@@ -1992,8 +1993,33 @@ impl Interpreter {
         func_obj_id: u64,
         body: &Body,
     ) -> crate::interpreter::bytecode::BytecodeCacheState {
+        let state = self.memoised_bytecode_verdict(
+            func_obj_id,
+            body,
+            crate::interpreter::bytecode::compiler::compile_function_body,
+        );
+        if let Some(o) = self.get_object(func_obj_id) {
+            o.borrow_mut().set_bytecode_cache(&state);
+        }
+        state
+    }
+
+    /// The memoised verdict of compiling `body` with `compile` (a plain
+    /// function body or a generator body), compiling it on first use.
+    pub(crate) fn memoised_bytecode_verdict(
+        &mut self,
+        func_obj_id: u64,
+        body: &Body,
+        compile: fn(
+            &[Statement],
+            &crate::interpreter::bytecode::compiler::FrameShape<'_>,
+        ) -> Result<
+            crate::interpreter::bytecode::chunk::Chunk,
+            crate::interpreter::bytecode::compiler::CompileError,
+        >,
+    ) -> crate::interpreter::bytecode::BytecodeCacheState {
         use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
-        let state = match self.bytecode_memo.get(body) {
+        match self.bytecode_memo.get(body) {
             Some(state) => {
                 // BAIL counts each literal once; the BODY row of every closure
                 // still names the reason.
@@ -2012,7 +2038,7 @@ impl Interpreter {
                     arguments_slot,
                     simple_params: &simple_params,
                 };
-                let state = match compiler::compile_function_body(body.as_slice(), &frame_shape) {
+                let state = match compile(body.as_slice(), &frame_shape) {
                     Ok(c) => {
                         #[cfg(feature = "perf-counters")]
                         {
@@ -2034,11 +2060,7 @@ impl Interpreter {
                 self.bytecode_memo.insert(body, state.clone());
                 state
             }
-        };
-        if let Some(o) = self.get_object(func_obj_id) {
-            o.borrow_mut().set_bytecode_cache(&state);
         }
-        state
     }
 
     /// The `typeof` result string for an evaluated value (HTMLDDA aware).
@@ -2103,8 +2125,7 @@ impl Interpreter {
                 // Function and lexical declarations are instantiated before
                 // the chunk runs, exactly as the tree-walker does, so the
                 // nodes handed back to it find their bindings in place.
-                let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
-                    .then(|| self.hoist_cache.analysis_for(body));
+                let analysis = self.chunk_instantiation_analysis(&chunk, body);
                 #[cfg(feature = "perf-counters")]
                 let has_fallback = !chunk.ast.is_empty();
                 #[cfg(feature = "perf-counters")]
@@ -2113,15 +2134,11 @@ impl Interpreter {
                     self.perf.enter_ast_body(name, seq, false);
                 }
                 let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
-                    if let Some(analysis) = &analysis {
-                        vm::declare_var_prologue(&chunk, exec_env);
-                        if let Some(err) = interp.instantiate_body_declarations(
-                            body.as_slice(),
-                            exec_env,
-                            Some(analysis),
-                        ) {
-                            return err;
-                        }
+                    if let Some(analysis) = &analysis
+                        && let Some(err) =
+                            interp.instantiate_chunk_declarations(&chunk, body, exec_env, analysis)
+                    {
+                        return err;
                     }
                     vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
                 });

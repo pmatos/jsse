@@ -1535,6 +1535,7 @@ impl Interpreter {
                     for env in frame.environments() {
                         Self::collect_env_roots(env, worklist, seen_envs);
                     }
+                    worklist.extend(frame.with_objects());
                 }
             }
             IteratorState::StateMachineGenerator {

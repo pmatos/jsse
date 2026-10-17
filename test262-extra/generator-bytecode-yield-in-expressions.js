@@ -95,8 +95,10 @@ var expected = {
   yieldInLabelledLoop: 'Y:"00",Y:"01",Y:"10",Y:"11",R:"end11"',
 };
 // A generator the engine runs as a state machine evaluates operands that
-// precede a `yield` only when it resumes, so the order in which side effects
-// happen is only asserted for engines that suspend the body in place.
+// precede a `yield` only when it resumes (#1104), so the order in which side
+// effects happen is only asserted for engines that suspend the body in place.
+// That generators of this shape are suspended in place is gated by
+// tests/perf_counters_bytecode_generator.rs.
 var operandOrderIsPreserved = (function() {
   log = [];
   function* probe() { return note(1) + (yield note(2)); }

@@ -308,6 +308,33 @@ impl Interpreter {
         None
     }
 
+    /// The hoisting analysis a compiled function body needs instantiated
+    /// before its chunk runs, or `None` when the chunk declares everything it
+    /// owns itself (`declare_chunk_prologue`).
+    pub(super) fn chunk_instantiation_analysis(
+        &mut self,
+        chunk: &crate::interpreter::bytecode::chunk::Chunk,
+        body: &Body,
+    ) -> Option<Rc<HoistAnalysis>> {
+        (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
+            .then(|| self.hoist_cache.analysis_for(body))
+    }
+
+    /// Declaration instantiation for a compiled function body whose chunk does
+    /// not declare its own bindings: the chunk's `var` names first, so
+    /// instantiation cannot choose a different binding order, then the
+    /// tree-walker's pass for the function and lexical declarations.
+    pub(super) fn instantiate_chunk_declarations(
+        &mut self,
+        chunk: &crate::interpreter::bytecode::chunk::Chunk,
+        body: &Body,
+        env: &EnvRef,
+        analysis: &Rc<HoistAnalysis>,
+    ) -> Option<Completion> {
+        crate::interpreter::bytecode::vm::declare_var_prologue(chunk, env);
+        self.instantiate_body_declarations(body.as_slice(), env, Some(analysis))
+    }
+
     /// Annex B.3.3.1 / `sec-functiondeclarationinstantiation`'s web-compat
     /// insertion point: at function/global level in sloppy mode, create var
     /// bindings for function declarations inside blocks. Skip names that

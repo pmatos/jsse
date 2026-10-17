@@ -87,7 +87,25 @@ enum RouteExceptionOutcome {
     },
 }
 
+/// How the body of a generator object runs.
+#[derive(Clone, Copy)]
+pub(crate) enum GeneratorImpl {
+    StateMachine,
+    Bytecode,
+}
+
 impl Interpreter {
+    /// How `this` runs, or `None` when it is not a sync generator whose body
+    /// the state machine or a bytecode chunk drives.
+    pub(crate) fn generator_impl(&self, this: &JsValue) -> Option<GeneratorImpl> {
+        let cell = self.get_object_cell(this.as_object_id()?)?;
+        match cell.borrow().iterator_state() {
+            Some(IteratorState::StateMachineGenerator { .. }) => Some(GeneratorImpl::StateMachine),
+            Some(IteratorState::BytecodeGenerator(_)) => Some(GeneratorImpl::Bytecode),
+            _ => None,
+        }
+    }
+
     /// This generator is finished and nothing will resume it: tear it down.
     ///
     /// Drops every per-generator side table the drivers root for `gen_id`
@@ -648,38 +666,7 @@ impl Interpreter {
     /// so every closure of one function literal shares it.
     fn generator_chunk(&mut self, func_obj_id: u64, body: &Body) -> Option<Rc<Chunk>> {
         use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
-        let state = match self.bytecode_memo.get(body) {
-            Some(state) => state,
-            None => {
-                let (arguments_slot, simple_params) = self.function_frame_shape(func_obj_id);
-                let frame_shape = compiler::FrameShape {
-                    arguments_slot,
-                    simple_params: &simple_params,
-                };
-                let state = match compiler::compile_generator_body(body.as_slice(), &frame_shape) {
-                    Ok(chunk) => {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            self.perf.compile_ok += 1;
-                            self.perf.record_fallbacks(&chunk.fallback_reasons);
-                        }
-                        BytecodeCacheState::Compiled(Rc::new(chunk))
-                    }
-                    Err(e) => {
-                        let reason = e.reason();
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            let (name, seq) = self.perf_body_name(func_obj_id);
-                            self.perf.record_bail(reason, name, seq);
-                        }
-                        BytecodeCacheState::Ineligible(reason)
-                    }
-                };
-                self.bytecode_memo.insert(body, state.clone());
-                state
-            }
-        };
-        match state {
+        match self.memoised_bytecode_verdict(func_obj_id, body, compiler::compile_generator_body) {
             BytecodeCacheState::Compiled(chunk) => Some(chunk),
             BytecodeCacheState::Ineligible(_) | BytecodeCacheState::Untried => None,
         }
@@ -703,18 +690,15 @@ impl Interpreter {
         let Some(chunk) = self.generator_chunk(func_obj_id, body) else {
             return Ok(None);
         };
-        let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
-            .then(|| self.hoist_cache.analysis_for(body));
-        match analysis {
+        match self.chunk_instantiation_analysis(&chunk, body) {
             Some(analysis) => {
-                vm::declare_var_prologue(&chunk, exec_env);
                 let failed = self.with_ic_body(body, |interp| {
-                    interp.instantiate_body_declarations(body.as_slice(), exec_env, Some(&analysis))
+                    interp.instantiate_chunk_declarations(&chunk, body, exec_env, &analysis)
                 });
                 match failed {
                     Some(Completion::Throw(error)) => return Err(error),
-                    Some(_) => {
-                        return Err(self.create_type_error("generator declaration failed"));
+                    Some(other) => {
+                        unreachable!("function declaration instantiation completed with {other:?}")
                     }
                     None => {}
                 }
@@ -928,12 +912,7 @@ impl Interpreter {
         iterator: &JsValue,
         read_value: bool,
     ) -> Option<Result<Option<JsValue>, JsValue>> {
-        let cell = self.get_object_cell(iterator.as_object_id()?)?;
-        let bytecode = match cell.borrow().iterator_state() {
-            Some(IteratorState::StateMachineGenerator { .. }) => false,
-            Some(IteratorState::BytecodeGenerator(_)) => true,
-            _ => return None,
-        };
+        let implementation = self.generator_impl(iterator)?;
         self.raw_iter_step = None;
         // `%GeneratorPrototype%.next` is a native [[Call]]: the body it
         // resumes sees no NewTarget, whatever constructor is running here.
@@ -942,10 +921,11 @@ impl Interpreter {
         let saved_new_target = self.new_target.take();
         // The native `next` call this replaces counted one call level; keep
         // that so recursion through generators stays bounded.
-        let completion = self.with_call_depth(|interp| {
-            if bytecode {
+        let completion = self.with_call_depth(|interp| match implementation {
+            GeneratorImpl::Bytecode => {
                 interp.bytecode_generator_resume(iterator, Resume::Next(JsValue::UNDEFINED), true)
-            } else {
+            }
+            GeneratorImpl::StateMachine => {
                 interp.generator_next_state_machine_with(iterator, JsValue::UNDEFINED, true)
             }
         });

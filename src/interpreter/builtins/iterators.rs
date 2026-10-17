@@ -1,4 +1,6 @@
 use super::super::*;
+use crate::interpreter::bytecode::vm::Resume;
+use crate::interpreter::eval::GeneratorImpl;
 use crate::interpreter::gc::RootedSlots;
 
 type ZipState = Rc<
@@ -3608,24 +3610,14 @@ impl Interpreter {
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Check which variant we have
-                if let Some(this_id) = this.as_object_id()
-                    && let Some(obj_rc) = interp.get_object_cell(this_id)
-                {
-                    let kind = match obj_rc.borrow().iterator_state() {
-                        Some(IteratorState::StateMachineGenerator { .. }) => 1,
-                        Some(IteratorState::BytecodeGenerator(_)) => 2,
-                        _ => 0,
-                    };
-                    if kind == 1 {
+                match interp.generator_impl(this) {
+                    Some(GeneratorImpl::StateMachine) => {
                         return interp.generator_next_state_machine(this, value);
                     }
-                    if kind == 2 {
-                        return interp.bytecode_generator_resume(
-                            this,
-                            crate::interpreter::bytecode::vm::Resume::Next(value),
-                            false,
-                        );
+                    Some(GeneratorImpl::Bytecode) => {
+                        return interp.bytecode_generator_resume(this, Resume::Next(value), false);
                     }
+                    None => {}
                 }
                 interp.generator_next(this, value)
             },
@@ -3645,24 +3637,18 @@ impl Interpreter {
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Check which variant we have
-                if let Some(this_id) = this.as_object_id()
-                    && let Some(obj_rc) = interp.get_object_cell(this_id)
-                {
-                    let kind = match obj_rc.borrow().iterator_state() {
-                        Some(IteratorState::StateMachineGenerator { .. }) => 1,
-                        Some(IteratorState::BytecodeGenerator(_)) => 2,
-                        _ => 0,
-                    };
-                    if kind == 1 {
+                match interp.generator_impl(this) {
+                    Some(GeneratorImpl::StateMachine) => {
                         return interp.generator_return_state_machine(this, value);
                     }
-                    if kind == 2 {
+                    Some(GeneratorImpl::Bytecode) => {
                         return interp.bytecode_generator_resume(
                             this,
-                            crate::interpreter::bytecode::vm::Resume::Return(value),
+                            Resume::Return(value),
                             false,
                         );
                     }
+                    None => {}
                 }
                 interp.generator_return(this, value)
             },
@@ -3681,24 +3667,18 @@ impl Interpreter {
             |interp, this, args| {
                 let exception = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Check which variant we have
-                if let Some(this_id) = this.as_object_id()
-                    && let Some(obj_rc) = interp.get_object_cell(this_id)
-                {
-                    let kind = match obj_rc.borrow().iterator_state() {
-                        Some(IteratorState::StateMachineGenerator { .. }) => 1,
-                        Some(IteratorState::BytecodeGenerator(_)) => 2,
-                        _ => 0,
-                    };
-                    if kind == 1 {
+                match interp.generator_impl(this) {
+                    Some(GeneratorImpl::StateMachine) => {
                         return interp.generator_throw_state_machine(this, exception);
                     }
-                    if kind == 2 {
+                    Some(GeneratorImpl::Bytecode) => {
                         return interp.bytecode_generator_resume(
                             this,
-                            crate::interpreter::bytecode::vm::Resume::Throw(exception),
+                            Resume::Throw(exception),
                             false,
                         );
                     }
+                    None => {}
                 }
                 interp.generator_throw(this, exception)
             },
