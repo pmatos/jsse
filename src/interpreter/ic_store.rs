@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 
-use crate::ast::{Body, BodyIcInfo, CallSiteId, PropSiteId};
+use crate::ast::{Body, CallSiteId, PropSiteId};
 use crate::interpreter::Interpreter;
 use crate::interpreter::ic::{CallIcSlot, PropIcSlot};
 use crate::interpreter::literal_frame::LiteralFrame;
@@ -122,7 +122,7 @@ impl IcStore {
 
         let tick = tick_clock(&mut self.clock);
         let entry = StoreEntry {
-            store: BodyIcStore::new(body.ic, body.statements.clone()),
+            store: BodyIcStore::new(body),
             last_used: tick,
             in_flight: 1,
         };
@@ -274,18 +274,18 @@ pub(crate) struct BodyIcStore {
 pub(crate) type FrameIcStore = Rc<BodyIcStore>;
 
 impl BodyIcStore {
-    fn new(info: BodyIcInfo, body: Rc<Vec<crate::ast::Statement>>) -> Self {
+    fn new(body: &Body) -> Self {
         Self {
-            call_slots: vec![Cell::new(CallIcSlot::Empty); info.call_site_count as usize],
-            prop_slots: RefCell::new(vec![PropIcSlot::Empty; info.prop_site_count as usize]),
-            _body: body,
+            call_slots: vec![Cell::new(CallIcSlot::Empty); body.ic.call_site_count as usize],
+            prop_slots: RefCell::new(vec![PropIcSlot::Empty; body.ic.prop_site_count as usize]),
+            _body: body.statements.clone(),
         }
     }
 
     /// A frame is paired with one literal's Body for its whole life; the
     /// frame's entry points assert it in debug builds.
     pub(crate) fn for_frame(body: &Body) -> FrameIcStore {
-        Rc::new(Self::new(body.ic, body.statements.clone()))
+        Rc::new(Self::new(body))
     }
 
     #[inline]

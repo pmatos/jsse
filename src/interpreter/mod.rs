@@ -473,7 +473,7 @@ pub(crate) struct Interpreter {
     pub(crate) ic_store: ic_store::IcStore,
     /// The IC store of the body currently being executed. Updated whenever we enter
     /// or leave a function body (or the top-level program). The evaluator uses
-    /// this handle to read and write per-body IC slots without threading it
+    /// this to read and write per-body IC slots without threading it
     /// through every recursive call.
     pub(crate) current_ic: ic_store::CurrentIc,
     /// Current JS call nesting depth. Incremented on entry to every function
