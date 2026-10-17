@@ -1348,53 +1348,53 @@ impl NanBoxedValue {
         self.0 >= Self::FIRST_HEAP_BITS
     }
 
+    /// The tag bits of a value known to own a heap pointer.
+    fn heap_tag_bits(&self) -> u64 {
+        (self.0 >> Self::TAG_SHIFT) & 0b111
+    }
+
     #[inline(never)]
     fn retain_heap_pointer(&self) {
-        match self.tag() {
-            Some(NanTag::String) => {
-                let ptr = self.payload_ptr::<StrView>();
-                // SAFETY: this value owns a live strong count for `ptr`.
-                unsafe { Arc::increment_strong_count(ptr) };
-            }
-            Some(NanTag::Symbol) => {
-                let ptr = self.payload_ptr::<JsSymbolData>();
-                // SAFETY: this value owns a live strong count for `ptr`.
-                unsafe { Arc::increment_strong_count(ptr) };
-            }
-            Some(NanTag::BigInt) => {
-                let ptr = self.payload_ptr::<num_bigint::BigInt>();
-                // SAFETY: this value owns a live strong count for `ptr`.
-                unsafe { Arc::increment_strong_count(ptr) };
-            }
+        const STRING: u64 = NanTag::String as u64;
+        const SYMBOL: u64 = NanTag::Symbol as u64;
+        const BIGINT: u64 = NanTag::BigInt as u64;
+        match self.heap_tag_bits() {
+            // SAFETY (all arms): this value owns a live strong count for `ptr`.
+            STRING => unsafe { Arc::increment_strong_count(self.payload_ptr::<StrView>()) },
+            SYMBOL => unsafe { Arc::increment_strong_count(self.payload_ptr::<JsSymbolData>()) },
+            BIGINT => unsafe {
+                Arc::increment_strong_count(self.payload_ptr::<num_bigint::BigInt>())
+            },
             _ => unreachable!("only heap-tagged values reach retain_heap_pointer"),
         }
     }
 
     #[inline(never)]
     fn release_heap_pointer(&mut self) {
-        match self.tag() {
-            Some(NanTag::String) => {
-                let ptr = self.payload_ptr::<StrView>();
-                // SAFETY: this value owns exactly one strong count for `ptr`.
-                unsafe { drop(Arc::from_raw(ptr)) };
-            }
-            Some(NanTag::Symbol) => {
-                let ptr = self.payload_ptr::<JsSymbolData>();
-                // SAFETY: this value owns exactly one strong count for `ptr`.
-                unsafe { drop(Arc::from_raw(ptr)) };
-            }
-            Some(NanTag::BigInt) => {
-                let ptr = self.payload_ptr::<num_bigint::BigInt>();
-                // SAFETY: this value owns exactly one strong count for `ptr`.
-                unsafe { drop(Arc::from_raw(ptr)) };
-            }
+        const STRING: u64 = NanTag::String as u64;
+        const SYMBOL: u64 = NanTag::Symbol as u64;
+        const BIGINT: u64 = NanTag::BigInt as u64;
+        match self.heap_tag_bits() {
+            // SAFETY (all arms): this value owns exactly one strong count for `ptr`.
+            STRING => unsafe { drop(Arc::from_raw(self.payload_ptr::<StrView>())) },
+            SYMBOL => unsafe { drop(Arc::from_raw(self.payload_ptr::<JsSymbolData>())) },
+            BIGINT => unsafe { drop(Arc::from_raw(self.payload_ptr::<num_bigint::BigInt>())) },
             _ => unreachable!("only heap-tagged values reach release_heap_pointer"),
         }
     }
 }
 
+// `owns_heap_pointer` is a single comparison only while the three tags that
+// own an `Arc` are the three largest.
+const _: () = {
+    assert!(NanTag::Object as u64 + 1 == NanTag::String as u64);
+    assert!(NanTag::String as u64 + 1 == NanTag::Symbol as u64);
+    assert!(NanTag::Symbol as u64 + 1 == NanTag::BigInt as u64);
+    assert!(NanTag::BigInt as u64 == 0b111);
+};
+
 impl Clone for NanBoxedValue {
-    #[inline(always)]
+    #[inline]
     fn clone(&self) -> Self {
         if self.owns_heap_pointer() {
             self.retain_heap_pointer();
@@ -1404,7 +1404,7 @@ impl Clone for NanBoxedValue {
 }
 
 impl Drop for NanBoxedValue {
-    #[inline(always)]
+    #[inline]
     fn drop(&mut self) {
         if self.owns_heap_pointer() {
             self.release_heap_pointer();
@@ -2318,6 +2318,48 @@ mod tests {
             bigint.raw_bits(),
             SIGNATURE | (7 << TAG_SHIFT) | bigint_address
         );
+    }
+
+    #[test]
+    fn only_arc_owning_values_report_a_heap_pointer() {
+        const MAX_PAYLOAD: u64 = (1_u64 << 48) - 1;
+
+        let owning = [
+            JsValue::string(JsString::from_vec(vec![0x61])),
+            JsValue::symbol(JsSymbol::new(1, None)),
+            JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(1))),
+        ];
+        for value in &owning {
+            assert!(value.owns_heap_pointer());
+        }
+
+        let borrowed = [
+            JsValue::UNDEFINED,
+            JsValue::NULL,
+            JsValue::TRUE,
+            JsValue::FALSE,
+            JsValue::object(0),
+            JsValue::object(MAX_PAYLOAD),
+            JsValue::number(0.0),
+            JsValue::number(-0.0),
+            JsValue::number(f64::NAN),
+            JsValue::number(f64::INFINITY),
+            JsValue::number(f64::NEG_INFINITY),
+            JsValue::number(f64::MAX),
+            JsValue::number(f64::from_bits(0xFFF0_0000_0000_0001)),
+        ];
+        for value in &borrowed {
+            assert!(!value.owns_heap_pointer());
+        }
+
+        let shared = JsString::from_vec(vec![0x62]);
+        let first = JsValue::string(shared.clone());
+        let second = first.clone();
+        assert_eq!(Arc::strong_count(&shared.view), 3);
+        drop(second);
+        assert_eq!(Arc::strong_count(&shared.view), 2);
+        drop(first);
+        assert_eq!(Arc::strong_count(&shared.view), 1);
     }
 
     #[test]
