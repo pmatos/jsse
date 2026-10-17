@@ -1091,30 +1091,54 @@ fn hoist_suspending_expr(
     Some(Expression::Identifier(temp_var))
 }
 
-/// Hoist the sub-expressions of a class heritage clause and computed element
-/// keys that themselves contain a `yield`/`await` into temp vars (heritage
-/// first, then each key in declaration order), so the suspension belongs to
-/// the enclosing generator rather than to the class.
+/// Capture, in source order, every part of a class heritage clause and its
+/// computed element keys that ClassDefinitionEvaluation (§15.7.14) evaluates
+/// up to and including the last one containing a `yield`/`await`, then point
+/// the rebuilt class at the captured temps. The heritage is bound to a temp;
+/// each such key is bound to a temp and converted with `ToPropertyKey` at once,
+/// so the suspension belongs to the enclosing generator and nothing the class
+/// runs later is observable before it. Keys after the last suspension stay in
+/// the class: they are evaluated when it is built, in order, after every temp.
 ///
-/// Only suspending sub-expressions move: non-suspending siblings stay in the
-/// rebuilt class and run when it is evaluated, after every hoisted suspension,
-/// and a hoisted key's ToPropertyKey is likewise deferred to that point. Both
-/// depart from the source order of ClassDefinitionEvaluation (spec §15.7.14).
+/// The heritage checks (IsConstructor, the `prototype` read) still run when the
+/// class is built, after the captured keys rather than before them (#1110).
 fn hoist_class_suspensions(
     super_class: &mut Option<Box<Expression>>,
     elements: &mut [ClassElement],
     ctx: &mut TransformContext,
 ) {
-    if let Some(sc) = super_class
-        && let Some(hoisted) = hoist_suspending_expr(sc, "class_heritage", ctx)
-    {
-        **sc = hoisted;
+    let is_async = ctx.is_async;
+    let last_key = elements.iter().rposition(|e| {
+        e.computed_key()
+            .is_some_and(|k| expr_has_suspension(k, is_async))
+    });
+    let heritage_suspends = super_class
+        .as_deref()
+        .is_some_and(|sc| expr_has_suspension(sc, is_async));
+    if last_key.is_none() && !heritage_suspends {
+        return;
     }
-    for key in elements.iter_mut().filter_map(ClassElement::key_mut) {
+    if let Some(sc) = super_class
+        && !matches!(**sc, Expression::Literal(_))
+    {
+        let temp_var = ctx.new_temp_var("class_heritage");
+        bind_expression_to_temp(sc, &temp_var, ctx);
+        **sc = Expression::Identifier(temp_var);
+    }
+    let Some(last_key) = last_key else {
+        return;
+    };
+    for key in elements[..=last_key]
+        .iter_mut()
+        .filter_map(ClassElement::key_mut)
+    {
         if let PropertyKey::Computed(e) = key
-            && let Some(hoisted) = hoist_suspending_expr(e, "class_key", ctx)
+            && (expr_has_suspension(e, is_async) || !matches!(**e, Expression::Literal(_)))
         {
-            **e = hoisted;
+            let temp_var = ctx.new_temp_var("class_key");
+            bind_expression_to_temp(e, &temp_var, ctx);
+            hoist_to_property_key(&temp_var, ctx);
+            **e = Expression::Identifier(temp_var);
         }
     }
 }
