@@ -21,7 +21,7 @@ info: |
       ii. If protoParent is not an Object and protoParent is not null, throw a TypeError exception.
   ... 28. For each ClassElement e of elements, do ... ClassElementEvaluation
 flags: [async]
-features: [generators, async-functions, async-iteration, class]
+features: [generators, async-functions, async-iteration, class, Proxy, arrow-function]
 ---*/
 
 var GeneratorFunction = Object.getPrototypeOf(function*() {}).constructor;
@@ -105,6 +105,11 @@ var cases = [
    "class C extends A { [n('k1')]() {} [@'k2']() {} }" +
    "return [new C().m(), C.s(), Object.getPrototypeOf(C) === A, Object.getPrototypeOf(C.prototype) === A.prototype].join();",
    "A.m,A.s,true,true"],
+  ["suspendingHeritageWithoutSuspendingKey",
+   "var P = proxied();" +
+   "class D extends (@P) { [n('k1')]() {} [n('k2')]() {} }" +
+   "return log.join();",
+   "protoget,k1,k2"],
   ["noSuspendingKeyKeepsOrder",
    "var P = proxied();" +
    "class D extends P { [n('k1')]() {} [n('k2')]() {} }" +

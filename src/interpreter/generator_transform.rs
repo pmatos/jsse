@@ -1164,7 +1164,9 @@ fn hoist_class_suspensions(
     let Some(last_key) = last_key else {
         return;
     };
-    if let Some(sc) = super_class {
+    if let Some(sc) = super_class
+        && !matches!(**sc, Expression::Literal(Literal::Null))
+    {
         let proto_var = ctx.new_temp_var("class_proto_parent");
         let check = Expression::ClassProtoParent(ExprBox::new((**sc).clone()));
         bind_expression_to_temp(&check, &proto_var, ctx);
