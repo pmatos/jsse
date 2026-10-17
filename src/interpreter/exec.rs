@@ -2417,7 +2417,23 @@ impl Interpreter {
         }
     }
 
+    /// A `return f()` in the body leaves the loop through IteratorClose, so the
+    /// call is never in tail position (HasCallInTailPosition has no clause for
+    /// iteration statements).
     fn exec_for_of(
+        &mut self,
+        fo: &ForOfStatement,
+        env: &EnvRef,
+        label: Option<&str>,
+    ) -> Completion {
+        let saved_tco = self.tco_suppress_depth;
+        self.tco_suppress_depth = saved_tco + 1;
+        let completion = self.exec_for_of_inner(fo, env, label);
+        self.tco_suppress_depth = saved_tco;
+        completion
+    }
+
+    fn exec_for_of_inner(
         &mut self,
         fo: &ForOfStatement,
         env: &EnvRef,
