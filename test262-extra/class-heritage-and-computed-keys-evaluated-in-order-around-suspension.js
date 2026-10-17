@@ -70,6 +70,31 @@ var cases = [
    "class C { static get [n('g')]() { return 1; } [n('f')] = n('init'); static [n('s')] = n('sinit'); [@n('last')]() {} }" +
    "new C(); return log.join();",
    "g,f,s,last,sinit,init"],
+  ["keyIsStrictCode",
+   "class C { [(function() { return this === undefined ? 'strict' : 'sloppy'; })()]() {} [@'y']() {} }" +
+   "return Object.getOwnPropertyNames(C.prototype).join();",
+   "constructor,strict,y"],
+  ["heritageIsStrictCode",
+   "class C extends (function() { return this === undefined ? Object : Array; })() { [@'y']() {} }" +
+   "return String(Object.getPrototypeOf(C) === Object);",
+   "true"],
+  ["keyReadsInnerClassBindingInTdz",
+   "try { var X = class C { [typeof C]() {} [@'y']() {} }; return 'no throw'; } catch (e) { return e.constructor.name; }",
+   "ReferenceError"],
+  ["heritageReadsInnerClassBindingInTdz",
+   "try { var X = class C extends (typeof C, Object) { [@'y']() {} }; return 'no throw'; } catch (e) { return e.constructor.name; }",
+   "ReferenceError"],
+  ["declarationKeyReadsClassBindingInTdz",
+   "try { class C { [typeof C]() {} [@'y']() {} } return 'no throw'; } catch (e) { return e.constructor.name; }",
+   "ReferenceError"],
+  ["keyDirectEvalIsStrict",
+   "class C { [eval('var q = 1; \\'k\\'')]() {} [@'y']() {} }" +
+   "return typeof q;",
+   "undefined"],
+  ["keyKeepsEnclosingThisAndArguments",
+   "class C { [this.tag]() {} [arguments.length]() {} [@'y']() {} }" +
+   "return Object.getOwnPropertyNames(C.prototype).join();",
+   "0,constructor,t,y"],
   ["symbolAndNumericKeysKeepTheirIdentity",
    "var sym = Symbol('s');" +
    "class C { [sym]() { return 'sym'; } [1 + 1]() { return 'two'; } [@'z']() { return 'z'; } }" +
@@ -106,7 +131,7 @@ var jobs = [];
 cases.forEach(function(c) {
   variants(c[1]).forEach(function(v) {
     jobs.push(function() {
-      var fn = v[1]();
+      var fn = v[1]().bind({ tag: 't' });
       var run = v[2] === "sync" ? runSync : v[2] === "async" ? function(f) { return f(); } : runAsyncGen;
       return run(fn).then(function(value) {
         assert.sameValue(value, c[2], c[0] + " (" + v[0] + ")");

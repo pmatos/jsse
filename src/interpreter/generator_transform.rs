@@ -1091,6 +1091,39 @@ fn hoist_suspending_expr(
     Some(Expression::Identifier(temp_var))
 }
 
+/// A class's heritage and computed keys are strict code evaluated in the
+/// class scope, where the class's own name is an uninitialised binding. Once
+/// hoisted into the enclosing function they would run in its (possibly sloppy)
+/// scope, so a non-suspending expression is wrapped in an immediately invoked
+/// strict arrow whose body also declares a class of the same name after the
+/// `return`, leaving that name in its temporal dead zone. `this`, `arguments`
+/// and `new.target` still resolve to the enclosing function's.
+fn in_class_scope(expr: &Expression, class_name: Option<&str>, is_async: bool) -> Expression {
+    if expr_has_suspension(expr, is_async) {
+        return expr.clone();
+    }
+    let mut stmts = vec![Statement::Return(Some(expr.clone()))];
+    if let Some(name) = class_name {
+        stmts.push(Statement::ClassDeclaration(ClassDecl {
+            name: name.to_string(),
+            super_class: None,
+            body: Vec::new(),
+            source_text: None,
+        }));
+    }
+    let mut body = Body::new(stmts);
+    assign_ic_sites(&mut body);
+    let arrow = Expression::ArrowFunction(ArrowFunction {
+        params: Vec::new(),
+        body: ArrowBody::Block(body),
+        is_async: false,
+        source_text: None,
+        body_is_strict: true,
+        info: Default::default(),
+    });
+    Expression::Call(ExprBox::new(arrow), Vec::new(), CallSiteId::UNASSIGNED)
+}
+
 /// Capture, in source order, every part of a class heritage clause and its
 /// computed element keys that ClassDefinitionEvaluation (§15.7.14) evaluates
 /// up to and including the last one containing a `yield`/`await`, then point
@@ -1103,6 +1136,7 @@ fn hoist_suspending_expr(
 /// The heritage checks (IsConstructor, the `prototype` read) still run when the
 /// class is built, after the captured keys rather than before them (#1110).
 fn hoist_class_suspensions(
+    class_name: Option<&str>,
     super_class: &mut Option<Box<Expression>>,
     elements: &mut [ClassElement],
     ctx: &mut TransformContext,
@@ -1122,7 +1156,8 @@ fn hoist_class_suspensions(
         && !matches!(**sc, Expression::Literal(_))
     {
         let temp_var = ctx.new_temp_var("class_heritage");
-        bind_expression_to_temp(sc, &temp_var, ctx);
+        let expr = in_class_scope(sc, class_name, is_async);
+        bind_expression_to_temp(&expr, &temp_var, ctx);
         **sc = Expression::Identifier(temp_var);
     }
     let Some(last_key) = last_key else {
@@ -1136,22 +1171,28 @@ fn hoist_class_suspensions(
             && (expr_has_suspension(e, is_async) || !matches!(**e, Expression::Literal(_)))
         {
             let temp_var = ctx.new_temp_var("class_key");
-            bind_expression_to_temp(e, &temp_var, ctx);
+            let expr = in_class_scope(e, class_name, is_async);
+            bind_expression_to_temp(&expr, &temp_var, ctx);
             hoist_to_property_key(&temp_var, ctx);
             **e = Expression::Identifier(temp_var);
         }
     }
 }
 
-/// Clone of `class_expr` with every heritage/computed-key suspension hoisted
-/// out via `hoist_class_suspensions`, so the result is safe to re-embed in a
+/// Clone of `class_expr` with its heritage and the computed keys up to the last
+/// suspending one captured in temps via `hoist_class_suspensions`, so the result is safe to re-embed in a
 /// non-suspending position (a plain `emit_statement`/`emit_expression_with_binding`
 /// call). Shared by the two call sites that need a suspension-free class to
 /// hand to the tree-walker's own (already-correct) evaluation: a bare class
 /// expression and an own-initializer class declarator.
 fn suspension_free_class_expr(class_expr: &ClassExpr, ctx: &mut TransformContext) -> ClassExpr {
     let mut class_expr = class_expr.clone();
-    hoist_class_suspensions(&mut class_expr.super_class, &mut class_expr.body, ctx);
+    hoist_class_suspensions(
+        class_expr.name.as_deref(),
+        &mut class_expr.super_class,
+        &mut class_expr.body,
+        ctx,
+    );
     class_expr
 }
 
@@ -1280,7 +1321,12 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::ClassDeclaration(class_decl) => {
             let mut class_decl = class_decl.clone();
-            hoist_class_suspensions(&mut class_decl.super_class, &mut class_decl.body, ctx);
+            hoist_class_suspensions(
+                Some(&class_decl.name),
+                &mut class_decl.super_class,
+                &mut class_decl.body,
+                ctx,
+            );
             ctx.emit_statement(Statement::ClassDeclaration(class_decl));
         }
 
