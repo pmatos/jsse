@@ -1282,6 +1282,7 @@ impl Interpreter {
         }
         let live_count = self.objects.live_count();
         self.gc.end_major_collection(live_count);
+        crate::thp::after_major_collection();
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
     }

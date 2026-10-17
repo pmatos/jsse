@@ -1,8 +1,6 @@
-//! The shipped binary runs on jemalloc with `thp:never` compiled in (#1047).
-//! The setting travels through the `_rjem_malloc_conf` symbol, which jemalloc
-//! reads only while the crate keeps its `_rjem_` prefix; without this check a
-//! prefix change would silently bring back the +17% test262 slowdown that
-//! default THP behaviour causes on THP=always hosts.
+//! The shipped binary runs on jemalloc (#1047). Its huge-page policy is set at
+//! runtime by `thp::disable_at_startup` and `thp::after_major_collection`
+//! (#1075, covered by `tests/thp_defer.rs`), not by an embedded `malloc_conf`.
 #![cfg(all(feature = "jemalloc", target_os = "linux"))]
 
 use std::process::Command;
@@ -13,20 +11,6 @@ fn jsse() -> Command {
         .env_remove("MALLOC_CONF")
         .env_remove("_RJEM_MALLOC_CONF");
     cmd
-}
-
-#[test]
-fn compiled_in_config_disables_transparent_huge_pages() {
-    let out = jsse()
-        .env("_RJEM_MALLOC_CONF", "stats_print:true")
-        .output()
-        .expect("spawn jsse");
-    assert!(out.status.success());
-    let stats = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stats.contains("opt.thp: \"never\""),
-        "jemalloc did not pick up the compiled-in malloc_conf:\n{stats}"
-    );
 }
 
 #[test]
