@@ -21,10 +21,9 @@ const COMPACT_MIN_ENTRIES: usize = 32;
 
 type Entry = (JsPropertyKey, PropertyRecord);
 
-/// Byte equality of two property keys. Interned keys of equal text share one
-/// allocation, so the common hit is settled by comparing addresses; a
-/// mismatch of equal length is almost always settled by the first byte, which
-/// keeps the scan clear of a `memcmp` call per entry.
+/// Property-key byte equality: interned keys share an allocation, so a hit is
+/// settled by address and most mismatches by length or first byte, without a
+/// `memcmp` call per entry.
 #[inline(always)]
 fn key_bytes_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len()

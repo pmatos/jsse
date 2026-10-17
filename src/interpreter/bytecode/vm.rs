@@ -459,12 +459,27 @@ fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize
     stack.truncate(base);
 }
 
-// The named-property ops (`GetProp`, `LoadMethod`, `SetProp`, `UpdateProp`)
-// live out of line, fast path and generic path together: each completes an
-// access to an ordinary object's data property in place when it can and
-// otherwise runs the full [[Get]]/[[Set]] path. Kept out of the dispatch loop
-// they cost one call per op there, and they do not enlarge the loop's frame.
+/// `GetProp` and `LoadMethod` share this: finish a named read the fast path
+/// could not complete as a plain value, with the base already popped. The base
+/// is unrooted here; the caller pushes the result (and the base, for a method).
+fn finish_named_get(
+    interp: &mut Interpreter,
+    base: &JsValue,
+    name: &Atom,
+    named: NamedGet,
+) -> Completion {
+    let result = match named {
+        NamedGet::Getter(getter) => interp.call_getter(&getter, base),
+        _ => member_get(interp, base, name),
+    };
+    unroot_stack_value(interp, base);
+    result
+}
 
+/// The named-property ops (`GetProp`, `LoadMethod`, `SetProp`, `UpdateProp`)
+/// live out of line, fast path and generic path together, so the dispatch loop
+/// carries one call per op and its code generation is unaffected.
+///
 /// `GetProp`: replaces the base on top of the stack with the property value.
 #[inline(never)]
 fn get_prop_op(
@@ -484,12 +499,7 @@ fn get_prop_op(
         return Ok(());
     }
     let base = stack.pop().expect("stack underflow on GetProp");
-    let result = match named {
-        NamedGet::Getter(getter) => interp.call_getter(&getter, &base),
-        _ => member_get(interp, &base, name),
-    };
-    unroot_stack_value(interp, &base);
-    match result {
+    match finish_named_get(interp, &base, name, named) {
         Completion::Normal(v) => {
             push_value(interp, stack, v);
             Ok(())
@@ -516,12 +526,7 @@ fn load_method_op(
         return Ok(());
     }
     let base = stack.pop().expect("stack underflow on LoadMethod");
-    let result = match named {
-        NamedGet::Getter(getter) => interp.call_getter(&getter, &base),
-        _ => member_get(interp, &base, name),
-    };
-    unroot_stack_value(interp, &base);
-    match result {
+    match finish_named_get(interp, &base, name, named) {
         Completion::Normal(method) => {
             push_value(interp, stack, method);
             push_value(interp, stack, base);

@@ -11,8 +11,8 @@ Gets cost less per op, but `GetProp`/`LoadMethod` paid the same chain (`member_g
 ## Change
 
 - **`SetProp`** (`Interpreter::named_store_fast`): an ordinary receiver (not Proxy, module namespace, TypedArray or arguments
-  object) with an own, writable data property takes the value in place, with the write barrier first
-  (`gc_write_barrier_value`, the named store has no element-card barrier). An absent property is added when the receiver is
+  object) with an own, writable data property takes the value in place, followed by the write barrier
+  (`gc_write_barrier_value`, the named store has no element-card barrier; nothing can collect in between). An absent property is added when the receiver is
   extensible, is not an Array or a String wrapper, and every object up the prototype chain is ordinary and does not own the name
   (no setter, read-only property, Proxy or exotic lookup can intervene). Array `length`, Array-index-like names, accessors,
   non-writable properties, frozen/sealed receivers and primitives take the generic [[Set]] unchanged.

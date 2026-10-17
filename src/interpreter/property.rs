@@ -279,14 +279,11 @@ impl Interpreter {
             .apply_dense_array_set(idx, value, plan)
     }
 
-    /// Completes the named store `base.key = value` of the bytecode VM
-    /// without the generic [[Set]] when the receiver is an ordinary object
-    /// and the outcome is one of two cases: an own writable data property is
-    /// overwritten in place, or an absent property is created on an
-    /// extensible receiver whose prototype chain is ordinary and does not
-    /// mention `key` (so no setter, read-only property or Proxy can
-    /// intervene). Returns `false` with no observable effect when the
-    /// generic path must run.
+    /// Completes the named store `base.key = value` of the bytecode VM without
+    /// the generic [[Set]]: an own writable data property is overwritten in
+    /// place, or an absent property is created on an extensible receiver whose
+    /// prototype chain is ordinary and does not mention `key`. Returns `false`
+    /// with no observable effect when the generic path must run.
     #[inline(always)]
     pub(super) fn named_store_fast(
         &self,
@@ -300,26 +297,27 @@ impl Interpreter {
         else {
             return false;
         };
-        self.gc_write_barrier_value(cell, value);
         let mut object = cell.borrow_mut_untracked();
-        match object.store_named_fast(key, value) {
+        let done = match object.store_named_fast(key, value) {
             NamedStore::Stored => true,
             NamedStore::Bail => false,
             NamedStore::Absent => {
-                if !object.can_add_named_fast()
-                    || !self.proto_chain_lacks_key(object.prototype_id, key)
-                {
-                    return false;
+                let addable = object.can_add_named_fast()
+                    && self.proto_chain_lacks_key(object.prototype_id, key);
+                if addable {
+                    object.add_named_fast(key, value);
                 }
-                object.add_named_fast(key, value);
-                true
+                addable
             }
+        };
+        if done {
+            self.gc_write_barrier_value(cell, value);
         }
+        done
     }
 
     /// `base.key++`/`--` on an own writable Number data property, applied in
-    /// place; the old and new values. `None` leaves everything untouched and
-    /// the generic update must run.
+    /// place; the old and new values. `None` leaves everything untouched.
     #[inline(always)]
     pub(super) fn named_update_fast(
         &self,
