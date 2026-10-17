@@ -5633,8 +5633,14 @@ impl Interpreter {
                                     Some(closure.clone()),
                                     params.len().saturating_add(2),
                                 );
+                                let closure_strict = closure.borrow().strict;
                                 func_env.borrow_mut().strict = is_strict;
-                                func_env.borrow_mut().set_this(_this_val.clone());
+                                let effective_this = self.ordinary_call_bind_this(
+                                    _this_val,
+                                    is_strict,
+                                    closure_strict,
+                                );
+                                func_env.borrow_mut().set_this(effective_this);
                                 let is_simple_ag = has_simple_params;
                                 if uses_arguments {
                                     let env_strict_ag = func_env.borrow().strict;
