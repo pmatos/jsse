@@ -184,11 +184,21 @@ enum EscapingJump {
     Continue(Option<String>),
 }
 
+/// Name pools up to this size are searched linearly; a larger one gets an index.
+const NAME_SCAN_LIMIT: usize = 16;
+
+type NameIndex = std::collections::HashMap<
+    crate::interpreter::Atom,
+    u16,
+    crate::interpreter::atom::IdentityBuild,
+>;
+
 struct Compiler {
     goal: CompileGoal,
     code: Vec<u8>,
     constants: Vec<Constant>,
     names: Vec<crate::interpreter::Atom>,
+    name_index: Option<NameIndex>,
     private_names: Vec<String>,
     var_names: Vec<u16>,
     current_stack: u16,
@@ -264,6 +274,7 @@ impl Compiler {
             code: Vec::new(),
             constants: Vec::new(),
             names: Vec::new(),
+            name_index: None,
             private_names: Vec::new(),
             var_names: Vec::new(),
             current_stack: 0,
@@ -305,15 +316,41 @@ impl Compiler {
         Ok(idx as u16)
     }
 
+    // `Atom` hashes and compares by identity, never through its `OnceCell`.
+    #[allow(clippy::mutable_key_type)]
     fn add_name(&mut self, name: &str) -> Result<u16, CompileError> {
+        if let Some(index) = &self.name_index {
+            let atom = crate::interpreter::Atom::intern(name);
+            if let Some(&i) = index.get(&atom) {
+                return Ok(i);
+            }
+            return self.push_name(atom);
+        }
         if let Some(i) = self.names.iter().position(|n| n.as_str() == name) {
             return Ok(i as u16);
         }
+        self.push_name(crate::interpreter::Atom::intern(name))
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    fn push_name(&mut self, atom: crate::interpreter::Atom) -> Result<u16, CompileError> {
         let idx = self.names.len();
         if idx > u16::MAX as usize {
             return Err(CompileError::Ineligible("name pool overflow"));
         }
-        self.names.push(crate::interpreter::Atom::intern(name));
+        if self.name_index.is_none() && idx >= NAME_SCAN_LIMIT {
+            self.name_index = Some(
+                self.names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| (n.clone(), i as u16))
+                    .collect(),
+            );
+        }
+        if let Some(index) = &mut self.name_index {
+            index.insert(atom.clone(), idx as u16);
+        }
+        self.names.push(atom);
         Ok(idx as u16)
     }
 

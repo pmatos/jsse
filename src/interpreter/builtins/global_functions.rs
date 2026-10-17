@@ -15,11 +15,26 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("parseInt".to_string(), 2, |interp, _this, args| {
                 let input = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let radix_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                // Plain decimal for 1e-6 <= |n| < 1e21: the digit prefix is the integer part.
+                if let Some(n) = input.as_number()
+                    && radix_val.is_undefined()
+                {
+                    if !n.is_finite() {
+                        return Completion::Normal(JsValue::number(f64::NAN));
+                    }
+                    if n == 0.0 {
+                        return Completion::Normal(JsValue::number(0.0));
+                    }
+                    let magnitude = n.abs();
+                    if (1e-6..1e21).contains(&magnitude) {
+                        return Completion::Normal(JsValue::number(n.trunc()));
+                    }
+                }
                 let s = match interp.to_string_lossy(&input) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let radix_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 // §19.2.5 step 6: Let R be 𝔽(? ToInt32(radix))
                 let radix_num = match interp.to_number_value(&radix_val) {
                     Ok(n) => n,

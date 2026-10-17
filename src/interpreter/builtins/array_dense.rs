@@ -78,6 +78,41 @@ pub(crate) fn proto_chain_without_index_keys(interp: &Interpreter, start: Option
     walk_index_free_chain(interp, start, false)
 }
 
+/// The values a plain dense Array yields when its iteration is entirely intrinsic (original
+/// `@@iterator` and `%ArrayIteratorPrototype%.next`), copied without creating an iterator.
+/// A hole reads `undefined` only when no prototype can answer the index.
+pub(crate) fn try_intrinsic_iteration(
+    interp: &Interpreter,
+    iterable: &JsValue,
+) -> Option<Vec<JsValue>> {
+    let b = array_cell(interp, iterable)?.borrow();
+    let elements = b.array_elements()?;
+    let realm = interp.realm();
+    if !b.is_plain_dense_array(elements.len()) || b.prototype_id != realm.array_prototype {
+        return None;
+    }
+    let iterator_key = JsPropertyKey::cached_well_known_symbol("iterator")?;
+    let values_id = realm.array_prototype_values.as_ref()?.as_object_id()?;
+    let proto = interp.get_object_cell(realm.array_prototype?)?.borrow();
+    let iterator_method = proto.properties.get(iterator_key)?;
+    if iterator_method.value().and_then(JsValue::as_object_id) != Some(values_id) {
+        return None;
+    }
+    drop(proto);
+    let next_id = realm.iterator_next_intrinsics.array?;
+    let iterator_proto = interp
+        .get_object_cell(realm.array_iterator_prototype?)?
+        .borrow();
+    let next = iterator_proto.properties.get("next")?;
+    if next.value().and_then(JsValue::as_object_id) != Some(next_id) {
+        return None;
+    }
+    if has_hole(elements) && !proto_chain_index_free(interp, b.prototype_id) {
+        return None;
+    }
+    Some(elements.clone())
+}
+
 fn has_hole(elements: &[JsValue]) -> bool {
     elements.iter().any(JsValue::is_undefined)
 }

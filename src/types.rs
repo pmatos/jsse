@@ -87,13 +87,27 @@ impl Drop for StrBuf {
 unsafe impl Send for StrBuf {}
 unsafe impl Sync for StrBuf {}
 
-pub(crate) struct StrView {
-    ptr: *const u16,
-    len: usize,
-    buf: Arc<StrBuf>,
+/// Strings of at most this many code units live inside their `StrView`, so a
+/// short result is one allocation instead of a view, a buffer header and a
+/// units vector.
+const INLINE_UNITS: usize = 40;
+
+enum Units {
+    Inline([u16; INLINE_UNITS]),
+    /// `ptr` is `buf.ptr`, kept here to save the `Arc` hop on every read.
+    Shared {
+        ptr: *const u16,
+        buf: Arc<StrBuf>,
+    },
 }
 
-// SAFETY: `ptr` points into `buf`, which is `Send + Sync` and kept alive by it.
+pub(crate) struct StrView {
+    len: usize,
+    units: Units,
+}
+
+// SAFETY: a `Shared` `ptr` points into its `buf`, which is `Send + Sync` and kept
+// alive by it; `Inline` is plain data.
 unsafe impl Send for StrView {}
 unsafe impl Sync for StrView {}
 
@@ -101,16 +115,42 @@ impl StrView {
     fn from_buf(buf: Arc<StrBuf>, len: usize) -> Self {
         debug_assert!(len <= buf.tail.load(Ordering::Relaxed));
         Self {
-            ptr: buf.ptr,
             len,
-            buf,
+            units: Units::Shared { ptr: buf.ptr, buf },
+        }
+    }
+
+    fn inline(head: &[u16], tail: &[u16]) -> Self {
+        let len = head.len() + tail.len();
+        let mut units = [0u16; INLINE_UNITS];
+        units[..head.len()].copy_from_slice(head);
+        units[head.len()..len].copy_from_slice(tail);
+        Self {
+            len,
+            units: Units::Inline(units),
+        }
+    }
+
+    fn inline_utf8(s: &str) -> Self {
+        let mut units = [0u16; INLINE_UNITS];
+        let mut len = 0;
+        for unit in s.encode_utf16() {
+            units[len] = unit;
+            len += 1;
+        }
+        Self {
+            len,
+            units: Units::Inline(units),
         }
     }
 
     fn units(&self) -> &[u16] {
-        // SAFETY: `[0, len)` lies below the buffer's tail, so it is initialised,
-        // immutable, and outlives `&self` through `buf`.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        match &self.units {
+            Units::Inline(units) => &units[..self.len],
+            // SAFETY: `[0, len)` lies below the buffer's tail, so it is
+            // initialised, immutable, and outlives `&self` through `buf`.
+            Units::Shared { ptr, .. } => unsafe { std::slice::from_raw_parts(*ptr, self.len) },
+        }
     }
 }
 
@@ -137,7 +177,23 @@ pub(crate) struct JsString {
 impl JsString {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
+        // UTF-16 never has more units than the UTF-8 text has bytes.
+        if s.len() <= INLINE_UNITS {
+            return Self {
+                view: Arc::new(StrView::inline_utf8(s)),
+            };
+        }
         Self::from_vec(s.encode_utf16().collect())
+    }
+
+    /// A copy of `units`, built in place when short enough to be stored inline.
+    pub(crate) fn from_units(units: &[u16]) -> Self {
+        if units.len() <= INLINE_UNITS {
+            return Self {
+                view: Arc::new(StrView::inline(units, &[])),
+            };
+        }
+        Self::from_vec(units.to_vec())
     }
 
     pub(crate) fn from_vec(v: Vec<u16>) -> Self {
@@ -146,6 +202,11 @@ impl JsString {
 
     fn from_vec_grown(v: Vec<u16>, grown: bool) -> Self {
         let len = v.len();
+        if len <= INLINE_UNITS {
+            return Self {
+                view: Arc::new(StrView::inline(&v, &[])),
+            };
+        }
         Self {
             view: Arc::new(StrView::from_buf(Arc::new(StrBuf::from_vec(v, grown)), len)),
         }
@@ -157,14 +218,14 @@ impl JsString {
 
     /// True when both strings view the same units of the same buffer.
     pub(crate) fn ptr_eq(&self, other: &JsString) -> bool {
-        self.view.ptr == other.view.ptr && self.view.len == other.view.len
+        self.view.len == other.view.len && self.units_addr() == other.units_addr()
     }
 
     /// Address of the first code unit. Together with the length it is the
     /// identity [`Self::ptr_eq`] compares, so it is a cheap identity hash.
     #[inline]
     pub(crate) fn units_addr(&self) -> usize {
-        self.view.ptr as usize
+        self.as_units().as_ptr() as usize
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -187,8 +248,8 @@ impl JsString {
         }
         let len = self.view.len;
         let new_len = len + extra.len();
-        let buf = &self.view.buf;
-        if new_len <= buf.cap
+        if let Units::Shared { buf, .. } = &self.view.units
+            && new_len <= buf.cap
             && buf
                 .tail
                 .compare_exchange(len, new_len, Ordering::AcqRel, Ordering::Relaxed)
@@ -204,7 +265,13 @@ impl JsString {
                 view: Arc::new(StrView::from_buf(Arc::clone(buf), new_len)),
             };
         }
-        let cap = if buf.grown && new_len >= STR_SLACK_THRESHOLD {
+        if new_len <= INLINE_UNITS {
+            return Self {
+                view: Arc::new(StrView::inline(self.as_units(), extra)),
+            };
+        }
+        let grown = matches!(&self.view.units, Units::Shared { buf, .. } if buf.grown);
+        let cap = if grown && new_len >= STR_SLACK_THRESHOLD {
             new_len.saturating_mul(2)
         } else {
             new_len
@@ -224,7 +291,7 @@ impl Default for JsString {
 
 impl PartialEq for JsString {
     fn eq(&self, other: &Self) -> bool {
-        self.ptr_eq(other) || self.as_units() == other.as_units()
+        Arc::ptr_eq(&self.view, &other.view) || self.as_units() == other.as_units()
     }
 }
 
@@ -1238,12 +1305,17 @@ impl NanBoxedValue {
             return Some(false);
         }
         Some(match a {
-            NanTag::String => self
-                .with_string(|x| other.with_string(|y| x == y).unwrap_or(false))
-                .unwrap_or(false),
+            NanTag::String => self.string_units_equal(other),
             NanTag::Symbol | NanTag::BigInt => self.symbol_or_bigint_equal(other),
             _ => false,
         })
+    }
+
+    /// Two distinct String values hold equal code units.
+    #[inline(never)]
+    fn string_units_equal(&self, other: &Self) -> bool {
+        self.with_string(|x| other.with_string(|y| x == y).unwrap_or(false))
+            .unwrap_or(false)
     }
 
     /// Same-tag, different-bits Symbols (equal ids: one rebuilt from its id)
@@ -2443,11 +2515,18 @@ mod tests {
 
 #[cfg(test)]
 mod js_string_buffer_tests {
-    use super::JsString;
+    use super::{INLINE_UNITS, JsString, Units};
+
+    /// `units` behind a prefix long enough that the string is buffer-backed.
+    fn pad(units: &[u16]) -> Vec<u16> {
+        let mut v = vec![0; INLINE_UNITS];
+        v.extend_from_slice(units);
+        v
+    }
 
     fn with_cap(units: &[u16], cap: usize) -> JsString {
-        let mut v = Vec::with_capacity(cap);
-        v.extend_from_slice(units);
+        let mut v = Vec::with_capacity(cap + INLINE_UNITS);
+        v.extend_from_slice(&pad(units));
         JsString::from_vec(v)
     }
 
@@ -2456,9 +2535,9 @@ mod js_string_buffer_tests {
         let a = with_cap(&[1, 2, 3], 16);
         let b = a.concat_units(&[4]);
         let c = b.concat_units(&[5, 6]);
-        assert_eq!(a.as_units(), [1, 2, 3]);
-        assert_eq!(b.as_units(), [1, 2, 3, 4]);
-        assert_eq!(c.as_units(), [1, 2, 3, 4, 5, 6]);
+        assert_eq!(a.as_units(), pad(&[1, 2, 3]));
+        assert_eq!(b.as_units(), pad(&[1, 2, 3, 4]));
+        assert_eq!(c.as_units(), pad(&[1, 2, 3, 4, 5, 6]));
         assert!(std::ptr::eq(a.as_units().as_ptr(), c.as_units().as_ptr()));
     }
 
@@ -2467,9 +2546,9 @@ mod js_string_buffer_tests {
         let a = with_cap(&[1, 2, 3], 16);
         let b = a.concat_units(&[4]);
         let c = a.concat_units(&[9]);
-        assert_eq!(b.as_units(), [1, 2, 3, 4]);
-        assert_eq!(c.as_units(), [1, 2, 3, 9]);
-        assert_eq!(a.as_units(), [1, 2, 3]);
+        assert_eq!(b.as_units(), pad(&[1, 2, 3, 4]));
+        assert_eq!(c.as_units(), pad(&[1, 2, 3, 9]));
+        assert_eq!(a.as_units(), pad(&[1, 2, 3]));
         assert!(!std::ptr::eq(a.as_units().as_ptr(), c.as_units().as_ptr()));
     }
 
@@ -2492,8 +2571,15 @@ mod js_string_buffer_tests {
         let slice = a.as_units();
         let b = a.concat_units(&[4, 5]);
         let c = b.concat_units(&[6; 100]);
-        assert_eq!(slice, [1, 2, 3]);
-        assert_eq!(c.len(), 105);
+        assert_eq!(slice, pad(&[1, 2, 3]));
+        assert_eq!(c.len(), INLINE_UNITS + 105);
+    }
+
+    fn shared_cap(s: &JsString) -> usize {
+        match &s.view.units {
+            Units::Shared { buf, .. } => buf.cap,
+            Units::Inline(_) => panic!("expected a buffer-backed string"),
+        }
     }
 
     #[test]
@@ -2502,11 +2588,11 @@ mod js_string_buffer_tests {
         let sibling = JsString::from_vec(vec![1; 100]).concat_units(&[3; 100]);
         assert_eq!(one_shot.len(), 200);
         assert_eq!(sibling.len(), 200);
-        assert!(!one_shot.view.buf.ptr.is_null() && one_shot.view.buf.cap == 200);
+        assert_eq!(shared_cap(&one_shot), 200);
 
         let chained = one_shot.concat_units(&[4]);
         assert_eq!(chained.len(), 201);
-        assert!(chained.view.buf.cap >= 402);
+        assert!(shared_cap(&chained) >= 402);
         let appended = chained.concat_units(&[5]);
         assert!(std::ptr::eq(
             chained.as_units().as_ptr(),
@@ -2519,7 +2605,7 @@ mod js_string_buffer_tests {
     fn equality_and_hash_ignore_buffer_identity() {
         use std::collections::HashSet;
         let long = with_cap(&[1, 2], 8).concat_units(&[3]);
-        let exact = JsString::from_vec(vec![1, 2, 3]);
+        let exact = JsString::from_vec(pad(&[1, 2, 3]));
         assert_eq!(long, exact);
         assert_eq!(exact, exact.clone());
         let mut set = HashSet::new();
@@ -2536,5 +2622,35 @@ mod js_string_buffer_tests {
             JsString::from_vec(vec![1]).concat_units(&[]).as_units(),
             [1]
         );
+    }
+
+    #[test]
+    fn short_results_are_inline_and_longer_ones_are_buffered() {
+        let at_limit = JsString::from_vec(vec![5; INLINE_UNITS - 1]).concat_units(&[6]);
+        assert!(matches!(at_limit.view.units, Units::Inline(_)));
+        assert_eq!(at_limit.len(), INLINE_UNITS);
+        assert_eq!(at_limit.as_units()[INLINE_UNITS - 1], 6);
+
+        let past_limit = at_limit.concat_units(&[7]);
+        assert!(matches!(past_limit.view.units, Units::Shared { .. }));
+        assert_eq!(past_limit.len(), INLINE_UNITS + 1);
+        assert_eq!(&past_limit.as_units()[INLINE_UNITS - 1..], [6, 7]);
+        assert_eq!(at_limit.len(), INLINE_UNITS);
+
+        assert_eq!(
+            JsString::from_vec(vec![5; INLINE_UNITS]),
+            JsString::from_vec(vec![5; INLINE_UNITS]).concat_units(&[])
+        );
+    }
+
+    #[test]
+    fn identity_follows_the_shared_allocation_for_inline_strings() {
+        let a = JsString::from_vec(vec![1, 2, 3]);
+        let b = a.clone();
+        let c = JsString::from_vec(vec![1, 2, 3]);
+        assert!(a.ptr_eq(&b));
+        assert_eq!(a.units_addr(), b.units_addr());
+        assert!(!a.ptr_eq(&c));
+        assert_eq!(a, c);
     }
 }

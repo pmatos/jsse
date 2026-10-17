@@ -4541,6 +4541,9 @@ impl Interpreter {
         self.gc_root_value(rval);
 
         let result = (|| {
+            let has_rest = props
+                .last()
+                .is_some_and(|p| matches!(p.value, Expression::Spread(_)));
             let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
 
             for prop in props {
@@ -4591,7 +4594,9 @@ impl Interpreter {
                                 ));
                             }
                         };
-                        excluded_keys.push(key.clone());
+                        if has_rest {
+                            excluded_keys.push(key.clone());
+                        }
 
                         // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
                         let (target, default_expr) =

@@ -143,7 +143,19 @@ fn execute_code(
 ) -> ExitCode {
     let mut interp = new_interp(can_block, bytecode, node);
     let result = run_source_with_interp(&mut interp, code, is_module, path);
-    exit_code_from_result(&interp, result)
+    let exit = exit_code_from_result(&interp, result);
+    retire_interpreter(interp);
+    exit
+}
+
+/// Release builds skip the heap teardown (nothing in it is observable at exit); debug builds,
+/// including `release-checked`, keep it for the arena assertions. Leak checkers see the heap as leaked.
+fn retire_interpreter(interp: interpreter::Interpreter) {
+    if cfg!(debug_assertions) {
+        drop(interp);
+    } else {
+        std::mem::forget(interp);
+    }
 }
 
 fn run_file(
@@ -247,30 +259,35 @@ pub(crate) fn run_main() -> ExitCode {
 
     // With preludes, we need to use a single interpreter instance
     let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node);
+    let code = run_with_preludes(&mut interp, &cli);
+    retire_interpreter(interp);
+    code
+}
 
+fn run_with_preludes(interp: &mut interpreter::Interpreter, cli: &Cli) -> ExitCode {
     // Run prelude files as scripts
     for prelude_path in &cli.prelude {
         let source = match std::fs::read_to_string(prelude_path) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading prelude {}: {e}", prelude_path.display());
-                return exit_after_execution(&interp, 1);
+                return exit_after_execution(interp, 1);
             }
         };
-        let prelude_result = run_source_with_interp(&mut interp, &source, false, None);
+        let prelude_result = run_source_with_interp(interp, &source, false, None);
         // A prelude that called `__host_exit` is a clean exit, not an error.
         if interp.pending_exit.is_some() {
-            return exit_code_from_result(&interp, prelude_result);
+            return exit_code_from_result(interp, prelude_result);
         }
         if let Err(e) = prelude_result {
             match e {
                 EngineError::Parse(msg) => {
                     eprintln!("SyntaxError in prelude: {msg}");
-                    return exit_after_execution(&interp, 2);
+                    return exit_after_execution(interp, 2);
                 }
                 EngineError::Runtime(msg) => {
                     eprintln!("Error in prelude: {msg}");
-                    return exit_after_execution(&interp, 1);
+                    return exit_after_execution(interp, 1);
                 }
             }
         }
@@ -278,24 +295,24 @@ pub(crate) fn run_main() -> ExitCode {
 
     // Now run the main input.
     if let Some(code) = &cli.eval {
-        let result = run_source_with_interp(&mut interp, code, cli.module, None);
-        exit_code_from_result(&interp, result)
+        let result = run_source_with_interp(interp, code, cli.module, None);
+        exit_code_from_result(interp, result)
     } else if let Some(path) = &cli.file {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading {}: {e}", path.display());
-                return exit_after_execution(&interp, 1);
+                return exit_after_execution(interp, 1);
             }
         };
         let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let result = run_source_with_interp(&mut interp, &source, is_module, Some(&abs_path));
-        exit_code_from_result(&interp, result)
+        let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
+        exit_code_from_result(interp, result)
     } else {
-        let code = run_repl(&mut interp);
+        let code = run_repl(interp);
         #[cfg(feature = "perf-counters")]
-        report_perf_counters(&interp);
+        report_perf_counters(interp);
         code
     }
 }

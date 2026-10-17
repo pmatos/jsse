@@ -104,7 +104,7 @@ fn create_segment_object(
         .insert_property(
             "segment".to_string(),
             PropertyDescriptor::data(
-                JsValue::string(JsString::from_vec(segment.to_vec())),
+                JsValue::string(JsString::from_units(segment)),
                 true,
                 true,
                 true,
@@ -123,7 +123,7 @@ fn create_segment_object(
         .insert_property(
             "input".to_string(),
             PropertyDescriptor::data(
-                JsValue::string(JsString::from_vec(input.to_vec())),
+                JsValue::string(JsString::from_units(input)),
                 true,
                 true,
                 true,

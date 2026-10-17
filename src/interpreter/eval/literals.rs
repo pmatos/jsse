@@ -26,14 +26,14 @@ thread_local! {
 }
 
 pub(crate) fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
-    JsPropertyKey::from_js_string(&JsString::from_vec(code_units.to_vec()))
+    JsPropertyKey::from_js_string(&JsString::from_units(code_units))
 }
 
 pub(crate) fn regexp_literal_source(pattern: &[u16]) -> JsString {
     if pattern.is_empty() {
         JsString::from_str("(?:)")
     } else {
-        JsString::from_vec(pattern.to_vec())
+        JsString::from_units(pattern)
     }
 }
 
