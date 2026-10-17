@@ -2333,7 +2333,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
 /// Used for generator/async state-machine *terminator* expressions — yield /
 /// await / return / throw values, `ConditionalGoto` and `SwitchDispatch`
 /// conditions, and `ForOfInit` iterables. The state driver evaluates these after
-/// `exec_body` has restored the previous `current_ic_handle`, i.e. under whatever
+/// `exec_body` has restored the previous `current_ic`, i.e. under whatever
 /// body is driving the generator (often the caller), not under any state body's
 /// store. A numbered site would then index the wrong store and panic, so these
 /// expressions must stay unnumbered. Nested function/arrow bodies are left intact

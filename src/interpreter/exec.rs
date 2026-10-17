@@ -165,7 +165,7 @@ impl Interpreter {
     }
 
     /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
-    /// `current_ic_handle` to the body's own IC store (dynamic code gets its own
+    /// `current_ic` to the body's own IC store (dynamic code gets its own
     /// dense site namespace via `assign_ic_sites`). Unlike `exec_body`, it does
     /// NOT run the function-body hoisting pass: eval callers run
     /// `eval_declaration_instantiation` first (which applies the eval-specific

@@ -2,7 +2,7 @@
 //! shared by `Rc` with every closure of the literal so a call reads them off
 //! the function it already holds instead of probing a Body-keyed table.
 
-use std::cell::{Cell, OnceCell};
+use std::cell::OnceCell;
 use std::rc::Rc;
 
 use crate::ast::{Body, Pattern};
@@ -10,7 +10,7 @@ use crate::ast::{Body, Pattern};
 use super::atom::Atom;
 use super::bytecode::chunk::Chunk;
 use super::hoist_cache::HoistAnalysis;
-use super::ic_store::BodyStoreHandle;
+use super::ic_store::{BodyIcStore, FrameIcStore};
 
 /// The interned parameter names of a simple parameter list.
 #[derive(Debug)]
@@ -65,7 +65,7 @@ pub(crate) struct CompiledCall {
 #[derive(Debug, Default)]
 pub(crate) struct LiteralFrame {
     param_atoms: OnceCell<ParamAtoms>,
-    ic_handle: Cell<Option<BodyStoreHandle>>,
+    ic_store: OnceCell<FrameIcStore>,
     compiled_call: OnceCell<CompiledCall>,
     hoist: OnceCell<Rc<HoistAnalysis>>,
 }
@@ -105,8 +105,10 @@ impl LiteralFrame {
         self.hoist.get_or_init(compute)
     }
 
-    pub(crate) fn ic_handle(&self) -> &Cell<Option<BodyStoreHandle>> {
-        &self.ic_handle
+    /// The literal's IC store, created on first entry from its body.
+    #[inline]
+    pub(crate) fn ic_store(&self, body: &Body) -> &FrameIcStore {
+        self.ic_store.get_or_init(|| BodyIcStore::for_frame(body))
     }
 }
 

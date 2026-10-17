@@ -753,18 +753,19 @@ impl Interpreter {
                 // variant owns a heap `Vec`). Extract just the Copy fields we
                 // need for the shape check + dispatch, then release the
                 // borrow before touching any object.
-                let cached: Option<(u64, PropIcKind)> = match self.prop_slot(site_id) {
-                    PropIcSlot::Mono {
-                        obj_id,
-                        obj_shape_id,
-                        kind,
-                    } if *obj_id == o.id => Some((*obj_shape_id, *kind)),
-                    PropIcSlot::Poly(entries) => entries
-                        .iter()
-                        .find(|e| e.obj_id == o.id)
-                        .map(|e| (e.obj_shape_id, e.kind)),
-                    _ => None,
-                };
+                let cached: Option<(u64, PropIcKind)> =
+                    self.with_prop_slot(site_id, |slot| match slot {
+                        PropIcSlot::Mono {
+                            obj_id,
+                            obj_shape_id,
+                            kind,
+                        } if *obj_id == o.id => Some((*obj_shape_id, *kind)),
+                        PropIcSlot::Poly(entries) => entries
+                            .iter()
+                            .find(|e| e.obj_id == o.id)
+                            .map(|e| (e.obj_shape_id, e.kind)),
+                        _ => None,
+                    });
                 if let Some((want_shape, kind)) = cached
                     && let Some(obj_rc) = self.get_object(o.id)
                     && obj_rc.borrow().shape_id == want_shape
@@ -785,13 +786,14 @@ impl Interpreter {
                 // unless the slot was already `Poly`.
                 self.ic_slow_path_count
                     .set(self.ic_slow_path_count.get() + 1);
-                let prev = self.prop_slot(site_id).clone();
+                let prev = self.with_prop_slot(site_id, |slot| slot.clone());
                 let result = self.get_object_property(o.id, &key, &obj_val.clone());
                 if let Completion::Normal(_) = &result {
                     // Classify for IC recording. Cheap one-borrow walk.
                     let observed = self.classify_for_prop_ic(o.id, &key);
                     // Drive the Empty → Mono → Poly → Megamorphic machine.
-                    *self.prop_slot(site_id) = prev.advance(observed);
+                    let next = prev.advance(observed);
+                    self.with_prop_slot(site_id, |slot| *slot = next);
                 }
                 return result;
             }
