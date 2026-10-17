@@ -94,24 +94,7 @@ var expected = {
   yieldInReturn: 'Y:"a",Y:"b",R:3',
   yieldInLabelledLoop: 'Y:"00",Y:"01",Y:"10",Y:"11",R:"end11"',
 };
-// A generator the engine runs as a state machine evaluates operands that
-// precede a `yield` only when it resumes (#1104), so the order in which side
-// effects happen is only asserted for engines that suspend the body in place.
-// That generators of this shape are suspended in place is gated by
-// tests/perf_counters_bytecode_generator.rs.
-var operandOrderIsPreserved = (function() {
-  log = [];
-  function* probe() { return note(1) + (yield note(2)); }
-  drain(probe(), [0, 0]);
-  return log.join() === "1,2";
-})();
-
 for (var name in cases) {
   var actual = cases[name]();
-  var want = expected[name];
-  if (!operandOrderIsPreserved) {
-    actual = actual.split("|")[0];
-    want = want.split("|")[0];
-  }
-  assert.sameValue(actual, want, name);
+  assert.sameValue(actual, expected[name], name);
 }
