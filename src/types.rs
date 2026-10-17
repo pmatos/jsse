@@ -1335,6 +1335,10 @@ impl NanBoxedValue {
     }
 }
 
+const STRING: u64 = NanTag::String as u64;
+const SYMBOL: u64 = NanTag::Symbol as u64;
+const BIGINT: u64 = NanTag::BigInt as u64;
+
 impl NanBoxedValue {
     /// The smallest bit pattern whose tag is String, Symbol or BigInt, the
     /// three tags that own an `Arc` strong count. Every boxed pattern with a
@@ -1355,9 +1359,6 @@ impl NanBoxedValue {
 
     #[inline(never)]
     fn retain_heap_pointer(&self) {
-        const STRING: u64 = NanTag::String as u64;
-        const SYMBOL: u64 = NanTag::Symbol as u64;
-        const BIGINT: u64 = NanTag::BigInt as u64;
         match self.heap_tag_bits() {
             // SAFETY (all arms): this value owns a live strong count for `ptr`.
             STRING => unsafe { Arc::increment_strong_count(self.payload_ptr::<StrView>()) },
@@ -1371,9 +1372,6 @@ impl NanBoxedValue {
 
     #[inline(never)]
     fn release_heap_pointer(&mut self) {
-        const STRING: u64 = NanTag::String as u64;
-        const SYMBOL: u64 = NanTag::Symbol as u64;
-        const BIGINT: u64 = NanTag::BigInt as u64;
         match self.heap_tag_bits() {
             // SAFETY (all arms): this value owns exactly one strong count for `ptr`.
             STRING => unsafe { drop(Arc::from_raw(self.payload_ptr::<StrView>())) },
@@ -1384,13 +1382,11 @@ impl NanBoxedValue {
     }
 }
 
-// `owns_heap_pointer` is a single comparison only while the three tags that
-// own an `Arc` are the three largest.
+// `owns_heap_pointer` is a single comparison only while String, Symbol and
+// BigInt are the three largest tags (so Object sits just below String).
 const _: () = {
-    assert!(NanTag::Object as u64 + 1 == NanTag::String as u64);
-    assert!(NanTag::String as u64 + 1 == NanTag::Symbol as u64);
-    assert!(NanTag::Symbol as u64 + 1 == NanTag::BigInt as u64);
-    assert!(NanTag::BigInt as u64 == 0b111);
+    assert!(NanTag::Object as u64 + 1 == STRING);
+    assert!(BIGINT == 0b111);
 };
 
 impl Clone for NanBoxedValue {
