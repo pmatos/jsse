@@ -1879,6 +1879,10 @@ fn transform_yielding_expression(
                 .any(|e| expr_has_suspension(e, ctx.is_async));
             let temp_tag = if matches!(&**tag, Expression::Member(..)) {
                 lower_member_callee(tag, exprs_suspend, ctx)
+            } else if let Expression::OptionalChain(base, chain) = &**tag
+                && (exprs_suspend || expr_has_suspension(tag, ctx.is_async))
+            {
+                lower_parenthesized_chain_callee(base, chain, ctx)
             } else {
                 let settle = exprs_suspend && callee_can_be_settled(tag, ctx);
                 lower_operand(tag, settle, "tag_fn", ctx)
@@ -1935,12 +1939,17 @@ fn transform_yielding_expression(
     }
 }
 
+/// The placeholder an optional chain's operations are built on, standing for
+/// its base.
+fn is_chain_base_placeholder(expr: &Expression) -> bool {
+    matches!(expr, Expression::Identifier(name) if name.is_empty())
+}
+
 /// Whether the first operation applied to an optional chain's base is a call.
 fn chain_starts_with_call(chain: &Expression) -> bool {
     match chain {
         Expression::Call(callee, ..) => {
-            matches!(&**callee, Expression::Identifier(name) if name.is_empty())
-                || chain_starts_with_call(callee)
+            is_chain_base_placeholder(callee) || chain_starts_with_call(callee)
         }
         Expression::Member(inner, ..) => chain_starts_with_call(inner),
         _ => false,
@@ -1956,7 +1965,7 @@ fn oc_chain_to_regular_expr(
     this: Option<&Expression>,
 ) -> Expression {
     match chain {
-        Expression::Identifier(name) if name.is_empty() => {
+        placeholder if is_chain_base_placeholder(placeholder) => {
             Expression::Identifier(base_var.to_string())
         }
         Expression::Identifier(name) => Expression::Member(
@@ -1974,12 +1983,10 @@ fn oc_chain_to_regular_expr(
         }
         Expression::Call(callee, args, _) => {
             let callee_expr = match this {
-                Some(this) if matches!(&**callee, Expression::Identifier(name) if name.is_empty()) => {
-                    Expression::BoundCallee(
-                        ExprBox::new(Expression::Identifier(base_var.to_string())),
-                        ExprBox::new(this.clone()),
-                    )
-                }
+                Some(this) if is_chain_base_placeholder(callee) => Expression::BoundCallee(
+                    ExprBox::new(Expression::Identifier(base_var.to_string())),
+                    ExprBox::new(this.clone()),
+                ),
                 _ => oc_chain_to_regular_expr(callee, base_var, this),
             };
             Expression::Call(
@@ -2001,6 +2008,10 @@ fn transform_call_expression(
     let args_suspend = args.iter().any(|a| expr_has_suspension(a, ctx.is_async));
     let temp_callee = if matches!(callee, Expression::Member(..)) {
         lower_member_callee(callee, args_suspend, ctx)
+    } else if let Expression::OptionalChain(base, chain) = callee
+        && (args_suspend || expr_has_suspension(callee, ctx.is_async))
+    {
+        lower_parenthesized_chain_callee(base, chain, ctx)
     } else {
         let settle = args_suspend && callee_can_be_settled(callee, ctx);
         lower_operand(callee, settle, "call_callee", ctx)
@@ -2790,6 +2801,110 @@ fn short_circuit_continue_test(op: LogicalOp, var: &str) -> Expression {
     }
 }
 
+/// Evaluate an optional chain's base into a temp and return it. When the
+/// chain's first operation is a call, the base is a reference (`o.f?.(...)`,
+/// `o?.f?.(...)`) and calls `f` with `this` = `o`, so the receiver is returned
+/// beside the function.
+fn bind_chain_base(
+    base: &Expression,
+    chain: &Expression,
+    ctx: &mut TransformContext,
+) -> (String, Option<Expression>) {
+    if chain_starts_with_call(chain) {
+        match base {
+            Expression::Member(..) => {
+                let base_var = ctx.new_temp_var("oc_bv");
+                let (member, this) = capture_member_callee(base, ctx);
+                bind_expression_to_temp(&member, &base_var, ctx);
+                return (base_var, Some(this));
+            }
+            Expression::OptionalChain(inner_base, inner_chain) => {
+                let (func, this) = lower_chain_reference(inner_base, inner_chain, ctx);
+                return (func, Some(this));
+            }
+            _ => {}
+        }
+    }
+    let base_var = ctx.new_temp_var("oc_bv");
+    bind_expression_to_temp(base, &base_var, ctx);
+    (base_var, None)
+}
+
+/// A parenthesised optional chain used as a call or tag, `(o?.f)(...)`, keeps
+/// the receiver of the reference it ends in.
+fn lower_parenthesized_chain_callee(
+    base: &Expression,
+    chain: &Expression,
+    ctx: &mut TransformContext,
+) -> Expression {
+    let (func, this) = lower_chain_reference(base, chain, ctx);
+    Expression::BoundCallee(
+        ExprBox::new(Expression::Identifier(func)),
+        ExprBox::new(this),
+    )
+}
+
+/// Evaluate the optional chain `base?.chain` as a Reference whose function
+/// and receiver are read now: returns a temp holding the function (undefined
+/// when the chain short-circuits) and the receiver expression. Used where the
+/// chain is a call target, `(o?.f)(...)` or the base of `o?.f?.(...)`.
+fn lower_chain_reference(
+    base: &Expression,
+    chain: &Expression,
+    ctx: &mut TransformContext,
+) -> (String, Expression) {
+    let (base_var, base_this) = bind_chain_base(base, chain, ctx);
+    let func = ctx.new_temp_var("oc_ref_fn");
+    let this = ctx.new_temp_var("oc_ref_this");
+    let after = ctx.new_state();
+    let eval_state = ctx.new_state();
+    let skip_state = ctx.new_state();
+    ctx.finalize_current_state(StateTerminator::ConditionalGoto {
+        condition: nullish_test(&base_var),
+        true_state: skip_state,
+        false_state: eval_state,
+    });
+
+    let undefined = || Expression::Void(ExprBox::new(Expression::Literal(Literal::Number(0.0))));
+    ctx.current_state_id = skip_state;
+    emit_temp_assignment(&func, undefined(), ctx);
+    emit_temp_assignment(&this, undefined(), ctx);
+    ctx.finalize_current_state(StateTerminator::Goto(after));
+
+    ctx.current_state_id = eval_state;
+    match chain {
+        Expression::Identifier(name) if !name.is_empty() => {
+            emit_temp_assignment(&this, Expression::Identifier(base_var.clone()), ctx);
+            let read = oc_chain_to_regular_expr(chain, &base_var, None);
+            emit_temp_assignment(&func, read, ctx);
+        }
+        Expression::Member(inner, prop, _) => {
+            let receiver = oc_chain_to_regular_expr(inner, &base_var, base_this.as_ref());
+            bind_expression_to_temp(&receiver, &this, ctx);
+            let prop = match prop {
+                MemberProperty::Computed(key) => {
+                    MemberProperty::Computed(ExprBox::new(settle_operand(key, "ref_key", ctx)))
+                }
+                other => other.clone(),
+            };
+            let read = Expression::Member(
+                ExprBox::new(Expression::Identifier(this.clone())),
+                prop,
+                PropSiteId::UNASSIGNED,
+            );
+            emit_temp_assignment(&func, read, ctx);
+        }
+        _ => {
+            let value = oc_chain_to_regular_expr(chain, &base_var, base_this.as_ref());
+            bind_expression_to_temp(&value, &func, ctx);
+            emit_temp_assignment(&this, undefined(), ctx);
+        }
+    }
+    ctx.finalize_current_state(StateTerminator::Goto(after));
+    ctx.current_state_id = after;
+    (func, Expression::Identifier(this))
+}
+
 /// Lower an optional chain whose chain part suspends: the base is evaluated
 /// once into a temp, a nullish base yields `skip_value`, and otherwise the chain
 /// runs as a regular expression on that temp, passed through `wrap`.
@@ -2801,19 +2916,7 @@ fn lower_optional_chain(
     binding: Option<SentValueBindingKind>,
     ctx: &mut TransformContext,
 ) {
-    let base_var = ctx.new_temp_var("oc_bv");
-    // `o.f?.(...)` calls `f` with `this` = `o`, so `o` is captured beside `f`.
-    let this = match base {
-        Expression::Member(..) if chain_starts_with_call(chain) => {
-            let (member, this) = capture_member_callee(base, ctx);
-            bind_expression_to_temp(&member, &base_var, ctx);
-            Some(this)
-        }
-        _ => {
-            bind_expression_to_temp(base, &base_var, ctx);
-            None
-        }
-    };
+    let (base_var, this) = bind_chain_base(base, chain, ctx);
     let after_oc = ctx.new_state();
     let eval_chain_state = ctx.new_state();
     let skip_state = ctx.new_state();

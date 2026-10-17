@@ -113,6 +113,15 @@ pub(crate) fn try_intrinsic_iteration(
     Some(elements.clone())
 }
 
+/// The elements of an Array the generator lowering built to spread without
+/// iterating it again: a fresh plain dense Array with no holes.
+pub(crate) fn fresh_array_values(interp: &Interpreter, o: &JsValue) -> Option<Vec<JsValue>> {
+    let b = array_cell(interp, o)?.borrow();
+    let elements = b.array_elements()?;
+    b.is_plain_dense_array(elements.len())
+        .then(|| elements.clone())
+}
+
 fn has_hole(elements: &[JsValue]) -> bool {
     elements.iter().any(JsValue::is_undefined)
 }

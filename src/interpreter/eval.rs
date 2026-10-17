@@ -6115,7 +6115,10 @@ impl Interpreter {
         value: &JsValue,
     ) -> Result<Vec<JsValue>, JsValue> {
         if matches!(inner, Expression::PreIterated(_)) {
-            self.create_list_from_array_like(value)
+            match super::builtins::array_dense::fresh_array_values(self, value) {
+                Some(values) => Ok(values),
+                None => self.create_list_from_array_like(value),
+            }
         } else {
             self.iterate_to_vec(value)
         }
