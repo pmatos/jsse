@@ -73,3 +73,35 @@ try {
   log.push('caught-' + e.message);
 }
 assert.sameValue(log.join(), 'A,caught-boom', 'using head: a throwing later initializer disposes the earlier resource');
+
+var fs = [];
+for (let i = { n: 0 }; (collect(), i.n < 5); i = { n: i.n + 1 }) {
+  fs.push(function () { return i.n; });
+}
+assert.sameValue(
+  fs.map(function (f) { return f(); }).join(),
+  '0,1,2,3,4',
+  'let head with per-iteration copies: an object assigned by the update expression survives the next loop-top collection'
+);
+
+var thrown = 0;
+try {
+  for (var k = (function () { throw 1; })(); ; ) {}
+} catch (e) {
+  thrown = e;
+}
+assert.sameValue(thrown, 1, 'var head: an abrupt initializer expression propagates');
+
+thrown = 0;
+try {
+  for (let a = { v: 1 }, b = (collect(), (function () { throw 2; })()); ; ) {}
+} catch (e) {
+  thrown = e;
+}
+assert.sameValue(thrown, 2, 'let head: an abrupt later initializer propagates after a collection');
+
+assert.sameValue(
+  (function () { for (let a = { v: 5 }, b = collect(); ; ) { return a.v; } })(),
+  5,
+  'let head: return from the body after a collection in a later initializer'
+);

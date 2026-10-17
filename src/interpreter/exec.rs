@@ -1913,11 +1913,24 @@ impl Interpreter {
 
     fn exec_for(&mut self, f: &ForStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         let for_env = Environment::new(Some(env.clone()));
-        // Keeps the head's bindings (and a `using` head's resources) reachable
-        // while later initializers run, and across the loop-head safepoints;
-        // `iter_env` is `for_env` itself whenever the head can hold a dispose
-        // stack.
+        // The loop's current head environment stays reachable (a `using` head's
+        // resources included) while the initializers, the body and the update
+        // run, and across the loop-head safepoints. This slot starts as
+        // `for_env` and follows `iter_env` once per-iteration copies exist.
         self.call_stack_envs.push(for_env.clone());
+        let completion = self.exec_for_in_env(f, env, label, &for_env);
+        self.call_stack_envs.pop();
+        completion
+    }
+
+    fn exec_for_in_env(
+        &mut self,
+        f: &ForStatement,
+        env: &EnvRef,
+        label: Option<&str>,
+        for_env: &EnvRef,
+    ) -> Completion {
+        let env_root = self.call_stack_envs.len() - 1;
         // Collect lexical binding names for per-iteration freshness (§14.7.4.2).
         // A loop that cannot capture or `eval` its scope never observes the
         // copies' identity, so it keeps running in `for_env`.
@@ -1961,19 +1974,16 @@ impl Interpreter {
                     let decl_env = if decl.kind == VarKind::Var {
                         env
                     } else {
-                        &for_env
+                        for_env
                     };
                     let comp = self.exec_variable_declaration(decl, decl_env);
                     if comp.is_abrupt() {
-                        let comp = self.dispose_resources(&for_env, comp);
-                        self.call_stack_envs.pop();
-                        return comp;
+                        return self.dispose_resources(for_env, comp);
                     }
                 }
                 ForInit::Expression(expr) => {
-                    let comp = self.eval_expr(expr, &for_env);
+                    let comp = self.eval_expr(expr, for_env);
                     if comp.is_abrupt() {
-                        self.call_stack_envs.pop();
                         return comp;
                     }
                 }
@@ -1985,10 +1995,11 @@ impl Interpreter {
         let mut iter_env = if !per_iteration_bindings.is_empty() {
             let new_env = Environment::new(Some(env.clone()));
             for (name, kind) in &per_iteration_bindings {
-                let val = self.env_get(&for_env, name).unwrap_or(JsValue::UNDEFINED);
+                let val = self.env_get(for_env, name).unwrap_or(JsValue::UNDEFINED);
                 new_env.borrow_mut().declare(name, *kind);
                 new_env.borrow_mut().initialize_binding(name, val);
             }
+            self.call_stack_envs[env_root] = new_env.clone();
             new_env
         } else {
             for_env.clone()
@@ -2023,6 +2034,7 @@ impl Interpreter {
                         new_env.borrow_mut().declare(name, *kind);
                         new_env.borrow_mut().initialize_binding(name, val);
                     }
+                    self.call_stack_envs[env_root] = new_env.clone();
                     iter_env = new_env;
                 }
                 if let Some(update) = &f.update {
@@ -2034,11 +2046,10 @@ impl Interpreter {
             }
             Completion::Normal(v)
         };
-        self.call_stack_envs.pop();
         if !per_iteration_bindings.is_empty() {
             self.dispose_resources(&iter_env, result)
         } else {
-            self.dispose_resources(&for_env, result)
+            self.dispose_resources(for_env, result)
         }
     }
 
