@@ -4917,49 +4917,9 @@ impl Interpreter {
                         return Completion::Normal(promise);
                     }
 
-                    // Check if yield value is a pending promise — need async suspension
+                    // Await(operand): the continuation always runs through a promise
+                    // reaction job, even for a settled promise or a non-object.
                     let wrapped_id = self.await_promise_resolve(&yield_val);
-                    let wrapped_state = wrapped_id.and_then(|id| self.get_promise_state(id));
-
-                    if matches!(wrapped_state, Some(PromiseState::Pending)) {
-                        self.stash_pending_iter_close(o.id);
-                        // Suspend generator and register callbacks for when promise resolves
-                        obj_rc.borrow_mut().set_iterator_state(
-                            IteratorState::StateMachineAsyncGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::SuspendedAtState {
-                                    state_id: *resume_state,
-                                },
-                                _sent_value: JsValue::UNDEFINED,
-                                try_stack: current_try_stack,
-                                pending_binding: sent_value_binding.clone(),
-                                delegated_iterator: None,
-                                pending_exception: pending_exception.take(),
-                                pending_return: pending_return.take(),
-                            },
-                        );
-
-                        self.await_then_internal(
-                            wrapped_id,
-                            &yield_val,
-                            ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
-                        );
-
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    }
-
-                    // Already-resolved path: value is not a pending promise.
-                    // Per spec §27.6.3.8 AsyncGeneratorYield, we must still go through
-                    // a microtask boundary (Await always creates a PromiseReactionJob).
-                    let (awaited_val, rejected) = match wrapped_state {
-                        Some(PromiseState::Fulfilled(v)) => (v, false),
-                        Some(PromiseState::Rejected(e)) => (e, true),
-                        _ => (yield_val, false),
-                    };
-
                     self.stash_pending_iter_close(o.id);
                     obj_rc.borrow_mut().set_iterator_state(
                         IteratorState::StateMachineAsyncGenerator {
@@ -4978,23 +4938,11 @@ impl Interpreter {
                         },
                     );
 
-                    // Schedule resolution via microtask to ensure proper interleaving
-                    if rejected {
-                        self.scheduler.enqueue_reaction_job(
-                            PromiseReaction {
-                                handler: None,
-                                target: ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
-                                reaction_type: PromiseReactionType::Reject,
-                            },
-                            awaited_val,
-                        );
-                    } else {
-                        self.await_then_internal(
-                            None,
-                            &awaited_val,
-                            ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
-                        );
-                    }
+                    self.await_then_internal(
+                        wrapped_id,
+                        &yield_val,
+                        ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
+                    );
                     self.scheduler.set_async_gen_yield_pending(true);
                     return Completion::Normal(promise);
                 }
@@ -6352,11 +6300,7 @@ impl Interpreter {
         }
 
         // Pop the queue entry and process next
-        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
-            queue.pop_front();
-        }
-        // AsyncGeneratorDrainQueue runs inline after the settled request.
-        self.async_gen_process_queue(this);
+        self.async_gen_drain_queue(gen_id);
     }
 
     pub(crate) fn async_generator_next(

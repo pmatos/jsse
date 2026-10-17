@@ -2,25 +2,19 @@
 // This code is governed by the BSD license found in the LICENSE file.
 
 /*---
-esid: sec-asyncgeneratoryield
+esid: sec-yield
 description: >
   `yield` in an async generator performs Await(operand) first, so a rejected
   operand throws at the `yield`: an enclosing try statement catches it, its
   finally block runs, and the generator stays usable. Without a handler the
   request is rejected and the generator completes.
 info: |
-  Runtime Semantics: Evaluation
-  YieldExpression : yield AssignmentExpression
+  Yield ( value )
 
-  [...]
-  3. If generatorKind is async, return ? AsyncGeneratorYield(? Await(value)).
+  1. Let generatorKind be GetGeneratorKind().
+  2. If generatorKind is async, return ? AsyncGeneratorYield(? Await(value)).
+  3. Otherwise, return ? GeneratorYield(CreateIterResultObject(value, false)).
 
-  Await ( value )
-
-  [...]
-  8. Let onRejected be CreateBuiltinFunction(rejectedClosure, 1, "", « »).
-  [...]
-  rejectedClosure: Perform AsyncBlockStart-style resumption with ThrowCompletion(reason).
 flags: [async]
 includes: [asyncHelpers.js, compareArray.js]
 features: [async-iteration]
@@ -29,6 +23,8 @@ features: [async-iteration]
 function thenableRejecting(reason) {
   return { then(_, reject) { reject(reason); } };
 }
+
+var cases = [];
 
 var operands = {
   'already rejected promise': function (r) { return Promise.reject(r); },
@@ -41,7 +37,7 @@ var operands = {
 Object.keys(operands).forEach(function (name) {
   var make = operands[name];
 
-  asyncTest(async function () {
+  cases.push(async function () {
     var log = [];
     async function* g() {
       try {
@@ -66,7 +62,7 @@ Object.keys(operands).forEach(function (name) {
     assert.compareArray(log, ['caught:R', 'finally', 'got:S'], name + ': log');
   });
 
-  asyncTest(async function () {
+  cases.push(async function () {
     var log = [];
     async function* g() {
       try {
@@ -90,7 +86,7 @@ Object.keys(operands).forEach(function (name) {
     assert.sameValue(after.value, undefined, name + ': completed value');
   });
 
-  asyncTest(async function () {
+  cases.push(async function () {
     var log = [];
     async function* g() {
       for (var i = 0; i < 3; i++) {
@@ -112,7 +108,7 @@ Object.keys(operands).forEach(function (name) {
     assert.compareArray(log, ['R0', 'R1', 'R2'], name + ': every rejection caught in turn');
   });
 
-  asyncTest(async function () {
+  cases.push(async function () {
     var closed = 0;
     var iterable = {
       [Symbol.iterator]() {
@@ -133,4 +129,10 @@ Object.keys(operands).forEach(function (name) {
     assert.sameValue(error, 'R', name + ': for-of body rejection propagates');
     assert.sameValue(closed, 1, name + ': for-of iterator closed');
   });
+});
+
+asyncTest(async function () {
+  for (var i = 0; i < cases.length; i++) {
+    await cases[i]();
+  }
 });
