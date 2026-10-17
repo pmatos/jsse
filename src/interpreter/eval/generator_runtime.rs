@@ -4954,22 +4954,10 @@ impl Interpreter {
                     // Already-resolved path: value is not a pending promise.
                     // Per spec §27.6.3.8 AsyncGeneratorYield, we must still go through
                     // a microtask boundary (Await always creates a PromiseReactionJob).
-                    let awaited_val = if let Some(PromiseState::Fulfilled(v)) = wrapped_state {
-                        v
-                    } else if let Some(PromiseState::Rejected(e)) = wrapped_state {
-                        self.retire_generator(o.id);
-                        self.scheduler.enqueue_reaction_job(
-                            PromiseReaction {
-                                handler: None,
-                                target: ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
-                                reaction_type: PromiseReactionType::Reject,
-                            },
-                            e,
-                        );
-                        self.scheduler.set_async_gen_yield_pending(true);
-                        return Completion::Normal(promise);
-                    } else {
-                        yield_val
+                    let (awaited_val, rejected) = match wrapped_state {
+                        Some(PromiseState::Fulfilled(v)) => (v, false),
+                        Some(PromiseState::Rejected(e)) => (e, true),
+                        _ => (yield_val, false),
                     };
 
                     self.stash_pending_iter_close(o.id);
@@ -4991,11 +4979,22 @@ impl Interpreter {
                     );
 
                     // Schedule resolution via microtask to ensure proper interleaving
-                    self.await_then_internal(
-                        None,
-                        &awaited_val,
-                        ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
-                    );
+                    if rejected {
+                        self.scheduler.enqueue_reaction_job(
+                            PromiseReaction {
+                                handler: None,
+                                target: ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
+                                reaction_type: PromiseReactionType::Reject,
+                            },
+                            awaited_val,
+                        );
+                    } else {
+                        self.await_then_internal(
+                            None,
+                            &awaited_val,
+                            ReactionTarget::AsyncGen(o.id, AsyncGenStep::Yield),
+                        );
+                    }
                     self.scheduler.set_async_gen_yield_pending(true);
                     return Completion::Normal(promise);
                 }
@@ -6283,7 +6282,9 @@ impl Interpreter {
             );
             return;
         };
-        if step == AsyncGenStep::Await {
+        // `yield`'s Await of a rejected operand throws at the `yield`, so the
+        // generator resumes with that exception rather than settling the request.
+        if step == AsyncGenStep::Await || (step == AsyncGenStep::Yield && is_reject) {
             self.async_gen_await_resume(gen_id, value, is_reject, &promise);
             return;
         }
@@ -6354,20 +6355,8 @@ impl Interpreter {
         if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
             queue.pop_front();
         }
-        let this_clone = this.clone();
-        if self
-            .scheduler
-            .async_gen_queue(gen_id)
-            .is_some_and(|q| !q.is_empty())
-        {
-            self.scheduler.enqueue_microtask((
-                vec![this_clone.clone()],
-                Box::new(move |interp| {
-                    interp.async_gen_process_queue(&this_clone);
-                    Completion::Normal(JsValue::UNDEFINED)
-                }),
-            ));
-        }
+        // AsyncGeneratorDrainQueue runs inline after the settled request.
+        self.async_gen_process_queue(this);
     }
 
     pub(crate) fn async_generator_next(
