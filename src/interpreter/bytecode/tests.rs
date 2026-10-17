@@ -10,7 +10,7 @@ use crate::types::{JsString, JsValue};
 fn run(chunk: Chunk) -> Completion {
     let mut interp = Interpreter::new();
     let env = interp.realm().global_env.clone();
-    run_chunk(&mut interp, &chunk, &env, JsValue::UNDEFINED)
+    run_chunk(&mut interp, &chunk, &env)
 }
 
 #[test]
@@ -2656,7 +2656,7 @@ fn run_body_count_safepoints(body: &[Statement]) -> u64 {
     let chunk = compile_body(body).expect("compile");
     let mut interp = Interpreter::new();
     let env = interp.realm().global_env.clone();
-    let _ = run_chunk(&mut interp, &chunk, &env, JsValue::UNDEFINED);
+    let _ = run_chunk(&mut interp, &chunk, &env);
     interp.gc.safepoint_calls()
 }
 

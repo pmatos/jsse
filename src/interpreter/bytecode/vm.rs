@@ -447,17 +447,26 @@ unsafe fn discard_number_operands(stack: &mut Vec<JsValue>, count: usize) {
 }
 
 /// Pops and unroots `count` operands, innermost first (LIFO with the pushes).
+/// Every object operand holds exactly one root and the roots are the top of
+/// `gc_bytecode_roots` (the callee frame truncates back to its entry depth on
+/// every exit), so the roots go in one step; debug builds still check each id.
 fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize) {
     let base = stack
         .len()
         .checked_sub(count)
         .expect("stack underflow releasing call operands");
-    interp.gc_bytecode_roots.pop_expected_batch(
-        stack[base..]
+    let operands = &stack[base..];
+    if cfg!(debug_assertions) {
+        for id in operands.iter().rev().filter_map(JsValue::as_object_id) {
+            interp.gc_bytecode_roots.pop_expected(id);
+        }
+    } else {
+        let objects = operands
             .iter()
-            .rev()
-            .filter_map(JsValue::as_object_id),
-    );
+            .filter(|value| value.as_object_id().is_some())
+            .count();
+        interp.gc_bytecode_roots.release_top(objects);
+    }
     stack.truncate(base);
 }
 
@@ -786,13 +795,8 @@ fn resume_at_handler(
     Ok(handler.target as usize)
 }
 
-pub(crate) fn run_chunk(
-    interp: &mut Interpreter,
-    chunk: &Chunk,
-    env: &EnvRef,
-    this_value: JsValue,
-) -> Completion {
-    run_chunk_with_var_prologue(interp, chunk, env, this_value, true)
+pub(crate) fn run_chunk(interp: &mut Interpreter, chunk: &Chunk, env: &EnvRef) -> Completion {
+    run_chunk_with_var_prologue(interp, chunk, env, true)
 }
 
 /// Run a Script chunk after its caller has completed
@@ -803,9 +807,8 @@ pub(crate) fn run_script_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
     env: &EnvRef,
-    this_value: JsValue,
 ) -> Completion {
-    run_chunk_with_var_prologue(interp, chunk, env, this_value, false)
+    run_chunk_with_var_prologue(interp, chunk, env, false)
 }
 
 /// How a suspended generator body is resumed (`Generator.prototype.next`,
@@ -906,7 +909,6 @@ pub(crate) fn run_generator_chunk(
         interp,
         chunk,
         env,
-        JsValue::UNDEFINED,
         false,
         stack,
         refs,
@@ -942,7 +944,6 @@ fn run_chunk_with_var_prologue(
     interp: &mut Interpreter,
     chunk: &Chunk,
     env: &EnvRef,
-    this_value: JsValue,
     declare_chunk_vars: bool,
 ) -> Completion {
     let gc_frame = interp.gc_bytecode_roots.len();
@@ -959,7 +960,6 @@ fn run_chunk_with_var_prologue(
         interp,
         chunk,
         env,
-        this_value,
         declare_chunk_vars,
         &mut stack,
         &mut refs,
@@ -1004,7 +1004,6 @@ fn run_chunk_inner<const GENERATOR: bool>(
     interp: &mut Interpreter,
     chunk: &Chunk,
     frame_env: &EnvRef,
-    _this: JsValue,
     declare_chunk_vars: bool,
     stack: &mut Vec<JsValue>,
     refs: &mut Vec<IdentifierRef>,

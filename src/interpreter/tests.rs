@@ -3815,7 +3815,7 @@ fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
 }
 
 #[test]
-fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
+fn hoist_analysis_is_read_off_the_literal_frame_across_repeated_calls() {
     let interp = run_script_tree_walker(
         r#"
         function f(n) { var acc = 0; for (var i = 0; i < n; i++) { acc += i; } return acc; }
@@ -3826,8 +3826,9 @@ fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
     );
     assert_eq!(global_number(&interp, "__total"), 150.0);
     assert!(
-        interp.hoist_cache.hits() >= 49,
-        "expected the repeatedly-called body to be memoised, got {} hits",
+        interp.hoist_cache.hits() < 5,
+        "expected the analysis to be kept on the literal's frame after its first call, \
+         but the Body-keyed memo was consulted {} times for 50 calls",
         interp.hoist_cache.hits()
     );
 }

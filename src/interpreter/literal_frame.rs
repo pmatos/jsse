@@ -3,10 +3,13 @@
 //! the function it already holds instead of probing a Body-keyed table.
 
 use std::cell::{Cell, OnceCell};
+use std::rc::Rc;
 
-use crate::ast::Pattern;
+use crate::ast::{Body, Pattern};
 
 use super::atom::Atom;
+use super::bytecode::chunk::Chunk;
+use super::hoist_cache::HoistAnalysis;
 use super::ic_store::BodyStoreHandle;
 
 /// The interned parameter names of a simple parameter list.
@@ -45,10 +48,26 @@ impl ParamAtoms {
     }
 }
 
+/// What an ordinary [[Call]] of a compiled function needs, read off its frame
+/// instead of off the function object and rebuilt per call (#1089). It exists
+/// only for the shape the hot call path handles: a plain (not generator, not
+/// async) function with simple parameters whose body never mentions
+/// `arguments` and whose compile verdict is `Compiled`.
+#[derive(Debug)]
+pub(crate) struct CompiledCall {
+    pub(crate) params: Rc<Vec<Pattern>>,
+    pub(crate) body: Body,
+    pub(crate) chunk: Rc<Chunk>,
+    pub(crate) is_arrow: bool,
+    pub(crate) is_strict: bool,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct LiteralFrame {
     param_atoms: OnceCell<ParamAtoms>,
     ic_handle: Cell<Option<BodyStoreHandle>>,
+    compiled_call: OnceCell<CompiledCall>,
+    hoist: OnceCell<Rc<HoistAnalysis>>,
 }
 
 impl LiteralFrame {
@@ -65,6 +84,25 @@ impl LiteralFrame {
             "a LiteralFrame was used with a different parameter list"
         );
         atoms
+    }
+
+    /// The compiled-call record, once a call has proved the function eligible.
+    #[inline]
+    pub(crate) fn compiled_call(&self) -> Option<&CompiledCall> {
+        self.compiled_call.get()
+    }
+
+    pub(crate) fn install_compiled_call(&self, make: impl FnOnce() -> CompiledCall) {
+        self.compiled_call.get_or_init(make);
+    }
+
+    /// The literal's hoisting analysis; `compute` runs on the first request.
+    #[inline]
+    pub(crate) fn hoist_analysis(
+        &self,
+        compute: impl FnOnce() -> Rc<HoistAnalysis>,
+    ) -> &Rc<HoistAnalysis> {
+        self.hoist.get_or_init(compute)
     }
 
     pub(crate) fn ic_handle(&self) -> &Cell<Option<BodyStoreHandle>> {

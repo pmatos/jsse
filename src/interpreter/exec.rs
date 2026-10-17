@@ -128,10 +128,7 @@ impl Interpreter {
                         } else {
                             interp.call_stack_envs.push(env.clone());
                             let result = crate::interpreter::bytecode::vm::run_script_chunk(
-                                interp,
-                                &chunk,
-                                env,
-                                JsValue::UNDEFINED,
+                                interp, &chunk, env,
                             );
                             interp.call_stack_envs.pop();
                             result

@@ -1,9 +1,10 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
-use crate::interpreter::bytecode::BytecodeCacheState;
+use crate::interpreter::bytecode::chunk::Chunk;
+use crate::interpreter::bytecode::{BytecodeCacheState, vm};
 use crate::interpreter::generator_analysis::block_has_await_using;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
-use crate::interpreter::literal_frame::LiteralFrame;
+use crate::interpreter::literal_frame::{CompiledCall, LiteralFrame};
 use crate::interpreter::property::SetOutcome;
 
 mod access;
@@ -2121,45 +2122,14 @@ impl Interpreter {
         frame: &LiteralFrame,
         bytecode_cache: BytecodeCacheState,
         exec_env: &EnvRef,
-        this_val: &JsValue,
     ) -> Completion {
         if self.bytecode_enabled {
-            use crate::interpreter::bytecode::vm;
             let cache_state = match bytecode_cache {
                 BytecodeCacheState::Untried => self.shared_bytecode_verdict(func_obj_id, body),
                 known => known,
             };
             if let BytecodeCacheState::Compiled(chunk) = cache_state {
-                #[cfg(feature = "perf-counters")]
-                {
-                    self.perf.body_compiled += 1;
-                }
-                // Function and lexical declarations are instantiated before
-                // the chunk runs, exactly as the tree-walker does, so the
-                // nodes handed back to it find their bindings in place.
-                let analysis = self.chunk_instantiation_analysis(&chunk, body);
-                #[cfg(feature = "perf-counters")]
-                let has_fallback = !chunk.ast.is_empty();
-                #[cfg(feature = "perf-counters")]
-                if has_fallback {
-                    let (name, seq) = self.perf_body_name(func_obj_id);
-                    self.perf.enter_ast_body(name, seq, false);
-                }
-                let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
-                    if let Some(analysis) = &analysis
-                        && let Some(err) =
-                            interp.instantiate_chunk_declarations(&chunk, body, exec_env, analysis)
-                    {
-                        return err;
-                    }
-                    vm::run_chunk(interp, &chunk, exec_env, this_val.clone())
-                });
-                #[cfg(feature = "perf-counters")]
-                if has_fallback {
-                    let exclusive = self.perf.leave_ast_body();
-                    self.perf.ast_units_in_fallbacks += exclusive;
-                }
-                return result;
+                return self.run_compiled_body(func_obj_id, &chunk, body, frame, exec_env);
             }
         }
         #[cfg(feature = "perf-counters")]
@@ -2170,12 +2140,56 @@ impl Interpreter {
         }
         // #72: the declared-name collection for this Body is memoised, bounded
         // per #165.
-        let analysis = self.hoist_cache.analysis_for(body);
+        let analysis = frame.hoist_analysis(|| self.hoist_cache.analysis_for(body));
         let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
-            interp.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis))
+            interp.exec_statements_cached(body.as_slice(), exec_env, Some(analysis))
         });
         #[cfg(feature = "perf-counters")]
         self.perf.leave_ast_body();
+        result
+    }
+
+    /// Runs a compiled function body in `exec_env`. Function and lexical
+    /// declarations are instantiated before the chunk runs, exactly as the
+    /// tree-walker does, so the nodes handed back to it find their bindings in
+    /// place.
+    fn run_compiled_body(
+        &mut self,
+        func_obj_id: u64,
+        chunk: &Chunk,
+        body: &Body,
+        frame: &LiteralFrame,
+        exec_env: &EnvRef,
+    ) -> Completion {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.body_compiled += 1;
+        }
+        let analysis = (chunk.needs_instantiation && chunk.top_level_lexicals.is_none())
+            .then(|| frame.hoist_analysis(|| self.hoist_cache.analysis_for(body)));
+        #[cfg(feature = "perf-counters")]
+        let has_fallback = !chunk.ast.is_empty();
+        #[cfg(feature = "perf-counters")]
+        if has_fallback {
+            let (name, seq) = self.perf_body_name(func_obj_id);
+            self.perf.enter_ast_body(name, seq, false);
+        }
+        #[cfg(not(feature = "perf-counters"))]
+        let _ = func_obj_id;
+        let result = self.with_ic_body_cached(body, frame.ic_handle(), |interp| {
+            if let Some(analysis) = analysis
+                && let Some(err) =
+                    interp.instantiate_chunk_declarations(chunk, body, exec_env, analysis)
+            {
+                return err;
+            }
+            vm::run_chunk(interp, chunk, exec_env)
+        });
+        #[cfg(feature = "perf-counters")]
+        if has_fallback {
+            let exclusive = self.perf.leave_ast_body();
+            self.perf.ast_units_in_fallbacks += exclusive;
+        }
         result
     }
 
@@ -5453,7 +5467,44 @@ impl Interpreter {
         result
     }
 
+    /// [[Call]] / [[Construct]] dispatch. An ordinary call of a function that
+    /// has proved eligible (`LiteralFrame::compiled_call`) is served here by
+    /// `call_compiled_function`; every other call, and every call that is
+    /// part of a construction, takes `call_function_general`.
     fn call_function_inner_impl(
+        &mut self,
+        func_val: &JsValue,
+        this_val: &JsValue,
+        args: &[JsValue],
+        skip_entry_checks: bool,
+    ) -> Completion {
+        if skip_entry_checks {
+            self.call_ic_fast_dispatch_count
+                .set(self.call_ic_fast_dispatch_count.get() + 1);
+        }
+        if !self.calling_as_construct
+            && self.new_target.is_none()
+            && !self.constructing_derived
+            && self.bytecode_enabled
+            && let Some(id) = func_val.as_object_id()
+            && let Some(obj) = self.get_object_cell(id)
+            && let Some((frame, closure, function_realm)) =
+                Self::compiled_call_target(obj, !skip_entry_checks)
+        {
+            return self.call_compiled_function(
+                id,
+                &frame,
+                closure,
+                function_realm,
+                this_val,
+                args,
+            );
+        }
+        self.call_function_general(func_val, this_val, args, skip_entry_checks)
+    }
+
+    #[inline(never)]
+    fn call_function_general(
         &mut self,
         func_val: &JsValue,
         _this_val: &JsValue,
@@ -5469,8 +5520,6 @@ impl Interpreter {
             // when an IC hit already validated the callable category — see
             // `call_function_ic_validated`.
             let (is_proxy_or_revoked, has_wrapped_target, is_class_ctor) = if skip_entry_checks {
-                self.call_ic_fast_dispatch_count
-                    .set(self.call_ic_fast_dispatch_count.get() + 1);
                 (false, false, false)
             } else {
                 let b = obj.borrow();
@@ -5909,6 +5958,20 @@ impl Interpreter {
                                 self.current_realm_id = caller_realm;
                                 break 'call Completion::Normal(JsValue::object(gen_id));
                             }
+                            if has_simple_params
+                                && !uses_arguments
+                                && !is_class_ctor
+                                && self.bytecode_enabled
+                                && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
+                            {
+                                frame.install_compiled_call(|| CompiledCall {
+                                    params: params.clone(),
+                                    body: body.clone(),
+                                    chunk: chunk.clone(),
+                                    is_arrow,
+                                    is_strict,
+                                });
+                            }
                             let closure_strict = closure.borrow().strict;
                             let func_env = self.acquire_function_environment(
                                 closure,
@@ -6029,14 +6092,8 @@ impl Interpreter {
                             // independent of any try/finally region in the caller.
                             let saved_tco_suppress = self.tco_suppress_depth;
                             self.tco_suppress_depth = 0;
-                            let result = self.dispatch_body(
-                                o.id,
-                                &body,
-                                &frame,
-                                bytecode_cache,
-                                &exec_env,
-                                _this_val,
-                            );
+                            let result =
+                                self.dispatch_body(o.id, &body, &frame, bytecode_cache, &exec_env);
                             self.tco_suppress_depth = saved_tco_suppress;
                             self.call_stack_envs.pop();
                             debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
@@ -6048,22 +6105,7 @@ impl Interpreter {
                             self.current_realm_id = caller_realm;
                             drop(exec_env);
                             self.recycle_environment(func_env);
-                            match result {
-                                Completion::Return(v) => {
-                                    self.last_call_had_explicit_return = true;
-                                    Completion::Normal(v)
-                                }
-                                Completion::TailCall { .. } => {
-                                    self.last_call_had_explicit_return = true;
-                                    result
-                                }
-                                Completion::Normal(_) | Completion::Empty => {
-                                    self.last_call_had_explicit_return = false;
-                                    Completion::Normal(JsValue::UNDEFINED)
-                                }
-                                Completion::Yield(_) => Completion::Normal(JsValue::UNDEFINED),
-                                other => other,
-                            }
+                            self.finish_user_call(result)
                         }
                     }
                 };
@@ -6074,6 +6116,127 @@ impl Interpreter {
         let desc = format!("{} is not a function", self.describe_non_callable(func_val));
         let err = self.create_type_error(&desc);
         Completion::Throw(err)
+    }
+
+    /// The completion an ordinary user function call reports, and the
+    /// side channel `[[Construct]]` reads to tell an explicit `return` from
+    /// falling off the end.
+    #[inline]
+    fn finish_user_call(&mut self, result: Completion) -> Completion {
+        match result {
+            Completion::Return(v) => {
+                self.last_call_had_explicit_return = true;
+                Completion::Normal(v)
+            }
+            Completion::TailCall { .. } => {
+                self.last_call_had_explicit_return = true;
+                result
+            }
+            Completion::Normal(_) | Completion::Empty => {
+                self.last_call_had_explicit_return = false;
+                Completion::Normal(JsValue::UNDEFINED)
+            }
+            Completion::Yield(_) => Completion::Normal(JsValue::UNDEFINED),
+            other => other,
+        }
+    }
+
+    /// The frame, closure environment and realm of a function whose [[Call]]
+    /// can take `call_compiled_function`, or `None` when it has not (yet)
+    /// proved eligible. Class constructors never do (they throw when called);
+    /// a Proxy or wrapped function copies its target's callable, so unless an
+    /// inline cache already ruled those out (`check_kind` false) they are
+    /// excluded here.
+    #[inline]
+    fn compiled_call_target(
+        obj: &ObjectHandle,
+        check_kind: bool,
+    ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>)> {
+        let data = obj.borrow();
+        match data.callable.as_deref() {
+            Some(JsFunction::User { frame, closure, .. })
+                if frame.compiled_call().is_some()
+                    && !(check_kind
+                        && (data.is_proxy()
+                            || data.is_proxy_revoked()
+                            || data.wrapped().is_some())) =>
+            {
+                Some((frame.clone(), closure.clone(), data.function_realm()))
+            }
+            _ => None,
+        }
+    }
+
+    /// [[Call]] of an ordinary compiled function: not a generator or async
+    /// function, simple parameters, no `arguments` binding, and not a
+    /// construction (so no NewTarget and no derived-constructor `this`). It
+    /// does what the general path of `call_function_inner_impl` does for such
+    /// a function, without rebuilding the call's invariants from the function
+    /// object.
+    fn call_compiled_function(
+        &mut self,
+        func_obj_id: u64,
+        frame: &Rc<LiteralFrame>,
+        closure: EnvRef,
+        function_realm: Option<usize>,
+        this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let call = frame
+            .compiled_call()
+            .expect("compiled_call_target checked the record");
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.calls_to_user += 1;
+        }
+        let caller_realm = self.current_realm_id;
+        if let Some(realm) = function_realm {
+            self.current_realm_id = realm;
+        }
+        let closure_strict = closure.borrow().strict;
+        let func_env =
+            self.acquire_function_environment(closure, call.params.len().saturating_add(2));
+        let mut call_frame_arguments = CallFrameArguments::None;
+        if call.is_arrow {
+            func_env.borrow_mut().is_arrow_scope = true;
+        } else {
+            let effective_this =
+                self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
+            func_env
+                .borrow_mut()
+                .bind_this_for_call(effective_this, JsValue::UNDEFINED);
+            if !call.is_strict && !closure_strict {
+                // SAFETY: popped right after the body returns.
+                call_frame_arguments = CallFrameArguments::Deferred {
+                    args: unsafe { DeferredCallArguments::new(args, &func_env) },
+                    mapped: true,
+                };
+            }
+        }
+        self.bind_simple_parameters(frame, &call.params, args, &func_env);
+        func_env.borrow_mut().strict = call.is_strict;
+        self.call_stack_frames.push(CallFrame {
+            func_obj_id,
+            arguments: call_frame_arguments,
+            is_eval: false,
+        });
+        let frame_depth = self.call_stack_frames.len();
+        self.call_stack_envs.push(func_env.clone());
+        self.in_tail_position = false;
+        let saved_tco_suppress = std::mem::take(&mut self.tco_suppress_depth);
+        let result = self.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env);
+        self.tco_suppress_depth = saved_tco_suppress;
+        self.call_stack_envs.pop();
+        debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
+        self.call_stack_frames.pop();
+        let result = if func_env.borrow().dispose_stack.is_some() {
+            self.dispose_resources(&func_env, result)
+        } else {
+            result
+        };
+        self.current_realm_id = caller_realm;
+        self.recycle_environment(func_env);
+        self.finish_user_call(result)
     }
 
     /// Names a non-callable value for a "... is not a function" message.
