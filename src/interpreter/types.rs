@@ -1187,41 +1187,17 @@ impl Environment {
         }))
     }
 
-    pub(crate) fn reset_function_scope(&mut self, parent: Option<EnvRef>, binding_capacity: usize) {
-        self.reset_scope(parent, binding_capacity, true);
-    }
-
-    /// Drops what a pooled environment holds on to (its parent chain and
-    /// bindings); every other field is rewritten when it is next acquired.
-    pub(crate) fn release_block_scope(&mut self) {
+    /// Returns this environment to the canonical state a pooled one holds: no
+    /// bindings, no parent, no `this`, and every other field at what
+    /// `Environment::new` builds. Paired with [`Environment::adopt_pooled`],
+    /// which then only sets what differs per use, so a call resets the
+    /// environment once instead of on both sides of the pool.
+    pub(crate) fn release_to_pool(&mut self) {
         self.bindings.clear();
+        self.this_binding = None;
         self.parent = None;
-        self.this_binding = None;
-        self.dispose_stack = None;
-        self.annexb_function_names = None;
-        self.class_private_names = None;
-        self.indirect_bindings = None;
-    }
-
-    /// Reinitialises a pooled environment as a fresh block scope under
-    /// `parent`, as `Environment::new` would build one.
-    pub(crate) fn reset_block_scope(&mut self, parent: EnvRef, binding_capacity: usize) {
-        self.reset_scope(Some(parent), binding_capacity, false);
-    }
-
-    fn reset_scope(
-        &mut self,
-        parent: Option<EnvRef>,
-        binding_capacity: usize,
-        is_function_scope: bool,
-    ) {
-        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
-        self.bindings.clear();
-        self.bindings.reserve(binding_capacity);
-        self.this_binding = None;
-        self.parent = parent;
-        self.strict = strict;
-        self.is_function_scope = is_function_scope;
+        self.strict = false;
+        self.is_function_scope = false;
         self.is_arrow_scope = false;
         self.with_object = None;
         self.dispose_stack = None;
@@ -1236,6 +1212,45 @@ impl Environment {
         self.is_derived_constructor_scope = false;
         self.indirect_bindings = None;
         self.module_path = None;
+    }
+
+    /// Makes a pooled environment (see [`Environment::release_to_pool`]) a
+    /// fresh scope under `parent`, as `Environment::new` or
+    /// `new_function_scope_with_capacity` would build one.
+    pub(crate) fn adopt_pooled(
+        &mut self,
+        parent: Option<EnvRef>,
+        binding_capacity: usize,
+        is_function_scope: bool,
+    ) {
+        debug_assert!(self.is_pool_canonical(), "pooled environment was dirty");
+        self.strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
+        self.parent = parent;
+        self.is_function_scope = is_function_scope;
+        self.bindings.reserve(binding_capacity);
+    }
+
+    /// True when every field is what [`Environment::release_to_pool`] leaves.
+    fn is_pool_canonical(&self) -> bool {
+        self.bindings.is_empty()
+            && self.this_binding.is_none()
+            && self.parent.is_none()
+            && !self.strict
+            && !self.is_function_scope
+            && !self.is_arrow_scope
+            && self.with_object.is_none()
+            && self.dispose_stack.is_none()
+            && self.global_object_id.is_none()
+            && self.annexb_function_names.is_none()
+            && self.class_private_names.is_none()
+            && !self.is_field_initializer
+            && !self.arguments_immutable
+            && !self.has_parameter_expressions
+            && self.has_simple_params
+            && !self.is_simple_catch_scope
+            && !self.is_derived_constructor_scope
+            && self.indirect_bindings.is_none()
+            && self.module_path.is_none()
     }
 
     pub(crate) fn find_module_path(env: &EnvRef) -> Option<super::ModuleKey> {

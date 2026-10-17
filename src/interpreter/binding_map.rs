@@ -182,7 +182,6 @@ impl BindingMap {
         self.entries.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

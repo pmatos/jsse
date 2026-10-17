@@ -5992,7 +5992,7 @@ impl Interpreter {
                             };
                             if let Err(error) = bound {
                                 self.current_realm_id = caller_realm;
-                                self.recycle_function_environment(func_env);
+                                self.recycle_environment(func_env);
                                 break 'call Completion::Throw(error);
                             }
                             let exec_env = if !is_simple {
@@ -6047,7 +6047,7 @@ impl Interpreter {
                             }
                             self.current_realm_id = caller_realm;
                             drop(exec_env);
-                            self.recycle_function_environment(func_env);
+                            self.recycle_environment(func_env);
                             match result {
                                 Completion::Return(v) => {
                                     self.last_call_had_explicit_return = true;

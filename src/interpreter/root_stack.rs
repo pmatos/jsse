@@ -44,6 +44,26 @@ impl RootStack {
         }
     }
 
+    /// Pops the top entries one by one against `expected`, which lists the ids
+    /// innermost (most recently pushed) first. Equivalent to calling
+    /// [`pop_expected`](Self::pop_expected) for each, but while the entries
+    /// match it only walks an index and truncates once; the first mismatch
+    /// falls back to `pop_expected`'s handling.
+    #[inline]
+    pub(super) fn pop_expected_batch(&mut self, expected: impl Iterator<Item = u64>) {
+        let mut len = self.ids.len();
+        for id in expected {
+            if len > 0 && self.ids[len - 1] == id {
+                len -= 1;
+            } else {
+                self.ids.truncate(len);
+                self.pop_expected(id);
+                len = self.ids.len();
+            }
+        }
+        self.ids.truncate(len);
+    }
+
     #[inline]
     pub(super) fn len(&self) -> usize {
         self.ids.len()

@@ -221,6 +221,14 @@ fn local_target<'a>(frame_env: &'a EnvRef, scopes: &'a [EnvRef], slot: u16) -> (
     }
 }
 
+/// The `this` value `env` itself binds, when it holds an initialized binding.
+#[inline(always)]
+fn initialized_this(env: &EnvRef) -> Option<JsValue> {
+    let scope = env.borrow();
+    let binding = scope.this_binding.as_ref()?;
+    binding.initialized.then(|| binding.value.clone())
+}
+
 /// The frame binding a verified slot hint names, when it is initialized and
 /// the scope is a plain declarative one; `f` sees its value in place.
 #[inline(always)]
@@ -321,7 +329,7 @@ fn unwind_scopes(
     interp.call_stack_envs.truncate(envs_base + depth);
     while scopes.len() > depth {
         let env = scopes.pop().expect("length checked above");
-        interp.recycle_block_environment(env);
+        interp.recycle_environment(env);
     }
 }
 
@@ -440,9 +448,17 @@ unsafe fn discard_number_operands(stack: &mut Vec<JsValue>, count: usize) {
 
 /// Pops and unroots `count` operands, innermost first (LIFO with the pushes).
 fn pop_operands(interp: &mut Interpreter, stack: &mut Vec<JsValue>, count: usize) {
-    for _ in 0..count {
-        pop_value(interp, stack, "stack underflow releasing call operands");
-    }
+    let base = stack
+        .len()
+        .checked_sub(count)
+        .expect("stack underflow releasing call operands");
+    interp.gc_bytecode_roots.pop_expected_batch(
+        stack[base..]
+            .iter()
+            .rev()
+            .filter_map(JsValue::as_object_id),
+    );
+    stack.truncate(base);
 }
 
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
@@ -950,7 +966,9 @@ fn run_chunk_with_var_prologue(
         None,
     );
     recycle_vm_buffer(&mut interp.vm_stack_pool, stack);
-    recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
+    if chunk.max_refs != 0 {
+        recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
+    }
     // `Throw`/`Exit` are abrupt and can leave operands from an
     // outer-in-progress expression still on the stack (issue #331) — every
     // other completion is produced only after the chunk's own opcode
@@ -1275,10 +1293,19 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         }
                     }
                 }
-                Op::LoadThis => match interp.resolve_this_binding(cur_env!()) {
-                    Completion::Normal(v) => push_value(interp, stack, v),
-                    abrupt => bail!('dispatch, abrupt),
-                },
+                Op::LoadThis => {
+                    // The block environments `PushEnv` opens never carry a
+                    // `this` binding, so a function frame that has one answers
+                    // without walking up from the innermost scope.
+                    if let Some(value) = initialized_this(frame_env) {
+                        push_value(interp, stack, value);
+                    } else {
+                        match interp.resolve_this_binding(cur_env!()) {
+                            Completion::Normal(v) => push_value(interp, stack, v),
+                            abrupt => bail!('dispatch, abrupt),
+                        }
+                    }
+                }
                 Op::LoadCalleeName => {
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
@@ -2221,7 +2248,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let top = scopes.len() - 1;
                     interp.call_stack_envs[envs_base + top] = fresh.clone();
                     let replaced = std::mem::replace(&mut scopes[top], fresh);
-                    interp.recycle_block_environment(replaced);
+                    interp.recycle_environment(replaced);
                 }
                 Op::MakeClosure => {
                     let idx = decode_u16(chunk, pc);

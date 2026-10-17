@@ -154,7 +154,7 @@ fn function_environment_pool_reuses_and_resets_unescaped_storage() {
         env.arguments_immutable = true;
     }
 
-    interp.recycle_function_environment(env);
+    interp.recycle_environment(env);
     assert_eq!(interp.function_env_pool.len(), 1);
 
     let second_parent = Environment::new(None);
@@ -175,7 +175,7 @@ fn function_environment_pool_does_not_pin_the_previous_receiver() {
     let mut interp = Interpreter::new();
     let env = interp.acquire_function_environment(Environment::new(None), 1);
     env.borrow_mut().set_this(JsValue::object(4242));
-    interp.recycle_function_environment(env);
+    interp.recycle_environment(env);
 
     let reused = interp.acquire_function_environment(Environment::new(None), 1);
     assert!(reused.borrow().this_binding.is_none());
@@ -189,7 +189,7 @@ fn function_environment_pool_rejects_escaped_storage() {
     env.borrow_mut().declare("captured", BindingKind::Var);
     let escaped = env.clone();
 
-    interp.recycle_function_environment(env);
+    interp.recycle_environment(env);
 
     assert!(interp.function_env_pool.is_empty());
     assert!(escaped.borrow().bindings.contains_key("captured"));
