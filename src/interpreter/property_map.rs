@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
@@ -370,6 +371,50 @@ impl PropertyMap {
             PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot)?.as_mut(),
         };
         entry.map(|(_, d)| d)
+    }
+
+    /// [`Self::slot_of`] for a key that stays the same at one access site,
+    /// trying the slot `hint` remembers first. The hint is only a guess:
+    /// it is accepted only if that slot holds this very key allocation, and
+    /// it is retrained on a hit elsewhere, so it can never go stale.
+    #[inline]
+    pub(crate) fn slot_hinted(
+        &self,
+        key: &JsPropertyKey,
+        hint: Option<&Cell<u32>>,
+    ) -> Option<usize> {
+        let Some(hint) = hint else {
+            return self.slot_of(key);
+        };
+        let remembered = hint.get() as usize;
+        if let Some((k, _)) = self.entry_at(remembered)
+            && k.same_allocation(key)
+        {
+            return Some(remembered);
+        }
+        let slot = self.slot_of(key)?;
+        hint.set(slot as u32);
+        Some(slot)
+    }
+
+    #[inline]
+    pub(crate) fn get_hinted(
+        &self,
+        key: &JsPropertyKey,
+        hint: Option<&Cell<u32>>,
+    ) -> Option<&PropertyRecord> {
+        let slot = self.slot_hinted(key, hint)?;
+        self.entry_at(slot).map(|(_, record)| record)
+    }
+
+    #[inline]
+    pub(crate) fn get_mut_hinted(
+        &mut self,
+        key: &JsPropertyKey,
+        hint: Option<&Cell<u32>>,
+    ) -> Option<&mut PropertyRecord> {
+        let slot = self.slot_hinted(key, hint)?;
+        self.entry_at_mut(slot)
     }
 
     pub(crate) fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyRecord> {
@@ -981,6 +1026,36 @@ mod tests {
         assert_eq!(num(m.get(&fresh_copy).unwrap()), 2.0);
         assert!(m.remove(&fresh_copy).is_some());
         assert!(m.get("ac").is_none());
+    }
+
+    #[test]
+    fn hinted_lookup_agrees_with_plain_lookup_across_spill_and_removal() {
+        let hint = Cell::new(0u32);
+        let mut m = PropertyMap::new();
+        let probe = key("target");
+        assert!(m.get_hinted(&probe, Some(&hint)).is_none(), "empty map");
+        for round in 0..2 {
+            for i in 0..20 {
+                m.insert(key(format!("k{i}")), desc(i as f64));
+                assert!(
+                    m.get_hinted(&probe, Some(&hint)).is_none(),
+                    "round {round}: absent"
+                );
+            }
+            m.insert(probe.clone(), desc(99.0));
+            assert_eq!(num(m.get_hinted(&probe, Some(&hint)).unwrap()), 99.0);
+            for i in 0..20 {
+                let k = key(format!("k{i}"));
+                let got = m.get_hinted(&k, Some(&Cell::new(7))).map(num);
+                assert_eq!(got, Some(i as f64));
+                assert_eq!(m.get_hinted(&k, None).map(num), Some(i as f64));
+            }
+            assert!(m.remove("target").is_some());
+            assert!(m.get_hinted(&probe, Some(&hint)).is_none(), "removed");
+            for i in 0..20 {
+                m.remove(&format!("k{i}"));
+            }
+        }
     }
 
     #[test]

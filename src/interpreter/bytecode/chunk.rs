@@ -3,6 +3,7 @@ use crate::interpreter::eval::{ClosureSpec, LiteralPropertySpec};
 use crate::interpreter::types::BindingKind;
 use crate::interpreter::{Atom, GlobalHint};
 use crate::types::{JsBigInt, JsPropertyKey, JsString, JsValue};
+use std::cell::Cell;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -201,6 +202,10 @@ pub(crate) struct Chunk {
     /// every use, so it is never an invalidation concern. May be shorter than
     /// `names` (hand-built chunks): a missing entry means no hint.
     pub(crate) global_hints: Vec<GlobalHint>,
+    /// One remembered property-map slot per `names` entry, for the named
+    /// property ops (`GetProp`, `SetProp`, ...). Verified by key identity on
+    /// every use. May be shorter than `names`: a missing entry means no hint.
+    pub(crate) prop_hints: Vec<Cell<u32>>,
     pub(crate) var_names: Vec<u16>,
     pub(crate) max_stack: u16,
     pub(crate) max_refs: u16,
@@ -262,6 +267,11 @@ impl Chunk {
             }
             _ => None,
         }
+    }
+
+    #[inline]
+    pub(crate) fn prop_hint(&self, name_idx: u16) -> Option<&Cell<u32>> {
+        self.prop_hints.get(usize::from(name_idx))
     }
 
     #[inline]

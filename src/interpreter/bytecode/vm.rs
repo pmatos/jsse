@@ -12,6 +12,7 @@ use crate::interpreter::types::{Binding, BindingKind, Completion, Environment, P
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
+use std::cell::Cell;
 
 #[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
@@ -489,9 +490,10 @@ fn get_prop_op(
     interp: &mut Interpreter,
     stack: &mut Vec<JsValue>,
     name: &Atom,
+    hint: Option<&Cell<u32>>,
 ) -> Result<(), Completion> {
     let slot = stack.last_mut().expect("stack underflow on GetProp");
-    let getter = match interp.named_get_fast(slot, name.property_key()) {
+    let getter = match interp.named_get_fast(slot, name.property_key(), hint) {
         NamedGet::Value(value) => {
             let base = std::mem::replace(slot, value);
             unroot_stack_value(interp, &base);
@@ -513,9 +515,10 @@ fn load_method_op(
     interp: &mut Interpreter,
     stack: &mut Vec<JsValue>,
     name: &Atom,
+    hint: Option<&Cell<u32>>,
 ) -> Result<(), Completion> {
     let base = stack.last().expect("stack underflow on LoadMethod");
-    let getter = match interp.named_get_fast(base, name.property_key()) {
+    let getter = match interp.named_get_fast(base, name.property_key(), hint) {
         NamedGet::Value(method) => {
             let base = pop_value(interp, stack, "stack underflow on LoadMethod");
             push_value(interp, stack, method);
@@ -538,10 +541,13 @@ fn set_prop_op(
     interp: &mut Interpreter,
     stack: &mut Vec<JsValue>,
     name: &Atom,
+    hint: Option<&Cell<u32>>,
     frame_env: &EnvRef,
 ) -> Result<(), JsValue> {
     let len = stack.len();
-    if len >= 2 && interp.named_store_fast(&stack[len - 2], name.property_key(), &stack[len - 1]) {
+    if len >= 2
+        && interp.named_store_fast(&stack[len - 2], name.property_key(), &stack[len - 1], hint)
+    {
         let rhs = pop_value(interp, stack, "stack underflow on SetProp rhs");
         pop_value(interp, stack, "stack underflow on SetProp base");
         push_value(interp, stack, rhs);
@@ -565,6 +571,7 @@ fn update_prop_op(
     interp: &mut Interpreter,
     stack: &mut Vec<JsValue>,
     name: &Atom,
+    hint: Option<&Cell<u32>>,
     mode: u8,
     frame_env: &EnvRef,
 ) -> Result<(), Completion> {
@@ -574,7 +581,7 @@ fn update_prop_op(
         UpdateOp::Decrement => -1.0,
     };
     let slot = stack.last_mut().expect("stack underflow on UpdateProp");
-    if let Some((old, new)) = interp.named_update_fast(slot, name.property_key(), delta) {
+    if let Some((old, new)) = interp.named_update_fast(slot, name.property_key(), delta, hint) {
         let base = std::mem::replace(slot, JsValue::number(if prefix { new } else { old }));
         unroot_stack_value(interp, &base);
         return Ok(());
@@ -1542,7 +1549,12 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     assert_operands_rooted!();
-                    if let Err(abrupt) = get_prop_op(interp, stack, &chunk.names[idx as usize]) {
+                    if let Err(abrupt) = get_prop_op(
+                        interp,
+                        stack,
+                        &chunk.names[idx as usize],
+                        chunk.prop_hint(idx),
+                    ) {
                         bail!('dispatch, abrupt);
                     }
                 }
@@ -1647,7 +1659,12 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     assert_operands_rooted!();
-                    if let Err(abrupt) = load_method_op(interp, stack, &chunk.names[idx as usize]) {
+                    if let Err(abrupt) = load_method_op(
+                        interp,
+                        stack,
+                        &chunk.names[idx as usize],
+                        chunk.prop_hint(idx),
+                    ) {
                         bail!('dispatch, abrupt);
                     }
                 }
@@ -1674,9 +1691,13 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     assert_operands_rooted!();
-                    if let Err(e) =
-                        set_prop_op(interp, stack, &chunk.names[idx as usize], frame_env)
-                    {
+                    if let Err(e) = set_prop_op(
+                        interp,
+                        stack,
+                        &chunk.names[idx as usize],
+                        chunk.prop_hint(idx),
+                        frame_env,
+                    ) {
                         throw!('dispatch, e);
                     }
                 }
@@ -2157,9 +2178,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     let mode = chunk.code[pc + 2];
                     pc += 3;
-                    if let Err(abrupt) =
-                        update_prop_op(interp, stack, &chunk.names[idx as usize], mode, frame_env)
-                    {
+                    if let Err(abrupt) = update_prop_op(
+                        interp,
+                        stack,
+                        &chunk.names[idx as usize],
+                        chunk.prop_hint(idx),
+                        mode,
+                        frame_env,
+                    ) {
                         bail!('dispatch, abrupt);
                     }
                 }
