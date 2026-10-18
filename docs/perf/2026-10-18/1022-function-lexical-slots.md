@@ -25,12 +25,14 @@ Free names (captured variables, script-level `const`/`let`/`class`, globals) wal
   It serves `LoadName`, `LoadCalleeName`, the `LoadLocal` fallback and `resolve_identifier_ref_hinted` (`ResolveName`, compound
   assignment and update of non-local names).
 - **Global shadow stamp.** An indexed `BindingMap` (more than 16 names; the global environment of a script with many lexicals)
-  carries a per-thread-unique stamp, renewed on every change of its key set. A global-object hint remembers the stamp at which the
-  global environment did not hold the name, so a hit skips that hash probe while the stamp is unchanged. Small maps keep
-  stamp 0 and are probed (filter, then scan), so per-call pushes into function environments pay nothing.
-- `perf-counters`: `scope_hint_hits`/`scope_hint_misses`.
-- `compiler.rs` resolves frame locals through a hash index only for frames of more than 16 names (a linear scan per identifier cost
-  Air's generated functions about 80M Ir before that).
+  can hand out a per-thread-unique stamp of its key set: it is assigned the first time it is read after the key set last changed,
+  and every change only clears it (one store per push into a large environment). A global-object hint remembers the stamp at which
+  the global environment did not hold the name, so a hit skips that hash probe while the stamp is unchanged. Small maps report
+  stamp 0 and are probed (filter, then scan).
+- `perf-counters`: `scope_hint_hits`/`scope_hint_misses` (per thread).
+- `compiler::LocalLayout` resolves frame locals through a hash index only for frames of more than `LINEAR_MAX` names (a linear
+  scan per identifier cost Air's generated functions about 80M Ir before that). A function whose only frame names are top-level
+  lexicals or function declarations now takes the second compile pass that emits the slot ops (one extra compile per literal).
 
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 

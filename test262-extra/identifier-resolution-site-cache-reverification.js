@@ -114,3 +114,22 @@ assert.sameValue(
   "far,far,far,far,near",
   "a block-scoped binding in the caller does not capture the callee's free name"
 );
+
+this.stampedGlobal = "object";
+function readStampedGlobal() { return stampedGlobal; }
+for (var stampWarm = 0; stampWarm < 4; stampWarm++) readStampedGlobal();
+$262.evalScript(
+  "let stampL1 = 1, stampL2 = 2, stampL3 = 3, stampL4 = 4, stampL5 = 5, stampL6 = 6," +
+  " stampL7 = 7, stampL8 = 8, stampL9 = 9, stampL10 = 10, stampL11 = 11, stampL12 = 12," +
+  " stampL13 = 13, stampL14 = 14, stampL15 = 15, stampL16 = 16, stampL17 = 17, stampL18 = 18;"
+);
+for (var stampWarm2 = 0; stampWarm2 < 4; stampWarm2++) readStampedGlobal();
+assert.sameValue(readStampedGlobal(), "object", "global object property is found past a large global lexical map");
+$262.evalScript("let stampL19 = 19;");
+assert.sameValue(readStampedGlobal(), "object", "an unrelated global lexical does not capture the name");
+$262.evalScript("let stampedGlobal = 'lexical';");
+assert.sameValue(
+  readStampedGlobal(),
+  "lexical",
+  "a global lexical declared after the read was warmed shadows the global object property"
+);

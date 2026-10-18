@@ -291,28 +291,27 @@ fn train_scope_hint(
 }
 
 #[cfg(feature = "perf-counters")]
-static SCOPE_HINT_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-#[cfg(feature = "perf-counters")]
-static SCOPE_HINT_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static SCOPE_HINT_COUNTS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
 
 #[cfg(feature = "perf-counters")]
 fn count_scope_hint(hit: bool) {
-    let counter = if hit {
-        &SCOPE_HINT_HITS
-    } else {
-        &SCOPE_HINT_MISSES
-    };
-    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    SCOPE_HINT_COUNTS.with(|counts| {
+        let (hits, misses) = counts.get();
+        counts.set(if hit {
+            (hits + 1, misses)
+        } else {
+            (hits, misses + 1)
+        });
+    });
 }
 
 /// Scope-walk hint verifications that answered, and those that fell back to a
-/// full walk, for the `perf-counters` report.
+/// full walk, on this thread's interpreter, for the `perf-counters` report.
 #[cfg(feature = "perf-counters")]
 pub(crate) fn scope_hint_counts() -> (u64, u64) {
-    (
-        SCOPE_HINT_HITS.load(std::sync::atomic::Ordering::Relaxed),
-        SCOPE_HINT_MISSES.load(std::sync::atomic::Ordering::Relaxed),
-    )
+    SCOPE_HINT_COUNTS.with(Cell::get)
 }
 
 impl Interpreter {
