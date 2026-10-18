@@ -57,6 +57,10 @@ impl Interpreter {
                     };
                     let mut list = Vec::with_capacity(len);
                     for i in 0..len {
+                        if let Some(v) = interp.numeric_index_fast_get(&arr_arg, i as f64) {
+                            list.push(v);
+                            continue;
+                        }
                         match interp.get_object_property(array_like_id, &i.to_string(), &arr_arg) {
                             Completion::Normal(v) => list.push(v),
                             Completion::Throw(e) => return Completion::Throw(e),

@@ -16,7 +16,11 @@ use super::ic_store::{BodyIcStore, FrameIcStore};
 /// The interned parameter names of a simple parameter list.
 #[derive(Debug)]
 pub(crate) struct ParamAtoms {
-    atoms: Box<[Atom]>,
+    atoms: Rc<[Atom]>,
+    /// `last[i]` is false when a later parameter repeats `atoms[i]`: only the
+    /// last occurrence of a duplicated name stays mapped to an `arguments`
+    /// index (§10.4.4.7 step 18).
+    last: Box<[bool]>,
     /// True when no two names are equal and none is `arguments`, so each can
     /// be appended to an environment that holds at most the `arguments`
     /// binding without first looking the name up.
@@ -27,7 +31,7 @@ pub(crate) struct ParamAtoms {
 
 impl ParamAtoms {
     fn new(params: &[Pattern]) -> Self {
-        let atoms: Box<[Atom]> = params
+        let atoms: Rc<[Atom]> = params
             .iter()
             .map(|param| {
                 let Pattern::Identifier(name) = param else {
@@ -40,8 +44,12 @@ impl ParamAtoms {
             atom.as_str() != "arguments" && !atoms[..i].iter().any(|prior| prior.ptr_eq(atom))
         });
         let filter = BindingMap::filter_of(&atoms);
+        let last = (0..atoms.len())
+            .map(|i| !atoms[i + 1..].iter().any(|later| later.ptr_eq(&atoms[i])))
+            .collect();
         Self {
             atoms,
+            last,
             fresh,
             filter,
         }
@@ -53,6 +61,14 @@ impl ParamAtoms {
 
     pub(crate) fn atoms(&self) -> &[Atom] {
         &self.atoms
+    }
+
+    pub(crate) fn shared_atoms(&self) -> &Rc<[Atom]> {
+        &self.atoms
+    }
+
+    pub(crate) fn last_occurrence(&self) -> &[bool] {
+        &self.last
     }
 
     pub(crate) fn names_are_fresh(&self) -> bool {
@@ -157,18 +173,28 @@ impl BodyVarPlan {
 /// instead of off the function object and rebuilt per call (#1089). It exists
 /// only for the shape the hot call path handles: a plain (not generator, not
 /// async) function whose parameters are plain names (optionally with defaults
-/// or a rest element), whose body never mentions `arguments` and whose
-/// compile verdict is `Compiled`.
+/// or a rest element, except in a function that mentions `arguments`) and
+/// whose compile verdict is `Compiled`.
 #[derive(Debug)]
 pub(crate) struct CompiledCall {
     pub(crate) params: Rc<Vec<Pattern>>,
-    /// The parameters are plain names with defaults or a rest element rather
-    /// than plain names alone, so the body runs in an environment of its own.
-    pub(crate) has_parameter_expressions: bool,
+    pub(crate) shape: CallShape,
     pub(crate) body: Body,
     pub(crate) chunk: Rc<Chunk>,
     pub(crate) is_arrow: bool,
     pub(crate) is_strict: bool,
+}
+
+/// Which compiled-call routine serves a function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallShape {
+    /// Plain-name parameters and no `arguments` object.
+    Plain,
+    /// The parameters are plain names with defaults or a rest element, so the
+    /// body runs in an environment of its own.
+    Defaults,
+    /// Plain-name parameters and a non-arrow body that mentions `arguments`.
+    Arguments,
 }
 
 #[derive(Debug, Default)]
@@ -276,6 +302,13 @@ mod tests {
     fn duplicate_or_arguments_names_are_not_fresh() {
         assert!(!ParamAtoms::new(&[ident("a"), ident("a")]).names_are_fresh());
         assert!(!ParamAtoms::new(&[ident("arguments")]).names_are_fresh());
+    }
+
+    #[test]
+    fn only_the_last_occurrence_of_a_name_is_marked() {
+        let atoms = ParamAtoms::new(&[ident("a"), ident("b"), ident("a"), ident("c"), ident("b")]);
+        assert_eq!(atoms.last_occurrence(), [false, false, true, true, true]);
+        assert_eq!(atoms.shared_atoms().len(), 5);
     }
 
     #[test]

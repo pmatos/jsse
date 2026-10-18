@@ -260,6 +260,9 @@ struct CommonKeys {
     name: JsPropertyKey,
     caller: JsPropertyKey,
     arguments: JsPropertyKey,
+    callee: JsPropertyKey,
+    /// The `arguments` binding name of a function environment.
+    arguments_atom: atom::Atom,
     prototype: JsPropertyKey,
     constructor: JsPropertyKey,
     value: JsPropertyKey,
@@ -280,6 +283,8 @@ impl CommonKeys {
             name: intern_key("name"),
             caller: intern_key("caller"),
             arguments: intern_key("arguments"),
+            callee: intern_key("callee"),
+            arguments_atom: atom::Atom::intern("arguments"),
             prototype: intern_key("prototype"),
             constructor: intern_key("constructor"),
             value: intern_key("value"),
@@ -2370,42 +2375,52 @@ impl Interpreter {
             ),
         };
 
-        let params = if mapped {
+        let user_function = if mapped {
             self.get_object_cell(func_obj_id).and_then(|obj| {
                 match obj.borrow().callable.as_deref() {
-                    Some(JsFunction::User { params, .. }) => Some(params.clone()),
+                    Some(JsFunction::User { params, frame, .. }) => {
+                        Some((params.clone(), frame.clone()))
+                    }
                     _ => None,
                 }
             })
         } else {
             None
         };
-        let callee = JsValue::object(func_obj_id);
-        let arguments = self.create_arguments_object(
-            &args,
-            callee,
-            false,
-            func_env.as_ref(),
-            params.as_deref().map_or(&[], |p| p.as_slice()),
-        );
+        let mapping = func_env
+            .as_ref()
+            .zip(user_function.as_ref())
+            .map(|(env, (params, frame))| (env, params.as_slice(), &**frame));
+        let arguments = self.create_arguments_object(&args, JsValue::object(func_obj_id), mapping);
         self.call_stack_frames[frame_index].arguments =
             CallFrameArguments::Materialized(arguments.clone());
         arguments
     }
 
-    /// CreateMappedArgumentsObject (§10.4.4.7) when `func_env` is `Some`
-    /// (`params` are then all plain identifiers), CreateUnmappedArgumentsObject
-    /// (§10.4.4.6) otherwise. The object is fresh and extensible, so its
+    /// Must run on an empty environment, before the parameters are bound.
+    pub(crate) fn bind_arguments_binding(&self, env: &EnvRef, arguments: JsValue) {
+        env.borrow_mut().bindings.push_unique(
+            self.common_keys.arguments_atom.clone(),
+            Binding {
+                value: arguments,
+                kind: BindingKind::Var,
+                initialized: true,
+                deletable: false,
+            },
+        );
+    }
+
+    /// CreateMappedArgumentsObject (§10.4.4.7) when `mapping` (the function
+    /// environment, its all-identifier parameters and its literal's frame) is
+    /// `Some`, CreateUnmappedArgumentsObject (§10.4.4.6) otherwise. The object is fresh and extensible, so its
     /// properties are installed directly, in the spec's creation order.
     fn create_arguments_object(
         &mut self,
         args: &[JsValue],
         callee: JsValue,
-        _is_strict: bool,
-        func_env: Option<&EnvRef>,
-        params: &[Pattern],
+        mapping: Option<(&EnvRef, &[Pattern], &literal_frame::LiteralFrame)>,
     ) -> JsValue {
-        let thrower = if func_env.is_none() {
+        let thrower = if mapping.is_none() {
             Some(
                 self.realm()
                     .throw_type_error
@@ -2423,42 +2438,36 @@ impl Interpreter {
             o.class_name = "Arguments";
             o.properties.reserve(args.len() + 3);
 
-            o.insert_property(
-                "length",
+            o.push_fresh_property(
+                &self.common_keys.length,
                 PropertyDescriptor::data(JsValue::number(args.len() as f64), true, false, true),
             );
             for (i, val) in args.iter().enumerate() {
-                o.insert_property(
-                    JsPropertyKey::from_index(i),
+                o.push_fresh_property(
+                    &JsPropertyKey::from_index(i),
                     PropertyDescriptor::data_default(val.clone()),
                 );
             }
 
-            if let Some(env) = func_env {
-                o.insert_property(
-                    "callee",
+            if let Some((env, params, frame)) = mapping {
+                o.push_fresh_property(
+                    &self.common_keys.callee,
                     PropertyDescriptor::data(callee, true, false, true),
                 );
                 // Only the last occurrence of a duplicated parameter name
                 // stays mapped, and only indices that received an argument.
-                let mut map = HashMap::with_capacity(params.len().min(args.len()));
-                for (i, param) in params.iter().enumerate().take(args.len()) {
-                    let Pattern::Identifier(name) = param else {
-                        continue;
-                    };
-                    let shadowed = params[i + 1..]
-                        .iter()
-                        .any(|later| matches!(later, Pattern::Identifier(n) if n == name));
-                    if !shadowed {
-                        map.insert(i.to_string(), (env.clone(), name.clone()));
-                    }
-                }
-                if !map.is_empty() {
+                let names = frame.param_atoms(params);
+                if let Some(map) = ParameterMap::new(
+                    env.clone(),
+                    names.shared_atoms().clone(),
+                    names.last_occurrence(),
+                    args.len(),
+                ) {
                     o.kind = crate::interpreter::types::ObjectKind::Arguments(Box::new(map));
                 }
             } else if let Some(thrower) = thrower {
-                o.insert_property(
-                    "callee",
+                o.push_fresh_property(
+                    &self.common_keys.callee,
                     PropertyDescriptor::accessor(
                         Some(thrower.clone()),
                         Some(thrower),
@@ -2474,7 +2483,7 @@ impl Interpreter {
             if let Some(key) = iterator_key
                 && let Some(values) = array_values
             {
-                o.insert_property(key, PropertyDescriptor::data(values, true, false, true));
+                o.push_fresh_property(&key, PropertyDescriptor::data(values, true, false, true));
             }
         }
         JsValue::object(obj_id)

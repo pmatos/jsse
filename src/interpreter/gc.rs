@@ -1487,9 +1487,7 @@ impl Interpreter {
                 Self::collect_iterator_state_roots(state, worklist, seen_envs);
             }
             ObjectKind::Arguments(map) => {
-                for (env_ref, _) in map.values() {
-                    Self::collect_env_roots(env_ref, worklist, seen_envs);
-                }
+                Self::collect_env_roots(map.env(), worklist, seen_envs);
             }
             ObjectKind::Array(_) => {
                 // Array elements are visited via the property walk above
@@ -2144,10 +2142,15 @@ mod tests {
 
         let env = Environment::new(None);
         let mut owner_data = JsObjectData::new();
-        owner_data.kind = ObjectKind::Arguments(Box::new(HashMap::from([(
-            "0".to_string(),
-            (env.clone(), "captured".to_string()),
-        )])));
+        owner_data.kind = ObjectKind::Arguments(Box::new(
+            ParameterMap::new(
+                env.clone(),
+                Rc::from([Atom::intern("captured")]),
+                &[true],
+                1,
+            )
+            .expect("one mapped parameter"),
+        ));
         let owner = interp.alloc_object(owner_data);
         interp.gc_root_id(owner);
 
