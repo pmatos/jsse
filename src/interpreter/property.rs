@@ -356,12 +356,12 @@ impl Interpreter {
     /// way, an Array-index-like name).
     #[inline(always)]
     pub(super) fn named_get_fast(&self, base: &JsValue, key: &JsPropertyKey) -> NamedGet {
-        if key_may_be_array_index(key) {
-            return NamedGet::Slow;
-        }
         let Some(mut object_id) = base.as_object_id() else {
             return NamedGet::Slow;
         };
+        if key_may_be_array_index(key) {
+            return NamedGet::Slow;
+        }
         for _ in 0..PROTO_WALK_LIMIT {
             let Some(cell) = self.get_object_cell(object_id) else {
                 return NamedGet::Slow;

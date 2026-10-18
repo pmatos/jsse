@@ -134,12 +134,19 @@ impl PropertyRecord {
         self.flags & (HAS_GET | HAS_SET) != 0
     }
 
+    /// A data property with a value, no accessor half, and `writable: true`.
+    #[inline]
+    fn is_plain_writable_data(&self) -> bool {
+        const MASK: u16 = HAS_VALUE | HAS_GET | HAS_SET | HAS_WRITABLE | IS_WRITABLE;
+        self.flags & MASK == HAS_VALUE | HAS_WRITABLE | IS_WRITABLE
+    }
+
     /// What [[Get]] reads from this own property: its value, or the getter
     /// to call with the receiver. An accessor without a getter reads
     /// `undefined`, like a descriptor without a value.
     #[inline]
     pub(crate) fn read(&self) -> PropertyRead<'_> {
-        if self.flags & (HAS_GET | HAS_SET) != 0 {
+        if self.is_accessor_descriptor() {
             return match self.getter() {
                 Some(getter) if !getter.is_undefined() => PropertyRead::Getter(getter),
                 _ => PropertyRead::Value(JsValue::undefined_ref()),
@@ -153,8 +160,7 @@ impl PropertyRecord {
     /// untouched.
     #[inline]
     pub(crate) fn add_to_writable_number(&mut self, delta: f64) -> Option<(f64, f64)> {
-        const MASK: u16 = HAS_VALUE | HAS_GET | HAS_SET | HAS_WRITABLE | IS_WRITABLE;
-        if self.flags & MASK != HAS_VALUE | HAS_WRITABLE | IS_WRITABLE {
+        if !self.is_plain_writable_data() {
             return None;
         }
         let old = self.value.as_number()?;
@@ -168,8 +174,7 @@ impl PropertyRecord {
     /// accessor, or a data property that is not writable).
     #[inline]
     pub(crate) fn overwrite_writable_data(&mut self, value: &JsValue) -> bool {
-        const MASK: u16 = HAS_VALUE | HAS_GET | HAS_SET | HAS_WRITABLE | IS_WRITABLE;
-        if self.flags & MASK != HAS_VALUE | HAS_WRITABLE | IS_WRITABLE {
+        if !self.is_plain_writable_data() {
             return false;
         }
         self.value = value.clone();

@@ -4401,8 +4401,7 @@ impl JsObjectData {
     /// established.
     #[inline]
     pub(crate) fn add_named_fast(&mut self, key: &JsPropertyKey, value: &JsValue) {
-        self.properties
-            .push_fresh(key.clone(), PropertyDescriptor::data_default(value.clone()));
+        self.push_fresh_tracked(key.clone(), PropertyDescriptor::data_default(value.clone()));
         self.shape_id = fresh_shape_id();
     }
 

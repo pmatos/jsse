@@ -466,14 +466,17 @@ fn finish_named_get(
     interp: &mut Interpreter,
     base: &JsValue,
     name: &Atom,
-    named: NamedGet,
-) -> Completion {
-    let result = match named {
-        NamedGet::Getter(getter) => interp.call_getter(&getter, base),
-        _ => member_get(interp, base, name),
+    getter: Option<JsValue>,
+) -> Result<JsValue, Completion> {
+    let result = match getter {
+        Some(getter) => interp.call_getter(&getter, base),
+        None => member_get(interp, base, name),
     };
     unroot_stack_value(interp, base);
-    result
+    match result {
+        Completion::Normal(v) => Ok(v),
+        abrupt => Err(abrupt),
+    }
 }
 
 /// The named-property ops (`GetProp`, `LoadMethod`, `SetProp`, `UpdateProp`)
@@ -487,25 +490,21 @@ fn get_prop_op(
     stack: &mut Vec<JsValue>,
     name: &Atom,
 ) -> Result<(), Completion> {
-    let named = match stack.last() {
-        Some(base) => interp.named_get_fast(base, name.property_key()),
-        None => NamedGet::Slow,
-    };
-    if let NamedGet::Value(value) = named {
-        let slot = stack.last_mut().expect("checked above");
-        let base = std::mem::replace(slot, value);
-        unroot_stack_value(interp, &base);
-        root_stack_value(interp, slot);
-        return Ok(());
-    }
-    let base = stack.pop().expect("stack underflow on GetProp");
-    match finish_named_get(interp, &base, name, named) {
-        Completion::Normal(v) => {
-            push_value(interp, stack, v);
-            Ok(())
+    let slot = stack.last_mut().expect("stack underflow on GetProp");
+    let getter = match interp.named_get_fast(slot, name.property_key()) {
+        NamedGet::Value(value) => {
+            let base = std::mem::replace(slot, value);
+            unroot_stack_value(interp, &base);
+            root_stack_value(interp, slot);
+            return Ok(());
         }
-        abrupt => Err(abrupt),
-    }
+        NamedGet::Getter(getter) => Some(getter),
+        NamedGet::Slow => None,
+    };
+    let base = stack.pop().expect("checked above");
+    let value = finish_named_get(interp, &base, name, getter)?;
+    push_value(interp, stack, value);
+    Ok(())
 }
 
 /// `LoadMethod`: the base stays as the call's `this`, under the method.
@@ -515,25 +514,22 @@ fn load_method_op(
     stack: &mut Vec<JsValue>,
     name: &Atom,
 ) -> Result<(), Completion> {
-    let named = match stack.last() {
-        Some(base) => interp.named_get_fast(base, name.property_key()),
-        None => NamedGet::Slow,
-    };
-    if let NamedGet::Value(method) = named {
-        let base = pop_value(interp, stack, "stack underflow on LoadMethod");
-        push_value(interp, stack, method);
-        push_value(interp, stack, base);
-        return Ok(());
-    }
-    let base = stack.pop().expect("stack underflow on LoadMethod");
-    match finish_named_get(interp, &base, name, named) {
-        Completion::Normal(method) => {
+    let base = stack.last().expect("stack underflow on LoadMethod");
+    let getter = match interp.named_get_fast(base, name.property_key()) {
+        NamedGet::Value(method) => {
+            let base = pop_value(interp, stack, "stack underflow on LoadMethod");
             push_value(interp, stack, method);
             push_value(interp, stack, base);
-            Ok(())
+            return Ok(());
         }
-        abrupt => Err(abrupt),
-    }
+        NamedGet::Getter(getter) => Some(getter),
+        NamedGet::Slow => None,
+    };
+    let base = stack.pop().expect("checked above");
+    let method = finish_named_get(interp, &base, name, getter)?;
+    push_value(interp, stack, method);
+    push_value(interp, stack, base);
+    Ok(())
 }
 
 /// `SetProp`: replaces the base and right-hand side with the right-hand side.
@@ -577,9 +573,8 @@ fn update_prop_op(
         UpdateOp::Increment => 1.0,
         UpdateOp::Decrement => -1.0,
     };
-    if let Some(slot) = stack.last_mut()
-        && let Some((old, new)) = interp.named_update_fast(slot, name.property_key(), delta)
-    {
+    let slot = stack.last_mut().expect("stack underflow on UpdateProp");
+    if let Some((old, new)) = interp.named_update_fast(slot, name.property_key(), delta) {
         let base = std::mem::replace(slot, JsValue::number(if prefix { new } else { old }));
         unroot_stack_value(interp, &base);
         return Ok(());
