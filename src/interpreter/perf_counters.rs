@@ -281,6 +281,9 @@ impl PerfCounters {
             "PERF\tglobal_prop_fast_misses\t{}",
             self.global_prop_fast_misses
         );
+        let (scope_hint_hits, scope_hint_misses) = super::global_access::scope_hint_counts();
+        let _ = writeln!(out, "PERF\tscope_hint_hits\t{scope_hint_hits}");
+        let _ = writeln!(out, "PERF\tscope_hint_misses\t{scope_hint_misses}");
         let _ = writeln!(
             out,
             "PERF\tatom_intern_calls\t{}",

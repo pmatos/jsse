@@ -27,6 +27,9 @@ struct HashIndex {
     by_hash: HashMap<u64, u32, IdentityBuild>,
     /// Slots whose hash is already claimed in `by_hash` by another name.
     overflow: Vec<u32>,
+    /// Stamp of the key set, assigned on demand by `BindingMap::epoch` and
+    /// cleared by every change to it; 0 means "not assigned".
+    stamp: std::cell::Cell<u64>,
 }
 
 pub(crate) struct BindingMap {
@@ -106,6 +109,11 @@ impl BindingKey for std::rc::Rc<str> {
 /// handed to property operations, and inserted as a new binding.
 pub(crate) trait BindingName: BindingKey {
     fn as_name(&self) -> &str;
+    /// The key as an interned atom, when it is one.
+    #[inline]
+    fn as_atom(&self) -> Option<&Atom> {
+        None
+    }
     fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding>;
 }
 
@@ -134,6 +142,10 @@ impl BindingName for Atom {
     fn as_name(&self) -> &str {
         self.as_str()
     }
+    #[inline]
+    fn as_atom(&self) -> Option<&Atom> {
+        Some(self)
+    }
     fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
         map.insert_atom(self, binding)
     }
@@ -143,6 +155,10 @@ impl<T: BindingName + ?Sized> BindingName for &T {
     #[inline]
     fn as_name(&self) -> &str {
         (**self).as_name()
+    }
+    #[inline]
+    fn as_atom(&self) -> Option<&Atom> {
+        (**self).as_atom()
     }
     fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
         (**self).insert_into(map, binding)
@@ -221,9 +237,38 @@ impl BindingMap {
             .find(|&slot| matches(&self.entries[slot].0))
     }
 
-    #[cfg(test)]
+    #[inline]
     pub(crate) fn position<K: BindingKey + ?Sized>(&self, key: &K) -> Option<usize> {
         key.find_in(self)
+    }
+
+    /// The key-set stamp of an indexed map, or 0 for one that is scanned
+    /// linearly. A stamp is a fresh value from a per-thread counter, handed out
+    /// the first time it is read after the key set last changed, so two maps
+    /// (or two states of one map) never share one. A reader that probed for a
+    /// name once can later prove it is still absent by comparing stamps instead
+    /// of probing again; the mutators only clear the stamp, so a push into a
+    /// large environment costs one store.
+    #[inline(always)]
+    pub(crate) fn epoch(&self) -> u64 {
+        let Some(index) = &self.index else {
+            return 0;
+        };
+        match index.stamp.get() {
+            0 => {
+                let fresh = super::types::fresh_shape_id();
+                index.stamp.set(fresh);
+                fresh
+            }
+            stamp => stamp,
+        }
+    }
+
+    /// Whether `name` might be bound here: `false` is definite (one `and` on
+    /// the name filter, no probe), `true` only means the filter bit is set.
+    #[inline(always)]
+    pub(crate) fn may_contain(&self, name: &Atom) -> bool {
+        self.name_filter & filter_bit(name.precomputed_hash()) != 0
     }
 
     #[inline]
@@ -279,6 +324,7 @@ impl BindingMap {
         self.entries.push((name, binding));
         if let Some(index) = &mut self.index {
             index.add(hash, slot);
+            index.stamp.set(0);
         } else if self.entries.len() > LINEAR_MAX {
             self.build_index();
         }
@@ -291,6 +337,7 @@ impl BindingMap {
         let Some(index) = &mut self.index else {
             return Some(removed);
         };
+        index.stamp.set(0);
         if !index.overflow.is_empty() {
             // Hash collisions are rare enough that rebuilding beats keeping
             // promotion bookkeeping for them.
@@ -316,6 +363,7 @@ impl BindingMap {
                 IdentityBuild::default(),
             ),
             overflow: Vec::new(),
+            stamp: std::cell::Cell::new(0),
         };
         for (slot, (atom, _)) in self.entries.iter().enumerate() {
             index.add(atom.precomputed_hash(), slot as u32);
@@ -446,6 +494,42 @@ mod tests {
         assert!(!m.contains_key("n1"));
         m.insert("n1", b(1.0));
         assert_eq!(val(&m, "n1"), Some(1.0));
+    }
+
+    #[test]
+    fn epoch_is_zero_when_scanned_and_renewed_on_every_key_set_change_when_indexed() {
+        let mut m = BindingMap::new();
+        for i in 0..LINEAR_MAX {
+            m.insert(&format!("e{i}"), b(0.0));
+            assert_eq!(m.epoch(), 0, "a linearly scanned map keeps stamp 0");
+        }
+        m.insert("e_indexed", b(0.0));
+        let built = m.epoch();
+        assert_ne!(built, 0, "building the index stamps the map");
+        m.insert("e_indexed", b(1.0));
+        assert_eq!(m.epoch(), built, "replacing a value keeps the key set");
+        m.insert("e_more", b(0.0));
+        let pushed = m.epoch();
+        assert_ne!(pushed, built, "a new key renews the stamp");
+        assert!(m.remove("e_more").is_some());
+        let removed = m.epoch();
+        assert_ne!(removed, pushed, "a removal renews the stamp");
+        assert!(m.remove("absent").is_none());
+        assert_eq!(
+            m.epoch(),
+            removed,
+            "a failed removal leaves the key set alone"
+        );
+        let other = {
+            let mut o = BindingMap::new();
+            for i in 0..=LINEAR_MAX {
+                o.insert(&format!("o{i}"), b(0.0));
+            }
+            o.epoch()
+        };
+        assert_ne!(other, removed, "two maps never share a stamp");
+        m.clear();
+        assert_eq!(m.epoch(), 0, "clearing drops the index and the stamp");
     }
 
     #[test]

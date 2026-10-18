@@ -141,3 +141,28 @@ fn function_top_level_lexicals_intern_nothing_per_call() {
     );
     assert!(large["calls_to_user"] > small["calls_to_user"]);
 }
+
+/// Function-top-level `let`/`const` bindings are part of the frame layout, so
+/// reading and writing them never resolves a name (#1022), even beside hoisted
+/// function declarations.
+#[test]
+fn function_top_level_lexicals_resolve_through_slots() {
+    let (perf, ops) = counters(
+        "function main(n) {\n\
+           function twice(v) { return v * 2; }\n\
+           let sum = 0;\n\
+           const mask = 31;\n\
+           for (let i = 0; i < n; i++) { sum += i & mask; }\n\
+           sum += mask;\n\
+           return sum;\n\
+         }\n\
+         main(1000);",
+    );
+    assert_eq!(perf["local_slot_misses"], 0, "no hint should miss");
+    for op in ["LoadName", "ResolveName", "StoreResolvedNamePop"] {
+        assert!(
+            !ops.contains_key(op),
+            "{op} executed for a frame-local name"
+        );
+    }
+}

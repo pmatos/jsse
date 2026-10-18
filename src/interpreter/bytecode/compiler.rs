@@ -220,7 +220,7 @@ struct Compiler {
     /// Frame binding order for a function body whose locals are known: slot
     /// `i` is the expected position of that name in the call's binding
     /// vector. Empty when no local ops are emitted.
-    locals: Vec<String>,
+    locals: LocalLayout,
     /// Offset of the most recently emitted opcode byte. The last byte of
     /// `code` may be an operand (a slot or name index whose high byte equals a
     /// return opcode), so `finish` must not decode `code.last()`.
@@ -274,7 +274,7 @@ impl Compiler {
         Self {
             goal,
             generator: false,
-            locals: Vec::new(),
+            locals: LocalLayout::default(),
             last_op_at: 0,
             code: Vec::new(),
             constants: Vec::new(),
@@ -535,8 +535,7 @@ impl Compiler {
             }
         }
         self.locals
-            .iter()
-            .position(|n| n == name)
+            .position(name)
             .and_then(|i| u16::try_from(i).ok())
             .filter(|slot| slot & BLOCK_SLOT_FLAG == 0)
     }
@@ -1610,15 +1609,7 @@ impl Compiler {
                     self.push_n(1);
                 }
             }
-            // The slot `PushEnv` declared this name at, when the innermost
-            // open block environment owns it.
-            let slot = self
-                .scopes
-                .last()
-                .and_then(|names| names.iter().position(|n| n == name))
-                .and_then(|i| u16::try_from(i).ok())
-                .filter(|&i| i != NO_INIT_SLOT)
-                .unwrap_or(NO_INIT_SLOT);
+            let slot = self.init_slot(name);
             self.emit(Op::InitLexical);
             self.emit_u16(idx);
             self.code.push(kind_byte);
@@ -1626,6 +1617,20 @@ impl Compiler {
             self.pop_n(1);
         }
         Ok(())
+    }
+
+    /// The slot of `name` in the current environment's binding vector for an
+    /// `InitLexical`: the innermost open block environment's declaration
+    /// order, or the frame layout when no block environment is open. Only a
+    /// hint (the op verifies it by atom identity and falls back to by-name).
+    fn init_slot(&self, name: &str) -> u16 {
+        let position = match self.scopes.last() {
+            Some(names) => names.iter().position(|n| n == name),
+            None => self.locals.position(name),
+        };
+        position
+            .and_then(|i| u16::try_from(i).ok())
+            .unwrap_or(NO_INIT_SLOT)
     }
 
     /// What BlockDeclarationInstantiation declares for the statement lists
@@ -2703,13 +2708,7 @@ impl Compiler {
     /// the value on top of the stack.
     fn emit_init_lexical(&mut self, name: &str, is_const: bool) -> Result<(), CompileError> {
         let idx = self.add_name(name)?;
-        let slot = self
-            .scopes
-            .last()
-            .and_then(|names| names.iter().position(|n| n == name))
-            .and_then(|i| u16::try_from(i).ok())
-            .filter(|&i| i != NO_INIT_SLOT)
-            .unwrap_or(NO_INIT_SLOT);
+        let slot = self.init_slot(name);
         self.emit(Op::InitLexical);
         self.emit_u16(idx);
         self.code.push(u8::from(is_const));
@@ -3648,13 +3647,55 @@ fn expression_kind(node: &Expression) -> &'static str {
     }
 }
 
+/// The binding order a function frame is expected to have, so a name's
+/// position is its slot hint. Names are found by scanning while the frame is
+/// no larger than a linearly scanned environment, and through a hash index
+/// above that, so a generated function with hundreds of names does not scan
+/// them for every identifier it compiles.
+#[derive(Default)]
+struct LocalLayout {
+    names: Vec<String>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl LocalLayout {
+    fn position(&self, name: &str) -> Option<usize> {
+        if self.index.is_empty() {
+            self.names.iter().position(|n| n == name)
+        } else {
+            self.index.get(name).copied()
+        }
+    }
+
+    fn push(&mut self, name: &str) {
+        if self.position(name).is_some() {
+            return;
+        }
+        self.names.push(name.to_string());
+        if !self.index.is_empty() {
+            self.index.insert(name.to_string(), self.names.len() - 1);
+        } else if self.names.len() > crate::interpreter::binding_map::LINEAR_MAX {
+            self.index = self
+                .names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.clone(), i))
+                .collect();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+}
+
 /// Function-goal compile of a statement list. Per-node fallback is only
 /// worth taking when some native work remains in the chunk; a body that is
 /// nothing but tree-walker hand-offs would pay chunk-entry cost for nothing.
 /// Callers pass plain function bodies only (see `is_poison_expression`).
 fn compile_function_goal(
     body: &[Statement],
-    locals: Vec<String>,
+    locals: LocalLayout,
     generator: bool,
 ) -> Result<Chunk, CompileError> {
     if body_has_poison(body, is_poison_expression) {
@@ -3693,14 +3734,12 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
     if lexicals.is_empty() {
         return None;
     }
-    let mut vars = std::collections::HashSet::new();
-    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
     let prologue: std::collections::HashSet<&str> = c
         .var_names
         .iter()
         .map(|&idx| c.names[usize::from(idx)].as_str())
         .collect();
-    if !vars.iter().all(|name| prologue.contains(name.as_str())) {
+    if !prologue_declares_body_vars(&prologue, body) {
         return None;
     }
     lexicals
@@ -3710,9 +3749,45 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
         .ok()
 }
 
+/// The bindings declaration instantiation adds to the frame after the chunk's
+/// var prologue, in the order it adds them: top-level function declarations,
+/// then `let`/`const`/class names. `None` when a `var` name the prologue does
+/// not declare could be instantiated in between, which leaves the order
+/// unpredictable (the slot hints would only miss, so such bodies get none).
+fn instantiated_names(first: &Chunk, body: &[Statement]) -> Option<Vec<String>> {
+    let functions = body
+        .iter()
+        .filter_map(crate::interpreter::hoisting::unwrap_labeled_function)
+        .map(|f| f.name.clone());
+    let lexicals = crate::interpreter::hoisting::collect_lexical_names(body)
+        .into_iter()
+        .map(|(name, _)| name);
+    let names: Vec<String> = functions.chain(lexicals).collect();
+    if names.is_empty() {
+        return Some(names);
+    }
+    let prologue: std::collections::HashSet<&str> = first
+        .var_names
+        .iter()
+        .map(|&idx| first.names[usize::from(idx)].as_str())
+        .collect();
+    prologue_declares_body_vars(&prologue, body).then_some(names)
+}
+
+/// Whether every `var` name the tree-walker would hoist from `body` is in
+/// `prologue`, the names the chunk's own var prologue declares.
+fn prologue_declares_body_vars(
+    prologue: &std::collections::HashSet<&str>,
+    body: &[Statement],
+) -> bool {
+    let mut vars = std::collections::HashSet::new();
+    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
+    vars.iter().all(|name| prologue.contains(name.as_str()))
+}
+
 #[cfg(test)]
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
-    compile_function_goal(body, Vec::new(), false)
+    compile_function_goal(body, LocalLayout::default(), false)
 }
 
 /// What the call path will have put in the frame before the chunk runs: the
@@ -3721,6 +3796,9 @@ pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
 pub(crate) struct FrameShape<'a> {
     pub(crate) arguments_slot: bool,
     pub(crate) simple_params: &'a [String],
+    /// The parameters are not all plain names, so the body runs in a fresh
+    /// environment of its own and its declaration order is not predictable.
+    pub(crate) separate_body_env: bool,
 }
 
 /// Compiles a function body, resolving the frame's own names through local
@@ -3756,21 +3834,21 @@ fn compile_function_body_as(
     shape: &FrameShape<'_>,
     generator: bool,
 ) -> Result<Chunk, CompileError> {
-    let mut first = compile_function_goal(body, Vec::new(), generator)?;
-    let mut locals: Vec<String> = Vec::new();
-    let mut push = |name: &str| {
-        if !locals.iter().any(|n| n == name) {
-            locals.push(name.to_string());
-        }
-    };
+    let mut first = compile_function_goal(body, LocalLayout::default(), generator)?;
+    let mut locals = LocalLayout::default();
     if shape.arguments_slot {
-        push("arguments");
+        locals.push("arguments");
     }
     for param in shape.simple_params {
-        push(param);
+        locals.push(param);
     }
     for &idx in &first.var_names {
-        push(first.names[idx as usize].as_str());
+        locals.push(first.names[idx as usize].as_str());
+    }
+    if !shape.separate_body_env {
+        for name in instantiated_names(&first, body).unwrap_or_default() {
+            locals.push(&name);
+        }
     }
     if locals.is_empty() {
         first.trivial_private_getter = first.detect_trivial_private_getter();

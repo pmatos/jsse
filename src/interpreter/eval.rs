@@ -108,6 +108,24 @@ pub(crate) struct ClosureSpec<'a> {
     pub(crate) source_text: &'a Option<SourceText>,
 }
 
+/// A function's frame shape, owned so it can outlive the borrow of the
+/// function object it was read from.
+pub(crate) struct OwnedFrameShape {
+    arguments_slot: bool,
+    simple_params: Vec<String>,
+    separate_body_env: bool,
+}
+
+impl OwnedFrameShape {
+    fn shape(&self) -> crate::interpreter::bytecode::compiler::FrameShape<'_> {
+        crate::interpreter::bytecode::compiler::FrameShape {
+            arguments_slot: self.arguments_slot,
+            simple_params: &self.simple_params,
+            separate_body_env: self.separate_body_env,
+        }
+    }
+}
+
 impl Interpreter {
     /// Evaluates a function or arrow literal (sec-function-definitions-
     /// runtime-semantics-evaluation, sec-arrow-function-definitions-runtime-
@@ -1974,9 +1992,10 @@ impl Interpreter {
 
     /// What the call path puts in a function's frame before its body runs, in
     /// the order the compiler's local slots assume (see `FrameShape`): whether
-    /// `arguments` is declared, and the simple parameter names. Functions
-    /// with parameter patterns have no predictable layout.
-    pub(crate) fn function_frame_shape(&self, func_obj_id: u64) -> (bool, Vec<String>) {
+    /// `arguments` is declared, and the simple parameter names. A function
+    /// with parameter patterns has a separate body environment and no
+    /// predictable layout.
+    pub(crate) fn function_frame_shape(&self, func_obj_id: u64) -> OwnedFrameShape {
         self.get_object(func_obj_id)
             .and_then(|o| match o.borrow().callable.as_deref() {
                 Some(JsFunction::User {
@@ -1985,19 +2004,24 @@ impl Interpreter {
                     uses_arguments,
                     has_simple_params,
                     ..
-                }) if *has_simple_params => Some((
-                    !*is_arrow && *uses_arguments,
-                    params
+                }) if *has_simple_params => Some(OwnedFrameShape {
+                    arguments_slot: !*is_arrow && *uses_arguments,
+                    simple_params: params
                         .iter()
                         .filter_map(|p| match p {
                             Pattern::Identifier(name) => Some(name.clone()),
                             _ => None,
                         })
-                        .collect::<Vec<String>>(),
-                )),
+                        .collect(),
+                    separate_body_env: false,
+                }),
                 _ => None,
             })
-            .unwrap_or((false, Vec::new()))
+            .unwrap_or(OwnedFrameShape {
+                arguments_slot: false,
+                simple_params: Vec::new(),
+                separate_body_env: true,
+            })
     }
 
     /// The bytecode compile verdict for `body`, recorded on the function
@@ -2033,7 +2057,7 @@ impl Interpreter {
             crate::interpreter::bytecode::compiler::CompileError,
         >,
     ) -> crate::interpreter::bytecode::BytecodeCacheState {
-        use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
+        use crate::interpreter::bytecode::BytecodeCacheState;
         match self.bytecode_memo.get(body) {
             Some(state) => {
                 // BAIL counts each literal once; the BODY row of every closure
@@ -2048,11 +2072,8 @@ impl Interpreter {
                 state
             }
             None => {
-                let (arguments_slot, simple_params) = self.function_frame_shape(func_obj_id);
-                let frame_shape = compiler::FrameShape {
-                    arguments_slot,
-                    simple_params: &simple_params,
-                };
+                let owned_shape = self.function_frame_shape(func_obj_id);
+                let frame_shape = owned_shape.shape();
                 let state = match compile(body.as_slice(), &frame_shape) {
                     Ok(c) => {
                         #[cfg(feature = "perf-counters")]
@@ -7555,7 +7576,7 @@ impl Interpreter {
         {
             return Ok(IdentifierRef::WithObject(obj_id));
         }
-        match global_access::walk_scope_chain(env, key, true, 0) {
+        match global_access::walk_scope(env, key, true, hint) {
             global_access::NameWalk::Bound(bound_env) => {
                 return Ok(IdentifierRef::SpecificEnv(bound_env));
             }
@@ -7803,7 +7824,7 @@ impl Interpreter {
         env: &EnvRef,
         hint: Option<&GlobalHint>,
     ) -> Option<JsValue> {
-        match global_access::walk_scope_chain(env, key, false, 0) {
+        match global_access::walk_scope(env, key, false, hint) {
             global_access::NameWalk::Value(value) => Some(value),
             global_access::NameWalk::Global(gid, _) => {
                 let value = self.global_object_own_data(gid, key.as_name(), hint)?;
