@@ -120,6 +120,24 @@ fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -
     result
 }
 
+/// `==`/`!=` through `Interpreter::loose_equal_no_user_code`: replaces the two operands
+/// with the Boolean result and returns `true`, or returns `false` and leaves
+/// the stack alone.
+#[inline(never)]
+fn loose_equality_op(interp: &mut Interpreter, stack: &mut Vec<JsValue>, negate: bool) -> bool {
+    let len = stack.len();
+    if len < 2 {
+        return false;
+    }
+    let Some(equal) = interp.loose_equal_no_user_code(&stack[len - 2], &stack[len - 1]) else {
+        return false;
+    };
+    pop_value(interp, stack, "stack underflow on binop rhs");
+    pop_value(interp, stack, "stack underflow on binop lhs");
+    stack.push(JsValue::boolean(equal != negate));
+    true
+}
+
 /// `StoreLocal`'s store: the frame slot when the hint verifies, else the
 /// by-name reference path.
 #[inline(always)]
@@ -1259,7 +1277,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 let l = pop_value(interp, stack, "stack underflow on binop lhs");
                 let equal = strict_equality(&l, &r);
                 stack.push(JsValue::boolean(equal == matches!($bop, Op::StrictEq)));
-            } else {
+            } else if !(matches!($bop, Op::Eq | Op::NotEq)
+                && loose_equality_op(interp, stack, matches!($bop, Op::NotEq)))
+            {
                 let r = stack.pop().expect("stack underflow on binop rhs");
                 let l = stack.pop().expect("stack underflow on binop lhs");
                 match binary_slow(interp, binary_of_op($bop), l, r) {
@@ -2006,6 +2026,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         // SAFETY: `len >= 2` and both operands were just read as Numbers.
                         unsafe { discard_number_operands(stack, 2) };
                         !number_compare(cmp, l, r)
+                    } else if len >= 2
+                        && matches!(cmp, Op::Eq | Op::NotEq)
+                        && let Some(equal) =
+                            interp.loose_equal_no_user_code(&stack[len - 2], &stack[len - 1])
+                    {
+                        pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
+                        pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
+                        equal != (cmp == Op::Eq)
                     } else if matches!(cmp, Op::StrictEq | Op::StrictNotEq) {
                         let r = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
                         let l = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
