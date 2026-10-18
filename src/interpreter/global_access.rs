@@ -27,10 +27,12 @@ pub(crate) struct GlobalHint {
 }
 
 /// Where the last full scope walk for this name site found it: `hops` scopes
-/// up from the site's environment, at binding slot `slot` of that scope's
-/// binding vector, or (`GLOBAL_OBJECT_SLOT`) in no scope at all because the
-/// walk reached the global environment. The walk is re-verified on every use,
-/// so the shape of the chain can change freely; it only costs a full walk.
+/// above the first function (or global) scope on the chain, at binding slot
+/// `slot` of that scope's binding vector, or (`GLOBAL_OBJECT_SLOT`) in no
+/// scope at all because the walk reached the global environment. Counting from
+/// the function scope keeps the hint valid whatever block scopes are open at
+/// the site. The walk is re-verified on every use, so the shape of the chain
+/// can change freely; it only costs a full walk.
 #[derive(Clone, Copy, Debug)]
 struct ScopeHint {
     hops: u32,
@@ -160,33 +162,47 @@ pub(super) fn walk_scope_chain_hinted(
 ) -> NameWalk {
     let remembered = hint.scope.get();
     if remembered.hops != NO_SCOPE_HINT.hops
-        && let Some(walk) = verify_scope_hint(env, key, remembered.hops, remembered.slot, want_env)
+        && let Some(walk) = verify_scope_hint(env, key, remembered, false, want_env)
     {
+        #[cfg(feature = "perf-counters")]
+        count_scope_hint(true);
         return walk;
     }
-    train_scope_hint(env, key, want_env, hint, 0)
+    #[cfg(feature = "perf-counters")]
+    count_scope_hint(false);
+    train_scope_hint(env, key, want_env, hint, None)
 }
 
+/// A scope that starts the counted hops: a function scope, or the global
+/// environment.
+#[inline(always)]
+fn starts_hops(scope: &Environment) -> bool {
+    scope.is_function_scope || scope.global_object_id.is_some()
+}
+
+/// `remembered.hops` counts down from the first function scope; `counting`
+/// says the walk has reached it.
 fn verify_scope_hint(
     env: &EnvRef,
     key: &Atom,
-    hops: u32,
-    slot: u32,
+    remembered: ScopeHint,
+    counting: bool,
     want_env: bool,
 ) -> Option<NameWalk> {
     let scope = env.borrow();
     if scope.with_object.is_some() || scope.indirect_bindings.is_some() {
         return None;
     }
-    if hops == 0 {
-        if slot == GLOBAL_OBJECT_SLOT {
+    let counting = counting || starts_hops(&scope);
+    if counting && remembered.hops == 0 {
+        if remembered.slot == GLOBAL_OBJECT_SLOT {
             let gid = scope.global_object_id?;
             if scope.bindings.may_contain(key) && scope.bindings.contains_key(key) {
                 return None;
             }
             return Some(NameWalk::Global(gid, want_env.then(|| env.clone())));
         }
-        let (atom, binding) = scope.bindings.entry_at(slot as usize)?;
+        let (atom, binding) = scope.bindings.entry_at(remembered.slot as usize)?;
         if !atom.ptr_eq(key) {
             return None;
         }
@@ -203,26 +219,36 @@ fn verify_scope_hint(
     {
         return None;
     }
-    verify_scope_hint(scope.parent.as_ref()?, key, hops - 1, slot, want_env)
+    let remembered = ScopeHint {
+        hops: remembered.hops - u32::from(counting),
+        ..remembered
+    };
+    verify_scope_hint(scope.parent.as_ref()?, key, remembered, counting, want_env)
 }
 
 /// The full walk of [`walk_scope_chain`], remembering where it ended.
+/// `hops` is `None` until the first function (or global) scope is reached; a
+/// binding found before that lives in a block scope of the site itself and
+/// leaves the hint alone.
 fn train_scope_hint(
     env: &EnvRef,
     key: &Atom,
     want_env: bool,
     hint: &GlobalHint,
-    depth: u32,
+    hops: Option<u32>,
 ) -> NameWalk {
     let scope = env.borrow();
     if scope.with_object.is_some() || scope.indirect_bindings.is_some() {
         return NameWalk::Slow;
     }
+    let hops = hops.or_else(|| starts_hops(&scope).then_some(0));
     if let Some(slot) = scope.bindings.position(key) {
-        hint.scope.set(ScopeHint {
-            hops: depth,
-            slot: slot as u32,
-        });
+        if let Some(hops) = hops {
+            hint.scope.set(ScopeHint {
+                hops,
+                slot: slot as u32,
+            });
+        }
         if want_env {
             return NameWalk::Bound(env.clone());
         }
@@ -239,17 +265,42 @@ fn train_scope_hint(
     }
     if let Some(gid) = scope.global_object_id {
         hint.scope.set(ScopeHint {
-            hops: depth,
+            hops: hops.unwrap_or(0),
             slot: GLOBAL_OBJECT_SLOT,
         });
         return NameWalk::Global(gid, want_env.then(|| env.clone()));
     }
     match &scope.parent {
-        Some(parent) if depth < MAX_WALK_DEPTH => {
-            train_scope_hint(parent, key, want_env, hint, depth + 1)
+        Some(parent) if hops.is_none_or(|h| h < MAX_WALK_DEPTH) => {
+            train_scope_hint(parent, key, want_env, hint, hops.map(|h| h + 1))
         }
         _ => NameWalk::Slow,
     }
+}
+
+#[cfg(feature = "perf-counters")]
+static SCOPE_HINT_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "perf-counters")]
+static SCOPE_HINT_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(feature = "perf-counters")]
+fn count_scope_hint(hit: bool) {
+    let counter = if hit {
+        &SCOPE_HINT_HITS
+    } else {
+        &SCOPE_HINT_MISSES
+    };
+    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Scope-walk hint verifications that answered, and those that fell back to a
+/// full walk, for the `perf-counters` report.
+#[cfg(feature = "perf-counters")]
+pub(crate) fn scope_hint_counts() -> (u64, u64) {
+    (
+        SCOPE_HINT_HITS.load(std::sync::atomic::Ordering::Relaxed),
+        SCOPE_HINT_MISSES.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 impl Interpreter {
