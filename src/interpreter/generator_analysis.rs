@@ -1076,7 +1076,7 @@ pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
 /// declaration form, a member-expression target (`o[await k]`) is supported: assignment can
 /// target one, a declaration cannot.
 pub(crate) fn pattern_needs_assignment_lowering(pattern: &Pattern) -> bool {
-    pattern_contains_await(pattern)
+    pattern_contains_suspension(pattern)
         && pattern_lowering_supported(pattern, PatternLoweringForm::Assignment)
 }
 
@@ -2034,10 +2034,14 @@ mod tests {
     }
 
     fn assignment_pattern(src: &str) -> Pattern {
+        assignment_pattern_in("async function", src)
+    }
+
+    fn assignment_pattern_in(prefix: &str, src: &str) -> Pattern {
         // A parenthesized `({...} = ...)` statement (needed so the leading
         // `{`/`[` isn't parsed as a block) comes back as a single-element
         // `Sequence`, not a bare `Assign`.
-        let expr = match first_statement(src) {
+        let expr = match first_statement_in(prefix, src) {
             Statement::Expression(Expression::Sequence(mut exprs)) if exprs.len() == 1 => {
                 exprs.remove(0)
             }
@@ -2069,6 +2073,16 @@ mod tests {
         // recursive `pattern_lowering_supported` call.
         let nested = assignment_pattern("({ x: [a = await 1] } = {});");
         assert!(pattern_needs_assignment_lowering(&nested));
+    }
+
+    #[test]
+    fn yield_only_assignment_patterns_use_the_shared_iterator_lowering() {
+        for src in ["[a = yield 1] = [];", "({ a = yield 1 } = {});"] {
+            let pattern = assignment_pattern_in("function*", src);
+            assert!(pattern_contains_suspension(&pattern));
+            assert!(!pattern_contains_await(&pattern));
+            assert!(pattern_needs_assignment_lowering(&pattern));
+        }
     }
 
     #[test]
