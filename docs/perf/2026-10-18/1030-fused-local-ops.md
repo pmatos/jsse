@@ -72,6 +72,18 @@ local access, and stays with #1030's expanded inventory.
 Wall time, the issue's `arith(10000000)` repro, pinned core, 5 alternating runs, load 1.4: base (pre-#1129) 5.05 s, #1129 4.71 s, this
 change 4.19 s, boa 4.75 s (jsse 0.88x boa).
 
+Wall time of the three #1030 table rows (`docs/perf/2026-10-10/repros`), pinned core, 9 alternating runs, load 1.3-2.0, medians:
+
+| workload | pre-#1129 | #1129 | this change | boa 0.22 | this change / boa |
+|---|---:|---:|---:|---:|---:|
+| `bench_numeric_intarith` | 0.878 s | 0.758 s | 0.737 s | 0.904 s | 0.82x |
+| `bench_bigint_ops_vm_numadd` | 0.556 s | 0.410 s | 0.373 s | 0.458 s | 0.81x |
+| `bench_strings-arrays_ctl_scalar_fn` | 0.951 s | 0.772 s | 0.647 s | 0.747 s | 0.87x |
+
+`run_chunk_inner` self Ir per counted VM op (cachegrind self Ir of the function over the perf-counters `vm_ops`): richards 70.3
+(3,069M / 43.7M; 119 in the #1030 audit), gaussian-blur 102.9 (16,212M / 157.5M ops; 116 in the audit, which counted 223M ops before
+fusion). `gc_safepoint` is the inline `poll` test since #1058; no out-of-line call on a no-op safepoint.
+
 ## Correctness gates
 
 `test262-extra/local-pair-operations-semantics.js` (Number/BigInt/string/Symbol operand kinds, NaN and signed zero, ToPrimitive order, a
