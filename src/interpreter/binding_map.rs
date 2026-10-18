@@ -27,6 +27,9 @@ struct HashIndex {
     by_hash: HashMap<u64, u32, IdentityBuild>,
     /// Slots whose hash is already claimed in `by_hash` by another name.
     overflow: Vec<u32>,
+    /// Stamp of the key set, assigned on demand by `BindingMap::epoch` and
+    /// cleared by every change to it; 0 means "not assigned".
+    stamp: std::cell::Cell<u64>,
 }
 
 pub(crate) struct BindingMap {
@@ -37,21 +40,6 @@ pub(crate) struct BindingMap {
     /// the (common) free-variable miss on a scope costs one `and`, not a scan.
     /// Removals leave their bit set: the filter may only err towards "maybe".
     name_filter: u64,
-    /// Stamp of the key set of an indexed map, assigned on demand by `epoch`
-    /// and cleared by every change to the key set; 0 means "not assigned".
-    epoch: std::cell::Cell<u64>,
-}
-
-thread_local! {
-    static NEXT_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
-}
-
-fn fresh_epoch() -> u64 {
-    NEXT_EPOCH.with(|next| {
-        let epoch = next.get();
-        next.set(epoch + 1);
-        epoch
-    })
 }
 
 #[inline]
@@ -194,7 +182,6 @@ impl BindingMap {
             entries: Vec::new(),
             index: None,
             name_filter: 0,
-            epoch: std::cell::Cell::new(0),
         }
     }
 
@@ -203,7 +190,6 @@ impl BindingMap {
             entries: Vec::with_capacity(capacity),
             index: None,
             name_filter: 0,
-            epoch: std::cell::Cell::new(0),
         }
     }
 
@@ -230,7 +216,6 @@ impl BindingMap {
         self.entries.clear();
         self.index = None;
         self.name_filter = 0;
-        self.epoch.set(0);
     }
 
     #[inline]
@@ -266,13 +251,13 @@ impl BindingMap {
     /// large environment costs one store.
     #[inline(always)]
     pub(crate) fn epoch(&self) -> u64 {
-        if self.index.is_none() {
+        let Some(index) = &self.index else {
             return 0;
-        }
-        match self.epoch.get() {
+        };
+        match index.stamp.get() {
             0 => {
-                let fresh = fresh_epoch();
-                self.epoch.set(fresh);
+                let fresh = super::types::fresh_shape_id();
+                index.stamp.set(fresh);
                 fresh
             }
             stamp => stamp,
@@ -339,7 +324,7 @@ impl BindingMap {
         self.entries.push((name, binding));
         if let Some(index) = &mut self.index {
             index.add(hash, slot);
-            self.epoch.set(0);
+            index.stamp.set(0);
         } else if self.entries.len() > LINEAR_MAX {
             self.build_index();
         }
@@ -352,7 +337,7 @@ impl BindingMap {
         let Some(index) = &mut self.index else {
             return Some(removed);
         };
-        self.epoch.set(0);
+        index.stamp.set(0);
         if !index.overflow.is_empty() {
             // Hash collisions are rare enough that rebuilding beats keeping
             // promotion bookkeeping for them.
@@ -378,12 +363,12 @@ impl BindingMap {
                 IdentityBuild::default(),
             ),
             overflow: Vec::new(),
+            stamp: std::cell::Cell::new(0),
         };
         for (slot, (atom, _)) in self.entries.iter().enumerate() {
             index.add(atom.precomputed_hash(), slot as u32);
         }
         self.index = Some(index);
-        self.epoch.set(0);
     }
 }
 

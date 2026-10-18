@@ -1630,7 +1630,6 @@ impl Compiler {
         };
         position
             .and_then(|i| u16::try_from(i).ok())
-            .filter(|&i| i != NO_INIT_SLOT)
             .unwrap_or(NO_INIT_SLOT)
     }
 
@@ -3735,14 +3734,12 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
     if lexicals.is_empty() {
         return None;
     }
-    let mut vars = std::collections::HashSet::new();
-    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
     let prologue: std::collections::HashSet<&str> = c
         .var_names
         .iter()
         .map(|&idx| c.names[usize::from(idx)].as_str())
         .collect();
-    if !vars.iter().all(|name| prologue.contains(name.as_str())) {
+    if !prologue_declares_body_vars(&prologue, body) {
         return None;
     }
     lexicals
@@ -3769,16 +3766,23 @@ fn instantiated_names(first: &Chunk, body: &[Statement]) -> Option<Vec<String>> 
     if names.is_empty() {
         return Some(names);
     }
-    let mut vars = std::collections::HashSet::new();
-    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
     let prologue: std::collections::HashSet<&str> = first
         .var_names
         .iter()
         .map(|&idx| first.names[usize::from(idx)].as_str())
         .collect();
-    vars.iter()
-        .all(|name| prologue.contains(name.as_str()))
-        .then_some(names)
+    prologue_declares_body_vars(&prologue, body).then_some(names)
+}
+
+/// Whether every `var` name the tree-walker would hoist from `body` is in
+/// `prologue`, the names the chunk's own var prologue declares.
+fn prologue_declares_body_vars(
+    prologue: &std::collections::HashSet<&str>,
+    body: &[Statement],
+) -> bool {
+    let mut vars = std::collections::HashSet::new();
+    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
+    vars.iter().all(|name| prologue.contains(name.as_str()))
 }
 
 #[cfg(test)]

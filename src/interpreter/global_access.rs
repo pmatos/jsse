@@ -101,6 +101,19 @@ pub(super) enum NameWalk {
 /// Deepest scope chain the recursive walk follows before giving up.
 const MAX_WALK_DEPTH: u32 = 64;
 
+/// The result of a walk that stopped at the scope `env`, which binds the name
+/// as `binding`: the scope itself when the caller wants environments, else
+/// the value of an initialised binding (an uninitialised one is `Slow`).
+fn found(env: &EnvRef, binding: &Binding, want_env: bool) -> NameWalk {
+    if want_env {
+        NameWalk::Bound(env.clone())
+    } else if binding.initialized {
+        NameWalk::Value(binding.value.clone())
+    } else {
+        NameWalk::Slow
+    }
+}
+
 /// Walk `env` outward looking for `key`, borrowing each scope in turn instead
 /// of cloning the `Rc` per hop. Never runs user code, so holding the borrows
 /// across the recursion is safe. Anything the walk does not model exactly
@@ -117,14 +130,7 @@ pub(super) fn walk_scope_chain<N: BindingName + ?Sized>(
         return NameWalk::Slow;
     }
     if let Some(binding) = scope.bindings.get(key) {
-        if want_env {
-            return NameWalk::Bound(env.clone());
-        }
-        return if binding.initialized {
-            NameWalk::Value(binding.value.clone())
-        } else {
-            NameWalk::Slow
-        };
+        return found(env, binding, want_env);
     }
     if let Some(gid) = scope.global_object_id {
         return NameWalk::Global(gid, want_env.then(|| env.clone()));
@@ -160,7 +166,7 @@ pub(super) fn walk_scope<N: BindingName + ?Sized>(
 /// must hold the name at the remembered slot. That is exactly the scope the
 /// full walk would stop at, so a hit answers identically; anything else runs
 /// the full walk, which retrains the hint.
-pub(super) fn walk_scope_chain_hinted(
+fn walk_scope_chain_hinted(
     env: &EnvRef,
     key: &Atom,
     want_env: bool,
@@ -168,7 +174,7 @@ pub(super) fn walk_scope_chain_hinted(
 ) -> NameWalk {
     let remembered = hint.scope.get();
     if remembered.hops != NO_SCOPE_HINT.hops
-        && let Some(walk) = verify_scope_hint(env, key, remembered, false, want_env)
+        && let Some(walk) = verify_scope_hint(env, key, remembered, false, want_env, hint)
     {
         #[cfg(feature = "perf-counters")]
         count_scope_hint(true);
@@ -194,6 +200,7 @@ fn verify_scope_hint(
     remembered: ScopeHint,
     counting: bool,
     want_env: bool,
+    hint: &GlobalHint,
 ) -> Option<NameWalk> {
     let scope = env.borrow();
     if scope.with_object.is_some() || scope.indirect_bindings.is_some() {
@@ -204,11 +211,15 @@ fn verify_scope_hint(
         if remembered.slot == GLOBAL_OBJECT_SLOT {
             let gid = scope.global_object_id?;
             let epoch = scope.bindings.epoch();
-            if (epoch == 0 || epoch != remembered.absent_epoch)
-                && scope.bindings.may_contain(key)
-                && scope.bindings.contains_key(key)
-            {
-                return None;
+            if epoch == 0 || epoch != remembered.absent_epoch {
+                if scope.bindings.may_contain(key) && scope.bindings.contains_key(key) {
+                    return None;
+                }
+                // Absent at this key set: remember it so later reads skip the probe.
+                hint.scope.set(ScopeHint {
+                    absent_epoch: epoch,
+                    ..hint.scope.get()
+                });
             }
             return Some(NameWalk::Global(gid, want_env.then(|| env.clone())));
         }
@@ -216,13 +227,7 @@ fn verify_scope_hint(
         if !atom.ptr_eq(key) {
             return None;
         }
-        return Some(if want_env {
-            NameWalk::Bound(env.clone())
-        } else if binding.initialized {
-            NameWalk::Value(binding.value.clone())
-        } else {
-            NameWalk::Slow
-        });
+        return Some(found(env, binding, want_env));
     }
     if scope.global_object_id.is_some()
         || (scope.bindings.may_contain(key) && scope.bindings.contains_key(key))
@@ -233,7 +238,14 @@ fn verify_scope_hint(
         hops: remembered.hops - u32::from(counting),
         ..remembered
     };
-    verify_scope_hint(scope.parent.as_ref()?, key, remembered, counting, want_env)
+    verify_scope_hint(
+        scope.parent.as_ref()?,
+        key,
+        remembered,
+        counting,
+        want_env,
+        hint,
+    )
 }
 
 /// The full walk of [`walk_scope_chain`], remembering where it ended.
@@ -260,19 +272,12 @@ fn train_scope_hint(
                 absent_epoch: 0,
             });
         }
-        if want_env {
-            return NameWalk::Bound(env.clone());
-        }
         let binding = &scope
             .bindings
             .entry_at(slot)
             .expect("position is a live slot")
             .1;
-        return if binding.initialized {
-            NameWalk::Value(binding.value.clone())
-        } else {
-            NameWalk::Slow
-        };
+        return found(env, binding, want_env);
     }
     if let Some(gid) = scope.global_object_id {
         hint.scope.set(ScopeHint {
