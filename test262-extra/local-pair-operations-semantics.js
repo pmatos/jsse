@@ -211,3 +211,30 @@ function blockScoped() {
   return out;
 }
 assert.compareArray(blockScoped(), [0, false, 3, false, 6, false], "block-scoped locals in fused ops");
+
+function constCompareJumpSlowPaths() {
+  var s = "5", big = 20n, o = { valueOf() { return 3; } }, nul = null, one = "1", r = [];
+  r.push(s < 10 ? 1 : 0, big > 10 ? 1 : 0, o < 10 ? 1 : 0, nul == 0 ? 1 : 0, nul >= 0 ? 1 : 0, one == 1 ? 1 : 0, one === 1 ? 1 : 0);
+  var calls = 0;
+  var counted = { valueOf() { calls++; return 7; } };
+  if (counted < 10) { r.push(calls); }
+  return r;
+}
+assert.compareArray(constCompareJumpSlowPaths(), [1, 1, 1, 0, 1, 1, 0, 1], "local vs number literal with non-Number locals");
+
+function constCompareJumpTdz() {
+  try {
+    if (later < 10) { return "then"; }
+  } catch (e) {
+    return e instanceof ReferenceError ? "ReferenceError" : "other";
+  }
+  let later = 1;
+}
+assert.sameValue(constCompareJumpTdz(), "ReferenceError", "TDZ in a local vs literal branch");
+
+function pairWithMixedNumberAndString() {
+  var n = 3, s = "4", r = [];
+  r.push(n + s, s * n, n < s ? 1 : 0, s > n ? 1 : 0);
+  return r;
+}
+assert.compareArray(pairWithMixedNumberAndString(), ["34", 12, 1, 1], "Number with String operands");

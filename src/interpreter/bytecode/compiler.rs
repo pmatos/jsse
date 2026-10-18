@@ -1502,6 +1502,24 @@ impl Compiler {
     /// patch site. A comparison fuses into `CmpJumpIfFalse` (its result is
     /// always a Boolean, so ToBoolean is the identity), and one whose operands
     /// are locals, or a local and a number literal, reads them in the jump op.
+    /// The comparison byte, optional constant and jump offset every
+    /// compare-and-branch op ends with; the offset comes last so `patch_jump`
+    /// applies. `temporaries` is the operand-stack depth the op's slow path
+    /// needs. Returns the patch site.
+    fn emit_cmp_jump_tail(&mut self, cmp: Op, temporaries: u16, constant: Option<u16>) -> usize {
+        self.code.push(cmp as u8);
+        if let Some(k_idx) = constant {
+            self.emit_u16(k_idx);
+        }
+        if temporaries > 0 {
+            self.push_n(temporaries);
+            self.pop_n(temporaries);
+        }
+        let patch = self.code.len();
+        self.emit_u16(0);
+        patch
+    }
+
     fn compile_cond_jump(&mut self, test: &Expression) -> Result<usize, CompileError> {
         if let Expression::Binary(op, lhs, rhs) = test
             && Self::is_comparison(*op)
@@ -1511,10 +1529,7 @@ impl Compiler {
                 self.emit(Op::LocalLocalCmpJump);
                 self.emit_local_ref(a);
                 self.emit_local_ref(b);
-                self.code.push(cmp as u8);
-                let patch = self.code.len();
-                self.emit_u16(0);
-                return Ok(patch);
+                return Ok(self.emit_cmp_jump_tail(cmp, 2, None));
             }
             if let Expression::Identifier(name) = lhs.as_ref()
                 && let Some(slot) = self.local_slot(name)
@@ -1524,20 +1539,13 @@ impl Compiler {
                 let k_idx = self.add_constant(Constant::Number(*k))?;
                 self.emit(Op::LocalConstCmpJump);
                 self.emit_local_ref((idx, slot));
-                self.code.push(cmp as u8);
-                self.emit_u16(k_idx);
-                let patch = self.code.len();
-                self.emit_u16(0);
-                return Ok(patch);
+                return Ok(self.emit_cmp_jump_tail(cmp, 2, Some(k_idx)));
             }
             self.compile_expr(lhs)?;
             self.compile_expr(rhs)?;
             self.pop_n(2);
             self.emit(Op::CmpJumpIfFalse);
-            self.code.push(cmp as u8);
-            let patch = self.code.len();
-            self.emit_u16(0);
-            return Ok(patch);
+            return Ok(self.emit_cmp_jump_tail(cmp, 0, None));
         }
         self.compile_expr(test)?;
         self.pop_n(1);
