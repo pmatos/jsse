@@ -23,6 +23,9 @@ unknown to the compiler, so every parameter read was a by-name `LoadName`.
 - **Otherwise** the body environment comes from the function-environment pool (`acquire_body_environment`, recycled after the
   call), is filled from the literal's `BodyVarPlan` (atoms plus whether each `var` copies the parameter of the same name) and
   reads the frame's hoisting analysis instead of probing the Body-keyed memo.
+- **GC.** Parameter defaults run user code before the activation that roots the function environment exists, so the environment
+  is put on `call_stack_envs` while a default is evaluated (`with_env_rooted`), in `bind_named_parameters` and in the generic
+  `bind_function_parameters`.
 - **Compiled-call path.** `CompiledCall` is installed for these functions too, and `call_compiled_function_with_defaults` (out of
   line, so the simple-parameter `call_compiled_function` is untouched) serves them; it is skipped once a `with` statement has run.
 
@@ -33,28 +36,28 @@ cachegrind `--cache-sim=no`, whole-process `I refs`; base = `origin/main` `ead00
 
 | form | base Ir/iter | new Ir/iter | delta |
 |---|---:|---:|---:|
-| `add(a, b)` (simple parameters, control) | 2,845 | 2,851 | +0.2% |
-| `add(a, b = 1)`, `b` supplied | 5,271 | 2,950 | -44.0% |
-| `add(a, b = 1)`, `b` omitted | 5,396 | 3,030 | -43.8% |
+| `add(a, b)` (simple parameters, control) | 2,845 | 2,853 | +0.3% |
+| `add(a, b = 1)`, `b` supplied | 5,271 | 2,981 | -43.4% |
+| `add(a, b = 1)`, `b` omitted | 5,396 | 3,110 | -42.4% |
 
-The default form is 1.035x the simple form (issue acceptance: <= 1.1x). `atom_intern_calls` is flat across call counts and no
+The default form is 1.045x the simple form (issue acceptance: <= 1.1x). `atom_intern_calls` is flat across call counts and no
 `LoadName` executes (`tests/perf_counters_env_hashing.rs::default_and_rest_parameters_intern_nothing_and_resolve_through_slots`).
 
-Whole-process, 40 workloads (geometric mean -0.90%):
+Whole-process, 40 workloads (geometric mean -0.89%):
 
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
-| bigint-noble-secp256k1 | 5,915,520,611 | 5,152,624,504 | -12.90% |
-| bigint-noble-ed25519 | 6,782,080,986 | 6,012,470,026 | -11.35% |
-| js-tokens | 4,844,517,541 | 4,557,312,079 | -5.93% |
-| Air | 1,898,735,175 | 1,790,055,010 | -5.72% |
-| lazy-collections | 3,961,279,185 | 3,866,555,950 | -2.39% |
-| proxy-vue | 1,131,751,696 | 1,123,649,999 | -0.72% |
-| micro:fib | 5,600,672,766 | 5,616,826,122 | +0.29% |
-| richards | 8,660,674,128 | 8,672,818,761 | +0.14% |
-| delta-blue | 6,408,411,688 | 6,422,052,873 | +0.21% |
-| hash-map | 13,943,873,509 | 14,011,561,622 | +0.49% |
-| proxy-mobx (noise: 574.8M-598.9M over runs of either binary) | 586,555,407 | 594,840,700 | +1.41% |
+| bigint-noble-secp256k1 | 5,915,520,611 | 5,186,780,279 | -12.32% |
+| bigint-noble-ed25519 | 6,782,080,986 | 6,052,400,806 | -10.76% |
+| Air | 1,898,735,175 | 1,791,570,306 | -5.64% |
+| lazy-collections | 3,961,279,185 | 3,889,358,460 | -1.82% |
+| js-tokens | 4,844,517,541 | 4,757,412,278 | -1.80% |
+| proxy-vue | 1,131,751,696 | 1,126,014,967 | -0.51% |
+| micro:fib | 5,600,672,766 | 5,622,209,531 | +0.38% |
+| richards | 8,660,674,128 | 8,676,829,975 | +0.19% |
+| delta-blue | 6,408,411,688 | 6,426,411,687 | +0.28% |
+| Box2D | 5,987,794,730 | 5,983,589,008 | -0.07% |
+| proxy-mobx (noise: 574.8M-598.9M over runs of either binary) | 586,555,407 | 575,951,426 | -1.81% |
 
 A first version that folded the default-parameter handling into `call_compiled_function` cost micro:fib +2.6% by code layout alone;
-splitting it out of line brought that to +0.29%.
+splitting it out of line brought that to +0.38%.
