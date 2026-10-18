@@ -55,7 +55,7 @@ function orderOfToPrimitive() {
   var gt = b > a;
   return [sum, lt, gt, log.join("")];
 }
-assert.compareArray(orderOfToPrimitive(), [3, true, true, "abab" + "ba"], "left operand converts first; > swaps for IsLessThan");
+assert.compareArray(orderOfToPrimitive(), [3, true, true, "ababba"], "left operand converts first; > swaps for IsLessThan");
 
 function valueOfRebindsLocals() {
   var a = { valueOf() { b = 100; return 1; } };
@@ -222,6 +222,13 @@ function constCompareJumpSlowPaths() {
 }
 assert.compareArray(constCompareJumpSlowPaths(), [1, 1, 1, 0, 1, 1, 0, 1], "local vs number literal with non-Number locals");
 
+function pairWithMixedNumberAndString() {
+  var n = 3, s = "4", r = [];
+  r.push(n + s, s * n, n < s ? 1 : 0, s > n ? 1 : 0);
+  return r;
+}
+assert.compareArray(pairWithMixedNumberAndString(), ["34", 12, 1, 1], "Number with String operands");
+
 function constCompareJumpTdz() {
   try {
     if (later < 10) { return "then"; }
@@ -232,9 +239,38 @@ function constCompareJumpTdz() {
 }
 assert.sameValue(constCompareJumpTdz(), "ReferenceError", "TDZ in a local vs literal branch");
 
-function pairWithMixedNumberAndString() {
-  var n = 3, s = "4", r = [];
-  r.push(n + s, s * n, n < s ? 1 : 0, s > n ? 1 : 0);
+function compoundAssignmentWithLocalOperand() {
+  var s = "a", t = "b", n = 5, m = 2, big = 10n, one = 3n, r = [];
+  s += t;
+  n -= m;
+  n *= m;
+  big += one;
+  r.push(s, n, big);
+  var x = { valueOf() { y = 100; return 1; } };
+  var y = 2;
+  x += y;
+  r.push(x);
   return r;
 }
-assert.compareArray(pairWithMixedNumberAndString(), ["34", 12, 1, 1], "Number with String operands");
+assert.compareArray(compoundAssignmentWithLocalOperand(), ["ab", 6, 13n, 3], "x op= y between locals");
+
+function compoundAssignmentToConst() {
+  const k = 1;
+  var v = 2;
+  try {
+    k += v;
+  } catch (e) {
+    return [e instanceof TypeError, k];
+  }
+}
+assert.compareArray(compoundAssignmentToConst(), [true, 1], "compound assignment to a const throws");
+
+function compoundAssignmentTdz() {
+  try {
+    a += b;
+  } catch (e) {
+    return e instanceof ReferenceError;
+  }
+  let a = 1, b = 2;
+}
+assert.sameValue(compoundAssignmentTdz(), true, "compound assignment on a TDZ local");

@@ -3390,13 +3390,10 @@ fn local_ops_address_block_bindings_and_still_hit_the_frame_for_outer_names() {
             } else {
                 1
             };
-            (0..refs)
-                .map(|k| {
-                    (
-                        chunk.names[usize::from(operands[2 * k])].to_string(),
-                        operands[2 * k + 1],
-                    )
-                })
+            operands
+                .chunks(2)
+                .take(refs)
+                .map(|pair| (chunk.names[usize::from(pair[0])].to_string(), pair[1]))
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -3724,9 +3721,7 @@ fn compound_assignment_with_number_literal_folds_the_constant() {
             Op::LoadResolvedName,
             Op::BinConst,
             Op::StoreResolvedNamePop,
-            Op::LoadLocal,
-            Op::LoadLocal,
-            Op::Sub,
+            Op::LocalLocalBin,
             Op::StoreLocalPop,
             Op::ReturnUndefined,
         ]
