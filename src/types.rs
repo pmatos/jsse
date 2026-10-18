@@ -1362,7 +1362,6 @@ impl NanBoxedValue {
         self.0 < Self::FIRST_OBJECT_BITS
     }
 
-    /// A copy of a value for which `is_plain` holds.
     #[inline(always)]
     pub(crate) fn copy_plain(&self) -> Self {
         debug_assert!(self.is_plain());

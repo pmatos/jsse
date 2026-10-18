@@ -19,8 +19,14 @@ fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     i16::from_le_bytes(operand_bytes::<2>(chunk, pc))
 }
 
-/// The `N` operand bytes at `pc` behind one bounds check, where `decode_u16`
-/// pays one per byte.
+/// The name index and slot hint operands (two u16) at `pc`.
+#[inline(always)]
+fn decode_local(chunk: &Chunk, pc: usize) -> (u16, u16) {
+    let [i0, i1, s0, s1] = operand_bytes::<4>(chunk, pc);
+    (u16::from_le_bytes([i0, i1]), u16::from_le_bytes([s0, s1]))
+}
+
+/// The `N` operand bytes at `pc` behind a single bounds check.
 #[inline(always)]
 fn operand_bytes<const N: usize>(chunk: &Chunk, pc: usize) -> [u8; N] {
     match chunk.code[pc..].first_chunk::<N>() {
@@ -222,19 +228,12 @@ fn store_local(
     value: &JsValue,
     hint: Option<&GlobalHint>,
 ) -> Result<(), JsValue> {
-    let stored = {
-        let mut scope = target.borrow_mut();
-        match scope.bindings.entry_at_mut(slot as usize) {
-            Some((atom, binding))
-                if atom.ptr_eq(name)
-                    && binding.initialized
-                    && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
-            {
-                binding.value = value.clone();
-                true
-            }
-            _ => false,
+    let stored = match hinted_writable(&mut target.borrow_mut(), name, slot) {
+        Some(binding) => {
+            binding.value = value.clone();
+            true
         }
+        None => false,
     };
     if stored {
         #[cfg(feature = "perf-counters")]
@@ -289,17 +288,12 @@ fn store_resolved_name(
     Ok(())
 }
 
-/// The slot hint a local op uses when the frame environment is not a plain
-/// declarative one: no binding sits there, so the op takes the by-name path.
 const NO_LOCAL_SLOT: u16 = u16::MAX;
 
-/// The environment a local-op slot operand addresses, and the slot within it:
-/// the frame (function) environment, or one of the chunk's open block
-/// environments (see `BLOCK_SLOT_FLAG`). Only a hint: the caller verifies the
-/// binding by atom identity and falls back to by-name resolution from the
-/// current environment. Block environments are always declarative; the frame
-/// environment is vetted once per chunk (`frame_plain`), so no op re-checks
-/// for a `with` object, indirect bindings or the global object.
+/// The environment a local-op slot operand addresses, and the slot within it.
+/// Only a hint: callers verify the binding by atom identity and fall back to
+/// by-name resolution. Block environments are declarative by construction;
+/// the frame environment is vetted once per chunk (`frame_plain`).
 #[inline(always)]
 fn local_target<'a>(
     frame_env: &'a EnvRef,
@@ -322,11 +316,12 @@ fn block_target<'a>(frame_env: &'a EnvRef, scopes: &'a [EnvRef], slot: u16) -> (
         "block slot names environment {scope} of {}",
         scopes.len()
     );
-    (scopes.get(scope).unwrap_or(frame_env), slot & 0xff)
+    match scopes.get(scope) {
+        Some(env) => (env, slot & 0xff),
+        None => (frame_env, NO_LOCAL_SLOT),
+    }
 }
 
-/// A plain declarative environment: no `with` object, indirect (module
-/// import) bindings or global object, so its `bindings` are the whole story.
 fn is_plain_declarative(env: &EnvRef) -> bool {
     let scope = env.borrow();
     scope.with_object.is_none()
@@ -334,8 +329,33 @@ fn is_plain_declarative(env: &EnvRef) -> bool {
         && scope.global_object_id.is_none()
 }
 
-/// The frame binding a verified slot hint names, when it is initialized;
-/// `f` sees its value in place.
+#[inline(always)]
+fn hinted_binding<'a>(scope: &'a Environment, name: &Atom, slot: u16) -> Option<&'a Binding> {
+    match scope.bindings.entry_at(slot as usize) {
+        Some((atom, binding)) if atom.ptr_eq(name) && binding.initialized => Some(binding),
+        _ => None,
+    }
+}
+
+#[inline(always)]
+fn hinted_writable<'a>(
+    scope: &'a mut Environment,
+    name: &Atom,
+    slot: u16,
+) -> Option<&'a mut Binding> {
+    match scope.bindings.entry_at_mut(slot as usize) {
+        Some((atom, binding))
+            if atom.ptr_eq(name)
+                && binding.initialized
+                && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
+        {
+            Some(binding)
+        }
+        _ => None,
+    }
+}
+
+/// The value of the initialized binding the slot hint verifies, seen in place.
 #[inline(always)]
 fn with_local_hit<R>(
     env: &EnvRef,
@@ -343,18 +363,11 @@ fn with_local_hit<R>(
     slot: u16,
     f: impl FnOnce(&JsValue) -> R,
 ) -> Option<R> {
-    let scope = env.borrow();
-    match scope.bindings.entry_at(slot as usize) {
-        Some((atom, binding)) if atom.ptr_eq(name) && binding.initialized => {
-            Some(f(&binding.value))
-        }
-        _ => None,
-    }
+    hinted_binding(&env.borrow(), name, slot).map(|binding| f(&binding.value))
 }
 
-/// `LoadLocal`'s hit path: pushes a copy of the initialized binding the slot
-/// hint verifies, `false` when it does not verify. A Number or other plain
-/// value is copied bitwise, with no clone or rooting work.
+/// `LoadLocal`'s hit path. A plain value is copied bitwise, with no clone or
+/// rooting work.
 #[inline(always)]
 fn push_local_hit(
     interp: &mut Interpreter,
@@ -364,22 +377,19 @@ fn push_local_hit(
     slot: u16,
 ) -> bool {
     let scope = env.borrow();
-    match scope.bindings.entry_at(slot as usize) {
-        Some((atom, binding)) if atom.ptr_eq(name) && binding.initialized => {
-            if binding.value.is_plain() {
-                stack.push(binding.value.copy_plain());
-            } else {
-                push_value(interp, stack, binding.value.clone());
-            }
-            true
-        }
-        _ => false,
+    let Some(binding) = hinted_binding(&scope, name, slot) else {
+        return false;
+    };
+    if binding.value.is_plain() {
+        stack.push(binding.value.copy_plain());
+    } else {
+        push_value(interp, stack, binding.value.clone());
     }
+    true
 }
 
-/// `StoreLocalPop`'s hit path: moves the top operand into the writable,
-/// initialized binding the slot hint verifies, `false` (stack untouched) when
-/// it does not verify.
+/// `StoreLocalPop`'s hit path: moves the top operand into the verified binding,
+/// leaving the stack untouched when the hint does not verify.
 #[inline(always)]
 fn move_into_local(
     interp: &mut Interpreter,
@@ -389,23 +399,15 @@ fn move_into_local(
     slot: u16,
 ) -> bool {
     let mut scope = env.borrow_mut();
-    match scope.bindings.entry_at_mut(slot as usize) {
-        Some((atom, binding))
-            if atom.ptr_eq(name)
-                && binding.initialized
-                && matches!(binding.kind, BindingKind::Var | BindingKind::Let) =>
-        {
-            let Some(value) = stack.pop() else {
-                return false;
-            };
-            if !value.is_plain() {
-                unroot_stack_value(interp, &value);
-            }
-            binding.value = value;
-            true
-        }
-        _ => false,
-    }
+    let Some(binding) = hinted_writable(&mut scope, name, slot) else {
+        return false;
+    };
+    let Some(value) = stack.pop() else {
+        return false;
+    };
+    unroot_stack_value(interp, &value);
+    binding.value = value;
+    true
 }
 
 /// Where a `break`/`continue` completion leaving an `ExecAst` statement
@@ -524,6 +526,9 @@ fn debug_assert_operands_rooted(
 
 #[inline(always)]
 fn root_stack_value(interp: &mut Interpreter, value: &JsValue) {
+    if value.is_plain() {
+        return;
+    }
     if let Some(object_id) = value.as_object_id() {
         interp.gc_bytecode_roots.push(object_id);
     }
@@ -531,6 +536,9 @@ fn root_stack_value(interp: &mut Interpreter, value: &JsValue) {
 
 #[inline(always)]
 fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
+    if value.is_plain() {
+        return;
+    }
     if let Some(object_id) = value.as_object_id() {
         interp.gc_bytecode_roots.pop_expected(object_id);
     }
@@ -1403,6 +1411,23 @@ fn run_chunk_inner<const GENERATOR: bool>(
             break $l thrown;
         }};
     }
+    // Stores the top operand into a local, leaving it on the stack.
+    macro_rules! store_local_top {
+        ($l:lifetime, $target:expr, $name:expr, $hint:expr, $idx:expr) => {{
+            let value = stack.last().expect("stack underflow on StoreLocal");
+            if let Err(e) = store_local(
+                interp,
+                $name,
+                $hint,
+                $target,
+                cur_env!(),
+                value,
+                chunk.global_hint($idx),
+            ) {
+                throw!($l, e);
+            }
+        }};
+    }
     // One arm per binary op, so the Number-pair fast path is specialised to
     // the op instead of re-dispatching on it.
     macro_rules! binary_arm {
@@ -1482,9 +1507,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::LoadLocal => {
-                    let [i0, i1, s0, s1] = operand_bytes::<4>(chunk, pc);
-                    let idx = u16::from_le_bytes([i0, i1]);
-                    let slot = u16::from_le_bytes([s0, s1]);
+                    let (idx, slot) = decode_local(chunk, pc);
                     pc += 4;
                     let name = &chunk.names[idx as usize];
                     let (target, hint_slot) = local_target(frame_env, frame_plain, &scopes, slot);
@@ -1505,29 +1528,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::StoreLocal => {
-                    let [i0, i1, s0, s1] = operand_bytes::<4>(chunk, pc);
-                    let idx = u16::from_le_bytes([i0, i1]);
-                    let slot = u16::from_le_bytes([s0, s1]);
+                    let (idx, slot) = decode_local(chunk, pc);
                     pc += 4;
                     let name = &chunk.names[idx as usize];
-                    let value = stack.last().expect("stack underflow on StoreLocal");
                     let (target, hint_slot) = local_target(frame_env, frame_plain, &scopes, slot);
-                    if let Err(e) = store_local(
-                        interp,
-                        name,
-                        hint_slot,
-                        target,
-                        cur_env!(),
-                        value,
-                        chunk.global_hint(idx),
-                    ) {
-                        throw!('dispatch, e);
-                    }
+                    store_local_top!('dispatch, target, name, hint_slot, idx);
                 }
                 Op::StoreLocalPop => {
-                    let [i0, i1, s0, s1] = operand_bytes::<4>(chunk, pc);
-                    let idx = u16::from_le_bytes([i0, i1]);
-                    let slot = u16::from_le_bytes([s0, s1]);
+                    let (idx, slot) = decode_local(chunk, pc);
                     pc += 4;
                     let name = &chunk.names[idx as usize];
                     let (target, hint_slot) = local_target(frame_env, frame_plain, &scopes, slot);
@@ -1537,52 +1545,29 @@ fn run_chunk_inner<const GENERATOR: bool>(
                             interp.perf.local_slot_hits += 1;
                         }
                     } else {
-                        let value = stack.last().expect("stack underflow on StoreLocalPop");
-                        if let Err(e) = store_local(
-                            interp,
-                            name,
-                            hint_slot,
-                            target,
-                            cur_env!(),
-                            value,
-                            chunk.global_hint(idx),
-                        ) {
-                            throw!('dispatch, e);
-                        }
+                        store_local_top!('dispatch, target, name, hint_slot, idx);
                         pop_value(interp, stack, "stack underflow on StoreLocalPop");
                     }
                 }
                 Op::UpdateLocal => {
-                    let [i0, i1, s0, s1, mode] = operand_bytes::<5>(chunk, pc);
-                    let idx = u16::from_le_bytes([i0, i1]);
-                    let slot = u16::from_le_bytes([s0, s1]);
+                    let (idx, slot) = decode_local(chunk, pc);
+                    let mode = chunk.code[pc + 4];
                     pc += YIELD_PERSISTENT_BACK;
                     let (op, prefix, discard) = update_mode(mode);
                     let name = &chunk.names[idx as usize];
                     let (target, hint_slot) = local_target(frame_env, frame_plain, &scopes, slot);
-                    let fast = {
-                        let mut scope = target.borrow_mut();
-                        match scope.bindings.entry_at_mut(hint_slot as usize) {
-                            Some((atom, binding))
-                                if atom.ptr_eq(name)
-                                    && binding.initialized
-                                    && matches!(
-                                        binding.kind,
-                                        BindingKind::Var | BindingKind::Let
-                                    ) =>
-                            {
-                                binding.value.as_number().map(|old| {
-                                    let new = match op {
-                                        UpdateOp::Increment => old + 1.0,
-                                        UpdateOp::Decrement => old - 1.0,
-                                    };
-                                    binding.value = JsValue::number(new);
-                                    JsValue::number(if prefix { new } else { old })
-                                })
-                            }
-                            _ => None,
-                        }
-                    };
+                    let fast = hinted_writable(&mut target.borrow_mut(), name, hint_slot).and_then(
+                        |binding| {
+                            binding.value.as_number().map(|old| {
+                                let new = match op {
+                                    UpdateOp::Increment => old + 1.0,
+                                    UpdateOp::Decrement => old - 1.0,
+                                };
+                                binding.value = JsValue::number(new);
+                                JsValue::number(if prefix { new } else { old })
+                            })
+                        },
+                    );
                     match fast {
                         Some(result) => {
                             #[cfg(feature = "perf-counters")]
