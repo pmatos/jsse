@@ -4,7 +4,7 @@ use super::chunk::{
 };
 use super::op::{Op, UPDATE_DISCARD, YIELD_DISCARD_BACK, YIELD_PERSISTENT_BACK, YIELD_SKIP_BACK};
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
-use crate::interpreter::eval::{IdentifierRef, is_primitive_string_concat};
+use crate::interpreter::eval::{IdentifierRef, bigint_binary_op, is_primitive_string_concat};
 use crate::interpreter::helpers::strict_equality;
 use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::property::NamedGet;
@@ -118,6 +118,57 @@ fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -
     unroot_stack_value(interp, &r);
     unroot_stack_value(interp, &l);
     result
+}
+
+/// A binary op when the two operands on top of the stack are BigInts, else
+/// `None` with the stack untouched. BigInts are never rooted (only objects
+/// are), so the operands are replaced by the result with no unrooting. A
+/// thrown RangeError (division by zero, bad exponent) comes back as `Err`.
+#[inline(never)]
+fn bigint_pair_op(
+    interp: &mut Interpreter,
+    stack: &mut Vec<JsValue>,
+    op: BinaryOp,
+) -> Option<Result<(), JsValue>> {
+    let len = stack.len();
+    if len < 2 || !stack[len - 2].is_bigint() || !stack[len - 1].is_bigint() {
+        return None;
+    }
+    let (Some(r), Some(l)) = (
+        stack.pop().and_then(JsValue::into_bigint),
+        stack.pop().and_then(JsValue::into_bigint),
+    ) else {
+        unreachable!("both operands are BigInts");
+    };
+    let result =
+        bigint_binary_op(op, &l.value, &r.value).expect("BigInt pair op without a BigInt form");
+    Some(match result {
+        Ok(v) => {
+            stack.push(v);
+            Ok(())
+        }
+        Err(message) => Err(interp.create_error("RangeError", message)),
+    })
+}
+
+/// The relational `cmp` over the two BigInts on top of the stack, popping
+/// both, or `None` with the stack untouched when they are not both BigInts.
+#[inline(never)]
+fn bigint_compare_pop(stack: &mut Vec<JsValue>, cmp: Op) -> Option<bool> {
+    let len = stack.len();
+    if len < 2 {
+        return None;
+    }
+    let holds = stack[len - 2].with_bigint(|a| {
+        stack[len - 1].with_bigint(|b| match cmp {
+            Op::Lt => a < b,
+            Op::Gt => a > b,
+            Op::LtEq => a <= b,
+            _ => a >= b,
+        })
+    })??;
+    stack.truncate(len - 2);
+    Some(holds)
 }
 
 /// `==`/`!=` through `Interpreter::loose_equal_no_user_code`: replaces the two operands
@@ -1272,6 +1323,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 // SAFETY: `len >= 2` and `stack[len - 1]` was just read as a Number.
                 unsafe { discard_number_operands(stack, 1) };
                 stack[len - 2] = number_binop($bop, l, r);
+            } else if !matches!(
+                $bop,
+                Op::Eq | Op::NotEq | Op::StrictEq | Op::StrictNotEq | Op::UShr
+            ) && let Some(done) = bigint_pair_op(interp, stack, binary_of_op($bop))
+            {
+                if let Err(thrown) = done {
+                    throw!($l, thrown);
+                }
             } else if matches!($bop, Op::StrictEq | Op::StrictNotEq) {
                 let r = pop_value(interp, stack, "stack underflow on binop rhs");
                 let l = pop_value(interp, stack, "stack underflow on binop lhs");
@@ -2034,6 +2093,10 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
                         pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
                         equal != (cmp == Op::Eq)
+                    } else if matches!(cmp, Op::Lt | Op::Gt | Op::LtEq | Op::GtEq)
+                        && let Some(holds) = bigint_compare_pop(stack, cmp)
+                    {
+                        !holds
                     } else if matches!(cmp, Op::StrictEq | Op::StrictNotEq) {
                         let r = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
                         let l = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");

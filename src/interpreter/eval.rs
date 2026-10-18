@@ -10642,7 +10642,7 @@ pub(super) fn is_primitive_string_concat(l: &JsValue, r: &JsValue) -> bool {
 /// A binary operator over two BigInts, or `None` when the operator has no
 /// BigInt/BigInt fast form (`>>>` throws a TypeError, `in` and `instanceof`
 /// need an object). `Err` carries the RangeError message.
-fn bigint_binary_op(
+pub(crate) fn bigint_binary_op(
     op: BinaryOp,
     a: &num_bigint::BigInt,
     b: &num_bigint::BigInt,
