@@ -446,7 +446,8 @@ impl Interpreter {
         owner: &crate::interpreter::object_arena::ObjectHandle,
         value: &JsValue,
     ) {
-        if let Some(object_id) = value.as_object_id()
+        if owner.is_old()
+            && let Some(object_id) = value.as_object_id()
             && self
                 .objects
                 .get_cell(object_id)
