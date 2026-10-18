@@ -188,3 +188,42 @@ function restWithLexical(...items) {
   return total;
 }
 assert.sameValue(restWithLexical(1, 2, 3), 6, "rest parameter with a body lexical and loop");
+
+function hiddenEvalInPatternDefault(a = 1) {
+  var { z = eval("var a = 9; 1") } = {};
+  return a + ":" + z;
+}
+function hiddenEvalInPatternDefaultArguments(a = 1) {
+  var { z = eval("var arguments = 7; 1") } = {};
+  return typeof arguments + ":" + arguments + ":" + z;
+}
+for (var i = 0; i < 4; i++) {
+  assert.sameValue(hiddenEvalInPatternDefault(), "9:1", "eval in a body pattern default declares into the body environment, call " + i);
+  assert.sameValue(
+    hiddenEvalInPatternDefaultArguments(),
+    "number:7:1",
+    "eval declaring arguments in a body pattern default, call " + i
+  );
+}
+
+function allocatingDefault() { $262.gc(); return { k: 1 }; }
+function collectBetweenDefaults(a = { v: [1, 2, 3] }, b = allocatingDefault(), ...rest) {
+  return a.v.length + b.k + rest.length;
+}
+for (var j = 0; j < 4; j++) {
+  assert.sameValue(collectBetweenDefaults(), 4, "an earlier default survives a collection during a later one, call " + j);
+  assert.sameValue(collectBetweenDefaults(undefined, undefined, 1, 2), 6, "also with rest arguments, call " + j);
+}
+
+function repeatedShapes() {
+  var out = [];
+  for (var n = 0; n < 4; n++) {
+    out.push(defaultSupplied(n), defaultSupplied(n, 5), laterDefaultSeesEarlier(n), restAfterDefault(undefined, n));
+  }
+  return out.join();
+}
+assert.sameValue(
+  repeatedShapes(),
+  [0, 1, 2, 3].map(function (n) { return [n + 1, n + 5, n + "," + n * 2 + "," + (n + n * 2), "1:" + n].join(); }).join(),
+  "repeated calls of the same literals take the compiled-call path"
+);

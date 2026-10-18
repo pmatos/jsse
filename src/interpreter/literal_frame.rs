@@ -89,24 +89,18 @@ impl NamedParamPlan {
 /// whose hoisting (Annex B) distinguishes parameter bindings from the body's.
 fn body_can_share_param_env(params: &[Pattern], body: &Body) -> bool {
     use crate::ast::Expression;
-    let is_eval_call = |expr: &Expression| match expr {
-        Expression::Call(callee, _, _) => {
-            matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
-        }
-        _ => false,
-    };
     let opens_scope = |expr: &Expression| {
         matches!(
             expr,
             Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_)
-        ) || is_eval_call(expr)
+        ) || super::bytecode::compiler::is_direct_eval_call(expr)
     };
     let defaults_are_plain = params.iter().all(|param| match param {
         Pattern::Assign(_, default) => !crate::ast::expr_contains_matching(default, &opens_scope),
         _ => true,
     });
     if !defaults_are_plain
-        || crate::ast::stmts_contain_matching(body.as_slice(), &is_eval_call)
+        || super::bytecode::compiler::body_may_run_direct_eval(body.as_slice())
         || super::bytecode::compiler::body_declares_function(body.as_slice())
     {
         return false;

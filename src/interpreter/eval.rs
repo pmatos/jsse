@@ -5245,17 +5245,31 @@ impl Interpreter {
             return Ok(());
         }
 
-        for (index, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest = args.get(index..).unwrap_or(&[]).to_vec();
-                let rest_array = self.create_array(rest);
-                self.bind_pattern_or_throw(inner, rest_array, BindingKind::Var, func_env)?;
-                break;
+        self.with_env_rooted(func_env, |interp| {
+            for (index, param) in params.iter().enumerate() {
+                if let Pattern::Rest(inner) = param {
+                    let rest = args.get(index..).unwrap_or(&[]).to_vec();
+                    let rest_array = interp.create_array(rest);
+                    interp.bind_pattern_or_throw(inner, rest_array, BindingKind::Var, func_env)?;
+                    break;
+                }
+                let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
+                interp.bind_pattern_or_throw(param, value, BindingKind::Var, func_env)?;
             }
-            let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
-            self.bind_pattern_or_throw(param, value, BindingKind::Var, func_env)?;
-        }
-        Ok(())
+            Ok(())
+        })
+    }
+
+    /// Runs `bind` with `env` on the collector's environment roots. Parameter
+    /// defaults run user code, which can reach a safepoint before the activation
+    /// that roots the function environment exists, and the parameters bound so
+    /// far live only there.
+    fn with_env_rooted<R>(&mut self, env: &EnvRef, bind: impl FnOnce(&mut Self) -> R) -> R {
+        let envs_base = self.call_stack_envs.len();
+        self.call_stack_envs.push(env.clone());
+        let result = bind(self);
+        self.call_stack_envs.truncate(envs_base);
+        result
     }
 
     /// The environment the body of a function with non-simple parameters runs
@@ -5313,6 +5327,18 @@ impl Interpreter {
     /// evaluated with its own name already in TDZ, and the final binding
     /// replaces that entry in place.
     fn bind_named_parameters(
+        &mut self,
+        plan: &NamedParamPlan,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        self.with_env_rooted(func_env, |interp| {
+            interp.bind_named_parameters_rooted(plan, params, args, func_env)
+        })
+    }
+
+    fn bind_named_parameters_rooted(
         &mut self,
         plan: &NamedParamPlan,
         params: &[Pattern],
@@ -5639,11 +5665,9 @@ impl Interpreter {
             && self.bytecode_enabled
             && let Some(id) = func_val.as_object_id()
             && let Some(obj) = self.get_object_cell(id)
-            && let Some((frame, closure, function_realm)) = Self::compiled_call_target(obj)
+            && let Some((frame, closure, function_realm, with_defaults)) =
+                Self::compiled_call_target(obj)
         {
-            let with_defaults = frame
-                .compiled_call()
-                .is_some_and(|call| call.has_parameter_expressions);
             if !with_defaults {
                 return self.call_compiled_function(
                     id,
@@ -6305,17 +6329,22 @@ impl Interpreter {
     #[inline]
     fn compiled_call_target(
         obj: &ObjectHandle,
-    ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>)> {
+    ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>, bool)> {
         let data = obj.borrow();
         match data.callable.as_deref() {
             Some(JsFunction::User { frame, closure, .. })
-                if frame.compiled_call().is_some()
-                    && !(data.is_proxy()
-                        || data.is_proxy_revoked()
-                        || data.wrapped().is_some()
-                        || data.is_class_constructor()) =>
+                if !(data.is_proxy()
+                    || data.is_proxy_revoked()
+                    || data.wrapped().is_some()
+                    || data.is_class_constructor()) =>
             {
-                Some((frame.clone(), closure.clone(), data.function_realm()))
+                let call = frame.compiled_call()?;
+                Some((
+                    frame.clone(),
+                    closure.clone(),
+                    data.function_realm(),
+                    call.has_parameter_expressions,
+                ))
             }
             _ => None,
         }

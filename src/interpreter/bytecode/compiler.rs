@@ -3469,11 +3469,23 @@ fn is_script_poison_expression(expr: &Expression) -> bool {
         | Expression::Import(..)
         | Expression::ImportDefer(..)
         | Expression::ImportSource(..) => true,
-        Expression::Call(callee, _, _) => {
-            matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
-        }
-        _ => false,
+        _ => is_direct_eval_call(expr),
     }
+}
+
+/// `eval(...)` by that name: a possible direct eval.
+pub(crate) fn is_direct_eval_call(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::Call(callee, _, _)
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
+    )
+}
+
+/// Whether `body` may run a direct `eval` anywhere an expression can appear,
+/// binding-pattern defaults included (a `with` statement also counts).
+pub(crate) fn body_may_run_direct_eval(body: &[Statement]) -> bool {
+    body_has_poison(body, is_direct_eval_call)
 }
 
 /// A construct that only has its meaning when the whole function runs as one
