@@ -221,6 +221,9 @@ struct Compiler {
     /// `i` is the expected position of that name in the call's binding
     /// vector. Empty when no local ops are emitted.
     locals: Vec<String>,
+    /// Each `locals` name's position, so resolving an identifier does not scan
+    /// a frame that holds hundreds of names.
+    local_index: std::collections::HashMap<String, usize>,
     /// Offset of the most recently emitted opcode byte. The last byte of
     /// `code` may be an operand (a slot or name index whose high byte equals a
     /// return opcode), so `finish` must not decode `code.last()`.
@@ -275,6 +278,7 @@ impl Compiler {
             goal,
             generator: false,
             locals: Vec::new(),
+            local_index: std::collections::HashMap::new(),
             last_op_at: 0,
             code: Vec::new(),
             constants: Vec::new(),
@@ -534,11 +538,19 @@ impl Compiler {
                     .then_some(BLOCK_SLOT_FLAG | ((scope as u16) << 8) | index as u16);
             }
         }
-        self.locals
-            .iter()
-            .position(|n| n == name)
-            .and_then(|i| u16::try_from(i).ok())
+        self.local_index
+            .get(name)
+            .and_then(|&i| u16::try_from(i).ok())
             .filter(|slot| slot & BLOCK_SLOT_FLAG == 0)
+    }
+
+    fn set_locals(&mut self, locals: Vec<String>) {
+        self.local_index = locals
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
+        self.locals = locals;
     }
 
     /// Stores the top of stack into a frame local; `discard` also pops it.
@@ -1625,10 +1637,11 @@ impl Compiler {
     /// order, or the frame layout when no block environment is open. Only a
     /// hint (the op verifies it by atom identity and falls back to by-name).
     fn init_slot(&self, name: &str) -> u16 {
-        let names = self.scopes.last().unwrap_or(&self.locals);
-        names
-            .iter()
-            .position(|n| n == name)
+        let position = match self.scopes.last() {
+            Some(names) => names.iter().position(|n| n == name),
+            None => self.local_index.get(name).copied(),
+        };
+        position
             .and_then(|i| u16::try_from(i).ok())
             .filter(|&i| i != NO_INIT_SLOT)
             .unwrap_or(NO_INIT_SLOT)
@@ -3667,7 +3680,7 @@ fn compile_function_goal(
     } else {
         Compiler::new(CompileGoal::Function)
     };
-    c.locals = locals;
+    c.set_locals(locals);
     c.compile_statements(body, true, true)?;
     if !c.ast.is_empty() && c.native_ops == 0 {
         return Err(CompileError::Ineligible("fallback-only body"));
@@ -3716,16 +3729,6 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
 /// not declare could be instantiated in between, which leaves the order
 /// unpredictable (the slot hints would only miss, so such bodies get none).
 fn instantiated_names(first: &Chunk, body: &[Statement]) -> Option<Vec<String>> {
-    let mut vars = std::collections::HashSet::new();
-    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
-    let prologue: std::collections::HashSet<&str> = first
-        .var_names
-        .iter()
-        .map(|&idx| first.names[usize::from(idx)].as_str())
-        .collect();
-    if !vars.iter().all(|name| prologue.contains(name.as_str())) {
-        return None;
-    }
     let functions = body
         .iter()
         .filter_map(crate::interpreter::hoisting::unwrap_labeled_function)
@@ -3733,7 +3736,20 @@ fn instantiated_names(first: &Chunk, body: &[Statement]) -> Option<Vec<String>> 
     let lexicals = crate::interpreter::hoisting::collect_lexical_names(body)
         .into_iter()
         .map(|(name, _)| name);
-    Some(functions.chain(lexicals).collect())
+    let names: Vec<String> = functions.chain(lexicals).collect();
+    if names.is_empty() {
+        return Some(names);
+    }
+    let mut vars = std::collections::HashSet::new();
+    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
+    let prologue: std::collections::HashSet<&str> = first
+        .var_names
+        .iter()
+        .map(|&idx| first.names[usize::from(idx)].as_str())
+        .collect();
+    vars.iter()
+        .all(|name| prologue.contains(name.as_str()))
+        .then_some(names)
 }
 
 #[cfg(test)]
@@ -3787,8 +3803,9 @@ fn compile_function_body_as(
 ) -> Result<Chunk, CompileError> {
     let mut first = compile_function_goal(body, Vec::new(), generator)?;
     let mut locals: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut push = |name: &str| {
-        if !locals.iter().any(|n| n == name) {
+        if seen.insert(name.to_string()) {
             locals.push(name.to_string());
         }
     };
