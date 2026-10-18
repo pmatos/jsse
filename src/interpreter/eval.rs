@@ -5210,16 +5210,8 @@ impl Interpreter {
             deletable: false,
         };
         if names.names_are_fresh() {
-            if env.bindings.is_empty()
-                && names.atoms().len() <= crate::interpreter::binding_map::LINEAR_MAX
-            {
-                env.bindings
-                    .fill_distinct(names.atoms(), names.filter(), binding);
-            } else {
-                for (index, atom) in names.atoms().iter().enumerate() {
-                    env.bindings.push_unique(atom.clone(), binding(index));
-                }
-            }
+            env.bindings
+                .fill_distinct(names.atoms(), names.filter(), binding);
         } else {
             for (index, atom) in names.atoms().iter().enumerate() {
                 env.bindings.insert_atom(atom, binding(index));
@@ -5602,8 +5594,9 @@ impl Interpreter {
         args: &[JsValue],
         skip_entry_checks: bool,
     ) -> Completion {
-        // Every JS invocation funnels through here, so bounding this depth
-        // bounds native recursion.
+        // Every JS invocation funnels through here (or through the
+        // IC-validated entry, which applies the same guard), so bounding this
+        // depth bounds native recursion.
         self.with_call_depth(|interp| {
             interp.call_function_inner_impl(func_val, this_val, args, skip_entry_checks)
         })

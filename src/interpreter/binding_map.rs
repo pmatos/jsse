@@ -198,6 +198,7 @@ impl BindingMap {
         self.entries.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -321,26 +322,30 @@ impl BindingMap {
             .fold(0, |bits, atom| bits | filter_bit(atom.precomputed_hash()))
     }
 
-    /// Fills an empty, unindexed map with one binding per atom of `atoms`,
-    /// which are pairwise distinct and number at most [`LINEAR_MAX`], so no
-    /// lookup or index is needed. `filter` is `filter_of(atoms)`; the caller
-    /// has checked `is_empty()`.
+    /// Appends one binding per atom of `atoms`, which are pairwise distinct
+    /// and absent from the map. `filter` is `filter_of(atoms)`. An empty,
+    /// unindexed map that stays within [`LINEAR_MAX`] is filled in one pass
+    /// with no lookups; any other map takes `push_unique` per name.
     pub(crate) fn fill_distinct(
         &mut self,
         atoms: &[Atom],
         filter: u64,
         binding: impl Fn(usize) -> Binding,
     ) {
-        debug_assert!(self.entries.is_empty() && self.index.is_none());
-        debug_assert!(atoms.len() <= LINEAR_MAX);
-        debug_assert_eq!(filter, Self::filter_of(atoms));
-        self.name_filter |= filter;
-        self.entries.extend(
-            atoms
-                .iter()
-                .enumerate()
-                .map(|(index, atom)| (atom.clone(), binding(index))),
-        );
+        if self.entries.is_empty() && self.index.is_none() && atoms.len() <= LINEAR_MAX {
+            debug_assert_eq!(filter, Self::filter_of(atoms));
+            self.name_filter |= filter;
+            self.entries.extend(
+                atoms
+                    .iter()
+                    .enumerate()
+                    .map(|(index, atom)| (atom.clone(), binding(index))),
+            );
+        } else {
+            for (index, atom) in atoms.iter().enumerate() {
+                self.push_unique(atom.clone(), binding(index));
+            }
+        }
     }
 
     /// Append an entry the caller knows is absent.
@@ -590,6 +595,30 @@ mod tests {
             assert!(!filled.contains_key("absent"));
             assert!(!filled.contains_key(&Atom::intern("absent")));
             assert_eq!(filled.epoch(), 0, "a filled map is scanned, not indexed");
+        }
+    }
+
+    #[test]
+    fn fill_distinct_falls_back_for_a_busy_map_or_a_long_list() {
+        let mut busy = BindingMap::new();
+        busy.insert("existing", b(7.0));
+        let atoms: Vec<Atom> = (0..3).map(|i| Atom::intern(&format!("h{i}"))).collect();
+        busy.fill_distinct(&atoms, BindingMap::filter_of(&atoms), |i| b(i as f64));
+        assert_eq!(busy.len(), 4);
+        assert_eq!(val(&busy, "existing"), Some(7.0));
+        assert_eq!(val(&busy, "h2"), Some(2.0));
+
+        let long: Vec<Atom> = (0..LINEAR_MAX + 4)
+            .map(|i| Atom::intern(&format!("long{i}")))
+            .collect();
+        let mut m = BindingMap::new();
+        m.fill_distinct(&long, BindingMap::filter_of(&long), |i| b(i as f64));
+        assert_eq!(m.len(), long.len());
+        for (i, atom) in long.iter().enumerate() {
+            assert_eq!(
+                m.get(atom).and_then(|b| b.value.as_number()),
+                Some(i as f64)
+            );
         }
     }
 
