@@ -1213,8 +1213,7 @@ impl NanBoxedValue {
         })
     }
 
-    /// Takes the value's strong count, so the BigInt drops without the
-    /// tag dispatch of `NanBoxedValue`'s own `Drop`.
+    /// Moves the BigInt's `Arc` out of the value, leaving the refcount alone.
     pub(crate) fn into_bigint(self) -> Option<JsBigInt> {
         if self.tag() != Some(NanTag::BigInt) {
             return None;

@@ -74,6 +74,43 @@ function expected(a, b) {
     }
   });
 
+// Known values (computed with an independent engine), through compiled operator sites.
+function literals(a, b, m) {
+  return [
+    a * b,
+    (a * b) % m,
+    (b * b) % a,
+    a / b,
+    a % b,
+    a & b,
+    a | b,
+    a ^ b,
+    b - a,
+    -a % b,
+    a / -b
+  ];
+}
+var lit = literals(big, other, big);
+assert.sameValue(lit[0], 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815a9d39af48667e19bc16f760b76860b73fcc02ed63dce1d6acd6439924a2883bc5572df4e8n);
+assert.sameValue(lit[1], 0n);
+assert.sameValue(lit[2], 0x8550e7d238fcf3086ba9adcf0fb52a9de3652194d06cb5bb38d50229b854fc49n);
+assert.sameValue(lit[3], 2n);
+assert.sameValue(lit[4], 0xc8333020c4688a754bf3ad462f1e9f1fac80649a463ae4d4c1afd48d20fccffn);
+assert.sameValue(lit[5], 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815a16f81408n);
+assert.sameValue(lit[6], 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffbfn);
+assert.sameValue(lit[7], 0x8641998106234453aa5f9d6a3178f4f8fd640324d231d726a60d7ea5e907ebb7n);
+assert.sameValue(lit[8], -0x8641998106234453aa5f9d6a3178f4f8fd640324d231d726a60d7ea3e907e497n);
+assert.sameValue(lit[9], -0xc8333020c4688a754bf3ad462f1e9f1fac80649a463ae4d4c1afd48d20fccffn);
+assert.sameValue(lit[10], -2n);
+assert.sameValue((function (a, b) { return a / b; })(7n, -3n), -2n);
+assert.sameValue((function (a, b) { return a % b; })(7n, -3n), 1n);
+assert.sameValue((function (a, b) { return a % b; })(-7n, 3n), -1n);
+
+// No handler in the function: the RangeError leaves the chunk.
+assert.throws(RangeError, function () { var a = 1n, b = 0n; return a / b; });
+assert.throws(RangeError, function () { var a = 1n, b = 0n; return a % b; });
+assert.throws(RangeError, function () { var a = 1n, b = -1n; return a ** b; });
+
 function guarded(a, b) {
   var log = [];
   var sum = 100n + a;

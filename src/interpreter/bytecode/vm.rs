@@ -120,8 +120,9 @@ fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -
     result
 }
 
-/// A binary op when the two operands on top of the stack are BigInts, else
-/// `None` with the stack untouched. BigInts are never rooted (only objects
+/// A binary op when the two operands on top of the stack are BigInts and `op`
+/// has a BigInt/BigInt form (see `bigint_binary_op`), else `None` with the
+/// stack untouched. BigInts are never rooted (only objects
 /// are), so the operands are replaced by the result with no unrooting. A
 /// thrown RangeError (division by zero, bad exponent) comes back as `Err`.
 #[inline(never)]
@@ -140,8 +141,11 @@ fn bigint_pair_op(
     ) else {
         unreachable!("both operands are BigInts");
     };
-    let result =
-        bigint_binary_op(op, &l.value, &r.value).expect("BigInt pair op without a BigInt form");
+    let Some(result) = bigint_binary_op(op, &l.value, &r.value) else {
+        stack.push(JsValue::bigint(l));
+        stack.push(JsValue::bigint(r));
+        return None;
+    };
     Some(match result {
         Ok(v) => {
             stack.push(v);
@@ -164,7 +168,8 @@ fn bigint_compare_pop(stack: &mut Vec<JsValue>, cmp: Op) -> Option<bool> {
             Op::Lt => a < b,
             Op::Gt => a > b,
             Op::LtEq => a <= b,
-            _ => a >= b,
+            Op::GtEq => a >= b,
+            _ => unreachable!("not a relational op: {cmp:?}"),
         })
     })??;
     stack.truncate(len - 2);
@@ -1326,7 +1331,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
             } else if !matches!(
                 $bop,
                 Op::Eq | Op::NotEq | Op::StrictEq | Op::StrictNotEq | Op::UShr
-            ) && let Some(done) = bigint_pair_op(interp, stack, binary_of_op($bop))
+            ) && stack.last().is_some_and(JsValue::is_bigint)
+                && let Some(done) = bigint_pair_op(interp, stack, binary_of_op($bop))
             {
                 if let Err(thrown) = done {
                     throw!($l, thrown);
@@ -2094,6 +2100,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
                         equal != (cmp == Op::Eq)
                     } else if matches!(cmp, Op::Lt | Op::Gt | Op::LtEq | Op::GtEq)
+                        && stack.last().is_some_and(JsValue::is_bigint)
                         && let Some(holds) = bigint_compare_pop(stack, cmp)
                     {
                         !holds

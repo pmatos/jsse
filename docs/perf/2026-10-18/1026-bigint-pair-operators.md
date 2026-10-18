@@ -8,9 +8,10 @@ rooted) and `eval_binary` re-tested for a Number pair that `binary_arm` had alre
 
 `binary_arm` (every arithmetic, bitwise, shift and relational op except `==`/`!=`/`===`/`!==`/`>>>`) and
 `CmpJumpIfFalse` (relational) try `bigint_pair_op` / `bigint_compare_pop` after the Number-pair test and before the
-generic path. Both are `#[inline(never)]` helpers that return `None` with the stack untouched unless the two top
-operands are BigInts, so the Number fast path of `run_chunk_inner` gains no code and the non-BigInt generic path pays
-one call that returns at once. `bigint_pair_op` takes the operands off the stack without unrooting, runs the existing
+generic path. Both are `#[inline(never)]` helpers behind an inline check of the top operand's tag; they return `None`
+with the stack untouched unless the two top operands are BigInts (and, for `bigint_pair_op`, the operator has a
+BigInt/BigInt form), so the Number fast path of `run_chunk_inner` gains one tag test and String or object operands
+reach the generic path after one more. `bigint_pair_op` takes the operands off the stack without unrooting, runs the existing
 `bigint_binary_op` (the same exact arithmetic, shift, sign and RangeError rules) and pushes the result;
 `bigint_compare_pop` compares through `with_bigint` and drops both operands. A RangeError (zero divisor, negative
 exponent) is thrown through the chunk's ordinary `throw!` route, so handlers see the same stack as for any other
@@ -36,26 +37,30 @@ base = `origin/main` at `c1335149`, new = base plus this change. Whole-process `
 
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
-| ops_vm_add loop (4 BigInt ops), Ir/iteration | 5,354 | 4,912 | -8.3% |
-| mulmod256 loop (`(a*b) % m`), Ir/iteration | 3,874 | 3,666 | -5.4% |
-| bigint-noble-secp256k1 | 5,211,877,010 | 5,068,857,160 | -2.7% |
-| bigint-noble-ed25519 | 6,027,738,752 | 5,883,838,599 | -2.4% |
-| fib (micro) | 5,622,210,510 | 5,612,789,073 | -0.2% |
-| richards | 8,685,902,241 | 8,650,362,758 | -0.4% |
-| delta-blue | 6,427,171,017 | 6,408,213,387 | -0.3% |
-| Box2D | 5,990,506,422 | 5,989,284,479 | 0.0% |
+| ops_vm_add loop (4 BigInt ops), Ir/iteration | 5,354 | 4,929 | -7.9% |
+| mulmod256 loop (`(a*b) % m`), Ir/iteration | 3,874 | 3,670 | -5.3% |
+| bigint-noble-secp256k1 | 5,211,877,010 | 5,080,038,815 | -2.5% |
+| bigint-noble-ed25519 | 6,027,738,752 | 5,917,165,480 | -1.8% |
+| string (micro) | 337,381,716 | 338,381,781 | +0.3% |
+| fib (micro) | 5,622,210,510 | 5,612,788,894 | -0.2% |
+| richards | 8,685,902,241 | 8,680,045,192 | -0.1% |
+| delta-blue | 6,427,171,017 | 6,431,546,362 | +0.1% |
+| Box2D | 5,990,506,422 | 5,974,919,886 | -0.3% |
 
-The last four rows are the non-BigInt controls: no regression from the extra branch in the generic path.
+The last five rows are the non-BigInt controls (`string` exercises the added tag test on String operands): no
+regression from the extra branches in the generic path.
 
-Wall time, buildbox3, load average 2 (interleaved runs, pinned to one CPU, median; JetStream rows are the runner's
-`first_time` of one `--iterations 1` measurement, 7 repeats, Boa 0.22.0 release binary):
+Wall time, buildbox3, load average 2.5-3.5 (interleaved runs, pinned to one CPU, median; JetStream rows are the
+runner's `first_time` of one `--iterations 1` measurement, 7 repeats, Boa 0.22.0 release binary). Shared host, so
+differences of a few percent between runs of the same binary are noise (an earlier build of the same Ir measured
+328 ms on `mulmod256`):
 
 | workload | base | new | Boa 0.22 | new vs Boa |
 |---|---:|---:|---:|---:|
-| ops_vm_add, N=500,000 | 542 ms | 471 ms | 393 ms | 1.20x slower |
-| mulmod256, N=500,000 | 350 ms | 328 ms | 315 ms | 1.04x slower |
-| bigint-noble-secp256k1 | 1,139 ms | 1,127 ms | 1,184 ms | 4.8% faster |
-| bigint-noble-ed25519 | 1,347 ms | 1,318 ms | 1,412 ms | 6.7% faster |
+| ops_vm_add, N=500,000 | 539 ms | 492 ms | 391 ms | 1.26x slower |
+| mulmod256, N=500,000 | 356 ms | 350 ms | 318 ms | 1.10x slower |
+| bigint-noble-secp256k1 | 1,127 ms | 1,116 ms | 1,134 ms | 1.6% faster |
+| bigint-noble-ed25519 | 1,342 ms | 1,313 ms | 1,387 ms | 5.3% faster |
 
 The two noble benchmarks were 1.24x and 1.13x behind Boa in checkpoint 15; #1126 and #1127 closed most of that and
 this change adds the margin. The operator loops remain dispatch-bound (`run_chunk_inner` self time is about 45% of
