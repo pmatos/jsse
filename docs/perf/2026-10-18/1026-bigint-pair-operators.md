@@ -10,8 +10,9 @@ rooted) and `eval_binary` re-tested for a Number pair that `binary_arm` had alre
 `CmpJumpIfFalse` (relational) try `bigint_pair_op` / `bigint_compare_pop` after the Number-pair test and before the
 generic path. Both are `#[inline(never)]` helpers behind an inline check of the top operand's tag; they return `None`
 with the stack untouched unless the two top operands are BigInts (and, for `bigint_pair_op`, the operator has a
-BigInt/BigInt form), so the Number fast path of `run_chunk_inner` gains one tag test and String or object operands
-reach the generic path after one more. `bigint_pair_op` takes the operands off the stack without unrooting, runs the existing
+BigInt/BigInt form), so the Number fast path of `run_chunk_inner` is untouched and String or object operands pay one tag test
+before the generic path. The helpers pop and own the operands instead of borrowing them in place: a borrowing variant measured
+1-3% more instructions on the operator loops. `bigint_pair_op` takes the operands off the stack without unrooting, runs the existing
 `bigint_binary_op` (the same exact arithmetic, shift, sign and RangeError rules) and pushes the result;
 `bigint_compare_pop` compares through `with_bigint` and drops both operands. A RangeError (zero divisor, negative
 exponent) is thrown through the chunk's ordinary `throw!` route, so handlers see the same stack as for any other

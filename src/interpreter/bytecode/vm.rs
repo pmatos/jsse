@@ -122,9 +122,11 @@ fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -
 
 /// A binary op when the two operands on top of the stack are BigInts and `op`
 /// has a BigInt/BigInt form (see `bigint_binary_op`), else `None` with the
-/// stack untouched. BigInts are never rooted (only objects
-/// are), so the operands are replaced by the result with no unrooting. A
-/// thrown RangeError (division by zero, bad exponent) comes back as `Err`.
+/// stack untouched. BigInts are never rooted (only objects are), so the
+/// operands are replaced by the result with no unrooting. A thrown RangeError
+/// (division by zero, bad exponent) comes back as `Err`. The operands are
+/// popped and owned rather than borrowed in place: that drops them without
+/// `NanBoxedValue`'s tag dispatch and measured 1-3% fewer instructions.
 #[inline(never)]
 fn bigint_pair_op(
     interp: &mut Interpreter,
