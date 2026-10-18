@@ -4,7 +4,7 @@ use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::{BytecodeCacheState, vm};
 use crate::interpreter::generator_analysis::block_has_await_using;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
-use crate::interpreter::literal_frame::{CompiledCall, LiteralFrame, NamedParamPlan};
+use crate::interpreter::literal_frame::{CallShape, CompiledCall, LiteralFrame, NamedParamPlan};
 use crate::interpreter::property::SetOutcome;
 
 mod access;
@@ -5655,28 +5655,40 @@ impl Interpreter {
             && self.bytecode_enabled
             && let Some(id) = func_val.as_object_id()
             && let Some(obj) = self.get_object_cell(id)
-            && let Some((frame, closure, function_realm, with_defaults)) =
-                Self::compiled_call_target(obj)
+            && let Some((frame, closure, function_realm, shape)) = Self::compiled_call_target(obj)
         {
-            if !with_defaults {
-                return self.call_compiled_function(
-                    id,
-                    &frame,
-                    closure,
-                    function_realm,
-                    this_val,
-                    args,
-                );
-            }
-            if !self.has_ever_entered_with {
-                return self.call_compiled_function_with_defaults(
-                    id,
-                    &frame,
-                    closure,
-                    function_realm,
-                    this_val,
-                    args,
-                );
+            match shape {
+                CallShape::Plain => {
+                    return self.call_compiled_function(
+                        id,
+                        &frame,
+                        closure,
+                        function_realm,
+                        this_val,
+                        args,
+                    );
+                }
+                CallShape::Defaults if !self.has_ever_entered_with => {
+                    return self.call_compiled_function_with_defaults(
+                        id,
+                        &frame,
+                        closure,
+                        function_realm,
+                        this_val,
+                        args,
+                    );
+                }
+                CallShape::Arguments => {
+                    return self.call_compiled_function_with_arguments(
+                        id,
+                        &frame,
+                        closure,
+                        function_realm,
+                        this_val,
+                        args,
+                    );
+                }
+                CallShape::Defaults => {}
             }
         }
         self.call_function_general(func_val, this_val, args, skip_entry_checks)
@@ -5883,12 +5895,11 @@ impl Interpreter {
                                     let arguments_obj = self.create_arguments_object(
                                         args,
                                         func_val.clone(),
-                                        is_strict,
                                         mapped_env_ag,
                                         &params,
+                                        Some(&frame),
                                     );
-                                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                    let _ = self.env_set(&func_env, "arguments", arguments_obj);
+                                    self.bind_arguments_binding(&func_env, arguments_obj);
                                     if is_strict || !is_simple_ag {
                                         func_env.borrow_mut().arguments_immutable = true;
                                     }
@@ -6038,12 +6049,11 @@ impl Interpreter {
                                     let arguments_obj = self.create_arguments_object(
                                         args,
                                         func_val.clone(),
-                                        is_strict,
                                         mapped_env_g,
                                         &params,
+                                        Some(&frame),
                                     );
-                                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                    let _ = self.env_set(&func_env, "arguments", arguments_obj);
+                                    self.bind_arguments_binding(&func_env, arguments_obj);
                                     if is_strict || !is_simple_g {
                                         func_env.borrow_mut().arguments_immutable = true;
                                     }
@@ -6139,7 +6149,7 @@ impl Interpreter {
                             }
                             if frame.compiled_call().is_none()
                                 && (has_simple_params || frame.named_param_plan(&params).is_some())
-                                && !uses_arguments
+                                && (has_simple_params || !uses_arguments)
                                 && self.bytecode_enabled
                                 && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
                                 && self
@@ -6148,7 +6158,13 @@ impl Interpreter {
                             {
                                 frame.install_compiled_call(|| CompiledCall {
                                     params: params.clone(),
-                                    has_parameter_expressions: !has_simple_params,
+                                    shape: if !has_simple_params {
+                                        CallShape::Defaults
+                                    } else if uses_arguments && !is_arrow {
+                                        CallShape::Arguments
+                                    } else {
+                                        CallShape::Plain
+                                    },
                                     body: body.clone(),
                                     chunk: chunk.clone(),
                                     is_arrow,
@@ -6191,14 +6207,13 @@ impl Interpreter {
                                     let arguments_obj = self.create_arguments_object(
                                         args,
                                         func_val.clone(),
-                                        is_strict,
                                         mapped_env,
                                         &params,
+                                        Some(&frame),
                                     );
                                     call_frame_arguments =
                                         CallFrameArguments::Materialized(arguments_obj.clone());
-                                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                    let _ = self.env_set(&func_env, "arguments", arguments_obj);
+                                    self.bind_arguments_binding(&func_env, arguments_obj);
                                     if is_strict || !is_simple {
                                         func_env.borrow_mut().arguments_immutable = true;
                                     }
@@ -6319,7 +6334,7 @@ impl Interpreter {
     #[inline]
     fn compiled_call_target(
         obj: &ObjectHandle,
-    ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>, bool)> {
+    ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>, CallShape)> {
         let data = obj.borrow();
         if !matches!(data.kind, ObjectKind::Ordinary) || data.is_class_constructor() {
             return None;
@@ -6331,7 +6346,7 @@ impl Interpreter {
                     frame.clone(),
                     closure.clone(),
                     data.function_realm(),
-                    call.has_parameter_expressions,
+                    call.shape,
                 ))
             }
             _ => None,
@@ -6388,6 +6403,71 @@ impl Interpreter {
         let result = self.run_activation(func_obj_id, call_frame_arguments, &func_env, |interp| {
             interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
         });
+        self.current_realm_id = caller_realm;
+        self.recycle_environment(func_env);
+        self.finish_user_call(result)
+    }
+
+    /// [`call_compiled_function`] for a non-arrow function that mentions
+    /// `arguments`: the arguments object is created (mapped for a sloppy
+    /// function) and bound ahead of the parameters, and it is the activation's
+    /// `fn.arguments` record. Kept out of line so the plain path stays as it was.
+    #[inline(never)]
+    fn call_compiled_function_with_arguments(
+        &mut self,
+        func_obj_id: u64,
+        frame: &Rc<LiteralFrame>,
+        closure: EnvRef,
+        function_realm: Option<usize>,
+        this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let call = frame
+            .compiled_call()
+            .expect("compiled_call_target checked the record");
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.calls_to_user += 1;
+        }
+        let caller_realm = self.current_realm_id;
+        if let Some(realm) = function_realm {
+            self.current_realm_id = realm;
+        }
+        let func_env =
+            self.acquire_function_environment(closure, call.params.len().saturating_add(2));
+        let closure_strict = {
+            let mut env = func_env.borrow_mut();
+            let closure_strict = env.strict;
+            let effective_this =
+                self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
+            env.bind_this_for_call(effective_this, JsValue::UNDEFINED);
+            closure_strict
+        };
+        let mapped = !call.is_strict && !closure_strict;
+        let arguments_obj = self.create_arguments_object(
+            args,
+            JsValue::object(func_obj_id),
+            mapped.then_some(&func_env),
+            &call.params,
+            Some(frame),
+        );
+        self.bind_arguments_binding(&func_env, arguments_obj.clone());
+        {
+            let mut env = func_env.borrow_mut();
+            if call.is_strict {
+                env.arguments_immutable = true;
+            }
+            Self::bind_simple_parameters(frame, &call.params, args, &mut env);
+            env.strict = call.is_strict;
+        }
+        let result = self.run_activation(
+            func_obj_id,
+            CallFrameArguments::Materialized(arguments_obj),
+            &func_env,
+            |interp| {
+                interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
+            },
+        );
         self.current_realm_id = caller_realm;
         self.recycle_environment(func_env);
         self.finish_user_call(result)
@@ -8382,12 +8462,11 @@ impl Interpreter {
                     let arguments_obj = interp.create_arguments_object(
                         args,
                         func_val.clone(),
-                        is_strict,
                         mapped_env,
                         params,
+                        None,
                     );
-                    func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                    let _ = interp.env_set(&func_env, "arguments", arguments_obj);
+                    interp.bind_arguments_binding(&func_env, arguments_obj);
                     if is_strict || !is_simple {
                         func_env.borrow_mut().arguments_immutable = true;
                     }

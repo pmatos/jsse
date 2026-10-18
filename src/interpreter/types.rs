@@ -2578,7 +2578,7 @@ pub(crate) enum ObjectKind {
     Iterator(Box<IteratorState>),
     /// `parameter_map` for an Arguments exotic object.
     #[allow(clippy::box_collection)] // keeps `ObjectKind` small
-    Arguments(Box<HashMap<String, (EnvRef, String)>>),
+    Arguments(Box<ParameterMap>),
     /// Element storage and bounded named-property metadata for an Array exotic object.
     Array(ArrayData),
     /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
@@ -2594,17 +2594,99 @@ pub(crate) enum ObjectKind {
     ShadowRealm(usize),
 }
 
+/// [[ParameterMap]] of a mapped arguments object (§10.4.4.7): which argument
+/// indices still alias the binding of the parameter at the same position.
+/// Indices are tracked in a flag per parameter; the names are the literal's
+/// shared parameter atoms.
+#[derive(Debug, Clone)]
+pub(crate) struct ParameterMap {
+    env: EnvRef,
+    names: Rc<[Atom]>,
+    live: smallvec::SmallVec<[bool; 8]>,
+}
+
+impl ParameterMap {
+    /// Maps each index below `argc` whose parameter is the last of its name
+    /// (`last_occurrence`, parallel to `names`). `None` when nothing is mapped.
+    pub(crate) fn new(
+        env: EnvRef,
+        names: Rc<[Atom]>,
+        last_occurrence: &[bool],
+        argc: usize,
+    ) -> Option<Self> {
+        let live: smallvec::SmallVec<[bool; 8]> =
+            last_occurrence.iter().copied().take(argc).collect();
+        live.iter()
+            .any(|&mapped| mapped)
+            .then_some(Self { env, names, live })
+    }
+
+    pub(crate) fn env(&self) -> &EnvRef {
+        &self.env
+    }
+
+    fn mapped_index(&self, key: &str) -> Option<usize> {
+        let bytes = key.as_bytes();
+        if bytes.is_empty() || bytes.len() > 10 || (bytes[0] == b'0' && bytes.len() > 1) {
+            return None;
+        }
+        let mut index = 0usize;
+        for &b in bytes {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            index = index * 10 + usize::from(b - b'0');
+        }
+        self.live
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+            .then_some(index)
+    }
+
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
+        self.mapped_index(key).is_some()
+    }
+
+    /// Ends the mapping of `key`'s index.
+    pub(crate) fn remove(&mut self, key: &str) {
+        if let Some(index) = self.mapped_index(key) {
+            self.live[index] = false;
+        }
+    }
+
+    /// The live value of the parameter `key` is mapped to.
+    pub(crate) fn value(&self, key: &str) -> Option<JsValue> {
+        let name = &self.names[self.mapped_index(key)?];
+        let env = self.env.borrow();
+        let binding = env.bindings.get(name)?;
+        binding.initialized.then(|| binding.value.clone())
+    }
+
+    /// Writes through to the parameter `key` is mapped to, if any.
+    pub(crate) fn set_value(&self, key: &str, value: &JsValue) {
+        if let Some(index) = self.mapped_index(key)
+            && let Some(binding) = self.env.borrow_mut().bindings.get_mut(&self.names[index])
+        {
+            binding.value = value.clone();
+        }
+    }
+}
+
 impl ObjectKind {
     /// Kinds whose named property access is not the ordinary algorithm for
     /// every key. Exhaustive on purpose: a new kind must be classified here.
+    /// An Arguments object answers only Array-index keys itself (through its
+    /// parameter map), and every named fast path already sends those to the
+    /// generic path, as it does for Arrays.
     #[inline(always)]
     pub(crate) fn is_named_access_exotic(&self) -> bool {
         match self {
-            ObjectKind::Proxy(_)
-            | ObjectKind::ModuleNamespace(_)
-            | ObjectKind::TypedArray(_)
-            | ObjectKind::Arguments(_) => true,
+            ObjectKind::Proxy(_) | ObjectKind::ModuleNamespace(_) | ObjectKind::TypedArray(_) => {
+                true
+            }
             ObjectKind::Ordinary
+            | ObjectKind::Arguments(_)
             | ObjectKind::RegExp(_)
             | ObjectKind::BoundFunction(_)
             | ObjectKind::WrappedFunction(_)
@@ -2848,7 +2930,7 @@ impl JsObjectData {
     kind_accessor!(boxed typed_array_info, TypedArray, TypedArrayInfo);
     kind_accessor!(boxed iterator_state, iterator_state_mut, Iterator, IteratorState);
     kind_accessor!(boxed promise_data, promise_data_mut, Promise, PromiseData);
-    kind_accessor!(boxed parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
+    kind_accessor!(boxed parameter_map, parameter_map_mut, Arguments, ParameterMap);
     kind_accessor!(array_data, array_data_mut, Array, ArrayData);
     kind_accessor!(
         boxed map_data,
@@ -3496,8 +3578,7 @@ impl JsObjectData {
             let mut d = desc.to_descriptor();
             if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_property_key_str()
-                && let Some((env_ref, param_name)) = map.get(key_str)
-                && let Some(val) = env_ref.borrow().get(param_name)
+                && let Some(val) = map.value(key_str)
             {
                 d.value = Some(val);
             }
@@ -3608,8 +3689,7 @@ impl JsObjectData {
             // Mapped arguments: update value from the live binding (§10.4.4.1)
             if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_property_key_str()
-                && let Some((env_ref, param_name)) = map.get(key_str)
-                && let Some(val) = env_ref.borrow().get(param_name)
+                && let Some(val) = map.value(key_str)
             {
                 d.value = Some(val);
             }
@@ -3946,8 +4026,7 @@ impl JsObjectData {
                 && !desc_has_value
                 && let Some(key_str) = key.as_str()
                 && let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key_str)
-                && let Some(live_val) = env_ref.borrow().get(param_name)
+                && let Some(live_val) = map.value(key_str)
             {
                 desc.value = Some(live_val);
             }
@@ -4042,12 +4121,9 @@ impl JsObjectData {
                     map.remove(&key_ref);
                 } else {
                     // Data descriptor
-                    if desc_has_value
-                        && let Some((env_ref, param_name)) = map.get(&key_ref)
-                        && let Some(ref val) = desc_value_for_step7
-                    {
+                    if desc_has_value && let Some(ref val) = desc_value_for_step7 {
                         // Update the live binding with the new value
-                        let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                        map.set_value(&key_ref, val);
                     }
                     if desc_writable == Some(false) {
                         // Make non-writable: delete mapping
@@ -4060,13 +4136,11 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(map) = self.parameter_map_mut()
+            if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_str()
-                && map.contains_key(key_str)
                 && let Some(ref val) = desc.value
-                && let Some((env_ref, param_name)) = map.get(key_str)
             {
-                let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                map.set_value(key_str, val);
             }
             let ikey = key;
             // For new property, fill in defaults per spec
@@ -4187,9 +4261,8 @@ impl JsObjectData {
         }
         if let Some(map) = self.parameter_map()
             && let Some(key_str) = key.as_property_key_str()
-            && let Some((env_ref, param_name)) = map.get(key_str)
         {
-            let _ = env_ref.borrow_mut().set(param_name, value.clone());
+            map.set_value(key_str, &value);
         }
         if self.class_name == "Array"
             && !value.is_undefined()
@@ -4525,8 +4598,7 @@ impl JsObjectData {
         }
         if let Some(map) = self.parameter_map()
             && let Some(key_str) = key.as_property_key_str()
-            && let Some((env_ref, param_name)) = map.get(key_str)
-            && let Some(val) = env_ref.borrow().get(param_name)
+            && let Some(val) = map.value(key_str)
         {
             return Some(val);
         }
@@ -4570,8 +4642,7 @@ impl JsObjectData {
             let mut d = desc.to_descriptor();
             if let Some(map) = self.parameter_map()
                 && let Some(key_str) = key.as_property_key_str()
-                && let Some((env_ref, param_name)) = map.get(key_str)
-                && let Some(val) = env_ref.borrow().get(param_name)
+                && let Some(val) = map.value(key_str)
             {
                 d.value = Some(val);
             }
@@ -6397,5 +6468,75 @@ mod canonical_numeric_index_tests {
             canonical_numeric_index_string("NaN").map(f64::is_nan),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod parameter_map_tests {
+    use super::*;
+
+    fn map_over(names: &[&str], last: &[bool], argc: usize) -> (EnvRef, Option<ParameterMap>) {
+        let env = Environment::new(None);
+        for (i, name) in names.iter().enumerate() {
+            env.borrow_mut().declare(name, BindingKind::Var);
+            env.borrow_mut()
+                .initialize_binding(name, JsValue::number(i as f64));
+        }
+        let atoms: Rc<[Atom]> = names.iter().map(|n| Atom::intern(n)).collect();
+        (env.clone(), ParameterMap::new(env, atoms, last, argc))
+    }
+
+    #[test]
+    fn nothing_mapped_yields_no_map() {
+        assert!(map_over(&["a"], &[true], 0).1.is_none());
+        assert!(map_over(&["a", "a"], &[false, false], 2).1.is_none());
+        assert!(map_over(&[], &[], 3).1.is_none());
+    }
+
+    #[test]
+    fn only_canonical_indices_below_the_argument_count_are_mapped() {
+        let (_, map) = map_over(&["a", "b", "c"], &[true, true, true], 2);
+        let map = map.expect("mapped");
+        assert!(map.contains_key("0") && map.contains_key("1"));
+        for key in ["2", "00", "01", "+1", "1.0", " 1", "", "a", "4294967296"] {
+            assert!(!map.contains_key(key), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn duplicate_names_map_only_their_last_occurrence() {
+        let (env, map) = map_over(&["a", "b", "a"], &[false, true, true], 3);
+        let map = map.expect("mapped");
+        assert!(!map.contains_key("0"));
+        assert!(map.contains_key("1") && map.contains_key("2"));
+        env.borrow_mut()
+            .bindings
+            .get_mut("a")
+            .expect("binding")
+            .value = JsValue::number(9.0);
+        assert_eq!(map.value("2").and_then(|v| v.as_number()), Some(9.0));
+        assert!(map.value("0").is_none());
+    }
+
+    #[test]
+    fn reads_and_writes_go_through_the_environment() {
+        let (env, map) = map_over(&["a", "b"], &[true, true], 2);
+        let mut map = map.expect("mapped");
+        assert_eq!(map.value("1").and_then(|v| v.as_number()), Some(1.0));
+        map.set_value("1", &JsValue::number(5.0));
+        assert_eq!(
+            env.borrow().bindings.get("b").map(|b| b.value.as_number()),
+            Some(Some(5.0))
+        );
+        map.set_value("7", &JsValue::number(1.0));
+        map.remove("1");
+        assert!(!map.contains_key("1") && map.contains_key("0"));
+        map.set_value("1", &JsValue::number(6.0));
+        assert_eq!(
+            env.borrow().bindings.get("b").map(|b| b.value.as_number()),
+            Some(Some(5.0)),
+            "an unmapped index no longer writes through"
+        );
+        assert!(map.value("1").is_none());
     }
 }

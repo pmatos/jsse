@@ -211,6 +211,25 @@ impl Interpreter {
             }
         }
 
+        if matches!(
+            obj_borrow.kind,
+            ObjectKind::Ordinary | ObjectKind::Arguments(_)
+        ) && obj_borrow.properties.may_hold_index_key()
+            && index == index.trunc()
+            && (0.0..4_294_967_295.0).contains(&index)
+        {
+            let mut buf = [0u8; 10];
+            let key_str = format_u32_stack(index as u32, &mut buf);
+            if let Some(record) = obj_borrow.properties.get(key_str)
+                && let PropertyRead::Value(value) = record.read()
+            {
+                return Some(match obj_borrow.parameter_map() {
+                    Some(map) => map.value(key_str).unwrap_or_else(|| value.clone()),
+                    None => value.clone(),
+                });
+            }
+        }
+
         None
     }
 

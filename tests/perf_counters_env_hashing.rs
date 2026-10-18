@@ -194,3 +194,28 @@ fn default_and_rest_parameters_intern_nothing_and_resolve_through_slots() {
         "a parameter or var was read by name"
     );
 }
+
+/// An `arguments` object is created and bound without interning or hashing
+/// per call: the binding name is a pre-interned atom, mapped parameters share
+/// the literal's atoms, and `arguments[i]`/`arguments.length` read the object
+/// directly.
+#[test]
+fn arguments_calls_intern_and_look_up_nothing_per_call() {
+    fn source(iterations: u32) -> String {
+        format!(
+            "function sum(a, b) {{ var s = 0; for (var j = 0; j < arguments.length; j++) s += arguments[j]; return s; }}\n\
+             function strictSum() {{ 'use strict'; return arguments.length + arguments[0]; }}\n\
+             function main() {{ var t = 0; for (var i = 0; i < {iterations}; i++) {{ t += sum(i, 1, 2) + strictSum(i); }} return t; }}\n\
+             main();"
+        )
+    }
+    let (small, _) = counters(&source(1_000));
+    let (large, _) = counters(&source(2_000));
+    for key in ["atom_intern_calls", "atom_lookup_calls"] {
+        assert_eq!(
+            small[key], large[key],
+            "{key} must not scale with the number of arguments-object calls"
+        );
+    }
+    assert!(large["calls_to_user"] > small["calls_to_user"]);
+}
