@@ -48,14 +48,111 @@ impl ParamAtoms {
     }
 }
 
+/// The binding atoms of a parameter list that has defaults or a rest element
+/// but only plain names (no destructuring pattern, none called `arguments`):
+/// one atom per parameter, in order, so a call binds them without interning or
+/// probing by text.
+#[derive(Debug)]
+pub(crate) struct NamedParamPlan {
+    atoms: Box<[Atom]>,
+}
+
+impl NamedParamPlan {
+    fn new(params: &[Pattern]) -> Option<Self> {
+        let atoms = params
+            .iter()
+            .map(|param| match param {
+                Pattern::Identifier(name) => Some(name),
+                Pattern::Assign(inner, _) | Pattern::Rest(inner) => match inner.as_ref() {
+                    Pattern::Identifier(name) => Some(name),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .map(|name| name.filter(|n| *n != "arguments").map(|n| Atom::intern(n)))
+            .collect::<Option<Box<[Atom]>>>()?;
+        Some(Self { atoms })
+    }
+
+    pub(crate) fn atoms(&self) -> &[Atom] {
+        &self.atoms
+    }
+}
+
+/// Whether a function whose parameters are plain names with defaults can run
+/// its body in the parameter environment itself. A separate body environment
+/// (FunctionDeclarationInstantiation step 28) exists so closures created by
+/// parameter expressions cannot see body declarations, so it is unobservable
+/// when no default creates a closure or runs direct `eval`. The body also
+/// must not run direct `eval` (its `var` declarations are checked against the
+/// parameter scope), redeclare `arguments` or hold function declarations,
+/// whose hoisting (Annex B) distinguishes parameter bindings from the body's.
+fn body_can_share_param_env(params: &[Pattern], body: &Body) -> bool {
+    use crate::ast::Expression;
+    let opens_scope = |expr: &Expression| {
+        matches!(
+            expr,
+            Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_)
+        ) || super::bytecode::compiler::is_direct_eval_call(expr)
+    };
+    let defaults_are_plain = params.iter().all(|param| match param {
+        Pattern::Assign(_, default) => !crate::ast::expr_contains_matching(default, &opens_scope),
+        _ => true,
+    });
+    if !defaults_are_plain
+        || super::bytecode::compiler::body_may_run_direct_eval(body.as_slice())
+        || super::bytecode::compiler::body_declares_function(body.as_slice())
+    {
+        return false;
+    }
+    let mut vars = std::collections::HashSet::new();
+    super::Interpreter::collect_var_names_from_stmts(body.as_slice(), &mut vars);
+    !vars.contains("arguments")
+        && !super::hoisting::collect_lexical_names(body.as_slice())
+            .iter()
+            .any(|(name, _)| name == "arguments")
+}
+
+/// The `var` names of a body that runs in its own environment because the
+/// parameters are not simple, each with whether it starts as a copy of the
+/// parameter of the same name (FunctionDeclarationInstantiation step 28).
+#[derive(Debug)]
+pub(crate) struct BodyVarPlan {
+    vars: Box<[(Atom, bool)]>,
+}
+
+impl BodyVarPlan {
+    fn new(params: &[Pattern], analysis: &HoistAnalysis) -> Option<Self> {
+        let mut vars = Vec::with_capacity(analysis.var_names.len());
+        for name in &analysis.var_names {
+            if name == "arguments" {
+                return None;
+            }
+            let copies = params.iter().any(|p| p.binds_name(name));
+            vars.push((Atom::intern(name), copies));
+        }
+        Some(Self {
+            vars: vars.into_boxed_slice(),
+        })
+    }
+
+    pub(crate) fn vars(&self) -> &[(Atom, bool)] {
+        &self.vars
+    }
+}
+
 /// What an ordinary [[Call]] of a compiled function needs, read off its frame
 /// instead of off the function object and rebuilt per call (#1089). It exists
 /// only for the shape the hot call path handles: a plain (not generator, not
-/// async) function with simple parameters whose body never mentions
-/// `arguments` and whose compile verdict is `Compiled`.
+/// async) function whose parameters are plain names (optionally with defaults
+/// or a rest element), whose body never mentions `arguments` and whose
+/// compile verdict is `Compiled`.
 #[derive(Debug)]
 pub(crate) struct CompiledCall {
     pub(crate) params: Rc<Vec<Pattern>>,
+    /// The parameters are plain names with defaults or a rest element rather
+    /// than plain names alone, so the body runs in an environment of its own.
+    pub(crate) has_parameter_expressions: bool,
     pub(crate) body: Body,
     pub(crate) chunk: Rc<Chunk>,
     pub(crate) is_arrow: bool,
@@ -65,6 +162,9 @@ pub(crate) struct CompiledCall {
 #[derive(Debug, Default)]
 pub(crate) struct LiteralFrame {
     param_atoms: OnceCell<ParamAtoms>,
+    named_params: OnceCell<Option<NamedParamPlan>>,
+    shares_param_env: OnceCell<bool>,
+    body_vars: OnceCell<Option<BodyVarPlan>>,
     ic_store: OnceCell<FrameIcStore>,
     compiled_call: OnceCell<CompiledCall>,
     hoist: OnceCell<Rc<HoistAnalysis>>,
@@ -84,6 +184,38 @@ impl LiteralFrame {
             "a LiteralFrame was used with a different parameter list"
         );
         atoms
+    }
+
+    /// The atoms of a non-simple parameter list made only of plain names,
+    /// defaults and a rest element; `None` when a parameter is a pattern.
+    #[inline]
+    pub(crate) fn named_param_plan(&self, params: &[Pattern]) -> Option<&NamedParamPlan> {
+        self.named_params
+            .get_or_init(|| NamedParamPlan::new(params))
+            .as_ref()
+    }
+
+    /// Whether a call of this function runs the body in the environment that
+    /// holds its parameters (see `body_can_share_param_env`). Only plain-name
+    /// parameter lists with defaults or a rest element qualify.
+    pub(crate) fn shares_param_env(&self, params: &[Pattern], body: &Body) -> bool {
+        *self.shares_param_env.get_or_init(|| {
+            self.named_param_plan(params).is_some() && body_can_share_param_env(params, body)
+        })
+    }
+
+    /// The body-environment `var` plan of a function with non-simple
+    /// parameters; `None` when a `var` is named `arguments`, which keeps the
+    /// generic path.
+    #[inline]
+    pub(crate) fn body_var_plan(
+        &self,
+        params: &[Pattern],
+        analysis: &HoistAnalysis,
+    ) -> Option<&BodyVarPlan> {
+        self.body_vars
+            .get_or_init(|| BodyVarPlan::new(params, analysis))
+            .as_ref()
     }
 
     /// The compiled-call record, once a call has proved the function eligible.

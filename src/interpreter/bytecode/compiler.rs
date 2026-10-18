@@ -3370,6 +3370,12 @@ fn is_function_declaration(stmt: &Statement) -> bool {
     crate::interpreter::hoisting::unwrap_labeled_function(stmt).is_some()
 }
 
+/// Whether a function declaration appears anywhere in `body` outside nested
+/// functions, in a block as well as at the top level.
+pub(crate) fn body_declares_function(body: &[Statement]) -> bool {
+    stmts_contain(body, &is_function_declaration)
+}
+
 /// Pre-order walk over `stmt` and the statements nested in it (not into
 /// function bodies, which are separate Bodies); true when `pred` matches any.
 fn stmt_contains(stmt: &Statement, pred: &dyn Fn(&Statement) -> bool) -> bool {
@@ -3463,11 +3469,23 @@ fn is_script_poison_expression(expr: &Expression) -> bool {
         | Expression::Import(..)
         | Expression::ImportDefer(..)
         | Expression::ImportSource(..) => true,
-        Expression::Call(callee, _, _) => {
-            matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
-        }
-        _ => false,
+        _ => is_direct_eval_call(expr),
     }
+}
+
+/// `eval(...)` by that name: a possible direct eval.
+pub(crate) fn is_direct_eval_call(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::Call(callee, _, _)
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
+    )
+}
+
+/// Whether `body` may run a direct `eval` anywhere an expression can appear,
+/// binding-pattern defaults included (a `with` statement also counts).
+pub(crate) fn body_may_run_direct_eval(body: &[Statement]) -> bool {
+    body_has_poison(body, is_direct_eval_call)
 }
 
 /// A construct that only has its meaning when the whole function runs as one
