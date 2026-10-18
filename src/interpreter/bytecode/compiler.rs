@@ -1610,15 +1610,7 @@ impl Compiler {
                     self.push_n(1);
                 }
             }
-            // The slot `PushEnv` declared this name at, when the innermost
-            // open block environment owns it.
-            let slot = self
-                .scopes
-                .last()
-                .and_then(|names| names.iter().position(|n| n == name))
-                .and_then(|i| u16::try_from(i).ok())
-                .filter(|&i| i != NO_INIT_SLOT)
-                .unwrap_or(NO_INIT_SLOT);
+            let slot = self.init_slot(name);
             self.emit(Op::InitLexical);
             self.emit_u16(idx);
             self.code.push(kind_byte);
@@ -1626,6 +1618,20 @@ impl Compiler {
             self.pop_n(1);
         }
         Ok(())
+    }
+
+    /// The slot of `name` in the current environment's binding vector for an
+    /// `InitLexical`: the innermost open block environment's declaration
+    /// order, or the frame layout when no block environment is open. Only a
+    /// hint (the op verifies it by atom identity and falls back to by-name).
+    fn init_slot(&self, name: &str) -> u16 {
+        let names = self.scopes.last().unwrap_or(&self.locals);
+        names
+            .iter()
+            .position(|n| n == name)
+            .and_then(|i| u16::try_from(i).ok())
+            .filter(|&i| i != NO_INIT_SLOT)
+            .unwrap_or(NO_INIT_SLOT)
     }
 
     /// What BlockDeclarationInstantiation declares for the statement lists
@@ -2703,13 +2709,7 @@ impl Compiler {
     /// the value on top of the stack.
     fn emit_init_lexical(&mut self, name: &str, is_const: bool) -> Result<(), CompileError> {
         let idx = self.add_name(name)?;
-        let slot = self
-            .scopes
-            .last()
-            .and_then(|names| names.iter().position(|n| n == name))
-            .and_then(|i| u16::try_from(i).ok())
-            .filter(|&i| i != NO_INIT_SLOT)
-            .unwrap_or(NO_INIT_SLOT);
+        let slot = self.init_slot(name);
         self.emit(Op::InitLexical);
         self.emit_u16(idx);
         self.code.push(u8::from(is_const));
@@ -3710,6 +3710,32 @@ fn lexical_only_instantiation(c: &mut Compiler, body: &[Statement]) -> Option<Ve
         .ok()
 }
 
+/// The bindings declaration instantiation adds to the frame after the chunk's
+/// var prologue, in the order it adds them: top-level function declarations,
+/// then `let`/`const`/class names. `None` when a `var` name the prologue does
+/// not declare could be instantiated in between, which leaves the order
+/// unpredictable (the slot hints would only miss, so such bodies get none).
+fn instantiated_names(first: &Chunk, body: &[Statement]) -> Option<Vec<String>> {
+    let mut vars = std::collections::HashSet::new();
+    crate::interpreter::Interpreter::collect_var_names_from_stmts(body, &mut vars);
+    let prologue: std::collections::HashSet<&str> = first
+        .var_names
+        .iter()
+        .map(|&idx| first.names[usize::from(idx)].as_str())
+        .collect();
+    if !vars.iter().all(|name| prologue.contains(name.as_str())) {
+        return None;
+    }
+    let functions = body
+        .iter()
+        .filter_map(crate::interpreter::hoisting::unwrap_labeled_function)
+        .map(|f| f.name.clone());
+    let lexicals = crate::interpreter::hoisting::collect_lexical_names(body)
+        .into_iter()
+        .map(|(name, _)| name);
+    Some(functions.chain(lexicals).collect())
+}
+
 #[cfg(test)]
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
     compile_function_goal(body, Vec::new(), false)
@@ -3771,6 +3797,9 @@ fn compile_function_body_as(
     }
     for &idx in &first.var_names {
         push(first.names[idx as usize].as_str());
+    }
+    for name in instantiated_names(&first, body).unwrap_or_default() {
+        push(&name);
     }
     if locals.is_empty() {
         first.trivial_private_getter = first.detect_trivial_private_getter();

@@ -23,13 +23,33 @@ use std::cell::Cell;
 pub(crate) struct GlobalHint {
     slot: Cell<u32>,
     key: JsPropertyKey,
+    scope: Cell<ScopeHint>,
 }
+
+/// Where the last full scope walk for this name site found it: `hops` scopes
+/// up from the site's environment, at binding slot `slot` of that scope's
+/// binding vector, or (`GLOBAL_OBJECT_SLOT`) in no scope at all because the
+/// walk reached the global environment. The walk is re-verified on every use,
+/// so the shape of the chain can change freely; it only costs a full walk.
+#[derive(Clone, Copy, Debug)]
+struct ScopeHint {
+    hops: u32,
+    slot: u32,
+}
+
+const NO_SCOPE_HINT: ScopeHint = ScopeHint {
+    hops: u32::MAX,
+    slot: 0,
+};
+
+const GLOBAL_OBJECT_SLOT: u32 = u32::MAX;
 
 impl GlobalHint {
     pub(crate) fn new(name: &str) -> Self {
         GlobalHint {
             slot: Cell::new(0),
             key: crate::interpreter::key_intern::intern_key(name),
+            scope: Cell::new(NO_SCOPE_HINT),
         }
     }
 }
@@ -104,6 +124,127 @@ pub(super) fn walk_scope_chain<N: BindingName + ?Sized>(
     match &scope.parent {
         Some(parent) if depth < MAX_WALK_DEPTH => {
             walk_scope_chain(parent, key, want_env, depth + 1)
+        }
+        _ => NameWalk::Slow,
+    }
+}
+
+/// [`walk_scope_chain`], following the site's remembered scope when the key is
+/// an interned name and the site has a hint.
+#[inline]
+pub(super) fn walk_scope<N: BindingName + ?Sized>(
+    env: &EnvRef,
+    key: &N,
+    want_env: bool,
+    hint: Option<&GlobalHint>,
+) -> NameWalk {
+    match (key.as_atom(), hint) {
+        (Some(atom), Some(hint)) => walk_scope_chain_hinted(env, atom, want_env, hint),
+        _ => walk_scope_chain(env, key, want_env, 0),
+    }
+}
+
+/// [`walk_scope_chain`] for an interned name site with a [`GlobalHint`].
+///
+/// The remembered `(hops, slot)` is checked against the live chain: every
+/// scope before the remembered one must be a plain declarative scope that
+/// does not bind the name (one filter probe each), and the remembered scope
+/// must hold the name at the remembered slot. That is exactly the scope the
+/// full walk would stop at, so a hit answers identically; anything else runs
+/// the full walk, which retrains the hint.
+pub(super) fn walk_scope_chain_hinted(
+    env: &EnvRef,
+    key: &Atom,
+    want_env: bool,
+    hint: &GlobalHint,
+) -> NameWalk {
+    let remembered = hint.scope.get();
+    if remembered.hops != NO_SCOPE_HINT.hops
+        && let Some(walk) = verify_scope_hint(env, key, remembered.hops, remembered.slot, want_env)
+    {
+        return walk;
+    }
+    train_scope_hint(env, key, want_env, hint, 0)
+}
+
+fn verify_scope_hint(
+    env: &EnvRef,
+    key: &Atom,
+    hops: u32,
+    slot: u32,
+    want_env: bool,
+) -> Option<NameWalk> {
+    let scope = env.borrow();
+    if scope.with_object.is_some() || scope.indirect_bindings.is_some() {
+        return None;
+    }
+    if hops == 0 {
+        if slot == GLOBAL_OBJECT_SLOT {
+            let gid = scope.global_object_id?;
+            if scope.bindings.contains_key(key) {
+                return None;
+            }
+            return Some(NameWalk::Global(gid, want_env.then(|| env.clone())));
+        }
+        let (atom, binding) = scope.bindings.entry_at(slot as usize)?;
+        if !atom.ptr_eq(key) {
+            return None;
+        }
+        return Some(if want_env {
+            NameWalk::Bound(env.clone())
+        } else if binding.initialized {
+            NameWalk::Value(binding.value.clone())
+        } else {
+            NameWalk::Slow
+        });
+    }
+    if scope.global_object_id.is_some() || scope.bindings.contains_key(key) {
+        return None;
+    }
+    verify_scope_hint(scope.parent.as_ref()?, key, hops - 1, slot, want_env)
+}
+
+/// The full walk of [`walk_scope_chain`], remembering where it ended.
+fn train_scope_hint(
+    env: &EnvRef,
+    key: &Atom,
+    want_env: bool,
+    hint: &GlobalHint,
+    depth: u32,
+) -> NameWalk {
+    let scope = env.borrow();
+    if scope.with_object.is_some() || scope.indirect_bindings.is_some() {
+        return NameWalk::Slow;
+    }
+    if let Some(slot) = scope.bindings.position(key) {
+        hint.scope.set(ScopeHint {
+            hops: depth,
+            slot: slot as u32,
+        });
+        if want_env {
+            return NameWalk::Bound(env.clone());
+        }
+        let binding = &scope
+            .bindings
+            .entry_at(slot)
+            .expect("position is a live slot")
+            .1;
+        return if binding.initialized {
+            NameWalk::Value(binding.value.clone())
+        } else {
+            NameWalk::Slow
+        };
+    }
+    if let Some(gid) = scope.global_object_id {
+        hint.scope.set(ScopeHint {
+            hops: depth,
+            slot: GLOBAL_OBJECT_SLOT,
+        });
+        return NameWalk::Global(gid, want_env.then(|| env.clone()));
+    }
+    match &scope.parent {
+        Some(parent) if depth < MAX_WALK_DEPTH => {
+            train_scope_hint(parent, key, want_env, hint, depth + 1)
         }
         _ => NameWalk::Slow,
     }

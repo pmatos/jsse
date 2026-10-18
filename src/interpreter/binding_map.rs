@@ -106,6 +106,11 @@ impl BindingKey for std::rc::Rc<str> {
 /// handed to property operations, and inserted as a new binding.
 pub(crate) trait BindingName: BindingKey {
     fn as_name(&self) -> &str;
+    /// The key as an interned atom, when it is one.
+    #[inline]
+    fn as_atom(&self) -> Option<&Atom> {
+        None
+    }
     fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding>;
 }
 
@@ -134,6 +139,10 @@ impl BindingName for Atom {
     fn as_name(&self) -> &str {
         self.as_str()
     }
+    #[inline]
+    fn as_atom(&self) -> Option<&Atom> {
+        Some(self)
+    }
     fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
         map.insert_atom(self, binding)
     }
@@ -143,6 +152,10 @@ impl<T: BindingName + ?Sized> BindingName for &T {
     #[inline]
     fn as_name(&self) -> &str {
         (**self).as_name()
+    }
+    #[inline]
+    fn as_atom(&self) -> Option<&Atom> {
+        (**self).as_atom()
     }
     fn insert_into(&self, map: &mut BindingMap, binding: Binding) -> Option<Binding> {
         (**self).insert_into(map, binding)
@@ -221,7 +234,7 @@ impl BindingMap {
             .find(|&slot| matches(&self.entries[slot].0))
     }
 
-    #[cfg(test)]
+    #[inline]
     pub(crate) fn position<K: BindingKey + ?Sized>(&self, key: &K) -> Option<usize> {
         key.find_in(self)
     }
