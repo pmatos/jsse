@@ -5621,6 +5621,9 @@ impl Interpreter {
             && let Some(id) = func_val.as_object_id()
             && let Some(obj) = self.get_object_cell(id)
             && let Some((frame, closure, function_realm)) = Self::compiled_call_target(obj)
+            && frame
+                .compiled_call()
+                .is_some_and(|call| !call.has_parameter_expressions || !self.has_ever_entered_with)
         {
             return self.call_compiled_function(
                 id,
@@ -6090,7 +6093,7 @@ impl Interpreter {
                                 break 'call Completion::Normal(JsValue::object(gen_id));
                             }
                             if frame.compiled_call().is_none()
-                                && has_simple_params
+                                && (has_simple_params || frame.named_param_plan(&params).is_some())
                                 && !uses_arguments
                                 && self.bytecode_enabled
                                 && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
@@ -6100,6 +6103,7 @@ impl Interpreter {
                             {
                                 frame.install_compiled_call(|| CompiledCall {
                                     params: params.clone(),
+                                    has_parameter_expressions: !has_simple_params,
                                     body: body.clone(),
                                     chunk: chunk.clone(),
                                     is_arrow,
@@ -6322,19 +6326,44 @@ impl Interpreter {
                     self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
                 env.bind_this_for_call(effective_this, JsValue::UNDEFINED);
             }
-            Self::bind_simple_parameters(frame, &call.params, args, &mut env);
-            env.strict = call.is_strict;
+            if call.has_parameter_expressions {
+                env.has_parameter_expressions = true;
+            } else {
+                Self::bind_simple_parameters(frame, &call.params, args, &mut env);
+                env.strict = call.is_strict;
+            }
             !call.is_arrow && !call.is_strict && !closure_strict
         };
+        let exec_env = if call.has_parameter_expressions {
+            let plan = frame
+                .named_param_plan(&call.params)
+                .expect("a compiled call with parameter expressions has a named parameter plan");
+            if let Err(error) = self.bind_named_parameters(plan, &call.params, args, &func_env) {
+                self.current_realm_id = caller_realm;
+                self.recycle_environment(func_env);
+                return Completion::Throw(error);
+            }
+            let body_env =
+                self.acquire_body_environment(&func_env, &call.params, &call.body, frame);
+            body_env.borrow_mut().strict = call.is_strict;
+            body_env
+        } else {
+            func_env.clone()
+        };
         let call_frame_arguments = if sloppy_record {
-            Self::deferred_arguments_record(args, &func_env, true)
+            Self::deferred_arguments_record(args, &func_env, !call.has_parameter_expressions)
         } else {
             CallFrameArguments::None
         };
-        let result = self.run_activation(func_obj_id, call_frame_arguments, &func_env, |interp| {
-            interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
+        let result = self.run_activation(func_obj_id, call_frame_arguments, &exec_env, |interp| {
+            interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &exec_env)
         });
         self.current_realm_id = caller_realm;
+        if call.has_parameter_expressions {
+            self.recycle_environment(exec_env);
+        } else {
+            drop(exec_env);
+        }
         self.recycle_environment(func_env);
         self.finish_user_call(result)
     }

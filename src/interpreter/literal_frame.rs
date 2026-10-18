@@ -49,8 +49,9 @@ impl ParamAtoms {
 }
 
 /// The binding atoms of a parameter list that has defaults or a rest element
-/// but only plain names (no destructuring pattern): one atom per parameter, in
-/// order, so a call binds them without interning or probing by text.
+/// but only plain names (no destructuring pattern, none called `arguments`):
+/// one atom per parameter, in order, so a call binds them without interning or
+/// probing by text.
 #[derive(Debug)]
 pub(crate) struct NamedParamPlan {
     atoms: Box<[Atom]>,
@@ -61,13 +62,14 @@ impl NamedParamPlan {
         let atoms = params
             .iter()
             .map(|param| match param {
-                Pattern::Identifier(name) => Some(Atom::intern(name)),
+                Pattern::Identifier(name) => Some(name),
                 Pattern::Assign(inner, _) | Pattern::Rest(inner) => match inner.as_ref() {
-                    Pattern::Identifier(name) => Some(Atom::intern(name)),
+                    Pattern::Identifier(name) => Some(name),
                     _ => None,
                 },
                 _ => None,
             })
+            .map(|name| name.filter(|n| *n != "arguments").map(|n| Atom::intern(n)))
             .collect::<Option<Box<[Atom]>>>()?;
         Some(Self { atoms })
     }
@@ -108,11 +110,15 @@ impl BodyVarPlan {
 /// What an ordinary [[Call]] of a compiled function needs, read off its frame
 /// instead of off the function object and rebuilt per call (#1089). It exists
 /// only for the shape the hot call path handles: a plain (not generator, not
-/// async) function with simple parameters whose body never mentions
-/// `arguments` and whose compile verdict is `Compiled`.
+/// async) function whose parameters are plain names (optionally with defaults
+/// or a rest element), whose body never mentions `arguments` and whose
+/// compile verdict is `Compiled`.
 #[derive(Debug)]
 pub(crate) struct CompiledCall {
     pub(crate) params: Rc<Vec<Pattern>>,
+    /// The parameters are plain names with defaults or a rest element rather
+    /// than plain names alone, so the body runs in an environment of its own.
+    pub(crate) has_parameter_expressions: bool,
     pub(crate) body: Body,
     pub(crate) chunk: Rc<Chunk>,
     pub(crate) is_arrow: bool,
