@@ -2375,7 +2375,7 @@ impl Interpreter {
             ),
         };
 
-        let params_and_frame = if mapped {
+        let user_function = if mapped {
             self.get_object_cell(func_obj_id).and_then(|obj| {
                 match obj.borrow().callable.as_deref() {
                     Some(JsFunction::User { params, frame, .. }) => {
@@ -2387,23 +2387,17 @@ impl Interpreter {
         } else {
             None
         };
-        let callee = JsValue::object(func_obj_id);
-        let arguments = self.create_arguments_object(
-            &args,
-            callee,
-            func_env.as_ref(),
-            params_and_frame
-                .as_ref()
-                .map_or(&[], |(params, _)| params.as_slice()),
-            params_and_frame.as_ref().map(|(_, frame)| &**frame),
-        );
+        let mapping = func_env
+            .as_ref()
+            .zip(user_function.as_ref())
+            .map(|(env, (params, frame))| (env, params.as_slice(), &**frame));
+        let arguments = self.create_arguments_object(&args, JsValue::object(func_obj_id), mapping);
         self.call_stack_frames[frame_index].arguments =
             CallFrameArguments::Materialized(arguments.clone());
         arguments
     }
 
-    /// Binds `arguments` in a freshly acquired function environment, ahead of
-    /// its parameters: the layout the compiler's local slots assume.
+    /// Must run on an empty environment, before the parameters are bound.
     pub(crate) fn bind_arguments_binding(&self, env: &EnvRef, arguments: JsValue) {
         env.borrow_mut().bindings.push_unique(
             self.common_keys.arguments_atom.clone(),
@@ -2416,19 +2410,17 @@ impl Interpreter {
         );
     }
 
-    /// CreateMappedArgumentsObject (§10.4.4.7) when `func_env` is `Some`
-    /// (`params` are then all plain identifiers), CreateUnmappedArgumentsObject
-    /// (§10.4.4.6) otherwise. The object is fresh and extensible, so its
+    /// CreateMappedArgumentsObject (§10.4.4.7) when `mapping` (the function
+    /// environment, its all-identifier parameters and its literal's frame) is
+    /// `Some`, CreateUnmappedArgumentsObject (§10.4.4.6) otherwise. The object is fresh and extensible, so its
     /// properties are installed directly, in the spec's creation order.
     fn create_arguments_object(
         &mut self,
         args: &[JsValue],
         callee: JsValue,
-        func_env: Option<&EnvRef>,
-        params: &[Pattern],
-        frame: Option<&literal_frame::LiteralFrame>,
+        mapping: Option<(&EnvRef, &[Pattern], &literal_frame::LiteralFrame)>,
     ) -> JsValue {
-        let thrower = if func_env.is_none() {
+        let thrower = if mapping.is_none() {
             Some(
                 self.realm()
                     .throw_type_error
@@ -2457,21 +2449,14 @@ impl Interpreter {
                 );
             }
 
-            if let Some(env) = func_env {
+            if let Some((env, params, frame)) = mapping {
                 o.push_fresh_property(
                     &self.common_keys.callee,
                     PropertyDescriptor::data(callee, true, false, true),
                 );
                 // Only the last occurrence of a duplicated parameter name
                 // stays mapped, and only indices that received an argument.
-                let owned;
-                let names = match frame {
-                    Some(frame) => frame.param_atoms(params),
-                    None => {
-                        owned = literal_frame::ParamAtoms::new(params);
-                        &owned
-                    }
-                };
+                let names = frame.param_atoms(params);
                 if let Some(map) = ParameterMap::new(
                     env.clone(),
                     names.shared_atoms().clone(),

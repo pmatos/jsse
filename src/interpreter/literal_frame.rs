@@ -30,7 +30,7 @@ pub(crate) struct ParamAtoms {
 }
 
 impl ParamAtoms {
-    pub(crate) fn new(params: &[Pattern]) -> Self {
+    fn new(params: &[Pattern]) -> Self {
         let atoms: Rc<[Atom]> = params
             .iter()
             .map(|param| {

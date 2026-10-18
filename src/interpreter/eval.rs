@@ -5867,6 +5867,7 @@ impl Interpreter {
                                     func_val,
                                     uses_arguments,
                                     has_simple_params,
+                                    &frame,
                                 );
                                 self.current_realm_id = caller_realm;
                                 break 'call result;
@@ -5895,9 +5896,7 @@ impl Interpreter {
                                     let arguments_obj = self.create_arguments_object(
                                         args,
                                         func_val.clone(),
-                                        mapped_env_ag,
-                                        &params,
-                                        Some(&frame),
+                                        mapped_env_ag.map(|env| (env, params.as_slice(), &*frame)),
                                     );
                                     self.bind_arguments_binding(&func_env, arguments_obj);
                                     if is_strict || !is_simple_ag {
@@ -6049,9 +6048,7 @@ impl Interpreter {
                                     let arguments_obj = self.create_arguments_object(
                                         args,
                                         func_val.clone(),
-                                        mapped_env_g,
-                                        &params,
-                                        Some(&frame),
+                                        mapped_env_g.map(|env| (env, params.as_slice(), &*frame)),
                                     );
                                     self.bind_arguments_binding(&func_env, arguments_obj);
                                     if is_strict || !is_simple_g {
@@ -6207,9 +6204,7 @@ impl Interpreter {
                                     let arguments_obj = self.create_arguments_object(
                                         args,
                                         func_val.clone(),
-                                        mapped_env,
-                                        &params,
-                                        Some(&frame),
+                                        mapped_env.map(|env| (env, params.as_slice(), &*frame)),
                                     );
                                     call_frame_arguments =
                                         CallFrameArguments::Materialized(arguments_obj.clone());
@@ -6447,9 +6442,7 @@ impl Interpreter {
         let arguments_obj = self.create_arguments_object(
             args,
             JsValue::object(func_obj_id),
-            mapped.then_some(&func_env),
-            &call.params,
-            Some(frame),
+            mapped.then_some((&func_env, call.params.as_slice(), &**frame)),
         );
         self.bind_arguments_binding(&func_env, arguments_obj.clone());
         {
@@ -8426,6 +8419,7 @@ impl Interpreter {
         func_val: &JsValue,
         uses_arguments: bool,
         has_simple_params: bool,
+        frame: &LiteralFrame,
     ) -> Completion {
         self.with_gc_root_scope(|interp| {
             let promise = interp.create_promise_object();
@@ -8462,9 +8456,7 @@ impl Interpreter {
                     let arguments_obj = interp.create_arguments_object(
                         args,
                         func_val.clone(),
-                        mapped_env,
-                        params,
-                        None,
+                        mapped_env.map(|env| (env, params, frame)),
                     );
                     interp.bind_arguments_binding(&func_env, arguments_obj);
                     if is_strict || !is_simple {

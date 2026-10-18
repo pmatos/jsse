@@ -2626,17 +2626,7 @@ impl ParameterMap {
     }
 
     fn mapped_index(&self, key: &str) -> Option<usize> {
-        let bytes = key.as_bytes();
-        if bytes.is_empty() || bytes.len() > 10 || (bytes[0] == b'0' && bytes.len() > 1) {
-            return None;
-        }
-        let mut index = 0usize;
-        for &b in bytes {
-            if !b.is_ascii_digit() {
-                return None;
-            }
-            index = index * 10 + usize::from(b - b'0');
-        }
+        let index = array_element_index(key)?;
         self.live
             .get(index)
             .copied()
@@ -2648,22 +2638,27 @@ impl ParameterMap {
         self.mapped_index(key).is_some()
     }
 
-    /// Ends the mapping of `key`'s index.
     pub(crate) fn remove(&mut self, key: &str) {
         if let Some(index) = self.mapped_index(key) {
             self.live[index] = false;
         }
     }
 
-    /// The live value of the parameter `key` is mapped to.
     pub(crate) fn value(&self, key: &str) -> Option<JsValue> {
-        let name = &self.names[self.mapped_index(key)?];
+        self.value_at(self.mapped_index(key)?)
+    }
+
+    /// The live value of the parameter mapped to `index`; `None` when that
+    /// index is not mapped.
+    pub(crate) fn value_at(&self, index: usize) -> Option<JsValue> {
+        if !self.live.get(index).copied().unwrap_or(false) {
+            return None;
+        }
         let env = self.env.borrow();
-        let binding = env.bindings.get(name)?;
+        let binding = env.bindings.get(&self.names[index])?;
         binding.initialized.then(|| binding.value.clone())
     }
 
-    /// Writes through to the parameter `key` is mapped to, if any.
     pub(crate) fn set_value(&self, key: &str, value: &JsValue) {
         if let Some(index) = self.mapped_index(key)
             && let Some(binding) = self.env.borrow_mut().bindings.get_mut(&self.names[index])
