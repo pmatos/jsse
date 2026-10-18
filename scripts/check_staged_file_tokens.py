@@ -1,5 +1,6 @@
-"""Enforce the file token budget against Git's staged blobs only."""
+"""Enforce the file token budget on staged blobs or a committed change range."""
 
+import argparse
 import os
 import subprocess
 import sys
@@ -16,16 +17,49 @@ def git(*args: str, input_bytes: bytes | None = None) -> bytes:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--base", help="CI: compare the merge base of this commit and head"
+    )
+    parser.add_argument("--head", help="CI: inspect this commit (defaults to HEAD)")
+    args = parser.parse_args()
+    if args.base == "" or args.head == "":
+        parser.error("commit references must not be empty")
+    if args.head and not args.base:
+        parser.error("--head requires --base")
+    attribute_source = ["--cached"]
+    revisions = ["--cached"]
+    if args.base:
+        head = (
+            git(
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                f"{args.head or 'HEAD'}^{{commit}}",
+            )
+            .decode()
+            .strip()
+        )
+        base = (
+            git("rev-parse", "--verify", "--end-of-options", f"{args.base}^{{commit}}")
+            .decode()
+            .strip()
+        )
+        base = git("merge-base", base, head).decode().strip()
+        revisions = [base, head]
+        attribute_source = [f"--source={head}"]
     # --no-renames treats a rename as deletion + addition, checking its new path.
     # Raw, NUL-delimited records preserve unusual names and give us blob IDs/modes.
     records = git(
         "diff",
-        "--cached",
         "--raw",
         "-z",
         "--no-abbrev",
         "--no-renames",
+        "--no-relative",
         "--diff-filter=ACMT",
+        *revisions,
+        "--",
     ).split(b"\0")
     staged = []
     for metadata, path in zip(records[::2], records[1::2]):
@@ -35,10 +69,10 @@ def main() -> int:
     if not staged:
         return 0
 
-    # Read exemptions from the index too: unstaged attributes cannot bypass it.
+    # Exemptions must come from the same snapshot as the inspected blobs.
     attributes = git(
         "check-attr",
-        "--cached",
+        *attribute_source,
         "-z",
         "--stdin",
         IGNORE_ATTRIBUTE,
@@ -71,7 +105,8 @@ def main() -> int:
         return 0
 
     print(
-        "Commit blocked: staged authored files exceed 5,000 tokens "
+        f"{'CI check failed: changed' if args.base else 'Commit blocked: staged'} "
+        "authored files exceed 5,000 tokens "
         "(bytes/4; maximum 20,000 bytes per file).",
         file=sys.stderr,
     )

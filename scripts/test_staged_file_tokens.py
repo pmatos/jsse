@@ -45,9 +45,9 @@ class StagedFileTokenTests(unittest.TestCase):
         self.write(name, data)
         self.git("add", "--", name)
 
-    def run_hook(self) -> subprocess.CompletedProcess:
+    def run_hook(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(HOOK)],
+            [sys.executable, str(HOOK), *args],
             cwd=self.root,
             env=self.env,
             text=True,
@@ -161,6 +161,60 @@ class StagedFileTokenTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stderr.count("20,001 bytes"), 4)
         self.assertIn(repr("newline\nname.rs"), result.stderr)
+
+    def test_ci_checks_committed_head_not_index_or_working_tree(self):
+        self.git("commit", "--quiet", "-m", "base")
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.stage("large.rs", b"x" * 20_001)
+        self.git("commit", "--quiet", "-m", "large")
+        self.stage("large.rs", b"small")
+        self.write(".gitattributes", b"large.rs token-limit-ignore\n")
+        self.git("add", "--", ".gitattributes")
+        self.assertEqual(self.run_hook().returncode, 0)
+        result = self.run_hook("--base", base, "--head", "HEAD")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CI check failed", result.stderr)
+        self.assertIn("20,001 bytes", result.stderr)
+
+    def test_ci_uses_head_exemptions_and_ignores_unchanged_large_files(self):
+        self.stage("old.rs", b"x" * 20_001)
+        self.git("commit", "--quiet", "-m", "base")
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.stage("generated.rs", b"x" * 20_001)
+        self.stage(".gitattributes", b"generated.rs token-limit-ignore\n")
+        self.git("commit", "--quiet", "-m", "generated")
+        self.stage(".gitattributes", b"")
+        self.assertEqual(self.run_hook("--base", base).returncode, 0)
+
+    def test_ci_compares_from_merge_base_on_diverged_branches(self):
+        self.stage("old.rs", b"x" * 20_001)
+        self.git("commit", "--quiet", "-m", "base")
+        self.git("branch", "topic")
+        self.stage("old.rs", b"small")
+        self.git("commit", "--quiet", "-m", "base advances")
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("checkout", "--quiet", "topic")
+        self.stage("small.rs", b"small")
+        self.git("commit", "--quiet", "-m", "topic")
+        self.assertEqual(self.run_hook("--base", base).returncode, 0)
+
+    def test_ci_checks_renames_and_deletions(self):
+        self.stage("old.rs", b"x" * 20_001)
+        self.git("commit", "--quiet", "-m", "base")
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("mv", "--", "old.rs", "new.rs")
+        self.git("commit", "--quiet", "-m", "rename")
+        result = self.run_hook("--base", base)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("new.rs", result.stderr)
+        self.git("rm", "--", "new.rs")
+        self.git("commit", "--quiet", "-m", "delete")
+        self.assertEqual(self.run_hook("--base", base).returncode, 0)
+
+    def test_ci_invalid_refs_fail_closed(self):
+        self.assertNotEqual(self.run_hook("--base", "missing-commit").returncode, 0)
+        self.assertNotEqual(self.run_hook("--head", "HEAD").returncode, 0)
+        self.assertNotEqual(self.run_hook("--base", "").returncode, 0)
 
 
 if __name__ == "__main__":

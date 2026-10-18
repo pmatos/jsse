@@ -27,6 +27,17 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+          fetch-depth: 0
+
+      # Keep this in the existing required build job so local hook bypasses
+      # cannot merge oversized authored files.
+      - name: Enforce authored file token limit
+        env:
+          TOKEN_LIMIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          TOKEN_LIMIT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 scripts/check_staged_file_tokens.py
+          --base "$TOKEN_LIMIT_BASE" --head "$TOKEN_LIMIT_HEAD"
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
@@ -122,4 +133,3 @@ jobs:
 
       - name: Run test262-extra (GC stress, JSSE_GC_STRESS=7, tree-walker)
         run: JSSE_GC_STRESS=7 uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --no-bytecode --timeout 300 --fail-on-failures
-
