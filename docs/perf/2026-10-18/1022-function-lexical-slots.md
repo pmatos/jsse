@@ -45,31 +45,32 @@ Per-iteration, startup cancelled with two run lengths (50k and 150k iterations):
 |---|---:|---:|---:|
 | `let sum` + `for (let i...)`, `sum += i & 31` | 1,318 | 915 | -30.6% |
 | function-top-level `const K` read in a `var` loop | 1,104 | 1,016 | -8.0% |
-| `let` captured by a closure called per iteration | 3,727 | 3,616 | -3.0% |
-| script-level `const K` read in a `var` loop | 1,156 | 1,146 | -0.8% |
-| script-level `var K` (global-object property) read in a `var` loop | 1,271 | 1,249 | -1.7% |
+| `let` captured by a closure called per iteration | 3,727 | 3,622 | -2.8% |
+| script-level `const K` read in a `var` loop | 1,156 | 1,148 | -0.7% |
+| script-level `var K` (global-object property) read in a `var` loop | 1,271 | 1,254 | -1.3% |
 
-Whole-process (selection; geometric mean over 39 workloads: -1.25%):
+Whole-process (selection; geometric mean over 39 workloads: -1.27%):
 
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
-| lazy-collections | 4,399,030,264 | 3,938,206,291 | -10.48% |
-| bigint-noble-secp256k1 | 6,309,019,329 | 5,894,886,973 | -6.56% |
-| sync-fs | 6,745,544,949 | 6,389,681,874 | -5.28% |
-| bigint-noble-ed25519 | 7,139,027,389 | 6,782,608,666 | -4.99% |
-| micro:loop | 3,267,545,324 | 3,126,546,409 | -4.32% |
-| navier-stokes | 3,915,209,759 | 3,815,617,249 | -2.54% |
-| bigint-noble-bls12-381 | 60,183,768,303 | 58,687,634,020 | -2.49% |
-| raytrace | 12,310,736,197 | 12,018,802,657 | -2.37% |
-| Babylon | 2,478,250,242 | 2,422,630,872 | -2.24% |
-| bigint-bigdenary | 4,455,242,729 | 4,386,787,723 | -1.54% |
-| proxy-vue | 1,153,619,960 | 1,138,728,640 | -1.29% |
-| micro:fib | 5,654,514,432 | 5,597,979,918 | -1.00% |
-| Box2D | 6,011,838,708 | 5,980,785,606 | -0.52% |
-| richards | 8,695,339,013 | 8,664,393,818 | -0.36% |
-| delta-blue | 6,424,892,260 | 6,409,330,510 | -0.24% |
-| Air | 1,892,845,169 | 1,899,524,152 | +0.35% |
-| proxy-mobx (noise: 574.8M-598.9M over four runs of either binary) | 574,664,921 | 592,763,608 | +3.15% |
+| lazy-collections | 4,399,030,264 | 3,961,279,185 | -9.95% |
+| bigint-noble-secp256k1 | 6,309,019,329 | 5,915,520,611 | -6.24% |
+| sync-fs | 6,745,544,949 | 6,390,623,432 | -5.26% |
+| bigint-noble-ed25519 | 7,139,027,389 | 6,782,080,986 | -5.00% |
+| micro:loop | 3,267,545,324 | 3,126,545,601 | -4.32% |
+| bigint-bigdenary | 4,455,242,729 | 4,335,057,329 | -2.70% |
+| bigint-noble-bls12-381 | 60,183,768,303 | 58,622,684,000 | -2.59% |
+| navier-stokes | 3,915,209,759 | 3,820,063,133 | -2.43% |
+| raytrace | 12,310,736,197 | 12,036,629,940 | -2.23% |
+| Babylon | 2,478,250,242 | 2,425,794,277 | -2.12% |
+| proxy-vue | 1,153,619,960 | 1,131,751,696 | -1.90% |
+| micro:fib | 5,654,514,432 | 5,600,672,766 | -0.95% |
+| richards | 8,695,339,013 | 8,660,674,128 | -0.40% |
+| Box2D | 6,011,838,708 | 5,987,794,730 | -0.40% |
+| delta-blue | 6,424,892,260 | 6,408,411,688 | -0.26% |
+| Air | 1,892,845,169 | 1,898,735,175 | +0.31% |
+| js-tokens | 4,805,301,442 | 4,844,517,541 | +0.82% |
+| proxy-mobx (noise: 574.8M-598.9M over four runs of either binary) | 574,664,921 | 586,555,407 | +2.07% |
 
 Air's symbolised build (callgrind, same source) is 1,964.2M base vs 1,960.1M new: the shipped +0.35% is code layout.
 
