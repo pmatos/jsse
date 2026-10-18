@@ -5640,18 +5640,30 @@ impl Interpreter {
             && let Some(id) = func_val.as_object_id()
             && let Some(obj) = self.get_object_cell(id)
             && let Some((frame, closure, function_realm)) = Self::compiled_call_target(obj)
-            && frame
-                .compiled_call()
-                .is_some_and(|call| !call.has_parameter_expressions || !self.has_ever_entered_with)
         {
-            return self.call_compiled_function(
-                id,
-                &frame,
-                closure,
-                function_realm,
-                this_val,
-                args,
-            );
+            let with_defaults = frame
+                .compiled_call()
+                .is_some_and(|call| call.has_parameter_expressions);
+            if !with_defaults {
+                return self.call_compiled_function(
+                    id,
+                    &frame,
+                    closure,
+                    function_realm,
+                    this_val,
+                    args,
+                );
+            }
+            if !self.has_ever_entered_with {
+                return self.call_compiled_function_with_defaults(
+                    id,
+                    &frame,
+                    closure,
+                    function_realm,
+                    this_val,
+                    args,
+                );
+            }
         }
         self.call_function_general(func_val, this_val, args, skip_entry_checks)
     }
@@ -6347,39 +6359,85 @@ impl Interpreter {
                     self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
                 env.bind_this_for_call(effective_this, JsValue::UNDEFINED);
             }
-            if call.has_parameter_expressions {
-                env.has_parameter_expressions = true;
-            } else {
-                Self::bind_simple_parameters(frame, &call.params, args, &mut env);
-                env.strict = call.is_strict;
-            }
+            Self::bind_simple_parameters(frame, &call.params, args, &mut env);
+            env.strict = call.is_strict;
             !call.is_arrow && !call.is_strict && !closure_strict
         };
-        let separate_body_env =
-            call.has_parameter_expressions && !frame.shares_param_env(&call.params, &call.body);
-        let exec_env = if call.has_parameter_expressions {
-            let plan = frame
-                .named_param_plan(&call.params)
-                .expect("a compiled call with parameter expressions has a named parameter plan");
-            if let Err(error) = self.bind_named_parameters(plan, &call.params, args, &func_env) {
-                self.current_realm_id = caller_realm;
-                self.recycle_environment(func_env);
-                return Completion::Throw(error);
-            }
-            if separate_body_env {
-                let body_env =
-                    self.acquire_body_environment(&func_env, &call.params, &call.body, frame);
-                body_env.borrow_mut().strict = call.is_strict;
-                body_env
-            } else {
-                func_env.borrow_mut().strict = call.is_strict;
-                func_env.clone()
-            }
+        let call_frame_arguments = if sloppy_record {
+            Self::deferred_arguments_record(args, &func_env, true)
         } else {
+            CallFrameArguments::None
+        };
+        let result = self.run_activation(func_obj_id, call_frame_arguments, &func_env, |interp| {
+            interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
+        });
+        self.current_realm_id = caller_realm;
+        self.recycle_environment(func_env);
+        self.finish_user_call(result)
+    }
+
+    /// [`call_compiled_function`] for a function whose parameters are plain
+    /// names with defaults or a rest element: the parameters bind through the
+    /// literal's atoms, and the body runs in the parameter environment when
+    /// nothing can observe the difference (`LiteralFrame::shares_param_env`),
+    /// else in a pooled body environment of its own. Kept out of line so the
+    /// simple-parameter path stays as it was.
+    #[inline(never)]
+    fn call_compiled_function_with_defaults(
+        &mut self,
+        func_obj_id: u64,
+        frame: &Rc<LiteralFrame>,
+        closure: EnvRef,
+        function_realm: Option<usize>,
+        this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let call = frame
+            .compiled_call()
+            .expect("compiled_call_target checked the record");
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.calls_to_user += 1;
+        }
+        let caller_realm = self.current_realm_id;
+        if let Some(realm) = function_realm {
+            self.current_realm_id = realm;
+        }
+        let func_env =
+            self.acquire_function_environment(closure, call.params.len().saturating_add(2));
+        let sloppy_record = {
+            let mut env = func_env.borrow_mut();
+            let closure_strict = env.strict;
+            if call.is_arrow {
+                env.is_arrow_scope = true;
+            } else {
+                let effective_this =
+                    self.ordinary_call_bind_this(this_val, call.is_strict, closure_strict);
+                env.bind_this_for_call(effective_this, JsValue::UNDEFINED);
+            }
+            env.has_parameter_expressions = true;
+            !call.is_arrow && !call.is_strict && !closure_strict
+        };
+        let plan = frame
+            .named_param_plan(&call.params)
+            .expect("a compiled call with parameter expressions has a named parameter plan");
+        if let Err(error) = self.bind_named_parameters(plan, &call.params, args, &func_env) {
+            self.current_realm_id = caller_realm;
+            self.recycle_environment(func_env);
+            return Completion::Throw(error);
+        }
+        let separate_body_env = !frame.shares_param_env(&call.params, &call.body);
+        let exec_env = if separate_body_env {
+            let body_env =
+                self.acquire_body_environment(&func_env, &call.params, &call.body, frame);
+            body_env.borrow_mut().strict = call.is_strict;
+            body_env
+        } else {
+            func_env.borrow_mut().strict = call.is_strict;
             func_env.clone()
         };
         let call_frame_arguments = if sloppy_record {
-            Self::deferred_arguments_record(args, &func_env, !call.has_parameter_expressions)
+            Self::deferred_arguments_record(args, &func_env, false)
         } else {
             CallFrameArguments::None
         };
