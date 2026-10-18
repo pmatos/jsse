@@ -290,6 +290,7 @@ impl Interpreter {
         base: &JsValue,
         key: &JsPropertyKey,
         value: &JsValue,
+        hint: Option<&Cell<u32>>,
     ) -> bool {
         let Some(cell) = base
             .as_object_id()
@@ -298,7 +299,7 @@ impl Interpreter {
             return false;
         };
         let mut object = cell.borrow_mut_untracked();
-        let done = match object.store_named_fast(key, value) {
+        let done = match object.store_named_fast(key, value, hint) {
             NamedStore::Stored => true,
             NamedStore::Bail => false,
             NamedStore::Absent => {
@@ -324,9 +325,11 @@ impl Interpreter {
         base: &JsValue,
         key: &JsPropertyKey,
         delta: f64,
+        hint: Option<&Cell<u32>>,
     ) -> Option<(f64, f64)> {
         let cell = self.get_object_cell(base.as_object_id()?)?;
-        cell.borrow_mut_untracked().add_to_named_number(key, delta)
+        cell.borrow_mut_untracked()
+            .add_to_named_number(key, delta, hint)
     }
 
     /// Whether no object on the prototype chain starting at `start` owns
@@ -355,7 +358,12 @@ impl Interpreter {
     /// path must run (a primitive base, a Proxy or other exotic object on the
     /// way, an Array-index-like name).
     #[inline(always)]
-    pub(super) fn named_get_fast(&self, base: &JsValue, key: &JsPropertyKey) -> NamedGet {
+    pub(super) fn named_get_fast(
+        &self,
+        base: &JsValue,
+        key: &JsPropertyKey,
+        hint: Option<&Cell<u32>>,
+    ) -> NamedGet {
         let Some(mut object_id) = base.as_object_id() else {
             return NamedGet::Slow;
         };
@@ -370,7 +378,7 @@ impl Interpreter {
             if object.kind.is_named_access_exotic() {
                 return NamedGet::Slow;
             }
-            if let Some(record) = object.properties.get(key) {
+            if let Some(record) = object.properties.get_hinted(key, hint) {
                 return match record.read() {
                     PropertyRead::Value(value) => NamedGet::Value(value.clone()),
                     PropertyRead::Getter(getter) => NamedGet::Getter(getter.clone()),

@@ -16,6 +16,7 @@ use crate::interpreter::eval::LiteralPropertySpec;
 use crate::interpreter::hoisting::block_declares_lexical;
 use crate::interpreter::types::BindingKind;
 use crate::types::{JsString, JsValue};
+use std::cell::Cell;
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
@@ -3186,12 +3187,14 @@ impl Compiler {
             .iter()
             .map(|name| GlobalHint::new(name.as_str()))
             .collect();
+        let prop_hints = self.names.iter().map(|_| Cell::new(0)).collect();
         Chunk {
             code: self.code,
             constants: self.constants,
             names: self.names,
             private_names: self.private_names,
             global_hints,
+            prop_hints,
             var_names: self.var_names,
             max_stack: self.max_stack,
             max_refs: self.max_refs,

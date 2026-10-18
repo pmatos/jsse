@@ -4344,6 +4344,7 @@ impl JsObjectData {
     fn own_named_record_mut(
         &mut self,
         key: &JsPropertyKey,
+        hint: Option<&Cell<u32>>,
     ) -> Result<Option<&mut PropertyRecord>, ()> {
         if self.kind.is_named_access_exotic()
             || key_may_be_array_index(key)
@@ -4351,7 +4352,7 @@ impl JsObjectData {
         {
             return Err(());
         }
-        Ok(self.properties.get_mut(key))
+        Ok(self.properties.get_mut_hinted(key, hint))
     }
 
     /// The own half of the VM's named store: overwrite an existing own
@@ -4359,8 +4360,13 @@ impl JsObjectData {
     /// property (the caller may still add one); `Bail` means the generic
     /// [[Set]] must run.
     #[inline]
-    pub(crate) fn store_named_fast(&mut self, key: &JsPropertyKey, value: &JsValue) -> NamedStore {
-        match self.own_named_record_mut(key) {
+    pub(crate) fn store_named_fast(
+        &mut self,
+        key: &JsPropertyKey,
+        value: &JsValue,
+        hint: Option<&Cell<u32>>,
+    ) -> NamedStore {
+        match self.own_named_record_mut(key, hint) {
             Err(()) => NamedStore::Bail,
             Ok(None) => NamedStore::Absent,
             Ok(Some(record)) => {
@@ -4380,8 +4386,9 @@ impl JsObjectData {
         &mut self,
         key: &JsPropertyKey,
         delta: f64,
+        hint: Option<&Cell<u32>>,
     ) -> Option<(f64, f64)> {
-        self.own_named_record_mut(key)
+        self.own_named_record_mut(key, hint)
             .ok()??
             .add_to_writable_number(delta)
     }

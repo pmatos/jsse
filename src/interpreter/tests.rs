@@ -2829,14 +2829,14 @@ fn named_store_fast_adds_bump_shape_and_overwrites_do_not() {
     let shape = |interp: &Interpreter| interp.get_object(id).unwrap().borrow().shape_id;
 
     let before_add = shape(&interp);
-    assert!(interp.named_store_fast(&base, &key, &JsValue::number(1.0)));
+    assert!(interp.named_store_fast(&base, &key, &JsValue::number(1.0), None));
     assert!(
         shape(&interp) > before_add,
         "an added property bumps shape_id"
     );
 
     let before_overwrite = shape(&interp);
-    assert!(interp.named_store_fast(&base, &key, &JsValue::number(2.0)));
+    assert!(interp.named_store_fast(&base, &key, &JsValue::number(2.0), None));
     assert_eq!(
         shape(&interp),
         before_overwrite,
@@ -2858,7 +2858,12 @@ fn named_store_fast_adds_bump_shape_and_overwrites_do_not() {
     non_extensible.extensible = false;
     let fixed_id = interp.alloc_object(non_extensible);
     let fixed_shape = interp.get_object(fixed_id).unwrap().borrow().shape_id;
-    assert!(interp.named_store_fast(&JsValue::object(fixed_id), &key, &JsValue::number(3.0)));
+    assert!(interp.named_store_fast(
+        &JsValue::object(fixed_id),
+        &key,
+        &JsValue::number(3.0),
+        None
+    ));
     assert_eq!(
         interp.get_object(fixed_id).unwrap().borrow().shape_id,
         fixed_shape
@@ -2874,7 +2879,7 @@ fn named_store_fast_declines_what_the_generic_path_must_decide() {
     let mut sealed = JsObjectData::new();
     sealed.extensible = false;
     let sealed_id = interp.alloc_object(sealed);
-    assert!(!interp.named_store_fast(&JsValue::object(sealed_id), &key, &value));
+    assert!(!interp.named_store_fast(&JsValue::object(sealed_id), &key, &value, None));
     assert!(
         interp
             .get_object(sealed_id)
@@ -2898,7 +2903,7 @@ fn named_store_fast_declines_what_the_generic_path_must_decide() {
         },
     );
     let read_only_id = interp.alloc_object(read_only);
-    assert!(!interp.named_store_fast(&JsValue::object(read_only_id), &key, &value));
+    assert!(!interp.named_store_fast(&JsValue::object(read_only_id), &key, &value, None));
 
     let proto_id = interp.alloc_object(JsObjectData::new());
     interp
@@ -2910,10 +2915,10 @@ fn named_store_fast_declines_what_the_generic_path_must_decide() {
     child.prototype_id = Some(proto_id);
     let child_id = interp.alloc_object(child);
     assert!(
-        !interp.named_store_fast(&JsValue::object(child_id), &key, &value),
+        !interp.named_store_fast(&JsValue::object(child_id), &key, &value, None),
         "a prototype that owns the name decides the store"
     );
-    assert!(!interp.named_store_fast(&JsValue::number(1.0), &key, &value));
+    assert!(!interp.named_store_fast(&JsValue::number(1.0), &key, &value, None));
 }
 
 #[test]

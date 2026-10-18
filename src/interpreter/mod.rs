@@ -5,7 +5,7 @@ use crate::types::{
     concat_fits, number_ops,
 };
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
