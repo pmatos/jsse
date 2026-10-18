@@ -147,16 +147,15 @@ impl Interpreter {
                         let state = context.for_of_stack.remove(pos);
                         // Publish removal before return() can re-enter or collect.
                         context.publish(interp);
-                        match interp.close_for_of_loop(
-                            state,
-                            context.func_env,
-                            Completion::Normal(JsValue::UNDEFINED),
-                            context.generator_id,
-                        ) {
-                            abrupt @ (Completion::Throw(_) | Completion::Exit(_)) => {
-                                return Err(abrupt);
-                            }
-                            _ => {}
+                        if let abrupt @ (Completion::Throw(_) | Completion::Exit(_)) = interp
+                            .close_for_of_loop(
+                                state,
+                                context.func_env,
+                                Completion::Normal(JsValue::UNDEFINED),
+                                context.generator_id,
+                            )
+                        {
+                            return Err(abrupt);
                         }
                     }
                 }
