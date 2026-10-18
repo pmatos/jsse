@@ -393,7 +393,12 @@ impl PropertyMap {
             return Some(remembered);
         }
         let slot = self.slot_of(key)?;
-        hint.set(slot as u32);
+        if self
+            .entry_at(slot)
+            .is_some_and(|(stored, _)| stored.same_allocation(key))
+        {
+            hint.set(slot as u32);
+        }
         Some(slot)
     }
 

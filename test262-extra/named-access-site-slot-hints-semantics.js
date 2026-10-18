@@ -54,7 +54,7 @@ function callM(o) { return o.m(); }
   setX(o, "third");
   assert.sameValue(Object.keys(o).join(), "b,x", "re-added last");
   assert.sameValue(getX(o), "third", "re-added value");
-  assert.sameValue(incX(o), "third" * 1 || NaN, "string updates to NaN");
+  assert.sameValue(incX(o), NaN, "a string updates to NaN");
   o.x = 5;
   assert.sameValue(incX(o), 5, "update returns the old value");
   assert.sameValue(o.x, 6, "update stored");
@@ -140,4 +140,39 @@ function callM(o) { return o.m(); }
   assert.sameValue(plain.length, 9, "plain object length");
   setLength(f, 5);
   assert.sameValue(f.length, 2, "function length is read-only");
+})();
+
+// Properties whose key text did not come from this site's identifier, and
+// receivers that never take a remembered slot, at sites already trained.
+(function () {
+  var trained = { pad: 0, x: "trained" };
+  for (var i = 0; i < 3; i++) {
+    assert.sameValue(getX(trained), "trained");
+    setX(trained, "trained");
+  }
+  var parsed = JSON.parse('{"p":1,"q":2,"x":"json"}');
+  var computed = {};
+  computed["p"] = 1;
+  computed["x" + ""] = "computed";
+  var defined = Object.defineProperty({ p: 1 }, ["x"].join(""), { value: "defined", writable: true, enumerable: true, configurable: true });
+  [[parsed, "json"], [computed, "computed"], [defined, "defined"]].forEach(function (pair) {
+    for (var k = 0; k < 3; k++) assert.sameValue(getX(pair[0]), pair[1], "get " + pair[1]);
+    setX(pair[0], "w");
+    assert.sameValue(pair[0].x, "w", "set " + pair[1]);
+    assert.sameValue(incX(pair[0]), NaN, "update " + pair[1]);
+  });
+
+  var log = [];
+  var proxy = new Proxy({ x: "target" }, {
+    get: function (t, k) { log.push("get"); return t[k]; },
+    set: function (t, k, v) { log.push("set"); t[k] = v; return true; },
+  });
+  assert.sameValue(getX(proxy), "target", "Proxy get after training");
+  setX(proxy, "p");
+  assert.sameValue(log.join(), "get,set", "Proxy traps ran");
+  assert.sameValue(getX(new String("s")), undefined, "String wrapper without x");
+  assert.sameValue(getX((function () { return arguments; })(1)), undefined, "arguments without x");
+  var ta = new Uint8Array(2);
+  setX(ta, 7);
+  assert.sameValue(getX(ta), 7, "TypedArray ordinary name");
 })();
