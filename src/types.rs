@@ -1349,6 +1349,26 @@ impl NanBoxedValue {
         self.0 >= Self::FIRST_HEAP_BITS
     }
 
+    /// The smallest bit pattern whose tag is Object. Numbers, `undefined`,
+    /// `null` and the Booleans all sort below it.
+    const FIRST_OBJECT_BITS: u64 =
+        Self::BOX_SIGNATURE | ((NanTag::Object as u64) << Self::TAG_SHIFT);
+
+    /// A Number, `undefined`, `null` or Boolean: the value neither owns a heap
+    /// pointer nor names an object, so a bitwise copy is a complete clone and
+    /// needs no GC root.
+    #[inline(always)]
+    pub(crate) fn is_plain(&self) -> bool {
+        self.0 < Self::FIRST_OBJECT_BITS
+    }
+
+    /// A copy of a value for which `is_plain` holds.
+    #[inline(always)]
+    pub(crate) fn copy_plain(&self) -> Self {
+        debug_assert!(self.is_plain());
+        Self(self.0)
+    }
+
     /// The tag bits of a value known to own a heap pointer.
     fn heap_tag_bits(&self) -> u64 {
         (self.0 >> Self::TAG_SHIFT) & 0b111
@@ -1382,6 +1402,7 @@ impl NanBoxedValue {
 // `owns_heap_pointer` is a single comparison only while String, Symbol and
 // BigInt are the three largest tags (so Object sits just below String).
 const _: () = {
+    assert!(NanTag::Undefined as u64 == 0 && (NanTag::True as u64) < NanTag::Object as u64);
     assert!(NanTag::Object as u64 + 1 == STRING);
     assert!(BIGINT == 0b111);
 };
