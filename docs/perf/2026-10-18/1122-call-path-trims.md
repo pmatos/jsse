@@ -46,7 +46,7 @@ are layout effects, not work.
 
 cachegrind `--cache-sim=no`, whole-process `I refs`; base = `origin/main` `731c3749`, new = base plus this change. JetStream
 drivers at `--iterations 1`. Each row is one deterministic run, except navier-stokes, whose Ir moves by up to +-2.5% between
-concurrent runs of the same binary; its row is the run-alone pair (base 3,145.8M and 3,153.0M, new 3,145.0M and 3,150.2M), and
+concurrent runs of the same binary; its row is run alone (base 3,145.8M and 3,153.0M, new 3,152.0M), and
 Box2D's base differs by 0.24% between two runs.
 
 | benchmark | base Ir | new Ir | delta |
