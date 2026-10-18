@@ -37,11 +37,17 @@ pub(crate) struct GlobalHint {
 struct ScopeHint {
     hops: u32,
     slot: u32,
+    /// For a `GLOBAL_OBJECT_SLOT` hint: the key-set stamp the global
+    /// environment's indexed binding map had when it was probed and did not
+    /// hold the name (0: it was scanned linearly). While the stamp still
+    /// matches, the name is still absent and the probe is skipped.
+    absent_epoch: u64,
 }
 
 const NO_SCOPE_HINT: ScopeHint = ScopeHint {
     hops: u32::MAX,
     slot: 0,
+    absent_epoch: 0,
 };
 
 const GLOBAL_OBJECT_SLOT: u32 = u32::MAX;
@@ -197,7 +203,11 @@ fn verify_scope_hint(
     if counting && remembered.hops == 0 {
         if remembered.slot == GLOBAL_OBJECT_SLOT {
             let gid = scope.global_object_id?;
-            if scope.bindings.may_contain(key) && scope.bindings.contains_key(key) {
+            let epoch = scope.bindings.epoch();
+            if (epoch == 0 || epoch != remembered.absent_epoch)
+                && scope.bindings.may_contain(key)
+                && scope.bindings.contains_key(key)
+            {
                 return None;
             }
             return Some(NameWalk::Global(gid, want_env.then(|| env.clone())));
@@ -247,6 +257,7 @@ fn train_scope_hint(
             hint.scope.set(ScopeHint {
                 hops,
                 slot: slot as u32,
+                absent_epoch: 0,
             });
         }
         if want_env {
@@ -267,6 +278,7 @@ fn train_scope_hint(
         hint.scope.set(ScopeHint {
             hops: hops.unwrap_or(0),
             slot: GLOBAL_OBJECT_SLOT,
+            absent_epoch: scope.bindings.epoch(),
         });
         return NameWalk::Global(gid, want_env.then(|| env.clone()));
     }

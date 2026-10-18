@@ -37,6 +37,24 @@ pub(crate) struct BindingMap {
     /// the (common) free-variable miss on a scope costs one `and`, not a scan.
     /// Removals leave their bit set: the filter may only err towards "maybe".
     name_filter: u64,
+    /// Stamp of the key set while `index` exists, 0 otherwise. Every change to
+    /// an indexed map's key set takes a fresh value from a per-thread counter,
+    /// so two maps (or two states of one map) never share a stamp, and a
+    /// reader that probed for a name once can later prove it is still absent
+    /// by comparing stamps instead of probing again.
+    epoch: u64,
+}
+
+thread_local! {
+    static NEXT_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+fn fresh_epoch() -> u64 {
+    NEXT_EPOCH.with(|next| {
+        let epoch = next.get();
+        next.set(epoch + 1);
+        epoch
+    })
 }
 
 #[inline]
@@ -179,6 +197,7 @@ impl BindingMap {
             entries: Vec::new(),
             index: None,
             name_filter: 0,
+            epoch: 0,
         }
     }
 
@@ -187,6 +206,7 @@ impl BindingMap {
             entries: Vec::with_capacity(capacity),
             index: None,
             name_filter: 0,
+            epoch: 0,
         }
     }
 
@@ -213,6 +233,7 @@ impl BindingMap {
         self.entries.clear();
         self.index = None;
         self.name_filter = 0;
+        self.epoch = 0;
     }
 
     #[inline]
@@ -237,6 +258,13 @@ impl BindingMap {
     #[inline]
     pub(crate) fn position<K: BindingKey + ?Sized>(&self, key: &K) -> Option<usize> {
         key.find_in(self)
+    }
+
+    /// The key-set stamp of an indexed map (see the `epoch` field), or 0 for a
+    /// map that is scanned linearly.
+    #[inline(always)]
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Whether `name` might be bound here: `false` is definite (one `and` on
@@ -299,6 +327,7 @@ impl BindingMap {
         self.entries.push((name, binding));
         if let Some(index) = &mut self.index {
             index.add(hash, slot);
+            self.epoch = fresh_epoch();
         } else if self.entries.len() > LINEAR_MAX {
             self.build_index();
         }
@@ -311,6 +340,7 @@ impl BindingMap {
         let Some(index) = &mut self.index else {
             return Some(removed);
         };
+        self.epoch = fresh_epoch();
         if !index.overflow.is_empty() {
             // Hash collisions are rare enough that rebuilding beats keeping
             // promotion bookkeeping for them.
@@ -341,6 +371,7 @@ impl BindingMap {
             index.add(atom.precomputed_hash(), slot as u32);
         }
         self.index = Some(index);
+        self.epoch = fresh_epoch();
     }
 }
 
