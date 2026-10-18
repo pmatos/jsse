@@ -1213,10 +1213,7 @@ impl NanBoxedValue {
         })
     }
 
-    /// Only exercised by tests today (`with_bigint` covers every production
-    /// read path) — kept for symmetry with `into_string` and to keep this
-    /// tag's forget/`Arc::from_raw` transfer under test.
-    #[allow(dead_code)]
+    /// Moves the BigInt's `Arc` out of the value, leaving the refcount alone.
     pub(crate) fn into_bigint(self) -> Option<JsBigInt> {
         if self.tag() != Some(NanTag::BigInt) {
             return None;
