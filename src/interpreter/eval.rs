@@ -5297,15 +5297,9 @@ impl Interpreter {
                         .flatten()
                         .filter(|binding| binding.initialized)
                         .map_or(JsValue::UNDEFINED, |binding| binding.value.clone());
-                    target.bindings.insert_atom(
-                        atom,
-                        Binding {
-                            value: copied,
-                            kind: BindingKind::Var,
-                            initialized: true,
-                            deletable: false,
-                        },
-                    );
+                    target
+                        .bindings
+                        .push_unique(atom.clone(), Binding::new(copied, BindingKind::Var, true));
                 }
             }
             return body_env;
@@ -5333,18 +5327,6 @@ impl Interpreter {
         args: &[JsValue],
         func_env: &EnvRef,
     ) -> Result<(), JsValue> {
-        self.with_env_rooted(func_env, |interp| {
-            interp.bind_named_parameters_rooted(plan, params, args, func_env)
-        })
-    }
-
-    fn bind_named_parameters_rooted(
-        &mut self,
-        plan: &NamedParamPlan,
-        params: &[Pattern],
-        args: &[JsValue],
-        func_env: &EnvRef,
-    ) -> Result<(), JsValue> {
         for (index, (param, atom)) in params.iter().zip(plan.atoms()).enumerate() {
             let value = match param {
                 Pattern::Identifier(_) => args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
@@ -5360,16 +5342,14 @@ impl Interpreter {
                             if !env.bindings.contains_key(atom) {
                                 env.bindings.push_unique(
                                     atom.clone(),
-                                    Binding {
-                                        value: JsValue::UNDEFINED,
-                                        kind: BindingKind::Var,
-                                        initialized: false,
-                                        deletable: false,
-                                    },
+                                    Binding::new(JsValue::UNDEFINED, BindingKind::Var, false),
                                 );
                             }
                         }
-                        let value = match self.eval_expr(default, func_env) {
+                        let evaluated = self.with_env_rooted(func_env, |interp| {
+                            interp.eval_expr(default, func_env)
+                        });
+                        let value = match evaluated {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(e),
                             _ => return Ok(()),
@@ -6333,17 +6313,20 @@ impl Interpreter {
         let data = obj.borrow();
         match data.callable.as_deref() {
             Some(JsFunction::User { frame, closure, .. })
-                if !(data.is_proxy()
-                    || data.is_proxy_revoked()
-                    || data.wrapped().is_some()
-                    || data.is_class_constructor()) =>
+                if frame.compiled_call().is_some()
+                    && !(data.is_proxy()
+                        || data.is_proxy_revoked()
+                        || data.wrapped().is_some()
+                        || data.is_class_constructor()) =>
             {
-                let call = frame.compiled_call()?;
+                let with_defaults = frame
+                    .compiled_call()
+                    .is_some_and(|call| call.has_parameter_expressions);
                 Some((
                     frame.clone(),
                     closure.clone(),
                     data.function_realm(),
-                    call.has_parameter_expressions,
+                    with_defaults,
                 ))
             }
             _ => None,
