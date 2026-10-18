@@ -410,6 +410,36 @@ fn move_into_local(
     true
 }
 
+#[inline(always)]
+fn local_number(env: &EnvRef, name: &Atom, slot: u16) -> Option<f64> {
+    hinted_binding(&env.borrow(), name, slot).and_then(|binding| binding.value.as_number())
+}
+
+/// A copy of the verified binding; an object copy is not rooted, so the
+/// caller stores it before anything can collect.
+#[inline(always)]
+fn read_local(env: &EnvRef, name: &Atom, slot: u16) -> Option<JsValue> {
+    hinted_binding(&env.borrow(), name, slot).map(|binding| {
+        if binding.value.is_plain() {
+            binding.value.copy_plain()
+        } else {
+            binding.value.clone()
+        }
+    })
+}
+
+/// Stores into the verified writable binding, or hands the value back.
+#[inline(always)]
+fn write_local(env: &EnvRef, name: &Atom, slot: u16, value: JsValue) -> Result<(), JsValue> {
+    match hinted_writable(&mut env.borrow_mut(), name, slot) {
+        Some(binding) => {
+            binding.value = value;
+            Ok(())
+        }
+        None => Err(value),
+    }
+}
+
 /// Where a `break`/`continue` completion leaving an `ExecAst` statement
 /// resumes, if its label names a loop compiled into this chunk.
 fn escape_target(
@@ -1466,6 +1496,80 @@ fn run_chunk_inner<const GENERATOR: bool>(
             }
         }};
     }
+    // `LoadLocal`'s body for a local the fused ops read: the slot when its
+    // hint verifies, else by-name resolution (which also raises a TDZ error).
+    macro_rules! push_local {
+        ($l:lifetime, $target:expr, $name:expr, $hint:expr, $idx:expr) => {{
+            if push_local_hit(interp, stack, $target, $name, $hint) {
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.local_slot_hits += 1;
+                }
+            } else {
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.local_slot_misses += 1;
+                }
+                match interp.resolve_name_hinted($name, cur_env!(), chunk.global_hint($idx)) {
+                    Completion::Normal(v) => push_value(interp, stack, v),
+                    abrupt => bail!($l, abrupt),
+                }
+            }
+        }};
+    }
+    // `StoreLocalPop`'s body: moves the top operand into a local.
+    macro_rules! store_pop_local {
+        ($l:lifetime, $target:expr, $name:expr, $hint:expr, $idx:expr) => {{
+            if move_into_local(interp, stack, $target, $name, $hint) {
+                #[cfg(feature = "perf-counters")]
+                {
+                    interp.perf.local_slot_hits += 1;
+                }
+            } else {
+                store_local_top!($l, $target, $name, $hint, $idx);
+                pop_value(interp, stack, "stack underflow on StoreLocalPop");
+            }
+        }};
+    }
+    // The operands of a `CmpJumpIfFalse` comparison are on the operand stack:
+    // pops them and yields whether the jump is taken (the comparison is false).
+    macro_rules! cmp_jump_taken {
+        ($l:lifetime, $cmp:expr) => {{
+            let cmp = $cmp;
+            let len = stack.len();
+            if len >= 2
+                && let (Some(l), Some(r)) = (stack[len - 2].as_number(), stack[len - 1].as_number())
+            {
+                // SAFETY: `len >= 2` and both operands were just read as Numbers.
+                unsafe { discard_number_operands(stack, 2) };
+                !number_compare(cmp, l, r)
+            } else if len >= 2
+                && matches!(cmp, Op::Eq | Op::NotEq)
+                && let Some(equal) =
+                    interp.loose_equal_no_user_code(&stack[len - 2], &stack[len - 1])
+            {
+                pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
+                pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
+                equal != (cmp == Op::Eq)
+            } else if matches!(cmp, Op::Lt | Op::Gt | Op::LtEq | Op::GtEq)
+                && stack.last().is_some_and(JsValue::is_bigint)
+                && let Some(holds) = bigint_compare_pop(stack, cmp)
+            {
+                !holds
+            } else if matches!(cmp, Op::StrictEq | Op::StrictNotEq) {
+                let r = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
+                let l = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
+                strict_equality(&l, &r) != (cmp == Op::StrictEq)
+            } else {
+                let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
+                let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
+                match binary_slow(interp, binary_of_op(cmp), l, r) {
+                    Completion::Normal(v) => !interp.to_boolean_val(&v),
+                    abrupt => bail!($l, abrupt),
+                }
+            }
+        }};
+    }
     if GENERATOR && let Some(thrown) = resume_throw {
         // The error is raised by the `Yield` op the body is suspended at.
         match resume_at_handler(
@@ -1539,15 +1643,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 4;
                     let name = &chunk.names[idx as usize];
                     let (target, hint_slot) = local_target(frame_env, frame_plain, &scopes, slot);
-                    if move_into_local(interp, stack, target, name, hint_slot) {
-                        #[cfg(feature = "perf-counters")]
-                        {
-                            interp.perf.local_slot_hits += 1;
-                        }
-                    } else {
-                        store_local_top!('dispatch, target, name, hint_slot, idx);
-                        pop_value(interp, stack, "stack underflow on StoreLocalPop");
-                    }
+                    store_pop_local!('dispatch, target, name, hint_slot, idx);
                 }
                 Op::UpdateLocal => {
                     let (idx, slot) = decode_local(chunk, pc);
@@ -2175,38 +2271,149 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let cmp = Op::from_u8(cmp).expect("invalid comparison byte");
                     let offset = i32::from(i16::from_le_bytes([o0, o1]));
                     pc += 3;
-                    let len = stack.len();
-                    let taken = if len >= 2
-                        && let (Some(l), Some(r)) =
-                            (stack[len - 2].as_number(), stack[len - 1].as_number())
-                    {
-                        // SAFETY: `len >= 2` and both operands were just read as Numbers.
-                        unsafe { discard_number_operands(stack, 2) };
-                        !number_compare(cmp, l, r)
-                    } else if len >= 2
-                        && matches!(cmp, Op::Eq | Op::NotEq)
-                        && let Some(equal) =
-                            interp.loose_equal_no_user_code(&stack[len - 2], &stack[len - 1])
-                    {
-                        pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
-                        pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
-                        equal != (cmp == Op::Eq)
-                    } else if matches!(cmp, Op::Lt | Op::Gt | Op::LtEq | Op::GtEq)
-                        && stack.last().is_some_and(JsValue::is_bigint)
-                        && let Some(holds) = bigint_compare_pop(stack, cmp)
-                    {
-                        !holds
-                    } else if matches!(cmp, Op::StrictEq | Op::StrictNotEq) {
-                        let r = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
-                        let l = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
-                        strict_equality(&l, &r) != (cmp == Op::StrictEq)
-                    } else {
-                        let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
-                        let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
-                        match binary_slow(interp, binary_of_op(cmp), l, r) {
-                            Completion::Normal(v) => !interp.to_boolean_val(&v),
-                            abrupt => bail!('dispatch, abrupt),
+                    if cmp_jump_taken!('dispatch, cmp) {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::LocalLocalBin => {
+                    let [a0, a1, a2, a3, b0, b1, b2, b3, bop] = operand_bytes::<9>(chunk, pc);
+                    pc += 9;
+                    let idx_a = u16::from_le_bytes([a0, a1]);
+                    let idx_b = u16::from_le_bytes([b0, b1]);
+                    let bop = Op::from_u8(bop).expect("invalid binary op byte");
+                    let name_a = &chunk.names[idx_a as usize];
+                    let name_b = &chunk.names[idx_b as usize];
+                    let (target_a, hint_a) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([a2, a3]),
+                    );
+                    let (target_b, hint_b) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([b2, b3]),
+                    );
+                    if let (Some(l), Some(r)) = (
+                        local_number(target_a, name_a, hint_a),
+                        local_number(target_b, name_b, hint_b),
+                    ) {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 2;
                         }
+                        stack.push(number_binop(bop, l, r));
+                    } else {
+                        push_local!('dispatch, target_a, name_a, hint_a, idx_a);
+                        push_local!('dispatch, target_b, name_b, hint_b, idx_b);
+                        binary_arm!('dispatch, bop);
+                    }
+                }
+                Op::MoveLocal => {
+                    let [s0, s1, s2, s3, d0, d1, d2, d3] = operand_bytes::<8>(chunk, pc);
+                    pc += 8;
+                    let idx_src = u16::from_le_bytes([s0, s1]);
+                    let idx_dst = u16::from_le_bytes([d0, d1]);
+                    let name_src = &chunk.names[idx_src as usize];
+                    let name_dst = &chunk.names[idx_dst as usize];
+                    let (target_src, hint_src) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([s2, s3]),
+                    );
+                    let (target_dst, hint_dst) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([d2, d3]),
+                    );
+                    let moved = match read_local(target_src, name_src, hint_src) {
+                        Some(value) => write_local(target_dst, name_dst, hint_dst, value),
+                        None => Err(JsValue::UNDEFINED),
+                    };
+                    match moved {
+                        Ok(()) => {
+                            #[cfg(feature = "perf-counters")]
+                            {
+                                interp.perf.local_slot_hits += 2;
+                            }
+                        }
+                        Err(_) => {
+                            push_local!('dispatch, target_src, name_src, hint_src, idx_src);
+                            store_pop_local!('dispatch, target_dst, name_dst, hint_dst, idx_dst);
+                        }
+                    }
+                }
+                Op::LocalLocalCmpJump => {
+                    let [a0, a1, a2, a3, b0, b1, b2, b3, cmp, o0, o1] =
+                        operand_bytes::<11>(chunk, pc);
+                    pc += 11;
+                    let idx_a = u16::from_le_bytes([a0, a1]);
+                    let idx_b = u16::from_le_bytes([b0, b1]);
+                    let cmp = Op::from_u8(cmp).expect("invalid comparison byte");
+                    let offset = i32::from(i16::from_le_bytes([o0, o1]));
+                    let name_a = &chunk.names[idx_a as usize];
+                    let name_b = &chunk.names[idx_b as usize];
+                    let (target_a, hint_a) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([a2, a3]),
+                    );
+                    let (target_b, hint_b) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([b2, b3]),
+                    );
+                    let taken = if let (Some(l), Some(r)) = (
+                        local_number(target_a, name_a, hint_a),
+                        local_number(target_b, name_b, hint_b),
+                    ) {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 2;
+                        }
+                        !number_compare(cmp, l, r)
+                    } else {
+                        push_local!('dispatch, target_a, name_a, hint_a, idx_a);
+                        push_local!('dispatch, target_b, name_b, hint_b, idx_b);
+                        cmp_jump_taken!('dispatch, cmp)
+                    };
+                    if taken {
+                        pc = (pc as i32 + offset) as usize;
+                    }
+                }
+                Op::LocalConstCmpJump => {
+                    let [i0, i1, s0, s1, cmp, k0, k1, o0, o1] = operand_bytes::<9>(chunk, pc);
+                    pc += 9;
+                    let idx = u16::from_le_bytes([i0, i1]);
+                    let cmp = Op::from_u8(cmp).expect("invalid comparison byte");
+                    let Constant::Number(k) =
+                        chunk.constants[usize::from(u16::from_le_bytes([k0, k1]))]
+                    else {
+                        unreachable!("LocalConstCmpJump constant is a Number")
+                    };
+                    let offset = i32::from(i16::from_le_bytes([o0, o1]));
+                    let name = &chunk.names[idx as usize];
+                    let (target, hint) = local_target(
+                        frame_env,
+                        frame_plain,
+                        &scopes,
+                        u16::from_le_bytes([s0, s1]),
+                    );
+                    let taken = if let Some(l) = local_number(target, name, hint) {
+                        #[cfg(feature = "perf-counters")]
+                        {
+                            interp.perf.local_slot_hits += 1;
+                        }
+                        !number_compare(cmp, l, k)
+                    } else {
+                        push_local!('dispatch, target, name, hint, idx);
+                        stack.push(JsValue::number(k));
+                        cmp_jump_taken!('dispatch, cmp)
                     };
                     if taken {
                         pc = (pc as i32 + offset) as usize;

@@ -236,6 +236,22 @@ pub(crate) enum Op {
     /// (i16, last so `patch_jump` applies unchanged) from the end of the
     /// operands to the code after the stub.
     Yield = 103,
+    /// `[...]` → `[..., a op b]` for two function-local names: `LoadLocal a`,
+    /// `LoadLocal b`, then the binary op, in one dispatch. Operands: name
+    /// (u16), slot hint (u16) for each of `a` and `b`, then the binary op (u8,
+    /// as `BinConst`).
+    LocalLocalBin = 104,
+    /// `[...]` → `[...]`: `LoadLocal src` then `StoreLocalPop dst`. Operands:
+    /// name (u16), slot hint (u16) for `src`, then for `dst`.
+    MoveLocal = 105,
+    /// `LoadLocal a`, `LoadLocal b`, then `CmpJumpIfFalse`. Operands: name
+    /// (u16), slot hint (u16) for each of `a` and `b`, comparison (u8, as
+    /// `CmpJumpIfFalse`), offset (i16, last).
+    LocalLocalCmpJump = 106,
+    /// `LocalBinConst` of a comparison, then `JumpIfFalse`. Operands: name
+    /// (u16), slot hint (u16), comparison (u8), constant (u16), offset (i16,
+    /// last).
+    LocalConstCmpJump = 107,
 }
 
 /// Where `Op::Yield`'s operands sit counted back from the end of the op, which
@@ -351,6 +367,10 @@ impl Op {
             101 => Some(Op::PrivateIn),
             102 => Some(Op::CaseStrictEq),
             103 => Some(Op::Yield),
+            104 => Some(Op::LocalLocalBin),
+            105 => Some(Op::MoveLocal),
+            106 => Some(Op::LocalLocalCmpJump),
+            107 => Some(Op::LocalConstCmpJump),
             _ => None,
         }
     }

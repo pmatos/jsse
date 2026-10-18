@@ -582,6 +582,47 @@ impl Compiler {
         Ok(())
     }
 
+    /// `(name index, slot)` of a function-local name; `None` for any other
+    /// expression or a name that is not a frame or block local.
+    fn local_ref(&mut self, expr: &Expression) -> Option<(u16, u16)> {
+        let Expression::Identifier(name) = expr else {
+            return None;
+        };
+        let slot = self.local_slot(name)?;
+        Some((self.add_name(name).ok()?, slot))
+    }
+
+    fn local_pair(
+        &mut self,
+        lhs: &Expression,
+        rhs: &Expression,
+    ) -> Option<((u16, u16), (u16, u16))> {
+        Some((self.local_ref(lhs)?, self.local_ref(rhs)?))
+    }
+
+    fn emit_local_ref(&mut self, (idx, slot): (u16, u16)) {
+        self.emit_u16(idx);
+        self.emit_u16(slot);
+    }
+
+    /// `LoadLocal a`, `LoadLocal b`, binary op, in one op: pushes `a op b`.
+    fn emit_local_local_bin(&mut self, a: (u16, u16), b: (u16, u16), bop: Op) {
+        self.emit(Op::LocalLocalBin);
+        self.emit_local_ref(a);
+        self.emit_local_ref(b);
+        self.code.push(bop as u8);
+        self.push_n(2);
+        self.pop_n(1);
+    }
+
+    fn emit_move_local(&mut self, src: (u16, u16), dst: (u16, u16)) {
+        self.emit(Op::MoveLocal);
+        self.emit_local_ref(src);
+        self.emit_local_ref(dst);
+        self.push_n(1);
+        self.pop_n(1);
+    }
+
     fn reset_script_completion(&mut self) {
         if self.goal == CompileGoal::Script {
             self.emit(Op::LoadUndefined);
@@ -959,6 +1000,12 @@ impl Compiler {
                     }
                     return Ok(());
                 }
+                if !matches!(bop, Op::Instanceof | Op::In)
+                    && let Some((a, b)) = self.local_pair(lhs, rhs)
+                {
+                    self.emit_local_local_bin(a, b, bop);
+                    return Ok(());
+                }
                 self.compile_expr(lhs)?;
                 self.compile_expr(rhs)?;
                 self.emit(bop);
@@ -1327,10 +1374,19 @@ impl Compiler {
             // A local of this frame: no `with`, closure or direct eval can
             // change what the name resolves to while the right-hand side
             // runs, so the reference needs no early resolution.
+            if op == AssignOp::Assign
+                && discard
+                && let Some(src) = self.local_ref(value)
+            {
+                self.emit_move_local(src, (idx, slot));
+                return Ok(());
+            }
             if op == AssignOp::Assign {
                 self.compile_named_value(value, name)?;
             } else if let Expression::Literal(Literal::Number(k)) = value {
                 self.emit_local_bin_const(name, slot, Self::compound_binary_op(op)?, *k)?;
+            } else if let Some(src) = self.local_ref(value) {
+                self.emit_local_local_bin((idx, slot), src, Self::compound_binary_op(op)?);
             } else {
                 self.compile_load_name(name)?;
                 self.compile_expr(value)?;
@@ -1438,28 +1494,51 @@ impl Compiler {
         )
     }
 
+    /// The comparison byte, optional constant and jump offset (last, so
+    /// `patch_jump` applies) every compare-and-branch op ends with. Returns the
+    /// patch site.
+    fn emit_cmp_jump_tail(&mut self, cmp: Op, constant: Option<u16>) -> usize {
+        self.code.push(cmp as u8);
+        if let Some(k_idx) = constant {
+            self.emit_u16(k_idx);
+        }
+        let patch = self.code.len();
+        self.emit_u16(0);
+        patch
+    }
+
     /// Compiles `test` and a forward jump taken when it is falsy; returns the
     /// patch site. A comparison fuses into `CmpJumpIfFalse` (its result is
-    /// always a Boolean, so ToBoolean is the identity). `local < literal`
-    /// keeps `LocalBinConst` + `JumpIfFalse`, which is already two dispatches.
+    /// always a Boolean, so ToBoolean is the identity), and one whose operands
+    /// are locals, or a local and a number literal, reads them in the jump op.
     fn compile_cond_jump(&mut self, test: &Expression) -> Result<usize, CompileError> {
         if let Expression::Binary(op, lhs, rhs) = test
             && Self::is_comparison(*op)
         {
-            let local_lhs =
-                matches!(lhs.as_ref(), Expression::Identifier(n) if self.local_slot(n).is_some());
-            let literal_rhs = matches!(rhs.as_ref(), Expression::Literal(Literal::Number(_)));
-            if !(local_lhs && literal_rhs) {
-                let cmp = Self::binary_op(*op)?;
-                self.compile_expr(lhs)?;
-                self.compile_expr(rhs)?;
+            let cmp = Self::binary_op(*op)?;
+            if let Some((a, b)) = self.local_pair(lhs, rhs) {
+                self.emit(Op::LocalLocalCmpJump);
+                self.emit_local_ref(a);
+                self.emit_local_ref(b);
+                self.push_n(2);
                 self.pop_n(2);
-                self.emit(Op::CmpJumpIfFalse);
-                self.code.push(cmp as u8);
-                let patch = self.code.len();
-                self.emit_u16(0);
-                return Ok(patch);
+                return Ok(self.emit_cmp_jump_tail(cmp, None));
             }
+            if let Expression::Literal(Literal::Number(k)) = rhs.as_ref()
+                && let Some(local) = self.local_ref(lhs)
+            {
+                let k_idx = self.add_constant(Constant::Number(*k))?;
+                self.emit(Op::LocalConstCmpJump);
+                self.emit_local_ref(local);
+                self.push_n(2);
+                self.pop_n(2);
+                return Ok(self.emit_cmp_jump_tail(cmp, Some(k_idx)));
+            }
+            self.compile_expr(lhs)?;
+            self.compile_expr(rhs)?;
+            self.pop_n(2);
+            self.emit(Op::CmpJumpIfFalse);
+            return Ok(self.emit_cmp_jump_tail(cmp, None));
         }
         self.compile_expr(test)?;
         self.pop_n(1);
