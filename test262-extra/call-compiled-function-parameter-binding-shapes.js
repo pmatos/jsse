@@ -32,6 +32,24 @@ function seventeen(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a
 function twenty(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19) {
   return a0 + a19 + a16;
 }
+function sixteenWithVar(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) {
+  var local = a15;
+  return local + a0;
+}
+function sixteenWithClosure(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) {
+  return function () {
+    return a15 + a0;
+  };
+}
+function sixteenWithFunction(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) {
+  function inner() {
+    return a15;
+  }
+  return inner() + a14;
+}
+function readsArguments(a, b) {
+  return arguments.length + a + b;
+}
 function duplicate(a, a) {
   return a;
 }
@@ -67,6 +85,10 @@ times(10, function (i) {
   assert.sameValue(twenty.apply(undefined, args20), 3 * i + 19 + 16, "twenty parameters, call " + i);
   assert.sameValue(seventeen(1, 2, 3), NaN, "seventeen parameters, mostly missing, call " + i);
 
+  assert.sameValue(sixteenWithVar.apply(undefined, args16), i + (i + 15), "var beside sixteen parameters, call " + i);
+  assert.sameValue(sixteenWithClosure.apply(undefined, args16)(), i + 15 + i, "closure over sixteen parameters, call " + i);
+  assert.sameValue(sixteenWithFunction.apply(undefined, args16), i + 15 + i + 14, "function beside sixteen parameters, call " + i);
+  assert.sameValue(readsArguments(i, 1), 2 + i + 1, "parameters beside an arguments object, call " + i);
   assert.sameValue(duplicate(i, i + 1), i + 1, "the last duplicate name wins, call " + i);
   assert.sameValue(duplicate(i), undefined, "a missing duplicate shadows an earlier one, call " + i);
   assert.sameValue(namedArguments(i), i, "a parameter named arguments, call " + i);

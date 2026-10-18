@@ -6320,9 +6320,9 @@ impl Interpreter {
 
     /// The frame, closure environment and realm of a function that can take
     /// `call_compiled_function`, or `None` when it has not (yet) proved
-    /// eligible. A Proxy or wrapped function copies its target's callable
-    /// (and so its frame), and a class constructor throws when called, so
-    /// neither is eligible.
+    /// eligible. Only an `Ordinary` object qualifies: a Proxy or wrapped
+    /// function copies its target's callable (and so its frame), and a class
+    /// constructor throws when called, so none of those is eligible.
     #[inline]
     fn compiled_call_target(
         obj: &ObjectHandle,

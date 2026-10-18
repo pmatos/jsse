@@ -104,6 +104,9 @@ Reproducer (the leaf-call script, Ir per iteration = (N=250,000 minus N=50,000) 
 
 One call (minus the control) costs 1,638 Ir at base and 1,553 now. Per extra parameter 138 -> 99 Ir; sloppy minus strict stays 20.
 
+Native stack: a script recursing to the catchable limit (4,000 levels, then a RangeError) peaks at 32.2 MB RSS with this change and
+32.7 MB at base, so merging the layers does not enlarge the per-call native footprint.
+
 Wall (hyperfine, 9 runs, pinned to one CPU, loadavg about 1.5, mean of two alternating invocations):
 
 | benchmark | base | new | delta |
@@ -115,9 +118,11 @@ Wall (hyperfine, 9 runs, pinned to one CPU, loadavg about 1.5, mean of two alter
 
 ## Correctness gates
 
-`test262-extra/call-compiled-function-parameter-binding-shapes.js` calls functions with 0, 1, 2, 16, 17 and 20 parameters,
-duplicate names, a parameter named `arguments`, missing and extra arguments, captured and reassigned parameters, and a `var` or
-function declaration redeclaring a parameter, ten times each so the later calls take the compiled path.
+`test262-extra/call-compiled-function-parameter-binding-shapes.js` calls functions with 0, 1, 2, 16, 17 and 20 parameters
+(sixteen also beside a `var`, a closure and a function declaration), duplicate names, a parameter named `arguments`, parameters
+beside an `arguments` object, missing and extra arguments, captured and reassigned parameters, and a `var` or function
+declaration redeclaring a parameter, ten times each so the later calls take the compiled path. `binding_map.rs` unit tests cover
+`fill_distinct` against `push_unique` and the index build on the 17th name.
 
 Full test262 default and `--no-bytecode`: 99,911/99,911 each; `test262-extra/` normal, `--no-bytecode` and both under
 `JSSE_GC_STRESS=7`, on the plain release and the `release-checked` binaries; `cargo test --lib`; `tests/recursion-limit-*.js` and

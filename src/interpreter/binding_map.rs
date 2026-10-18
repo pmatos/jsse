@@ -570,6 +570,48 @@ mod tests {
     }
 
     #[test]
+    fn fill_distinct_matches_pushing_each_name() {
+        for count in [0usize, 1, 3, LINEAR_MAX] {
+            let atoms: Vec<Atom> = (0..count).map(|i| Atom::intern(&format!("f{i}"))).collect();
+            let mut filled = BindingMap::new();
+            filled.fill_distinct(&atoms, BindingMap::filter_of(&atoms), |i| b(i as f64));
+            let mut pushed = BindingMap::new();
+            for (i, atom) in atoms.iter().enumerate() {
+                pushed.push_unique(atom.clone(), b(i as f64));
+            }
+            assert_eq!(filled.len(), count);
+            for (i, atom) in atoms.iter().enumerate() {
+                assert_eq!(filled.position(atom), pushed.position(atom));
+                assert_eq!(
+                    filled.get(atom).and_then(|b| b.value.as_number()),
+                    Some(i as f64)
+                );
+            }
+            assert!(!filled.contains_key("absent"));
+            assert!(!filled.contains_key(&Atom::intern("absent")));
+            assert_eq!(filled.epoch(), 0, "a filled map is scanned, not indexed");
+        }
+    }
+
+    #[test]
+    fn a_map_filled_to_the_linear_limit_indexes_on_the_next_push() {
+        let atoms: Vec<Atom> = (0..LINEAR_MAX)
+            .map(|i| Atom::intern(&format!("g{i}")))
+            .collect();
+        let mut m = BindingMap::new();
+        m.fill_distinct(&atoms, BindingMap::filter_of(&atoms), |i| b(i as f64));
+        m.push_unique(Atom::intern("g_next"), b(99.0));
+        assert_ne!(m.epoch(), 0, "the 17th name builds the index");
+        for (i, atom) in atoms.iter().enumerate() {
+            assert_eq!(
+                m.get(atom).and_then(|b| b.value.as_number()),
+                Some(i as f64)
+            );
+        }
+        assert_eq!(val(&m, "g_next"), Some(99.0));
+    }
+
+    #[test]
     fn colliding_hashes_stay_distinct_through_insert_and_remove() {
         let mut m = BindingMap::new();
         let atoms: Vec<Atom> = (0..40)
