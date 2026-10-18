@@ -315,6 +315,39 @@ impl BindingMap {
         None
     }
 
+    /// The filter bits of `atoms`, as `fill_distinct` stores them.
+    pub(crate) fn filter_of(atoms: &[Atom]) -> u64 {
+        atoms
+            .iter()
+            .fold(0, |bits, atom| bits | filter_bit(atom.precomputed_hash()))
+    }
+
+    /// Appends one binding per atom of `atoms`, which are pairwise distinct
+    /// and absent from the map. `filter` is `filter_of(atoms)`. An empty,
+    /// unindexed map that stays within [`LINEAR_MAX`] is filled in one pass
+    /// with no lookups; any other map takes `push_unique` per name.
+    pub(crate) fn fill_distinct(
+        &mut self,
+        atoms: &[Atom],
+        filter: u64,
+        binding: impl Fn(usize) -> Binding,
+    ) {
+        if self.entries.is_empty() && self.index.is_none() && atoms.len() <= LINEAR_MAX {
+            debug_assert_eq!(filter, Self::filter_of(atoms));
+            self.name_filter |= filter;
+            self.entries.extend(
+                atoms
+                    .iter()
+                    .enumerate()
+                    .map(|(index, atom)| (atom.clone(), binding(index))),
+            );
+        } else {
+            for (index, atom) in atoms.iter().enumerate() {
+                self.push_unique(atom.clone(), binding(index));
+            }
+        }
+    }
+
     /// Append an entry the caller knows is absent.
     pub(crate) fn push_unique(&mut self, name: Atom, binding: Binding) {
         debug_assert!(name.find_in(self).is_none(), "push_unique of a bound name");
@@ -539,6 +572,72 @@ mod tests {
         m.push_unique(Atom::intern("q"), b(2.0));
         assert_eq!(m.entry_at(1).map(|(a, _)| a.as_str()), Some("q"));
         assert_eq!(m.position("q"), Some(1));
+    }
+
+    #[test]
+    fn fill_distinct_matches_pushing_each_name() {
+        for count in [0usize, 1, 3, LINEAR_MAX] {
+            let atoms: Vec<Atom> = (0..count).map(|i| Atom::intern(&format!("f{i}"))).collect();
+            let mut filled = BindingMap::new();
+            filled.fill_distinct(&atoms, BindingMap::filter_of(&atoms), |i| b(i as f64));
+            let mut pushed = BindingMap::new();
+            for (i, atom) in atoms.iter().enumerate() {
+                pushed.push_unique(atom.clone(), b(i as f64));
+            }
+            assert_eq!(filled.len(), count);
+            for (i, atom) in atoms.iter().enumerate() {
+                assert_eq!(filled.position(atom), pushed.position(atom));
+                assert_eq!(
+                    filled.get(atom).and_then(|b| b.value.as_number()),
+                    Some(i as f64)
+                );
+            }
+            assert!(!filled.contains_key("absent"));
+            assert!(!filled.contains_key(&Atom::intern("absent")));
+            assert_eq!(filled.epoch(), 0, "a filled map is scanned, not indexed");
+        }
+    }
+
+    #[test]
+    fn fill_distinct_falls_back_for_a_busy_map_or_a_long_list() {
+        let mut busy = BindingMap::new();
+        busy.insert("existing", b(7.0));
+        let atoms: Vec<Atom> = (0..3).map(|i| Atom::intern(&format!("h{i}"))).collect();
+        busy.fill_distinct(&atoms, BindingMap::filter_of(&atoms), |i| b(i as f64));
+        assert_eq!(busy.len(), 4);
+        assert_eq!(val(&busy, "existing"), Some(7.0));
+        assert_eq!(val(&busy, "h2"), Some(2.0));
+
+        let long: Vec<Atom> = (0..LINEAR_MAX + 4)
+            .map(|i| Atom::intern(&format!("long{i}")))
+            .collect();
+        let mut m = BindingMap::new();
+        m.fill_distinct(&long, BindingMap::filter_of(&long), |i| b(i as f64));
+        assert_eq!(m.len(), long.len());
+        for (i, atom) in long.iter().enumerate() {
+            assert_eq!(
+                m.get(atom).and_then(|b| b.value.as_number()),
+                Some(i as f64)
+            );
+        }
+    }
+
+    #[test]
+    fn a_map_filled_to_the_linear_limit_indexes_on_the_next_push() {
+        let atoms: Vec<Atom> = (0..LINEAR_MAX)
+            .map(|i| Atom::intern(&format!("g{i}")))
+            .collect();
+        let mut m = BindingMap::new();
+        m.fill_distinct(&atoms, BindingMap::filter_of(&atoms), |i| b(i as f64));
+        m.push_unique(Atom::intern("g_next"), b(99.0));
+        assert_ne!(m.epoch(), 0, "the 17th name builds the index");
+        for (i, atom) in atoms.iter().enumerate() {
+            assert_eq!(
+                m.get(atom).and_then(|b| b.value.as_number()),
+                Some(i as f64)
+            );
+        }
+        assert_eq!(val(&m, "g_next"), Some(99.0));
     }
 
     #[test]

@@ -8,6 +8,7 @@ use std::rc::Rc;
 use crate::ast::{Body, Pattern};
 
 use super::atom::Atom;
+use super::binding_map::BindingMap;
 use super::bytecode::chunk::Chunk;
 use super::hoist_cache::HoistAnalysis;
 use super::ic_store::{BodyIcStore, FrameIcStore};
@@ -20,6 +21,8 @@ pub(crate) struct ParamAtoms {
     /// be appended to an environment that holds at most the `arguments`
     /// binding without first looking the name up.
     fresh: bool,
+    /// `BindingMap::filter_of(atoms)`.
+    filter: u64,
 }
 
 impl ParamAtoms {
@@ -36,7 +39,16 @@ impl ParamAtoms {
         let fresh = atoms.iter().enumerate().all(|(i, atom)| {
             atom.as_str() != "arguments" && !atoms[..i].iter().any(|prior| prior.ptr_eq(atom))
         });
-        Self { atoms, fresh }
+        let filter = BindingMap::filter_of(&atoms);
+        Self {
+            atoms,
+            fresh,
+            filter,
+        }
+    }
+
+    pub(crate) fn filter(&self) -> u64 {
+        self.filter
     }
 
     pub(crate) fn atoms(&self) -> &[Atom] {
