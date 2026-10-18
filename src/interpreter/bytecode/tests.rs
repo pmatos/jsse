@@ -2916,6 +2916,10 @@ fn operand_layout(op: Op) -> &'static [usize] {
         Op::DupN => &[1],
         Op::BinConst | Op::CmpJumpIfFalse => &[1, 2],
         Op::LocalBinConst => &[2, 2, 1, 2],
+        Op::LocalLocalBin => &[2, 2, 2, 2, 1],
+        Op::MoveLocal => &[2, 2, 2, 2],
+        Op::LocalLocalCmpJump => &[2, 2, 2, 2, 1, 2],
+        Op::LocalConstCmpJump => &[2, 2, 1, 2, 2],
         Op::PushEnv | Op::EvalAst => &[2],
         Op::PopEnv => &[1],
         Op::ExecAst => &[2, 2, 1],
@@ -3370,12 +3374,30 @@ fn local_ops_address_block_bindings_and_still_hit_the_frame_for_outer_names() {
     );
     let slots: Vec<(String, u16)> = decode_ops(&chunk)
         .into_iter()
-        .filter(|(op, _)| matches!(op, Op::LoadLocal | Op::StoreLocal | Op::StoreLocalPop))
-        .map(|(_, operands)| {
-            (
-                chunk.names[usize::from(operands[0])].to_string(),
-                operands[1],
+        .filter(|(op, _)| {
+            matches!(
+                op,
+                Op::LoadLocal
+                    | Op::StoreLocal
+                    | Op::StoreLocalPop
+                    | Op::LocalLocalBin
+                    | Op::MoveLocal
             )
+        })
+        .flat_map(|(op, operands)| {
+            let refs = if matches!(op, Op::LocalLocalBin | Op::MoveLocal) {
+                2
+            } else {
+                1
+            };
+            (0..refs)
+                .map(|k| {
+                    (
+                        chunk.names[usize::from(operands[2 * k])].to_string(),
+                        operands[2 * k + 1],
+                    )
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
     let slot_of = |name: &str| {
@@ -3677,7 +3699,7 @@ fn for_loop_update_has_no_pop() {
     let chunk = compile_function_source("for (var i = 0; i < n; i++) {}", &["n"]);
     let ops = work_ops(&chunk);
     assert!(!ops.contains(&Op::Pop));
-    assert!(ops.contains(&Op::CmpJumpIfFalse));
+    assert!(ops.contains(&Op::LocalLocalCmpJump));
 }
 
 #[test]
@@ -3747,18 +3769,35 @@ fn comparison_in_value_context_stays_unfused() {
 }
 
 #[test]
-fn local_compared_with_literal_branches_through_local_bin_const() {
+fn local_compared_with_literal_branches_through_local_const_cmp_jump() {
     let chunk = compile_function_source("for (var i = 0; i < 10; i++) {}", &[]);
     let ops = work_ops(&chunk);
-    assert!(ops.contains(&Op::LocalBinConst));
-    assert!(ops.contains(&Op::JumpIfFalse));
+    assert!(ops.contains(&Op::LocalConstCmpJump));
+    assert!(!ops.contains(&Op::JumpIfFalse));
     assert!(!ops.contains(&Op::CmpJumpIfFalse));
 }
 
-/// The `arith` loop of `benchmarks/scripts/bench_opmix.js` must stay within
-/// 25 dispatched ops per iteration (issue #903; 43 before fusion).
 #[test]
-fn opmix_arith_loop_body_is_at_most_25_ops() {
+fn local_pairs_fuse_into_one_op() {
+    let chunk = compile_function_source(
+        "var t = a + b; c = a; if (a < b) { c = 1; }",
+        &["a", "b", "c"],
+    );
+    let ops = work_ops(&chunk);
+    assert!(ops.contains(&Op::LocalLocalBin));
+    assert!(ops.contains(&Op::MoveLocal));
+    assert!(ops.contains(&Op::LocalLocalCmpJump));
+    assert!(!ops.contains(&Op::Add) && !ops.contains(&Op::Lt));
+    let chunk = compile_function_source("var u = a instanceof b; var w = a in b;", &["a", "b"]);
+    let ops = work_ops(&chunk);
+    assert!(!ops.contains(&Op::LocalLocalBin));
+}
+
+/// The `arith` loop of `benchmarks/scripts/bench_opmix.js` must stay within
+/// 19 dispatched ops per iteration (issue #903: 43 before fusion; #1030: 25
+/// before the local-pair ops).
+#[test]
+fn opmix_arith_loop_body_is_at_most_19_ops() {
     let chunk = compile_function_source(
         "var r0 = 0, r1 = 1, r2 = 2;
         for (var i = 0; i < n; i++) {
@@ -3774,7 +3813,7 @@ fn opmix_arith_loop_body_is_at_most_25_ops() {
     let decoded = decode_ops(&chunk);
     let loop_start = decoded
         .iter()
-        .position(|(op, _)| *op == Op::LocalBinConst)
+        .position(|(op, _)| *op == Op::LocalLocalCmpJump)
         .expect("loop test");
     let back_jump = decoded
         .iter()
@@ -3785,7 +3824,7 @@ fn opmix_arith_loop_body_is_at_most_25_ops() {
         .filter(|(op, _)| *op != Op::Safepoint)
         .count();
     assert!(
-        per_iteration <= 25,
+        per_iteration <= 19,
         "arith loop dispatches {per_iteration} ops per iteration"
     );
 }
