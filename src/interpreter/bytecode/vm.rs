@@ -120,6 +120,48 @@ fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -
     result
 }
 
+/// `l == r` when the comparison runs no user code: a same-type pair (strict
+/// comparison) or `null`/`undefined` against anything. `None` leaves mixed
+/// types that need ToPrimitive or ToNumber to the generic path.
+#[inline(never)]
+fn loose_equal_no_user_code(interp: &Interpreter, l: &JsValue, r: &JsValue) -> Option<bool> {
+    if l.kind() == r.kind() {
+        return Some(strict_equality(l, r));
+    }
+    match (l.is_nullish(), r.is_nullish()) {
+        (true, true) => Some(true),
+        (false, false) => None,
+        (l_nullish, _) => {
+            // Only an [[IsHTMLDDA]] object equals null or undefined (B.3.6.2).
+            let other = if l_nullish { r } else { l };
+            Some(
+                other
+                    .as_object_id()
+                    .and_then(|id| interp.get_object_cell(id))
+                    .is_some_and(|cell| cell.borrow_untracked().is_htmldda),
+            )
+        }
+    }
+}
+
+/// `==`/`!=` through [`loose_equal_no_user_code`]: replaces the two operands
+/// with the Boolean result and returns `true`, or returns `false` and leaves
+/// the stack alone.
+#[inline(never)]
+fn loose_equality_op(interp: &mut Interpreter, stack: &mut Vec<JsValue>, negate: bool) -> bool {
+    let len = stack.len();
+    if len < 2 {
+        return false;
+    }
+    let Some(equal) = loose_equal_no_user_code(interp, &stack[len - 2], &stack[len - 1]) else {
+        return false;
+    };
+    pop_value(interp, stack, "stack underflow on binop rhs");
+    pop_value(interp, stack, "stack underflow on binop lhs");
+    stack.push(JsValue::boolean(equal != negate));
+    true
+}
+
 /// `StoreLocal`'s store: the frame slot when the hint verifies, else the
 /// by-name reference path.
 #[inline(always)]
@@ -1254,6 +1296,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 // SAFETY: `len >= 2` and `stack[len - 1]` was just read as a Number.
                 unsafe { discard_number_operands(stack, 1) };
                 stack[len - 2] = number_binop($bop, l, r);
+            } else if matches!($bop, Op::Eq | Op::NotEq)
+                && loose_equality_op(interp, stack, matches!($bop, Op::NotEq))
+            {
             } else if matches!($bop, Op::StrictEq | Op::StrictNotEq) {
                 let r = pop_value(interp, stack, "stack underflow on binop rhs");
                 let l = pop_value(interp, stack, "stack underflow on binop lhs");
@@ -2006,6 +2051,13 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         // SAFETY: `len >= 2` and both operands were just read as Numbers.
                         unsafe { discard_number_operands(stack, 2) };
                         !number_compare(cmp, l, r)
+                    } else if matches!(cmp, Op::Eq | Op::NotEq)
+                        && let Some(equal) =
+                            loose_equal_no_user_code(interp, &stack[len - 2], &stack[len - 1])
+                    {
+                        pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
+                        pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
+                        equal != (cmp == Op::Eq)
                     } else if matches!(cmp, Op::StrictEq | Op::StrictNotEq) {
                         let r = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse rhs");
                         let l = pop_value(interp, stack, "stack underflow on CmpJumpIfFalse lhs");
