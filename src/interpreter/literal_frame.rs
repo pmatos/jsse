@@ -48,6 +48,63 @@ impl ParamAtoms {
     }
 }
 
+/// The binding atoms of a parameter list that has defaults or a rest element
+/// but only plain names (no destructuring pattern): one atom per parameter, in
+/// order, so a call binds them without interning or probing by text.
+#[derive(Debug)]
+pub(crate) struct NamedParamPlan {
+    atoms: Box<[Atom]>,
+}
+
+impl NamedParamPlan {
+    fn new(params: &[Pattern]) -> Option<Self> {
+        let atoms = params
+            .iter()
+            .map(|param| match param {
+                Pattern::Identifier(name) => Some(Atom::intern(name)),
+                Pattern::Assign(inner, _) | Pattern::Rest(inner) => match inner.as_ref() {
+                    Pattern::Identifier(name) => Some(Atom::intern(name)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Option<Box<[Atom]>>>()?;
+        Some(Self { atoms })
+    }
+
+    pub(crate) fn atoms(&self) -> &[Atom] {
+        &self.atoms
+    }
+}
+
+/// The `var` names of a body that runs in its own environment because the
+/// parameters are not simple, each with whether it starts as a copy of the
+/// parameter of the same name (FunctionDeclarationInstantiation step 28).
+#[derive(Debug)]
+pub(crate) struct BodyVarPlan {
+    vars: Box<[(Atom, bool)]>,
+}
+
+impl BodyVarPlan {
+    fn new(params: &[Pattern], analysis: &HoistAnalysis) -> Option<Self> {
+        let mut vars = Vec::with_capacity(analysis.var_names.len());
+        for name in &analysis.var_names {
+            if name == "arguments" {
+                return None;
+            }
+            let copies = params.iter().any(|p| p.binds_name(name));
+            vars.push((Atom::intern(name), copies));
+        }
+        Some(Self {
+            vars: vars.into_boxed_slice(),
+        })
+    }
+
+    pub(crate) fn vars(&self) -> &[(Atom, bool)] {
+        &self.vars
+    }
+}
+
 /// What an ordinary [[Call]] of a compiled function needs, read off its frame
 /// instead of off the function object and rebuilt per call (#1089). It exists
 /// only for the shape the hot call path handles: a plain (not generator, not
@@ -65,6 +122,8 @@ pub(crate) struct CompiledCall {
 #[derive(Debug, Default)]
 pub(crate) struct LiteralFrame {
     param_atoms: OnceCell<ParamAtoms>,
+    named_params: OnceCell<Option<NamedParamPlan>>,
+    body_vars: OnceCell<Option<BodyVarPlan>>,
     ic_store: OnceCell<FrameIcStore>,
     compiled_call: OnceCell<CompiledCall>,
     hoist: OnceCell<Rc<HoistAnalysis>>,
@@ -84,6 +143,29 @@ impl LiteralFrame {
             "a LiteralFrame was used with a different parameter list"
         );
         atoms
+    }
+
+    /// The atoms of a non-simple parameter list made only of plain names,
+    /// defaults and a rest element; `None` when a parameter is a pattern.
+    #[inline]
+    pub(crate) fn named_param_plan(&self, params: &[Pattern]) -> Option<&NamedParamPlan> {
+        self.named_params
+            .get_or_init(|| NamedParamPlan::new(params))
+            .as_ref()
+    }
+
+    /// The body-environment `var` plan of a function with non-simple
+    /// parameters; `None` when a `var` is named `arguments`, which keeps the
+    /// generic path.
+    #[inline]
+    pub(crate) fn body_var_plan(
+        &self,
+        params: &[Pattern],
+        analysis: &HoistAnalysis,
+    ) -> Option<&BodyVarPlan> {
+        self.body_vars
+            .get_or_init(|| BodyVarPlan::new(params, analysis))
+            .as_ref()
     }
 
     /// The compiled-call record, once a call has proved the function eligible.

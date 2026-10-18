@@ -4,7 +4,7 @@ use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::{BytecodeCacheState, vm};
 use crate::interpreter::generator_analysis::block_has_await_using;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
-use crate::interpreter::literal_frame::{CompiledCall, LiteralFrame};
+use crate::interpreter::literal_frame::{CompiledCall, LiteralFrame, NamedParamPlan};
 use crate::interpreter::property::SetOutcome;
 
 mod access;
@@ -5239,6 +5239,119 @@ impl Interpreter {
         Ok(())
     }
 
+    /// The environment the body of a function with non-simple parameters runs
+    /// in (FunctionDeclarationInstantiation step 28): a fresh function scope
+    /// under the parameter scope holding the body's `var` names, each starting
+    /// as a copy of the parameter of the same name.
+    fn acquire_body_environment(
+        &mut self,
+        func_env: &EnvRef,
+        params: &[Pattern],
+        body: &Body,
+        frame: &LiteralFrame,
+    ) -> EnvRef {
+        let analysis = frame.hoist_analysis(|| self.hoist_cache.analysis_for(body));
+        let body_env =
+            self.acquire_function_environment(func_env.clone(), analysis.var_names.len());
+        body_env.borrow_mut().has_simple_params = false;
+        if let Some(plan) = frame.body_var_plan(params, analysis) {
+            {
+                let source = func_env.borrow();
+                let mut target = body_env.borrow_mut();
+                for (atom, copies) in plan.vars() {
+                    let copied = copies
+                        .then(|| source.bindings.get(atom))
+                        .flatten()
+                        .filter(|binding| binding.initialized)
+                        .map_or(JsValue::UNDEFINED, |binding| binding.value.clone());
+                    target.bindings.insert_atom(
+                        atom,
+                        Binding {
+                            value: copied,
+                            kind: BindingKind::Var,
+                            initialized: true,
+                            deletable: false,
+                        },
+                    );
+                }
+            }
+            return body_env;
+        }
+        for name in &analysis.var_names {
+            body_env.borrow_mut().declare(name, BindingKind::Var);
+            if name == "arguments" || params.iter().any(|p| p.binds_name(name)) {
+                let val = self.env_get(func_env, name).unwrap_or(JsValue::UNDEFINED);
+                let _ = self.env_set(&body_env, name, val);
+            }
+        }
+        body_env
+    }
+
+    /// `bind_function_parameters` for a non-simple list of plain names,
+    /// defaults and a rest element, binding through the literal's atoms. Each
+    /// step matches what `bind_pattern` does for the same parameter in a
+    /// function scope with no `with` scope on the chain: a default is
+    /// evaluated with its own name already in TDZ, and the final binding
+    /// replaces that entry in place.
+    fn bind_named_parameters(
+        &mut self,
+        plan: &NamedParamPlan,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        for (index, (param, atom)) in params.iter().zip(plan.atoms()).enumerate() {
+            let value = match param {
+                Pattern::Identifier(_) => args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
+                Pattern::Rest(_) => {
+                    let rest = args.get(index..).unwrap_or(&[]).to_vec();
+                    self.create_array(rest)
+                }
+                Pattern::Assign(_, default) => {
+                    let supplied = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
+                    if supplied.is_undefined() {
+                        {
+                            let mut env = func_env.borrow_mut();
+                            if !env.bindings.contains_key(atom) {
+                                env.bindings.push_unique(
+                                    atom.clone(),
+                                    Binding {
+                                        value: JsValue::UNDEFINED,
+                                        kind: BindingKind::Var,
+                                        initialized: false,
+                                        deletable: false,
+                                    },
+                                );
+                            }
+                        }
+                        let value = match self.eval_expr(default, func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => return Ok(()),
+                        };
+                        if default.is_anonymous_function_definition() {
+                            self.set_function_name(&value, atom.as_str());
+                        }
+                        value
+                    } else {
+                        supplied
+                    }
+                }
+                _ => unreachable!("a named parameter plan holds only plain parameters"),
+            };
+            func_env.borrow_mut().bindings.insert_atom(
+                atom,
+                Binding {
+                    value,
+                    kind: BindingKind::Var,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// Like `bind_pattern`, but for call sites where the pattern is known to
     /// never contain `yield` (e.g. function parameters, an early SyntaxError
     /// in generator formals) so only `Throw` is reachable, and the caller
@@ -6071,6 +6184,11 @@ impl Interpreter {
                                     &mut func_env.borrow_mut(),
                                 );
                                 Ok(())
+                            } else if let Some(plan) = frame
+                                .named_param_plan(&params)
+                                .filter(|_| !self.has_ever_entered_with)
+                            {
+                                self.bind_named_parameters(plan, &params, args, &func_env)
                             } else {
                                 self.bind_function_parameters(&params, args, &func_env, is_simple)
                             };
@@ -6080,23 +6198,7 @@ impl Interpreter {
                                 break 'call Completion::Throw(error);
                             }
                             let exec_env = if !is_simple {
-                                let body_env =
-                                    Environment::new_function_scope(Some(func_env.clone()));
-                                body_env.borrow_mut().strict = func_env.borrow().strict;
-                                body_env.borrow_mut().has_simple_params = false;
-                                let analysis = self.hoist_cache.analysis_for(&body);
-                                for name in &analysis.var_names {
-                                    body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if name == "arguments"
-                                        || params.iter().any(|p| p.binds_name(name))
-                                    {
-                                        let val = self
-                                            .env_get(&func_env, name)
-                                            .unwrap_or(JsValue::UNDEFINED);
-                                        let _ = self.env_set(&body_env, name, val);
-                                    }
-                                }
-                                body_env
+                                self.acquire_body_environment(&func_env, &params, &body, &frame)
                             } else {
                                 func_env.clone()
                             };
@@ -6119,7 +6221,11 @@ impl Interpreter {
                                 self.last_call_this_value = func_env.borrow().get_this();
                             }
                             self.current_realm_id = caller_realm;
-                            drop(exec_env);
+                            if is_simple {
+                                drop(exec_env);
+                            } else {
+                                self.recycle_environment(exec_env);
+                            }
                             self.recycle_environment(func_env);
                             self.finish_user_call(result)
                         }
