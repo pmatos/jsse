@@ -198,7 +198,6 @@ impl BindingMap {
         self.entries.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -313,6 +312,35 @@ impl BindingMap {
         }
         self.push_unique(name.clone(), binding);
         None
+    }
+
+    /// The filter bits of `atoms`, as `fill_distinct` stores them.
+    pub(crate) fn filter_of(atoms: &[Atom]) -> u64 {
+        atoms
+            .iter()
+            .fold(0, |bits, atom| bits | filter_bit(atom.precomputed_hash()))
+    }
+
+    /// Fills an empty, unindexed map with one binding per atom of `atoms`,
+    /// which are pairwise distinct and number at most [`LINEAR_MAX`], so no
+    /// lookup or index is needed. `filter` is `filter_of(atoms)`; the caller
+    /// has checked `is_empty()`.
+    pub(crate) fn fill_distinct(
+        &mut self,
+        atoms: &[Atom],
+        filter: u64,
+        binding: impl Fn(usize) -> Binding,
+    ) {
+        debug_assert!(self.entries.is_empty() && self.index.is_none());
+        debug_assert!(atoms.len() <= LINEAR_MAX);
+        debug_assert_eq!(filter, Self::filter_of(atoms));
+        self.name_filter |= filter;
+        self.entries.extend(
+            atoms
+                .iter()
+                .enumerate()
+                .map(|(index, atom)| (atom.clone(), binding(index))),
+        );
     }
 
     /// Append an entry the caller knows is absent.

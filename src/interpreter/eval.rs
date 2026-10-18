@@ -2196,6 +2196,7 @@ impl Interpreter {
     /// tree-walker does, so the nodes handed back to it find their bindings in
     /// place.
     #[cfg_attr(not(feature = "perf-counters"), allow(unused_variables))]
+    #[inline(always)]
     fn run_compiled_body(
         &mut self,
         func_obj_id: u64,
@@ -5209,8 +5210,15 @@ impl Interpreter {
             deletable: false,
         };
         if names.names_are_fresh() {
-            for (index, atom) in names.atoms().iter().enumerate() {
-                env.bindings.push_unique(atom.clone(), binding(index));
+            if env.bindings.is_empty()
+                && names.atoms().len() <= crate::interpreter::binding_map::LINEAR_MAX
+            {
+                env.bindings
+                    .fill_distinct(names.atoms(), names.filter(), binding);
+            } else {
+                for (index, atom) in names.atoms().iter().enumerate() {
+                    env.bindings.push_unique(atom.clone(), binding(index));
+                }
             }
         } else {
             for (index, atom) in names.atoms().iter().enumerate() {
@@ -5487,7 +5495,9 @@ impl Interpreter {
         this_val: &JsValue,
         args: &[JsValue],
     ) -> Completion {
-        let mut result = self.call_function_inner(func_val, this_val, args, true);
+        let mut result = self.with_call_depth(|interp| {
+            interp.call_function_inner_impl(func_val, this_val, args, true)
+        });
         loop {
             match result {
                 Completion::TailCall {
@@ -5504,6 +5514,7 @@ impl Interpreter {
 
     /// §10.2.1.2 OrdinaryCallBindThis: sloppy callees see the realm's global
     /// object for a nullish `this` and the wrapper object for a primitive one.
+    #[inline(always)]
     fn ordinary_call_bind_this(
         &mut self,
         this_val: &JsValue,
@@ -5519,6 +5530,11 @@ impl Interpreter {
                 None => this_val.clone(),
             };
         }
+        self.wrap_primitive_this(this_val)
+    }
+
+    #[inline(never)]
+    fn wrap_primitive_this(&mut self, this_val: &JsValue) -> JsValue {
         match self.to_object(this_val) {
             Completion::Normal(v) => v,
             _ => this_val.clone(),
@@ -5628,6 +5644,7 @@ impl Interpreter {
     /// has proved eligible (`LiteralFrame::compiled_call`) is served here by
     /// `call_compiled_function`; every other call, and every call that is
     /// part of a construction, takes `call_function_general`.
+    #[inline(always)]
     fn call_function_inner_impl(
         &mut self,
         func_val: &JsValue,
@@ -6311,22 +6328,17 @@ impl Interpreter {
         obj: &ObjectHandle,
     ) -> Option<(Rc<LiteralFrame>, EnvRef, Option<usize>, bool)> {
         let data = obj.borrow();
+        if !matches!(data.kind, ObjectKind::Ordinary) || data.is_class_constructor() {
+            return None;
+        }
         match data.callable.as_deref() {
-            Some(JsFunction::User { frame, closure, .. })
-                if frame.compiled_call().is_some()
-                    && !(data.is_proxy()
-                        || data.is_proxy_revoked()
-                        || data.wrapped().is_some()
-                        || data.is_class_constructor()) =>
-            {
-                let with_defaults = frame
-                    .compiled_call()
-                    .is_some_and(|call| call.has_parameter_expressions);
+            Some(JsFunction::User { frame, closure, .. }) => {
+                let call = frame.compiled_call()?;
                 Some((
                     frame.clone(),
                     closure.clone(),
                     data.function_realm(),
-                    with_defaults,
+                    call.has_parameter_expressions,
                 ))
             }
             _ => None,

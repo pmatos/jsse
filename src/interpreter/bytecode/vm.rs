@@ -1127,6 +1127,7 @@ fn resume_at_handler(
     Ok(handler.target as usize)
 }
 
+#[inline(always)]
 pub(crate) fn run_chunk(interp: &mut Interpreter, chunk: &Chunk, env: &EnvRef) -> Completion {
     run_chunk_with_var_prologue(interp, chunk, env, true)
 }
@@ -1274,6 +1275,7 @@ fn recycle_vm_buffer<T>(pool: &mut Vec<Vec<T>>, mut buf: Vec<T>) {
     }
 }
 
+#[inline(always)]
 fn run_chunk_with_var_prologue(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -1302,6 +1304,8 @@ fn run_chunk_with_var_prologue(
     recycle_vm_buffer(&mut interp.vm_stack_pool, stack);
     if chunk.max_refs != 0 {
         recycle_vm_buffer(&mut interp.vm_ref_pool, refs);
+    } else if refs.capacity() == 0 {
+        std::mem::forget(refs);
     }
     // `Throw`/`Exit` are abrupt and can leave operands from an
     // outer-in-progress expression still on the stack (issue #331) — every
