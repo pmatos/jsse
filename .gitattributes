@@ -1,0 +1,15 @@
+# Machine-maintained files are exempt from the staged-file token limit.
+# Add specific generated/vendored paths here, never hand-authored code.
+*.lock token-limit-ignore
+package-lock.json token-limit-ignore
+npm-shrinkwrap.json token-limit-ignore
+CHANGELOG.md token-limit-ignore
+src/unicode_tables.rs token-limit-ignore
+src/emoji_strings.rs token-limit-ignore
+scripts/.unicode_cache/** token-limit-ignore
+test262-pass*.txt token-limit-ignore
+benchmarks/results.csv token-limit-ignore
+
+# Upstream submodules (gitlinks are also skipped by the checker).
+spec/** token-limit-ignore
+test262/** token-limit-ignore

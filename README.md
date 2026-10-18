@@ -99,6 +99,22 @@ uv tool install pre-commit
 pre-commit install
 ```
 
+The token-limit hook checks only added or modified staged files, including rename
+destinations, using their staged contents. The limit is 5,000 tokens, estimated
+as bytes/4 (20,000 bytes); it also applies when editing an existing large file.
+Unstaged files, deletions, symlinks, submodules, and binary assets are skipped.
+Lockfiles, generated Unicode/emoji tables, test262 baselines, the changelog, and
+benchmark results are exempt via `token-limit-ignore` in `.gitattributes`.
+Add specific generated or vendored paths there when needed; authored files must
+be split into cohesive modules, test files, or linked documents. The hook reports
+each oversized file and provides splitting and re-staging instructions.
+
+Run just this check (always staged-only, even with `--all-files`):
+
+```bash
+pre-commit run staged-file-token-limit
+```
+
 Run every hook against the full repository when changing hook configuration or
 tooling:
 
