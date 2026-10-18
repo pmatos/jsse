@@ -3370,6 +3370,12 @@ fn is_function_declaration(stmt: &Statement) -> bool {
     crate::interpreter::hoisting::unwrap_labeled_function(stmt).is_some()
 }
 
+/// Whether a function declaration appears anywhere in `body` outside nested
+/// functions, in a block as well as at the top level.
+pub(crate) fn body_declares_function(body: &[Statement]) -> bool {
+    stmts_contain(body, &is_function_declaration)
+}
+
 /// Pre-order walk over `stmt` and the statements nested in it (not into
 /// function bodies, which are separate Bodies); true when `pred` matches any.
 fn stmt_contains(stmt: &Statement, pred: &dyn Fn(&Statement) -> bool) -> bool {

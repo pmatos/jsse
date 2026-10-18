@@ -1994,8 +1994,9 @@ impl Interpreter {
     /// the order the compiler's local slots assume (see `FrameShape`): whether
     /// `arguments` is declared, and the simple parameter names. A function
     /// with parameter patterns has a separate body environment and no
-    /// predictable layout.
-    pub(crate) fn function_frame_shape(&self, func_obj_id: u64) -> OwnedFrameShape {
+    /// predictable layout; one with plain-name defaults that can share its
+    /// parameter environment lays out the parameters in order.
+    pub(crate) fn function_frame_shape(&self, func_obj_id: u64, body: &Body) -> OwnedFrameShape {
         self.get_object(func_obj_id)
             .and_then(|o| match o.borrow().callable.as_deref() {
                 Some(JsFunction::User {
@@ -2003,18 +2004,36 @@ impl Interpreter {
                     is_arrow,
                     uses_arguments,
                     has_simple_params,
+                    is_generator,
+                    is_async,
+                    frame,
                     ..
-                }) if *has_simple_params => Some(OwnedFrameShape {
-                    arguments_slot: !*is_arrow && *uses_arguments,
-                    simple_params: params
-                        .iter()
-                        .filter_map(|p| match p {
-                            Pattern::Identifier(name) => Some(name.clone()),
-                            _ => None,
-                        })
-                        .collect(),
-                    separate_body_env: false,
-                }),
+                }) => {
+                    let arguments_slot = !*is_arrow && *uses_arguments;
+                    let simple_params: Vec<String> = if *has_simple_params {
+                        params
+                            .iter()
+                            .filter_map(|p| match p {
+                                Pattern::Identifier(name) => Some(name.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    } else if *is_generator || *is_async || !frame.shares_param_env(params, body) {
+                        return None;
+                    } else {
+                        frame
+                            .named_param_plan(params)?
+                            .atoms()
+                            .iter()
+                            .map(|a| a.as_str().to_string())
+                            .collect()
+                    };
+                    Some(OwnedFrameShape {
+                        arguments_slot,
+                        simple_params,
+                        separate_body_env: false,
+                    })
+                }
                 _ => None,
             })
             .unwrap_or(OwnedFrameShape {
@@ -2072,7 +2091,7 @@ impl Interpreter {
                 state
             }
             None => {
-                let owned_shape = self.function_frame_shape(func_obj_id);
+                let owned_shape = self.function_frame_shape(func_obj_id, body);
                 let frame_shape = owned_shape.shape();
                 let state = match compile(body.as_slice(), &frame_shape) {
                     Ok(c) => {
@@ -6201,7 +6220,9 @@ impl Interpreter {
                                 self.recycle_environment(func_env);
                                 break 'call Completion::Throw(error);
                             }
-                            let exec_env = if !is_simple {
+                            let separate_body_env =
+                                !is_simple && !frame.shares_param_env(&params, &body);
+                            let exec_env = if separate_body_env {
                                 self.acquire_body_environment(&func_env, &params, &body, &frame)
                             } else {
                                 func_env.clone()
@@ -6225,10 +6246,10 @@ impl Interpreter {
                                 self.last_call_this_value = func_env.borrow().get_this();
                             }
                             self.current_realm_id = caller_realm;
-                            if is_simple {
-                                drop(exec_env);
-                            } else {
+                            if separate_body_env {
                                 self.recycle_environment(exec_env);
+                            } else {
+                                drop(exec_env);
                             }
                             self.recycle_environment(func_env);
                             self.finish_user_call(result)
@@ -6334,6 +6355,8 @@ impl Interpreter {
             }
             !call.is_arrow && !call.is_strict && !closure_strict
         };
+        let separate_body_env =
+            call.has_parameter_expressions && !frame.shares_param_env(&call.params, &call.body);
         let exec_env = if call.has_parameter_expressions {
             let plan = frame
                 .named_param_plan(&call.params)
@@ -6343,10 +6366,15 @@ impl Interpreter {
                 self.recycle_environment(func_env);
                 return Completion::Throw(error);
             }
-            let body_env =
-                self.acquire_body_environment(&func_env, &call.params, &call.body, frame);
-            body_env.borrow_mut().strict = call.is_strict;
-            body_env
+            if separate_body_env {
+                let body_env =
+                    self.acquire_body_environment(&func_env, &call.params, &call.body, frame);
+                body_env.borrow_mut().strict = call.is_strict;
+                body_env
+            } else {
+                func_env.borrow_mut().strict = call.is_strict;
+                func_env.clone()
+            }
         } else {
             func_env.clone()
         };
@@ -6359,7 +6387,7 @@ impl Interpreter {
             interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &exec_env)
         });
         self.current_realm_id = caller_realm;
-        if call.has_parameter_expressions {
+        if separate_body_env {
             self.recycle_environment(exec_env);
         } else {
             drop(exec_env);

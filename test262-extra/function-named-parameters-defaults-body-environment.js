@@ -113,3 +113,78 @@ function manyCalls() {
   return t;
 }
 assert.sameValue(manyCalls(), 1275 + 100, "repeated calls reuse pooled environments correctly");
+
+var outerY = "outer";
+function closureDefaultIgnoresBodyLexical(a = () => outerY) { let outerY2 = "body"; return a(); }
+assert.sameValue(closureDefaultIgnoresBodyLexical(), "outer", "a closure default does not see body declarations");
+
+var shadowed = "outer-shadowed";
+function closureDefaultSkipsBodyLet(read = () => shadowed) {
+  let shadowed = "body";
+  return read() + ":" + shadowed;
+}
+assert.sameValue(closureDefaultSkipsBodyLet(), "outer-shadowed:body", "a body let does not capture a default closure's free name");
+
+var freeInDefault = "outer-free";
+function defaultReadsOuterBeforeBodyVar(a = freeInDefault) {
+  var freeInDefault = "body-var";
+  return a + ":" + freeInDefault;
+}
+assert.sameValue(defaultReadsOuterBeforeBodyVar(), "outer-free:body-var", "a default evaluates before the body's var exists");
+
+var lateLet = "outer-let";
+function defaultReadsOuterBeforeBodyLet(a = lateLet) {
+  let lateLet = "body-let";
+  return a + ":" + lateLet;
+}
+assert.sameValue(defaultReadsOuterBeforeBodyLet(), "outer-let:body-let", "a default evaluates before the body's let exists");
+
+function evalRedeclaresParameter(a = 1) {
+  eval("var a = 5");
+  return a;
+}
+assert.sameValue(evalRedeclaresParameter(), 5, "a body eval may redeclare a parameter name with var");
+
+function evalVarWithoutInitialiser(a = 7) {
+  eval("var a");
+  return a;
+}
+assert.sameValue(evalVarWithoutInitialiser(), undefined, "a body eval var lives in the separate body environment, apart from the parameter");
+
+function bodyFunctionDeclaration(a = 1) {
+  function inner() { return a; }
+  var a2 = inner();
+  return a2 + ":" + typeof inner;
+}
+assert.sameValue(bodyFunctionDeclaration(), "1:function", "function declarations beside defaults");
+
+function blockFunctionDeclaration(a = 1) {
+  { function blockInner() { return 2; } }
+  return a + blockInner();
+}
+assert.sameValue(blockFunctionDeclaration(), 3, "Annex B block function beside defaults");
+
+function lexicalsBesideDefaults(a = 2, b = a * 3) {
+  let c = a + b;
+  const d = c * 2;
+  var e = d + 1;
+  return [a, b, c, d, e].join();
+}
+assert.sameValue(lexicalsBesideDefaults(), "2,6,8,16,17", "lexicals and vars after defaults");
+assert.sameValue(lexicalsBesideDefaults(1, 1), "1,1,2,4,5", "supplied arguments");
+
+function tdzBodyLexicalReadByDefaultClosure(a = function () { return later; }) {
+  var result;
+  try { result = a(); } catch (e) { result = e.constructor === ReferenceError ? "tdz-or-outer" : "other"; }
+  let later = 1;
+  return result;
+}
+var later = "global-later";
+assert.sameValue(tdzBodyLexicalReadByDefaultClosure(), "global-later", "a default closure resolves past the body's let to the outer binding");
+
+function restWithLexical(...items) {
+  let total = 0;
+  for (var i = 0; i < items.length; i++) total += items[i];
+  return total;
+}
+assert.sameValue(restWithLexical(1, 2, 3), 6, "rest parameter with a body lexical and loop");

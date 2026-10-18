@@ -166,3 +166,31 @@ fn function_top_level_lexicals_resolve_through_slots() {
         );
     }
 }
+
+/// Parameters with defaults or a rest element bind through the literal's
+/// atoms, and a body that shares the parameter environment reads them through
+/// frame slots, so repeated calls intern nothing and parameter reads are
+/// `LoadLocal` exactly as for simple parameters (#1024).
+#[test]
+fn default_and_rest_parameters_intern_nothing_and_resolve_through_slots() {
+    fn default_loop(iterations: u32) -> String {
+        format!(
+            "function add(a, b = 1, ...rest) {{ var t = a + b; return t + rest.length; }}\n\
+             function main() {{ var s = 0; for (var i = 0; i < {iterations}; i++) {{ s = (s + add(i & 7) + add(i & 3, 2, 5)) | 0; }} return s; }}\n\
+             main();"
+        )
+    }
+    let (small, small_ops) = counters(&default_loop(1_000));
+    let (large, _) = counters(&default_loop(2_000));
+    let extra_interns = large["atom_intern_calls"] - small["atom_intern_calls"];
+    assert!(
+        extra_interns <= 8,
+        "{extra_interns} extra interns over 1,000 extra iterations of two calls with default and rest parameters"
+    );
+    assert!(large["calls_to_user"] > small["calls_to_user"]);
+    assert_eq!(small["local_slot_misses"], 0, "no hint should miss");
+    assert!(
+        !small_ops.contains_key("LoadName"),
+        "a parameter or var was read by name"
+    );
+}

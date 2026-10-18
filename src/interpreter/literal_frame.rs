@@ -79,6 +79,46 @@ impl NamedParamPlan {
     }
 }
 
+/// Whether a function whose parameters are plain names with defaults can run
+/// its body in the parameter environment itself. A separate body environment
+/// (FunctionDeclarationInstantiation step 28) exists so closures created by
+/// parameter expressions cannot see body declarations, so it is unobservable
+/// when no default creates a closure or runs direct `eval`. The body also
+/// must not run direct `eval` (its `var` declarations are checked against the
+/// parameter scope), redeclare `arguments` or hold function declarations,
+/// whose hoisting (Annex B) distinguishes parameter bindings from the body's.
+fn body_can_share_param_env(params: &[Pattern], body: &Body) -> bool {
+    use crate::ast::Expression;
+    let is_eval_call = |expr: &Expression| match expr {
+        Expression::Call(callee, _, _) => {
+            matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
+        }
+        _ => false,
+    };
+    let opens_scope = |expr: &Expression| {
+        matches!(
+            expr,
+            Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_)
+        ) || is_eval_call(expr)
+    };
+    let defaults_are_plain = params.iter().all(|param| match param {
+        Pattern::Assign(_, default) => !crate::ast::expr_contains_matching(default, &opens_scope),
+        _ => true,
+    });
+    if !defaults_are_plain
+        || crate::ast::stmts_contain_matching(body.as_slice(), &is_eval_call)
+        || super::bytecode::compiler::body_declares_function(body.as_slice())
+    {
+        return false;
+    }
+    let mut vars = std::collections::HashSet::new();
+    super::Interpreter::collect_var_names_from_stmts(body.as_slice(), &mut vars);
+    !vars.contains("arguments")
+        && !super::hoisting::collect_lexical_names(body.as_slice())
+            .iter()
+            .any(|(name, _)| name == "arguments")
+}
+
 /// The `var` names of a body that runs in its own environment because the
 /// parameters are not simple, each with whether it starts as a copy of the
 /// parameter of the same name (FunctionDeclarationInstantiation step 28).
@@ -129,6 +169,7 @@ pub(crate) struct CompiledCall {
 pub(crate) struct LiteralFrame {
     param_atoms: OnceCell<ParamAtoms>,
     named_params: OnceCell<Option<NamedParamPlan>>,
+    shares_param_env: OnceCell<bool>,
     body_vars: OnceCell<Option<BodyVarPlan>>,
     ic_store: OnceCell<FrameIcStore>,
     compiled_call: OnceCell<CompiledCall>,
@@ -158,6 +199,15 @@ impl LiteralFrame {
         self.named_params
             .get_or_init(|| NamedParamPlan::new(params))
             .as_ref()
+    }
+
+    /// Whether a call of this function runs the body in the environment that
+    /// holds its parameters (see `body_can_share_param_env`). Only plain-name
+    /// parameter lists with defaults or a rest element qualify.
+    pub(crate) fn shares_param_env(&self, params: &[Pattern], body: &Body) -> bool {
+        *self.shares_param_env.get_or_init(|| {
+            self.named_param_plan(params).is_some() && body_can_share_param_env(params, body)
+        })
     }
 
     /// The body-environment `var` plan of a function with non-simple
