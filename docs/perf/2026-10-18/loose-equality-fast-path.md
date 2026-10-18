@@ -56,5 +56,9 @@ dispatch loop's code generation unchanged) and `CmpJumpIfFalse` use it before fa
 | proxy-mobx | 576,800,773 | 596,483,409 | +3.41% |
 | proxy-vue | 1,169,878,627 | 1,212,217,309 | +3.62% |
 
-Geometric mean over 40 workloads: +0.06%: the rest is layout noise (proxy-mobx/proxy-vue vary by +-5% between runs of one binary
-because their Ir depends on randomised hashing). richards is the workload whose hot loop is `!= null` tests.
+Geometric mean over 40 workloads: +0.06%: richards is the workload whose hot loop is `!= null` tests, the rest does not move. js-tokens,
+proxy-mobx and proxy-vue are not reproducible run to run: two runs of the *same* js-tokens binary measured 4.62G and 4.91G Ir (the
+base binary 4.82G and 4.83G), so their rows are not signal.
+
+`abstract_equality` now starts with the same `loose_equal_no_user_code`, so the generic and the VM paths share one definition of the
+no-user-code cases.

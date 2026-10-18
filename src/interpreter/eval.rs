@@ -1693,31 +1693,33 @@ impl Interpreter {
         }
     }
 
-    fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> Result<bool, JsValue> {
+    /// `left == right` when the comparison runs no user code: a same-type
+    /// pair (the strict comparison) or `null`/`undefined` against anything
+    /// (both nullish: true; one nullish: only an [[IsHTMLDDA]] object equals it,
+    /// B.3.6.2). `None` for mixed types that need ToPrimitive or ToNumber.
+    #[inline(never)]
+    pub(crate) fn loose_equal_no_user_code(&self, left: &JsValue, right: &JsValue) -> Option<bool> {
         if left.kind() == right.kind() {
-            return Ok(strict_equality(left, right));
+            return Some(strict_equality(left, right));
         }
-        // B.3.6.2: IsHTMLDDA == null/undefined
-        if let Some(o) = (left)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(obj) = self.objects.get(o.id)
-            && obj.borrow().is_htmldda
-            && (right.is_null() || right.is_undefined())
-        {
-            return Ok(true);
+        match (left.is_nullish(), right.is_nullish()) {
+            (true, true) => Some(true),
+            (false, false) => None,
+            (left_nullish, _) => {
+                let other = if left_nullish { right } else { left };
+                Some(
+                    other
+                        .as_object_id()
+                        .and_then(|id| self.get_object_cell(id))
+                        .is_some_and(|cell| cell.borrow_untracked().is_htmldda),
+                )
+            }
         }
-        if let Some(o) = (right)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-            && let Some(obj) = self.objects.get(o.id)
-            && obj.borrow().is_htmldda
-            && (left.is_null() || left.is_undefined())
-        {
-            return Ok(true);
-        }
-        if (left.is_null() && right.is_undefined()) || (left.is_undefined() && right.is_null()) {
-            return Ok(true);
+    }
+
+    fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> Result<bool, JsValue> {
+        if let Some(equal) = self.loose_equal_no_user_code(left, right) {
+            return Ok(equal);
         }
         if left.is_number() && right.is_string() {
             return self.abstract_equality(left, &JsValue::number(to_number(right)));

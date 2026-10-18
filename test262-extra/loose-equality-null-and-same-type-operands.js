@@ -3,9 +3,9 @@ description: >
   `==` and `!=` with a null or undefined operand, and between two operands of
   one type, give the IsLooselyEqual results in expressions and in the
   condition of `if`/`while`/`?:`, including objects, [[IsHTMLDDA]] objects and
-  operands that need ToPrimitive (valueOf runs once and in order).
+  operands that need ToPrimitive (valueOf runs once and in order, and not at all for two objects).
 esid: sec-islooselyequal
-features: [IsHTMLDDA]
+features: [IsHTMLDDA, BigInt, Symbol, Proxy, generators, cross-realm]
 flags: [noStrict]
 ---*/
 
@@ -56,7 +56,14 @@ var log = [];
 var left = { valueOf: function () { log.push("l"); return 1; } };
 var right = { valueOf: function () { log.push("r"); return 1; } };
 assert.sameValue(eq(left, 1), true, "object == number");
+assert.sameValue(log.join(), "l", "valueOf once");
+log.length = 0;
 assert.sameValue(eq(1, left), true, "number == object");
+assert.sameValue(log.join(), "l", "valueOf once, other side");
+log.length = 0;
+assert.sameValue(eq(left, "1") && !ne(left, "1"), true, "object == string, both operators");
+assert.sameValue(log.join(), "l,l", "valueOf once per comparison");
+log.length = 0;
 assert.sameValue(eqIf(left, "1"), true, "object == string in if");
 assert.sameValue(eq("1", 1), true, "string == number");
 assert.sameValue(eq(true, 1), true, "boolean == number");
@@ -76,3 +83,40 @@ var holder = { next: { next: null } };
 var count = 0;
 for (var cur = holder; cur != null; cur = cur.next) count++;
 assert.sameValue(count, 2, "linked list walk with != null");
+
+// Nested comparisons and operands that are objects on the operand stack.
+(function () {
+  var a = {}, b = null, c = {};
+  assert.sameValue(a == (b == c), false, "object == (null == object)");
+  assert.sameValue((a != b) == (c != b), true, "(obj != null) == (obj != null)");
+  assert.sameValue((a == b) == (b == a), true, "false == false");
+  assert.sameValue([a, c].map(function (o) { return o == null; }).join(), "false,false", "callbacks");
+  function* gen(x) {
+    var seen = [];
+    seen.push(x == null);
+    yield x != null;
+    seen.push(yield (x == undefined));
+    return seen;
+  }
+  var it = gen({});
+  assert.sameValue(it.next().value, true, "generator: object != null");
+  assert.sameValue(it.next().value, false, "generator: object == undefined");
+  var done = it.next(false);
+  assert.sameValue(done.value.join(), "false,false", "generator state");
+  try {
+    if ({} == null) throw new Error("unreachable");
+    if (a != null && c != null) throw new RangeError("through try");
+  } catch (e) {
+    assert.sameValue(e instanceof RangeError, true, "inside try");
+  }
+  var p = new Proxy({}, {});
+  assert.sameValue(p == null, false, "Proxy == null");
+  assert.sameValue(p != undefined, true, "Proxy != undefined");
+  assert.sameValue(p == p, true, "Proxy identity");
+  var otherDDA = $262.createRealm().global.$262.IsHTMLDDA;
+  assert.sameValue(otherDDA == null, true, "cross-realm IsHTMLDDA == null");
+  assert.sameValue(undefined != otherDDA, false, "undefined != cross-realm IsHTMLDDA");
+  var n = 0;
+  while (htmldda == null && n < 3) n++;
+  assert.sameValue(n, 3, "loop condition with IsHTMLDDA");
+})();
