@@ -221,8 +221,8 @@ struct Compiler {
     /// `i` is the expected position of that name in the call's binding
     /// vector. Empty when no local ops are emitted.
     locals: Vec<String>,
-    /// Each `locals` name's position, so resolving an identifier does not scan
-    /// a frame that holds hundreds of names.
+    /// Each `locals` name's position, built only for a frame large enough that
+    /// scanning `locals` per identifier would cost more than hashing it.
     local_index: std::collections::HashMap<String, usize>,
     /// Offset of the most recently emitted opcode byte. The last byte of
     /// `code` may be an operand (a slot or name index whose high byte equals a
@@ -538,18 +538,27 @@ impl Compiler {
                     .then_some(BLOCK_SLOT_FLAG | ((scope as u16) << 8) | index as u16);
             }
         }
-        self.local_index
-            .get(name)
-            .and_then(|&i| u16::try_from(i).ok())
+        self.local_position(name)
+            .and_then(|i| u16::try_from(i).ok())
             .filter(|slot| slot & BLOCK_SLOT_FLAG == 0)
     }
 
+    fn local_position(&self, name: &str) -> Option<usize> {
+        if self.local_index.is_empty() {
+            self.locals.iter().position(|n| n == name)
+        } else {
+            self.local_index.get(name).copied()
+        }
+    }
+
     fn set_locals(&mut self, locals: Vec<String>) {
-        self.local_index = locals
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (name.clone(), i))
-            .collect();
+        if locals.len() > LOCAL_INDEX_MIN {
+            self.local_index = locals
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), i))
+                .collect();
+        }
         self.locals = locals;
     }
 
@@ -1639,7 +1648,7 @@ impl Compiler {
     fn init_slot(&self, name: &str) -> u16 {
         let position = match self.scopes.last() {
             Some(names) => names.iter().position(|n| n == name),
-            None => self.local_index.get(name).copied(),
+            None => self.local_position(name),
         };
         position
             .and_then(|i| u16::try_from(i).ok())
@@ -3796,6 +3805,10 @@ pub(crate) fn compile_generator_body(
     compile_function_body_as(body, shape, true)
 }
 
+/// Frames with more names than this resolve identifiers through a hash index
+/// and deduplicate through a set; smaller ones scan.
+const LOCAL_INDEX_MIN: usize = 16;
+
 fn compile_function_body_as(
     body: &[Statement],
     shape: &FrameShape<'_>,
@@ -3803,10 +3816,17 @@ fn compile_function_body_as(
 ) -> Result<Chunk, CompileError> {
     let mut first = compile_function_goal(body, Vec::new(), generator)?;
     let mut locals: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: Option<std::collections::HashSet<String>> = None;
     let mut push = |name: &str| {
-        if seen.insert(name.to_string()) {
+        let present = match &mut seen {
+            Some(set) => !set.insert(name.to_string()),
+            None => locals.iter().any(|n| n == name),
+        };
+        if !present {
             locals.push(name.to_string());
+            if seen.is_none() && locals.len() > LOCAL_INDEX_MIN {
+                seen = Some(locals.iter().cloned().collect());
+            }
         }
     };
     if shape.arguments_slot {
