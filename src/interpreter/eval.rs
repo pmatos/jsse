@@ -1976,7 +1976,7 @@ impl Interpreter {
     /// the order the compiler's local slots assume (see `FrameShape`): whether
     /// `arguments` is declared, and the simple parameter names. Functions
     /// with parameter patterns have no predictable layout.
-    pub(crate) fn function_frame_shape(&self, func_obj_id: u64) -> (bool, Vec<String>) {
+    pub(crate) fn function_frame_shape(&self, func_obj_id: u64) -> (bool, Vec<String>, bool) {
         self.get_object(func_obj_id)
             .and_then(|o| match o.borrow().callable.as_deref() {
                 Some(JsFunction::User {
@@ -1994,10 +1994,11 @@ impl Interpreter {
                             _ => None,
                         })
                         .collect::<Vec<String>>(),
+                    false,
                 )),
                 _ => None,
             })
-            .unwrap_or((false, Vec::new()))
+            .unwrap_or((false, Vec::new(), true))
     }
 
     /// The bytecode compile verdict for `body`, recorded on the function
@@ -2048,10 +2049,12 @@ impl Interpreter {
                 state
             }
             None => {
-                let (arguments_slot, simple_params) = self.function_frame_shape(func_obj_id);
+                let (arguments_slot, simple_params, separate_body_env) =
+                    self.function_frame_shape(func_obj_id);
                 let frame_shape = compiler::FrameShape {
                     arguments_slot,
                     simple_params: &simple_params,
+                    separate_body_env,
                 };
                 let state = match compile(body.as_slice(), &frame_shape) {
                     Ok(c) => {

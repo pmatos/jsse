@@ -3747,6 +3747,9 @@ pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
 pub(crate) struct FrameShape<'a> {
     pub(crate) arguments_slot: bool,
     pub(crate) simple_params: &'a [String],
+    /// The parameters are not all plain names, so the body runs in a fresh
+    /// environment of its own and its declaration order is not predictable.
+    pub(crate) separate_body_env: bool,
 }
 
 /// Compiles a function body, resolving the frame's own names through local
@@ -3798,8 +3801,10 @@ fn compile_function_body_as(
     for &idx in &first.var_names {
         push(first.names[idx as usize].as_str());
     }
-    for name in instantiated_names(&first, body).unwrap_or_default() {
-        push(&name);
+    if !shape.separate_body_env {
+        for name in instantiated_names(&first, body).unwrap_or_default() {
+            push(&name);
+        }
     }
     if locals.is_empty() {
         first.trivial_private_getter = first.detect_trivial_private_getter();

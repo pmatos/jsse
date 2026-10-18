@@ -239,6 +239,13 @@ impl BindingMap {
         key.find_in(self)
     }
 
+    /// Whether `name` might be bound here: `false` is definite (one `and` on
+    /// the name filter, no probe), `true` only means the filter bit is set.
+    #[inline(always)]
+    pub(crate) fn may_contain(&self, name: &Atom) -> bool {
+        self.name_filter & filter_bit(name.precomputed_hash()) != 0
+    }
+
     #[inline]
     pub(crate) fn get<K: BindingKey + ?Sized>(&self, key: &K) -> Option<&Binding> {
         key.find_in(self).map(|i| &self.entries[i].1)

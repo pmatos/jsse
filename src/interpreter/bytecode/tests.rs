@@ -2977,6 +2977,7 @@ fn compile_returning_body(body: &str) -> Chunk {
         &FrameShape {
             arguments_slot: false,
             simple_params: &params,
+            separate_body_env: false,
         },
     )
     .expect("compile")
@@ -2997,6 +2998,7 @@ fn try_compile_function_source(
         &FrameShape {
             arguments_slot: false,
             simple_params: &params,
+            separate_body_env: false,
         },
     )
 }
@@ -4415,6 +4417,7 @@ fn try_compile_generator_source(source: &str) -> Result<Chunk, super::compiler::
         &FrameShape {
             arguments_slot: false,
             simple_params: &["a".to_string()],
+            separate_body_env: false,
         },
     )
 }

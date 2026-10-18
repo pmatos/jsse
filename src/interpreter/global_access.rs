@@ -181,7 +181,7 @@ fn verify_scope_hint(
     if hops == 0 {
         if slot == GLOBAL_OBJECT_SLOT {
             let gid = scope.global_object_id?;
-            if scope.bindings.contains_key(key) {
+            if scope.bindings.may_contain(key) && scope.bindings.contains_key(key) {
                 return None;
             }
             return Some(NameWalk::Global(gid, want_env.then(|| env.clone())));
@@ -198,7 +198,9 @@ fn verify_scope_hint(
             NameWalk::Slow
         });
     }
-    if scope.global_object_id.is_some() || scope.bindings.contains_key(key) {
+    if scope.global_object_id.is_some()
+        || (scope.bindings.may_contain(key) && scope.bindings.contains_key(key))
+    {
         return None;
     }
     verify_scope_hint(scope.parent.as_ref()?, key, hops - 1, slot, want_env)
