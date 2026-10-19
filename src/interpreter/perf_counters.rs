@@ -70,6 +70,10 @@ pub(crate) struct PerfCounters {
     /// distortion, unlike timing a per-opcode or per-call boundary.
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
+    /// Environment walk entries during collections, and how many were the
+    /// first visit of their collection (the rest stopped a parent walk).
+    pub(crate) gc_env_probes: u64,
+    pub(crate) gc_env_first_visits: u64,
     pub(crate) gc_nanos: u128,
     /// The share of `gc_nanos` spent in minor collections.
     pub(crate) gc_minor_nanos: u128,
@@ -129,6 +133,8 @@ impl Default for PerfCounters {
             calls_to_user: 0,
             gc_minor: 0,
             gc_major: 0,
+            gc_env_probes: 0,
+            gc_env_first_visits: 0,
             gc_nanos: 0,
             gc_minor_nanos: 0,
             local_slot_hits: 0,
@@ -150,6 +156,11 @@ impl Default for PerfCounters {
 }
 
 impl PerfCounters {
+    pub(crate) fn note_env_visits(&mut self, visits: &crate::interpreter::types::EnvVisits) {
+        self.gc_env_probes += visits.probes;
+        self.gc_env_first_visits += visits.first_visits;
+    }
+
     pub(crate) fn record_op(&mut self, op: Op) {
         // `Op::Safepoint` is bookkeeping, not work: the tree-walker's
         // equivalent per-statement `gc_safepoint()` call isn't counted into
@@ -261,6 +272,12 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tcalls_to_user\t{}", self.calls_to_user);
         let _ = writeln!(out, "PERF\tgc_minor\t{}", self.gc_minor);
         let _ = writeln!(out, "PERF\tgc_major\t{}", self.gc_major);
+        let _ = writeln!(out, "PERF\tgc_env_probes\t{}", self.gc_env_probes);
+        let _ = writeln!(
+            out,
+            "PERF\tgc_env_first_visits\t{}",
+            self.gc_env_first_visits
+        );
         let _ = writeln!(out, "PERF\tgc_ms\t{}", self.gc_nanos / 1_000_000);
         let _ = writeln!(out, "PERF\tgc_minor_us\t{}", self.gc_minor_nanos / 1_000);
         let _ = writeln!(out, "PERF\tlocal_slot_hits\t{}", self.local_slot_hits);

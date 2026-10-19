@@ -529,7 +529,7 @@ impl Interpreter {
         &self,
         worklist: &mut Vec<u64>,
         marks: &mut [bool],
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
         weak_maps: &mut Vec<u64>,
     ) {
         let mut children = Vec::new();
@@ -596,9 +596,9 @@ impl Interpreter {
         }
     }
 
-    fn collect_gc_roots(&self) -> (Vec<u64>, HashSet<usize>) {
+    fn collect_gc_roots(&self) -> (Vec<u64>, EnvVisits) {
         let mut roots = Vec::new();
-        let mut seen_envs = HashSet::new();
+        let mut seen_envs = EnvVisits::new();
 
         for realm in &self.realms {
             realm.collect_roots(&mut roots, &mut seen_envs);
@@ -743,7 +743,7 @@ impl Interpreter {
     fn trace_young_worklist(
         &self,
         worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
         weak_containers: &mut Vec<u64>,
         young: &mut YoungIds,
     ) {
@@ -1099,6 +1099,8 @@ impl Interpreter {
         self.gc_young = young;
         self.objects.replace_nursery(survivors);
         self.gc.end_minor_collection();
+        #[cfg(feature = "perf-counters")]
+        self.perf.note_env_visits(&seen_envs);
     }
 
     /// Barrier check for the minor collector, run once marking is complete: a
@@ -1286,6 +1288,8 @@ impl Interpreter {
         crate::thp::after_major_collection();
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
+        #[cfg(feature = "perf-counters")]
+        self.perf.note_env_visits(&seen_envs);
     }
 
     fn collect_value_roots(val: &JsValue, worklist: &mut Vec<u64>) {
@@ -1294,11 +1298,7 @@ impl Interpreter {
         }
     }
 
-    fn trace_object_fields(
-        obj: &JsObjectData,
-        worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
-    ) {
+    fn trace_object_fields(obj: &JsObjectData, worklist: &mut Vec<u64>, seen_envs: &mut EnvVisits) {
         Self::trace_object_fields_in(obj, worklist, seen_envs, true);
     }
 
@@ -1308,7 +1308,7 @@ impl Interpreter {
     fn trace_object_fields_in(
         obj: &JsObjectData,
         worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
         bulk: bool,
     ) {
         if let Some(pid) = obj.prototype_id {
@@ -1502,7 +1502,7 @@ impl Interpreter {
     fn collect_iterator_state_roots(
         state: &IteratorState,
         worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
     ) {
         match state {
             IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
@@ -1587,7 +1587,7 @@ impl Interpreter {
     fn collect_for_of_stack_roots(
         for_of_stack: &[ForOfLoopState],
         worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
     ) {
         for loop_state in for_of_stack {
             Self::collect_env_roots(&loop_state.outer_env, worklist, seen_envs);
@@ -1604,7 +1604,7 @@ impl Interpreter {
     fn collect_scope_stack_roots(
         scope_stack: &[ScopeFrame],
         worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
     ) {
         for frame in scope_stack {
             Self::collect_env_roots(&frame.env, worklist, seen_envs);
@@ -1614,15 +1614,14 @@ impl Interpreter {
     pub(crate) fn collect_env_roots(
         env: &EnvRef,
         worklist: &mut Vec<u64>,
-        seen_envs: &mut HashSet<usize>,
+        seen_envs: &mut EnvVisits,
     ) {
         let mut current = Some(env.clone());
         while let Some(e) = current {
-            let ptr = Rc::as_ptr(&e) as usize;
-            if !seen_envs.insert(ptr) {
+            let borrowed = e.borrow();
+            if !seen_envs.first_visit(&borrowed) {
                 break;
             }
-            let borrowed = e.borrow();
             for binding in borrowed.bindings.values() {
                 Self::collect_value_roots(&binding.value, worklist);
             }
@@ -1708,7 +1707,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
         assert_eq!(as_set(worklist), vec![7, 8]);
     }
 
@@ -1721,7 +1720,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
         assert_eq!(as_set(worklist), vec![10, 11]);
     }
 
@@ -1732,7 +1731,7 @@ mod tests {
         data.gc_native_roots_mut().push(obj(22));
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
         assert_eq!(as_set(worklist), vec![20, 21, 22]);
     }
 
@@ -1749,7 +1748,7 @@ mod tests {
         });
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
         assert_eq!(as_set(worklist), vec![30, 31]);
     }
 
@@ -1768,7 +1767,7 @@ mod tests {
             .insert("a", Binding::new(obj(30), BindingKind::Var, true));
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new());
         assert_eq!(as_set(worklist), vec![30, 31]);
 
         // (b) self-referential env (parent points to itself) binds "c"=Object(32)
@@ -1781,7 +1780,7 @@ mod tests {
         cyclic.borrow_mut().parent = Some(cyclic.clone());
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&cyclic, &mut worklist, &mut HashSet::new());
+        Interpreter::collect_env_roots(&cyclic, &mut worklist, &mut EnvVisits::new());
         assert_eq!(worklist, vec![32]);
     }
 
@@ -1792,7 +1791,7 @@ mod tests {
         let child = Environment::new(Some(env));
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new());
         assert_eq!(worklist, vec![34]);
     }
 
@@ -1803,7 +1802,7 @@ mod tests {
         let child = Environment::new(Some(env));
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new());
         worklist.sort_unstable();
         assert_eq!(worklist, vec![34, 35]);
     }
@@ -1815,12 +1814,26 @@ mod tests {
             .bindings
             .insert("shared", Binding::new(obj(33), BindingKind::Var, true));
         let mut worklist = Vec::new();
-        let mut seen_envs = HashSet::new();
+        let mut seen_envs = EnvVisits::new();
 
         Interpreter::collect_env_roots(&env, &mut worklist, &mut seen_envs);
         Interpreter::collect_env_roots(&env, &mut worklist, &mut seen_envs);
 
         assert_eq!(worklist, vec![33]);
+    }
+
+    #[test]
+    fn a_new_collection_scans_an_environment_an_earlier_one_stamped() {
+        let env = Environment::new(None);
+        env.borrow_mut()
+            .bindings
+            .insert("held", Binding::new(obj(36), BindingKind::Var, true));
+
+        for _ in 0..3 {
+            let mut worklist = Vec::new();
+            Interpreter::collect_env_roots(&env, &mut worklist, &mut EnvVisits::new());
+            assert_eq!(worklist, vec![36]);
+        }
     }
 
     // GcPacer — the allocation-pressure heuristic that decides when to collect.
