@@ -92,11 +92,51 @@ cargo build --release
 
 ## Development checks
 
-Install the pinned repository hooks once per checkout:
+Install and verify the pinned repository hooks and their environments:
 
 ```bash
 uv tool install pre-commit
-pre-commit install
+./scripts/ensure-hooks.sh
+```
+
+Provision agent workspaces with this command before mounting Git metadata
+read-only, and provide a writable `PRE_COMMIT_HOME` cache. Launch agents through
+`./scripts/agent-session.sh --worktree <path> <agent-command> [arguments...]` to
+install hooks in the selected worktree and start the agent there only after
+setup succeeds. Omit `--worktree` to use the current worktree. For example:
+
+```bash
+git worktree add -b feat/example ../jsse-example
+./scripts/agent-session.sh --worktree ../jsse-example <agent-command>
+```
+
+Claude Code also runs setup on `SessionStart`. Its `PreToolUse` gate blocks edits
+and shell commands when hooks are missing, so a failed startup installation
+cannot silently lead to implementation work. Setup preserves existing Git hooks and verifies both
+`pre-commit` and `commit-msg`. Agents must not commit if setup fails or bypass
+checks with `--no-verify`, `SKIP`, or an overridden `core.hooksPath`.
+
+The token-limit hook checks only added or modified staged files, including rename
+destinations, using their staged contents. The limit is 5,000 tokens, estimated
+as bytes/4 (20,000 bytes); it also applies when editing an existing large file.
+Unstaged files, deletions, symlinks, submodules, and binary assets are skipped.
+Lockfiles, generated Unicode/emoji tables, test262 baselines, the changelog, and
+benchmark results are exempt via `token-limit-ignore` in `.gitattributes`.
+Add specific generated or vendored paths there when needed; authored files must
+be split into cohesive modules, test files, or linked documents. The hook reports
+each oversized file and provides splitting and re-staging instructions.
+
+Run just this check (always staged-only, even with `--all-files`):
+
+```bash
+pre-commit run staged-file-token-limit
+```
+
+The existing required CI `build` job also checks committed PR changes, reading
+blobs and exemptions from the head commit rather than an empty CI index:
+
+```bash
+uv run python scripts/check_staged_file_tokens.py --base origin/main --head HEAD
 ```
 
 Run every hook against the full repository when changing hook configuration or

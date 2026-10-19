@@ -1,0 +1,18 @@
+# Library Tests (Node-compat harness)
+Real-world npm libraries are run as engine stress tests via a generalized
+harness. See `scripts/README.md` for the full recipe and how to add a library.
+- Run one library: `./scripts/run-library-tests.sh <lib>` (e.g. `decimal.js`, `big.js`, `acorn`).
+- Run on Node only (reference oracle): `./scripts/run-library-tests.sh <lib> --node`.
+- Force a fresh clone/rebuild: `./scripts/run-library-tests.sh <lib> --clean`.
+- Each library has a config at `scripts/libs/<lib>.sh` (pinned repo/ref, bundle entry, prepare hook, verdict). The runner clones the pinned ref, bundles with a pinned esbuild, prepends the shared JS-only Node-globals shims (`scripts/node-shim.js` for `process`/`console`, `scripts/node-buffer-shim.js` for `Buffer`/`TextEncoder`/`TextDecoder`) — never baked into jsse's globals, so test262 is unaffected — runs on jsse, and cross-checks the test count against Node. Caches live under `/tmp/jsse-libtests/<lib>/`.
+- The shim stubs are guarded so they are inert on Node, letting `--node` run the identical bundle as the reference.
+- **`Buffer`** is a pure-JS subclass of `Uint8Array` (`node-buffer-shim.js`), needing zero new engine object kinds; `instanceof Uint8Array` holds. Self-verifying fixtures live in `scripts/shim-fixtures/`; run them (jsse + Node cross-checked) with `./scripts/run-shim-fixtures.sh`.
+- **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507), `prismjs` (2,563), `uglify-js` (4,233; ~15 min — full compress DSL transform/mangle/codegen corpus), `highlight.js` (731; ~30 min for the full auto-detection competition set), `uuid` (75; pinned to the browser build so v3/v5 exercise its own pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness from a `crypto.getRandomValues` shim backed by `__host_random_bytes` — see `node-crypto-shim.js`).
+- **`bignumber.js`** is wired but blocked on a jsse bug it surfaced (strict-mode `return <call-returning-non-object>` in a constructor returns that value instead of `this`, jsse#238); it goes green once that engine bug is fixed.
+- **`luxon`** is wired at 3.7.2 with an exact 1,152-test Node cross-check. Node itself fails 13/1,152 on this host (ICU/Node version drift, not a jsse bug); jsse currently passes 1,002, with the remaining Intl/system-zone gaps tracked in jsse#262–#265.
+- **`zod`** is wired at v4.4.3 in separate normal and jitless processes with an exact 2,184-case Node cross-check. Node is green; jsse runs every case with no skips and reports 2,178 passing, with the 6 residual failures tracked in jsse#313 (1 per mode) and jsse#314 (2 per mode). jsse#310's artificial `500 → 0` refinement-delay patch in `gen-zod-entry.js` is still in place.
+- **`moment`** is wired at 2.30.1 with an exact 3,871-test Node cross-check. Node is green with 162,868 assertions; jsse executes every test and records 198 visible failing assertions, tracked in jsse#311.
+
+### Acorn (`./scripts/run-acorn-tests.sh` — thin wrapper over the harness)
+- Pinned to **acorn 8.16.0** (13,507 tests, green on jsse and Node). 8.17.0+ added a parser stack-guard test (`"[".repeat(2000)`) that expects the engine to *throw* a "stack space" error; jsse's tree-walker aborts (SIGABRT) before acorn's guard fires — a jsse deep-recursion robustness gap tracked separately. Bump the pin once that lands.
+- **esbuild comment stripping**: esbuild removes comments from function bodies. The `TestComments` test relies on `Function.prototype.toString()` preserving comments, so a pre-bundle patch (`scripts/patch-acorn-comments.js`) replaces the `.toString()` call with a string literal.

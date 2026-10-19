@@ -9,6 +9,16 @@ exclude: |
   )
 
 repos:
+  - repo: local
+    hooks:
+      - id: staged-file-token-limit
+        name: Check staged files are at most 5,000 tokens (bytes/4)
+        entry: python scripts/check_staged_file_tokens.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
