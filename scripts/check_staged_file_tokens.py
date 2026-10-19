@@ -16,7 +16,20 @@ def git(*args: str, input_bytes: bytes | None = None) -> bytes:
     ).stdout
 
 
-def find_violations(candidates: list[tuple[bytes, bytes]]) -> list[tuple[bytes, int]]:
+def base_size(base_rev: str, path: bytes) -> int | None:
+    """Size of `path` in `base_rev`, or None when it did not exist there."""
+    result = subprocess.run(
+        ["git", "cat-file", "-s", f"{base_rev}:{os.fsdecode(path)}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return int(result.stdout) if result.returncode == 0 else None
+
+
+def find_violations(
+    candidates: list[tuple[bytes, bytes]], base_rev: str
+) -> list[tuple[bytes, int, int | None]]:
     sizes = git(
         "cat-file",
         "--batch-check=%(objectsize)",
@@ -27,10 +40,15 @@ def find_violations(candidates: list[tuple[bytes, bytes]]) -> list[tuple[bytes, 
         byte_count = int(size)
         if byte_count <= MAX_BYTES:
             continue
+        # Ratchet: a file that was already over the limit may change as long
+        # as it does not grow, so oversized files shrink as they are touched.
+        before = base_size(base_rev, path)
+        if before is not None and before > MAX_BYTES and byte_count <= before:
+            continue
         # Match Git's usual binary heuristic; assets have no text token budget.
         if b"\0" in git("cat-file", "blob", oid.decode("ascii"))[:8000]:
             continue
-        violations.append((path, byte_count))
+        violations.append((path, byte_count, before))
     return violations
 
 
@@ -47,6 +65,7 @@ def main() -> int:
         parser.error("--head requires --base")
     attribute_source = ["--cached"]
     revisions = ["--cached"]
+    base_rev = "HEAD"
     if args.base:
         head = (
             git(
@@ -65,6 +84,7 @@ def main() -> int:
         )
         base = git("merge-base", base, head).decode().strip()
         revisions = [base, head]
+        base_rev = base
         attribute_source = [f"--source={head}"]
     # --no-renames treats a rename as deletion + addition, checking its new path.
     # Raw, NUL-delimited records preserve unusual names and give us blob IDs/modes.
@@ -105,7 +125,7 @@ def main() -> int:
     if not candidates:
         return 0
 
-    violations = find_violations(candidates)
+    violations = find_violations(candidates, base_rev)
     if not violations:
         return 0
 
@@ -115,14 +135,17 @@ def main() -> int:
         "(bytes/4; maximum 20,000 bytes per file).",
         file=sys.stderr,
     )
-    for path, byte_count in violations:
+    for path, byte_count, before in violations:
+        was = f" (was {before:,})" if before is not None and before > MAX_BYTES else ""
         print(
-            f"  {os.fsdecode(path)!r}: {byte_count:,} bytes = "
+            f"  {os.fsdecode(path)!r}: {byte_count:,} bytes{was} = "
             f"{byte_count / 4:,.2f} tokens",
             file=sys.stderr,
         )
     print(
-        "\nSplit each listed file before committing:\n"
+        "\nNew files must stay at or below the limit, and a file that is already "
+        "over it may change\nonly if it does not grow. Split each listed file "
+        "before committing:\n"
         "  1. Group related functions, types, tests, or documentation by "
         "responsibility.\n"
         "  2. Move cohesive groups into focused sibling files, keeping EVERY "

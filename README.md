@@ -118,7 +118,10 @@ checks with `--no-verify`, `SKIP`, or an overridden `core.hooksPath`.
 
 The token-limit hook checks only added or modified staged files, including rename
 destinations, using their staged contents. The limit is 5,000 tokens, estimated
-as bytes/4 (20,000 bytes); it also applies when editing an existing large file.
+as bytes/4 (20,000 bytes). A file that is already over the limit may be edited as
+long as it does not grow (a ratchet against its size at the base commit), so large
+files shrink as code is extracted from them; new files and files under the limit
+must stay at or below it.
 Unstaged files, deletions, symlinks, submodules, and binary assets are skipped.
 Lockfiles, generated Unicode/emoji tables, test262 baselines, the changelog, and
 benchmark results are exempt via `token-limit-ignore` in `.gitattributes`.

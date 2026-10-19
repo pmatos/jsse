@@ -98,11 +98,46 @@ class StagedFileTokenTests(unittest.TestCase):
         self.stage("new.rs", b"small")
         self.assertEqual(self.run_hook().returncode, 0)
 
-    def test_modifying_existing_large_file_fails(self):
+    def test_growing_existing_large_file_fails(self):
         self.stage("old.rs", b"x" * 20_001)
         self.git("commit", "--quiet", "-m", "baseline")
-        self.stage("old.rs", b"y" * 20_001)
+        self.stage("old.rs", b"y" * 20_002)
+        result = self.run_hook()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("(was 20,001)", result.stderr)
+
+    def test_existing_large_file_may_change_without_growing(self):
+        self.stage("old.rs", b"x" * 30_000)
+        self.git("commit", "--quiet", "-m", "baseline")
+        self.stage("old.rs", b"y" * 30_000)
+        self.assertEqual(self.run_hook().returncode, 0)
+        self.stage("old.rs", b"z" * 25_000)
+        self.assertEqual(self.run_hook().returncode, 0)
+
+    def test_shrunk_file_may_not_grow_back_past_its_new_size(self):
+        self.stage("old.rs", b"x" * 30_000)
+        self.git("commit", "--quiet", "-m", "baseline")
+        self.stage("old.rs", b"y" * 25_000)
+        self.git("commit", "--quiet", "-m", "shrunk")
+        self.stage("old.rs", b"z" * 26_000)
         self.assertEqual(self.run_hook().returncode, 1)
+
+    def test_small_file_may_not_cross_the_limit(self):
+        self.stage("small.rs", b"x" * 20_000)
+        self.git("commit", "--quiet", "-m", "baseline")
+        self.stage("small.rs", b"x" * 20_001)
+        self.assertEqual(self.run_hook().returncode, 1)
+
+    def test_ci_ratchet_uses_merge_base_size(self):
+        self.stage("old.rs", b"x" * 30_000)
+        self.git("commit", "--quiet", "-m", "base")
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.stage("old.rs", b"y" * 29_000)
+        self.git("commit", "--quiet", "-m", "shrink")
+        self.assertEqual(self.run_hook("--base", base).returncode, 0)
+        self.stage("old.rs", b"y" * 30_001)
+        self.git("commit", "--quiet", "-m", "grow")
+        self.assertEqual(self.run_hook("--base", base).returncode, 1)
 
     def test_deletion_passes_and_rename_checks_destination(self):
         self.stage("old.rs", b"x" * 20_001)
