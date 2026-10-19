@@ -10,7 +10,6 @@ use std::rc::Rc;
 
 /// The immutable option snapshot of an `Intl.PluralRules` instance (ECMA-402 §16.1).
 /// `locale` is already stripped of Unicode extensions by the constructor.
-#[derive(Clone)]
 pub(crate) struct PluralRulesOptions {
     pub(crate) locale: String,
     pub(crate) plural_type: String,
@@ -36,13 +35,14 @@ pub(crate) struct PluralRulesState {
     range_rules: OnceCell<Option<PluralRulesWithRanges<IcuPluralRules>>>,
 }
 
-fn icu_inputs(options: &PluralRulesOptions) -> (PluralRulesPreferences, IcuPluralRulesOptions) {
-    let icu_locale: IcuLocale = options
-        .locale
-        .parse()
-        .unwrap_or_else(|_| "en".parse().unwrap());
+/// ICU inputs for a locale already stripped of Unicode extensions.
+pub(crate) fn icu_inputs(
+    locale: &str,
+    plural_type: &str,
+) -> (PluralRulesPreferences, IcuPluralRulesOptions) {
+    let icu_locale: IcuLocale = locale.parse().unwrap_or_else(|_| "en".parse().unwrap());
     let mut opts = IcuPluralRulesOptions::default();
-    opts.rule_type = Some(if options.plural_type == "ordinal" {
+    opts.rule_type = Some(if plural_type == "ordinal" {
         PluralRuleType::Ordinal
     } else {
         PluralRuleType::Cardinal
@@ -59,19 +59,19 @@ impl PluralRulesState {
         }
     }
 
-    pub(crate) fn new(options: PluralRulesOptions) -> Self {
-        Self {
+    pub(crate) fn new(options: PluralRulesOptions) -> Rc<Self> {
+        Rc::new(Self {
             options,
             rules: OnceCell::new(),
             range_rules: OnceCell::new(),
-        }
+        })
     }
 
     /// `None` when ICU has no rules for the locale; callers answer "other".
     pub(crate) fn rules(&self) -> Option<&IcuPluralRules> {
         self.rules
             .get_or_init(|| {
-                let (prefs, opts) = icu_inputs(&self.options);
+                let (prefs, opts) = icu_inputs(&self.options.locale, &self.options.plural_type);
                 IcuPluralRules::try_new(prefs, opts).ok()
             })
             .as_ref()
@@ -80,12 +80,22 @@ impl PluralRulesState {
     pub(crate) fn range_rules(&self) -> Option<&PluralRulesWithRanges<IcuPluralRules>> {
         self.range_rules
             .get_or_init(|| {
-                let (prefs, opts) = icu_inputs(&self.options);
+                let (prefs, opts) = icu_inputs(&self.options.locale, &self.options.plural_type);
                 PluralRulesWithRanges::try_new(prefs, opts).ok()
             })
             .as_ref()
     }
 }
+
+/// Categories in ECMA-402 `pluralCategories` order; `CATEGORY_NAMES` is indexed alike.
+pub(crate) const SPEC_ORDER: [PluralCategory; 6] = [
+    PluralCategory::Zero,
+    PluralCategory::One,
+    PluralCategory::Two,
+    PluralCategory::Few,
+    PluralCategory::Many,
+    PluralCategory::Other,
+];
 
 const CATEGORY_NAMES: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
 
