@@ -21,15 +21,12 @@ impl PropertyMap {
     /// Append an entry whose key is absent and does not begin with a digit.
     pub(crate) fn push_non_index(&mut self, key: JsPropertyKey, value: PropertyDescriptor) {
         debug_assert!(!self.contains_key(&key) && !Self::is_digit_leading(key.as_bytes()));
-        let within_capacity = match &self.inner {
-            PropertyMapInner::Inline(entries) => entries.len() < entries.capacity(),
-            PropertyMapInner::Spilled { .. } => false,
-        };
-        match &mut self.inner {
-            PropertyMapInner::Inline(entries) if within_capacity => {
-                entries.push((key, value.into()));
-            }
-            _ => self.push_fresh(key, value),
+        if let PropertyMapInner::Inline(entries) = &mut self.inner
+            && entries.len() < entries.capacity()
+        {
+            entries.push((key, value.into()));
+        } else {
+            self.push_fresh(key, value);
         }
     }
 }

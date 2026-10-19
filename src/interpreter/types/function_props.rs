@@ -6,12 +6,7 @@ impl Environment {
     pub(crate) fn declare_function_name(&mut self, name: Atom) {
         self.bindings.push_unique(
             name,
-            Binding {
-                value: JsValue::UNDEFINED,
-                kind: BindingKind::FunctionName,
-                initialized: false,
-                deletable: false,
-            },
+            Binding::new(JsValue::UNDEFINED, BindingKind::FunctionName, false),
         );
     }
 
