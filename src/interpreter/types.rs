@@ -1009,7 +1009,7 @@ pub(crate) struct Environment {
     pub(crate) module_path: Option<super::ModuleKey>,
     /// Epoch of the last collection walk that visited this environment
     /// (`EnvVisits`); never reset, since an epoch is never reused.
-    pub(crate) gc_epoch: Cell<u64>,
+    gc_epoch: Cell<u64>,
 }
 
 static NEXT_ENV_VISIT_EPOCH: AtomicU64 = AtomicU64::new(1);
