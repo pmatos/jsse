@@ -67,7 +67,7 @@ impl Interpreter {
                         }
                         let id = interp.next_symbol_id;
                         interp.next_symbol_id += 1;
-                        let sym = crate::types::JsSymbol::new(id, Some(key.clone()));
+                        let sym = crate::types::JsSymbol::for_key(id, key.clone());
                         interp.global_symbol_registry.insert(key, sym.clone());
                         Completion::Normal(JsValue::symbol(sym))
                     }),

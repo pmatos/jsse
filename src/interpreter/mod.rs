@@ -1667,10 +1667,7 @@ impl Interpreter {
         if val.is_object() {
             true
         } else if let Some(sym) = val.as_symbol() {
-            !self
-                .global_symbol_registry
-                .values()
-                .any(|reg| reg.id() == sym.id())
+            !sym.is_registered()
         } else {
             false
         }
