@@ -28,9 +28,9 @@ pub(crate) type BodyKey = (Rc<str>, u64);
 
 /// Identity for synthetic bodies that have no function object at all
 /// (`<script body>`, `<module body>`, `<eval>`, and unlabelled state-machine
-/// bodies). Object ids are allocated upward from 0, so this can never collide.
+/// bodies). Object ids are allocated upward from 0, so it never collides.
 pub(crate) const SYNTHETIC_BODY_ID: u64 = u64::MAX;
-const _: () = assert!((Op::ConstructSpread as usize) < OP_SLOTS);
+const _: () = assert!((Op::ConstructSpreadSole as usize) < OP_SLOTS);
 
 pub(crate) struct PerfCounters {
     /// Opcodes dispatched by `vm::run_chunk_inner`.

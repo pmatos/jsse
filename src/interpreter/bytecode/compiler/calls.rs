@@ -39,6 +39,17 @@ impl Compiler {
         if usize::from(self.current_stack) + args.len() + 1 > usize::from(u16::MAX) {
             return Err(CompileError::Ineligible("operand stack overflow"));
         }
+        if let [Expression::Spread(iterable)] = args {
+            self.compile_expr(iterable)?;
+            self.emit(if below == 2 {
+                Op::CallSpreadSole
+            } else {
+                Op::ConstructSpreadSole
+            });
+            self.pop_n(below + 1);
+            self.push_n(1);
+            return Ok(());
+        }
         let mut slots: u16 = 0;
         let mut spread_seen = false;
         for arg in args {

@@ -78,30 +78,6 @@ pub(crate) fn proto_chain_without_index_keys(interp: &Interpreter, start: Option
     walk_index_free_chain(interp, start, false)
 }
 
-thread_local! {
-    static ITERATOR_SLOT: Cell<u32> = const { Cell::new(0) };
-    static NEXT_SLOT: Cell<u32> = const { Cell::new(0) };
-}
-
-/// The record for the key with these bytes, trying the slot the last lookup
-/// found it in first. The slot is only a guess: it is used when it holds the
-/// key and replaced by the lookup otherwise.
-fn hinted_record<'a, K: PropertyKeyLike + ?Sized>(
-    map: &'a PropertyMap,
-    key: &K,
-    hint: &'static std::thread::LocalKey<Cell<u32>>,
-) -> Option<&'a PropertyRecord> {
-    let guess = hint.with(Cell::get) as usize;
-    if let Some((k, record)) = map.entry_at(guess)
-        && k.as_bytes() == key.as_property_key_bytes()
-    {
-        return Some(record);
-    }
-    let slot = map.slot_of(key)?;
-    hint.with(|h| h.set(slot as u32));
-    map.entry_at(slot).map(|(_, record)| record)
-}
-
 /// The values a plain dense Array yields when its iteration is entirely intrinsic (original
 /// `@@iterator` and `%ArrayIteratorPrototype%.next`), copied without creating an iterator.
 /// A hole reads `undefined` only when no prototype can answer the index.
@@ -118,7 +94,7 @@ pub(crate) fn try_intrinsic_iteration(
     let iterator_key = JsPropertyKey::cached_well_known_symbol("iterator")?;
     let values_id = realm.array_prototype_values.as_ref()?.as_object_id()?;
     let proto = interp.get_object_cell(realm.array_prototype?)?.borrow();
-    let iterator_method = hinted_record(&proto.properties, iterator_key, &ITERATOR_SLOT)?;
+    let iterator_method = proto.properties.get(iterator_key)?;
     if iterator_method.value().and_then(JsValue::as_object_id) != Some(values_id) {
         return None;
     }
@@ -127,7 +103,7 @@ pub(crate) fn try_intrinsic_iteration(
     let iterator_proto = interp
         .get_object_cell(realm.array_iterator_prototype?)?
         .borrow();
-    let next = hinted_record(&iterator_proto.properties, "next", &NEXT_SLOT)?;
+    let next = iterator_proto.properties.get("next")?;
     if next.value().and_then(JsValue::as_object_id) != Some(next_id) {
         return None;
     }

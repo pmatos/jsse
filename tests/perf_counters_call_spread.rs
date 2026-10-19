@@ -60,10 +60,15 @@ fn spread_calls_and_new_stay_in_the_vm() {
     ] {
         let (perf, ops) = counters(&loop_of(body));
         assert_eq!(perf["ast_fallback_execs"], 0, "{body}: hand-offs");
-        let spread_ops: u64 = ["CallSpread", "ConstructSpread"]
-            .iter()
-            .filter_map(|op| ops.get(*op))
-            .sum();
+        let spread_ops: u64 = [
+            "CallSpread",
+            "ConstructSpread",
+            "CallSpreadSole",
+            "ConstructSpreadSole",
+        ]
+        .iter()
+        .filter_map(|op| ops.get(*op))
+        .sum();
         assert_eq!(spread_ops, 50, "{body}: one spread call op per iteration");
     }
 }
@@ -84,7 +89,12 @@ fn unsupported_spread_forms_stay_on_the_tree_walker() {
         perf["ast_fallback_execs"] > 0,
         "super(...) and ?.(...) hand off"
     );
-    for op in ["CallSpread", "ConstructSpread"] {
+    for op in [
+        "CallSpread",
+        "ConstructSpread",
+        "CallSpreadSole",
+        "ConstructSpreadSole",
+    ] {
         assert!(
             !ops.contains_key(op),
             "{op}: the only spreads are super(...) and ?.(...) forms"

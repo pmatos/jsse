@@ -1902,11 +1902,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 2;
                     let site_id = CallSiteId(decode_u32(chunk, pc));
                     pc += 4;
-                    // Counted here, before the strict tail-call return below: that
-                    // path leaves the VM without ever reaching the dispatch site,
-                    // so incrementing later would omit every strict tail call from
-                    // `calls_from_vm` and understate VM-issued calls on
-                    // tail-call-heavy code.
+                    // Counted before the strict tail-call return below, which leaves
+                    // the VM without reaching the dispatch site: strict tail calls
+                    // stay in `calls_from_vm`.
                     #[cfg(feature = "perf-counters")]
                     {
                         interp.perf.calls_from_vm += 1;
@@ -2011,7 +2009,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 | Op::ArgSpread
                 | Op::ArgPush
                 | Op::CallSpread
-                | Op::ConstructSpread => {
+                | Op::ConstructSpread
+                | Op::CallSpreadSole
+                | Op::ConstructSpreadSole => {
                     let before = if op == Op::ArgSpreadFirst {
                         pc += 2;
                         decode_u16(chunk, pc - 2)

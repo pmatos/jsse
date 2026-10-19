@@ -267,6 +267,12 @@ pub(crate) enum Op {
     CallSpread = 111,
     /// `[..., callee, args, count]` → `[..., result]`.
     ConstructSpread = 112,
+    /// A call whose only argument is a spread: `[..., callee, this,
+    /// iterable]` → `[..., result]`, with no count slot.
+    CallSpreadSole = 113,
+    /// `new` whose only argument is a spread: `[..., callee, iterable]` →
+    /// `[..., result]`.
+    ConstructSpreadSole = 114,
 }
 
 /// Where `Op::Yield`'s operands sit counted back from the end of the op, which
@@ -391,6 +397,8 @@ impl Op {
             110 => Some(Op::ArgPush),
             111 => Some(Op::CallSpread),
             112 => Some(Op::ConstructSpread),
+            113 => Some(Op::CallSpreadSole),
+            114 => Some(Op::ConstructSpreadSole),
             _ => None,
         }
     }
