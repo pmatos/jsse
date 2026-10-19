@@ -375,8 +375,7 @@ impl Interpreter {
     /// disposal, and no `Await`, is due).
     pub(crate) fn take_dispose_stack(&mut self, env: &EnvRef) -> Option<Vec<DisposableResource>> {
         env.borrow_mut()
-            .dispose_stack
-            .take()
+            .take_disposables()
             .filter(|stack| !stack.is_empty())
     }
 

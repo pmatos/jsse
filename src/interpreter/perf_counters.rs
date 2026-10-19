@@ -74,6 +74,8 @@ pub(crate) struct PerfCounters {
     /// first visit of their collection (the rest stopped a parent walk).
     pub(crate) gc_env_probes: u64,
     pub(crate) gc_env_first_visits: u64,
+    /// Minor-collection walk entries that skipped a clean environment.
+    pub(crate) gc_env_clean_skips: u64,
     pub(crate) gc_nanos: u128,
     /// The share of `gc_nanos` spent in minor collections.
     pub(crate) gc_minor_nanos: u128,
@@ -135,6 +137,7 @@ impl Default for PerfCounters {
             gc_major: 0,
             gc_env_probes: 0,
             gc_env_first_visits: 0,
+            gc_env_clean_skips: 0,
             gc_nanos: 0,
             gc_minor_nanos: 0,
             local_slot_hits: 0,
@@ -159,6 +162,7 @@ impl PerfCounters {
     pub(crate) fn note_env_visits(&mut self, visits: &crate::interpreter::types::EnvVisits) {
         self.gc_env_probes += visits.probes;
         self.gc_env_first_visits += visits.first_visits;
+        self.gc_env_clean_skips += visits.clean_skips;
     }
 
     pub(crate) fn record_op(&mut self, op: Op) {
@@ -278,6 +282,7 @@ impl PerfCounters {
             "PERF\tgc_env_first_visits\t{}",
             self.gc_env_first_visits
         );
+        let _ = writeln!(out, "PERF\tgc_env_clean_skips\t{}", self.gc_env_clean_skips);
         let _ = writeln!(out, "PERF\tgc_ms\t{}", self.gc_nanos / 1_000_000);
         let _ = writeln!(out, "PERF\tgc_minor_us\t{}", self.gc_minor_nanos / 1_000);
         let _ = writeln!(out, "PERF\tlocal_slot_hits\t{}", self.local_slot_hits);

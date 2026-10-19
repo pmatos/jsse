@@ -2998,11 +2998,7 @@ impl Interpreter {
                 hint,
                 dispose_method: JsValue::UNDEFINED,
             };
-            let mut env_ref = env.borrow_mut();
-            if env_ref.dispose_stack.is_none() {
-                env_ref.dispose_stack = Some(Vec::new());
-            }
-            env_ref.dispose_stack.as_mut().unwrap().push(resource);
+            env.borrow_mut().push_disposable(resource);
             return Ok(());
         }
 
@@ -3069,11 +3065,7 @@ impl Interpreter {
             dispose_method: method,
         };
 
-        let mut env_ref = env.borrow_mut();
-        if env_ref.dispose_stack.is_none() {
-            env_ref.dispose_stack = Some(Vec::new());
-        }
-        env_ref.dispose_stack.as_mut().unwrap().push(resource);
+        env.borrow_mut().push_disposable(resource);
         Ok(())
     }
 

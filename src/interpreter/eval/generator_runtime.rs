@@ -5957,7 +5957,7 @@ impl Interpreter {
             .into_iter()
             .flatten()
         {
-            if let Some(stack) = frame.env.borrow_mut().dispose_stack.take() {
+            if let Some(stack) = frame.env.borrow_mut().take_disposables() {
                 combined.extend(stack);
             }
         }
@@ -7065,10 +7065,7 @@ impl Interpreter {
 }
 
 fn env_has_pending_dispose(env: &EnvRef) -> bool {
-    env.borrow()
-        .dispose_stack
-        .as_ref()
-        .is_some_and(|stack| !stack.is_empty())
+    env.borrow().has_pending_disposables()
 }
 
 /// Makes `slot` equal to `src`, writing only the entries that differ.

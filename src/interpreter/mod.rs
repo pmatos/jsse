@@ -323,6 +323,9 @@ pub(crate) struct Interpreter {
     gc: crate::interpreter::gc::GcPacer,
     // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
     gc_marks: Vec<bool>,
+    /// Every environment a collection has scanned, weakly: a minor collection
+    /// re-scans the ones written to since (`BindingMap::is_clean`).
+    env_registry: Vec<std::rc::Weak<RefCell<Environment>>>,
     // Nursery bitmap scratch buffers reused by every minor collection.
     gc_young: crate::interpreter::gc::YoungIds,
     generator_context: Option<GeneratorContext>,
@@ -803,6 +806,7 @@ impl Interpreter {
             new_target: None,
             gc: crate::interpreter::gc::GcPacer::new(),
             gc_marks: Vec::new(),
+            env_registry: Vec::new(),
             gc_young: Default::default(),
             generator_context: None,
             destructuring_yield: false,
