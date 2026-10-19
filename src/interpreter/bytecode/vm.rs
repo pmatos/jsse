@@ -1021,10 +1021,9 @@ pub(crate) struct GeneratorControl {
     scopes: SmallVec<[EnvRef; 4]>,
 }
 
-/// A generator body's suspended VM frame. The operand and reference stacks
-/// are the ones `run_chunk` would have kept on its Rust frame; between
-/// resumptions the generator object owns them, and the collector reaches them
-/// through `IteratorState::BytecodeGenerator`.
+/// A suspended body's VM frame: the operand and reference stacks `run_chunk`
+/// would have kept on its Rust frame, owned between resumptions by the
+/// generator object (traced via `IteratorState::BytecodeGenerator`).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct GeneratorFrame {
     control: GeneratorControl,
@@ -2822,3 +2821,5 @@ fn run_chunk_inner<const GENERATOR: bool>(
         }
     }
 }
+
+mod suspension;
