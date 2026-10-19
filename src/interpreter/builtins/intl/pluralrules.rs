@@ -1,10 +1,14 @@
 use super::super::super::*;
+use super::super::plural_rules_state::{
+    PluralRulesOptions, PluralRulesState, category_value, other_value,
+};
 use fixed_decimal::{CompactDecimal, Decimal};
 use icu::locale::Locale as IcuLocale;
 use icu::plurals::{
     PluralCategory, PluralOperands, PluralRuleType, PluralRules as IcuPluralRules,
-    PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences, PluralRulesWithRanges,
+    PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences,
 };
+use std::rc::Rc;
 
 fn plural_category_to_str(cat: PluralCategory) -> &'static str {
     match cat {
@@ -186,18 +190,11 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let data = {
-                        let b = obj.borrow();
-                        b.intl_data().cloned()
+                    let state = match obj.borrow().intl_data() {
+                        Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
+                        _ => None,
                     };
-                    if let Some(IntlData::PluralRules {
-                        locale,
-                        plural_type,
-                        notation,
-                        compact_display,
-                        ..
-                    }) = data
-                    {
+                    if let Some(state) = state {
                         let n_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let n = match interp.to_number_value(&n_val) {
                             Ok(v) => v,
@@ -205,34 +202,18 @@ impl Interpreter {
                         };
 
                         if n.is_nan() {
-                            return Completion::Normal(JsValue::from_str("other"));
+                            return Completion::Normal(other_value());
                         }
 
-                        let base = base_locale(&locale);
-                        let icu_locale: IcuLocale =
-                            base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-                        let prefs = PluralRulesPreferences::from(&icu_locale);
-                        let mut opts = IcuPluralRulesOptions::default();
-                        opts.rule_type = Some(if plural_type == "ordinal" {
-                            PluralRuleType::Ordinal
-                        } else {
-                            PluralRuleType::Cardinal
-                        });
-
-                        let rules = match IcuPluralRules::try_new(prefs, opts) {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return Completion::Normal(JsValue::from_str("other"));
-                            }
+                        let Some(rules) = state.rules() else {
+                            return Completion::Normal(other_value());
                         };
-
                         let operands = number_to_plural_operands_with_notation(
                             n,
-                            &notation,
-                            compact_display.as_deref(),
+                            &state.options.notation,
+                            state.options.compact_display.as_deref(),
                         );
-                        let cat = rules.category_for(operands);
-                        return Completion::Normal(JsValue::from_str(plural_category_to_str(cat)));
+                        return Completion::Normal(category_value(rules.category_for(operands)));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -252,18 +233,11 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let data = {
-                        let b = obj.borrow();
-                        b.intl_data().cloned()
+                    let state = match obj.borrow().intl_data() {
+                        Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
+                        _ => None,
                     };
-                    if let Some(IntlData::PluralRules {
-                        locale,
-                        plural_type,
-                        notation,
-                        compact_display,
-                        ..
-                    }) = data
-                    {
+                    if let Some(state) = state {
                         let start_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let end_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
@@ -291,36 +265,22 @@ impl Interpreter {
                             );
                         }
 
-                        let base = base_locale(&locale);
-                        let icu_locale: IcuLocale =
-                            base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-                        let prefs = PluralRulesPreferences::from(&icu_locale);
-                        let mut opts = IcuPluralRulesOptions::default();
-                        opts.rule_type = Some(if plural_type == "ordinal" {
-                            PluralRuleType::Ordinal
-                        } else {
-                            PluralRuleType::Cardinal
-                        });
-
-                        let range_rules = match PluralRulesWithRanges::try_new(prefs, opts) {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return Completion::Normal(JsValue::from_str("other"));
-                            }
+                        let Some(range_rules) = state.range_rules() else {
+                            return Completion::Normal(other_value());
                         };
 
                         let start_ops = number_to_plural_operands_with_notation(
                             start_n,
-                            &notation,
-                            compact_display.as_deref(),
+                            &state.options.notation,
+                            state.options.compact_display.as_deref(),
                         );
                         let end_ops = number_to_plural_operands_with_notation(
                             end_n,
-                            &notation,
-                            compact_display.as_deref(),
+                            &state.options.notation,
+                            state.options.compact_display.as_deref(),
                         );
                         let cat = range_rules.category_for_range(start_ops, end_ops);
-                        return Completion::Normal(JsValue::from_str(plural_category_to_str(cat)));
+                        return Completion::Normal(category_value(cat));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -340,26 +300,26 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let data = {
-                        let b = obj.borrow();
-                        b.intl_data().cloned()
+                    let state = match obj.borrow().intl_data() {
+                        Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
+                        _ => None,
                     };
-                    if let Some(IntlData::PluralRules {
-                        locale,
-                        plural_type,
-                        notation,
-                        compact_display,
-                        minimum_integer_digits,
-                        minimum_fraction_digits,
-                        maximum_fraction_digits,
-                        minimum_significant_digits,
-                        maximum_significant_digits,
-                        rounding_mode,
-                        rounding_increment,
-                        rounding_priority,
-                        trailing_zero_display,
-                    }) = data
-                    {
+                    if let Some(state) = state {
+                        let PluralRulesOptions {
+                            locale,
+                            plural_type,
+                            notation,
+                            compact_display,
+                            minimum_integer_digits,
+                            minimum_fraction_digits,
+                            maximum_fraction_digits,
+                            minimum_significant_digits,
+                            maximum_significant_digits,
+                            rounding_mode,
+                            rounding_increment,
+                            rounding_priority,
+                            trailing_zero_display,
+                        } = state.options.clone();
                         let result_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
                             interp
@@ -1038,7 +998,7 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.PluralRules";
-                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::PluralRules {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::PluralRules(Rc::new(PluralRulesState::new(PluralRulesOptions {
                     locale,
                     plural_type,
                     notation,
@@ -1052,7 +1012,7 @@ impl Interpreter {
                     rounding_increment,
                     rounding_priority,
                     trailing_zero_display,
-                }));
+                })))));
 
                 Completion::Normal(JsValue::object(obj_id))
             },
