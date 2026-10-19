@@ -21,10 +21,8 @@ pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
 
 /// One entry of the microtask queue.
 ///
-/// The Promise machinery queues typed jobs, so a queued reaction costs one
-/// enum value rather than a boxed closure plus a separate roots `Vec`; the
-/// collector reads the queued values straight off the job. `Closure` keeps the
-/// explicit-roots form for the remaining one-off producers (disposal,
+/// Promise jobs are typed values the collector reads its roots from directly;
+/// `Closure` keeps the explicit-roots form for one-off producers (disposal,
 /// async-generator and module plumbing).
 pub(crate) enum Microtask {
     Closure {
@@ -336,7 +334,9 @@ impl JobScheduler {
     }
 
     pub(crate) fn remove_async_gen_queue(&mut self, gen_id: u64) {
-        self.async_gen_queues.remove(&gen_id);
+        if !self.async_gen_queues.is_empty() {
+            self.async_gen_queues.remove(&gen_id);
+        }
     }
 
     pub(crate) fn set_async_gen_yield_pending(&mut self, value: bool) {

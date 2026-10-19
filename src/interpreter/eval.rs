@@ -129,56 +129,6 @@ impl OwnedFrameShape {
 }
 
 impl Interpreter {
-    /// Evaluates a function or arrow literal (sec-function-definitions-
-    /// runtime-semantics-evaluation, sec-arrow-function-definitions-runtime-
-    /// semantics-evaluation) in `env`. `inferred_name` is the name
-    /// NamedEvaluation gives an anonymous function definition.
-    pub(crate) fn make_closure(
-        &mut self,
-        spec: &ClosureSpec<'_>,
-        env: &EnvRef,
-        is_method: bool,
-        inferred_name: Option<&JsString>,
-    ) -> JsValue {
-        let own_name = if spec.is_arrow { None } else { spec.name };
-        let closure_env = if let Some(name) = own_name {
-            let func_env = Environment::new(Some(env.clone()));
-            if spec.body_is_strict {
-                func_env.borrow_mut().strict = true;
-            }
-            func_env
-                .borrow_mut()
-                .declare(name, BindingKind::FunctionName);
-            func_env
-        } else {
-            env.clone()
-        };
-        let enclosing_strict = env.borrow().strict;
-        let func = JsFunction::User {
-            bytecode_cache: Default::default(),
-            frame: spec.info.frame.clone(),
-            name: own_name.map(str::to_string),
-            params: spec.info.params.clone(),
-            body: spec.body.clone(),
-            closure: closure_env.clone(),
-            is_arrow: spec.is_arrow,
-            is_strict: spec.body_is_strict || enclosing_strict,
-            is_generator: spec.is_generator,
-            is_async: spec.is_async,
-            is_method,
-            source_text: spec.source_text.clone(),
-            // Arrows never have their own `arguments`; their literal info
-            // records `false`.
-            uses_arguments: spec.info.uses_arguments,
-            has_simple_params: spec.info.has_simple_params,
-        };
-        let func_val = self.create_function_with_name(func, FunctionInit::Default, inferred_name);
-        if let Some(name) = own_name {
-            let _ = self.env_set(&closure_env, name, func_val.clone());
-        }
-        func_val
-    }
-
     /// §2.1.1.1 EvaluateImportCall: evaluate an import call's options expression
     /// without inspecting the resulting value. The raw value must survive the
     /// specifier's observable ToString; only after that succeeds may the caller

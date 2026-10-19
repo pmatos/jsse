@@ -12,6 +12,7 @@ use super::binding_map::BindingMap;
 use super::bytecode::chunk::Chunk;
 use super::hoist_cache::HoistAnalysis;
 use super::ic_store::{BodyIcStore, FrameIcStore};
+use crate::types::JsString;
 
 /// The interned parameter names of a simple parameter list.
 #[derive(Debug)]
@@ -199,6 +200,8 @@ pub(crate) enum CallShape {
 
 #[derive(Debug, Default)]
 pub(crate) struct LiteralFrame {
+    own_name_atom: OnceCell<Atom>,
+    name_string: OnceCell<JsString>,
     param_atoms: OnceCell<ParamAtoms>,
     named_params: OnceCell<Option<NamedParamPlan>>,
     shares_param_env: OnceCell<bool>,
@@ -273,6 +276,32 @@ impl LiteralFrame {
         compute: impl FnOnce() -> Rc<HoistAnalysis>,
     ) -> &Rc<HoistAnalysis> {
         self.hoist.get_or_init(compute)
+    }
+
+    /// The interned name of the literal, bound without hashing by a named
+    /// function expression's own scope and by a hoisted function declaration.
+    /// A frame shared across names gets a fresh atom for a different name.
+    #[inline]
+    pub(crate) fn own_name_atom(&self, name: &str) -> Atom {
+        let atom = self.own_name_atom.get_or_init(|| Atom::intern(name));
+        if atom.as_str() == name {
+            atom.clone()
+        } else {
+            Atom::intern(name)
+        }
+    }
+
+    /// The `name` value of a closure named `name`: one string per literal
+    /// instead of one per closure. The default class constructors share one
+    /// frame across names, so a different name gets a string of its own.
+    #[inline]
+    pub(crate) fn name_string(&self, name: &str) -> JsString {
+        let cached = self.name_string.get_or_init(|| JsString::from_str(name));
+        if cached.as_units().iter().copied().eq(name.encode_utf16()) {
+            cached.clone()
+        } else {
+            JsString::from_str(name)
+        }
     }
 
     /// The literal's IC store, created on first entry from its body.
