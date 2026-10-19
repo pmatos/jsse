@@ -67,11 +67,11 @@ impl Compiler {
         for declarator in &decl.declarations {
             let Pattern::Identifier(name) = &declarator.pattern else {
                 let unsupported = CompileError::Unsupported("lexical binding pattern");
-                let bindings = simple_object_pattern(&declarator.pattern).ok_or(unsupported)?;
-                let init = declarator
-                    .init
-                    .as_ref()
-                    .expect("a pattern has an initializer");
+                let (Some(bindings), Some(init)) =
+                    (simple_object_pattern(&declarator.pattern), &declarator.init)
+                else {
+                    return Err(unsupported);
+                };
                 self.compile_expr(init)?;
                 self.compile_simple_object_pattern(&bindings, is_const)?;
                 continue;
