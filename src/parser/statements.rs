@@ -780,7 +780,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Var) => {
                 self.advance()?;
                 self.no_in = true;
-                let decls = self.parse_variable_declaration_list()?;
+                let decls = self.parse_for_declaration_list()?;
                 self.no_in = false;
                 if self.current == Token::Keyword(Keyword::In) {
                     if is_await {
@@ -923,7 +923,7 @@ impl<'a> Parser<'a> {
                     let kind = VarKind::Let;
                     self.advance()?;
                     self.no_in = true;
-                    let decls = self.parse_variable_declaration_list()?;
+                    let decls = self.parse_for_declaration_list()?;
                     self.no_in = false;
                     if self.current == Token::Keyword(Keyword::In) {
                         if is_await {
@@ -1002,7 +1002,7 @@ impl<'a> Parser<'a> {
                 };
                 self.advance()?;
                 self.no_in = true;
-                let decls = self.parse_variable_declaration_list()?;
+                let decls = self.parse_for_declaration_list()?;
                 self.no_in = false;
                 if self.current == Token::Keyword(Keyword::In) {
                     if is_await {

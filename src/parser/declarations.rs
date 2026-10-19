@@ -1,5 +1,7 @@
 use super::*;
 
+mod declarator_list;
+
 fn bigint_literal_to_decimal(s: &str) -> String {
     crate::interpreter::parse_bigint_literal(s).to_string()
 }
@@ -43,28 +45,6 @@ impl<'a> Parser<'a> {
             kind,
             declarations,
         }))
-    }
-
-    pub(super) fn parse_variable_declaration_list(
-        &mut self,
-    ) -> Result<Vec<VariableDeclarator>, ParseError> {
-        let mut decls = Vec::new();
-        loop {
-            let pattern = self.parse_binding_pattern()?;
-            let init = if self.current == Token::Assign {
-                self.advance()?;
-                Some(self.parse_assignment_expression()?)
-            } else {
-                None
-            };
-            decls.push(VariableDeclarator { pattern, init });
-            if self.current == Token::Comma {
-                self.advance()?;
-            } else {
-                break;
-            }
-        }
-        Ok(decls)
     }
 
     pub(super) fn parse_binding_pattern(&mut self) -> Result<Pattern, ParseError> {
