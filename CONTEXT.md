@@ -108,6 +108,17 @@ _Avoid_: pattern hoisting, destructuring desugar.
 The generator analysis query for whether an expression evaluated in the current scope reaches `yield`, `await`, or either. `expr_contains_yield`, `expr_contains_await`, and `expr_contains_suspension` share one exhaustive expression walk in `generator_analysis.rs`; a nonmatching `yield` or `await` is searched through its operand for the requested kind. Function and arrow bodies are separate scopes, while class heritage and computed keys run in the enclosing scope. Statement scans retain their own Pattern Lowering and loop-head shape gates.
 _Avoid_: statement suspension policy, pattern lowering gate.
 
+**Array Pattern Iterator**:
+The synchronous iterator lifecycle of a lowered array binding or assignment
+pattern. `run_array_pattern_iter` (`eval/array_pattern.rs`) owns Init, Step,
+Drain and Finish for sync generators, async generators and async functions:
+registration on the existing `ForOfLoopState` stack, exhaustion and protocol
+failure cleanup, GC-rooted rest accumulation, and normal IteratorClose.
+The drivers evaluate Init's Terminator Operand and route returned completions;
+their environments and loop stacks retain the iterator across suspension.
+Both `await` and `yield` in a supported assignment pattern select this lowering.
+_Avoid_: pattern cursor, destructuring loop driver.
+
 **Destructuring Reference Scope**:
 The evaluator seam that owns a captured destructuring assignment Reference from target evaluation through final PutValue. `with_destruct_lref` roots the ordinary/private/super reference while its callback performs iterator, source-property, and default-initializer work; `Completion::Normal(value)` enters finalization, while every other completion bypasses the write unchanged. Finalization roots the value, defers an ordinary member's `ToPropertyKey`, dispatches the ordinary/private/super or recursive fallback write, and releases all scoped roots on return.
 _Avoid_: destructuring write switch, lRef cleanup.
