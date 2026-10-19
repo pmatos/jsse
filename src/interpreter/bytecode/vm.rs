@@ -14,6 +14,14 @@ use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
 use std::cell::Cell;
 
+mod iteration;
+mod spread;
+
+use iteration::{
+    bind_head_op, drop_below, end_finally, iteration_close, iteration_close_throw, iteration_head,
+    iteration_step,
+};
+
 #[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
     i16::from_le_bytes(operand_bytes::<2>(chunk, pc))
@@ -940,153 +948,6 @@ pub(crate) fn declare_chunk_prologue(chunk: &Chunk, env: &EnvRef) {
     declare_var_prologue(chunk, env);
     if let Some(lexicals) = &chunk.top_level_lexicals {
         declare_lexicals(&mut env.borrow_mut(), chunk, lexicals);
-    }
-}
-
-/// `GetIterator` / the for-in head: `[value]` -> `[iterator]`.
-#[inline(never)]
-fn iteration_head(
-    interp: &mut Interpreter,
-    stack: &mut Vec<JsValue>,
-    is_for_in: bool,
-) -> Result<(), JsValue> {
-    let value = stack.pop().expect("stack underflow on GetIterator");
-    let result = if is_for_in {
-        interp.for_in_head_iterator(&value)
-    } else {
-        interp.get_iterator(&value)
-    };
-    unroot_stack_value(interp, &value);
-    let iterator = result?;
-    push_value(interp, stack, iterator);
-    Ok(())
-}
-
-/// `IterStep`/`ForInStep`: `[it]` -> `[it, value]` (true), or the iterator is
-/// dropped (false) when it is exhausted.
-#[inline(never)]
-fn iteration_step(
-    interp: &mut Interpreter,
-    stack: &mut Vec<JsValue>,
-    is_for_in: bool,
-) -> Result<bool, JsValue> {
-    let iterator = stack.last().expect("stack underflow on IterStep").clone();
-    let step = if is_for_in {
-        match iterator.as_object_id() {
-            Some(id) => interp.for_in_enumerator_step(id),
-            None => Ok(None),
-        }
-    } else {
-        interp.iterator_step_value(&iterator)
-    };
-    match step? {
-        Some(value) => {
-            push_value(interp, stack, value);
-            Ok(true)
-        }
-        None => {
-            pop_value(interp, stack, "stack underflow on IterStep");
-            Ok(false)
-        }
-    }
-}
-
-/// `IterClose`: IteratorClose with a normal completion for the iterator
-/// `depth` values below the top, which is removed.
-#[inline(never)]
-fn iteration_close(
-    interp: &mut Interpreter,
-    stack: &mut Vec<JsValue>,
-    depth: usize,
-) -> Result<(), JsValue> {
-    let index = stack
-        .len()
-        .checked_sub(1 + depth)
-        .expect("stack underflow on IterClose");
-    // The iterator and any pending value above it stay rooted while
-    // `return()` runs.
-    let iterator = stack[index].clone();
-    interp.iterator_close_result(&iterator)?;
-    let mut held: SmallVec<[JsValue; 1]> = SmallVec::new();
-    for _ in 0..depth {
-        held.push(pop_value(interp, stack, "stack underflow on IterClose"));
-    }
-    pop_value(interp, stack, "stack underflow on IterClose");
-    for value in held.into_iter().rev() {
-        push_value(interp, stack, value);
-    }
-    Ok(())
-}
-
-/// `IterCloseThrow`: `[it, thrown]`; closes the iterator without letting its
-/// `return()` replace the throw, and yields the throw to rethrow.
-#[inline(never)]
-fn iteration_close_throw(interp: &mut Interpreter, stack: &mut Vec<JsValue>) -> JsValue {
-    let thrown = stack
-        .last()
-        .expect("stack underflow on IterCloseThrow")
-        .clone();
-    let iterator = stack[stack.len() - 2].clone();
-    interp.iterator_close(&iterator, thrown.clone());
-    pop_value(interp, stack, "stack underflow on IterCloseThrow");
-    pop_value(interp, stack, "stack underflow on IterCloseThrow");
-    thrown
-}
-
-#[inline(never)]
-fn drop_below(interp: &mut Interpreter, stack: &mut Vec<JsValue>, has_value: bool, count: usize) {
-    let held = if has_value {
-        Some(pop_value(interp, stack, "stack underflow on DropBelow"))
-    } else {
-        None
-    };
-    for _ in 0..count {
-        pop_value(interp, stack, "stack underflow on DropBelow");
-    }
-    if let Some(value) = held {
-        push_value(interp, stack, value);
-    }
-}
-
-/// `EndFinally`: pops `[value, kind]`. Kind 0 is a normal completion (`None`),
-/// 1 rethrows `value` (`Err`), and `n >= 2` resumes at the finalizer's exit
-/// `n - 2` (`Some(target)`), pushing `value` back when it carries one.
-#[inline(never)]
-fn end_finally(
-    interp: &mut Interpreter,
-    chunk: &Chunk,
-    stack: &mut Vec<JsValue>,
-    table: usize,
-) -> Result<Option<usize>, JsValue> {
-    let kind = pop_value(interp, stack, "stack underflow on EndFinally kind");
-    let value = pop_value(interp, stack, "stack underflow on EndFinally value");
-    let kind = kind.as_number().expect("finalizer completion kind") as usize;
-    match kind {
-        0 => Ok(None),
-        1 => Err(value),
-        n => {
-            let exit = chunk.finally_tables[table][n - 2];
-            if exit.keep_value {
-                push_value(interp, stack, value);
-            }
-            Ok(Some(exit.target as usize))
-        }
-    }
-}
-
-#[inline(never)]
-fn bind_head_op(
-    interp: &mut Interpreter,
-    stack: &mut Vec<JsValue>,
-    head: &HeadBinding,
-    env: &EnvRef,
-) -> Result<(), Completion> {
-    let value = stack.last().expect("stack underflow on BindHead").clone();
-    let result = bind_head(interp, head, value, env);
-    pop_value(interp, stack, "stack underflow on BindHead");
-    match result {
-        Completion::Normal(_) | Completion::Empty => Ok(()),
-        abrupt => Err(abrupt),
     }
 }
 
@@ -2041,11 +1902,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 2;
                     let site_id = CallSiteId(decode_u32(chunk, pc));
                     pc += 4;
-                    // Counted here, before the strict tail-call return below: that
-                    // path leaves the VM without ever reaching the dispatch site,
-                    // so incrementing later would omit every strict tail call from
-                    // `calls_from_vm` and understate VM-issued calls on
-                    // tail-call-heavy code.
+                    // Counted before the strict tail-call return below, which leaves
+                    // the VM without reaching the dispatch site: strict tail calls
+                    // stay in `calls_from_vm`.
                     #[cfg(feature = "perf-counters")]
                     {
                         interp.perf.calls_from_vm += 1;
@@ -2144,6 +2003,23 @@ fn run_chunk_inner<const GENERATOR: bool>(
                             push_value(interp, stack, JsValue::UNDEFINED);
                         }
                         abrupt => bail!('dispatch, abrupt),
+                    }
+                }
+                Op::ArgSpreadFirst
+                | Op::ArgSpread
+                | Op::ArgPush
+                | Op::CallSpread
+                | Op::ConstructSpread
+                | Op::CallSpreadSole
+                | Op::ConstructSpreadSole => {
+                    let before = if op == Op::ArgSpreadFirst {
+                        pc += 2;
+                        decode_u16(chunk, pc - 2)
+                    } else {
+                        0
+                    };
+                    if let Err(abrupt) = spread::run(interp, stack, op, usize::from(before)) {
+                        bail!('dispatch, abrupt);
                     }
                 }
                 Op::Construct => {

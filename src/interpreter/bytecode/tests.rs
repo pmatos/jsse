@@ -2413,7 +2413,7 @@ fn non_callable_direct_call_throws_via_bytecode() {
 }
 
 #[test]
-fn direct_eval_and_spread_calls_remain_ineligible() {
+fn direct_eval_ineligible_spread_ok() {
     use super::compiler::CompileError;
     use crate::ast::CallSiteId;
 
@@ -2436,10 +2436,7 @@ fn direct_eval_and_spread_calls_remain_ineligible() {
         )))],
         CallSiteId::UNASSIGNED,
     ))];
-    assert!(matches!(
-        compile_body(&spread),
-        Err(CompileError::Ineligible(_))
-    ));
+    assert!(work_ops(&compile_body(&spread).unwrap()).contains(&Op::CallSpreadSole));
 }
 
 #[test]
@@ -2908,7 +2905,8 @@ fn operand_layout(op: Op) -> &'static [usize] {
         | Op::CaseStrictEq
         | Op::JumpIfTruthyKeep
         | Op::JumpIfFalsyKeep
-        | Op::JumpIfNotNullishKeep => &[2],
+        | Op::JumpIfNotNullishKeep
+        | Op::ArgSpreadFirst => &[2],
         Op::UpdateName => &[2, 1],
         Op::LoadLocal | Op::StoreLocal | Op::StoreLocalPop => &[2, 2],
         Op::UpdateLocal => &[2, 2, 1],
@@ -4495,7 +4493,6 @@ fn generator_chunk_rejects_what_a_suspending_frame_cannot_host() {
         "var [x = yield] = a;",
         "var { x = yield } = a;",
         "return `${yield}`;",
-        "return f(...[yield]);",
         "return { [yield]: 1 };",
         "class C extends (yield) {}",
         "for (const [x = yield] of a) {}",
@@ -4524,6 +4521,7 @@ fn generator_chunk_accepts_statement_and_expression_yields() {
         "while (yield) { if (yield) continue; }",
         "a.b = yield a;",
         "return f(1, yield, 3);",
+        "return f(...[yield]);",
         "label: for (const x of a) { try { yield x; } catch (e) { break label; } }",
     ] {
         let chunk =

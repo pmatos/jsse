@@ -18,6 +18,8 @@ use crate::interpreter::types::BindingKind;
 use crate::types::{JsString, JsValue};
 use std::cell::Cell;
 
+mod calls;
+
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
 const LITERAL_VALUE_CHUNK: usize = 256;
@@ -1040,29 +1042,7 @@ impl Compiler {
             Expression::Call(callee, args, site_id) => {
                 self.compile_call(callee, args, Op::Call, *site_id)
             }
-            Expression::New(callee, args, site_id) => {
-                if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
-                    return Err(CompileError::Unsupported("spread constructor argument"));
-                }
-                let argc = u16::try_from(args.len())
-                    .map_err(|_| CompileError::Ineligible("construct argument count overflow"))?;
-                if usize::from(self.current_stack) + args.len() + 1 > usize::from(u16::MAX) {
-                    return Err(CompileError::Ineligible("operand stack overflow"));
-                }
-                // Construct never reads a `this` value from the callee reference
-                // (unlike Call), so no LoadCalleeName-style receiver capture is
-                // needed — any expression compiles as the callee directly.
-                self.compile_expr(callee)?;
-                for arg in args {
-                    self.compile_expr(arg)?;
-                }
-                self.emit(Op::Construct);
-                self.emit_u16(argc);
-                self.emit_u32(site_id.0);
-                self.pop_n(argc + 1);
-                self.push_n(1);
-                Ok(())
-            }
+            Expression::New(callee, args, site_id) => self.compile_new(callee, args, *site_id),
             Expression::Array(elements, _) => self.compile_array_literal(elements),
             Expression::Object(props, _) => self.compile_object_literal(props),
             Expression::Function(_) | Expression::ArrowFunction(_) => {
@@ -1552,7 +1532,7 @@ impl Compiler {
         op: Op,
         site_id: CallSiteId,
     ) -> Result<(), CompileError> {
-        if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
+        if calls::is_unsupported_call(callee, args, op) {
             return Err(CompileError::Unsupported("spread call argument"));
         }
         let argc = u16::try_from(args.len())
@@ -1615,6 +1595,9 @@ impl Compiler {
                 self.emit(Op::LoadUndefined);
                 self.push_n(1);
             }
+        }
+        if calls::has_spread(args) {
+            return self.compile_spread_arguments(args, 2);
         }
         for arg in args {
             self.compile_expr(arg)?;
@@ -2857,8 +2840,8 @@ impl Compiler {
         )
     }
 
-    /// `for (head in/of expr) body` (sec-forin-div-ofheadevaluation,
-    /// sec-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset).
+    /// `for (head in/of expr) body` (ForIn/OfHeadEvaluation and
+    /// ForIn/OfBodyEvaluation).
     /// The iterator (a for-of's iterator, a for-in's enumerator) is one
     /// persistent operand slot for the whole loop:
     ///
