@@ -1472,7 +1472,6 @@ impl Environment {
         self.bindings.mark_written();
     }
 
-    #[cfg(debug_assertions)]
     pub(crate) fn is_registered(&self) -> bool {
         self.gc_registered.get()
     }
