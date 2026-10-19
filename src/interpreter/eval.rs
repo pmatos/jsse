@@ -160,6 +160,7 @@ impl Interpreter {
                 is_derived_constructor_scope: false,
                 indirect_bindings: None,
                 module_path: None,
+                gc_epoch: Cell::new(0),
             }));
             func_env
                 .borrow_mut()

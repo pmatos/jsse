@@ -822,7 +822,7 @@ impl Realm {
         random_bits as f64 / 9_007_199_254_740_992.0
     }
 
-    pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>, seen_envs: &mut HashSet<usize>) {
+    pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>, seen_envs: &mut EnvVisits) {
         super::Interpreter::collect_env_roots(&self.global_env, worklist, seen_envs);
         if let Some(id) = self.global_object {
             worklist.push(id);
@@ -1007,6 +1007,46 @@ pub(crate) struct Environment {
     pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
     // Module path for import.meta resolution (§16.2.1.5.2 GetActiveScriptOrModule)
     pub(crate) module_path: Option<super::ModuleKey>,
+    /// Epoch of the last collection walk that visited this environment
+    /// (`EnvVisits`); never reset, since an epoch is never reused.
+    pub(crate) gc_epoch: Cell<u64>,
+}
+
+static NEXT_ENV_VISIT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// The set of environments one collection has already walked. Membership is
+/// a stamp on the environment itself rather than a hash-set probe, so a
+/// closure-heavy heap pays a load and a store per environment visit.
+pub(crate) struct EnvVisits {
+    epoch: u64,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) probes: u64,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) first_visits: u64,
+}
+
+impl EnvVisits {
+    pub(crate) fn new() -> Self {
+        Self {
+            epoch: NEXT_ENV_VISIT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            #[cfg(feature = "perf-counters")]
+            probes: 0,
+            #[cfg(feature = "perf-counters")]
+            first_visits: 0,
+        }
+    }
+
+    /// Stamps `env` and reports whether this is its first visit.
+    #[inline]
+    pub(crate) fn first_visit(&mut self, env: &Environment) -> bool {
+        let first = env.gc_epoch.replace(self.epoch) != self.epoch;
+        #[cfg(feature = "perf-counters")]
+        {
+            self.probes += 1;
+            self.first_visits += u64::from(first);
+        }
+        first
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1132,6 +1172,7 @@ impl Environment {
             is_derived_constructor_scope: false,
             indirect_bindings: None,
             module_path: None,
+            gc_epoch: Cell::new(0),
         }
     }
 
@@ -1206,6 +1247,7 @@ impl Environment {
             is_derived_constructor_scope,
             indirect_bindings,
             module_path,
+            gc_epoch: _,
         } = self;
         bindings.clear();
         *this_binding = None;
