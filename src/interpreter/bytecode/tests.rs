@@ -2413,7 +2413,7 @@ fn non_callable_direct_call_throws_via_bytecode() {
 }
 
 #[test]
-fn direct_eval_ineligible_spread_compile() {
+fn direct_eval_ineligible_spread_ok() {
     use super::compiler::CompileError;
     use crate::ast::CallSiteId;
 
@@ -2436,7 +2436,7 @@ fn direct_eval_ineligible_spread_compile() {
         )))],
         CallSiteId::UNASSIGNED,
     ))];
-    assert!(work_ops(&compile_body(&spread).unwrap()).contains(&Op::CallSpread));
+    assert!(work_ops(&compile_body(&spread).unwrap()).contains(&Op::CallSpreadSole));
 }
 
 #[test]
