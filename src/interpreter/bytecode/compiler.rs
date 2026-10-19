@@ -19,6 +19,7 @@ use crate::types::{JsString, JsValue};
 use std::cell::Cell;
 
 mod calls;
+mod lexical;
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
@@ -1647,36 +1648,6 @@ impl Compiler {
                     self.emit_store_resolved_name(idx, true);
                 }
             }
-        }
-        Ok(())
-    }
-
-    fn compile_lexical_declaration(
-        &mut self,
-        decl: &VariableDeclaration,
-    ) -> Result<(), CompileError> {
-        let kind_byte = u8::from(decl.kind == VarKind::Const);
-        for declarator in &decl.declarations {
-            let Pattern::Identifier(name) = &declarator.pattern else {
-                return Err(CompileError::Unsupported("lexical binding pattern"));
-            };
-            if declarator.init.as_ref().is_some_and(is_anonymous_class) {
-                return Err(CompileError::Unsupported("anonymous class initializer"));
-            }
-            let idx = self.add_name(name)?;
-            match &declarator.init {
-                Some(init) => self.compile_named_value(init, name)?,
-                None => {
-                    self.emit(Op::LoadUndefined);
-                    self.push_n(1);
-                }
-            }
-            let slot = self.init_slot(name);
-            self.emit(Op::InitLexical);
-            self.emit_u16(idx);
-            self.code.push(kind_byte);
-            self.emit_u16(slot);
-            self.pop_n(1);
         }
         Ok(())
     }
