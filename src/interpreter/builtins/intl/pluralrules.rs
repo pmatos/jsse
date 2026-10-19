@@ -1,21 +1,11 @@
 use super::super::super::*;
+use super::super::plural_rules_state::{
+    PluralRulesOptions, PluralRulesState, SPEC_ORDER, category_name, category_value, icu_inputs,
+    other_value,
+};
 use fixed_decimal::{CompactDecimal, Decimal};
 use icu::locale::Locale as IcuLocale;
-use icu::plurals::{
-    PluralCategory, PluralOperands, PluralRuleType, PluralRules as IcuPluralRules,
-    PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences, PluralRulesWithRanges,
-};
-
-fn plural_category_to_str(cat: PluralCategory) -> &'static str {
-    match cat {
-        PluralCategory::Zero => "zero",
-        PluralCategory::One => "one",
-        PluralCategory::Two => "two",
-        PluralCategory::Few => "few",
-        PluralCategory::Many => "many",
-        PluralCategory::Other => "other",
-    }
-}
+use icu::plurals::{PluralCategory, PluralOperands, PluralRules as IcuPluralRules};
 
 fn number_to_plural_operands(n: f64) -> PluralOperands {
     if n.is_nan() || n.is_infinite() {
@@ -131,35 +121,18 @@ fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'st
         }
     }
 
-    let icu_locale: IcuLocale = base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-    let prefs = PluralRulesPreferences::from(&icu_locale);
-    let mut opts = IcuPluralRulesOptions::default();
-    opts.rule_type = Some(if plural_type == "ordinal" {
-        PluralRuleType::Ordinal
-    } else {
-        PluralRuleType::Cardinal
-    });
+    let (prefs, opts) = icu_inputs(&base, plural_type);
 
     let rules = match IcuPluralRules::try_new(prefs, opts) {
         Ok(r) => r,
         Err(_) => return vec!["other"],
     };
 
-    // Spec order: zero, one, two, few, many, other
-    let spec_order = [
-        PluralCategory::Zero,
-        PluralCategory::One,
-        PluralCategory::Two,
-        PluralCategory::Few,
-        PluralCategory::Many,
-        PluralCategory::Other,
-    ];
-
     let available: Vec<PluralCategory> = rules.categories().collect();
-    spec_order
+    SPEC_ORDER
         .iter()
         .filter(|c| available.contains(c))
-        .map(|c| plural_category_to_str(*c))
+        .map(|c| category_name(*c))
         .collect()
 }
 
@@ -186,18 +159,8 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let data = {
-                        let b = obj.borrow();
-                        b.intl_data().cloned()
-                    };
-                    if let Some(IntlData::PluralRules {
-                        locale,
-                        plural_type,
-                        notation,
-                        compact_display,
-                        ..
-                    }) = data
-                    {
+                    let state = PluralRulesState::of(&obj.borrow());
+                    if let Some(state) = state {
                         let n_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let n = match interp.to_number_value(&n_val) {
                             Ok(v) => v,
@@ -205,34 +168,18 @@ impl Interpreter {
                         };
 
                         if n.is_nan() {
-                            return Completion::Normal(JsValue::from_str("other"));
+                            return Completion::Normal(other_value());
                         }
 
-                        let base = base_locale(&locale);
-                        let icu_locale: IcuLocale =
-                            base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-                        let prefs = PluralRulesPreferences::from(&icu_locale);
-                        let mut opts = IcuPluralRulesOptions::default();
-                        opts.rule_type = Some(if plural_type == "ordinal" {
-                            PluralRuleType::Ordinal
-                        } else {
-                            PluralRuleType::Cardinal
-                        });
-
-                        let rules = match IcuPluralRules::try_new(prefs, opts) {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return Completion::Normal(JsValue::from_str("other"));
-                            }
+                        let Some(rules) = state.rules() else {
+                            return Completion::Normal(other_value());
                         };
-
                         let operands = number_to_plural_operands_with_notation(
                             n,
-                            &notation,
-                            compact_display.as_deref(),
+                            &state.options.notation,
+                            state.options.compact_display.as_deref(),
                         );
-                        let cat = rules.category_for(operands);
-                        return Completion::Normal(JsValue::from_str(plural_category_to_str(cat)));
+                        return Completion::Normal(category_value(rules.category_for(operands)));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -252,18 +199,8 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let data = {
-                        let b = obj.borrow();
-                        b.intl_data().cloned()
-                    };
-                    if let Some(IntlData::PluralRules {
-                        locale,
-                        plural_type,
-                        notation,
-                        compact_display,
-                        ..
-                    }) = data
-                    {
+                    let state = PluralRulesState::of(&obj.borrow());
+                    if let Some(state) = state {
                         let start_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let end_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
@@ -291,36 +228,22 @@ impl Interpreter {
                             );
                         }
 
-                        let base = base_locale(&locale);
-                        let icu_locale: IcuLocale =
-                            base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-                        let prefs = PluralRulesPreferences::from(&icu_locale);
-                        let mut opts = IcuPluralRulesOptions::default();
-                        opts.rule_type = Some(if plural_type == "ordinal" {
-                            PluralRuleType::Ordinal
-                        } else {
-                            PluralRuleType::Cardinal
-                        });
-
-                        let range_rules = match PluralRulesWithRanges::try_new(prefs, opts) {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return Completion::Normal(JsValue::from_str("other"));
-                            }
+                        let Some(range_rules) = state.range_rules() else {
+                            return Completion::Normal(other_value());
                         };
 
                         let start_ops = number_to_plural_operands_with_notation(
                             start_n,
-                            &notation,
-                            compact_display.as_deref(),
+                            &state.options.notation,
+                            state.options.compact_display.as_deref(),
                         );
                         let end_ops = number_to_plural_operands_with_notation(
                             end_n,
-                            &notation,
-                            compact_display.as_deref(),
+                            &state.options.notation,
+                            state.options.compact_display.as_deref(),
                         );
                         let cat = range_rules.category_for_range(start_ops, end_ops);
-                        return Completion::Normal(JsValue::from_str(plural_category_to_str(cat)));
+                        return Completion::Normal(category_value(cat));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -340,26 +263,23 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let data = {
-                        let b = obj.borrow();
-                        b.intl_data().cloned()
-                    };
-                    if let Some(IntlData::PluralRules {
-                        locale,
-                        plural_type,
-                        notation,
-                        compact_display,
-                        minimum_integer_digits,
-                        minimum_fraction_digits,
-                        maximum_fraction_digits,
-                        minimum_significant_digits,
-                        maximum_significant_digits,
-                        rounding_mode,
-                        rounding_increment,
-                        rounding_priority,
-                        trailing_zero_display,
-                    }) = data
-                    {
+                    let state = PluralRulesState::of(&obj.borrow());
+                    if let Some(state) = state {
+                        let PluralRulesOptions {
+                            locale,
+                            plural_type,
+                            notation,
+                            compact_display,
+                            minimum_integer_digits,
+                            minimum_fraction_digits,
+                            maximum_fraction_digits,
+                            minimum_significant_digits,
+                            maximum_significant_digits,
+                            rounding_mode,
+                            rounding_increment,
+                            rounding_priority,
+                            trailing_zero_display,
+                        } = &state.options;
                         let result_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
                             interp
@@ -379,7 +299,7 @@ impl Interpreter {
                             .insert_property(
                                 "locale".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::from_str(&locale),
+                                    JsValue::from_str(locale),
                                     true,
                                     true,
                                     true,
@@ -391,7 +311,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::from_str(&plural_type),
+                                    JsValue::from_str(plural_type),
                                     true,
                                     true,
                                     true,
@@ -403,7 +323,7 @@ impl Interpreter {
                             .insert_property(
                                 "notation".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::from_str(&notation),
+                                    JsValue::from_str(notation),
                                     true,
                                     true,
                                     true,
@@ -430,7 +350,7 @@ impl Interpreter {
                             .insert_property(
                                 "minimumIntegerDigits".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::number(minimum_integer_digits as f64),
+                                    JsValue::number(*minimum_integer_digits as f64),
                                     true,
                                     true,
                                     true,
@@ -445,7 +365,7 @@ impl Interpreter {
                                 .insert_property(
                                     "minimumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::number(minimum_fraction_digits as f64),
+                                        JsValue::number(*minimum_fraction_digits as f64),
                                         true,
                                         true,
                                         true,
@@ -457,7 +377,7 @@ impl Interpreter {
                                 .insert_property(
                                     "maximumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::number(maximum_fraction_digits as f64),
+                                        JsValue::number(*maximum_fraction_digits as f64),
                                         true,
                                         true,
                                         true,
@@ -472,7 +392,7 @@ impl Interpreter {
                                     .insert_property(
                                         "minimumFractionDigits".to_string(),
                                         PropertyDescriptor::data(
-                                            JsValue::number(minimum_fraction_digits as f64),
+                                            JsValue::number(*minimum_fraction_digits as f64),
                                             true,
                                             true,
                                             true,
@@ -484,7 +404,7 @@ impl Interpreter {
                                     .insert_property(
                                         "maximumFractionDigits".to_string(),
                                         PropertyDescriptor::data(
-                                            JsValue::number(maximum_fraction_digits as f64),
+                                            JsValue::number(*maximum_fraction_digits as f64),
                                             true,
                                             true,
                                             true,
@@ -500,7 +420,7 @@ impl Interpreter {
                                 .insert_property(
                                     "minimumSignificantDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::number(min_sd as f64),
+                                        JsValue::number(*min_sd as f64),
                                         true,
                                         true,
                                         true,
@@ -514,7 +434,7 @@ impl Interpreter {
                                 .insert_property(
                                     "maximumSignificantDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::number(max_sd as f64),
+                                        JsValue::number(*max_sd as f64),
                                         true,
                                         true,
                                         true,
@@ -523,7 +443,7 @@ impl Interpreter {
                         }
 
                         // pluralCategories
-                        let cats = get_plural_categories_sorted(&locale, &plural_type);
+                        let cats = get_plural_categories_sorted(locale, plural_type);
                         let cat_values: Vec<JsValue> =
                             cats.iter().map(|c| JsValue::from_str(c)).collect();
                         let cat_array = interp.create_array(cat_values);
@@ -541,7 +461,7 @@ impl Interpreter {
                             .insert_property(
                                 "roundingIncrement".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::number(rounding_increment as f64),
+                                    JsValue::number(*rounding_increment as f64),
                                     true,
                                     true,
                                     true,
@@ -553,7 +473,7 @@ impl Interpreter {
                             .insert_property(
                                 "roundingMode".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::from_str(&rounding_mode),
+                                    JsValue::from_str(rounding_mode),
                                     true,
                                     true,
                                     true,
@@ -565,7 +485,7 @@ impl Interpreter {
                             .insert_property(
                                 "roundingPriority".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::from_str(&rounding_priority),
+                                    JsValue::from_str(rounding_priority),
                                     true,
                                     true,
                                     true,
@@ -577,7 +497,7 @@ impl Interpreter {
                             .insert_property(
                                 "trailingZeroDisplay".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::from_str(&trailing_zero_display),
+                                    JsValue::from_str(trailing_zero_display),
                                     true,
                                     true,
                                     true,
@@ -1038,7 +958,7 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.PluralRules";
-                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::PluralRules {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::PluralRules(PluralRulesState::new(PluralRulesOptions {
                     locale,
                     plural_type,
                     notation,
@@ -1052,7 +972,7 @@ impl Interpreter {
                     rounding_increment,
                     rounding_priority,
                     trailing_zero_display,
-                }));
+                }))));
 
                 Completion::Normal(JsValue::object(obj_id))
             },

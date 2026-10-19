@@ -2287,22 +2287,7 @@ pub(crate) enum IntlData {
         rounding_priority: String,
         trailing_zero_display: String,
     },
-    PluralRules {
-        locale: String,
-        plural_type: String,
-        notation: String,
-        /// [[CompactDisplay]] — Some only when notation is "compact" (§17.4).
-        compact_display: Option<String>,
-        minimum_integer_digits: u32,
-        minimum_fraction_digits: u32,
-        maximum_fraction_digits: u32,
-        minimum_significant_digits: Option<u32>,
-        maximum_significant_digits: Option<u32>,
-        rounding_mode: String,
-        rounding_increment: u32,
-        rounding_priority: String,
-        trailing_zero_display: String,
-    },
+    PluralRules(std::rc::Rc<crate::interpreter::builtins::plural_rules_state::PluralRulesState>),
     ListFormat {
         locale: String,
         list_type: String,
