@@ -140,6 +140,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   hashing identifier interner. A call path that is free of identifier hashing
   keeps the two atom counters flat as the call count grows
   (`tests/perf_counters_env_hashing.rs`).
+- `gc_env_probes` / `gc_env_first_visits` count environment-walk entries during collections (`EnvVisits::first_visit`) and the subset that were the first visit of their collection; the rest stopped a parent-chain walk at an already-stamped environment.
 - `PERF` totals, `OP` per-opcode histogram, `BAIL` compile-bail reasons named by
   AST variant (`statement:Labeled`) for bodies that stay wholly on the
   tree-walker, `FALLBACK` static hand-off nodes per reason inside *compiled*

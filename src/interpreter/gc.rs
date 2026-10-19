@@ -1298,11 +1298,7 @@ impl Interpreter {
         }
     }
 
-    fn trace_object_fields(
-        obj: &JsObjectData,
-        worklist: &mut Vec<u64>,
-        seen_envs: &mut EnvVisits,
-    ) {
+    fn trace_object_fields(obj: &JsObjectData, worklist: &mut Vec<u64>, seen_envs: &mut EnvVisits) {
         Self::trace_object_fields_in(obj, worklist, seen_envs, true);
     }
 
