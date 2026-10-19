@@ -6,7 +6,6 @@ use super::op::{Op, UPDATE_DISCARD, YIELD_DISCARD_BACK, YIELD_PERSISTENT_BACK, Y
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, bigint_binary_op, is_primitive_string_concat};
 use crate::interpreter::helpers::strict_equality;
-use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::property::NamedGet;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment, PrivateId};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
@@ -1926,75 +1925,10 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let base = stack.len() - argc - 2;
                     let callee = stack[base].clone();
                     let this_value = stack[base + 1].clone();
-                    // Call-site IC probe + record, mirroring eval_call's tree-walker
-                    // sequence (issue #432). `with_scope_depth != 0` is excluded
-                    // because a `with`-resolved binding can dynamically pick a
-                    // different callee per invocation, defeating monomorphic
-                    // caching.
-                    let ic_callee_id =
-                        if site_id != CallSiteId::UNASSIGNED && interp.with_scope_depth == 0 {
-                            callee.as_object_id()
-                        } else {
-                            None
-                        };
-                    let mut probe_hit = false;
-                    if let Some(callee_id) = ic_callee_id {
-                        let slot = interp.call_slot(site_id);
-                        if let CallIcSlot::Mono {
-                            callee_obj_id,
-                            callee_shape_id,
-                            ..
-                        } = slot
-                            && callee_id == callee_obj_id
-                            && let Some(obj_rc) = interp.get_object(callee_id)
-                            && obj_rc.borrow().shape_id == callee_shape_id
-                        {
-                            interp
-                                .call_ic_hit_count
-                                .set(interp.call_ic_hit_count.get() + 1);
-                            probe_hit = true;
-                        }
-                        if !probe_hit {
-                            interp
-                                .call_ic_slow_path_count
-                                .set(interp.call_ic_slow_path_count.get() + 1);
-                        }
-                    }
-                    // The operands stay on the operand stack (and in
-                    // gc_bytecode_roots) for the complete nested invocation: the
-                    // callee borrows its arguments straight from the stack and can
-                    // execute arbitrary JS and hit any number of safepoints.
-                    let result = if probe_hit {
-                        interp.call_function_ic_validated(&callee, &this_value, &stack[base + 2..])
-                    } else {
-                        interp.call_function(&callee, &this_value, &stack[base + 2..])
-                    };
-                    // Record only on success to avoid caching error-paths.
-                    if let Some(callee_id) = ic_callee_id
-                        && !probe_hit
-                        && matches!(result, Completion::Normal(_))
-                    {
-                        let slot = interp.call_slot(site_id);
-                        let new_slot = interp.classify_for_call_ic(callee_id);
-                        let next = match (slot, new_slot) {
-                            (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
-                            (_, None) => CallIcSlot::Empty,
-                            (CallIcSlot::Empty, Some(s)) => s,
-                            (
-                                CallIcSlot::Mono {
-                                    callee_obj_id: prev,
-                                    ..
-                                },
-                                Some(
-                                    s @ CallIcSlot::Mono {
-                                        callee_obj_id: new, ..
-                                    },
-                                ),
-                            ) if prev == new => s,
-                            (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
-                        };
-                        interp.set_call_slot(site_id, next);
-                    }
+                    // Operands remain on the stack and in gc_bytecode_roots
+                    // throughout the invocation, including nested safepoints.
+                    let result =
+                        interp.call_at_site(site_id, &callee, &this_value, &stack[base + 2..]);
                     pop_operands(interp, stack, argc + 2);
                     match result {
                         Completion::Normal(value) | Completion::Return(value) => {

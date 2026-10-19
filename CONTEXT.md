@@ -13,7 +13,7 @@ A specific call or property-access location in a Body that can be inline-cached 
 _Avoid_: cache entry, IC slot (when referring to the location rather than the stored value).
 
 **IC State**:
-Where a property-access IC Site sits on the `Empty → Mono → Poly → Megamorphic` lattice. `Mono` caches one object; `Poly` caches up to `MAX_POLY_PROP` distinct objects (issue #71); `Megamorphic` is the terminal give-up state. Driven by `PropIcSlot::advance`.
+An IC Site's cached resolution. Property sites use `Empty → Mono → Poly → Megamorphic`; call sites stay monomorphic. Call invocation owns probing, dispatch and successful-miss recording against the post-call slot. `Megamorphic` is terminal for both.
 _Avoid_: cache mode, IC level.
 
 **CallSiteId**:

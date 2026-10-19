@@ -10,6 +10,7 @@ use crate::interpreter::property::SetOutcome;
 mod access;
 mod array_pattern;
 pub(super) mod async_chunk;
+mod call_ic;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod generator_runtime;
 mod literals;
@@ -5024,109 +5025,9 @@ impl Interpreter {
                 args: evaluated_args,
             };
         }
-        // Phase 3 call-IC probe + record. Issue #71.
-        //  - Probe HIT increments call_ic_hit_count and dispatches through
-        //    call_function_ic_validated, which skips the proxy/wrapped/
-        //    class-ctor entry checks (9a6246f, #71 Phase-3 follow-up).
-        //  - Probe MISS classifies the callable; if it's a plain native or
-        //    user function (no proxy, no wrapped, not a class ctor without
-        //    `new`, not bound), records Mono. Otherwise transitions to
-        //    Megamorphic. State machine identical to PropIcSlot.
-        if site_id != CallSiteId::UNASSIGNED
-            && self.with_scope_depth == 0
-            && let Some(o) = func_val
-                .as_object_id()
-                .map(|id| crate::types::JsObject { id })
-        {
-            use crate::interpreter::ic::CallIcSlot;
-            let slot = self.call_slot(site_id);
-            let mut probe_hit = false;
-            if let CallIcSlot::Mono {
-                callee_obj_id,
-                callee_shape_id,
-                ..
-            } = slot
-                && o.id == callee_obj_id
-                && let Some(obj_rc) = self.get_object(o.id)
-                && obj_rc.borrow().shape_id == callee_shape_id
-            {
-                self.call_ic_hit_count.set(self.call_ic_hit_count.get() + 1);
-                probe_hit = true;
-            }
-            if !probe_hit {
-                self.call_ic_slow_path_count
-                    .set(self.call_ic_slow_path_count.get() + 1);
-            }
-            // Phase-3 follow-up: route IC hits through the fast dispatch
-            // entry that skips proxy/wrapped/class-ctor checks. Misses use
-            // the slow path so the entry checks correctly classify novel
-            // callables (proxies, bound, class ctors) before IC recording.
-            let result = if probe_hit {
-                self.call_function_ic_validated(&func_val, &this_val, &evaluated_args)
-            } else {
-                self.call_function(&func_val, &this_val, &evaluated_args)
-            };
-            // Record only on success to avoid caching error-paths.
-            if !probe_hit && matches!(result, Completion::Normal(_)) {
-                let new_slot = self.classify_for_call_ic(o.id);
-                let next = match (slot, new_slot) {
-                    (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
-                    (_, None) => CallIcSlot::Empty,
-                    (CallIcSlot::Empty, Some(s)) => s,
-                    (
-                        CallIcSlot::Mono {
-                            callee_obj_id: prev,
-                            ..
-                        },
-                        Some(
-                            s @ CallIcSlot::Mono {
-                                callee_obj_id: new, ..
-                            },
-                        ),
-                    ) if prev == new => s,
-                    (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
-                };
-                self.set_call_slot(site_id, next);
-            }
-            self.gc_unroot_frame(gc_frame);
-            return result;
-        }
-        let result = self.call_function(&func_val, &this_val, &evaluated_args);
+        let result = self.call_at_site(site_id, &func_val, &this_val, &evaluated_args);
         self.gc_unroot_frame(gc_frame);
         result
-    }
-
-    /// Classifies the post-call state of `callee_obj_id` into a
-    /// `CallIcSlot::Mono { kind: ... }` ready for caching, or `None` if the
-    /// site is not IC-able under the v1 narrow scope (proxy, wrapped, bound,
-    /// or class-ctor-without-new). Phase 3, plan Step 14.
-    ///
-    /// `pub(super)` so the bytecode VM's `Call`/`ReturnCall` handling
-    /// (`bytecode::vm`) can share this classification with the tree-walker's
-    /// probe in `eval_call` (issue #432).
-    pub(super) fn classify_for_call_ic(
-        &self,
-        callee_obj_id: u64,
-    ) -> Option<crate::interpreter::ic::CallIcSlot> {
-        use crate::interpreter::ic::{CallIcKind, CallIcSlot};
-        let obj_rc = self.get_object(callee_obj_id)?;
-        let obj = obj_rc.borrow();
-        if obj.proxy().is_some()
-            || obj.wrapped().is_some()
-            || obj.bound().is_some()
-            || obj.is_class_constructor()
-        {
-            return None;
-        }
-        let kind = match obj.callable.as_deref()? {
-            JsFunction::Native(..) => CallIcKind::NativeFn,
-            JsFunction::User { .. } => CallIcKind::UserFn,
-        };
-        Some(CallIcSlot::Mono {
-            callee_obj_id,
-            callee_shape_id: obj.shape_id,
-            kind,
-        })
     }
 
     /// Simple-parameter binding for the hot call path: the parameter atoms
