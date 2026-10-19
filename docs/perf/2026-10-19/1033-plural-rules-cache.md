@@ -19,7 +19,7 @@ An ICU construction failure is cached as `None` and answered with `"other"`, as 
 
 ## Measured (buildbox3, shipped profile: fat LTO, cgu=1, nightly, `--locked`)
 
-Base = `origin/main` at `c07afbca` (binary sha256 `2a0ee0c07b19...`), new = base plus this change (`736f93d4202b...`).
+Base = `origin/main` at `c07afbca` (binary sha256 `2a0ee0c07b19...`), new = base plus this change (`171485ecad4e...`, commit `449adce2`).
 cachegrind `--cache-sim=no`, whole-process `I refs`. Wall: one pinned core (CPU 100), alternating runs, `/usr/bin/time`, load
 average 1.4-2.1 during the runs (a little above the 1.5 gate; the ratios below are far outside that noise, the control
 differences are not and are judged on Ir).
@@ -28,13 +28,13 @@ differences are not and are judged on Ir).
 
 | workload | base | new | delta |
 |---|---:|---:|---:|
-| issue repro (`rules.select(i % 1000)` x 500,000 in a function), wall median of 7 | 0.87 s | 0.22 s | -75% |
+| issue repro (`rules.select(i % 1000)` x 500,000 in a function), wall median of 7 | 0.88 s | 0.22 s | -75% |
 | same repro, Boa 0.22 on the same host | 0.39 s | | |
 | `select` fixture, Ir per iteration ((300k - 100k) / 200k) | 11,389 | 5,333 | -53.2% |
 | `selectRange` fixture (`ar`), Ir per iteration | 10,096 | 6,531 | -35.3% |
-| `select` fixture x 300,000, wall median of 9 | 0.710 s | 0.310 s | -56% |
-| `selectRange` fixture x 300,000, wall median of 9 | 0.660 s | 0.390 s | -41% |
-| JetStream `intl/PluralRules` (2 iterations, one process), Ir | 1,309,142,699 | 646,796,612 | -50.6% |
+| `select` fixture x 300,000, wall median of 9 | 0.720 s | 0.300 s | -58% |
+| `selectRange` fixture x 300,000, wall median of 9 | 0.670 s | 0.400 s | -40% |
+| JetStream `intl/PluralRules` (2 iterations, one process), Ir | 1,309,142,699 | 657,763,389 | -49.8% |
 | same, wall median of 9 | 0.300 s | 0.140 s | -53% |
 
 The remaining ~5,000 Ir per iteration of the `select` fixture is the global-scope loop and the native call, not PluralRules: the
@@ -46,25 +46,26 @@ call (and the Ir of the JetStream workload is dominated by instance construction
 
 | benchmark | base Ir | new Ir | delta |
 |---|---:|---:|---:|
-| `bigint-noble-secp256k1` | 4,761,295,246 | 4,758,322,404 | -0.062% |
-| `Box2D` | 5,352,224,871 | 5,356,511,446 | +0.080% |
-| `delta-blue` | 6,208,700,231 | 6,209,172,621 | +0.008% |
-| `fib` | 4,896,557,354 | 4,896,559,823 | +0.000% |
-| `gaussian-blur` | 19,901,426,177 | 19,901,423,899 | -0.000% |
-| `lazy-collections` | 3,711,024,685 | 3,711,993,878 | +0.026% |
-| `opmix` | 38,800,939,981 | 38,800,941,180 | +0.000% |
-| `richards` | 8,448,469,109 | 8,449,189,424 | +0.009% |
-| `splay` | 7,579,081,846 | 7,574,311,669 | -0.063% |
+| `bigint-noble-secp256k1` | 4,761,295,246 | 4,763,757,649 | +0.052% |
+| `Box2D` | 5,352,224,871 | 5,344,694,129 | -0.141% |
+| `delta-blue` | 6,208,700,231 | 6,208,717,990 | +0.000% |
+| `fib` | 4,896,557,354 | 4,896,562,166 | +0.000% |
+| `gaussian-blur` | 19,901,426,177 | 19,901,424,990 | -0.000% |
+| `lazy-collections` | 3,711,024,685 | 3,711,689,977 | +0.018% |
+| `opmix` | 38,800,939,981 | 38,800,943,021 | +0.000% |
+| `richards` | 8,448,469,109 | 8,448,440,138 | -0.000% |
+| `splay` | 7,579,081,846 | 7,573,455,885 | -0.074% |
 
-Peak RSS (median of 5 runs, KB, base -> new): fib 17,276 -> 17,084; richards 19,208 -> 19,428; delta-blue 23,444 -> 23,420;
-Box2D 39,044 -> 39,136; lazy-collections 27,960 -> 27,920; secp256k1 40,344 -> 40,356; opmix 17,508 -> 17,596; gaussian-blur
-21,432 -> 21,184; splay 596,896 -> 596,312. Run-to-run spread within one binary is about 1% (richards 19,168-19,500 for base), and the
-two binaries trade places, so there is no growth beyond noise. The PluralRules fixtures sit at 17.5-18.8 MB in both builds.
+Peak RSS (median of 5 runs, KB, base -> new): fib 17,028 -> 17,284; richards 19,216 -> 19,272; delta-blue 23,348 -> 23,516;
+Box2D 39,348 -> 39,240; lazy-collections 27,812 -> 27,984; secp256k1 40,264 -> 39,988; opmix 17,660 -> 17,428; gaussian-blur
+21,088 -> 21,236; splay 595,076 -> 596,180. Run-to-run spread within one binary is about 1% and the two binaries trade places, so
+there is no growth beyond noise. The PluralRules fixtures sit at 17.6-18.7 MB in both builds.
 
-Control wall (median of 5): fib 0.92 -> 0.91 s, delta-blue 1.38 -> 1.39, lazy-collections 0.86 -> 0.85, secp256k1 1.12 -> 1.12,
-opmix 6.90 -> 6.85, gaussian-blur 4.00 -> 3.90, splay 2.03 -> 2.04. `richards` (1.91 -> 1.94 s, +1.6% over 15 runs) and `Box2D`
-(1.22 -> 1.23 s) read slightly slower while their Ir is flat (+0.009%, +0.080%) and neither runs any PluralRules or
-`IntlData` code: this is code-layout noise between two distinct binaries, not executed work.
+Control wall (median of 5): fib 0.92 -> 0.92 s, richards 1.91 -> 1.92, delta-blue 1.39 -> 1.38, Box2D 1.22 -> 1.22,
+lazy-collections 0.86 -> 0.84, secp256k1 1.13 -> 1.14, opmix 6.97 -> 6.93, gaussian-blur 3.98 -> 3.94, splay 2.03 -> 2.03. An
+earlier build of the same change (before the review cleanups) read `richards` +1.6% slower over 15 runs with Ir flat; the final
+build does not, which confirms that was code-layout noise between two distinct binaries, not executed work (neither runs any
+PluralRules or `IntlData` code).
 
 ## Tests
 
