@@ -5,7 +5,9 @@
 //! (`ArgSpreadFirst`) appends the iterable's elements and leaves a running
 //! argument count on top of them, which every later argument keeps current
 //! (`ArgSpread`, `ArgPush`). `CallSpread`/`ConstructSpread` read the count to
-//! find the callee, so the arguments are never copied into a list.
+//! find the callee, so the arguments are never copied into a list. A lone
+//! spread needs no count: `CallSpreadSole`/`ConstructSpreadSole` push the
+//! elements and call.
 //!
 //! The static stack model counts the count slot and the arguments before the
 //! first spread only; the elements a spread contributes are dynamic, which no
