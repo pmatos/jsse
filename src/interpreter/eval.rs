@@ -278,7 +278,7 @@ impl Interpreter {
     /// Walks up the environment chain to find the `this` binding.
     fn this_is_in_tdz(env: &EnvRef) -> bool {
         let e = env.borrow();
-        if let Some(this) = &e.this_binding {
+        if let Some(this) = e.this_binding() {
             return !this.initialized;
         }
         if let Some(ref parent) = e.parent {
@@ -313,7 +313,7 @@ impl Interpreter {
     /// Walks up to find the function scope's `this` binding and marks it initialized.
     fn initialize_this_binding(env: &EnvRef, value: JsValue) {
         let mut e = env.borrow_mut();
-        if e.this_binding.is_some() {
+        if e.this_binding().is_some() {
             e.set_this(value);
             return;
         }
@@ -6554,7 +6554,7 @@ impl Interpreter {
         self.call_stack_envs.pop();
         debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
         self.call_stack_frames.pop();
-        if exec_env.borrow().dispose_stack.is_some() {
+        if exec_env.borrow().has_disposables() {
             self.dispose_resources(exec_env, result)
         } else {
             result

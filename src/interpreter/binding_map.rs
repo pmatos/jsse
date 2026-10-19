@@ -15,6 +15,7 @@
 //! must stay correct): the loser of the `by_hash` slot is recorded in
 //! `overflow` and found by a short scan.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use super::atom::{Atom, IdentityBuild, hash_text};
@@ -40,6 +41,11 @@ pub(crate) struct BindingMap {
     /// the (common) free-variable miss on a scope costs one `and`, not a scan.
     /// Removals leave their bit set: the filter may only err towards "maybe".
     name_filter: u64,
+    /// A collection scanned this scope, found no nursery object in it and
+    /// nothing has handed out write access since (generational GC barrier,
+    /// #1027). Every method that can store a value clears it; one store, no
+    /// branch.
+    clean: Cell<bool>,
 }
 
 #[inline]
@@ -182,6 +188,7 @@ impl BindingMap {
             entries: Vec::new(),
             index: None,
             name_filter: 0,
+            clean: Cell::new(false),
         }
     }
 
@@ -190,6 +197,7 @@ impl BindingMap {
             entries: Vec::with_capacity(capacity),
             index: None,
             name_filter: 0,
+            clean: Cell::new(false),
         }
     }
 
@@ -213,6 +221,7 @@ impl BindingMap {
 
     /// Drops every binding but keeps the entry buffer for pooled reuse.
     pub(crate) fn clear(&mut self) {
+        self.clean.set(false);
         self.entries.clear();
         self.index = None;
         self.name_filter = 0;
@@ -278,6 +287,7 @@ impl BindingMap {
 
     #[inline]
     pub(crate) fn get_mut<K: BindingKey + ?Sized>(&mut self, key: &K) -> Option<&mut Binding> {
+        self.clean.set(false);
         key.find_in(self).map(|i| &mut self.entries[i].1)
     }
 
@@ -294,11 +304,13 @@ impl BindingMap {
 
     #[inline]
     pub(crate) fn entry_at_mut(&mut self, i: usize) -> Option<&mut (Atom, Binding)> {
+        self.clean.set(false);
         self.entries.get_mut(i)
     }
 
     /// Insert-or-replace by script text. Replacement keeps the entry position.
     pub(crate) fn insert(&mut self, name: &str, binding: Binding) -> Option<Binding> {
+        self.clean.set(false);
         if let Some(i) = name.find_in(self) {
             return Some(std::mem::replace(&mut self.entries[i].1, binding));
         }
@@ -308,6 +320,7 @@ impl BindingMap {
 
     /// Insert-or-replace by atom.
     pub(crate) fn insert_atom(&mut self, name: &Atom, binding: Binding) -> Option<Binding> {
+        self.clean.set(false);
         if let Some(i) = name.find_in(self) {
             return Some(std::mem::replace(&mut self.entries[i].1, binding));
         }
@@ -332,6 +345,7 @@ impl BindingMap {
         filter: u64,
         binding: impl Fn(usize) -> Binding,
     ) {
+        self.clean.set(false);
         if self.entries.is_empty() && self.index.is_none() && atoms.len() <= LINEAR_MAX {
             debug_assert_eq!(filter, Self::filter_of(atoms));
             self.name_filter |= filter;
@@ -350,6 +364,7 @@ impl BindingMap {
 
     /// Append an entry the caller knows is absent.
     pub(crate) fn push_unique(&mut self, name: Atom, binding: Binding) {
+        self.clean.set(false);
         debug_assert!(name.find_in(self).is_none(), "push_unique of a bound name");
         let slot = self.entries.len() as u32;
         let hash = name.precomputed_hash();
@@ -364,6 +379,7 @@ impl BindingMap {
     }
 
     pub(crate) fn remove<K: BindingKey + ?Sized>(&mut self, key: &K) -> Option<Binding> {
+        self.clean.set(false);
         let i = key.find_in(self)?;
         let removed_hash = self.entries[i].0.precomputed_hash();
         let (_, removed) = self.entries.swap_remove(i);
@@ -383,6 +399,21 @@ impl BindingMap {
             index.by_hash.insert(moved.precomputed_hash(), i as u32);
         }
         Some(removed)
+    }
+
+    #[inline]
+    pub(crate) fn is_clean(&self) -> bool {
+        self.clean.get()
+    }
+
+    pub(crate) fn set_clean(&self, clean: bool) {
+        self.clean.set(clean);
+    }
+
+    /// For a write the map cannot see, to the environment's other state.
+    #[inline]
+    pub(crate) fn mark_written(&self) {
+        self.clean.set(false);
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &Binding> {
@@ -668,5 +699,47 @@ mod tests {
             }
         }
         assert_eq!(m.len(), 38);
+    }
+
+    #[test]
+    fn every_mutator_clears_the_clean_mark_and_reads_keep_it() {
+        let mut map = BindingMap::new();
+        map.insert("a", b(1.0));
+        let atom = Atom::intern("a");
+        let other = Atom::intern("other");
+        let mutators: Vec<(&str, Box<dyn Fn(&mut BindingMap)>)> = vec![
+            ("get_mut", Box::new(|m| drop(m.get_mut("a")))),
+            ("entry_at_mut", Box::new(|m| drop(m.entry_at_mut(0)))),
+            ("insert", Box::new(|m| drop(m.insert("a", b(2.0))))),
+            (
+                "insert_atom",
+                Box::new(|m| drop(m.insert_atom(&atom, b(3.0)))),
+            ),
+            (
+                "push_unique",
+                Box::new(|m| m.push_unique(other.clone(), b(4.0))),
+            ),
+            ("remove", Box::new(|m| drop(m.remove("other")))),
+            ("clear", Box::new(|m| m.clear())),
+        ];
+        for (name, mutate) in mutators {
+            map.set_clean(true);
+            let _ = (map.get("a"), map.entry_at(0), map.contains_key("a"));
+            let _: Vec<_> = map.values().collect();
+            assert!(map.is_clean(), "a read cleared the mark before {name}");
+            mutate(&mut map);
+            assert!(!map.is_clean(), "{name} left the clean mark set");
+            map.insert("a", b(1.0));
+        }
+    }
+
+    #[test]
+    fn fill_distinct_clears_the_clean_mark() {
+        let mut map = BindingMap::new();
+        map.set_clean(true);
+        let atoms = [Atom::intern("x"), Atom::intern("y")];
+        let filter = BindingMap::filter_of(&atoms);
+        map.fill_distinct(&atoms, filter, |_| b(0.0));
+        assert!(!map.is_clean());
     }
 }

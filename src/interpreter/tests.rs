@@ -178,7 +178,7 @@ fn function_environment_pool_does_not_pin_the_previous_receiver() {
     interp.recycle_environment(env);
 
     let reused = interp.acquire_function_environment(Environment::new(None), 1);
-    assert!(reused.borrow().this_binding.is_none());
+    assert!(reused.borrow().this_binding().is_none());
     assert!(reused.borrow().get_this().is_none());
 }
 

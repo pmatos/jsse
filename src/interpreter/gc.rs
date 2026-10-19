@@ -596,9 +596,9 @@ impl Interpreter {
         }
     }
 
-    fn collect_gc_roots(&self) -> (Vec<u64>, EnvVisits) {
+    fn collect_gc_roots(&mut self, minor: bool) -> (Vec<u64>, EnvVisits) {
         let mut roots = Vec::new();
-        let mut seen_envs = EnvVisits::new();
+        let mut seen_envs = EnvVisits::new(minor);
 
         for realm in &self.realms {
             realm.collect_roots(&mut roots, &mut seen_envs);
@@ -708,6 +708,22 @@ impl Interpreter {
             Self::collect_scope_stack_roots(&afs.scope_stack, &mut roots, &mut seen_envs);
         }
 
+        // A minor collection's only view of old environments written since
+        // the last collection; a major one scans everything.
+        if minor {
+            self.env_registry.retain(|weak| {
+                let Some(env) = weak.upgrade() else {
+                    return false;
+                };
+                if !env.borrow().is_clean() {
+                    Self::collect_dirty_env_roots(env, &mut roots, &mut seen_envs);
+                }
+                true
+            });
+        } else {
+            self.env_registry.retain(|weak| weak.strong_count() > 0);
+        }
+
         (roots, seen_envs)
     }
 
@@ -766,12 +782,10 @@ impl Interpreter {
     }
 
     fn object_requires_persistent_minor_scan(obj: &JsObjectData) -> bool {
-        let has_closure_env = matches!(obj.callable.as_deref(), Some(JsFunction::User { .. }));
-        has_closure_env
-            || matches!(
-                obj.kind,
-                ObjectKind::Iterator(_) | ObjectKind::Arguments(_) | ObjectKind::ModuleNamespace(_)
-            )
+        matches!(
+            obj.kind,
+            ObjectKind::Iterator(_) | ObjectKind::Arguments(_) | ObjectKind::ModuleNamespace(_)
+        )
     }
 
     /// Kinds whose edges into the nursery the tracer cannot see, so a promoted
@@ -936,7 +950,7 @@ impl Interpreter {
             return;
         }
 
-        let (roots, mut seen_envs) = self.collect_gc_roots();
+        let (roots, mut seen_envs) = self.collect_gc_roots(true);
         let remembered = self.objects.take_remembered();
         let mut young = std::mem::take(&mut self.gc_young);
         young.fill(self.objects.nursery_ids(), self.objects.capacity());
@@ -1075,6 +1089,7 @@ impl Interpreter {
         #[cfg(debug_assertions)]
         if self.objects.live_count() <= 100_000 {
             self.debug_assert_old_arrays_reach_only_marked_young();
+            self.debug_assert_old_closure_envs_are_tracked(seen_envs.epoch());
         }
 
         let nursery = self.objects.take_nursery();
@@ -1098,9 +1113,58 @@ impl Interpreter {
         young.clear(&nursery);
         self.gc_young = young;
         self.objects.replace_nursery(survivors);
+        self.settle_scanned_envs(&mut seen_envs);
         self.gc.end_minor_collection();
         #[cfg(feature = "perf-counters")]
         self.perf.note_env_visits(&seen_envs);
+    }
+
+    /// Barrier check for closure environments, run once marking is complete:
+    /// every environment an old closure reaches must have been scanned by this
+    /// collection or be clean, and a clean one may reference no nursery object.
+    /// A store that skipped `BindingMap`'s mutators, or a scan that left a
+    /// young reference behind a clean mark, fails here.
+    #[cfg(debug_assertions)]
+    fn debug_assert_old_closure_envs_are_tracked(&self, epoch: u64) {
+        let mut checked = HashSet::new();
+        for id in 0..self.objects.capacity() {
+            let Some(handle) = self.objects.get_cell(id) else {
+                continue;
+            };
+            if !handle.is_old() {
+                continue;
+            }
+            let obj = handle.borrow_untracked();
+            let Some(JsFunction::User { closure, .. }) = obj.callable.as_deref() else {
+                continue;
+            };
+            let mut current = Some(closure.clone());
+            while let Some(env) = current {
+                if !checked.insert(Rc::as_ptr(&env) as usize) {
+                    break;
+                }
+                let borrowed = env.borrow();
+                if borrowed.is_clean() {
+                    borrowed.for_each_root_id(|child| {
+                        assert!(
+                            self.objects
+                                .get_cell(child)
+                                .is_none_or(|child_handle| !child_handle.is_young()),
+                            "clean environment of old closure {id} references nursery object \
+                             {child}: a write skipped the environment barrier"
+                        );
+                    });
+                } else {
+                    assert_eq!(
+                        borrowed.gc_epoch(),
+                        epoch,
+                        "environment of old closure {id} is neither clean nor scanned by this \
+                         collection"
+                    );
+                }
+                current = borrowed.parent.clone();
+            }
+        }
     }
 
     /// Barrier check for the minor collector, run once marking is complete: a
@@ -1199,7 +1263,7 @@ impl Interpreter {
         marks.clear();
         marks.resize(obj_count, false);
 
-        let (roots, mut seen_envs) = self.collect_gc_roots();
+        let (roots, mut seen_envs) = self.collect_gc_roots(false);
 
         // Mark each object when it is enqueued, not when it is popped. Shared
         // environments and prototypes can expose the same object through many
@@ -1288,6 +1352,13 @@ impl Interpreter {
         crate::thp::after_major_collection();
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
+        // Everything that survived is old now, so every environment the mark
+        // walked is clean; one the walk missed is not reachable from any heap
+        // object.
+        for env in std::mem::take(&mut seen_envs.scanned) {
+            env.borrow().set_clean(true);
+            self.register_env(&env);
+        }
         #[cfg(feature = "perf-counters")]
         self.perf.note_env_visits(&seen_envs);
     }
@@ -1611,6 +1682,9 @@ impl Interpreter {
         }
     }
 
+    /// Roots the values `env` and its parents reference. A minor collection
+    /// leaves a clean environment's bindings out: it holds no nursery object
+    /// (`BindingMap::is_clean`), so every object it references is old and survives anyway.
     pub(crate) fn collect_env_roots(
         env: &EnvRef,
         worklist: &mut Vec<u64>,
@@ -1622,32 +1696,59 @@ impl Interpreter {
             if !seen_envs.first_visit(&borrowed) {
                 break;
             }
-            for binding in borrowed.bindings.values() {
-                Self::collect_value_roots(&binding.value, worklist);
-            }
-            if let Some(this) = &borrowed.this_binding {
-                Self::collect_value_roots(&this.value, worklist);
-                Self::collect_value_roots(&this.new_target, worklist);
-            }
-            // The with-target is interned (id-only) — root it explicitly so
-            // identifier resolution inside `with(o) { ... }` keeps `o` alive
-            // across GC.
-            if let Some(ref w) = borrowed.with_object {
-                worklist.push(w.obj_id);
-            }
-            // A `using`/`await using` declaration's resources sit here between
-            // AddDisposableResource and the block's DisposeResources call.
-            // `value` is usually also reachable via `bindings`, but the
-            // synthetic sync-dispose-fallback wrapper `dispose_method`
-            // (`async_from_sync_dispose_method`) never is. Root both
-            // explicitly.
-            if let Some(ref stack) = borrowed.dispose_stack {
-                for resource in stack {
-                    Self::collect_value_roots(&resource.value, worklist);
-                    Self::collect_value_roots(&resource.dispose_method, worklist);
+            let parent = borrowed.parent.clone();
+            if seen_envs.minor && borrowed.is_clean() {
+                #[cfg(feature = "perf-counters")]
+                {
+                    seen_envs.clean_skips += 1;
                 }
+            } else {
+                borrowed.for_each_root_id(|id| worklist.push(id));
+                drop(borrowed);
+                seen_envs.scanned.push(e);
             }
-            current = borrowed.parent.clone();
+            current = parent;
+        }
+    }
+
+    /// Roots one environment's own values (not its parents'), as a dirty
+    /// environment queued by the write barrier needs.
+    fn collect_dirty_env_roots(env: EnvRef, worklist: &mut Vec<u64>, seen_envs: &mut EnvVisits) {
+        let borrowed = env.borrow();
+        if seen_envs.first_visit(&borrowed) {
+            borrowed.for_each_root_id(|id| worklist.push(id));
+            drop(borrowed);
+            seen_envs.scanned.push(env);
+        }
+    }
+
+    /// Whether `env` still references an object of the nursery.
+    fn env_references_nursery(&self, env: &EnvRef) -> bool {
+        let mut found = false;
+        env.borrow().for_each_root_id(|id| {
+            found = found
+                || self
+                    .objects
+                    .get_cell(id)
+                    .is_some_and(|handle| handle.is_young());
+        });
+        found
+    }
+
+    /// After a collection: an environment it scanned is clean unless it still
+    /// holds a nursery object, in which case the next minor collection scans it
+    /// again.
+    fn settle_scanned_envs(&mut self, seen_envs: &mut EnvVisits) {
+        for env in std::mem::take(&mut seen_envs.scanned) {
+            let clean = !self.env_references_nursery(&env);
+            env.borrow().set_clean(clean);
+            self.register_env(&env);
+        }
+    }
+
+    fn register_env(&mut self, env: &EnvRef) {
+        if !env.borrow().register_with_collector() {
+            self.env_registry.push(Rc::downgrade(env));
         }
     }
 }
@@ -1707,7 +1808,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(as_set(worklist), vec![7, 8]);
     }
 
@@ -1720,7 +1821,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(as_set(worklist), vec![10, 11]);
     }
 
@@ -1731,7 +1832,7 @@ mod tests {
         data.gc_native_roots_mut().push(obj(22));
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(as_set(worklist), vec![20, 21, 22]);
     }
 
@@ -1748,7 +1849,7 @@ mod tests {
         });
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new());
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(as_set(worklist), vec![30, 31]);
     }
 
@@ -1767,7 +1868,7 @@ mod tests {
             .insert("a", Binding::new(obj(30), BindingKind::Var, true));
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new());
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(as_set(worklist), vec![30, 31]);
 
         // (b) self-referential env (parent points to itself) binds "c"=Object(32)
@@ -1780,7 +1881,7 @@ mod tests {
         cyclic.borrow_mut().parent = Some(cyclic.clone());
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&cyclic, &mut worklist, &mut EnvVisits::new());
+        Interpreter::collect_env_roots(&cyclic, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(worklist, vec![32]);
     }
 
@@ -1791,7 +1892,7 @@ mod tests {
         let child = Environment::new(Some(env));
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new());
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new(false));
         assert_eq!(worklist, vec![34]);
     }
 
@@ -1802,7 +1903,7 @@ mod tests {
         let child = Environment::new(Some(env));
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new());
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut EnvVisits::new(false));
         worklist.sort_unstable();
         assert_eq!(worklist, vec![34, 35]);
     }
@@ -1814,7 +1915,7 @@ mod tests {
             .bindings
             .insert("shared", Binding::new(obj(33), BindingKind::Var, true));
         let mut worklist = Vec::new();
-        let mut seen_envs = EnvVisits::new();
+        let mut seen_envs = EnvVisits::new(false);
 
         Interpreter::collect_env_roots(&env, &mut worklist, &mut seen_envs);
         Interpreter::collect_env_roots(&env, &mut worklist, &mut seen_envs);
@@ -1831,7 +1932,7 @@ mod tests {
 
         for _ in 0..3 {
             let mut worklist = Vec::new();
-            Interpreter::collect_env_roots(&env, &mut worklist, &mut EnvVisits::new());
+            Interpreter::collect_env_roots(&env, &mut worklist, &mut EnvVisits::new(false));
             assert_eq!(worklist, vec![36]);
         }
     }
@@ -2532,6 +2633,119 @@ mod tests {
 
         assert!(interp.objects.get_cell(young).is_some());
         assert!(interp.objects.get_cell(pushed).is_some());
+    }
+
+    fn bind_in_global_env(interp: &mut Interpreter, name: &str, value: u64) {
+        let env = interp.realm().global_env.clone();
+        env.borrow_mut()
+            .bindings
+            .insert(name, Binding::new(obj(value), BindingKind::Var, true));
+    }
+
+    #[test]
+    fn a_major_collection_marks_the_environments_it_walked_clean() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let env = interp.realm().global_env.clone();
+        assert!(env.borrow().is_clean());
+
+        let held = fresh_object(&mut interp);
+        bind_in_global_env(&mut interp, "held", held);
+        assert!(!env.borrow().is_clean());
+
+        major_gc(&mut interp);
+        assert!(env.borrow().is_clean());
+        assert!(interp.objects.get_cell_expect(held).is_old());
+    }
+
+    #[test]
+    fn a_young_value_stored_into_a_clean_environment_survives_minor_collections() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let env = interp.realm().global_env.clone();
+        assert!(env.borrow().is_clean());
+
+        let held = fresh_object(&mut interp);
+        bind_in_global_env(&mut interp, "held", held);
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell(held).is_some());
+        assert!(
+            !env.borrow().is_clean(),
+            "the environment still references a nursery object"
+        );
+
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(held).is_old());
+        assert!(
+            env.borrow().is_clean(),
+            "a scan that finds only old objects marks the environment clean"
+        );
+
+        let replacement = fresh_object(&mut interp);
+        bind_in_global_env(&mut interp, "held", replacement);
+        assert!(!env.borrow().is_clean());
+        minor_gc(&mut interp);
+        minor_gc(&mut interp);
+        minor_gc(&mut interp);
+        assert!(interp.objects.get_cell_expect(replacement).is_old());
+        assert!(env.borrow().is_clean());
+    }
+
+    fn run_source(interp: &mut Interpreter, source: &str) {
+        let program = crate::parser::Parser::new(source)
+            .expect("parser init")
+            .parse_program()
+            .expect("parse program");
+        assert!(
+            matches!(
+                interp.run(&program),
+                Completion::Normal(_) | Completion::Empty
+            ),
+            "script threw"
+        );
+    }
+
+    #[test]
+    fn an_old_closure_is_not_rescanned_while_its_environment_is_clean() {
+        let mut interp = Interpreter::new();
+        run_source(
+            &mut interp,
+            "var cell = (function () {
+                 var held = { tag: 0 };
+                 return { get: function () { return held; }, set: function (v) { held = v; } };
+             })();",
+        );
+        major_gc(&mut interp);
+        minor_gc(&mut interp);
+        let remembered_closures = interp
+            .objects
+            .take_remembered_ids()
+            .into_iter()
+            .filter(|&id| {
+                matches!(
+                    interp
+                        .objects
+                        .get_cell_expect(id)
+                        .borrow()
+                        .callable
+                        .as_deref(),
+                    Some(JsFunction::User { .. })
+                )
+            })
+            .count();
+        assert_eq!(
+            remembered_closures, 0,
+            "an old closure over a clean environment needs no persistent scan"
+        );
+
+        run_source(&mut interp, "cell.set({ tag: 1 });");
+        for _ in 0..3 {
+            minor_gc(&mut interp);
+        }
+        run_source(
+            &mut interp,
+            "if (cell.get().tag !== 1) throw new Error('stored object was collected');",
+        );
     }
 
     use crate::interpreter::types::CARD_ELEMENTS;

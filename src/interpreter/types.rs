@@ -983,13 +983,15 @@ pub(crate) struct Environment {
     /// §9.1.1.3 [[ThisValue]]/[[ThisBindingStatus]] of a function (or the
     /// global/module) scope. Kept out of `bindings` so a call binds `this`
     /// without hashing or allocating a name.
-    pub(crate) this_binding: Option<ThisBinding>,
+    ///
+    /// Private: every write goes through a method that clears the clean mark.
+    this_binding: Option<ThisBinding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
     pub(crate) is_arrow_scope: bool,
     pub(crate) with_object: Option<WithObject>,
-    pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
+    dispose_stack: Option<Vec<DisposableResource>>,
     /// Slab id of the realm's global object. The canonical identity reference.
     /// External callers reach the global object via `Interpreter::env_*`
     /// wrappers in `env_helpers.rs`, never by holding a borrow here.
@@ -1010,30 +1012,50 @@ pub(crate) struct Environment {
     /// Epoch of the last collection walk that visited this environment
     /// (`EnvVisits`); never reset, since an epoch is never reused.
     gc_epoch: Cell<u64>,
+    /// Whether the collector's registry already holds this environment.
+    gc_registered: Cell<bool>,
 }
 
 static NEXT_ENV_VISIT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
-/// The set of environments one collection has already walked. Membership is
-/// a stamp on the environment itself rather than a hash-set probe, so a
-/// closure-heavy heap pays a load and a store per environment visit.
+/// The environments one collection has already walked. Membership is a stamp
+/// on the environment itself rather than a hash-set probe, so a closure-heavy
+/// heap pays a load and a store per environment visit.
+///
+/// A minor collection also skips the bindings of a clean environment (see
+/// `BindingMap::is_clean`) and records every environment it did scan in
+/// `scanned`, so the collector can afterwards mark each one clean or leave it
+/// for the next minor collection.
 pub(crate) struct EnvVisits {
     epoch: u64,
+    pub(crate) minor: bool,
+    pub(crate) scanned: Vec<EnvRef>,
     #[cfg(feature = "perf-counters")]
     pub(crate) probes: u64,
     #[cfg(feature = "perf-counters")]
     pub(crate) first_visits: u64,
+    #[cfg(feature = "perf-counters")]
+    pub(crate) clean_skips: u64,
 }
 
 impl EnvVisits {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(minor: bool) -> Self {
         Self {
             epoch: NEXT_ENV_VISIT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            minor,
+            scanned: Vec::new(),
             #[cfg(feature = "perf-counters")]
             probes: 0,
             #[cfg(feature = "perf-counters")]
             first_visits: 0,
+            #[cfg(feature = "perf-counters")]
+            clean_skips: 0,
         }
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Stamps `env` and reports whether this is its first visit.
@@ -1146,6 +1168,36 @@ pub(crate) enum SetBindingCheck {
 }
 
 impl Environment {
+    /// Calls `f` with the id of every object this environment references: the
+    /// values of its bindings, `this` and `new.target`, a `with` target and
+    /// the pending disposable resources.
+    pub(crate) fn for_each_root_id(&self, mut f: impl FnMut(u64)) {
+        for binding in self.bindings.values() {
+            if let Some(id) = binding.value.as_object_id() {
+                f(id);
+            }
+        }
+        if let Some(this) = &self.this_binding {
+            for value in [&this.value, &this.new_target] {
+                if let Some(id) = value.as_object_id() {
+                    f(id);
+                }
+            }
+        }
+        if let Some(with) = &self.with_object {
+            f(with.obj_id);
+        }
+        if let Some(stack) = &self.dispose_stack {
+            for resource in stack {
+                for value in [&resource.value, &resource.dispose_method] {
+                    if let Some(id) = value.as_object_id() {
+                        f(id);
+                    }
+                }
+            }
+        }
+    }
+
     /// An environment with every field at its initial value except the ones
     /// a constructor chooses; `release_to_pool` restores the same state.
     fn blank(
@@ -1176,6 +1228,7 @@ impl Environment {
             indirect_bindings: None,
             module_path: None,
             gc_epoch: Cell::new(0),
+            gc_registered: Cell::new(false),
         }
     }
 
@@ -1251,6 +1304,7 @@ impl Environment {
             indirect_bindings,
             module_path,
             gc_epoch: _,
+            gc_registered: _,
         } = self;
         bindings.clear();
         *this_binding = None;
@@ -1271,6 +1325,7 @@ impl Environment {
         *is_derived_constructor_scope = false;
         *indirect_bindings = None;
         *module_path = None;
+        bindings.set_clean(true);
     }
 
     /// Makes a pooled environment (see [`Environment::release_to_pool`]) a
@@ -1318,6 +1373,7 @@ impl Environment {
             .this_binding
             .take()
             .map_or(JsValue::UNDEFINED, |t| t.new_target);
+        self.bindings.mark_written();
         self.this_binding = Some(ThisBinding {
             value,
             initialized: true,
@@ -1328,6 +1384,7 @@ impl Environment {
     /// Binds `this` and [[NewTarget]] of a function environment being created
     /// for a call.
     pub(crate) fn bind_this_for_call(&mut self, value: JsValue, new_target: JsValue) {
+        self.bindings.mark_written();
         self.this_binding = Some(ThisBinding {
             value,
             initialized: true,
@@ -1338,11 +1395,62 @@ impl Environment {
     /// Creates the `this` binding uninitialized: a derived constructor's TDZ
     /// until `super()` returns.
     pub(crate) fn declare_this_uninit(&mut self, new_target: JsValue) {
+        self.bindings.mark_written();
         self.this_binding = Some(ThisBinding {
             value: JsValue::UNDEFINED,
             initialized: false,
             new_target,
         });
+    }
+
+    /// The `this` binding this environment itself holds, if it has one.
+    #[inline]
+    pub(crate) fn this_binding(&self) -> Option<&ThisBinding> {
+        self.this_binding.as_ref()
+    }
+
+    pub(crate) fn has_pending_disposables(&self) -> bool {
+        self.dispose_stack
+            .as_ref()
+            .is_some_and(|stack| !stack.is_empty())
+    }
+
+    pub(crate) fn has_disposables(&self) -> bool {
+        self.dispose_stack.is_some()
+    }
+
+    /// Queues a `using` resource for the block's DisposeResources.
+    pub(crate) fn push_disposable(&mut self, resource: DisposableResource) {
+        self.bindings.mark_written();
+        self.dispose_stack
+            .get_or_insert_with(Vec::new)
+            .push(resource);
+    }
+
+    pub(crate) fn take_disposables(&mut self) -> Option<Vec<DisposableResource>> {
+        self.dispose_stack.take()
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn gc_epoch(&self) -> u64 {
+        self.gc_epoch.get()
+    }
+
+    /// Whether a scan found no nursery object in this environment and nothing
+    /// has been written to it since.
+    #[inline]
+    pub(crate) fn is_clean(&self) -> bool {
+        self.bindings.is_clean()
+    }
+
+    pub(crate) fn set_clean(&self, clean: bool) {
+        self.bindings.set_clean(clean);
+    }
+
+    /// Reports whether the collector's registry already held this
+    /// environment, registering it.
+    pub(crate) fn register_with_collector(&self) -> bool {
+        self.gc_registered.replace(true)
     }
 
     /// `GetNewTarget` (§9.4.3): the [[NewTarget]] of the nearest function
