@@ -10,6 +10,7 @@ info: |
   collection is not exempt from later ones. Only the observable result is
   asserted: every captured value must still hold the object last stored.
 esid: sec-environment-records
+features: [host-gc-required]
 ---*/
 
 function churn() {

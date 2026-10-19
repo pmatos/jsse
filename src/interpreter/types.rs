@@ -1039,7 +1039,10 @@ impl EnvVisits {
     /// Stamps `env` and reports whether this is its first visit.
     #[inline]
     pub(crate) fn first_visit(&mut self, env: &Environment) -> bool {
-        let first = env.gc_epoch.replace(self.epoch) != self.epoch;
+        let first = env.gc_epoch.get() != self.epoch;
+        if first {
+            env.gc_epoch.set(self.epoch);
+        }
         #[cfg(feature = "perf-counters")]
         {
             self.probes += 1;

@@ -1822,6 +1822,20 @@ mod tests {
         assert_eq!(worklist, vec![33]);
     }
 
+    #[test]
+    fn a_new_collection_scans_an_environment_an_earlier_one_stamped() {
+        let env = Environment::new(None);
+        env.borrow_mut()
+            .bindings
+            .insert("held", Binding::new(obj(36), BindingKind::Var, true));
+
+        for _ in 0..3 {
+            let mut worklist = Vec::new();
+            Interpreter::collect_env_roots(&env, &mut worklist, &mut EnvVisits::new());
+            assert_eq!(worklist, vec![36]);
+        }
+    }
+
     // GcPacer — the allocation-pressure heuristic that decides when to collect.
     // Tested through its public interface; expected budgets are hand-computed
     // literals (independent of the pacer's own arithmetic).
