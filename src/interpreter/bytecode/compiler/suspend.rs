@@ -20,6 +20,7 @@ pub(super) enum BodyKind {
     Plain,
     Generator,
     Async,
+    AsyncGenerator,
 }
 
 fn is_yield_expression(expr: &Expression) -> bool {
@@ -50,8 +51,8 @@ impl Compiler {
     /// (sec-isintailposition).
     pub(super) fn for_body(kind: BodyKind) -> Self {
         let mut c = Self::new(super::CompileGoal::Function);
-        c.generator = kind == BodyKind::Generator;
-        c.async_body = kind == BodyKind::Async;
+        c.generator = matches!(kind, BodyKind::Generator | BodyKind::AsyncGenerator);
+        c.async_body = matches!(kind, BodyKind::Async | BodyKind::AsyncGenerator);
         c.no_tail = u32::from(kind != BodyKind::Plain);
         c
     }
@@ -75,7 +76,9 @@ impl Compiler {
     /// height, so the stub is the same exit a `return v` statement emits
     /// (running `finally` blocks and closing iterators on the way out);
     /// `throw(e)` resumes at the enclosing handler like a throw raised by the
-    /// op itself.
+    /// op itself. In an async generator the operand is awaited before the
+    /// yield and the `return(v)` stub awaits `v` before it unwinds
+    /// (AsyncGeneratorYield, AsyncGeneratorUnwrapYieldResumption).
     pub(super) fn compile_yield(
         &mut self,
         argument: Option<&Expression>,
@@ -88,6 +91,9 @@ impl Compiler {
                 self.push_n(1);
             }
         }
+        if self.async_body {
+            self.emit_await(false)?;
+        }
         self.emit(Op::Yield);
         self.emit_u16(self.stack_base);
         self.code.push(u8::from(discard));
@@ -97,6 +103,9 @@ impl Compiler {
         self.current_stack = self.stack_base + 1;
         self.current_refs = 0;
         self.max_stack = self.max_stack.max(self.current_stack);
+        if self.async_body {
+            self.emit_await(false)?;
+        }
         self.compile_jump(Terminal::Return, true)?;
         self.current_stack = if discard { stack - 1 } else { stack };
         self.current_refs = refs;
@@ -113,6 +122,11 @@ impl Compiler {
         discard: bool,
     ) -> Result<(), CompileError> {
         self.compile_expr(argument)?;
+        self.emit_await(discard)
+    }
+
+    /// The suspension op of an `await` over the value on top of the stack.
+    pub(super) fn emit_await(&mut self, discard: bool) -> Result<(), CompileError> {
         self.emit(Op::Yield);
         self.emit_u16(self.stack_base);
         self.code.push(u8::from(discard));
@@ -140,6 +154,21 @@ pub(crate) fn compile_async_body(
         ));
     }
     compile_function_body_as(body, shape, BodyKind::Async)
+}
+
+/// [`compile_async_body`] for an async generator body: `yield` and `await`
+/// both suspend, `return expr` awaits `expr`, and `yield*` (and what an async
+/// function cannot host) keeps the state machine.
+pub(crate) fn compile_async_generator_body(
+    body: &[crate::ast::Statement],
+    shape: &FrameShape<'_>,
+) -> Result<Chunk, CompileError> {
+    if super::stmts_contain(body, &declares_using) {
+        return Err(CompileError::Ineligible(
+            "construct needs the async generator state machine",
+        ));
+    }
+    compile_function_body_as(body, shape, BodyKind::AsyncGenerator)
 }
 
 #[cfg(test)]
@@ -240,6 +269,72 @@ mod tests {
         ] {
             assert!(
                 compile_async(source).is_err(),
+                "expected {source} to stay on the state machine"
+            );
+        }
+    }
+
+    fn compile_async_generator(source: &str) -> Result<Chunk, CompileError> {
+        let wrapped = format!("async function* g(a) {{ {source}\n}}");
+        let mut parser = Parser::new(&wrapped).expect("parser init");
+        let program = parser.parse_program().expect("parse");
+        let Some(crate::ast::Statement::FunctionDeclaration(decl)) =
+            program.body.as_slice().first()
+        else {
+            panic!("function declaration");
+        };
+        compile_async_generator_body(
+            decl.body.statements.as_slice(),
+            &FrameShape {
+                arguments_slot: false,
+                simple_params: &["a".to_string()],
+                separate_body_env: false,
+            },
+        )
+    }
+
+    fn suspensions(chunk: &Chunk) -> Vec<(bool, bool)> {
+        decode_ops(chunk)
+            .into_iter()
+            .filter(|(op, _)| *op == Op::Yield)
+            .map(|(_, operands)| (operands[2] == 0, operands[1] != 0))
+            .collect()
+    }
+
+    #[test]
+    fn async_generator_yield_awaits_its_operand_and_its_return_stub_awaits() {
+        let chunk = compile_async_generator("yield a;").expect("compile");
+        // await a; yield; the stub's await of a return(v) value.
+        assert_eq!(
+            suspensions(&chunk),
+            [(true, false), (false, true), (true, false)]
+        );
+        let ops = work_ops(&chunk);
+        let stub = ops
+            .iter()
+            .rposition(|op| *op == Op::Yield)
+            .expect("stub await");
+        assert_eq!(ops[stub + 1], Op::Return, "the unwind follows the await");
+    }
+
+    #[test]
+    fn async_generator_return_with_a_value_awaits_it_but_a_bare_return_does_not() {
+        let with_value = compile_async_generator("return a;").expect("compile");
+        assert_eq!(suspensions(&with_value), [(true, false)]);
+        let bare = compile_async_generator("return;").expect("compile");
+        assert!(suspensions(&bare).is_empty());
+    }
+
+    #[test]
+    fn async_generator_chunk_rejects_yield_star_and_for_await() {
+        for source in [
+            "yield* a;",
+            "for await (const x of a) {}",
+            "await using r = a;",
+            "var [x = yield] = a;",
+        ] {
+            assert!(
+                compile_async_generator(source).is_err(),
                 "expected {source} to stay on the state machine"
             );
         }

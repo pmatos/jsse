@@ -9,7 +9,6 @@ use crate::interpreter::property::SetOutcome;
 
 mod access;
 mod array_pattern;
-pub(super) mod async_chunk;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod generator_runtime;
 mod literals;
@@ -5887,53 +5886,21 @@ impl Interpreter {
                                     has_simple_params,
                                 );
 
-                                let state_machine = self.state_machine_for(
-                                    StateMachineKind::AsyncGenerator,
-                                    &body,
-                                    &params,
-                                    o.id,
-                                );
-                                for temp_var in &state_machine.temp_vars {
-                                    exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
-                                }
-                                for lv in &state_machine.local_vars {
-                                    let bk = match lv.kind {
-                                        crate::ast::VarKind::Let
-                                        | crate::ast::VarKind::Const
-                                        | crate::ast::VarKind::Using
-                                        | crate::ast::VarKind::AwaitUsing => {
-                                            // Block-scoped bindings must not be hoisted to function level
-                                            if lv.scope_depth > 0 {
-                                                continue;
-                                            }
-                                            BindingKind::Let
-                                        }
-                                        _ => BindingKind::Var,
-                                    };
-                                    if !exec_env.borrow().bindings.contains_key(&lv.name)
-                                        && !func_env.borrow().bindings.contains_key(&lv.name)
-                                    {
-                                        exec_env.borrow_mut().declare(&lv.name, bk);
+                                let state = match self
+                                    .bytecode_async_generator_state(o.id, &body, &frame, &exec_env)
+                                {
+                                    Ok(Some(state)) => state,
+                                    Err(error) => {
+                                        self.current_realm_id = caller_realm;
+                                        break 'call Completion::Throw(error);
                                     }
-                                }
-                                self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
+                                    Ok(None) => self.state_machine_async_generator_state(
+                                        o.id, &body, &params, &func_env, exec_env, is_strict,
+                                    ),
+                                };
                                 self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .set_iterator_state(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env: exec_env,
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedStart,
-                                            _sent_value: JsValue::UNDEFINED,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
+                                    .set_iterator_state(state);
                                 let gen_id = gen_obj_id;
                                 if let Some(obj_rc) = self.get_object_cell(gen_id) {
                                     obj_rc
@@ -10898,3 +10865,7 @@ mod relational_bigint_tests {
         );
     }
 }
+
+// Declared last, as in `compiler.rs` and `vm.rs`: measured layout-neutral (#1105).
+pub(super) mod async_chunk;
+mod async_gen_chunk;

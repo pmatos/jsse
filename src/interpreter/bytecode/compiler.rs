@@ -20,10 +20,8 @@ use std::cell::Cell;
 
 mod calls;
 mod lexical;
-mod suspend;
-
 use suspend::BodyKind;
-pub(crate) use suspend::compile_async_body;
+pub(crate) use suspend::{compile_async_body, compile_async_generator_body};
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
@@ -2177,6 +2175,9 @@ impl Compiler {
     /// Evaluates `expr` and returns it through any open cleanups.
     fn compile_return_value(&mut self, expr: &Expression) -> Result<(), CompileError> {
         self.compile_expr(expr)?;
+        if self.async_body && self.generator {
+            self.emit_await(false)?;
+        }
         self.compile_jump(Terminal::Return, true)?;
         self.pop_n(1);
         Ok(())
@@ -2193,13 +2194,10 @@ impl Compiler {
         )
     }
 
-    /// Resolves a `break`'s target frame. The unlabeled form binds to the
-    /// innermost frame of either kind (a `switch` is a break target); the
-    /// labeled form searches outward so a label on an outer loop is
-    /// reachable past an intervening unlabeled inner loop. The parser's
-    /// early-error checks guarantee a labeled form always names an enclosing
-    /// frame that compiled successfully — `None` is defensive coding against
-    /// a future change that stops being true.
+    /// Resolves a `break`'s target frame: the innermost frame of either kind
+    /// (a `switch` is a break target), or the one carrying the label. The
+    /// parser guarantees a label names an enclosing frame; `None` is
+    /// defensive.
     fn resolve_break_frame(&self, label: Option<&str>) -> Option<usize> {
         match label {
             None => self.loop_frames.len().checked_sub(1),
@@ -3869,3 +3867,5 @@ pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileEr
     }
     Ok(c.finish())
 }
+
+mod suspend;

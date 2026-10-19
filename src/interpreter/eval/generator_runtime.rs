@@ -23,7 +23,7 @@ enum DelegateStep {
 
 /// Where AsyncGeneratorAwaitReturn left the request it started on.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum AwaitReturnStart {
+pub(super) enum AwaitReturnStart {
     /// Waiting on the operand; the reaction settles, pops and drains.
     Parked,
     /// Already settled (PromiseResolve threw); the caller pops and drains.
@@ -101,7 +101,9 @@ impl Interpreter {
         let cell = self.get_object_cell(this.as_object_id()?)?;
         match cell.borrow().iterator_state() {
             Some(IteratorState::StateMachineGenerator { .. }) => Some(GeneratorImpl::StateMachine),
-            Some(IteratorState::BytecodeGenerator(_)) => Some(GeneratorImpl::Bytecode),
+            Some(IteratorState::BytecodeGenerator(g)) if !g.is_async => {
+                Some(GeneratorImpl::Bytecode)
+            }
             _ => None,
         }
     }
@@ -726,6 +728,7 @@ impl Interpreter {
                 }),
                 status: BytecodeGeneratorStatus::SuspendedStart,
                 frame: None,
+                is_async: false,
             },
         ))))
     }
@@ -3126,6 +3129,9 @@ impl Interpreter {
         } else {
             return;
         };
+        if self.is_bytecode_async_generator(gen_id) {
+            return self.async_gen_drain(gen_id);
+        }
 
         let request = {
             let queue = self.scheduler.async_gen_queue(gen_id);
@@ -5957,7 +5963,11 @@ impl Interpreter {
 
     /// Runs `f` with the realm of async generator `gen_id` current, restoring
     /// the caller's afterwards.
-    fn with_generator_realm<R>(&mut self, gen_id: u64, f: impl FnOnce(&mut Self) -> R) -> R {
+    pub(super) fn with_generator_realm<R>(
+        &mut self,
+        gen_id: u64,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         let caller_realm = self.current_realm_id;
         if let Some(realm_id) = self
             .get_object_cell(gen_id)
@@ -5982,6 +5992,9 @@ impl Interpreter {
         value: JsValue,
         is_reject: bool,
     ) {
+        if step == AsyncGenStep::Await && self.is_bytecode_async_generator(gen_id) {
+            return self.async_gen_await_resume_chunk(gen_id, value, is_reject);
+        }
         let Some(promise) = self
             .scheduler
             .async_gen_queue(gen_id)
@@ -6079,16 +6092,7 @@ impl Interpreter {
             return self
                 .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
         };
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
-        };
-
-        let is_async_generator = matches!(
-            obj_rc.borrow().iterator_state(),
-            Some(IteratorState::StateMachineAsyncGenerator { .. })
-        );
-        if is_async_generator {
+        if self.is_async_generator_object(o.id) {
             return self.async_gen_enqueue(this, sent_value, super::AsyncGenRequestKind::Next);
         }
         self.reject_with_type_error("not an async generator object")
@@ -6105,7 +6109,7 @@ impl Interpreter {
     ///
     /// Never touches the yield-pending flag: which context the caller runs in
     /// decides how `Parked` reaches the queue driver.
-    fn async_gen_await_return(
+    pub(super) fn async_gen_await_return(
         &mut self,
         gen_id: u64,
         value: JsValue,
@@ -6157,15 +6161,7 @@ impl Interpreter {
                 .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
         };
 
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
-        };
-        let is_async_generator = matches!(
-            obj_rc.borrow().iterator_state(),
-            Some(IteratorState::StateMachineAsyncGenerator { .. })
-        );
-        if is_async_generator {
+        if self.is_async_generator_object(o.id) {
             return self.async_gen_enqueue(this, value, super::AsyncGenRequestKind::Return);
         }
         self.reject_with_type_error("not an async generator object")
@@ -6349,15 +6345,7 @@ impl Interpreter {
                 .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
         };
 
-        let Some(obj_rc) = self.get_object(o.id) else {
-            return self
-                .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
-        };
-        let is_async_generator = matches!(
-            obj_rc.borrow().iterator_state(),
-            Some(IteratorState::StateMachineAsyncGenerator { .. })
-        );
-        if is_async_generator {
+        if self.is_async_generator_object(o.id) {
             return self.async_gen_enqueue(this, exception, super::AsyncGenRequestKind::Throw);
         }
         self.reject_with_type_error("not an async generator object")
