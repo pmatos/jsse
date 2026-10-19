@@ -1083,8 +1083,9 @@ impl GeneratorFrame {
 /// body yields again, leaving the frame ready for the next resumption; any
 /// other completion ends the generator and the frame must be discarded.
 ///
-/// The caller has put the body's frame environment on `call_stack_envs` and
-/// instantiated the body's declarations (`declare_chunk_prologue`).
+/// The caller has pushed the frame environment on `call_stack_envs` and
+/// instantiated the declarations.
+#[inline(never)]
 pub(crate) fn run_generator_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,

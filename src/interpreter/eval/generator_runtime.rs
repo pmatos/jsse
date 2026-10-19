@@ -713,21 +713,7 @@ impl Interpreter {
         let Some(chunk) = self.generator_chunk(func_obj_id, body) else {
             return Ok(None);
         };
-        match self.chunk_instantiation_analysis(&chunk, body, frame) {
-            Some(analysis) => {
-                let failed = self.with_ic_body_in_frame(body, frame, |interp| {
-                    interp.instantiate_chunk_declarations(&chunk, body, exec_env, analysis)
-                });
-                match failed {
-                    Some(Completion::Throw(error)) => return Err(error),
-                    Some(other) => {
-                        unreachable!("function declaration instantiation completed with {other:?}")
-                    }
-                    None => {}
-                }
-            }
-            None => vm::declare_chunk_prologue(&chunk, exec_env),
-        }
+        self.instantiate_hosted_body(&chunk, body, frame, exec_env)?;
         Ok(Some(IteratorState::BytecodeGenerator(Box::new(
             BytecodeGenerator {
                 code: Rc::new(BytecodeGeneratorCode {

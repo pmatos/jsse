@@ -1146,9 +1146,6 @@ fn assert_parity_number(source: &str, expected: f64) {
     assert_eq!(bc_v.as_number(), Some(expected), "{source}: bytecode value");
 }
 
-// NOTE: lexical declarations are not yet compilable, so a body containing one
-// still bails the WHOLE body to the tree-walker.
-
 #[test]
 fn if_true_takes_consequent_branch() {
     // (a) if(true) taken branch
@@ -2939,7 +2936,7 @@ fn operand_layout(op: Op) -> &'static [usize] {
 
 /// Decodes a whole chunk into `(op, operands)` through the operand-width
 /// table; operand values are widened to u16 (a u32 keeps its low half).
-fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
+pub(super) fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
     let mut out = Vec::new();
     let mut pc = 0;
     while pc < chunk.code.len() {
@@ -3006,7 +3003,7 @@ fn try_compile_function_source(
 }
 
 /// The chunk's ops without statement-boundary safepoints.
-fn work_ops(chunk: &Chunk) -> Vec<Op> {
+pub(super) fn work_ops(chunk: &Chunk) -> Vec<Op> {
     decode_ops(chunk)
         .into_iter()
         .map(|(op, _)| op)

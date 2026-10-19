@@ -47,7 +47,7 @@ pub(crate) struct GcPacer {
 }
 
 /// Environment variable that enables the GC stress mode: a collection is
-/// forced at every Nth safepoint. Unset, `0` or unparseable leaves it off.
+/// forced at every Nth safepoint. Unset, `0` or unparsable leaves it off.
 pub(crate) const GC_STRESS_ENV: &str = "JSSE_GC_STRESS";
 
 /// In-crate unit tests never read the variable, so their exact-result pacer
@@ -563,12 +563,8 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_safepoint(&mut self) {
-        // The clock starts inside the collecting arms, never before the match:
-        // safepoints are hit on every loop backedge, so an unconditional
-        // `Instant::now()` here would run millions of times per run to time
-        // the handful of collections that actually happen — inflating the very
-        // measurement overhead this feature is supposed to keep negligible
-        // (#537 review, third pass).
+        // The clock starts inside the collecting arms: an unconditional
+        // `Instant::now()` would run on every loop backedge (#537).
         match self.gc.begin_collection() {
             Some(CollectionKind::Minor) => {
                 #[cfg(feature = "perf-counters")]
@@ -707,6 +703,7 @@ impl Interpreter {
             Self::collect_for_of_stack_roots(&afs.for_of_stack, &mut roots, &mut seen_envs);
             Self::collect_scope_stack_roots(&afs.scope_stack, &mut roots, &mut seen_envs);
         }
+        self.collect_async_activation_roots(&mut roots, &mut seen_envs);
 
         // A minor collection's only view of old environments written since
         // the last collection; a major one scans everything.
