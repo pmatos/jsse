@@ -716,7 +716,7 @@ impl Interpreter {
                     return false;
                 };
                 if !env.borrow().is_clean() {
-                    Self::collect_dirty_env_roots(env, &mut roots, &mut seen_envs);
+                    Self::collect_env_roots(&env, &mut roots, &mut seen_envs);
                 }
                 true
             });
@@ -1356,7 +1356,7 @@ impl Interpreter {
         // walked is clean; one the walk missed is not reachable from any heap
         // object.
         for env in std::mem::take(&mut seen_envs.scanned) {
-            env.borrow().set_clean(true);
+            env.borrow().mark_clean();
             self.register_env(&env);
         }
         #[cfg(feature = "perf-counters")]
@@ -1698,6 +1698,10 @@ impl Interpreter {
             }
             let parent = borrowed.parent.clone();
             if seen_envs.minor && borrowed.is_clean() {
+                debug_assert!(
+                    borrowed.is_registered(),
+                    "a clean environment is registered"
+                );
                 #[cfg(feature = "perf-counters")]
                 {
                     seen_envs.clean_skips += 1;
@@ -1711,28 +1715,13 @@ impl Interpreter {
         }
     }
 
-    /// Roots one environment's own values (not its parents'), as a dirty
-    /// environment queued by the write barrier needs.
-    fn collect_dirty_env_roots(env: EnvRef, worklist: &mut Vec<u64>, seen_envs: &mut EnvVisits) {
-        let borrowed = env.borrow();
-        if seen_envs.first_visit(&borrowed) {
-            borrowed.for_each_root_id(|id| worklist.push(id));
-            drop(borrowed);
-            seen_envs.scanned.push(env);
-        }
-    }
-
     /// Whether `env` still references an object of the nursery.
     fn env_references_nursery(&self, env: &EnvRef) -> bool {
-        let mut found = false;
-        env.borrow().for_each_root_id(|id| {
-            found = found
-                || self
-                    .objects
-                    .get_cell(id)
-                    .is_some_and(|handle| handle.is_young());
-        });
-        found
+        env.borrow().any_root_id(|id| {
+            self.objects
+                .get_cell(id)
+                .is_some_and(|handle| handle.is_young())
+        })
     }
 
     /// After a collection: an environment it scanned is clean unless it still
@@ -1740,8 +1729,11 @@ impl Interpreter {
     /// again.
     fn settle_scanned_envs(&mut self, seen_envs: &mut EnvVisits) {
         for env in std::mem::take(&mut seen_envs.scanned) {
-            let clean = !self.env_references_nursery(&env);
-            env.borrow().set_clean(clean);
+            if self.env_references_nursery(&env) {
+                env.borrow().mark_written();
+            } else {
+                env.borrow().mark_clean();
+            }
             self.register_env(&env);
         }
     }
@@ -2689,6 +2681,60 @@ mod tests {
         minor_gc(&mut interp);
         assert!(interp.objects.get_cell_expect(replacement).is_old());
         assert!(env.borrow().is_clean());
+    }
+
+    #[test]
+    fn a_registered_dirty_environment_is_scanned_together_with_its_parents() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let held = fresh_object(&mut interp);
+        let parent = Environment::new(Some(interp.realm().global_env.clone()));
+        parent
+            .borrow_mut()
+            .bindings
+            .insert("held", Binding::new(obj(held), BindingKind::Var, true));
+        let child = Environment::new(Some(parent.clone()));
+        child.borrow_mut().bindings.insert(
+            "own",
+            Binding::new(JsValue::number(1.0), BindingKind::Var, true),
+        );
+        interp.register_env(&child);
+
+        let (mut roots, mut seen_envs) = interp.collect_gc_roots(true);
+        // A young closure over `child` reaches it again in the same collection.
+        Interpreter::collect_env_roots(&child, &mut roots, &mut seen_envs);
+
+        assert!(
+            roots.contains(&held),
+            "the unregistered parent's young value must be rooted"
+        );
+    }
+
+    #[test]
+    fn every_clean_environment_is_registered() {
+        let mut interp = Interpreter::new();
+        run_source(
+            &mut interp,
+            "var cell = (function () {
+                 var held = { tag: 0 };
+                 return function () { return held; };
+             })();",
+        );
+        major_gc(&mut interp);
+        let clean = interp
+            .env_registry
+            .iter()
+            .filter_map(|weak| weak.upgrade())
+            .filter(|env| env.borrow().is_clean())
+            .count();
+        assert!(clean > 0);
+        assert!(
+            interp
+                .env_registry
+                .iter()
+                .filter_map(|weak| weak.upgrade())
+                .all(|env| env.borrow().is_registered())
+        );
     }
 
     fn run_source(interp: &mut Interpreter, source: &str) {

@@ -21,7 +21,7 @@ var sink;
 
 // Allocates enough short-lived objects to run several minor collections.
 function minor() {
-  for (var i = 0; i < 30000; i++) sink = { i: i, next: sink && null };
+  for (var i = 0; i < 30000; i++) sink = { i: i };
 }
 
 // Promotes everything allocated so far.
@@ -151,7 +151,6 @@ for (var i = 0; i < 4; i++) {
 promote();
 
 var asyncLabel = "async";
-var asyncValues = [];
 async function asyncScenario() {
   var held = fresh("initial");
   var read = function () { return held; };

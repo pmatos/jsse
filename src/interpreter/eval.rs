@@ -6554,7 +6554,7 @@ impl Interpreter {
         self.call_stack_envs.pop();
         debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
         self.call_stack_frames.pop();
-        if exec_env.borrow().has_disposables() {
+        if exec_env.borrow().has_dispose_stack() {
             self.dispose_resources(exec_env, result)
         } else {
             result

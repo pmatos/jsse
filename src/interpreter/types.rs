@@ -1168,34 +1168,51 @@ pub(crate) enum SetBindingCheck {
 }
 
 impl Environment {
-    /// Calls `f` with the id of every object this environment references: the
-    /// values of its bindings, `this` and `new.target`, a `with` target and
-    /// the pending disposable resources.
-    pub(crate) fn for_each_root_id(&self, mut f: impl FnMut(u64)) {
+    /// Whether `found` holds for the id of an object this environment
+    /// references: the values of its bindings, `this` and `new.target`, a
+    /// `with` target or a pending disposable resource.
+    pub(crate) fn any_root_id(&self, mut found: impl FnMut(u64) -> bool) -> bool {
         for binding in self.bindings.values() {
-            if let Some(id) = binding.value.as_object_id() {
-                f(id);
+            if let Some(id) = binding.value.as_object_id()
+                && found(id)
+            {
+                return true;
             }
         }
         if let Some(this) = &self.this_binding {
             for value in [&this.value, &this.new_target] {
-                if let Some(id) = value.as_object_id() {
-                    f(id);
+                if let Some(id) = value.as_object_id()
+                    && found(id)
+                {
+                    return true;
                 }
             }
         }
-        if let Some(with) = &self.with_object {
-            f(with.obj_id);
+        if let Some(with) = &self.with_object
+            && found(with.obj_id)
+        {
+            return true;
         }
         if let Some(stack) = &self.dispose_stack {
             for resource in stack {
                 for value in [&resource.value, &resource.dispose_method] {
-                    if let Some(id) = value.as_object_id() {
-                        f(id);
+                    if let Some(id) = value.as_object_id()
+                        && found(id)
+                    {
+                        return true;
                     }
                 }
             }
         }
+        false
+    }
+
+    /// Calls `f` with the id of every object this environment references.
+    pub(crate) fn for_each_root_id(&self, mut f: impl FnMut(u64)) {
+        self.any_root_id(|id| {
+            f(id);
+            false
+        });
     }
 
     /// An environment with every field at its initial value except the ones
@@ -1325,7 +1342,6 @@ impl Environment {
         *is_derived_constructor_scope = false;
         *indirect_bindings = None;
         *module_path = None;
-        bindings.set_clean(true);
     }
 
     /// Makes a pooled environment (see [`Environment::release_to_pool`]) a
@@ -1415,7 +1431,8 @@ impl Environment {
             .is_some_and(|stack| !stack.is_empty())
     }
 
-    pub(crate) fn has_disposables(&self) -> bool {
+    /// Whether a disposable-resource stack exists, even an empty one.
+    pub(crate) fn has_dispose_stack(&self) -> bool {
         self.dispose_stack.is_some()
     }
 
@@ -1443,8 +1460,21 @@ impl Environment {
         self.bindings.is_clean()
     }
 
-    pub(crate) fn set_clean(&self, clean: bool) {
-        self.bindings.set_clean(clean);
+    /// The collector's: a scan found no nursery object here. Callers register
+    /// the environment (`register_with_collector`) so a minor collection finds
+    /// it again once it is written.
+    pub(crate) fn mark_clean(&self) {
+        self.bindings.mark_clean();
+    }
+
+    /// Clears the clean mark.
+    pub(crate) fn mark_written(&self) {
+        self.bindings.mark_written();
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn is_registered(&self) -> bool {
+        self.gc_registered.get()
     }
 
     /// Reports whether the collector's registry already held this
