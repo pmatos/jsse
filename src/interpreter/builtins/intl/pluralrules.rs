@@ -1,6 +1,6 @@
 use super::super::super::*;
 use super::super::plural_rules_state::{
-    PluralRulesOptions, PluralRulesState, category_value, other_value,
+    PluralRulesOptions, PluralRulesState, category_name, category_value, other_value,
 };
 use fixed_decimal::{CompactDecimal, Decimal};
 use icu::locale::Locale as IcuLocale;
@@ -9,17 +9,6 @@ use icu::plurals::{
     PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences,
 };
 use std::rc::Rc;
-
-fn plural_category_to_str(cat: PluralCategory) -> &'static str {
-    match cat {
-        PluralCategory::Zero => "zero",
-        PluralCategory::One => "one",
-        PluralCategory::Two => "two",
-        PluralCategory::Few => "few",
-        PluralCategory::Many => "many",
-        PluralCategory::Other => "other",
-    }
-}
 
 fn number_to_plural_operands(n: f64) -> PluralOperands {
     if n.is_nan() || n.is_infinite() {
@@ -163,7 +152,7 @@ fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'st
     spec_order
         .iter()
         .filter(|c| available.contains(c))
-        .map(|c| plural_category_to_str(*c))
+        .map(|c| category_name(*c))
         .collect()
 }
 
@@ -190,10 +179,7 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let state = match obj.borrow().intl_data() {
-                        Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
-                        _ => None,
-                    };
+                    let state = PluralRulesState::of(&obj.borrow());
                     if let Some(state) = state {
                         let n_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let n = match interp.to_number_value(&n_val) {
@@ -233,10 +219,7 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let state = match obj.borrow().intl_data() {
-                        Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
-                        _ => None,
-                    };
+                    let state = PluralRulesState::of(&obj.borrow());
                     if let Some(state) = state {
                         let start_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let end_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
@@ -300,10 +283,7 @@ impl Interpreter {
                 if let Some(o) = this.as_object_id()
                     && let Some(obj) = interp.get_object_cell(o)
                 {
-                    let state = match obj.borrow().intl_data() {
-                        Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
-                        _ => None,
-                    };
+                    let state = PluralRulesState::of(&obj.borrow());
                     if let Some(state) = state {
                         let PluralRulesOptions {
                             locale,

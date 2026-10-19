@@ -1,3 +1,4 @@
+use crate::interpreter::types::{IntlData, JsObjectData};
 use crate::types::JsValue;
 use icu::locale::Locale as IcuLocale;
 use icu::plurals::{
@@ -5,6 +6,7 @@ use icu::plurals::{
     PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences, PluralRulesWithRanges,
 };
 use std::cell::OnceCell;
+use std::rc::Rc;
 
 /// The immutable option snapshot of an `Intl.PluralRules` instance (ECMA-402 §16.1).
 /// `locale` is already stripped of Unicode extensions by the constructor.
@@ -49,6 +51,14 @@ fn icu_inputs(options: &PluralRulesOptions) -> (PluralRulesPreferences, IcuPlura
 }
 
 impl PluralRulesState {
+    /// The state of a PluralRules object; `None` for any other object kind.
+    pub(crate) fn of(data: &JsObjectData) -> Option<Rc<Self>> {
+        match data.intl_data() {
+            Some(IntlData::PluralRules(state)) => Some(Rc::clone(state)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn new(options: PluralRulesOptions) -> Self {
         Self {
             options,
@@ -77,28 +87,30 @@ impl PluralRulesState {
     }
 }
 
-thread_local! {
-    static CATEGORY_VALUES: [JsValue; 6] = [
-        JsValue::from_str("zero"),
-        JsValue::from_str("one"),
-        JsValue::from_str("two"),
-        JsValue::from_str("few"),
-        JsValue::from_str("many"),
-        JsValue::from_str("other"),
-    ];
-}
+const CATEGORY_NAMES: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
 
-/// The category's string value, shared per thread instead of allocated per call.
-pub(crate) fn category_value(cat: PluralCategory) -> JsValue {
-    let idx = match cat {
+fn category_index(cat: PluralCategory) -> usize {
+    match cat {
         PluralCategory::Zero => 0,
         PluralCategory::One => 1,
         PluralCategory::Two => 2,
         PluralCategory::Few => 3,
         PluralCategory::Many => 4,
         PluralCategory::Other => 5,
-    };
-    CATEGORY_VALUES.with(|values| values[idx].clone())
+    }
+}
+
+pub(crate) fn category_name(cat: PluralCategory) -> &'static str {
+    CATEGORY_NAMES[category_index(cat)]
+}
+
+thread_local! {
+    static CATEGORY_VALUES: [JsValue; 6] = CATEGORY_NAMES.map(JsValue::from_str);
+}
+
+/// The category's string value, shared per thread instead of allocated per call.
+pub(crate) fn category_value(cat: PluralCategory) -> JsValue {
+    CATEGORY_VALUES.with(|values| values[category_index(cat)].clone())
 }
 
 pub(crate) fn other_value() -> JsValue {
