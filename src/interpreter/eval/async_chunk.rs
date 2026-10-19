@@ -90,6 +90,7 @@ impl Interpreter {
     /// inside a call made by the step would otherwise free what only they hold.
     /// One `call_stack_envs` slot at `base`, replaced at each step and
     /// truncated when the resumption ends.
+    #[inline(never)]
     pub(super) fn pin_driver_env(&mut self, base: usize, env: &EnvRef) {
         match self.call_stack_envs.get_mut(base) {
             Some(slot) => *slot = env.clone(),
@@ -194,7 +195,7 @@ impl Interpreter {
         self.tco_suppress_depth = saved_tco + 1;
         let result =
             self.with_ic_body_in_frame(&activation.body, &activation.frame_info, |interp| {
-                vm::suspended::run_async_chunk(
+                vm::run_generator_chunk(
                     interp,
                     &activation.chunk,
                     &activation.env,

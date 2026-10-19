@@ -25,10 +25,27 @@ change. cachegrind `--cache-sim=no`, whole process, `--iterations 1` JetStream d
 | gaussian-blur | 20,664,663,785 | 20,665,744,416 | +0.01% |
 | splay | 7,810,775,034 | 7,809,189,624 | -0.02% |
 
-`vm.rs` gains one `mod` line and nothing in `run_chunk_inner`: the first variant, which called the shared
-`run_generator_chunk` from both drivers, cost lazy-collections +0.41% (two call sites stopped it inlining into
-`bytecode_generator_resume`), and `#[inline(always)]` made it +1.26%. The async driver therefore has its own
-out-of-line wrapper (`vm/suspended.rs`), and the generator path is byte-for-byte what it was.
+`vm.rs` is untouched in `run_chunk_inner`. Both drivers call the one `run_generator_chunk`, now `#[inline(never)]`: leaving
+it to LTO gave lazy-collections +0.41% (two call sites), `#[inline(always)]` +1.26%, and a separate async wrapper moved
+fib/richards wall +2-3% at equal Ir (dispatch-loop layout). With the out-of-line shared wrapper the sync generator path
+pays one call per resume (lazy-collections +0.41% Ir, wall neutral) and fib/richards/Box2D/splay/delta-blue are flat.
+
+Wall (`wall.py`: interleaved, pinned to one CPU, 9 runs, median, load 1.7-2.8, shipped binaries):
+
+| benchmark | base | new |
+|---|---:|---:|
+| richards | 1.933 s | 1.917 s |
+| Box2D | 1.228 s | 1.210 s |
+| splay | 2.059 s | 2.060 s |
+| delta-blue | 1.394 s | 1.379 s |
+| fib | 0.928 s | 0.933 s |
+| lazy-collections | 0.876 s | 0.877 s |
+| doxbee-async | 0.782 s | 0.569 s (-27%) |
+| async-fs | 1.769 s | 1.809 s (+2.3%) |
+
+async-fs wall is +1.5-2.3% in every build variant tried (also with hosting switched off at run time) while its Ir is
+-0.1..-0.2% and its simulated I1 misses and branch mispredicts are lower: the state-machine code it runs is unchanged,
+so this is code placement, not work. The next stages move its hot loops off that code.
 
 Peak RSS (`/usr/bin/time`, two runs each, base / new): doxbee-async 94.9-95.0 MB / 87.9-88.2 MB, async-fs 28.4-30.2 MB /
 28.7 MB, richards 19.5 MB / 19.0-19.3 MB, splay 593-597 MB / 596-598 MB, Box2D 39.0-40.6 MB / 39.1 MB, lazy-collections
