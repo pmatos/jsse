@@ -865,28 +865,25 @@ impl<'a> Parser<'a> {
             }
             return Err(self.error("Expected 'target' after 'new.'"));
         }
-        if self.current == Token::Keyword(Keyword::New) {
-            let inner = self.parse_new_expression()?;
-            return Ok(Expression::New(
-                ExprBox::new(inner),
-                Vec::new(),
-                CallSiteId::UNASSIGNED,
-            ));
-        }
-        // `new import(...)` is a syntax error (ImportCall is CallExpression, not MemberExpression)
-        // but `new (import(...))` is valid — parens make it a CoveredParenthesizedExpression
-        let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
-        let mut callee = self.parse_primary_expression()?;
-        if is_direct_import
-            && matches!(
-                &callee,
-                Expression::Import(_, _)
-                    | Expression::ImportDefer(_, _)
-                    | Expression::ImportSource(_, _)
-            )
-        {
-            return Err(self.error("Cannot use 'new' with import()"));
-        }
+        let mut callee = if self.current == Token::Keyword(Keyword::New) {
+            self.parse_new_expression()?
+        } else {
+            // `new import(...)` is a syntax error (ImportCall is CallExpression, not MemberExpression)
+            // but `new (import(...))` is valid — parens make it a CoveredParenthesizedExpression
+            let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
+            let primary = self.parse_primary_expression()?;
+            if is_direct_import
+                && matches!(
+                    &primary,
+                    Expression::Import(_, _)
+                        | Expression::ImportDefer(_, _)
+                        | Expression::ImportSource(_, _)
+                )
+            {
+                return Err(self.error("Cannot use 'new' with import()"));
+            }
+            primary
+        };
         loop {
             match &self.current {
                 Token::OptionalChain => {
