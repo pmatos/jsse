@@ -644,38 +644,6 @@ impl Interpreter {
         }
     }
 
-    fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
-        if f.phase == DeclPhase::CopyOnly {
-            return;
-        }
-        let enclosing_strict = env.borrow().strict;
-        let info = f.info();
-        let func = JsFunction::User {
-            bytecode_cache: Default::default(),
-            frame: info.frame.clone(),
-            name: Some(f.name.clone()),
-            params: info.params.clone(),
-            body: f.body.clone(),
-            closure: env.clone(),
-            is_arrow: false,
-            is_strict: f.body_is_strict || enclosing_strict,
-            is_generator: f.is_generator,
-            is_async: f.is_async,
-            is_method: false,
-            source_text: f.source_text.clone(),
-            uses_arguments: info.uses_arguments,
-            has_simple_params: info.has_simple_params,
-        };
-        let val = self.create_function(func);
-        if is_global {
-            // §16.1.7 step 17c: CreateGlobalFunctionBinding(fn, fo, false)
-            self.env_declare_global_function_binding(env, &f.name, val, false);
-        } else {
-            env.borrow_mut().declare(&f.name, BindingKind::Var);
-            let _ = self.env_set(env, &f.name, val);
-        }
-    }
-
     /// §14.2.2 BlockDeclarationInstantiation: Hoist let/const/class declarations as
     /// uninitialized (TDZ) bindings at the top of a block scope.
     fn hoist_lexical_declarations(stmts: &[Statement], env: &EnvRef) {

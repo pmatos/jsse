@@ -67,3 +67,32 @@ fn promise_capability_creation_interns_no_property_keys() {
         "key_intern_calls must not scale with the number of promises"
     );
 }
+
+#[test]
+fn named_function_expressions_and_hoisted_declarations_intern_no_names() {
+    let program = |maker: &str, n: u32| {
+        format!(
+            "function mk(x) {{ {maker} }}\n\
+             function main() {{ var s = 0; for (var i = 0; i < {n}; i++) {{ s += mk(i & 7)(i & 3); }} return s; }}\n\
+             main();"
+        )
+    };
+    for (label, maker) in [
+        (
+            "named function expression",
+            "return function inner(y) { return x + y; };",
+        ),
+        (
+            "hoisted declaration",
+            "function decl(y) { return x + y; } return decl;",
+        ),
+    ] {
+        let small = counters(&program(maker, 1_000));
+        let large = counters(&program(maker, 2_000));
+        assert_eq!(
+            small["atom_intern_calls"], large["atom_intern_calls"],
+            "{label}: atom_intern_calls must not scale with the number of closures"
+        );
+        assert!(large["calls_to_user"] > small["calls_to_user"]);
+    }
+}

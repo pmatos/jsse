@@ -1,4 +1,5 @@
 use std::cell::Cell;
+mod exact_capacity;
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
@@ -10,10 +11,9 @@ use crate::types::{JsPropertyKey, JsValue, PropertyKeyLike};
 // at 320 bytes (#909), which leaves room for three entries.
 const INLINE_CAP: usize = 3;
 
-// Largest entry count kept in the linear (scan-only) representation. Entries
-// beyond `INLINE_CAP` live in the SmallVec's heap buffer, which is cheaper
-// than hashing for the 5-property shape of a sloppy constructable function
-// (issue #901).
+// Largest entry count kept in the linear (scan-only) representation; entries
+// beyond `INLINE_CAP` live in the SmallVec's heap buffer, cheaper than hashing
+// for a sloppy function's 5 properties (#901).
 const LINEAR_MAX: usize = 8;
 
 // A spilled map compacts once tombstones outnumber live entries by this much

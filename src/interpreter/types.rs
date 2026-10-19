@@ -1,4 +1,5 @@
 use crate::ast::*;
+mod function_props;
 use crate::interpreter::Atom;
 use crate::interpreter::PropertyMap;
 use crate::interpreter::binding_map::{BindingMap, BindingName};
@@ -17,13 +18,11 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
-/// Process-global monotonic counter for `JsObjectData.shape_id`. Starts at 1;
-/// `0` is reserved as an invalid sentinel. Mirrors the existing
-/// `NEXT_TEMPLATE_ID` pattern in `ast.rs`. Issue #71 (inline caching).
+/// Process-global counter for `JsObjectData.shape_id`; starts at 1 because `0`
+/// is the invalid sentinel (#71, inline caching).
 static NEXT_SHAPE_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Draws a fresh, globally-unique shape id. Cheap (single relaxed atomic
-/// fetch-add); no locking. See `JsObjectData.shape_id` doc.
+/// Draws a fresh, globally-unique shape id (one relaxed fetch-add).
 #[inline]
 pub(crate) fn fresh_shape_id() -> u64 {
     NEXT_SHAPE_ID.fetch_add(1, Ordering::Relaxed)
@@ -2163,91 +2162,8 @@ impl IteratorState {
 }
 
 #[cfg(test)]
-mod completed_state_machine_generator_tests {
-    use super::*;
-
-    fn empty_state_machine() -> Rc<GeneratorStateMachine> {
-        Rc::new(GeneratorStateMachine {
-            states: Rc::from(Vec::new()),
-            local_vars: Vec::new(),
-            params: Vec::new(),
-            num_yields: 0,
-            temp_vars: Vec::new(),
-            #[cfg(feature = "perf-counters")]
-            perf_key: None,
-        })
-    }
-
-    #[test]
-    fn completed_sync_generator_clears_every_pending_field() {
-        let state = IteratorState::completed_state_machine_generator(
-            empty_state_machine(),
-            Environment::new(None),
-            true,
-        );
-        match state {
-            IteratorState::StateMachineGenerator {
-                is_strict,
-                execution_state,
-                _sent_value,
-                try_stack,
-                pending_binding,
-                delegated_iterator,
-                pending_exception,
-                pending_return,
-                ..
-            } => {
-                assert!(is_strict);
-                assert!(matches!(
-                    execution_state,
-                    StateMachineExecutionState::Completed
-                ));
-                assert!(_sent_value.is_undefined());
-                assert!(try_stack.is_empty());
-                assert!(pending_binding.is_none());
-                assert!(delegated_iterator.is_none());
-                assert!(pending_exception.is_none());
-                assert!(pending_return.is_none());
-            }
-            _ => panic!("expected a StateMachineGenerator"),
-        }
-    }
-
-    #[test]
-    fn completed_async_generator_clears_every_pending_field() {
-        let state = IteratorState::completed_state_machine_async_generator(
-            empty_state_machine(),
-            Environment::new(None),
-            false,
-        );
-        match state {
-            IteratorState::StateMachineAsyncGenerator {
-                is_strict,
-                execution_state,
-                _sent_value,
-                try_stack,
-                pending_binding,
-                delegated_iterator,
-                pending_exception,
-                pending_return,
-                ..
-            } => {
-                assert!(!is_strict);
-                assert!(matches!(
-                    execution_state,
-                    StateMachineExecutionState::Completed
-                ));
-                assert!(_sent_value.is_undefined());
-                assert!(try_stack.is_empty());
-                assert!(pending_binding.is_none());
-                assert!(delegated_iterator.is_none());
-                assert!(pending_exception.is_none());
-                assert!(pending_return.is_none());
-            }
-            _ => panic!("expected a StateMachineAsyncGenerator"),
-        }
-    }
-}
+#[path = "types/generator_tests.rs"]
+mod completed_state_machine_generator_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum TypedArrayKind {
@@ -3080,9 +2996,14 @@ macro_rules! kind_accessor {
 
 impl JsObjectData {
     pub(crate) fn new() -> Self {
+        Self::with_properties(PropertyMap::new())
+    }
+
+    #[inline]
+    pub(crate) fn with_properties(properties: PropertyMap) -> Self {
         Self {
             id: None,
-            properties: PropertyMap::new(),
+            properties,
             prototype_id: None,
             callable: None,
             class_name: "Object",
