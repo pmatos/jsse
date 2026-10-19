@@ -252,6 +252,21 @@ pub(crate) enum Op {
     /// (u16), slot hint (u16), comparison (u8), constant (u16), offset (i16,
     /// last).
     LocalConstCmpJump = 107,
+    /// First spread argument of a call or `new`: `[..., a0, ..., ak-1,
+    /// iterable]` → `[..., a0, ..., ak-1, e0, ..., em-1, k + m]`, the
+    /// iterable's elements pushed as arguments and the running argument count
+    /// (a Number) on top. Operand: k (u16), the arguments pushed before it.
+    ArgSpreadFirst = 108,
+    /// A later spread argument: `[..., args, count, iterable]` → `[..., args,
+    /// e0, ..., em-1, count + m]`.
+    ArgSpread = 109,
+    /// An argument after a spread: `[..., args, count, v]` → `[..., args, v,
+    /// count + 1]`.
+    ArgPush = 110,
+    /// `[..., callee, this, args, count]` → `[..., result]`.
+    CallSpread = 111,
+    /// `[..., callee, args, count]` → `[..., result]`.
+    ConstructSpread = 112,
 }
 
 /// Where `Op::Yield`'s operands sit counted back from the end of the op, which
@@ -371,6 +386,11 @@ impl Op {
             105 => Some(Op::MoveLocal),
             106 => Some(Op::LocalLocalCmpJump),
             107 => Some(Op::LocalConstCmpJump),
+            108 => Some(Op::ArgSpreadFirst),
+            109 => Some(Op::ArgSpread),
+            110 => Some(Op::ArgPush),
+            111 => Some(Op::CallSpread),
+            112 => Some(Op::ConstructSpread),
             _ => None,
         }
     }
