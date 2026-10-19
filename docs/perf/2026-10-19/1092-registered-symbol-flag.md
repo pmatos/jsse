@@ -6,7 +6,7 @@ operation: O(registered symbols) per call.
 
 ## Change
 
-- `JsSymbolData` gained `registered: bool`, set only by the new `JsSymbol::new_registered` that `Symbol.for` uses. The
+- `JsSymbolData` gained `registered: bool`, set only by the new `JsSymbol::for_key` that `Symbol.for` uses (measured under the name `new_registered`; renamed afterwards to keep `primitive_constructors.rs` from growing). The
   flag sits in existing padding: `size_of::<JsSymbolData>()` is 48 before and after (checked with a throwaway unit test), so
   `JsSymbol` stays one word and the symbol allocation is unchanged.
 - `can_be_held_weakly` tests `JsSymbol::is_registered`. A symbol rebuilt from a dead property key is never a registered one
