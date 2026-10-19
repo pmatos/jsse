@@ -16,6 +16,24 @@ def git(*args: str, input_bytes: bytes | None = None) -> bytes:
     ).stdout
 
 
+def find_violations(candidates: list[tuple[bytes, bytes]]) -> list[tuple[bytes, int]]:
+    sizes = git(
+        "cat-file",
+        "--batch-check=%(objectsize)",
+        input_bytes=b"\n".join(oid for _, oid in candidates) + b"\n",
+    ).splitlines()
+    violations = []
+    for (path, oid), size in zip(candidates, sizes):
+        byte_count = int(size)
+        if byte_count <= MAX_BYTES:
+            continue
+        # Match Git's usual binary heuristic; assets have no text token budget.
+        if b"\0" in git("cat-file", "blob", oid.decode("ascii"))[:8000]:
+            continue
+        violations.append((path, byte_count))
+    return violations
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -87,20 +105,7 @@ def main() -> int:
     if not candidates:
         return 0
 
-    sizes = git(
-        "cat-file",
-        "--batch-check=%(objectsize)",
-        input_bytes=b"\n".join(oid for _, oid in candidates) + b"\n",
-    ).splitlines()
-    violations = []
-    for (path, oid), size in zip(candidates, sizes):
-        byte_count = int(size)
-        if byte_count <= MAX_BYTES:
-            continue
-        # Match Git's usual binary heuristic; assets have no text token budget.
-        if b"\0" in git("cat-file", "blob", oid.decode("ascii"))[:8000]:
-            continue
-        violations.append((path, byte_count))
+    violations = find_violations(candidates)
     if not violations:
         return 0
 
