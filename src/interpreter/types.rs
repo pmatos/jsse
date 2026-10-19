@@ -18,13 +18,11 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
-/// Process-global monotonic counter for `JsObjectData.shape_id`. Starts at 1;
-/// `0` is reserved as an invalid sentinel. Mirrors the existing
-/// `NEXT_TEMPLATE_ID` pattern in `ast.rs`. Issue #71 (inline caching).
+/// Process-global counter for `JsObjectData.shape_id`; starts at 1 because `0`
+/// is the invalid sentinel (#71, inline caching).
 static NEXT_SHAPE_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Draws a fresh, globally-unique shape id. Cheap (single relaxed atomic
-/// fetch-add); no locking. See `JsObjectData.shape_id` doc.
+/// Draws a fresh, globally-unique shape id (one relaxed fetch-add).
 #[inline]
 pub(crate) fn fresh_shape_id() -> u64 {
     NEXT_SHAPE_ID.fetch_add(1, Ordering::Relaxed)
@@ -2998,9 +2996,14 @@ macro_rules! kind_accessor {
 
 impl JsObjectData {
     pub(crate) fn new() -> Self {
+        Self::with_properties(PropertyMap::new())
+    }
+
+    #[inline]
+    pub(crate) fn with_properties(properties: PropertyMap) -> Self {
         Self {
             id: None,
-            properties: PropertyMap::new(),
+            properties,
             prototype_id: None,
             callable: None,
             class_name: "Object",

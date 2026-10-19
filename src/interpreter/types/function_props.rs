@@ -21,12 +21,6 @@ impl Environment {
 }
 
 impl JsObjectData {
-    pub(crate) fn with_properties(properties: PropertyMap) -> Self {
-        let mut data = Self::new();
-        data.properties = properties;
-        data
-    }
-
     /// Append an own property to an object whose map came from
     /// `PropertyMap::with_exact_capacity` and has room for it: the key is
     /// absent, interned and not index-like (a `CommonKeys` key).
