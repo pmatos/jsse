@@ -2722,11 +2722,9 @@ impl Interpreter {
     }
 
     fn exec_try(&mut self, t: &TryStatement, env: &EnvRef) -> Completion {
-        // Calls inside the try Block are never in tail position: the catch
-        // and/or finally handlers must remain live on the stack. Suppress TCO
-        // for the block's dynamic extent, then restore. `saved_tco` is this
-        // statement's ambient suppression level (non-zero when nested in an
-        // outer try/finally region within the same function body).
+        // Calls in the try Block are never in tail position: the handlers must
+        // stay live. Suppress TCO for its dynamic extent; `saved_tco` is the
+        // ambient level (non-zero inside an outer try/finally region).
         let saved_tco = self.tco_suppress_depth;
         let block_env = Environment::new(Some(env.clone()));
         self.tco_suppress_depth = saved_tco + 1;
@@ -3039,7 +3037,10 @@ impl Interpreter {
 
     pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
         match self.take_dispose_stack(env) {
-            Some(stack) => self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion)),
+            Some(stack) => {
+                let completion = self.settle_tail_call(&stack, completion);
+                self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion))
+            }
             None => completion,
         }
     }
