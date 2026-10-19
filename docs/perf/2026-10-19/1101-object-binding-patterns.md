@@ -35,9 +35,8 @@ call = (Ir of 20,000 calls minus Ir of 2,000 calls) / 18,000, a method called in
 Gap over the explicit reads, net of the empty method: `o2` +758 -> +14, `o4` +1,124 -> +41. `ast_fallback_execs` is 0 for every
 plain-name form and one per execution for the forms that stay (`tests/perf_counters_object_pattern.rs`).
 
-1M calls, pinned core, median of 11 interleaved runs (load average 2.2-2.9 on the 61-core host): `o2` 0.79 s -> 0.58 s (-26.6%),
-`o4` 1.05 s -> 0.77 s (-26.7%); the `empty`/`d2`/`d4` controls moved -2.7/-3.4/-1.3% (noise of unrelated layout, same binary
-code path). Peak RSS of the probes 16.7-16.9 MB on both sides.
+1M calls, pinned core, median of 11 interleaved runs: `o2` 0.79 s -> 0.58 s (-26.6%), `o4` 1.05 s -> 0.77 s (-26.7%) (load
+average 2.2-2.9); the `empty`/`d2`/`d4` controls moved -2.7/-3.4/-1.3% in that run. Peak RSS of the probes 16.7-16.9 MB on both sides.
 
 ## No-regression gates
 
@@ -55,10 +54,12 @@ Whole-process Ir of the control set (one run each; Ir is deterministic to about 
 | gaussian-blur | 20,234,823,004 | 20,234,828,933 | +0.00% |
 | splay | 7,593,582,516 | 7,599,581,915 | +0.08% |
 
-`opmix` and `bigint-noble-secp256k1` contain plain-name patterns. Wall (pinned core, median of 7-15 interleaved runs) and peak
-RSS, base -> new: fib 0.96 -> 0.97 s (+1.0%), richards 1.97 -> 1.98 s (+0.5%), delta-blue 1.43 -> 1.41 s (-1.4%), splay
-2.09 -> 2.07 s (-1.0%), Box2D 1.26 -> 1.24 s (-1.6%), lazy-collections 0.87 -> 0.86 s (-1.1%), opmix 7.28 -> 7.06 s (-3.0%),
-bigint-noble-secp256k1 1.15 -> 1.14 s (-0.9%); peak RSS within +-1.3% everywhere (splay 582.4 MB on both sides).
+`opmix` and `bigint-noble-secp256k1` contain plain-name patterns. Wall and peak RSS, pinned core, median of 15 interleaved runs,
+rerun at load average 1.0-1.3 (an earlier pass at 2.2-2.9 gave the same picture), base -> new: fib 0.96 -> 0.97 s (+1.0%),
+richards 1.97 -> 1.97 s (0.0%), delta-blue 1.44 -> 1.41 s (-2.1%), splay 2.10 -> 2.07 s (-1.4%), Box2D 1.26 -> 1.24 s (-1.6%),
+lazy-collections 0.87 -> 0.86 s (-1.1%); from the earlier pass opmix 7.28 -> 7.06 s (-3.0%), bigint-noble-secp256k1 1.15 -> 1.14 s
+(-0.9%). Peak RSS within +-1.3% everywhere (splay 582 MB on both sides). 1M-call probes at low load: `o2` 0.80 -> 0.58 s
+(-27.5%), `o4` 1.04 -> 0.77 s (-26.0%).
 
 ## What the layout lottery looked like
 

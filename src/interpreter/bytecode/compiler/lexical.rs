@@ -98,19 +98,16 @@ impl Compiler {
         bindings: &[SimpleBinding],
         is_const: bool,
     ) -> Result<(), CompileError> {
-        let (last, rest) = bindings
-            .split_last()
-            .expect("a simple pattern has a property");
-        for binding in rest {
-            self.emit_dup_n(1);
+        let last = bindings.len() - 1;
+        for (i, binding) in bindings.iter().enumerate() {
+            if i < last {
+                self.emit_dup_n(1);
+            }
             let key = self.add_name(&binding.key)?;
             self.emit(Op::GetProp);
             self.emit_u16(key);
             self.emit_init_lexical(&binding.name, is_const)?;
         }
-        let key = self.add_name(&last.key)?;
-        self.emit(Op::GetProp);
-        self.emit_u16(key);
-        self.emit_init_lexical(&last.name, is_const)
+        Ok(())
     }
 }
