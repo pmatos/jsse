@@ -390,3 +390,30 @@ function lateBoundPrototypeGetter() {
   return inherited;
 }
 assert.sameValue(lateBoundPrototypeGetter(), "receiver ok");
+
+function protoKeyIsAnAccessorOnObjectPrototype() {
+  const { __proto__: p, x } = { x: 1 };
+  const { __proto__ } = Object.create(null, { y: { value: 2 } });
+  var own = {};
+  Object.defineProperty(own, "__proto__", { value: 7, enumerable: true });
+  const { __proto__: q } = own;
+  return [p === Object.prototype, x, __proto__, q];
+}
+assert.compareArray(protoKeyIsAnAccessorOnObjectPrototype(), [true, 1, undefined, 7]);
+
+function* yieldInInitializer() {
+  const { a, b } = yield "first";
+  const { c } = { c: yield "second" };
+  return a + b + c;
+}
+var gen = yieldInInitializer();
+assert.sameValue(gen.next().value, "first");
+assert.sameValue(gen.next({ a: 1, b: 2 }).value, "second");
+assert.sameValue(gen.next(3).value, 6);
+
+function keywordKeysAndWrapperSources() {
+  const { default: d, if: i, class: c } = { default: 1, if: 2, class: 3 };
+  const { constructor: C, name } = function named() {};
+  return [d + i + c, C === Function, name];
+}
+assert.compareArray(keywordKeysAndWrapperSources(), [6, true, "named"]);
