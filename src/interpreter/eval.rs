@@ -9,6 +9,7 @@ use crate::interpreter::property::SetOutcome;
 
 mod access;
 mod array_pattern;
+pub(super) mod async_chunk;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod generator_runtime;
 mod literals;
@@ -5879,29 +5880,12 @@ impl Interpreter {
                                 self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
                                     .class_name = "AsyncGenerator";
-                                let is_simple = has_simple_params;
-                                let exec_env = if !is_simple {
-                                    let body_env =
-                                        Environment::new_function_scope(Some(func_env.clone()));
-                                    body_env.borrow_mut().strict = func_env.borrow().strict;
-                                    body_env.borrow_mut().has_simple_params = false;
-                                    let analysis = self.hoist_cache.analysis_for(&body);
-                                    for name in &analysis.var_names {
-                                        body_env.borrow_mut().declare(name, BindingKind::Var);
-                                        if name == "arguments"
-                                            || params.iter().any(|p| p.binds_name(name))
-                                        {
-                                            let val = func_env
-                                                .borrow()
-                                                .get(name)
-                                                .unwrap_or(JsValue::UNDEFINED);
-                                            let _ = self.env_set(&body_env, name, val);
-                                        }
-                                    }
-                                    body_env
-                                } else {
-                                    func_env.clone()
-                                };
+                                let exec_env = self.hosted_body_env(
+                                    &func_env,
+                                    &params,
+                                    &body,
+                                    has_simple_params,
+                                );
 
                                 let state_machine = self.state_machine_for(
                                     StateMachineKind::AsyncGenerator,
@@ -6031,29 +6015,12 @@ impl Interpreter {
                                 self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
                                     .class_name = "Generator";
-                                let is_simple = has_simple_params;
-                                let exec_env = if !is_simple {
-                                    let body_env =
-                                        Environment::new_function_scope(Some(func_env.clone()));
-                                    body_env.borrow_mut().strict = func_env.borrow().strict;
-                                    body_env.borrow_mut().has_simple_params = false;
-                                    let analysis = self.hoist_cache.analysis_for(&body);
-                                    for name in &analysis.var_names {
-                                        body_env.borrow_mut().declare(name, BindingKind::Var);
-                                        if name == "arguments"
-                                            || params.iter().any(|p| p.binds_name(name))
-                                        {
-                                            let val = func_env
-                                                .borrow()
-                                                .get(name)
-                                                .unwrap_or(JsValue::UNDEFINED);
-                                            let _ = self.env_set(&body_env, name, val);
-                                        }
-                                    }
-                                    body_env
-                                } else {
-                                    func_env.clone()
-                                };
+                                let exec_env = self.hosted_body_env(
+                                    &func_env,
+                                    &params,
+                                    &body,
+                                    has_simple_params,
+                                );
 
                                 let generator_state = match self
                                     .bytecode_generator_state(o.id, &body, &frame, &exec_env)
@@ -8354,7 +8321,7 @@ impl Interpreter {
         func_val: &JsValue,
         uses_arguments: bool,
         has_simple_params: bool,
-        frame: &LiteralFrame,
+        frame: &Rc<LiteralFrame>,
     ) -> Completion {
         self.with_gc_root_scope(|interp| {
             let promise = interp.create_promise_object();
@@ -8391,7 +8358,7 @@ impl Interpreter {
                     let arguments_obj = interp.create_arguments_object(
                         args,
                         func_val.clone(),
-                        mapped_env.map(|env| (env, params, frame)),
+                        mapped_env.map(|env| (env, params, &**frame)),
                     );
                     interp.bind_arguments_binding(&func_env, arguments_obj);
                     if is_strict || !is_simple {
@@ -8420,6 +8387,18 @@ impl Interpreter {
             func_env.borrow_mut().strict = is_strict;
             interp.in_tail_position = false;
 
+            if let Some(done) = interp.host_async_function(
+                _func_obj_id,
+                params,
+                body,
+                frame,
+                &func_env,
+                &resolvers,
+                &promise,
+                has_simple_params,
+            ) {
+                return done;
+            }
             let sm = interp.state_machine_for(
                 StateMachineKind::AsyncFunction,
                 body,
@@ -8497,10 +8476,12 @@ impl Interpreter {
             .async_function_state_mut(async_id)
             .map(|state| state.realm_id)
         else {
-            return Completion::Normal(JsValue::UNDEFINED);
+            return self.resume_hosted_async(async_id, sent_value, is_error);
         };
         let saved_realm = std::mem::replace(&mut self.current_realm_id, realm_id);
+        let envs_base = self.call_stack_envs.len();
         let completion = self.async_function_resume_in_realm(async_id, sent_value, is_error);
+        self.call_stack_envs.truncate(envs_base);
         self.current_realm_id = saved_realm;
         completion
     }
@@ -8515,6 +8496,7 @@ impl Interpreter {
             ArrayPatternIterOp, LoopControlTarget, SentValueBindingKind, StateTerminator,
         };
 
+        let envs_base = self.call_stack_envs.len();
         // The state stays in the scheduler map for the whole run, so the
         // collector keeps tracing it; the driver works on local copies of the
         // pieces it mutates and hands them back at the next suspension.
@@ -9281,6 +9263,7 @@ impl Interpreter {
                 for_of_stack.len(),
                 &for_of_env,
             );
+            self.pin_driver_env(envs_base, &term_env);
             let mut stmt_result = match preloaded_stmt_result.take() {
                 Some(finished) => finished,
                 None => {

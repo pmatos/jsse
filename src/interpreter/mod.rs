@@ -342,21 +342,19 @@ pub(crate) struct Interpreter {
     /// Start of the running generator activation's window in
     /// `pending_iter_close`; slots below it belong to enclosing activations.
     pub(crate) iter_close_base: usize,
-    /// Object IDs whose `Array.prototype.join` calls are currently converting
-    /// elements. Re-entering `join` for the same receiver through element
-    /// stringification contributes an empty string instead of recursing until
-    /// the native-stack guard fires.
+    /// Receivers of `Array.prototype.join` calls in progress; re-entering one
+    /// contributes an empty string.
     pub(crate) active_array_joins: Vec<u64>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
     pub(crate) generator_for_of_stacks: FxHashMap<u64, Vec<ForOfLoopState>>,
     /// Generator-side counterpart to `AsyncFunctionState::scope_stack`, keyed
-    /// by generator object id — mirrors `generator_for_of_stacks`' own shape
-    /// since a generator's driver state lives outside the object's
-    /// `IteratorState` enum.
+    /// by generator object id.
     pub(crate) generator_scope_stacks: FxHashMap<u64, Vec<ScopeFrame>>,
     /// Async generator requests parked at a DisposeResources `Await`, keyed
     /// by generator object id (see [`GeneratorDisposal`]).
     pub(crate) generator_pending_dispose: FxHashMap<u64, GeneratorDisposal>,
+    /// Async functions hosted as bytecode chunks, parked at an `await`.
+    pub(crate) async_activations: FxHashMap<u64, eval::async_chunk::AsyncActivation>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
@@ -820,6 +818,7 @@ impl Interpreter {
             generator_for_of_stacks: FxHashMap::default(),
             generator_scope_stacks: FxHashMap::default(),
             generator_pending_dispose: FxHashMap::default(),
+            async_activations: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),

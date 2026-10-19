@@ -16,6 +16,7 @@ use std::cell::Cell;
 
 mod iteration;
 mod spread;
+pub(crate) mod suspended;
 
 use iteration::{
     bind_head_op, drop_below, end_finally, iteration_close, iteration_close_throw, iteration_head,
@@ -1083,8 +1084,8 @@ impl GeneratorFrame {
 /// body yields again, leaving the frame ready for the next resumption; any
 /// other completion ends the generator and the frame must be discarded.
 ///
-/// The caller has put the body's frame environment on `call_stack_envs` and
-/// instantiated the body's declarations (`declare_chunk_prologue`).
+/// The caller has pushed the frame environment on `call_stack_envs` and
+/// instantiated the declarations.
 pub(crate) fn run_generator_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,

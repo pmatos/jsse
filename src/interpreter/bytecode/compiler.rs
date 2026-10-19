@@ -20,6 +20,10 @@ use std::cell::Cell;
 
 mod calls;
 mod lexical;
+mod suspend;
+
+use suspend::BodyKind;
+pub(crate) use suspend::compile_async_body;
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
@@ -270,6 +274,8 @@ struct Compiler {
     /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
     /// handed to the tree-walker must not contain one (it could not suspend).
     generator: bool,
+    /// Compiling an async function body: `await` is a suspension too.
+    async_body: bool,
 }
 
 impl Compiler {
@@ -277,6 +283,7 @@ impl Compiler {
         Self {
             goal,
             generator: false,
+            async_body: false,
             locals: LocalLayout::default(),
             last_op_at: 0,
             code: Vec::new(),
@@ -313,14 +320,6 @@ impl Compiler {
             kind_constants: Vec::new(),
             unwind_segments: Vec::new(),
         }
-    }
-
-    fn new_generator() -> Self {
-        let mut c = Self::new(CompileGoal::Function);
-        c.generator = true;
-        // A generator body has no tail position (sec-isintailposition).
-        c.no_tail = 1;
-        c
     }
 
     fn add_constant(&mut self, c: Constant) -> Result<u16, CompileError> {
@@ -758,8 +757,8 @@ impl Compiler {
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
-        if self.generator && node_contains_yield(&node) {
-            return Err(CompileError::Ineligible("yield in tree-walked node"));
+        if self.suspends_in(&node) {
+            return Err(CompileError::Ineligible("suspension in tree-walked node"));
         }
         let idx = self.ast.len();
         if idx >= usize::from(NO_ESCAPE_TABLE) {
@@ -1052,43 +1051,9 @@ impl Compiler {
             Expression::Yield(argument, false) if self.generator => {
                 self.compile_yield(argument.as_deref(), false)
             }
+            Expression::Await(argument) if self.async_body => self.compile_await(argument, false),
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
-    }
-
-    /// `yield argument`: `[..., value]` → `[..., sent]`, or `[...]` when the
-    /// sent value is `discard`ed (an expression statement). A `next(v)`
-    /// resumption pushes `v` and jumps over the stub that follows; `return(v)`
-    /// resumes at the stub with the operand stack cut back to the persistent
-    /// height, so the stub is the same exit a `return v` statement emits
-    /// (running `finally` blocks and closing iterators on the way out);
-    /// `throw(e)` resumes at the enclosing handler like a throw raised by the
-    /// op itself.
-    fn compile_yield(
-        &mut self,
-        argument: Option<&Expression>,
-        discard: bool,
-    ) -> Result<(), CompileError> {
-        match argument {
-            Some(argument) => self.compile_expr(argument)?,
-            None => {
-                self.emit(Op::LoadUndefined);
-                self.push_n(1);
-            }
-        }
-        self.emit(Op::Yield);
-        self.emit_u16(self.stack_base);
-        self.code.push(u8::from(discard));
-        let skip = self.code.len();
-        self.code.extend_from_slice(&[0, 0]);
-        let (stack, refs) = (self.current_stack, self.current_refs);
-        self.current_stack = self.stack_base + 1;
-        self.current_refs = 0;
-        self.max_stack = self.max_stack.max(self.current_stack);
-        self.compile_jump(Terminal::Return, true)?;
-        self.current_stack = if discard { stack - 1 } else { stack };
-        self.current_refs = refs;
-        self.patch_jump(skip)
     }
 
     /// `MakeClosure` for a function or arrow literal. `inferred_name` is the
@@ -1332,6 +1297,9 @@ impl Compiler {
             }
             Expression::Yield(argument, false) if self.generator => {
                 return self.compile_yield(argument.as_deref(), true);
+            }
+            Expression::Await(argument) if self.async_body => {
+                return self.compile_await(argument, true);
             }
             _ => {}
         }
@@ -2751,9 +2719,9 @@ impl Compiler {
     }
 
     fn emit_bind_head(&mut self, head: HeadBinding) -> Result<(), CompileError> {
-        if self.generator && head_binding_contains_yield(&head) {
+        if self.suspends_in_head(&head) {
             return Err(CompileError::Ineligible(
-                "yield in tree-walked head binding",
+                "suspension in tree-walked head binding",
             ));
         }
         let idx = u16::try_from(self.head_bindings.len())
@@ -3448,10 +3416,6 @@ fn stmts_contain(stmts: &[Statement], pred: &dyn Fn(&Statement) -> bool) -> bool
 
 type PoisonFn = fn(&Expression) -> bool;
 
-fn is_yield_expression(expr: &Expression) -> bool {
-    matches!(expr, Expression::Yield(..))
-}
-
 /// A `using`/`await using` declaration anywhere in `stmt` (not nested
 /// functions): the resources are disposed by the generator driver, which the
 /// state machine implements.
@@ -3470,24 +3434,6 @@ fn declares_using(stmt: &Statement) -> bool {
             matches!(&f.left, ForInOfLeft::Variable(decl) if is_using(decl.kind))
         }
         _ => false,
-    }
-}
-
-/// Whether handing `node` to the tree-walker would strand a `yield`.
-fn node_contains_yield(node: &AstNode) -> bool {
-    match node {
-        AstNode::Expr(expr) => expr_has_poison(expr, is_yield_expression),
-        AstNode::Stmt(stmt) => {
-            body_has_poison(std::slice::from_ref(stmt.as_ref()), is_yield_expression)
-        }
-    }
-}
-
-fn head_binding_contains_yield(head: &HeadBinding) -> bool {
-    match head {
-        HeadBinding::Declare { pattern, .. } | HeadBinding::Assign { pattern } => {
-            pattern_has_poison(pattern, is_yield_expression)
-        }
     }
 }
 
@@ -3747,18 +3693,14 @@ impl LocalLayout {
 fn compile_function_goal(
     body: &[Statement],
     locals: LocalLayout,
-    generator: bool,
+    kind: BodyKind,
 ) -> Result<Chunk, CompileError> {
     if body_has_poison(body, is_poison_expression) {
         return Err(CompileError::Ineligible(
             "construct needs tree-walked frame",
         ));
     }
-    let mut c = if generator {
-        Compiler::new_generator()
-    } else {
-        Compiler::new(CompileGoal::Function)
-    };
+    let mut c = Compiler::for_body(kind);
     c.locals = locals;
     c.compile_statements(body, true, true)?;
     if !c.ast.is_empty() && c.native_ops == 0 {
@@ -3838,7 +3780,7 @@ fn prologue_declares_body_vars(
 
 #[cfg(test)]
 pub(crate) fn compile_body(body: &[Statement]) -> Result<Chunk, CompileError> {
-    compile_function_goal(body, LocalLayout::default(), false)
+    compile_function_goal(body, LocalLayout::default(), BodyKind::Plain)
 }
 
 /// What the call path will have put in the frame before the chunk runs: the
@@ -3861,7 +3803,7 @@ pub(crate) fn compile_function_body(
     body: &[Statement],
     shape: &FrameShape<'_>,
 ) -> Result<Chunk, CompileError> {
-    compile_function_body_as(body, shape, false)
+    compile_function_body_as(body, shape, BodyKind::Plain)
 }
 
 /// [`compile_function_body`] for a sync generator body, whose `yield`s
@@ -3877,15 +3819,15 @@ pub(crate) fn compile_generator_body(
             "construct needs the generator state machine",
         ));
     }
-    compile_function_body_as(body, shape, true)
+    compile_function_body_as(body, shape, BodyKind::Generator)
 }
 
 fn compile_function_body_as(
     body: &[Statement],
     shape: &FrameShape<'_>,
-    generator: bool,
+    kind: BodyKind,
 ) -> Result<Chunk, CompileError> {
-    let mut first = compile_function_goal(body, LocalLayout::default(), generator)?;
+    let mut first = compile_function_goal(body, LocalLayout::default(), kind)?;
     let mut locals = LocalLayout::default();
     if shape.arguments_slot {
         locals.push("arguments");
@@ -3905,7 +3847,7 @@ fn compile_function_body_as(
         first.trivial_private_getter = first.detect_trivial_private_getter();
         return Ok(first);
     }
-    let mut chunk = compile_function_goal(body, locals, generator)?;
+    let mut chunk = compile_function_goal(body, locals, kind)?;
     chunk.trivial_private_getter = chunk.detect_trivial_private_getter();
     Ok(chunk)
 }
