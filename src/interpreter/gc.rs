@@ -1356,8 +1356,7 @@ impl Interpreter {
         // walked is clean; one the walk missed is not reachable from any heap
         // object.
         for env in std::mem::take(&mut seen_envs.scanned) {
-            env.borrow().mark_clean();
-            self.register_env(&env);
+            self.mark_env_clean(&env);
         }
         #[cfg(feature = "perf-counters")]
         self.perf.note_env_visits(&seen_envs);
@@ -1731,11 +1730,18 @@ impl Interpreter {
         for env in std::mem::take(&mut seen_envs.scanned) {
             if self.env_references_nursery(&env) {
                 env.borrow().mark_written();
+                self.register_env(&env);
             } else {
-                env.borrow().mark_clean();
+                self.mark_env_clean(&env);
             }
-            self.register_env(&env);
         }
+    }
+
+    /// Marks `env` clean and registers it, so a minor collection finds it again
+    /// once it is written: a clean environment is always registered.
+    fn mark_env_clean(&mut self, env: &EnvRef) {
+        env.borrow().mark_clean();
+        self.register_env(env);
     }
 
     fn register_env(&mut self, env: &EnvRef) {
@@ -2721,20 +2727,13 @@ mod tests {
              })();",
         );
         major_gc(&mut interp);
-        let clean = interp
+        let registered: Vec<_> = interp
             .env_registry
             .iter()
             .filter_map(|weak| weak.upgrade())
-            .filter(|env| env.borrow().is_clean())
-            .count();
-        assert!(clean > 0);
-        assert!(
-            interp
-                .env_registry
-                .iter()
-                .filter_map(|weak| weak.upgrade())
-                .all(|env| env.borrow().is_registered())
-        );
+            .collect();
+        assert!(registered.iter().any(|env| env.borrow().is_clean()));
+        assert!(registered.iter().all(|env| env.borrow().is_registered()));
     }
 
     fn run_source(interp: &mut Interpreter, source: &str) {
