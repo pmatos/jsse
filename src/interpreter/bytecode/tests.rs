@@ -3339,17 +3339,6 @@ fn block_with_lexicals_runs_in_its_own_environment_without_a_hand_off() {
 }
 
 #[test]
-fn non_capturing_for_let_keeps_one_environment_for_every_iteration() {
-    let chunk = compile_function_source(
-        "for (let i = 0; i < n; i++) { const v = i * 2; s += v; }",
-        &["n", "s"],
-    );
-    assert_eq!(count_ops(&chunk, Op::ExecAst), 0, "{:?}", work_ops(&chunk));
-    assert_eq!(count_ops(&chunk, Op::PushEnv), 2, "head and body");
-    assert_eq!(count_ops(&chunk, Op::CopyIterEnv), 0);
-}
-
-#[test]
 fn capturing_for_let_copies_its_environment_before_the_test_and_the_update() {
     let chunk = compile_function_source(
         "for (let i = 0; i < n; i++) { fs.push(function () { return i; }); }",
@@ -3358,71 +3347,6 @@ fn capturing_for_let_copies_its_environment_before_the_test_and_the_update() {
     assert_eq!(count_ops(&chunk, Op::ExecAst), 0, "{:?}", work_ops(&chunk));
     assert_eq!(count_ops(&chunk, Op::CopyIterEnv), 2);
     assert_eq!(count_ops(&chunk, Op::PushEnv), 1);
-}
-
-#[test]
-fn local_ops_address_block_bindings_and_still_hit_the_frame_for_outer_names() {
-    use super::chunk::BLOCK_SLOT_FLAG;
-    let chunk = compile_function_source(
-        "for (let i = 0; i < n; i++) { const v = i + 1; s = s + v; }",
-        &["n", "s"],
-    );
-    let slots: Vec<(String, u16)> = decode_ops(&chunk)
-        .into_iter()
-        .filter(|(op, _)| {
-            matches!(
-                op,
-                Op::LoadLocal
-                    | Op::StoreLocal
-                    | Op::StoreLocalPop
-                    | Op::LocalLocalBin
-                    | Op::MoveLocal
-            )
-        })
-        .flat_map(|(op, operands)| {
-            let refs = if matches!(op, Op::LocalLocalBin | Op::MoveLocal) {
-                2
-            } else {
-                1
-            };
-            operands
-                .chunks(2)
-                .take(refs)
-                .map(|pair| (chunk.names[usize::from(pair[0])].to_string(), pair[1]))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    let slot_of = |name: &str| {
-        slots
-            .iter()
-            .find(|(n, _)| n == name)
-            .unwrap_or_else(|| panic!("no local op names {name}: {slots:?}"))
-            .1
-    };
-    assert_eq!(slot_of("s") & BLOCK_SLOT_FLAG, 0, "frame local stays frame");
-    assert_eq!(slot_of("v") & BLOCK_SLOT_FLAG, BLOCK_SLOT_FLAG);
-    assert_eq!(
-        slot_of("v") >> 8,
-        0x81,
-        "the body block is the second scope"
-    );
-}
-
-#[test]
-fn break_out_of_nested_blocks_leaves_their_environments_first() {
-    let chunk = compile_function_source(
-        "for (let i = 0; i < n; i++) { let a = i; { let b = a; if (b > 2) break; } }",
-        &["n"],
-    );
-    let pops: Vec<u16> = decode_ops(&chunk)
-        .into_iter()
-        .filter(|(op, _)| *op == Op::PopEnv)
-        .map(|(_, operands)| operands[0])
-        .collect();
-    assert!(
-        pops.contains(&2),
-        "the break leaves the two blocks it is nested in: {pops:?}"
-    );
 }
 
 #[test]
@@ -4529,3 +4453,5 @@ fn generator_chunk_accepts_statement_and_expression_yields() {
         );
     }
 }
+
+mod block_env;
