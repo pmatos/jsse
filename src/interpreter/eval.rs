@@ -9,6 +9,7 @@ use crate::interpreter::property::SetOutcome;
 
 mod access;
 mod array_pattern;
+mod compiled_call_record;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod generator_runtime;
 mod literals;
@@ -6019,30 +6020,14 @@ impl Interpreter {
                                 self.current_realm_id = caller_realm;
                                 break 'call Completion::Normal(JsValue::object(gen_id));
                             }
-                            if frame.compiled_call().is_none()
-                                && (has_simple_params || frame.named_param_plan(&params).is_some())
-                                && (has_simple_params || !uses_arguments)
-                                && self.bytecode_enabled
-                                && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
-                                && self
-                                    .get_object_cell(o.id)
-                                    .is_some_and(|callee| !callee.borrow().is_class_constructor())
-                            {
-                                frame.install_compiled_call(|| CompiledCall {
-                                    params: params.clone(),
-                                    shape: if !has_simple_params {
-                                        CallShape::Defaults
-                                    } else if uses_arguments && !is_arrow {
-                                        CallShape::Arguments
-                                    } else {
-                                        CallShape::Plain
-                                    },
-                                    body: body.clone(),
-                                    chunk: chunk.clone(),
-                                    is_arrow,
-                                    is_strict,
-                                });
-                            }
+                            let bytecode_cache = self.install_compiled_call(
+                                o.id,
+                                &frame,
+                                &params,
+                                &body,
+                                flags,
+                                bytecode_cache,
+                            );
                             let closure_strict = closure.borrow().strict;
                             let func_env = self.acquire_function_environment(
                                 closure,

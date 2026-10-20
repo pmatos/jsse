@@ -21,11 +21,38 @@ impl Environment {
 }
 
 impl JsObjectData {
-    /// Append an own property to an object whose map came from
-    /// `PropertyMap::with_exact_capacity` and has room for it: the key is
-    /// absent, interned and not index-like (a `CommonKeys` key).
-    pub(crate) fn push_exact_property(&mut self, key: &JsPropertyKey, desc: PropertyDescriptor) {
+    /// Append an own data property to an object whose map has room for it
+    /// (one from `PropertyMap::with_exact_capacity`, or a fresh empty one):
+    /// the key is absent, interned and not index-like (a `CommonKeys` key).
+    #[inline]
+    pub(crate) fn push_exact_data(
+        &mut self,
+        key: &JsPropertyKey,
+        value: JsValue,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) {
         debug_assert!(self.array_data().is_none());
-        self.properties.push_non_index(key.clone(), desc);
+        self.properties.push_non_index_record(
+            key.clone(),
+            PropertyRecord::data(value, writable, enumerable, configurable),
+        );
+    }
+
+    /// `push_exact_data` for a getter-only accessor property.
+    #[inline]
+    pub(crate) fn push_exact_getter(
+        &mut self,
+        key: &JsPropertyKey,
+        getter: JsValue,
+        enumerable: bool,
+        configurable: bool,
+    ) {
+        debug_assert!(self.array_data().is_none());
+        self.properties.push_non_index_record(
+            key.clone(),
+            PropertyRecord::getter_only(getter, enumerable, configurable),
+        );
     }
 }
