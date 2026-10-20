@@ -16,7 +16,13 @@ fn run_in(dir: &std::path::Path, entry: &str) -> (bool, String) {
         .output()
         .expect("failed to run jsse");
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    // The perf-counters build appends a tab-separated report to stderr, which
+    // varies between runs; diagnostics never contain tabs.
+    for line in String::from_utf8_lossy(&output.stderr).split_inclusive('\n') {
+        if !line.contains('\t') {
+            combined.push_str(line);
+        }
+    }
     (output.status.success(), combined)
 }
 
