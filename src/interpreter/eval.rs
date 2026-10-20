@@ -21,6 +21,22 @@ mod operand;
 use generator_runtime::ForOfUnwindOutcome;
 pub(crate) use operand::Operand;
 
+/// The binding a state-machine body declares in its function environment for
+/// `local`. A function-level `let`/`const`/`using` stays uninitialised until
+/// its declaration runs, so a read before it throws a ReferenceError
+/// (§9.1.1.1.6); a nested one is created by its lowered block scope and is
+/// not declared here (`None`).
+fn function_level_binding_kind(
+    local: &crate::interpreter::generator_analysis::LocalVariable,
+) -> Option<BindingKind> {
+    match local.kind {
+        VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+            (local.scope_depth == 0).then_some(BindingKind::Let)
+        }
+        _ => Some(BindingKind::Var),
+    }
+}
+
 /// RAII guard that decrements the interpreter's expression-evaluation depth
 /// counter on every exit path of `eval_expr` — the tail return, each of its
 /// ~100 early `return`s, and any unwind. It holds an `Rc<Cell<usize>>` rather
@@ -1891,18 +1907,8 @@ impl Interpreter {
             exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
         }
         for lv in &state_machine.local_vars {
-            let bk = match lv.kind {
-                crate::ast::VarKind::Let
-                | crate::ast::VarKind::Const
-                | crate::ast::VarKind::Using
-                | crate::ast::VarKind::AwaitUsing => {
-                    // Block-scoped bindings must not be hoisted to function level
-                    if lv.scope_depth > 0 {
-                        continue;
-                    }
-                    BindingKind::Let
-                }
-                _ => BindingKind::Var,
+            let Some(bk) = function_level_binding_kind(lv) else {
+                continue;
             };
             if !exec_env.borrow().bindings.contains_key(&lv.name)
                 && !func_env.borrow().bindings.contains_key(&lv.name)
@@ -8377,17 +8383,11 @@ impl Interpreter {
                 func_env.borrow_mut().declare(tv, BindingKind::Var);
             }
             for lv in &sm.local_vars {
-                if matches!(
-                    lv.kind,
-                    VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-                ) && lv.scope_depth > 0
-                {
-                    // Nested lexical bindings are created by their transformed
-                    // runtime scopes and must not leak into the function scope.
+                let Some(bk) = function_level_binding_kind(lv) else {
                     continue;
-                }
+                };
                 if !func_env.borrow().bindings.contains_key(&lv.name) {
-                    func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                    func_env.borrow_mut().declare(&lv.name, bk);
                 }
             }
 
