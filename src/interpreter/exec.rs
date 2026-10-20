@@ -3,6 +3,8 @@ use crate::ast::{Body, DeclPhase};
 use crate::interpreter::literal_frame::LiteralFrame;
 use std::borrow::Cow;
 
+mod try_clauses;
+
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         self.exec_statements_cached(stmts, env, None)
@@ -2747,22 +2749,7 @@ impl Interpreter {
             // and the exit propagates out via the `other` arm below.
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
-                    let catch_env = Environment::new(Some(env.clone()));
-                    if let Some(param) = &handler.param {
-                        if matches!(param, Pattern::Identifier(_)) {
-                            catch_env.borrow_mut().is_simple_catch_scope = true;
-                        }
-                        propagate!(self.bind_pattern(param, val, BindingKind::Let, &catch_env));
-                    }
-                    let catch_block_env = Environment::new(Some(catch_env.clone()));
-                    // A call in the catch Block is in tail position only when
-                    // there is no finally; otherwise the finalizer must run.
-                    if t.finalizer.is_some() {
-                        self.tco_suppress_depth = saved_tco + 1;
-                    }
-                    let r = self.exec_statements(&handler.body, &catch_block_env);
-                    self.tco_suppress_depth = saved_tco;
-                    r
+                    self.exec_catch_clause(handler, val, env, t.finalizer.is_some(), saved_tco)
                 } else {
                     Completion::Throw(val)
                 }
@@ -2782,11 +2769,7 @@ impl Interpreter {
             // A call in the finally Block IS in tail position (nothing runs
             // after it), so it must keep whatever ambient suppression applies
             // but add none of its own — depth is already `saved_tco` here.
-            let fin_env = Environment::new(Some(env.clone()));
-            let fin_result = self.with_gc_root_scope(|interp| {
-                result.root_payload(|v| interp.gc_root_value(v));
-                interp.exec_statements(finalizer, &fin_env)
-            });
+            let fin_result = self.exec_finalizer(finalizer, &result, env);
             if fin_result.is_abrupt() {
                 return fin_result;
             }
