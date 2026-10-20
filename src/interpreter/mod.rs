@@ -28,6 +28,7 @@ pub(crate) use builtins::regexp::{
 };
 mod bytecode;
 mod dispose;
+mod dispose_tail_call;
 pub(crate) use dispose::{
     AsyncDisposal, DisposeCursor, DisposeStep, DisposeThen, GeneratorDisposal,
     GeneratorDisposeStart, GeneratorDisposeThen, PendingDispose,
@@ -1595,9 +1596,8 @@ impl Interpreter {
     /// body's returned value is *not* rooted after the scope closes (identical
     /// to the hand-written `gc_unroot_frame(frame); return v;` tail), so a
     /// caller that needs the result to survive a later GC re-roots it outside.
-    /// Not restored on a Rust panic (neither was the manual idiom); JS errors
-    /// travel as `Completion::Throw` values returned normally, so every
-    /// JS-level exit truncates.
+    /// Not restored on a Rust panic; JS errors are `Completion::Throw` values
+    /// returned normally, so every JS-level exit truncates.
     #[inline]
     pub(crate) fn with_gc_root_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
         let frame = self.gc_root_frame();
