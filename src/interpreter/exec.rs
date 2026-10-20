@@ -3,6 +3,9 @@ use crate::ast::{Body, DeclPhase};
 use crate::interpreter::literal_frame::LiteralFrame;
 use std::borrow::Cow;
 
+mod loop_targets;
+mod try_clauses;
+
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         self.exec_statements_cached(stmts, env, None)
@@ -2296,12 +2299,11 @@ impl Interpreter {
                         }
                         ForInOfLeft::Pattern(pat) => match pat {
                             Pattern::Identifier(name) => {
-                                if !self.env_has(env, name) && env.borrow().strict {
-                                    break 'unroot Completion::Throw(self.create_reference_error(
-                                        &format!("{name} is not defined"),
-                                    ));
+                                if let Err(e) =
+                                    self.assign_loop_identifier_target(name, key_val, env)
+                                {
+                                    break 'unroot Completion::Throw(e);
                                 }
-                                let _ = self.env_set(env, name, key_val);
                             }
                             Pattern::MemberExpression(expr) => {
                                 if let Err(e) = self.assign_to_expr(expr, key_val, env) {
@@ -2722,11 +2724,9 @@ impl Interpreter {
     }
 
     fn exec_try(&mut self, t: &TryStatement, env: &EnvRef) -> Completion {
-        // Calls inside the try Block are never in tail position: the catch
-        // and/or finally handlers must remain live on the stack. Suppress TCO
-        // for the block's dynamic extent, then restore. `saved_tco` is this
-        // statement's ambient suppression level (non-zero when nested in an
-        // outer try/finally region within the same function body).
+        // Calls in the try Block are never in tail position: the handlers must
+        // stay live. Suppress TCO for its dynamic extent; `saved_tco` is the
+        // ambient level (non-zero inside an outer try/finally region).
         let saved_tco = self.tco_suppress_depth;
         let block_env = Environment::new(Some(env.clone()));
         self.tco_suppress_depth = saved_tco + 1;
@@ -2749,22 +2749,7 @@ impl Interpreter {
             // and the exit propagates out via the `other` arm below.
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
-                    let catch_env = Environment::new(Some(env.clone()));
-                    if let Some(param) = &handler.param {
-                        if matches!(param, Pattern::Identifier(_)) {
-                            catch_env.borrow_mut().is_simple_catch_scope = true;
-                        }
-                        propagate!(self.bind_pattern(param, val, BindingKind::Let, &catch_env));
-                    }
-                    let catch_block_env = Environment::new(Some(catch_env.clone()));
-                    // A call in the catch Block is in tail position only when
-                    // there is no finally; otherwise the finalizer must run.
-                    if t.finalizer.is_some() {
-                        self.tco_suppress_depth = saved_tco + 1;
-                    }
-                    let r = self.exec_statements(&handler.body, &catch_block_env);
-                    self.tco_suppress_depth = saved_tco;
-                    r
+                    self.exec_catch_clause(handler, val, env, t.finalizer.is_some(), saved_tco)
                 } else {
                     Completion::Throw(val)
                 }
@@ -2784,11 +2769,7 @@ impl Interpreter {
             // A call in the finally Block IS in tail position (nothing runs
             // after it), so it must keep whatever ambient suppression applies
             // but add none of its own — depth is already `saved_tco` here.
-            let fin_env = Environment::new(Some(env.clone()));
-            let fin_result = self.with_gc_root_scope(|interp| {
-                result.root_payload(|v| interp.gc_root_value(v));
-                interp.exec_statements(finalizer, &fin_env)
-            });
+            let fin_result = self.exec_finalizer(finalizer, &result, env);
             if fin_result.is_abrupt() {
                 return fin_result;
             }
@@ -3039,7 +3020,10 @@ impl Interpreter {
 
     pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
         match self.take_dispose_stack(env) {
-            Some(stack) => self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion)),
+            Some(stack) => {
+                let completion = self.settle_tail_call(&stack, completion);
+                self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion))
+            }
             None => completion,
         }
     }

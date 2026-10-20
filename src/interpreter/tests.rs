@@ -1751,7 +1751,7 @@ fn async_generator_requests_and_awaits_create_no_function_objects() {
     );
     for (name, expected) in [
         ("awaited", AsyncGenStep::Await),
-        ("yielded", AsyncGenStep::Yield),
+        ("yielded", AsyncGenStep::Await),
     ] {
         let id = interp
             .get_global_var_ref(name)
@@ -6338,6 +6338,7 @@ mod generator_retirement_tests {
             r#"
             globalThis.gen = (async function* () {
               for (const x of [1, 2, 3]) { yield x; throw new Error("boom"); }
+              for await (const unused of []);
             })();
             gen.next()
               .then(function () { return gen.next(); })
@@ -6371,11 +6372,9 @@ mod generator_retirement_tests {
 /// `tests/recursion-limit-interpreter.js` covers the plain-recursion shape
 /// from JS against a release binary; keep the two lists in step.
 ///
-/// This cannot fail politely: if `CALL_DEPTH_HARD_LIMIT` is ever raised above
-/// what the running profile's native stack holds, the process aborts
-/// (SIGABRT) instead of reporting a failed assertion. Runs on the engine
-/// stack because that is the stack the limit is calibrated against — the
-/// default test-harness stack is far smaller.
+/// If `CALL_DEPTH_HARD_LIMIT` is ever raised above what the running profile's
+/// native stack holds, the process aborts (SIGABRT) instead of failing an
+/// assertion. Runs on the engine stack, which the limit is calibrated against.
 #[test]
 fn deep_call_recursion_raises_error_before_native_overflow() {
     // Twice the limit, so even the shape advancing the counter slowest (one

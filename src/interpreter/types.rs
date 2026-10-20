@@ -411,6 +411,8 @@ pub(crate) struct BytecodeGenerator {
     pub(crate) code: Rc<BytecodeGeneratorCode>,
     pub(crate) status: BytecodeGeneratorStatus,
     pub(crate) frame: Option<Box<crate::interpreter::bytecode::vm::GeneratorFrame>>,
+    /// An async generator: its requests queue in the scheduler.
+    pub(crate) is_async: bool,
 }
 
 /// A Completion Record intercepted by a running `finally`, owned by the
@@ -1535,7 +1537,7 @@ impl Environment {
         );
     }
 
-    /// §9.1.1.1.4 InitializeBinding — sets value and marks initialized (no TDZ check)
+    /// §9.1.1.1.4 InitializeBinding (no TDZ check)
     pub(crate) fn initialize_binding(&mut self, name: &str, value: JsValue) {
         if let Some(binding) = self.bindings.get_mut(name) {
             binding.value = value;
@@ -1543,8 +1545,7 @@ impl Environment {
         }
     }
 
-    /// §9.1.1.5.5 CreateImportBinding(N, M, N2)
-    /// Creates an immutable indirect binding that references another module's environment.
+    /// §9.1.1.5.5 CreateImportBinding: an immutable indirect binding.
     pub(crate) fn create_import_binding(
         &mut self,
         local_name: &str,
@@ -1555,7 +1556,7 @@ impl Environment {
         map.insert(local_name.to_string(), (source_env, source_name));
     }
 
-    /// Resolve an indirect binding, returning the current value from the source environment.
+    /// Resolve an indirect binding to its source environment's current value.
     pub(crate) fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
         if let Some(ref indirect) = self.indirect_bindings
             && let Some((source_env, source_name)) = indirect.get(name)
@@ -2065,8 +2066,8 @@ pub(crate) enum IteratorState {
         pending_exception: Option<JsValue>,
         pending_return: Option<JsValue>,
     },
-    /// A generator whose body is a bytecode chunk (`Op::Yield`); the state
-    /// machine drives the rest.
+    /// A generator or async generator whose body is a bytecode chunk
+    /// (`Op::Yield`).
     BytecodeGenerator(Box<BytecodeGenerator>),
     StateMachineAsyncGenerator {
         state_machine: Rc<GeneratorStateMachine>,

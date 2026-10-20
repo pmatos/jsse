@@ -9,8 +9,8 @@ use crate::interpreter::property::SetOutcome;
 
 mod access;
 mod array_pattern;
-pub(super) mod async_chunk;
 mod call_ic;
+mod compiled_call_record;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod generator_runtime;
 mod literals;
@@ -22,6 +22,22 @@ mod operand;
 
 use generator_runtime::ForOfUnwindOutcome;
 pub(crate) use operand::Operand;
+
+/// The binding a state-machine body declares in its function environment for
+/// `local`. A function-level `let`/`const`/`using` stays uninitialised until
+/// its declaration runs, so a read before it throws a ReferenceError
+/// (§9.1.1.1.6); a nested one is created by its lowered block scope and is
+/// not declared here (`None`).
+fn function_level_binding_kind(
+    local: &crate::interpreter::generator_analysis::LocalVariable,
+) -> Option<BindingKind> {
+    match local.kind {
+        VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+            (local.scope_depth == 0).then_some(BindingKind::Let)
+        }
+        _ => Some(BindingKind::Var),
+    }
+}
 
 /// RAII guard that decrements the interpreter's expression-evaluation depth
 /// counter on every exit path of `eval_expr` — the tail return, each of its
@@ -1893,18 +1909,8 @@ impl Interpreter {
             exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
         }
         for lv in &state_machine.local_vars {
-            let bk = match lv.kind {
-                crate::ast::VarKind::Let
-                | crate::ast::VarKind::Const
-                | crate::ast::VarKind::Using
-                | crate::ast::VarKind::AwaitUsing => {
-                    // Block-scoped bindings must not be hoisted to function level
-                    if lv.scope_depth > 0 {
-                        continue;
-                    }
-                    BindingKind::Let
-                }
-                _ => BindingKind::Var,
+            let Some(bk) = function_level_binding_kind(lv) else {
+                continue;
             };
             if !exec_env.borrow().bindings.contains_key(&lv.name)
                 && !func_env.borrow().bindings.contains_key(&lv.name)
@@ -5788,53 +5794,21 @@ impl Interpreter {
                                     has_simple_params,
                                 );
 
-                                let state_machine = self.state_machine_for(
-                                    StateMachineKind::AsyncGenerator,
-                                    &body,
-                                    &params,
-                                    o.id,
-                                );
-                                for temp_var in &state_machine.temp_vars {
-                                    exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
-                                }
-                                for lv in &state_machine.local_vars {
-                                    let bk = match lv.kind {
-                                        crate::ast::VarKind::Let
-                                        | crate::ast::VarKind::Const
-                                        | crate::ast::VarKind::Using
-                                        | crate::ast::VarKind::AwaitUsing => {
-                                            // Block-scoped bindings must not be hoisted to function level
-                                            if lv.scope_depth > 0 {
-                                                continue;
-                                            }
-                                            BindingKind::Let
-                                        }
-                                        _ => BindingKind::Var,
-                                    };
-                                    if !exec_env.borrow().bindings.contains_key(&lv.name)
-                                        && !func_env.borrow().bindings.contains_key(&lv.name)
-                                    {
-                                        exec_env.borrow_mut().declare(&lv.name, bk);
+                                let state = match self
+                                    .bytecode_async_generator_state(o.id, &body, &frame, &exec_env)
+                                {
+                                    Ok(Some(state)) => state,
+                                    Err(error) => {
+                                        self.current_realm_id = caller_realm;
+                                        break 'call Completion::Throw(error);
                                     }
-                                }
-                                self.hoist_annexb_at_state_machine_entry(&body, &exec_env);
+                                    Ok(None) => self.state_machine_async_generator_state(
+                                        o.id, &body, &params, &func_env, exec_env, is_strict,
+                                    ),
+                                };
                                 self.get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .set_iterator_state(
-                                        IteratorState::StateMachineAsyncGenerator {
-                                            state_machine,
-                                            func_env: exec_env,
-                                            is_strict,
-                                            execution_state:
-                                                StateMachineExecutionState::SuspendedStart,
-                                            _sent_value: JsValue::UNDEFINED,
-                                            try_stack: vec![],
-                                            pending_binding: None,
-                                            delegated_iterator: None,
-                                            pending_exception: None,
-                                            pending_return: None,
-                                        },
-                                    );
+                                    .set_iterator_state(state);
                                 let gen_id = gen_obj_id;
                                 if let Some(obj_rc) = self.get_object_cell(gen_id) {
                                     obj_rc
@@ -5947,30 +5921,14 @@ impl Interpreter {
                                 self.current_realm_id = caller_realm;
                                 break 'call Completion::Normal(JsValue::object(gen_id));
                             }
-                            if frame.compiled_call().is_none()
-                                && (has_simple_params || frame.named_param_plan(&params).is_some())
-                                && (has_simple_params || !uses_arguments)
-                                && self.bytecode_enabled
-                                && let BytecodeCacheState::Compiled(chunk) = &bytecode_cache
-                                && self
-                                    .get_object_cell(o.id)
-                                    .is_some_and(|callee| !callee.borrow().is_class_constructor())
-                            {
-                                frame.install_compiled_call(|| CompiledCall {
-                                    params: params.clone(),
-                                    shape: if !has_simple_params {
-                                        CallShape::Defaults
-                                    } else if uses_arguments && !is_arrow {
-                                        CallShape::Arguments
-                                    } else {
-                                        CallShape::Plain
-                                    },
-                                    body: body.clone(),
-                                    chunk: chunk.clone(),
-                                    is_arrow,
-                                    is_strict,
-                                });
-                            }
+                            let bytecode_cache = self.install_compiled_call(
+                                o.id,
+                                &frame,
+                                &params,
+                                &body,
+                                flags,
+                                bytecode_cache,
+                            );
                             let closure_strict = closure.borrow().strict;
                             let func_env = self.acquire_function_environment(
                                 closure,
@@ -8311,17 +8269,11 @@ impl Interpreter {
                 func_env.borrow_mut().declare(tv, BindingKind::Var);
             }
             for lv in &sm.local_vars {
-                if matches!(
-                    lv.kind,
-                    VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-                ) && lv.scope_depth > 0
-                {
-                    // Nested lexical bindings are created by their transformed
-                    // runtime scopes and must not leak into the function scope.
+                let Some(bk) = function_level_binding_kind(lv) else {
                     continue;
-                }
+                };
                 if !func_env.borrow().bindings.contains_key(&lv.name) {
-                    func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                    func_env.borrow_mut().declare(&lv.name, bk);
                 }
             }
 
@@ -10799,3 +10751,7 @@ mod relational_bigint_tests {
         );
     }
 }
+
+// Declared last, as in `compiler.rs` and `vm.rs`: measured layout-neutral (#1105).
+pub(super) mod async_chunk;
+mod async_gen_chunk;

@@ -18,12 +18,13 @@ use crate::interpreter::types::BindingKind;
 use crate::types::{JsString, JsValue};
 use std::cell::Cell;
 
+mod block_scope;
 mod calls;
 mod lexical;
-mod suspend;
-
+mod loop_scope;
+use loop_scope::LoopHead;
 use suspend::BodyKind;
-pub(crate) use suspend::compile_async_body;
+pub(crate) use suspend::{compile_async_body, compile_async_generator_body};
 
 /// Operand values one `NewArray`/`ArrayAppend`/`NewObject`/`ObjectAppend`
 /// keeps on the operand stack at once: larger literals are built in chunks.
@@ -1620,116 +1621,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// The slot of `name` in the current environment's binding vector for an
-    /// `InitLexical`: the innermost open block environment's declaration
-    /// order, or the frame layout when no block environment is open. Only a
-    /// hint (the op verifies it by atom identity and falls back to by-name).
-    fn init_slot(&self, name: &str) -> u16 {
-        let position = match self.scopes.last() {
-            Some(names) => names.iter().position(|n| n == name),
-            None => self.locals.position(name),
-        };
-        position
-            .and_then(|i| u16::try_from(i).ok())
-            .unwrap_or(NO_INIT_SLOT)
-    }
-
-    /// What BlockDeclarationInstantiation declares for the statement lists
-    /// of one block (or all `case` clauses of a `switch`): block-level
-    /// function declarations first, then `let`/`const`/class bindings in TDZ,
-    /// the order `exec_statements` instantiates them in. `None` when a list
-    /// holds a `using` declaration, whose environment owns a disposal stack
-    /// the VM does not model.
-    fn scope_declarations(&self, lists: &[&[Statement]]) -> Option<ScopeDecls> {
-        let mut decls = ScopeDecls::default();
-        for stmts in lists {
-            for stmt in *stmts {
-                if let Some(f) = crate::interpreter::hoisting::unwrap_labeled_function(stmt) {
-                    decls.functions.push(stmt.clone());
-                    decls.function_names.push(f.name.clone());
-                }
-            }
-        }
-        for stmts in lists {
-            let has_using = stmts.iter().any(|stmt| {
-                matches!(
-                    stmt,
-                    Statement::Variable(decl)
-                        if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing)
-                )
-            });
-            if has_using {
-                return None;
-            }
-            decls
-                .lexicals
-                .extend(crate::interpreter::hoisting::collect_lexical_names(stmts));
-        }
-        Some(decls)
-    }
-
-    /// Emits `PushEnv` for `decls` and makes its names shadow the enclosing
-    /// scopes' for everything compiled until the matching `close_scope`.
-    fn open_scope(&mut self, decls: ScopeDecls) -> Result<(), CompileError> {
-        let index = self.block_scopes.len();
-        let operand = u16::try_from(index)
-            .map_err(|_| CompileError::Ineligible("block scope pool overflow"))?;
-        let mut names: Vec<String> = Vec::new();
-        for name in &decls.function_names {
-            if !names.contains(name) {
-                names.push(name.clone());
-            }
-        }
-        let mut lexicals = Vec::with_capacity(decls.lexicals.len());
-        for (name, is_const) in &decls.lexicals {
-            if !names.contains(name) {
-                names.push(name.clone());
-                lexicals.push((self.add_name(name)?, *is_const));
-            }
-        }
-        self.block_scopes.push(BlockScope {
-            functions: decls.functions,
-            lexicals,
-            simple_catch: decls.simple_catch,
-        });
-        self.emit(Op::PushEnv);
-        self.emit_u16(operand);
-        self.scopes.push(names);
-        Ok(())
-    }
-
-    fn close_scope(&mut self) {
-        self.emit_pop_env(1);
-        self.scopes.pop();
-    }
-
-    /// `PopEnv` for `count` environments, split to fit its u8 operand. The
-    /// compile-time scope stack is the caller's to maintain: a `break` or
-    /// `continue` leaves environments without closing them.
-    fn emit_pop_env(&mut self, mut count: usize) {
-        while count > 0 {
-            let n = count.min(usize::from(u8::MAX));
-            self.emit(Op::PopEnv);
-            self.code.push(n as u8);
-            count -= n;
-        }
-    }
-
-    /// A statement list that runs in its own environment when it declares a
-    /// binding (a block, a `try`/`catch`/`finally` block).
-    fn compile_scoped_block(&mut self, body: &[Statement]) -> Result<(), CompileError> {
-        if !block_declares_lexical(body) {
-            return self.compile_statement_list(body);
-        }
-        let decls = self
-            .scope_declarations(&[body])
-            .ok_or(CompileError::Unsupported("block-scoped declaration"))?;
-        self.open_scope(decls)?;
-        self.compile_statements(body, false, true)?;
-        self.close_scope();
-        Ok(())
-    }
-
     fn compile_literal(&mut self, lit: &Literal) -> Result<(), CompileError> {
         match lit {
             Literal::Number(n) => {
@@ -2177,6 +2068,9 @@ impl Compiler {
     /// Evaluates `expr` and returns it through any open cleanups.
     fn compile_return_value(&mut self, expr: &Expression) -> Result<(), CompileError> {
         self.compile_expr(expr)?;
+        if self.async_body && self.generator {
+            self.emit_await(false)?;
+        }
         self.compile_jump(Terminal::Return, true)?;
         self.pop_n(1);
         Ok(())
@@ -2193,13 +2087,10 @@ impl Compiler {
         )
     }
 
-    /// Resolves a `break`'s target frame. The unlabeled form binds to the
-    /// innermost frame of either kind (a `switch` is a break target); the
-    /// labeled form searches outward so a label on an outer loop is
-    /// reachable past an intervening unlabeled inner loop. The parser's
-    /// early-error checks guarantee a labeled form always names an enclosing
-    /// frame that compiled successfully — `None` is defensive coding against
-    /// a future change that stops being true.
+    /// Resolves a `break`'s target frame: the innermost frame of either kind
+    /// (a `switch` is a break target), or the one carrying the label. The
+    /// parser guarantees a label names an enclosing frame; `None` is
+    /// defensive.
     fn resolve_break_frame(&self, label: Option<&str>) -> Option<usize> {
         match label {
             None => self.loop_frames.len().checked_sub(1),
@@ -2896,12 +2787,19 @@ impl Compiler {
         self.bump_persistent(1);
 
         let hoisted = matches!(head, Head::Lexical(..)) && !may_capture;
-        if hoisted {
-            self.open_scope(ScopeDecls {
-                lexicals: lexical_names.clone(),
-                ..ScopeDecls::default()
-            })?;
-        }
+        let loop_scope = self.open_loop_scope(
+            if hoisted {
+                lexical_names.clone()
+            } else {
+                Vec::new()
+            },
+            body,
+            &LoopHead {
+                left: Some(left),
+                ..LoopHead::default()
+            },
+            !may_capture && (hoisted || lexical_names.is_empty()),
+        )?;
         let loop_top = self.code.len();
         self.loop_frames.push(LoopFrame::new(
             labels,
@@ -2946,7 +2844,7 @@ impl Compiler {
                 })?;
             }
         }
-        self.compile_statement(body)?;
+        self.compile_loop_body(body, &loop_scope)?;
         if per_iteration {
             self.close_scope();
         }
@@ -2983,7 +2881,7 @@ impl Compiler {
             self.emit(Op::Pop);
         }
         self.patch_jump(step)?;
-        if hoisted {
+        if loop_scope.opened {
             self.close_scope();
         }
         self.cleanups.pop();
@@ -3001,6 +2899,11 @@ impl Compiler {
         // WhileLoopEvaluation starts its local V at undefined and updates it
         // only when the body produces a non-empty value.
         self.reset_script_completion();
+        let head = LoopHead {
+            test: Some(&while_stmt.test),
+            ..LoopHead::default()
+        };
+        let loop_scope = self.open_loop_scope(Vec::new(), &while_stmt.body, &head, true)?;
         let loop_start = self.code.len();
         self.loop_frames.push(LoopFrame::new(
             labels,
@@ -3014,7 +2917,7 @@ impl Compiler {
         } else {
             Some(self.compile_cond_jump(&while_stmt.test)?)
         };
-        self.compile_statement(&while_stmt.body)?;
+        self.compile_loop_body(&while_stmt.body, &loop_scope)?;
         debug_assert_eq!(self.current_stack, self.stack_base);
         debug_assert_eq!(self.current_refs, 0);
         self.emit_jump_to(Op::Jump, loop_start)?;
@@ -3033,6 +2936,9 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         self.resolve_escape_targets(&frame.escape_breaks);
+        if loop_scope.opened {
+            self.close_scope();
+        }
         Ok(())
     }
 
@@ -3044,6 +2950,11 @@ impl Compiler {
         // DoWhileLoopEvaluation starts V at undefined and evaluates its test
         // only after the body, including after a matching continue.
         self.reset_script_completion();
+        let head = LoopHead {
+            test: Some(&do_while_stmt.test),
+            ..LoopHead::default()
+        };
+        let loop_scope = self.open_loop_scope(Vec::new(), &do_while_stmt.body, &head, true)?;
         let loop_start = self.code.len();
         self.loop_frames.push(LoopFrame::new(
             labels,
@@ -3052,7 +2963,7 @@ impl Compiler {
             self.cleanups.len(),
             self.stack_base,
         ));
-        self.compile_statement(&do_while_stmt.body)?;
+        self.compile_loop_body(&do_while_stmt.body, &loop_scope)?;
         let frame = self
             .loop_frames
             .pop()
@@ -3072,6 +2983,9 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         self.resolve_escape_targets(&frame.escape_breaks);
+        if loop_scope.opened {
+            self.close_scope();
+        }
         Ok(())
     }
 
@@ -3089,6 +3003,7 @@ impl Compiler {
         // bindings are copied per iteration only when the loop can observe
         // the identity of that environment (CreatePerIterationEnvironment,
         // sec-createperiterationenvironment), the same test `exec_for` uses.
+        let mut head_lexicals = Vec::new();
         let mut scoped = false;
         if let Some(ForInit::Variable(decl)) = &for_stmt.init
             && decl.kind != VarKind::Var
@@ -3096,17 +3011,21 @@ impl Compiler {
             if !matches!(decl.kind, VarKind::Let | VarKind::Const) {
                 return Err(CompileError::Unsupported("lexical declaration"));
             }
-            let lexicals = crate::interpreter::hoisting::declaration_bound_names(decl)
+            head_lexicals = crate::interpreter::hoisting::declaration_bound_names(decl)
                 .into_iter()
                 .map(|name| (name, decl.kind == VarKind::Const))
                 .collect();
-            self.open_scope(ScopeDecls {
-                lexicals,
-                ..ScopeDecls::default()
-            })?;
             scoped = true;
         }
         let per_iteration = scoped && for_stmt.may_capture_iteration_scope();
+        let head = LoopHead {
+            init: for_stmt.init.as_ref(),
+            test: for_stmt.test.as_ref(),
+            update: for_stmt.update.as_deref(),
+            ..LoopHead::default()
+        };
+        let loop_scope =
+            self.open_loop_scope(head_lexicals, &for_stmt.body, &head, !per_iteration)?;
         if let Some(init) = &for_stmt.init {
             match init {
                 ForInit::Variable(decl) => self.compile_var_declaration(decl, scoped)?,
@@ -3133,7 +3052,7 @@ impl Compiler {
             self.cleanups.len(),
             self.stack_base,
         ));
-        self.compile_statement(&for_stmt.body)?;
+        self.compile_loop_body(&for_stmt.body, &loop_scope)?;
         let frame = self
             .loop_frames
             .pop()
@@ -3158,7 +3077,7 @@ impl Compiler {
             self.patch_jump(site)?;
         }
         self.resolve_escape_targets(&frame.escape_breaks);
-        if scoped {
+        if loop_scope.opened {
             self.close_scope();
         }
         Ok(())
@@ -3869,3 +3788,5 @@ pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileEr
     }
     Ok(c.finish())
 }
+
+mod suspend;

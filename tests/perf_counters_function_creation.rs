@@ -33,6 +33,20 @@ fn counters(source: &str) -> HashMap<String, u64> {
     perf
 }
 
+/// `key_intern_calls` carries a few counts of per-process noise: whether a key
+/// is recognised by address as already canonical depends on where the
+/// allocator places it. Interning once per object would add one call per extra
+/// iteration (hundreds), so a small slack still proves the count stays flat.
+const KEY_INTERN_NOISE: u64 = 16;
+
+fn assert_key_intern_flat(small: &HashMap<String, u64>, large: &HashMap<String, u64>, what: &str) {
+    let (small, large) = (small["key_intern_calls"], large["key_intern_calls"]);
+    assert!(
+        large.abs_diff(small) <= KEY_INTERN_NOISE,
+        "key_intern_calls must not scale with the number of {what}: {small} vs {large}"
+    );
+}
+
 fn closure_loop(iterations: u32) -> String {
     format!(
         "function makeAdder(x) {{ return function (y) {{ return x + y; }}; }}\n\
@@ -45,10 +59,7 @@ fn closure_loop(iterations: u32) -> String {
 fn closure_creation_interns_no_property_keys() {
     let small = counters(&closure_loop(1_000));
     let large = counters(&closure_loop(2_000));
-    assert_eq!(
-        small["key_intern_calls"], large["key_intern_calls"],
-        "key_intern_calls must not scale with the number of closures"
-    );
+    assert_key_intern_flat(&small, &large, "closures");
     assert!(
         large["calls_to_user"] > small["calls_to_user"],
         "the larger run must actually create and call more closures"
@@ -62,10 +73,7 @@ fn promise_capability_creation_interns_no_property_keys() {
     };
     let small = counters(&promise_loop(500));
     let large = counters(&promise_loop(1_000));
-    assert_eq!(
-        small["key_intern_calls"], large["key_intern_calls"],
-        "key_intern_calls must not scale with the number of promises"
-    );
+    assert_key_intern_flat(&small, &large, "promises");
 }
 
 #[test]

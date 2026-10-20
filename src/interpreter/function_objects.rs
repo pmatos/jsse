@@ -150,48 +150,23 @@ impl Interpreter {
         obj_data.set_function_realm(self.current_realm_id);
         obj_data.callable = Some(Box::new(func));
 
-        obj_data.push_exact_property(
-            &self.common_keys.length,
-            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
-        );
-        obj_data.push_exact_property(
-            &self.common_keys.name,
-            PropertyDescriptor::data(JsValue::string(name_val), false, false, true),
-        );
-        if has_restricted_props {
-            let restricted = |getter: &Option<JsValue>| match getter {
-                Some(getter) => {
-                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true)
-                }
-                None => PropertyDescriptor::data(JsValue::NULL, false, false, true),
-            };
-            let caller = restricted(&self.realm().sloppy_caller_getter);
-            let arguments = restricted(&self.realm().sloppy_arguments_getter);
-            obj_data.push_exact_property(&self.common_keys.caller, caller);
-            obj_data.push_exact_property(&self.common_keys.arguments, arguments);
-        }
-        let mut prototype_id = None;
-        if needs_prototype {
-            let mut proto_data = JsObjectData::new();
-            proto_data.prototype_id = if is_async_gen {
+        let prototype = needs_prototype.then(|| {
+            let parent = if is_async_gen {
                 self.realm().async_generator_prototype
             } else if is_gen {
                 self.realm().generator_prototype
             } else {
                 self.realm().object_prototype
             };
-            let proto_id = self.alloc_object(proto_data);
-            prototype_id = Some(proto_id);
-            obj_data.push_exact_property(
-                &self.common_keys.prototype,
-                PropertyDescriptor::data(
-                    JsValue::object(proto_id),
-                    matches!(init, FunctionInit::Default),
-                    false,
-                    false,
-                ),
-            );
-        }
+            (parent, matches!(init, FunctionInit::Default))
+        });
+        let prototype_id = self.push_function_props(
+            &mut obj_data,
+            fn_length,
+            name_val,
+            has_restricted_props,
+            prototype,
+        );
         let func_id = self.alloc_object(obj_data);
         let func_val = JsValue::object(func_id);
         // Set prototype.constructor = func (not for generators)
@@ -200,12 +175,72 @@ impl Interpreter {
             && let Some(proto_id) = prototype_id
             && let Some(proto_obj) = self.get_object_cell(proto_id)
         {
-            proto_obj.borrow_mut().push_fresh_property(
+            proto_obj.borrow_mut().push_exact_data(
                 &self.common_keys.constructor,
-                PropertyDescriptor::data(func_val.clone(), true, false, true),
+                func_val.clone(),
+                true,
+                false,
+                true,
             );
         }
         func_val
+    }
+
+    /// Fills `obj_data` (built by `with_exact_capacity`) with the own
+    /// properties a function object starts with: `length`, `name`, the Annex B
+    /// `caller`/`arguments` of a sloppy function, and a fresh `prototype`
+    /// object with the given parent and writability. Returns that object's id.
+    /// Shared by every function kind and kept out of line so the create path's
+    /// hot code stays compact.
+    #[inline(never)]
+    fn push_function_props(
+        &mut self,
+        obj_data: &mut JsObjectData,
+        fn_length: usize,
+        name_val: JsString,
+        has_restricted_props: bool,
+        prototype: Option<(Option<u64>, bool)>,
+    ) -> Option<u64> {
+        obj_data.push_exact_data(
+            &self.common_keys.length,
+            JsValue::number(fn_length as f64),
+            false,
+            false,
+            true,
+        );
+        obj_data.push_exact_data(
+            &self.common_keys.name,
+            JsValue::string(name_val),
+            false,
+            false,
+            true,
+        );
+        if has_restricted_props {
+            for (key, getter) in [
+                (&self.common_keys.caller, &self.realm().sloppy_caller_getter),
+                (
+                    &self.common_keys.arguments,
+                    &self.realm().sloppy_arguments_getter,
+                ),
+            ] {
+                match getter {
+                    Some(getter) => obj_data.push_exact_getter(key, getter.clone(), false, true),
+                    None => obj_data.push_exact_data(key, JsValue::NULL, false, false, true),
+                }
+            }
+        }
+        let (parent, writable) = prototype?;
+        let mut proto_data = JsObjectData::new();
+        proto_data.prototype_id = parent;
+        let proto_id = self.alloc_object(proto_data);
+        obj_data.push_exact_data(
+            &self.common_keys.prototype,
+            JsValue::object(proto_id),
+            writable,
+            false,
+            false,
+        );
+        Some(proto_id)
     }
 
     pub(super) fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
