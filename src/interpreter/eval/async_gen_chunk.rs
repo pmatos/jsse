@@ -14,6 +14,7 @@
 //! queue is empty or the body parks at an `await`; the reaction of that
 //! `await` (`ReactionTarget::AsyncGen(id, Await)`) re-enters it.
 
+use super::function_level_binding_kind;
 use super::generator_runtime::AwaitReturnStart;
 use super::*;
 use crate::interpreter::bytecode::vm::{self, GeneratorFrame, Resume};
@@ -377,18 +378,8 @@ impl Interpreter {
             exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
         }
         for lv in &state_machine.local_vars {
-            let bk = match lv.kind {
-                crate::ast::VarKind::Let
-                | crate::ast::VarKind::Const
-                | crate::ast::VarKind::Using
-                | crate::ast::VarKind::AwaitUsing => {
-                    // Block-scoped bindings must not be hoisted to function level
-                    if lv.scope_depth > 0 {
-                        continue;
-                    }
-                    BindingKind::Let
-                }
-                _ => BindingKind::Var,
+            let Some(bk) = function_level_binding_kind(lv) else {
+                continue;
             };
             if !exec_env.borrow().bindings.contains_key(&lv.name)
                 && !func_env.borrow().bindings.contains_key(&lv.name)
