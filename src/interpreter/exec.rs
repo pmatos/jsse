@@ -3,6 +3,7 @@ use crate::ast::{Body, DeclPhase};
 use crate::interpreter::literal_frame::LiteralFrame;
 use std::borrow::Cow;
 
+mod loop_targets;
 mod try_clauses;
 
 impl Interpreter {
@@ -2298,12 +2299,11 @@ impl Interpreter {
                         }
                         ForInOfLeft::Pattern(pat) => match pat {
                             Pattern::Identifier(name) => {
-                                if !self.env_has(env, name) && env.borrow().strict {
-                                    break 'unroot Completion::Throw(self.create_reference_error(
-                                        &format!("{name} is not defined"),
-                                    ));
+                                if let Err(e) =
+                                    self.assign_loop_identifier_target(name, key_val, env)
+                                {
+                                    break 'unroot Completion::Throw(e);
                                 }
-                                let _ = self.env_set(env, name, key_val);
                             }
                             Pattern::MemberExpression(expr) => {
                                 if let Err(e) = self.assign_to_expr(expr, key_val, env) {
