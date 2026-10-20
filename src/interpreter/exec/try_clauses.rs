@@ -2,7 +2,7 @@ use super::*;
 
 impl Interpreter {
     /// The `catch` clause of a try statement, entered with the thrown `val`.
-    /// The clause's Block owns a scope of its own (§14.15.2 CatchClauseEvaluation
+    /// The clause's Block owns a scope of its own (CatchClauseEvaluation
     /// evaluates it as a Block), so its `using` resources are disposed here.
     pub(super) fn exec_catch_clause(
         &mut self,
