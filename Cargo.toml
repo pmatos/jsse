@@ -16,7 +16,7 @@ perf-counters = []
 jemalloc = ["dep:tikv-jemallocator"]
 
 [target.'cfg(not(any(windows, target_family = "wasm")))'.dependencies]
-tikv-jemallocator = { version = "0.6", optional = true }
+tikv-jemallocator = { version = "0.7", optional = true }
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
