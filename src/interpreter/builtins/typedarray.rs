@@ -1,4 +1,5 @@
 use super::super::*;
+use super::find_via_predicate::FindMethod;
 use crate::interpreter::types::BufferData;
 use crate::types::{JsBigInt, JsValue, ValueKind, number_ops};
 use std::cell::{Cell, RefCell};
@@ -2501,30 +2502,7 @@ impl Interpreter {
         let find_fn = self.create_function(JsFunction::native(
             "find".to_string(),
             1,
-            |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-                for i in 0..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val.clone(), JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if interp.to_boolean_val(&result) {
-                                return Completion::Normal(val);
-                            }
-                        }
-                        other => return other,
-                    }
-                }
-                Completion::Normal(JsValue::UNDEFINED)
-            },
+            |interp, this_val, args| FindMethod::Find.typed_array(interp, this_val, args),
         ));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -2534,30 +2512,7 @@ impl Interpreter {
         let find_index_fn = self.create_function(JsFunction::native(
             "findIndex".to_string(),
             1,
-            |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-                for i in 0..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::number(i as f64));
-                            }
-                        }
-                        other => return other,
-                    }
-                }
-                Completion::Normal(JsValue::number(-1.0))
-            },
+            |interp, this_val, args| FindMethod::FindIndex.typed_array(interp, this_val, args),
         ));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -2567,32 +2522,7 @@ impl Interpreter {
         let find_last_fn = self.create_function(JsFunction::native(
             "findLast".to_string(),
             1,
-            |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-                let mut i = len as i64 - 1;
-                while i >= 0 {
-                    let val = typed_array_get_index(&ta, i as usize);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val.clone(), JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if interp.to_boolean_val(&result) {
-                                return Completion::Normal(val);
-                            }
-                        }
-                        other => return other,
-                    }
-                    i -= 1;
-                }
-                Completion::Normal(JsValue::UNDEFINED)
-            },
+            |interp, this_val, args| FindMethod::FindLast.typed_array(interp, this_val, args),
         ));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -2602,32 +2532,7 @@ impl Interpreter {
         let find_last_index_fn = self.create_function(JsFunction::native(
             "findLastIndex".to_string(),
             1,
-            |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-                let mut i = len as i64 - 1;
-                while i >= 0 {
-                    let val = typed_array_get_index(&ta, i as usize);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::number(i as f64));
-                            }
-                        }
-                        other => return other,
-                    }
-                    i -= 1;
-                }
-                Completion::Normal(JsValue::number(-1.0))
-            },
+            |interp, this_val, args| FindMethod::FindLastIndex.typed_array(interp, this_val, args),
         ));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -5435,7 +5340,7 @@ fn ta_number_getter(
     }
 }
 
-fn validate_typed_array(
+pub(super) fn validate_typed_array(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {

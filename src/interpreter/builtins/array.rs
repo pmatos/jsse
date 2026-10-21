@@ -1,5 +1,6 @@
 use super::super::*;
 use super::array_dense;
+use super::find_via_predicate::FindMethod;
 use crate::interpreter::gc::RootedSlots;
 
 // §7.2.2 IsArray — Proxy-aware check
@@ -32,14 +33,20 @@ fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue
     }
 }
 
-fn to_object_val(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, Completion> {
+pub(super) fn to_object_val(
+    interp: &mut Interpreter,
+    this: &JsValue,
+) -> Result<JsValue, Completion> {
     match interp.to_object(this) {
         Completion::Normal(v) => Ok(v),
         other => Err(other),
     }
 }
 
-fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, Completion> {
+pub(super) fn length_of_array_like(
+    interp: &mut Interpreter,
+    o: &JsValue,
+) -> Result<usize, Completion> {
     // An exotic Array's `length` is always an own data property, so reading
     // it directly is exactly `Get(O, "length")`.
     let array_length = o
@@ -98,7 +105,11 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, 
 }
 
 // [[Get]](O, ToString(idx)) with an own-present-element fast path.
-fn get_index(interp: &mut Interpreter, o: &JsValue, idx: usize) -> Result<JsValue, Completion> {
+pub(super) fn get_index(
+    interp: &mut Interpreter,
+    o: &JsValue,
+    idx: usize,
+) -> Result<JsValue, Completion> {
     if let Some(v) = array_dense::dense_element(interp, o, idx) {
         return Ok(v);
     }
@@ -2201,155 +2212,22 @@ impl Interpreter {
 
         // Array.prototype.find
         self.define_method(proto_id, "find", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(interp, &callback, "find predicate is not a function")
-            {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            for k in 0..len {
-                let kvalue = match get_index(interp, &o, k) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                match interp.call_function(
-                    &callback,
-                    &this_arg,
-                    &[kvalue.clone(), JsValue::number(k as f64), o.clone()],
-                ) {
-                    Completion::Normal(v) => {
-                        if interp.to_boolean_val(&v) {
-                            return Completion::Normal(kvalue);
-                        }
-                    }
-                    other => return other,
-                }
-            }
-            Completion::Normal(JsValue::UNDEFINED)
+            FindMethod::Find.array(interp, this_val, args)
         });
 
         // Array.prototype.findIndex
         self.define_method(proto_id, "findIndex", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) =
-                require_callable(interp, &callback, "findIndex predicate is not a function")
-            {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            for k in 0..len {
-                let kvalue = match get_index(interp, &o, k) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                match interp.call_function(
-                    &callback,
-                    &this_arg,
-                    &[kvalue, JsValue::number(k as f64), o.clone()],
-                ) {
-                    Completion::Normal(v) => {
-                        if interp.to_boolean_val(&v) {
-                            return Completion::Normal(JsValue::number(k as f64));
-                        }
-                    }
-                    other => return other,
-                }
-            }
-            Completion::Normal(JsValue::number(-1.0))
+            FindMethod::FindIndex.array(interp, this_val, args)
         });
 
         // Array.prototype.findLast
         self.define_method(proto_id, "findLast", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) =
-                require_callable(interp, &callback, "findLast predicate is not a function")
-            {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            for k in (0..len).rev() {
-                let kvalue = match get_index(interp, &o, k) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                match interp.call_function(
-                    &callback,
-                    &this_arg,
-                    &[kvalue.clone(), JsValue::number(k as f64), o.clone()],
-                ) {
-                    Completion::Normal(v) => {
-                        if interp.to_boolean_val(&v) {
-                            return Completion::Normal(kvalue);
-                        }
-                    }
-                    other => return other,
-                }
-            }
-            Completion::Normal(JsValue::UNDEFINED)
+            FindMethod::FindLast.array(interp, this_val, args)
         });
 
         // Array.prototype.findLastIndex
         self.define_method(proto_id, "findLastIndex", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(
-                interp,
-                &callback,
-                "findLastIndex predicate is not a function",
-            ) {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            for k in (0..len).rev() {
-                let kvalue = match get_index(interp, &o, k) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                match interp.call_function(
-                    &callback,
-                    &this_arg,
-                    &[kvalue, JsValue::number(k as f64), o.clone()],
-                ) {
-                    Completion::Normal(v) => {
-                        if interp.to_boolean_val(&v) {
-                            return Completion::Normal(JsValue::number(k as f64));
-                        }
-                    }
-                    other => return other,
-                }
-            }
-            Completion::Normal(JsValue::number(-1.0))
+            FindMethod::FindLastIndex.array(interp, this_val, args)
         });
 
         // Array.prototype.splice

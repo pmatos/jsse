@@ -6,6 +6,7 @@ mod collections;
 mod date;
 mod disposable;
 mod errors;
+mod find_via_predicate;
 mod function;
 mod function_constructors;
 mod global_functions;

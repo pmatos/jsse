@@ -242,21 +242,21 @@ Roots and Rooted Slots.
 _Avoid_: combinator setup record, resolver root frame.
 
 **Receiver Guard**:
-The single prologue a native method routes its `this` through to brand-check the
-receiver — or throw the brand `TypeError` — so callers never re-spell the
-`as_object_id → get_object → borrow → <kind>_info` dance. The family:
-`require_array_buffer` / `require_shared_array_buffer` (`builtins/typedarray.rs`)
-hand back an owned snapshot of the buffer's kind-specific info; `with_typed_array_ref`
-is the leaner kernel form — it runs a caller-supplied closure against the borrowed
-`TypedArrayInfo` and returns whatever the closure returns (a scalar, an owned
-snapshot via `TypedArrayInfo::clone`, or anything else), so ownership is the
-caller's choice, not the guard's. `validate_typed_array` layers a snapshot +
-detached/OOB throw on top of the kernel. A guard may be parameterized by a
-detach policy: `ta_number_getter` layers the numeric getters' spec
-`TypedArrayLength → 0`-on-detached-or-out-of-bounds rule on top of the kernel,
-where `validate_typed_array` instead throws. Either way, any borrow the guard
-holds drops before `create_type_error` runs (it mutates the object arena).
+A native method's brand-checking prologue. In `builtins/typedarray.rs`,
+`require_array_buffer` / `require_shared_array_buffer` return owned snapshots;
+`with_typed_array_ref` runs a closure over borrowed `TypedArrayInfo`, letting
+callers choose a scalar or snapshot. `validate_typed_array` adds detached/OOB
+rejection; `ta_number_getter` instead returns zero for detached/OOB views.
+Borrows end before `create_type_error` mutates the arena.
 _Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
+
+**FindViaPredicate**:
+The shared Array/TypedArray find-family module (`builtins/find_via_predicate.rs`).
+`FindMethod` selects the method; its two family entry points own receiver
+preparation, captured length, callable validation, traversal, callback arguments,
+result selection and GC Root Scopes. Array reads visit holes through Get;
+TypedArray reads retain live detach/resize checks without changing the range.
+_Avoid_: search cursor, predicate strategy.
 
 **Close-on-Reject**:
 The exit an `%IteratorPrototype%` helper takes when its argument fails
