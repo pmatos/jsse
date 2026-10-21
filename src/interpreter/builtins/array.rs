@@ -1,6 +1,7 @@
 use super::super::*;
 use super::array_dense;
 use super::find_via_predicate::FindMethod;
+use super::reduction::{self, Reduction};
 use crate::interpreter::gc::RootedSlots;
 
 // §7.2.2 IsArray — Proxy-aware check
@@ -117,7 +118,7 @@ pub(super) fn get_index(
 }
 
 // HasProperty(O, ToString(idx)) followed by Get when present.
-fn get_if_present(
+pub(super) fn get_if_present(
     interp: &mut Interpreter,
     o: &JsValue,
     idx: usize,
@@ -2011,126 +2012,12 @@ impl Interpreter {
 
         // Array.prototype.reduce
         self.define_method(proto_id, "reduce", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(interp, &callback, "reduce callback is not a function")
-            {
-                return c;
-            }
-            if len == 0 && args.len() < 2 {
-                return Completion::Throw(
-                    interp.create_type_error("Reduce of empty array with no initial value"),
-                );
-            }
-            let mut k = 0usize;
-            let mut acc = if args.len() >= 2 {
-                args[1].clone()
-            } else {
-                // Find first present element
-                loop {
-                    if k >= len {
-                        return Completion::Throw(
-                            interp.create_type_error("Reduce of empty array with no initial value"),
-                        );
-                    }
-                    match get_if_present(interp, &o, k) {
-                        Ok(Some(val)) => {
-                            k += 1;
-                            break val;
-                        }
-                        Ok(None) => {}
-                        Err(c) => return c,
-                    }
-                    k += 1;
-                }
-            };
-            while k < len {
-                match get_if_present(interp, &o, k) {
-                    Ok(Some(kvalue)) => {
-                        match interp.call_function(
-                            &callback,
-                            &JsValue::UNDEFINED,
-                            &[acc, kvalue, JsValue::number(k as f64), o.clone()],
-                        ) {
-                            Completion::Normal(v) => acc = v,
-                            other => return other,
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(c) => return c,
-                }
-                k += 1;
-            }
-            Completion::Normal(acc)
+            reduction::reduce(interp, Reduction::Array, this_val, args)
         });
 
         // Array.prototype.reduceRight
         self.define_method(proto_id, "reduceRight", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) =
-                require_callable(interp, &callback, "reduceRight callback is not a function")
-            {
-                return c;
-            }
-            if len == 0 && args.len() < 2 {
-                return Completion::Throw(
-                    interp.create_type_error("Reduce of empty array with no initial value"),
-                );
-            }
-            let mut k = len as i64 - 1;
-            let mut acc = if args.len() >= 2 {
-                args[1].clone()
-            } else {
-                loop {
-                    if k < 0 {
-                        return Completion::Throw(
-                            interp.create_type_error("Reduce of empty array with no initial value"),
-                        );
-                    }
-                    match get_if_present(interp, &o, k as usize) {
-                        Ok(Some(val)) => {
-                            k -= 1;
-                            break val;
-                        }
-                        Ok(None) => {}
-                        Err(c) => return c,
-                    }
-                    k -= 1;
-                }
-            };
-            while k >= 0 {
-                match get_if_present(interp, &o, k as usize) {
-                    Ok(Some(kvalue)) => {
-                        match interp.call_function(
-                            &callback,
-                            &JsValue::UNDEFINED,
-                            &[acc, kvalue, JsValue::number(k as f64), o.clone()],
-                        ) {
-                            Completion::Normal(v) => acc = v,
-                            other => return other,
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(c) => return c,
-                }
-                k -= 1;
-            }
-            Completion::Normal(acc)
+            reduction::reduce(interp, Reduction::ArrayRight, this_val, args)
         });
 
         // Array.prototype.some

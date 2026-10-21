@@ -1,5 +1,6 @@
 use super::super::*;
 use super::find_via_predicate::FindMethod;
+use super::reduction::{self, Reduction};
 use crate::interpreter::types::BufferData;
 use crate::types::{JsBigInt, JsValue, ValueKind, number_ops};
 use std::cell::{Cell, RefCell};
@@ -2751,37 +2752,7 @@ impl Interpreter {
             "reduce".to_string(),
             1,
             |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = typed_array_length(&ta);
-                let mut acc;
-                let start;
-                if args.len() > 1 {
-                    acc = args[1].clone();
-                    start = 0;
-                } else {
-                    if len == 0 {
-                        return Completion::Throw(
-                            interp.create_type_error("Reduce of empty array with no initial value"),
-                        );
-                    }
-                    acc = typed_array_get_index(&ta, 0);
-                    start = 1;
-                }
-                for i in start..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &JsValue::UNDEFINED,
-                        &[acc, val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => acc = result,
-                        other => return other,
-                    }
-                }
-                Completion::Normal(acc)
+                reduction::reduce(interp, Reduction::TypedArray, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2793,39 +2764,7 @@ impl Interpreter {
             "reduceRight".to_string(),
             1,
             |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = typed_array_length(&ta);
-                let mut acc;
-                let start: i64;
-                if args.len() > 1 {
-                    acc = args[1].clone();
-                    start = len as i64 - 1;
-                } else {
-                    if len == 0 {
-                        return Completion::Throw(
-                            interp.create_type_error("Reduce of empty array with no initial value"),
-                        );
-                    }
-                    acc = typed_array_get_index(&ta, len - 1);
-                    start = len as i64 - 2;
-                }
-                let mut i = start;
-                while i >= 0 {
-                    let val = typed_array_get_index(&ta, i as usize);
-                    match interp.call_function(
-                        &callback,
-                        &JsValue::UNDEFINED,
-                        &[acc, val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => acc = result,
-                        other => return other,
-                    }
-                    i -= 1;
-                }
-                Completion::Normal(acc)
+                reduction::reduce(interp, Reduction::TypedArrayRight, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)

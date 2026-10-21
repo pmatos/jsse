@@ -258,18 +258,20 @@ result selection and GC Root Scopes. Array reads visit holes through Get;
 TypedArray reads retain live detach/resize checks without changing the range.
 _Avoid_: search cursor, predicate strategy.
 
+**Reduction**:
+The Array/TypedArray `reduce`/`reduceRight` operation (`builtins/reduction.rs`).
+One entry selects four natives and owns preparation, length capture, seed
+selection, callbacks and abrupt propagation. Array reads skip holes via
+HasProperty/Get; TypedArray reads retain live bounds checks. Each visit roots
+the accumulator before observable reads, then releases replaced accumulators.
+_Avoid_: fold strategy, accumulator cursor.
+
 **Close-on-Reject**:
-The exit an `%IteratorPrototype%` helper takes when its argument fails
-validation: build the error, close the iterator the helper was handed but does
-not own (spec `IfAbruptCloseIterator`), then throw. `require_callable_arg`
-(`builtins/iterators.rs`) concentrates it for the eight helpers taking a callable
-argument. Two orderings are load-bearing and are the reason this is a seam rather
-than a convention: the error object is constructed **before** the close, because
-the close runs a user `return()` method that can rebind the global `TypeError`
-and so change the thrown error's prototype; and the error is GC-rooted **across**
-the close, because the close runs arbitrary JS and the collector does not scan
-the Rust stack. The close's own failure is discarded — the original argument
-error wins. Distinct from a Receiver Guard, which checks `this` and has no
-iterator to close; the two are deliberately separate here, because only 9 of the
-14 helpers brand-check their receiver at all.
+An iterator helper's argument-validation failure: `require_callable_arg`
+(`builtins/iterators.rs`) builds the error, closes the borrowed iterator
+(`IfAbruptCloseIterator`), then throws the original error even if close fails.
+It serves eight callable-argument helpers. Construct the error **before** close
+(user `return()` can rebind `TypeError`), and GC-root it **across** close (the
+collector cannot see Rust locals). This differs from a Receiver Guard: only 9
+of 14 helpers check `this`, which supplies no iterator to close.
 _Avoid_: close-and-throw, argument check, iterator preamble.

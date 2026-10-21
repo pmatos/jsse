@@ -23,6 +23,7 @@ pub(crate) mod plural_rules_state;
 mod primitive_constructors;
 mod promise;
 mod proxy;
+mod reduction;
 mod reflect;
 pub(crate) mod regexp;
 mod regexp_lookbehind;
