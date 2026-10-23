@@ -172,7 +172,7 @@ Per-test timing data is written to `/tmp/timing-{engine}.json` after each run.
 
 ## Fuzzing
 
-Two `cargo-fuzz` targets live under `fuzz/`: `parse_roundtrip` (the parser
+Two `cargo-fuzz` targets live under `fuzz/`: `parse` (the parser
 must never panic on arbitrary bytes) and `differential` (jsse vs `node` on
 the same source, surfacing divergences no fixed corpus would). See
 `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md` for the design
@@ -180,7 +180,7 @@ and `.claude/skills/fuzzing/SKILL.md` for the full run/triage workflow.
 
 ```bash
 cargo install cargo-fuzz --locked
-cargo +nightly fuzz run parse_roundtrip -- -max_total_time=60
+cargo +nightly fuzz run parse -- -max_total_time=60
 cargo build --release   # differential needs the release binary
 cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
 ```

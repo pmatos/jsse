@@ -1,5 +1,5 @@
-# cargo-fuzz targets for the parser (parse_roundtrip) and jsse-vs-node
-# divergences (differential). See docs/adr/0003-fuzz-lib-target-and-subprocess-differential.md
+# cargo-fuzz targets for the parser (parse) and jsse-vs-node
+# divergences (differential). See docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md
 # and .claude/skills/fuzzing/SKILL.md for the design and triage workflow.
 #
 # fuzz-smoke (pull_request gate) only replays the committed seed corpus
@@ -52,11 +52,11 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Build parse_roundtrip fuzz target
-        run: cargo +nightly fuzz build parse_roundtrip --sanitizer none
+      - name: Build parse fuzz target
+        run: cargo +nightly fuzz build parse --sanitizer none
 
       - name: Replay seed corpus (deterministic, no new mutation)
-        run: cargo +nightly fuzz run parse_roundtrip --sanitizer none -- -runs=0 fuzz/corpus/parse_roundtrip
+        run: cargo +nightly fuzz run parse --sanitizer none -- -runs=0 fuzz/corpus/parse
 
       - name: Upload crash artifacts
         if: failure()
@@ -91,8 +91,8 @@ jobs:
       - name: Build release jsse (differential target's other engine)
         run: cargo build --release
 
-      - name: Fuzz parse_roundtrip (new mutations, 5 min budget)
-        run: cargo +nightly fuzz run parse_roundtrip --sanitizer none -- -max_total_time=300 fuzz/corpus/parse_roundtrip
+      - name: Fuzz parse (new mutations, 5 min budget)
+        run: cargo +nightly fuzz run parse --sanitizer none -- -max_total_time=300 fuzz/corpus/parse
 
       - name: Fuzz differential (new mutations, 5 min budget)
         run: cargo +nightly fuzz run differential --sanitizer none -- -max_total_time=300 -timeout=30 fuzz/corpus/differential

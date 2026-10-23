@@ -15,8 +15,8 @@ path = ".."
 default-features = false
 
 [[bin]]
-name = "parse_roundtrip"
-path = "fuzz_targets/parse_roundtrip.rs"
+name = "parse"
+path = "fuzz_targets/parse.rs"
 test = false
 doc = false
 bench = false

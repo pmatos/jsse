@@ -5,13 +5,13 @@ description: >-
   "run cargo fuzz", "fuzz jsse vs node", "check for fuzzer crashes",
   "triage a fuzz crash", "minimize a fuzz artifact", or wants to drive
   a cargo-fuzz run or triage a crash/divergence it found. Covers both
-  the parse_roundtrip and differential targets under fuzz/.
+  the parse and differential targets under fuzz/.
 version: 0.1.0
 ---
 
 # Fuzzing
 
-Two `cargo-fuzz` targets live under `fuzz/`: `parse_roundtrip` (parsing
+Two `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
 arbitrary bytes must never panic) and `differential` (jsse vs `node` on
 the same source). See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
 for why they're built the way they are, and the `Divergence Tier` entry
@@ -33,7 +33,7 @@ build/corpus/artifact state), then, only if it finds something,
      cleanly if absent.
 2. **Regression replay (fast, deterministic, safe to run anytime):**
    ```bash
-   cargo +nightly fuzz run parse_roundtrip -- -runs=0 fuzz/corpus/parse_roundtrip
+   cargo +nightly fuzz run parse -- -runs=0 fuzz/corpus/parse
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
    This is exactly what CI's `fuzz-smoke` job runs on every PR. It replays
@@ -43,10 +43,10 @@ build/corpus/artifact state), then, only if it finds something,
 3. **New-mutation fuzzing (can find fresh, previously-unknown bugs at any
    time — this is expected, not a sign something is broken):**
    ```bash
-   cargo +nightly fuzz run parse_roundtrip -- -max_total_time=60
+   cargo +nightly fuzz run parse -- -max_total_time=60
    cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
    ```
-   `parse_roundtrip` runs at libFuzzer's normal in-process speed.
+   `parse` runs at libFuzzer's normal in-process speed.
    `differential` is much slower (two subprocess spawns per iteration,
    tens of iterations/sec, not thousands) by design — see the ADR. Budget
    accordingly; CI's nightly `fuzz-deep` job gives each target 5 minutes.
@@ -58,7 +58,7 @@ build/corpus/artifact state), then, only if it finds something,
 
 **First, tell the two failure shapes apart** — they need different next steps:
 
-- **`parse_roundtrip` crashed** (a real panic/abort — this target has no
+- **`parse` crashed** (a real panic/abort — this target has no
   other way to fail): always worth investigating. Go to "Root-cause and
   file" below.
 - **`differential` panicked**: the panic message says which tier fired.
@@ -76,7 +76,7 @@ cargo +nightly fuzz tmin <target> fuzz/artifacts/<target>/crash-<hash>
 same failure — use that (not the original, often much larger) input in
 the issue report.
 
-For `parse_roundtrip`, also reproduce outside the fuzzer to get a full
+For `parse`, also reproduce outside the fuzzer to get a full
 Rust backtrace, since the release build used in CI/most local runs has
 overflow-checks off and won't panic on the same input a debug build will:
 ```bash
@@ -98,7 +98,7 @@ whatever session found it.**
    authority order.
 2. `gh issue create` with: the minimized repro, the exact command used to
    trigger it, the tier (for `differential`) or panic message/backtrace
-   (for `parse_roundtrip`), and — if you have a hypothesis — what looks
+   (for `parse`), and — if you have a hypothesis — what looks
    wrong, without asserting the fix. Link back to whichever issue drove
    the fuzzing session, if any.
 3. Stop there. The fix (if one is warranted) is its own PR, scoped to the

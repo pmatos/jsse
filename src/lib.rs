@@ -58,8 +58,8 @@ where
 }
 
 /// Parses `data` and discards the result, panicking only if the parser
-/// itself panics/aborts. Backs the `parse_roundtrip` fuzz target
-/// (`fuzz/fuzz_targets/parse_roundtrip.rs`): a parse *error* is a normal
+/// itself panics/aborts. Backs the `parse` fuzz target
+/// (`fuzz/fuzz_targets/parse.rs`): a parse *error* is a normal
 /// outcome for arbitrary bytes, not a finding, so the `Result` is discarded
 /// entirely inside `run_on_engine_stack`'s closure — `ast::Program` isn't
 /// `Send` (it's `Rc`-based), so it could not cross the thread boundary
