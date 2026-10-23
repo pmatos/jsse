@@ -160,8 +160,10 @@ pub(super) fn try_shift(interp: &Interpreter, o: &JsValue, len: usize) -> Option
         if len == 0 || !b.is_plain_dense_array(len) {
             return None;
         }
-        // The hole scan is O(n), so it only runs when holes would matter.
-        if !holes_movable(interp, &b, true) && has_hole(b.array_elements()?) {
+        // Holes only matter when moving across them is unsafe, and the O(n)
+        // scan for them is worth running only then.
+        let movable_across_holes = b.extensible && proto_chain_index_free(interp, b.prototype_id);
+        if !movable_across_holes && has_hole(b.array_elements()?) {
             return None;
         }
     }
@@ -268,8 +270,7 @@ pub(super) fn try_splice(
     let removed: Vec<JsValue> = ob
         .array_elements_mut()
         .unwrap()
-        .splice(start..start + delete_count, items.iter().cloned())
-        .collect();
+        .splice(start..start + delete_count, items.iter().cloned());
     ob.set_dense_array_length(new_len);
     if !removed.is_empty() {
         ab.array_elements_mut().unwrap().extend(removed);

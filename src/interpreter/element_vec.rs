@@ -9,12 +9,12 @@
 use super::Interpreter;
 use super::types::JsObjectData;
 use crate::types::JsValue;
-use std::ops::{Deref, DerefMut, RangeBounds};
+use std::ops::{Deref, DerefMut, Range};
 
 /// Below this many dead slots a compaction is never worth the move.
 const MIN_COMPACT_HEAD: usize = 32;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub(crate) struct ElementVec {
     buf: Vec<JsValue>,
     head: usize,
@@ -31,7 +31,9 @@ impl ElementVec {
         if self.buf.len() == self.head {
             return None;
         }
-        self.buf.pop()
+        let last = self.buf.pop();
+        self.reset_if_empty();
+        last
     }
 
     /// Removes and returns the first element; `None` when empty.
@@ -66,24 +68,21 @@ impl ElementVec {
         self.buf.resize(self.head + len, value);
     }
 
+    /// Replaces `range` of the live window, returning the removed elements.
     pub(crate) fn splice<I: IntoIterator<Item = JsValue>>(
         &mut self,
-        range: impl RangeBounds<usize>,
+        range: Range<usize>,
         replace_with: I,
-    ) -> std::vec::IntoIter<JsValue> {
-        self.compact();
-        self.buf
-            .splice(range, replace_with)
-            .collect::<Vec<_>>()
-            .into_iter()
+    ) -> Vec<JsValue> {
+        let range = self.head + range.start..self.head + range.end;
+        self.buf.splice(range, replace_with).collect()
     }
 
     pub(crate) fn remove(&mut self, index: usize) -> JsValue {
         if index == 0 && !self.is_empty() {
             return self.pop_front().expect("non-empty");
         }
-        self.compact();
-        self.buf.remove(index)
+        self.buf.remove(self.head + index)
     }
 
     pub(crate) fn into_vec(mut self) -> Vec<JsValue> {
@@ -108,6 +107,13 @@ impl ElementVec {
             self.buf.clear();
             self.head = 0;
         }
+    }
+}
+
+impl Clone for ElementVec {
+    /// Copies only the live window, not the dead prefix.
+    fn clone(&self) -> Self {
+        Self::from(self.to_vec())
     }
 }
 
@@ -213,6 +219,42 @@ mod tests {
         assert_eq!(v.pop().unwrap().as_number(), Some(199.0));
         v.push(num(7));
         assert_eq!(v.last().unwrap().as_number(), Some(7.0));
+    }
+
+    #[test]
+    fn pop_to_empty_resets_the_dead_prefix() {
+        let mut v = ElementVec::from((0..40).map(num).collect::<Vec<_>>());
+        for _ in 0..10 {
+            v.pop_front();
+        }
+        while v.pop().is_some() {}
+        assert!(v.is_empty());
+        v.push(num(1));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].as_number(), Some(1.0));
+    }
+
+    #[test]
+    fn splice_resize_extend_and_clone_see_only_live_window() {
+        let mut v = ElementVec::from((0..40).map(num).collect::<Vec<_>>());
+        for _ in 0..10 {
+            v.pop_front();
+        }
+        let removed = v.splice(0..2, [num(-1)]);
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].as_number(), Some(10.0));
+        assert_eq!(v.len(), 29);
+        assert_eq!(v[0].as_number(), Some(-1.0));
+        v.extend([num(100)]);
+        v.resize(32, JsValue::UNDEFINED);
+        assert_eq!(v.len(), 32);
+        assert!(v[31].is_undefined());
+        assert_eq!(v[29].as_number(), Some(39.0));
+        let c = v.clone();
+        assert_eq!(c.len(), 32);
+        assert_eq!(c[0].as_number(), Some(-1.0));
+        assert_eq!(v.take().len(), 32);
+        assert!(v.is_empty());
     }
 
     #[test]
