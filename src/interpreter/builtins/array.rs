@@ -484,7 +484,7 @@ pub(crate) fn sort_with_comparefn(
     items: &mut Vec<JsValue>,
     compare_fn: &JsValue,
 ) -> Result<(), JsValue> {
-    merge_sort_by(items, |x, y| {
+    super::merge_sort::merge_sort_by(items, |x, y| {
         let v = match interp.call_function(compare_fn, &JsValue::UNDEFINED, &[x.clone(), y.clone()])
         {
             Completion::Normal(v) => v,
@@ -494,84 +494,6 @@ pub(crate) fn sort_with_comparefn(
         let n = interp.to_number_value(&v)?;
         Ok(n.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
     })
-}
-
-// Stable bottom-up merge sort driven by a fallible comparator. A user
-// comparefn need not be a consistent comparator (the resulting order is then
-// implementation-defined), and `slice::sort_by` panics when it detects such a
-// total-order violation, so user-driven sorts must go through this instead.
-// Stops at the first `Err`, leaving `items` a permutation of its input.
-fn merge_sort_by<E>(
-    items: &mut Vec<JsValue>,
-    mut cmp: impl FnMut(&JsValue, &JsValue) -> Result<std::cmp::Ordering, E>,
-) -> Result<(), E> {
-    let n = items.len();
-    if n < 2 {
-        return Ok(());
-    }
-    let mut src = std::mem::take(items);
-    let mut dst: Vec<JsValue> = Vec::with_capacity(n);
-    let mut width = 1;
-    while width < n {
-        dst.clear();
-        if let Err(e) = merge_pass(&src, &mut dst, width, &mut cmp) {
-            *items = src;
-            return Err(e);
-        }
-        std::mem::swap(&mut src, &mut dst);
-        width = width.saturating_mul(2);
-    }
-    *items = src;
-    Ok(())
-}
-
-// One bottom-up pass of `merge_sort_by`: merges each pair of adjacent
-// `width`-long runs of `src` into `dst`.
-fn merge_pass<E>(
-    src: &[JsValue],
-    dst: &mut Vec<JsValue>,
-    width: usize,
-    cmp: &mut impl FnMut(&JsValue, &JsValue) -> Result<std::cmp::Ordering, E>,
-) -> Result<(), E> {
-    let n = src.len();
-    let mut lo = 0;
-    while lo < n {
-        let mid = (lo + width).min(n);
-        let hi = (lo + 2 * width).min(n);
-        if mid == hi {
-            dst.extend_from_slice(&src[lo..hi]);
-            lo = hi;
-            continue;
-        }
-        // Already in order: one comparison instead of a full merge, so
-        // sorted input costs about n comparefn calls, not (n/2)*log2(n).
-        if cmp(&src[mid - 1], &src[mid])? != std::cmp::Ordering::Greater {
-            dst.extend_from_slice(&src[lo..hi]);
-            lo = hi;
-            continue;
-        }
-        // With a one-element left run that check was the merge's first
-        // comparison, so reuse its result instead of calling cmp again.
-        let mut known_first = (mid - lo == 1).then_some(std::cmp::Ordering::Greater);
-        let (mut i, mut j) = (lo, mid);
-        while i < mid && j < hi {
-            let ord = match known_first.take() {
-                Some(ord) => ord,
-                None => cmp(&src[i], &src[j])?,
-            };
-            if ord == std::cmp::Ordering::Greater {
-                dst.push(src[j].clone());
-                j += 1;
-            } else {
-                dst.push(src[i].clone());
-                i += 1;
-            }
-        }
-        dst.extend_from_slice(&src[i..mid]);
-        dst.extend_from_slice(&src[j..hi]);
-        lo = hi;
-    }
-    Ok(())
 }
 
 fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<bool, JsValue> {
