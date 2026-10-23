@@ -1,0 +1,7 @@
+var n = 0;
+for (var i = 0; i < 25; i++) {
+  n += eval('({ a: [' + i + '] })').a[0];
+  n += new Function('x', 'return { r: [x, { y: x }] }')(i).r[1].y;
+  n += (0, eval)('var __g' + i + ' = { v: [' + i + '] }; __g' + i + '.v[0]');
+}
+n;

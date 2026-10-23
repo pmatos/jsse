@@ -1,0 +1,8 @@
+var m = new Map(), n = 0;
+for (var i = 0; i < 120; i++) {
+  var k = { i: i };
+  m.set(k, { v: [i], k: k });
+  if (m.size > 15) { var first = m.keys().next().value; m.delete(first); }
+  n += m.get(k).v[0];
+}
+n + m.size;

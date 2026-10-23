@@ -1,0 +1,8 @@
+var syms = [], bigs = [], strs = [];
+for (var i = 0; i < 50; i++) {
+  syms.push(Symbol('s' + i)); bigs.push(BigInt(i) ** 3n + 1n); strs.push('str' + i + 'x'.repeat(i % 7));
+  var o = {}; o[syms[i]] = { v: bigs[i] };
+}
+var n = 0n;
+for (var j = 0; j < 50; j++) n += bigs[j] + BigInt(strs[j].length);
+String(n) + syms.length + Symbol.for('k').description;

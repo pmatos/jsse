@@ -1,0 +1,8 @@
+var keep = [], n = 0;
+for (var i = 0; i < 400; i++) {
+  var o = { i: i, a: [i, { j: i }], s: 'k' + i };
+  if (i % 5 == 0) keep.push(o);
+  n += o.a[1].j;
+  if (keep.length > 20) keep.shift();
+}
+n + keep.length;

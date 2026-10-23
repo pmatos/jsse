@@ -1,0 +1,10 @@
+
+var o = {
+  get g() { return { a: [1, 2] }; },
+  set g(v) { this._s = { v: v, w: [v] }; },
+  valueOf: function () { return { n: 1 }.n + [2].length; },
+  toString: function () { return 'o' + { a: 1 }.a; }
+};
+var n = 0;
+for (var i = 0; i < 30; i++) { o.g = { i: i }; n += o.g.a.length + (o + 1) + `${o}`.length + o._s.w.length; }
+n;

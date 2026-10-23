@@ -1,0 +1,5 @@
+var fns = [];
+for (let i = 0; i < 40; i++) { let o = { i: i, a: [i] }; fns.push(() => o.a[0] + o.i); }
+var sum = 0;
+for (var f of fns) sum += f();
+sum;
