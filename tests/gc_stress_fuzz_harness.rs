@@ -20,7 +20,10 @@ fn stress_is_applied_in_process() {
         let (_, off) = stressed(ALLOCATING, bytecode, 0);
         assert_eq!(off, 0, "period 0 must not count stress safepoints");
         let (_, on) = stressed(ALLOCATING, bytecode, 1);
-        assert!(on > 0, "period 1 must count stress safepoints (bytecode={bytecode})");
+        assert!(
+            on > 0,
+            "period 1 must count stress safepoints (bytecode={bytecode})"
+        );
     }
 }
 
@@ -50,7 +53,10 @@ fn uncaught_error_survives_collections_in_later_jobs() {
     let src = "async function f() { await 1; await 2; } f(); nope;";
     for bytecode in [true, false] {
         let (base, _) = stressed(src, bytecode, 0);
-        assert_eq!(base.outcome, jsse::SigOutcome::Threw("ReferenceError".into()));
+        assert_eq!(
+            base.outcome,
+            jsse::SigOutcome::Threw("ReferenceError".into())
+        );
         for period in [1, 2, 3] {
             let (sig, _) = stressed(src, bytecode, period);
             assert_eq!(base, sig, "period {period}, bytecode={bytecode}");

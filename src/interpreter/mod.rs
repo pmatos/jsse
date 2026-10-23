@@ -2459,9 +2459,7 @@ impl Interpreter {
                     self.pending_exit = Some(*code);
                 }
                 // Keep path set during microtask draining so async callbacks can use relative imports
-                self.with_module_key(Some(module_key), |interp| {
-                    interp.drain_after_run(&r)
-                });
+                self.with_module_key(Some(module_key), |interp| interp.drain_after_run(&r));
                 r
             }
         }
