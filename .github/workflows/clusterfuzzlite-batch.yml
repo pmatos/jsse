@@ -23,7 +23,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Build fuzzers (ASan)
-        id: build
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: rust
@@ -31,7 +30,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run fuzzers (batch, 30 min)
-        id: run
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: rust

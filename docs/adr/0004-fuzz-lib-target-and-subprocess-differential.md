@@ -116,7 +116,7 @@ This surfaced in practice, not hypothetically: a 20-second local
 new-mutation run against `parse` — no sanitizer, no special
 seed — found a real integer-underflow panic in the parser (filed as
 issue #597) while this tooling was being built. It was filed and left
-unfixed here, and its existence is also why `fuzz-smoke`'s PR gate is
+unfixed here, and its existence is also why the original `fuzz-smoke` PR gate was
 corpus-replay-only (`-runs=0`) rather than running any new-mutation pass:
 a mutation pass can hit this exact bug (or another latent one) on any
 future PR, at random, which would make the fuzz gate itself flaky for
@@ -140,9 +140,9 @@ reasons that have nothing to do with the PR under test.
   the main crate; `cd fuzz && cargo fmt --check && cargo clippy --all-targets
   -- -D warnings` was run manually during implementation and is clean, but
   isn't wired into the automated gate.
-- **`ASan`/other sanitizers in `fuzz-smoke`.** `--sanitizer none`: `unsafe`
+- **`ASan`/other sanitizers in the original `fuzz-smoke` job.** `--sanitizer none`: `unsafe`
   usage is small (29 hits, grep-confirmed) and ASan roughly doubles build
-  time on an already `icu`-heavy dependency tree. `fuzz-deep` could opt in
+  time on an already `icu`-heavy dependency tree. The nightly job could opt in
   later if UB detection beyond debug-assertions/overflow-checks turns out
   to matter. (Update: ADR-2026-10-23-0854 runs `parse` under ASan in ClusterFuzzLite;
   `differential` still has no sanitizer.)

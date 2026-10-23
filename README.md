@@ -202,7 +202,7 @@ retention, after which fuzzing restarts from the committed seeds.
 
 To triage a ClusterFuzzLite failure, open the failed run, download its
 `clusterfuzzlite-*-crashes` artifact (or copy the testcase from the log) and
-reproduce with `cargo +nightly fuzz run parse <testcase>`; see
+reproduce with `cargo +nightly fuzz run --debug-assertions parse <testcase>`; see
 `.claude/skills/fuzzing/SKILL.md`. A finding from either target is a lead, not
 a fix to make in the PR that touches the fuzz tooling itself: file it as its
 own issue and fix it against `spec/`/test262, never by matching `node`'s

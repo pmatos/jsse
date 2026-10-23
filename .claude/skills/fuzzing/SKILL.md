@@ -68,8 +68,10 @@ build/corpus/artifact state), then, only if it finds something,
    log shows the ASan report and testcase path; the `clusterfuzzlite-*-crashes`
    artifact holds the testcase file(s).
 2. Download it (`gh run download <run-id> -n clusterfuzzlite-pr-crashes`) and
-   reproduce locally: `cargo +nightly fuzz run parse <testcase>` (cargo-fuzz
-   uses ASan by default), then `cargo +nightly fuzz tmin parse <testcase>`.
+   reproduce locally: `cargo +nightly fuzz run --debug-assertions parse <testcase>`
+   (cargo-fuzz uses ASan by default; CI builds with `--debug-assertions`, so
+   overflow panics only reproduce with it), then
+   `cargo +nightly fuzz tmin --debug-assertions parse <testcase>`.
 3. Decide if the PR caused it: re-run against `main`'s commit. A crash that
    also reproduces on `main` is a latent bug unrelated to the PR (the
    continuous build normally filters these out, but not every one); file it
