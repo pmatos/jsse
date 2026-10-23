@@ -3341,7 +3341,7 @@ impl Interpreter {
             &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(values.len() as f64), true, false, false),
         );
-        *obj_data.array_elements_mut().unwrap() = values;
+        obj_data.set_array_elements(values);
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
     }
@@ -3378,7 +3378,7 @@ impl Interpreter {
             &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(len as f64), true, false, false),
         );
-        *obj_data.array_elements_mut().unwrap() = array_elements;
+        obj_data.set_array_elements(array_elements);
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
     }

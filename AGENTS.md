@@ -80,6 +80,7 @@ local hook was bypassed.
     - `date.rs` — setup_date_builtin
   - `atom.rs` — `Atom`: randomised-interner identifier atoms (pointer equality, precomputed hash)
   - `binding_map.rs` — `BindingMap`: atom-keyed `Environment.bindings` storage and the `BindingKey`/`BindingName` lookup traits
+  - `element_vec.rs` — `ElementVec`: Array element storage (`Vec<JsValue>` plus a dead-slot head offset) so `shift` is amortised O(1); derefs to the live `[JsValue]` window
   - `keyed_entries.rs` — `KeyedEntries`: Map/Set/WeakMap/WeakSet [[MapData]]/[[SetData]] storage, an insertion-ordered slot list with a SameValueZero hash index; iterators hold spec-index cursors stepped by `next_live`, so tombstone compaction needs no iterator fix-up
   - `global_access.rs` — Global Data Fast Path: clone-free scope walk plus one re-validated own-property read/write of a global-object data property, with per-site `GlobalHint` slot hints
 - `scripts/` — Test runners and utilities

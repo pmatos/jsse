@@ -136,7 +136,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::number(len as f64), false, false, false),
         );
-        *obj_data.array_elements_mut().unwrap() = values;
+        obj_data.set_array_elements(values);
         obj_data.extensible = false;
         let id = self.alloc_object(obj_data);
         JsValue::object(id)
@@ -1582,7 +1582,7 @@ impl Interpreter {
             .expect("ArrayAppend target is an array literal");
         let cell = self.get_object_cell_expect(id);
         let mut obj = cell.borrow_mut();
-        let start = obj.array_elements().map_or(0, Vec::len);
+        let start = obj.array_len();
         for (offset, value) in values.iter().enumerate() {
             if value.is_undefined() {
                 obj.insert_value((start + offset).to_string(), value.clone());
