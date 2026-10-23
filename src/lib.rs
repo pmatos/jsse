@@ -155,6 +155,152 @@ pub fn run_script_with_budget(
     (outcome, interp.steps_used())
 }
 
+/// Step budget for each run of the `execute` fuzz target.
+const FUZZ_EXECUTE_STEP_BUDGET: u64 = 100_000;
+
+/// Fixed `Math.random` seed shared by both runs of the `execute` fuzz target.
+const FUZZ_EXECUTE_RANDOM_SEED: u64 = 0x5EED_F0F0_1174_CAFE;
+
+/// Identifiers whose presence means the input must not run at all:
+/// `$262.agent.start` spawns an unbudgeted thread, `sleep` is a real
+/// wall-clock sleep and `waitAsync` parks the event loop on a condvar.
+const FUZZ_EXECUTE_SKIP_IDENTS: &[&str] = &["agent", "waitAsync", "sleep"];
+
+/// Identifiers whose presence means the observable outcome legitimately varies
+/// between two runs (clock, GC timing, shared memory), so the signatures are
+/// not compared. Both modes still run for panic and sanitizer coverage.
+const FUZZ_EXECUTE_NONDETERMINISTIC_IDENTS: &[&str] = &[
+    "Date",
+    "Temporal",
+    "WeakRef",
+    "FinalizationRegistry",
+    "$262",
+    "Atomics",
+    "SharedArrayBuffer",
+    "performance",
+    "gc",
+];
+
+/// What a script run observably did, ignoring step counts and the wording of
+/// error messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SigOutcome {
+    /// Normal completion, with the rendered completion value.
+    Completed(String),
+    /// Uncaught exception: the error's `name` for objects, else the rendered value.
+    Threw(String),
+    ParseError,
+    BudgetExhausted,
+}
+
+/// The observable result of one run: how it ended plus the captured
+/// `print` / `console.*` output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSignature {
+    pub outcome: SigOutcome,
+    pub output: String,
+}
+
+/// Runs `src` in a fresh, deterministic interpreter (fixed `Math.random` seed,
+/// virtual timers, captured host output) under `budget` steps, on the bytecode
+/// VM or the tree-walker, and returns its [`RunSignature`]. Call it on an
+/// engine-sized stack (`run_on_engine_stack`).
+pub fn run_script_observed(src: &str, budget: u64, bytecode: bool) -> RunSignature {
+    let Some(program) = parse_script(src) else {
+        return RunSignature {
+            outcome: SigOutcome::ParseError,
+            output: String::new(),
+        };
+    };
+    let mut interp = interpreter::Interpreter::new();
+    interp.bytecode_enabled = bytecode;
+    interp.set_step_budget(Some(budget));
+    interp.set_virtual_timers(true);
+    interp.set_math_random_seed(FUZZ_EXECUTE_RANDOM_SEED);
+    interp.capture_host_output();
+    let completion = interp.run(&program);
+    let outcome = if interp.step_budget_exhausted() {
+        SigOutcome::BudgetExhausted
+    } else {
+        match completion {
+            interpreter::Completion::Throw(val) => SigOutcome::Threw(interp.thrown_class(&val)),
+            interpreter::Completion::Normal(val) => SigOutcome::Completed(format!("{val}")),
+            _ => SigOutcome::Completed(String::new()),
+        }
+    };
+    RunSignature {
+        outcome,
+        output: interp.take_captured_host_output(),
+    }
+}
+
+fn contains_ident(src: &str, ident: &str) -> bool {
+    let is_ident_char = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    src.match_indices(ident).any(|(at, _)| {
+        let before = src[..at].chars().next_back();
+        let after = src[at + ident.len()..].chars().next();
+        !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
+    })
+}
+
+/// Describes how two runs of the same source differ, or `None` when they agree
+/// or the pair is not comparable (either run exhausted its budget: the modes
+/// count steps differently, so they stop at different points).
+pub fn execution_divergence(bytecode: &RunSignature, tree_walker: &RunSignature) -> Option<String> {
+    if bytecode.outcome == SigOutcome::BudgetExhausted
+        || tree_walker.outcome == SigOutcome::BudgetExhausted
+        || bytecode == tree_walker
+    {
+        return None;
+    }
+    Some(format!(
+        "bytecode:    {bytecode:?}\ntree-walker: {tree_walker:?}"
+    ))
+}
+
+/// Runs `src` on the bytecode VM and then the tree-walker and returns both
+/// signatures, or `None` when the input is skipped (it contains an identifier
+/// that would hang or escape the budget) or its outcome is not comparable.
+/// Skipped-for-nondeterminism inputs still run in both modes.
+pub fn fuzz_execute_signatures(src: &str) -> Option<(RunSignature, RunSignature)> {
+    if FUZZ_EXECUTE_SKIP_IDENTS
+        .iter()
+        .any(|ident| contains_ident(src, ident))
+    {
+        return None;
+    }
+    let bytecode = run_script_observed(src, FUZZ_EXECUTE_STEP_BUDGET, true);
+    let tree_walker = run_script_observed(src, FUZZ_EXECUTE_STEP_BUDGET, false);
+    if FUZZ_EXECUTE_NONDETERMINISTIC_IDENTS
+        .iter()
+        .any(|ident| contains_ident(src, ident))
+    {
+        return None;
+    }
+    Some((bytecode, tree_walker))
+}
+
+/// Backs the `execute` fuzz target (`fuzz/fuzz_targets/execute.rs`): runs the
+/// input on both execution engines under a step budget. A panic, abort or
+/// sanitizer report is a finding, and so is an observable difference between
+/// the bytecode VM and the tree-walker (reported as a panic starting with
+/// `execution divergence`). Inputs that exhaust the budget are skipped.
+pub fn fuzz_execute_bytes(data: &[u8]) {
+    let Ok(src) = std::str::from_utf8(data) else {
+        return;
+    };
+    run_on_engine_stack(move || {
+        if let Some((bytecode, tree_walker)) = fuzz_execute_signatures(src)
+            && let Some(report) = execution_divergence(&bytecode, &tree_walker)
+        {
+            panic!(
+                "execution divergence ({} bytes of source)\n{report}",
+                src.len()
+            );
+        }
+    });
+}
+
 #[cfg(test)]
 mod lib_tests {
     use super::*;

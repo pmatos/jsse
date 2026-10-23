@@ -1,3 +1,4 @@
+use super::super::fuzz_host::HostStream;
 use super::super::*;
 
 fn format_host_args(args: &[JsValue]) -> String {
@@ -5,23 +6,13 @@ fn format_host_args(args: &[JsValue]) -> String {
     parts.join(" ")
 }
 
-fn console_stdout_write(
-    _interp: &mut Interpreter,
-    _this: &JsValue,
-    args: &[JsValue],
-) -> Completion {
-    println!("{}", format_host_args(args));
+fn console_stdout_write(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
+    interp.host_write_line(HostStream::Out, &format_host_args(args));
     Completion::Normal(JsValue::UNDEFINED)
 }
 
-fn console_stderr_write(
-    _interp: &mut Interpreter,
-    _this: &JsValue,
-    args: &[JsValue],
-) -> Completion {
-    use std::io::Write as _;
-    let line = format!("{}\n", format_host_args(args));
-    let _ = std::io::stderr().write_all(line.as_bytes());
+fn console_stderr_write(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
+    interp.host_write_line(HostStream::Err, &format_host_args(args));
     Completion::Normal(JsValue::UNDEFINED)
 }
 
@@ -111,14 +102,13 @@ impl Interpreter {
                 "assert".to_string(),
                 0,
                 |interp, _this, args| {
-                    use std::io::Write as _;
                     if !args.first().is_some_and(|v| interp.to_boolean_val(v)) {
                         let line = if args.len() > 1 {
-                            format!("Assertion failed: {}\n", format_host_args(&args[1..]))
+                            format!("Assertion failed: {}", format_host_args(&args[1..]))
                         } else {
-                            "Assertion failed\n".to_string()
+                            "Assertion failed".to_string()
                         };
-                        let _ = std::io::stderr().write_all(line.as_bytes());
+                        interp.host_write_line(HostStream::Err, &line);
                     }
                     Completion::Normal(JsValue::UNDEFINED)
                 },
@@ -180,8 +170,8 @@ impl Interpreter {
             let print_fn = self.create_function(JsFunction::native(
                 "print".to_string(),
                 1,
-                |_interp, _this, args| {
-                    println!("{}", format_host_args(args));
+                |interp, _this, args| {
+                    interp.host_write_line(HostStream::Out, &format_host_args(args));
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
