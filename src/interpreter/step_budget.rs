@@ -3,12 +3,12 @@
 //! callback). Exhaustion is fatal and uncatchable; it rides the
 //! `Completion::Exit` / `pending_exit` machinery.
 
-/// Process exit status for budget exhaustion (the `timeout(1)` convention).
-const STEP_BUDGET_EXIT_CODE: i32 = 124;
-
 use super::{Completion, EnvRef, Interpreter, scheduler};
 use crate::ast::Statement;
 use crate::types::JsValue;
+
+/// Process exit status for budget exhaustion (the `timeout(1)` convention).
+const STEP_BUDGET_EXIT_CODE: i32 = 124;
 
 #[derive(Default)]
 pub(crate) struct StepBudget {
@@ -59,16 +59,16 @@ impl Interpreter {
     /// boundary, a loop back-edge, a microtask job or a timer callback.
     /// Exhaustion is fatal and uncatchable: the run ends like `__host_exit`,
     /// with `pending_exit == Some(STEP_BUDGET_EXIT_CODE)`.
-    pub fn set_step_budget(&mut self, limit: Option<u64>) {
+    pub(crate) fn set_step_budget(&mut self, limit: Option<u64>) {
         self.step_budget.set(limit);
         self.gc.set_budget_active(limit.is_some());
     }
 
-    pub fn step_budget_exhausted(&self) -> bool {
+    pub(crate) fn step_budget_exhausted(&self) -> bool {
         self.step_budget.exhausted()
     }
 
-    pub fn steps_used(&self) -> u64 {
+    pub(crate) fn steps_used(&self) -> u64 {
         self.step_budget.used()
     }
 

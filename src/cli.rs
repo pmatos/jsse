@@ -77,9 +77,8 @@ fn run_source_with_interp(
 
 /// Map a run result to a process exit code. A pending `__host_exit` (issue
 /// #229) takes precedence: its code becomes the process status and the sentinel
-/// throw is not reported as an error. `pending_exit` is always `None` unless the
-/// node host floor was enabled, so this is behaviour-identical to before when
-/// `--node` is absent.
+/// throw is not reported as an error. `pending_exit` is only set by the node
+/// host floor (`--node`) or an exhausted `--step-budget`.
 /// Emits the opt-in execution counters (issue #526). Called from every path
 /// that finishes executing JavaScript — `exit_code_from_result` covers the
 /// eval/file/prelude exits, and the REPL exits call it directly — so the

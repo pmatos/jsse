@@ -1182,9 +1182,9 @@ fn run_chunk_with_var_prologue(
     result
 }
 
-/// A safepoint between statements (empty scratch stacks); true if the budget is spent.
+/// Safepoint; true if budget spent.
 #[inline(always)]
-fn stmt_safepoint(
+fn safepoint_with_empty_stacks(
     interp: &mut Interpreter,
     stack: &[JsValue],
     persistent: usize,
@@ -2424,7 +2424,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 Op::Jump => {
                     let offset = decode_i16(chunk, pc) as i32;
                     if offset < 0
-                        && stmt_safepoint(
+                        && safepoint_with_empty_stacks(
                             interp,
                             stack,
                             usize::from(chunk.persistent_slots),
@@ -2727,7 +2727,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     return Completion::Yield(value);
                 }
                 Op::Safepoint => {
-                    if stmt_safepoint(
+                    if safepoint_with_empty_stacks(
                         interp,
                         stack,
                         usize::from(chunk.persistent_slots),

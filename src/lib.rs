@@ -147,10 +147,7 @@ pub fn run_script_with_budget(
     let completion = interp.run(&program);
     let outcome = if interp.step_budget_exhausted() {
         ScriptOutcome::StepBudgetExhausted
-    } else if matches!(
-        completion,
-        interpreter::Completion::Normal(_) | interpreter::Completion::Empty
-    ) {
+    } else if !completion.is_abrupt() {
         ScriptOutcome::Completed
     } else {
         ScriptOutcome::Threw
