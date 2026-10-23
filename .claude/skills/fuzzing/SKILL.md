@@ -5,15 +5,17 @@ description: >-
   "run cargo fuzz", "fuzz jsse vs node", "check for fuzzer crashes",
   "triage a fuzz crash", "minimize a fuzz artifact", or wants to drive
   a cargo-fuzz run or triage a crash/divergence it found. Covers both
-  the parse and differential targets under fuzz/.
+  the parse, execute and differential targets under fuzz/.
 version: 0.1.0
 ---
 
 # Fuzzing
 
-Two `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
-arbitrary bytes must never panic) and `differential` (jsse vs `node` on
-the same source). See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
+Three `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
+arbitrary bytes must never panic), `execute` (run in-process under a step
+budget on the bytecode VM and the tree-walker; panics and differences between
+the two are findings) and `differential` (jsse vs `node` on the same source).
+See `docs/adr/2026-10-23-1400-execute-fuzz-target.md` for `execute`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
 for why they're built the way they are, and the `Divergence Tier` entry
 in `CONTEXT.md` for the tiering `differential` uses.
 
@@ -34,6 +36,7 @@ build/corpus/artifact state), then, only if it finds something,
 2. **Regression replay (fast, deterministic, safe to run anytime):**
    ```bash
    cargo +nightly fuzz run parse -- -runs=0 fuzz/corpus/parse
+   cargo +nightly fuzz run execute -- -runs=0 -max_len=16384 fuzz/corpus/execute
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
    This replays the committed seed corpus with no new mutation — if this fails, something
@@ -43,9 +46,11 @@ build/corpus/artifact state), then, only if it finds something,
    time — this is expected, not a sign something is broken):**
    ```bash
    cargo +nightly fuzz run parse -- -max_total_time=60
+   cargo +nightly fuzz run execute -- -max_total_time=60 -max_len=16384 -timeout=30
    cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
    ```
-   `parse` runs at libFuzzer's normal in-process speed.
+   `parse` runs at libFuzzer's normal in-process speed; `execute` runs two
+   interpreters per input, about 200 executions/sec under ASan.
    `differential` is much slower (two subprocess spawns per iteration,
    tens of iterations/sec, not thousands) by design — see the ADR. Budget
    accordingly; CI's nightly `Fuzz` workflow gives `differential` 5 minutes.
@@ -55,8 +60,8 @@ build/corpus/artifact state), then, only if it finds something,
 
 ## Where CI runs each target
 
-- `parse`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
-  is a blocking per-PR check (120 s of fuzzing); `clusterfuzzlite-batch.yml`
+- `parse` and `execute`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
+  is a blocking per-PR check (120 s of fuzzing, shared between the two targets); `clusterfuzzlite-batch.yml`
   runs 30 minutes daily and stores the merged corpus as a GitHub Actions
   artifact that later batch and PR runs start from.
 - `differential`: `fuzz.yml`, nightly, 5 minutes, no sanitizer (needs `node`
@@ -88,6 +93,22 @@ build/corpus/artifact state), then, only if it finds something,
 - **`parse` crashed** (a real panic/abort — this target has no
   other way to fail): always worth investigating. Go to "Root-cause and
   file" below.
+- **`execute` failed**, one of:
+  - a panic, abort or ASan report: same flow as `parse`.
+  - a panic starting `execution divergence`: the bytecode VM and the
+    tree-walker disagree (an "Execution Divergence", defined in the `execute` ADR). The
+    message shows both signatures. Reproduce with the CLI in both modes and
+    diff stdout and the exit code: `jsse f.js` vs `jsse --no-bytecode f.js`.
+    The CLI differs from the fuzz runner (real timers and `Math.random`), so a
+    script using those may need the fuzz run to reproduce. Minimize with
+    `tmin`, then decide against `spec/` which mode is wrong. File one issue per
+    root cause. If the difference is spec-unspecified (for example error
+    message wording) the fix is to normalise it in `RunSignature` with a
+    comment naming the unspecified clause, never to hide a spec-defined one.
+  - a libFuzzer `timeout-*` or `oom-*` artifact: work the step budget does not
+    count (regex backtracking, huge `repeat`, some arrow-function loops). A
+    real missing resource limit; file it.
+  - Inputs that exhaust the step budget are skipped, never a finding.
 - **`differential` panicked**: the panic message says which tier fired.
   Only Tier 1 and Tier 2 panic (see the `Divergence Tier` glossary entry);
   Tier 3 is recorded, never a panic, so if `differential` panics at all,
@@ -146,7 +167,8 @@ don't, and filing every Tier 3 sample would just create noise.
 ## Corpus hygiene
 
 `fuzz/corpus/<target>/` holds the *committed* seed corpus (copied from
-`tests/*.js` and `test262-extra/*.js`, curated small for `differential`
+`tests/*.js` and `test262-extra/*.js`; `execute` also carries ~40 test262 tests
+generated by `scripts/gen-fuzz-execute-corpus.py` with the harness inlined, curated small for `differential`
 since it pays a subprocess-spawn cost per seed). Running `cargo fuzz run`
 without `-runs=0` writes newly-discovered inputs into this same directory
 by default — expect `git status` to show new untracked files after a

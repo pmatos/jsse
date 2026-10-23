@@ -595,10 +595,9 @@ impl IteratorNextIntrinsics {
     }
 }
 
-#[allow(clippy::type_complexity)]
 pub(crate) struct Realm {
     pub(crate) global_env: EnvRef,
-    math_random_state: u64,
+    pub(crate) math_random_state: u64,
     pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
     /// %Array.prototype.values%, captured when the realm's Array prototype is

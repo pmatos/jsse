@@ -149,7 +149,10 @@ reasons that have nothing to do with the PR under test.
 - **An in-process differential target with an interpreter step budget.**
   Would let `differential` run at libFuzzer speed instead of subprocess
   speed, but needs a real engine feature (an instruction/step budget) with
-  its own spec/perf implications, well beyond this issue.
+  its own spec/perf implications, well beyond this issue. (Update:
+  ADR-2026-10-23-1200 added the step budget and ADR-2026-10-23-1400 the
+  in-process `execute` target; it compares the bytecode VM against the
+  tree-walker rather than jsse against node.)
 - **A committed `fuzz/corpus/<target>/`-is-pristine guarantee.** `cargo
   fuzz run <target>` without `-runs=0` writes newly-discovered inputs into
   whatever corpus directory it's given, which defaults to
