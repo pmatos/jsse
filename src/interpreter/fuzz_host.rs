@@ -78,7 +78,7 @@ impl Interpreter {
         let Some(at) = self.scheduler.next_timer_deadline() else {
             return false;
         };
-        let now = self.scheduler.timers_mut().advance_clock_to(at);
-        self.run_due_timers_at(now)
+        self.scheduler.timers_mut().advance_clock_to(at);
+        self.run_due_timers()
     }
 }

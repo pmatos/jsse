@@ -57,10 +57,10 @@ impl TimerQueue {
         self.virtual_now = Some(Instant::now());
     }
 
-    pub(crate) fn advance_clock_to(&mut self, at: Instant) -> Instant {
-        let now = self.now().max(at);
-        self.virtual_now = self.virtual_now.map(|_| now);
-        now
+    pub(crate) fn advance_clock_to(&mut self, at: Instant) {
+        if let Some(now) = &mut self.virtual_now {
+            *now = (*now).max(at);
+        }
     }
 
     /// Arm a timer and return its id. Ids start at 1, so an id is always truthy

@@ -40,11 +40,6 @@ impl Interpreter {
     /// only as it is about to run, so a callback can still cancel a sibling
     /// that has not fired yet, and the queue goes on rooting the ones waiting.
     pub(crate) fn run_due_timers(&mut self) -> bool {
-        let now = self.scheduler.timers_mut().now();
-        self.run_due_timers_at(now)
-    }
-
-    pub(crate) fn run_due_timers_at(&mut self, now: std::time::Instant) -> bool {
         // One task must never re-enter another. A callback that nests a whole
         // interpreter run (`$262.evalScript`, say) reaches this again, and
         // would find the rest of its own batch — or a zero-delay interval
@@ -53,6 +48,7 @@ impl Interpreter {
         if self.dispatching_timers {
             return false;
         }
+        let now = self.scheduler.timers_mut().now();
         let due = self.scheduler.take_due_timers(now);
         if due.is_empty() {
             return false;
