@@ -1,0 +1,199 @@
+{
+ "intl_format": {
+  "jsse": [
+   {
+    "status": "pass",
+    "wall": 0.026260523591190577,
+    "inner": 11,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025752955116331577,
+    "inner": 11,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025729804765433073,
+    "inner": 12,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025481014978140593,
+    "inner": 12,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025521995034068823,
+    "inner": 11,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025414375122636557,
+    "inner": 12,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025431064888834953,
+    "inner": 12,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.027293004095554352,
+    "inner": 13,
+    "value": "12230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.027308504097163677,
+    "inner": 13,
+    "value": "12230",
+    "err": ""
+   }
+  ],
+  "boa022": [
+   {
+    "status": "pass",
+    "wall": 0.026150193996727467,
+    "inner": 6,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025773143861442804,
+    "inner": 6,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025872614700347185,
+    "inner": 6,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025797654874622822,
+    "inner": 7,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.025261404924094677,
+    "inner": 6,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.02733177412301302,
+    "inner": 6,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.027643944136798382,
+    "inner": 6,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.030950411222875118,
+    "inner": 7,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.028072283137589693,
+    "inner": 7,
+    "value": "11230",
+    "err": ""
+   }
+  ],
+  "boahead": [
+   {
+    "status": "pass",
+    "wall": 0.02755520399659872,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.028681463096290827,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.02725780289620161,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.026594345457851887,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.02751629287377,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.02717505395412445,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.027750102803111076,
+    "inner": 9,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.030557621736079454,
+    "inner": 9,
+    "value": "11230",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.029330993071198463,
+    "inner": 8,
+    "value": "11230",
+    "err": ""
+   }
+  ]
+ }
+}

@@ -1,0 +1,199 @@
+{
+ "arr_typed_methods": {
+  "jsse": [
+   {
+    "status": "pass",
+    "wall": 0.38467506179586053,
+    "inner": 368,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.3269828958436847,
+    "inner": 312,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.3269118960015476,
+    "inner": 313,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.3290051952935755,
+    "inner": 315,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.341248317155987,
+    "inner": 326,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.32551263784989715,
+    "inner": 312,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.3255506260320544,
+    "inner": 312,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.32640576595440507,
+    "inner": 311,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.3262404967099428,
+    "inner": 312,
+    "value": "7460000",
+    "err": ""
+   }
+  ],
+  "boa022": [
+   {
+    "status": "pass",
+    "wall": 0.27243956783786416,
+    "inner": 251,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2495626132003963,
+    "inner": 229,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2499056519009173,
+    "inner": 230,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.25106172170490026,
+    "inner": 230,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2590115163475275,
+    "inner": 237,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2502423911355436,
+    "inner": 230,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.24948684172704816,
+    "inner": 229,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2493286319077015,
+    "inner": 229,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2496410608291626,
+    "inner": 230,
+    "value": "7460000",
+    "err": ""
+   }
+  ],
+  "boahead": [
+   {
+    "status": "pass",
+    "wall": 0.267054031137377,
+    "inner": 246,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2424620259553194,
+    "inner": 223,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.2426948263309896,
+    "inner": 223,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.242048476357013,
+    "inner": 222,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.24322411557659507,
+    "inner": 224,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.24624988436698914,
+    "inner": 226,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.24340840615332127,
+    "inner": 224,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.24628818407654762,
+    "inner": 226,
+    "value": "7460000",
+    "err": ""
+   },
+   {
+    "status": "pass",
+    "wall": 0.24596852390095592,
+    "inner": 226,
+    "value": "7460000",
+    "err": ""
+   }
+  ]
+ }
+}
