@@ -249,7 +249,8 @@ mod tests {
         v.resize(32, JsValue::UNDEFINED);
         assert_eq!(v.len(), 32);
         assert!(v[31].is_undefined());
-        assert_eq!(v[29].as_number(), Some(39.0));
+        assert_eq!(v[28].as_number(), Some(39.0));
+        assert_eq!(v[29].as_number(), Some(100.0));
         let c = v.clone();
         assert_eq!(c.len(), 32);
         assert_eq!(c[0].as_number(), Some(-1.0));
