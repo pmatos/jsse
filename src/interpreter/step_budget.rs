@@ -125,6 +125,7 @@ impl Interpreter {
     }
 
     /// A safepoint with `v` rooted across it; true when the budget is spent.
+    #[inline(always)]
     pub(crate) fn safepoint_rooted(&mut self, v: &JsValue) -> bool {
         self.gc_root_value(v);
         let exhausted = self.gc_safepoint_poll();
