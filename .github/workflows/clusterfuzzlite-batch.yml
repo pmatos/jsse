@@ -1,0 +1,50 @@
+# Scheduled batch fuzzing of the parse target under AddressSanitizer. Batch
+# runs merge their findings into the stored corpus (a GitHub Actions artifact)
+# that the next batch and the PR runs start from. See README.md "Fuzzing".
+
+name: ClusterFuzzLite batch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Build fuzzers (ASan)
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          sanitizer: address
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run fuzzers (batch, 30 min)
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          mode: batch
+          sanitizer: address
+          fuzz-seconds: 1800
+          output-sarif: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: clusterfuzzlite-batch-crashes
+          path: out/artifacts/
+          if-no-files-found: ignore
