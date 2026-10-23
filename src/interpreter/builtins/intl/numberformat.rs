@@ -6,6 +6,8 @@ use icu::decimal::options::{DecimalFormatterOptions, GroupingStrategy};
 use icu::decimal::{DecimalFormatter, DecimalFormatterPreferences};
 use icu::locale::Locale as IcuLocale;
 
+pub(super) mod format_cache;
+
 /// ECMA-402 UnwrapNumberFormat: resolve the receiver of an Intl.NumberFormat
 /// prototype method to the object carrying the [[InitializedNumberFormat]]
 /// slot. If `this` lacks the slot but is an instance of %NumberFormat%, read
@@ -294,7 +296,7 @@ fn strip_unicode_extensions(locale_str: &str) -> String {
     }
 }
 
-fn base_locale(locale_str: &str) -> String {
+pub(super) fn base_locale(locale_str: &str) -> String {
     let parsed: Result<IcuLocale, _> = strip_unicode_extensions(locale_str).parse();
     match parsed {
         Ok(loc) => loc.to_string(),
@@ -988,7 +990,7 @@ fn js_sign_display_to_fd(sign_display: &str) -> SignDisplay {
     }
 }
 
-fn grouping_strategy_from_str(s: &str) -> GroupingStrategy {
+pub(super) fn grouping_strategy_from_str(s: &str) -> GroupingStrategy {
     match s {
         "always" => GroupingStrategy::Always,
         "min2" => GroupingStrategy::Min2,
@@ -1339,13 +1341,7 @@ pub(crate) fn format_number_internal(
         );
     }
 
-    let base = base_locale(locale_str);
-    let locale: IcuLocale = base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-    let prefs = DecimalFormatterPreferences::from(&locale);
-    let mut opts = DecimalFormatterOptions::default();
-    opts.grouping_strategy = Some(grouping_strategy_from_str(use_grouping));
-    let formatter = DecimalFormatter::try_new(prefs, opts)
-        .unwrap_or_else(|_| DecimalFormatter::try_new(Default::default(), opts).unwrap());
+    let formatter = format_cache::decimal_formatter(locale_str, use_grouping);
 
     let work_value = if rounding_increment > 1 && minimum_significant_digits.is_none() {
         let scale = 10f64.powi(maximum_fraction_digits as i32);
