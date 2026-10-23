@@ -2,7 +2,7 @@
 # Builds the ClusterFuzzLite targets. `differential` is intentionally absent:
 # it needs node and a release jsse binary, so it runs in .github/workflows/fuzz.yml.
 
-TARGETS=(parse execute)
+TARGETS=(parse execute typed_array)
 
 cd "$SRC/jsse"
 
@@ -16,4 +16,10 @@ done
 cat > "$OUT/execute.options" <<'OPTIONS'
 [libfuzzer]
 max_len = 16384
+OPTIONS
+
+# 64 ops of at most 12 bytes each; longer inputs are truncated by the decoder anyway.
+cat > "$OUT/typed_array.options" <<'OPTIONS'
+[libfuzzer]
+max_len = 768
 OPTIONS

@@ -4,6 +4,8 @@
 //! since it's fuzz-harness-only: it shells out to compiled binaries rather
 //! than linking the interpreter in-process (see the ADR for why).
 
+pub mod typed_array;
+
 use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};

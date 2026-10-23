@@ -172,10 +172,12 @@ Per-test timing data is written to `/tmp/timing-{engine}.json` after each run.
 
 ## Fuzzing
 
-Three `cargo-fuzz` targets live under `fuzz/`: `parse` (the parser
+Four `cargo-fuzz` targets live under `fuzz/`: `parse` (the parser
 must never panic on arbitrary bytes), `execute` (scripts run in-process under a
 step budget on the bytecode VM and the tree-walker; a panic or a difference
-between the two is a finding) and `differential` (jsse vs `node` on the same
+between the two is a finding), `typed_array` (structured sequences of
+resizable/shared buffer, view, detach, transfer and `Atomics` operations, run
+the same way; see `docs/adr/2026-10-23-1600-typed-array-fuzz-target.md`) and `differential` (jsse vs `node` on the same
 source, surfacing divergences no fixed corpus would). See
 `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md` for the design
 and `.claude/skills/fuzzing/SKILL.md` for the full run/triage workflow.
@@ -184,6 +186,7 @@ and `.claude/skills/fuzzing/SKILL.md` for the full run/triage workflow.
 cargo install cargo-fuzz --locked
 cargo +nightly fuzz run parse -- -max_total_time=60
 cargo +nightly fuzz run execute -- -max_total_time=60 -max_len=16384
+cargo +nightly fuzz run typed_array -- -max_total_time=60 -max_len=768
 cargo build --release   # differential needs the release binary
 cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
 ```
@@ -194,21 +197,23 @@ Where each target runs in CI:
 | --- | --- | --- | --- |
 | `parse` | `clusterfuzzlite-pr.yml` (ClusterFuzzLite, code-change mode, 120 s fuzz time, blocking) | ASan | every PR |
 | `parse` | `clusterfuzzlite-batch.yml` (ClusterFuzzLite, batch mode, 30 min) | ASan | daily |
-| `execute` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the two targets) | ASan | every PR |
+| `execute` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
 | `execute` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
+| `typed_array` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the three targets) | ASan | every PR |
+| `typed_array` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
 | `differential` | `fuzz.yml` (needs `node` and a release `jsse`, so it stays outside ClusterFuzzLite) | none | nightly |
 
 `clusterfuzzlite-build.yml` uploads an ASan build of `main` on every push so a
 PR run can tell a crash the PR introduced from one already on `main`. The
 corpus found by batch runs is stored as a GitHub Actions artifact; the next
 batch run and every PR run start from it (plus the committed seeds in
-`fuzz/corpus/parse/` and `fuzz/corpus/execute/`). The artifact expires with the repository's artifact
+`fuzz/corpus/parse/`, `fuzz/corpus/execute/` and `fuzz/corpus/typed_array/`). The artifact expires with the repository's artifact
 retention, after which fuzzing restarts from the committed seeds.
 
 To triage a ClusterFuzzLite failure, open the failed run, download its
 `clusterfuzzlite-*-crashes` artifact (or copy the testcase from the log) and
 reproduce with `cargo +nightly fuzz run --debug-assertions <target> <testcase>`; see
-`.claude/skills/fuzzing/SKILL.md`. A finding from either target is a lead, not
+`.claude/skills/fuzzing/SKILL.md`. A finding from any target is a lead, not
 a fix to make in the PR that touches the fuzz tooling itself: file it as its
 own issue and fix it against `spec/`/test262, never by matching `node`'s
 observed behavior. A PR check can also fail on a latent bug the PR did not
