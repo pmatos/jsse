@@ -1,5 +1,5 @@
-# Blocking code-change fuzzing of the parse target under AddressSanitizer.
-# Fuzz time is capped at 120 s; the ASan build is extra. See README.md "Fuzzing".
+# Blocking code-change fuzzing of the parse and execute targets under AddressSanitizer.
+# Fuzz time is capped at 120 s and shared between the targets; the ASan build is extra. See README.md "Fuzzing".
 
 name: ClusterFuzzLite PR
 

@@ -42,4 +42,4 @@ and nothing exercised a PR's change with mutation fuzzing.
 - Nightly toolchain drift in the builder image can break the fuzz build
   independently of the repository.
 - Follow-ups: corpus pruning and coverage reports (ClusterFuzzLite `prune` and
-  `coverage` modes), a `storage-repo`, and further targets from #1168.
+  `coverage` modes), a `storage-repo`, and further targets from #1168 (`execute`: ADR-2026-10-23-1400).
