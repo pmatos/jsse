@@ -5,13 +5,13 @@ description: >-
   "run cargo fuzz", "fuzz jsse vs node", "check for fuzzer crashes",
   "triage a fuzz crash", "minimize a fuzz artifact", or wants to drive
   a cargo-fuzz run or triage a crash/divergence it found. Covers both
-  the parse_roundtrip and differential targets under fuzz/.
+  the parse and differential targets under fuzz/.
 version: 0.1.0
 ---
 
 # Fuzzing
 
-Two `cargo-fuzz` targets live under `fuzz/`: `parse_roundtrip` (parsing
+Two `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
 arbitrary bytes must never panic) and `differential` (jsse vs `node` on
 the same source). See `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
 for why they're built the way they are, and the `Divergence Tier` entry
@@ -33,32 +33,59 @@ build/corpus/artifact state), then, only if it finds something,
      cleanly if absent.
 2. **Regression replay (fast, deterministic, safe to run anytime):**
    ```bash
-   cargo +nightly fuzz run parse_roundtrip -- -runs=0 fuzz/corpus/parse_roundtrip
+   cargo +nightly fuzz run parse -- -runs=0 fuzz/corpus/parse
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
-   This is exactly what CI's `fuzz-smoke` job runs on every PR. It replays
-   the committed seed corpus with no new mutation — if this fails, something
+   This replays the committed seed corpus with no new mutation — if this fails, something
    in the current tree broke a previously-clean input; that's worth
    investigating immediately, unlike a new-mutation finding (see below).
 3. **New-mutation fuzzing (can find fresh, previously-unknown bugs at any
    time — this is expected, not a sign something is broken):**
    ```bash
-   cargo +nightly fuzz run parse_roundtrip -- -max_total_time=60
+   cargo +nightly fuzz run parse -- -max_total_time=60
    cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
    ```
-   `parse_roundtrip` runs at libFuzzer's normal in-process speed.
+   `parse` runs at libFuzzer's normal in-process speed.
    `differential` is much slower (two subprocess spawns per iteration,
    tens of iterations/sec, not thousands) by design — see the ADR. Budget
-   accordingly; CI's nightly `fuzz-deep` job gives each target 5 minutes.
+   accordingly; CI's nightly `Fuzz` workflow gives `differential` 5 minutes.
 4. **A crash writes an artifact** to `fuzz/artifacts/<target>/crash-<hash>`
    (or `fuzz/artifacts/<target>/oom-<hash>` / `timeout-<hash>`) and prints
    its path. That file is the input to triage below.
+
+## Where CI runs each target
+
+- `parse`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
+  is a blocking per-PR check (120 s of fuzzing); `clusterfuzzlite-batch.yml`
+  runs 30 minutes daily and stores the merged corpus as a GitHub Actions
+  artifact that later batch and PR runs start from.
+- `differential`: `fuzz.yml`, nightly, 5 minutes, no sanitizer (needs `node`
+  and `target/release/jsse`).
+
+### Triaging a ClusterFuzzLite finding
+
+1. Open the failed `ClusterFuzzLite PR` or `ClusterFuzzLite batch` run. The
+   log shows the ASan report and testcase path; the `clusterfuzzlite-*-crashes`
+   artifact holds the testcase file(s).
+2. Download it (`gh run download <run-id> -n clusterfuzzlite-pr-crashes`) and
+   reproduce locally: `cargo +nightly fuzz run --debug-assertions parse <testcase>`
+   (cargo-fuzz uses ASan by default; CI builds with `--debug-assertions`, so
+   overflow panics only reproduce with it), then
+   `cargo +nightly fuzz tmin --debug-assertions parse <testcase>`.
+3. Decide if the PR caused it: re-run against `main`'s commit. A crash that
+   also reproduces on `main` is a latent bug unrelated to the PR (the
+   continuous build normally filters these out, but not every one); file it
+   under "Root-cause and file" below and re-run the check.
+4. To seed a local session with the stored corpus, download the latest corpus
+   artifact from the batch workflow's runs (`gh run list -w "ClusterFuzzLite batch"`,
+   `gh run download <run-id>`) and pass the extracted directory to
+   `cargo +nightly fuzz run parse`.
 
 ## Triaging a finding
 
 **First, tell the two failure shapes apart** — they need different next steps:
 
-- **`parse_roundtrip` crashed** (a real panic/abort — this target has no
+- **`parse` crashed** (a real panic/abort — this target has no
   other way to fail): always worth investigating. Go to "Root-cause and
   file" below.
 - **`differential` panicked**: the panic message says which tier fired.
@@ -76,7 +103,7 @@ cargo +nightly fuzz tmin <target> fuzz/artifacts/<target>/crash-<hash>
 same failure — use that (not the original, often much larger) input in
 the issue report.
 
-For `parse_roundtrip`, also reproduce outside the fuzzer to get a full
+For `parse`, also reproduce outside the fuzzer to get a full
 Rust backtrace, since the release build used in CI/most local runs has
 overflow-checks off and won't panic on the same input a debug build will:
 ```bash
@@ -98,7 +125,7 @@ whatever session found it.**
    authority order.
 2. `gh issue create` with: the minimized repro, the exact command used to
    trigger it, the tier (for `differential`) or panic message/backtrace
-   (for `parse_roundtrip`), and — if you have a hypothesis — what looks
+   (for `parse`), and — if you have a hypothesis — what looks
    wrong, without asserting the fix. Link back to whichever issue drove
    the fuzzing session, if any.
 3. Stop there. The fix (if one is warranted) is its own PR, scoped to the
@@ -127,4 +154,5 @@ local new-mutation session. That's normal; nothing here separates "seed"
 from "discovered" corpus into different directories. Don't commit
 discovered-corpus growth casually — if a specific discovered input is
 worth keeping as a regression seed (e.g. after fixing the bug it found),
-add it deliberately, not as a side effect of `git add -A`.
+add it deliberately, not as a side effect of `git add -A`. ClusterFuzzLite's
+corpus lives in a CI artifact, not in the tree.

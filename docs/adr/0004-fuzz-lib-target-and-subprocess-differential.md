@@ -32,7 +32,7 @@ method has call-site cost with no correctness benefit here.
 
 The obvious design for "compare jsse and node on the same source" is to
 link the interpreter into the fuzz target and call it directly, the way
-`parse_roundtrip` calls the parser directly. We didn't do that, for one
+`parse` calls the parser directly. We didn't do that, for one
 concrete reason: the interpreter has no step/instruction budget or
 interrupt mechanism (grep-confirmed: no `step_budget`, `instruction_count`,
 or similar). A fuzzer will eventually produce `while(1){}`, and an
@@ -46,14 +46,14 @@ wall-clock timeout (raced via `try_wait()` polling, since
 `std::process::Command` has no built-in one), and a timeout classifies as
 `Verdict::Recorded` rather than gating anything. It also means the
 differential target never needs interpreter internals exposed — no
-`CALL_DEPTH_*`/GC internals need to be `pub` for it, unlike `parse_roundtrip`
+`CALL_DEPTH_*`/GC internals need to be `pub` for it, unlike `parse`
 which already needed `run_on_engine_stack` and the parser to be reachable.
 
 The trade-off, stated plainly rather than glossed over: throughput is
 bounded by two process spawns per iteration (tens of ms each), so this
 target runs at tens of iterations/sec, not the thousands/sec libFuzzer
 normally achieves fuzzing in-process. That's why it's a `workflow_dispatch`/
-`schedule` (nightly) target only (`fuzz-deep` in `.github/workflows/fuzz.yml`),
+`schedule` (nightly) target only (the nightly job in `.github/workflows/fuzz.yml`),
 never the `pull_request` gate.
 
 ### Resource limits mirror `scripts/run-test262.py`, but asymmetrically
@@ -113,22 +113,26 @@ target's own name is a reminder that node is a comparison oracle for
 *finding* divergences, not an authority on what the *correct* behavior
 is (see `AGENTS.md`'s authority order: spec, then test262, then node).
 This surfaced in practice, not hypothetically: a 20-second local
-new-mutation run against `parse_roundtrip` — no sanitizer, no special
+new-mutation run against `parse` — no sanitizer, no special
 seed — found a real integer-underflow panic in the parser (filed as
 issue #597) while this tooling was being built. It was filed and left
-unfixed here, and its existence is also why `fuzz-smoke`'s PR gate is
+unfixed here, and its existence is also why the original `fuzz-smoke` PR gate was
 corpus-replay-only (`-runs=0`) rather than running any new-mutation pass:
 a mutation pass can hit this exact bug (or another latent one) on any
 future PR, at random, which would make the fuzz gate itself flaky for
 reasons that have nothing to do with the PR under test.
 
+> Update: ADR-2026-10-23-0854 moved `parse` to ClusterFuzzLite with a blocking
+> mutation-fuzzing PR check, so the replay-only gate described here no longer
+> exists.
+
 ## Deliberately out of scope
 
-- **Module-source (`.mjs`) fuzzing.** The seed corpus and `parse_roundtrip`
+- **Module-source (`.mjs`) fuzzing.** The seed corpus and `parse`
   cover scripts only; a fuzzed module can `import` an arbitrary
   nonexistent path, which adds resolution complexity this round doesn't
   need to solve.
-- **A true AST-print-and-reparse roundtrip.** `parse_roundtrip` is
+- **A true AST-print-and-reparse roundtrip.** `parse` is
   parse-must-not-panic only; there's no `Display`/`to_source` for
   `ast::Program` to roundtrip through yet (grep-confirmed).
 - **Wiring `fuzz/` into `scripts/lint.sh`.** The fuzz crate's `#![no_main]`/
@@ -136,11 +140,12 @@ reasons that have nothing to do with the PR under test.
   the main crate; `cd fuzz && cargo fmt --check && cargo clippy --all-targets
   -- -D warnings` was run manually during implementation and is clean, but
   isn't wired into the automated gate.
-- **`ASan`/other sanitizers in `fuzz-smoke`.** `--sanitizer none`: `unsafe`
+- **`ASan`/other sanitizers in the original `fuzz-smoke` job.** `--sanitizer none`: `unsafe`
   usage is small (29 hits, grep-confirmed) and ASan roughly doubles build
-  time on an already `icu`-heavy dependency tree. `fuzz-deep` could opt in
+  time on an already `icu`-heavy dependency tree. The nightly job could opt in
   later if UB detection beyond debug-assertions/overflow-checks turns out
-  to matter.
+  to matter. (Update: ADR-2026-10-23-0854 runs `parse` under ASan in ClusterFuzzLite;
+  `differential` still has no sanitizer.)
 - **An in-process differential target with an interpreter step budget.**
   Would let `differential` run at libFuzzer speed instead of subprocess
   speed, but needs a real engine feature (an instruction/step budget) with
