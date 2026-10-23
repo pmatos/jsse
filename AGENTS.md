@@ -39,6 +39,7 @@ local hook was bypassed.
 
 ## Source Layout
 - `src/main.rs` — CLI entry point (`jsse <file>` or `jsse -e "code"`)
+- `src/fuzz_reentrancy/` — `reentrancy` fuzz target: decodes bytes into a plan (op, host, hook, action, step, shape) and renders a JS program whose Proxy traps/generators/accessors/callbacks re-enter the engine; seeds in `fuzz/corpus/reentrancy/` via `scripts/gen-fuzz-reentrancy-corpus.py`
 - `src/lexer.rs` — Tokenizer
 - `src/ast.rs` — AST node types
 - `src/types.rs` — JS value types (`JsValue`, `JsString`, `JsSymbol`, `JsBigInt`, etc.)
