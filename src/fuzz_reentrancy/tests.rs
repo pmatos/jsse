@@ -152,6 +152,11 @@ fn seeds_cover_every_op_and_host_and_run_clean() {
         );
         let plan = Plan::decode(&bytes);
         for s in &plan.scenarios {
+            assert!(
+                s.hook < s.host.hook_count(),
+                "seed hook out of range for {:?}; regenerate with scripts/gen-fuzz-reentrancy-corpus.py",
+                s.host
+            );
             ops.insert(format!("{:?}", s.op));
             hosts.insert(format!("{:?}", s.host));
         }

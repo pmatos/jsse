@@ -105,11 +105,11 @@ impl Plan {
             .map(|_| {
                 let op = Op::ALL[cur.next(Op::ALL.len())];
                 let host = Host::ALL[cur.next(Host::ALL.len())];
-                let hook = cur.next(256);
+                let hook = cur.next(host.hook_count());
                 let action = Action::ALL[cur.next(Action::ALL.len())];
                 let step = cur.next(4);
                 let shapes = op.shapes();
-                let shape = shapes[cur.next(256) % shapes.len()];
+                let shape = shapes[cur.next(shapes.len())];
                 Scenario {
                     op,
                     host,
