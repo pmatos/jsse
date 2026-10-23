@@ -4,6 +4,7 @@
 pub mod ast;
 mod cli;
 pub(crate) mod emoji_strings;
+mod fuzz_reentrancy;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
@@ -344,6 +345,14 @@ pub fn fuzz_execute_source(src: &str) {
             );
         }
     });
+}
+
+/// Backs the `reentrancy` fuzz target (`fuzz/fuzz_targets/reentrancy.rs`):
+/// decodes the bytes into a re-entrancy plan, renders it to a JS program in
+/// which Proxy traps, generators, accessors and callbacks call back into the
+/// engine mid-operation, and runs it exactly like `fuzz_execute_bytes`.
+pub fn fuzz_reentrancy_bytes(data: &[u8]) {
+    fuzz_execute_source(&fuzz_reentrancy::Plan::decode(data).render());
 }
 
 #[cfg(test)]

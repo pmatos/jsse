@@ -2,7 +2,7 @@
 # Builds the ClusterFuzzLite targets. `differential` is intentionally absent:
 # it needs node and a release jsse binary, so it runs in .github/workflows/fuzz.yml.
 
-TARGETS=(parse execute typed_array execute_ast gc_stress)
+TARGETS=(parse execute typed_array execute_ast gc_stress reentrancy)
 
 cd "$SRC/jsse"
 
@@ -35,4 +35,10 @@ OPTIONS
 cat > "$OUT/gc_stress.options" <<'OPTIONS'
 [libfuzzer]
 max_len = 4096
+OPTIONS
+
+# Plans decode from 25 bytes (a count byte plus up to four 6-byte scenarios).
+cat > "$OUT/reentrancy.options" <<'OPTIONS'
+[libfuzzer]
+max_len = 32
 OPTIONS
