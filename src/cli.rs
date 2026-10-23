@@ -38,6 +38,11 @@ struct Cli {
     /// loads via `--prelude` and must keep the default global environment.
     #[arg(long = "node")]
     node: bool,
+
+    /// Stop the run, uncatchably, after N counted steps (statement boundaries,
+    /// loop back-edges, microtask jobs, timer callbacks); exits with status 124.
+    #[arg(long = "step-budget", value_name = "N")]
+    step_budget: Option<u64>,
 }
 
 enum EngineError {
@@ -72,9 +77,8 @@ fn run_source_with_interp(
 
 /// Map a run result to a process exit code. A pending `__host_exit` (issue
 /// #229) takes precedence: its code becomes the process status and the sentinel
-/// throw is not reported as an error. `pending_exit` is always `None` unless the
-/// node host floor was enabled, so this is behaviour-identical to before when
-/// `--node` is absent.
+/// throw is not reported as an error. `pending_exit` is only set by the node
+/// host floor (`--node`) or an exhausted `--step-budget`.
 /// Emits the opt-in execution counters (issue #526). Called from every path
 /// that finishes executing JavaScript — `exit_code_from_result` covers the
 /// eval/file/prelude exits, and the REPL exits call it directly — so the
@@ -95,6 +99,15 @@ fn exit_after_execution(_interp: &interpreter::Interpreter, code: u8) -> ExitCod
     ExitCode::from(code)
 }
 
+fn report_step_budget(interp: &interpreter::Interpreter) {
+    if interp.step_budget_exhausted() {
+        eprintln!(
+            "jsse: step budget exhausted after {} steps",
+            interp.steps_used()
+        );
+    }
+}
+
 fn exit_code_from_result(
     interp: &interpreter::Interpreter,
     result: Result<(), EngineError>,
@@ -102,6 +115,7 @@ fn exit_code_from_result(
     #[cfg(feature = "perf-counters")]
     report_perf_counters(interp);
     if let Some(code) = interp.pending_exit {
+        report_step_budget(interp);
         return ExitCode::from((code as u32 & 0xff) as u8);
     }
     match result {
@@ -123,10 +137,16 @@ fn exit_code_from_result(
     }
 }
 
-fn new_interp(can_block: bool, bytecode: bool, node: bool) -> interpreter::Interpreter {
+fn new_interp(
+    can_block: bool,
+    bytecode: bool,
+    node: bool,
+    step_budget: Option<u64>,
+) -> interpreter::Interpreter {
     let mut interp = interpreter::Interpreter::new();
     interp.can_block = can_block;
     interp.bytecode_enabled = bytecode;
+    interp.set_step_budget(step_budget);
     if node {
         interp.enable_node_host();
     }
@@ -140,8 +160,9 @@ fn execute_code(
     can_block: bool,
     bytecode: bool,
     node: bool,
+    step_budget: Option<u64>,
 ) -> ExitCode {
-    let mut interp = new_interp(can_block, bytecode, node);
+    let mut interp = new_interp(can_block, bytecode, node, step_budget);
     let result = run_source_with_interp(&mut interp, code, is_module, path);
     let exit = exit_code_from_result(&interp, result);
     retire_interpreter(interp);
@@ -164,6 +185,7 @@ fn run_file(
     can_block: bool,
     bytecode: bool,
     node: bool,
+    step_budget: Option<u64>,
 ) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -181,6 +203,7 @@ fn run_file(
         can_block,
         bytecode,
         node,
+        step_budget,
     )
 }
 
@@ -210,6 +233,7 @@ fn run_repl(interp: &mut interpreter::Interpreter) -> ExitCode {
                     // Runtime error; honor the exit code before reporting it,
                     // matching the file/eval paths' `exit_code_from_result`.
                     if let Some(code) = interp.pending_exit {
+                        report_step_budget(interp);
                         return ExitCode::from((code as u32 & 0xff) as u8);
                     }
                     match repl_result {
@@ -243,14 +267,22 @@ pub(crate) fn run_main() -> ExitCode {
                 cli.can_block,
                 !cli.no_bytecode,
                 cli.node,
+                cli.step_budget,
             );
         }
 
         if let Some(path) = &cli.file {
-            return run_file(path, cli.module, cli.can_block, !cli.no_bytecode, cli.node);
+            return run_file(
+                path,
+                cli.module,
+                cli.can_block,
+                !cli.no_bytecode,
+                cli.node,
+                cli.step_budget,
+            );
         }
 
-        let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node);
+        let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node, cli.step_budget);
         let code = run_repl(&mut interp);
         #[cfg(feature = "perf-counters")]
         report_perf_counters(&interp);
@@ -258,7 +290,7 @@ pub(crate) fn run_main() -> ExitCode {
     }
 
     // With preludes, we need to use a single interpreter instance
-    let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node);
+    let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node, cli.step_budget);
     let code = run_with_preludes(&mut interp, &cli);
     retire_interpreter(interp);
     code

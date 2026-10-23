@@ -32,6 +32,8 @@ pub(crate) struct GcPacer {
     /// `major_requested | minor_requested | (stress_period != 0)`, kept in
     /// step by every writer so the VM's safepoint poll is one load and test.
     poll: bool,
+    /// A step budget is installed, so every safepoint must tick it.
+    budget_active: bool,
     /// Safepoints seen while stress mode is on. Every `stress_period`th one
     /// collects, alternating major (finds missing roots) and minor (finds
     /// missing write barriers).
@@ -83,6 +85,7 @@ impl GcPacer {
             stress_period,
             poll: stress_period != 0,
             stress_count: 0,
+            budget_active: false,
             #[cfg(test)]
             safepoint_calls: 0,
         }
@@ -90,7 +93,16 @@ impl GcPacer {
 
     #[inline(always)]
     fn sync_poll(&mut self) {
-        self.poll = self.major_requested | self.minor_requested | (self.stress_period != 0);
+        self.poll = self.wanted_poll();
+    }
+
+    fn wanted_poll(&self) -> bool {
+        self.major_requested | self.minor_requested | (self.stress_period != 0) | self.budget_active
+    }
+
+    pub(crate) fn set_budget_active(&mut self, active: bool) {
+        self.budget_active = active;
+        self.sync_poll();
     }
 
     #[inline(always)]
@@ -159,10 +171,7 @@ impl GcPacer {
     /// it is always true so `safepoint_calls` still counts every poll.
     #[inline(always)]
     pub(crate) fn safepoint_pending(&self) -> bool {
-        debug_assert_eq!(
-            self.poll,
-            self.major_requested | self.minor_requested | (self.stress_period != 0)
-        );
+        debug_assert_eq!(self.poll, self.wanted_poll());
         cfg!(test) || self.poll
     }
 
@@ -545,21 +554,6 @@ impl Interpreter {
             Self::trace_object_fields(&obj, &mut children, seen_envs);
             Self::enqueue_unmarked(children.drain(..), worklist, marks);
         }
-    }
-
-    /// `gc_safepoint` for the VM's hot path: one inline test of `poll`, the call
-    /// only when a request or stress mode makes the safepoint do something.
-    #[inline(always)]
-    pub(crate) fn gc_safepoint_poll(&mut self) {
-        if self.gc.safepoint_pending() {
-            self.gc_safepoint_slow();
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn gc_safepoint_slow(&mut self) {
-        self.gc_safepoint();
     }
 
     pub(crate) fn gc_safepoint(&mut self) {

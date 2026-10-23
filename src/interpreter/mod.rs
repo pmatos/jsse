@@ -65,6 +65,7 @@ mod property_map;
 mod root_stack;
 pub(crate) use property_map::{PropertyMap, PropertyRead, PropertyRecord};
 mod scheduler;
+mod step_budget;
 #[cfg(test)]
 mod tests;
 
@@ -447,14 +448,13 @@ pub(crate) struct Interpreter {
     /// installed and every host-floor check below is inert — the global
     /// environment is byte-identical to a build without this feature.
     pub(crate) node_host_enabled: bool,
-    /// Terminal exit-code sink for `__host_exit` (issue #242). The exit itself
-    /// propagates structurally as `Completion::Exit(code)`, which is
-    /// uncatchable by construction; this field is written only where that
-    /// completion crosses a boundary that cannot carry one — the event-loop
-    /// drain (microtask jobs), an inline `await` drain, an iterator `return()`,
-    /// or module top-level await — and is read by `main`/`run` to set the
-    /// process exit status. Always `None` when `node_host_enabled` is false.
+    /// Terminal exit-code sink (issues #242, #1173) for `__host_exit` and
+    /// step-budget exhaustion. The exit propagates as the uncatchable
+    /// `Completion::Exit`; this field is written where that completion cannot
+    /// be carried (microtask drain, inline `await` drain, iterator `return()`,
+    /// module top-level await) and read by `main`/`run` for the exit status.
     pub pending_exit: Option<i32>,
+    step_budget: step_budget::StepBudget,
     /// True while a timer callback is running. Timer callbacks are tasks and
     /// must not re-enter one another, so a nested interpreter run started from
     /// inside one neither fires timers nor stays alive waiting for them.
@@ -881,6 +881,7 @@ impl Interpreter {
             perf_next_body_seq: 0,
             node_host_enabled: false,
             pending_exit: None,
+            step_budget: Default::default(),
             dispatching_timers: false,
             host_clock_start: None,
             hoist_cache: HoistCache::new(),
@@ -5415,7 +5416,7 @@ impl Interpreter {
                 return;
             }
             if let Some(task) = self.scheduler.pop_microtask() {
-                let job_result = self.run_microtask(task);
+                let job_result = self.run_budgeted_microtask(task);
                 // A `__host_exit` inside the job (issue #242) surfaces as
                 // `Completion::Exit`; the drain loop is a `()`-returning
                 // event-loop boundary, so latch the code into the terminal sink
@@ -5538,7 +5539,7 @@ impl Interpreter {
                 self.gc_root_value(arg);
             }
             let rooted_depth = self.gc_root_frame();
-            let result = self.call_function(&callback, &JsValue::UNDEFINED, &args);
+            let result = self.call_budgeted_timer(&callback, &args);
             self.gc_assert_root_depth(rooted_depth, "a timer callback");
             self.gc_unroot_frame(frame);
             if let Completion::Exit(code) = result {
@@ -5656,7 +5657,7 @@ impl Interpreter {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             while let Some(task) = self.scheduler.pop_microtask() {
-                let job_result = self.run_microtask(task);
+                let job_result = self.run_budgeted_microtask(task);
                 // A `__host_exit` inside the job (issue #242) latches the
                 // terminal sink and stops draining.
                 if let Completion::Exit(code) = job_result {

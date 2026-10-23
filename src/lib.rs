@@ -118,6 +118,43 @@ pub fn bench_eval_with_check(src: &str, check: Option<&str>) -> bool {
     }
 }
 
+/// How a script run under [`run_script_with_budget`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptOutcome {
+    Completed,
+    Threw,
+    ParseError,
+    /// The step budget ran out. This is fatal and uncatchable: no `catch` or
+    /// `finally` block, iterator `return()` or promise reaction observes it.
+    StepBudgetExhausted,
+}
+
+/// Runs `src` in a fresh interpreter under an optional deterministic step
+/// budget (see `Interpreter::set_step_budget`), on the tree-walker or the
+/// bytecode VM. Returns the outcome and the number of steps counted. Call it on
+/// an engine-sized stack (`run_on_engine_stack`). Backs in-process fuzz targets.
+pub fn run_script_with_budget(
+    src: &str,
+    budget: Option<u64>,
+    bytecode: bool,
+) -> (ScriptOutcome, u64) {
+    let Some(program) = parse_script(src) else {
+        return (ScriptOutcome::ParseError, 0);
+    };
+    let mut interp = interpreter::Interpreter::new();
+    interp.bytecode_enabled = bytecode;
+    interp.set_step_budget(budget);
+    let completion = interp.run(&program);
+    let outcome = if interp.step_budget_exhausted() {
+        ScriptOutcome::StepBudgetExhausted
+    } else if !completion.is_abrupt() {
+        ScriptOutcome::Completed
+    } else {
+        ScriptOutcome::Threw
+    };
+    (outcome, interp.steps_used())
+}
+
 #[cfg(test)]
 mod lib_tests {
     use super::*;
@@ -196,5 +233,31 @@ mod lib_tests {
     #[test]
     fn fuzz_parse_bytes_deep_nesting() {
         fuzz_parse_bytes("[".repeat(parser::MAX_PARSE_DEPTH as usize * 2).as_bytes());
+    }
+
+    #[test]
+    fn run_script_with_budget_classifies_outcomes() {
+        run_on_engine_stack(|| {
+            for bytecode in [true, false] {
+                let run = |src, budget| run_script_with_budget(src, budget, bytecode);
+                assert_eq!(
+                    run("while (1) {}", Some(10_000)),
+                    (ScriptOutcome::StepBudgetExhausted, 10_000)
+                );
+                assert_eq!(run("throw 1", None).0, ScriptOutcome::Threw);
+                assert_eq!(run("let =", None).0, ScriptOutcome::ParseError);
+                assert_eq!(run("1 + 1", None).0, ScriptOutcome::Completed);
+                assert_eq!(
+                    run("try { for (;;); } catch (e) {}", Some(100)).0,
+                    ScriptOutcome::StepBudgetExhausted
+                );
+                for _ in 0..20 {
+                    assert_eq!(
+                        run("for (;;);", Some(50)).0,
+                        ScriptOutcome::StepBudgetExhausted
+                    );
+                }
+            }
+        });
     }
 }

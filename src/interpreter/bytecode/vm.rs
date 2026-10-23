@@ -1182,9 +1182,7 @@ fn run_chunk_with_var_prologue(
     result
 }
 
-/// Hits a GC safepoint, asserting the VM's two scratch stacks are empty —
-/// both safepoint sites (a loop back-edge, a statement boundary) land
-/// between statements, where the compiler guarantees a net-zero stack.
+/// Safepoint; true if budget spent.
 #[inline(always)]
 fn safepoint_with_empty_stacks(
     interp: &mut Interpreter,
@@ -1192,10 +1190,10 @@ fn safepoint_with_empty_stacks(
     persistent: usize,
     refs: &[IdentifierRef],
     context: &str,
-) {
+) -> bool {
     debug_assert!(stack.len() <= persistent, "operand stack live at {context}");
     debug_assert!(refs.is_empty(), "reference stack live at {context}");
-    interp.gc_safepoint_poll();
+    interp.gc_safepoint_poll()
 }
 
 fn run_chunk_inner<const GENERATOR: bool>(
@@ -2425,14 +2423,16 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 }
                 Op::Jump => {
                     let offset = decode_i16(chunk, pc) as i32;
-                    if offset < 0 {
-                        safepoint_with_empty_stacks(
+                    if offset < 0
+                        && safepoint_with_empty_stacks(
                             interp,
                             stack,
                             usize::from(chunk.persistent_slots),
                             refs,
                             "loop backedge",
-                        );
+                        )
+                    {
+                        return interp.budget_exit();
                     }
                     pc = (pc as i32 + 2 + offset) as usize;
                 }
@@ -2727,13 +2727,15 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     return Completion::Yield(value);
                 }
                 Op::Safepoint => {
-                    safepoint_with_empty_stacks(
+                    if safepoint_with_empty_stacks(
                         interp,
                         stack,
                         usize::from(chunk.persistent_slots),
                         refs,
                         "statement boundary",
-                    );
+                    ) {
+                        return interp.budget_exit();
+                    }
                 }
             }
         };
