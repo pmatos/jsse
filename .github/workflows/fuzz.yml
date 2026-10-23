@@ -1,5 +1,5 @@
 # Nightly differential fuzzing (jsse vs node). It stays outside ClusterFuzzLite
-# because the target needs node and a release build of jsse. The parse and execute
+# because the target needs node and a release build of jsse. The parse, execute, typed_array, execute_ast, gc_stress and reentrancy
 # targets run in the clusterfuzzlite-*.yml workflows. See README.md "Fuzzing" and
 # docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md.
 

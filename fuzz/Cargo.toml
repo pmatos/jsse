@@ -56,3 +56,10 @@ path = "fuzz_targets/gc_stress.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "reentrancy"
+path = "fuzz_targets/reentrancy.rs"
+test = false
+doc = false
+bench = false
