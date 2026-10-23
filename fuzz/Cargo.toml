@@ -34,3 +34,10 @@ path = "fuzz_targets/execute.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "typed_array"
+path = "fuzz_targets/typed_array.rs"
+test = false
+doc = false
+bench = false

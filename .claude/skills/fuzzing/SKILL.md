@@ -5,17 +5,20 @@ description: >-
   "run cargo fuzz", "fuzz jsse vs node", "check for fuzzer crashes",
   "triage a fuzz crash", "minimize a fuzz artifact", or wants to drive
   a cargo-fuzz run or triage a crash/divergence it found. Covers both
-  the parse, execute and differential targets under fuzz/.
+  the parse, execute, typed_array and differential targets under fuzz/.
 version: 0.1.0
 ---
 
 # Fuzzing
 
-Three `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
+Four `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
 arbitrary bytes must never panic), `execute` (run in-process under a step
 budget on the bytecode VM and the tree-walker; panics and differences between
-the two are findings) and `differential` (jsse vs `node` on the same source).
-See `docs/adr/2026-10-23-1400-execute-fuzz-target.md` for `execute`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
+the two are findings), `typed_array` (the same oracle over generated
+ArrayBuffer/typed array/`DataView`/`Atomics` operation sequences, whose input is
+a byte-encoded op list, not JS source) and `differential` (jsse vs `node` on the same source).
+See `docs/adr/2026-10-23-1400-execute-fuzz-target.md` for `execute`,
+`docs/adr/2026-10-23-1600-typed-array-fuzz-target.md` for `typed_array`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
 for why they're built the way they are, and the `Divergence Tier` entry
 in `CONTEXT.md` for the tiering `differential` uses.
 
@@ -37,6 +40,7 @@ build/corpus/artifact state), then, only if it finds something,
    ```bash
    cargo +nightly fuzz run parse -- -runs=0 fuzz/corpus/parse
    cargo +nightly fuzz run execute -- -runs=0 -max_len=16384 fuzz/corpus/execute
+   cargo +nightly fuzz run typed_array -- -runs=0 -max_len=768 fuzz/corpus/typed_array
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
    This replays the committed seed corpus with no new mutation — if this fails, something
@@ -47,10 +51,12 @@ build/corpus/artifact state), then, only if it finds something,
    ```bash
    cargo +nightly fuzz run parse -- -max_total_time=60
    cargo +nightly fuzz run execute -- -max_total_time=60 -max_len=16384 -timeout=30
+   cargo +nightly fuzz run typed_array -- -max_total_time=60 -max_len=768 -timeout=30
    cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
    ```
    `parse` runs at libFuzzer's normal in-process speed; `execute` runs two
-   interpreters per input, about 200 executions/sec under ASan.
+   interpreters per input, about 200 executions/sec under ASan; `typed_array`
+   does the same but with larger generated programs, about 10 executions/sec.
    `differential` is much slower (two subprocess spawns per iteration,
    tens of iterations/sec, not thousands) by design — see the ADR. Budget
    accordingly; CI's nightly `Fuzz` workflow gives `differential` 5 minutes.
@@ -60,8 +66,8 @@ build/corpus/artifact state), then, only if it finds something,
 
 ## Where CI runs each target
 
-- `parse` and `execute`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
-  is a blocking per-PR check (120 s of fuzzing, shared between the two targets); `clusterfuzzlite-batch.yml`
+- `parse`, `execute` and `typed_array`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
+  is a blocking per-PR check (120 s of fuzzing, shared between the targets); `clusterfuzzlite-batch.yml`
   runs 30 minutes daily and stores the merged corpus as a GitHub Actions
   artifact that later batch and PR runs start from.
 - `differential`: `fuzz.yml`, nightly, 5 minutes, no sanitizer (needs `node`
@@ -109,6 +115,11 @@ build/corpus/artifact state), then, only if it finds something,
     count (regex backtracking, huge `repeat`, some arrow-function loops). A
     real missing resource limit; file it.
   - Inputs that exhaust the step budget are skipped, never a finding.
+- **`typed_array` failed**: same shapes as `execute`. The artifact is a byte-encoded
+  op list, so print the script it generates with
+  `JSSE_FUZZ_DUMP_SCRIPT=1 cargo +nightly fuzz run typed_array <artifact>` and
+  triage that JS (`jsse f.js` vs `jsse --no-bytecode f.js`; the script needs
+  `print` and `$262`). `tmin` works on the byte input.
 - **`differential` panicked**: the panic message says which tier fired.
   Only Tier 1 and Tier 2 panic (see the `Divergence Tier` glossary entry);
   Tier 3 is recorded, never a panic, so if `differential` panics at all,
