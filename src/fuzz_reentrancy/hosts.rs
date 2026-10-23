@@ -30,7 +30,6 @@ impl Host {
     /// They install the re-entry point selected by `hook` and may reassign
     /// `W`, `gen`, `CB`.
     pub(crate) fn setup(self, hook: usize) -> String {
-        let hook = hook % self.hook_count();
         match self {
             Host::ProxyTrap => {
                 let (trap, bogus) = PROXY_TRAPS[hook];

@@ -208,15 +208,15 @@ Where each target runs in CI:
 | --- | --- | --- | --- |
 | `parse` | `clusterfuzzlite-pr.yml` (ClusterFuzzLite, code-change mode, 120 s fuzz time, blocking) | ASan | every PR |
 | `parse` | `clusterfuzzlite-batch.yml` (ClusterFuzzLite, batch mode, 30 min) | ASan | daily |
-| `execute` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
+| `execute` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared across all ClusterFuzzLite targets) | ASan | every PR |
 | `execute` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
-| `typed_array` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
+| `typed_array` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared across all ClusterFuzzLite targets) | ASan | every PR |
 | `typed_array` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
-| `execute_ast` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
+| `execute_ast` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared across all ClusterFuzzLite targets) | ASan | every PR |
 | `execute_ast` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
 | `gc_stress` | `clusterfuzzlite-pr.yml` (same job as `parse`) | ASan | every PR |
 | `gc_stress` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
-| `reentrancy` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
+| `reentrancy` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared across all ClusterFuzzLite targets) | ASan | every PR |
 | `reentrancy` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
 | `differential` | `fuzz.yml` (needs `node` and a release `jsse`, so it stays outside ClusterFuzzLite) | none | nightly |
 
