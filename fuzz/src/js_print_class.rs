@@ -2,14 +2,14 @@
 
 use crate::js_ast::*;
 use crate::js_pools::*;
-use crate::js_print::{FnKind, Printer, pick_str};
+use crate::js_print::{FnKind, Printer, pick};
 
 impl Printer {
     pub(crate) fn key(&mut self, k: &Key, private: &str) {
         match k {
-            Key::Name(i) => self.quoted(pick_str(KEYS, *i)),
+            Key::Name(i) => self.quoted(pick(KEYS, *i)),
             Key::Str(i) => {
-                let s = pick_str(STRS, *i);
+                let s = pick(STRS, *i);
                 self.w(if s == r#""constructor""# || s == r#""prototype""# {
                     "\"x\""
                 } else {
@@ -115,8 +115,8 @@ impl Printer {
 
     pub(crate) fn bind_name(t: &Target) -> &'static str {
         match t {
-            Target::Id(i) => pick_str(&VARS, *i),
-            Target::Member(_, p) => pick_str(&VARS, *p),
+            Target::Id(i) => pick(&VARS, *i),
+            Target::Member(_, p) => pick(&VARS, *p),
             Target::Index(..) => VARS[0],
         }
     }
@@ -149,7 +149,7 @@ impl Printer {
                 self.w("{");
                 for (i, (k, e)) in props.iter().enumerate() {
                     self.w(if i > 0 { ", " } else { "" });
-                    self.quoted(pick_str(PROPS, *k));
+                    self.quoted(pick(PROPS, *k));
                     self.w(": ");
                     self.pat_elem(e, binding);
                 }

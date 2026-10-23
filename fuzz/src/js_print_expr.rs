@@ -2,7 +2,7 @@
 
 use crate::js_ast::*;
 use crate::js_pools::*;
-use crate::js_print::{FnKind, Printer, is_ident_name, pick_str};
+use crate::js_print::{FnKind, Printer, is_ident_name, pick};
 
 fn un_op(op: UnOp) -> &'static str {
     match op {
@@ -94,7 +94,7 @@ impl Printer {
             }
             Target::Member(o, p) => {
                 self.paren(o);
-                self.prop_access(pick_str(PROPS, *p), false);
+                self.prop_access(pick(PROPS, *p), false);
             }
             Target::Index(o, k) => {
                 self.paren(o);
@@ -132,12 +132,12 @@ impl Printer {
     fn template(&mut self, parts: &[(Ix, Expr)], last: Ix) {
         self.w("`");
         for (chunk, e) in parts {
-            self.w(pick_str(TPL, *chunk));
+            self.w(pick(TPL, *chunk));
             self.w("${");
             self.expr(e);
             self.w("}");
         }
-        self.w(pick_str(TPL, last));
+        self.w(pick(TPL, last));
         self.w("`");
     }
 
@@ -152,7 +152,7 @@ impl Printer {
                     self.w(&n);
                 }
                 ObjProp::Kv(k, v) => {
-                    let name = pick_str(PROPS, *k);
+                    let name = pick(PROPS, *k);
                     if name == "__proto__" && !std::mem::replace(&mut proto_used, true) {
                         self.w("\"__proto__\"");
                     } else if name == "__proto__" {
@@ -172,13 +172,13 @@ impl Printer {
                 ObjProp::Method(k, f) => {
                     self.w(if f.is_async { "async " } else { "" });
                     self.w(if f.is_gen { "*" } else { "" });
-                    self.quoted(pick_str(PROPS, *k));
+                    self.quoted(pick(PROPS, *k));
                     self.func_tail(FnKind::Method, f);
                 }
                 ObjProp::Get(k, b) | ObjProp::Set(k, b) => {
                     let setter = matches!(p, ObjProp::Set(..));
                     self.w(if setter { "set " } else { "get " });
-                    self.quoted(pick_str(PROPS, *k));
+                    self.quoted(pick(PROPS, *k));
                     self.accessor_tail(setter, b);
                 }
                 ObjProp::Spread(e) => {
@@ -204,8 +204,8 @@ impl Printer {
         match e {
             Expr::Int(n) if *n < 0 => self.w(&format!("({n})")),
             Expr::Int(n) => self.w(&n.to_string()),
-            Expr::Num(i) => self.w(pick_str(NUMS, *i)),
-            Expr::Str(i) => self.w(pick_str(STRS, *i)),
+            Expr::Num(i) => self.w(pick(NUMS, *i)),
+            Expr::Str(i) => self.w(pick(STRS, *i)),
             Expr::Bool(b) => self.w(&b.to_string()),
             Expr::Null => self.w("null"),
             Expr::Undef => self.w("undefined"),
@@ -216,21 +216,21 @@ impl Printer {
                 let n = self.name(*i);
                 self.w(&n);
             }
-            Expr::Global(i) => self.w(pick_str(GLOBALS, *i)),
+            Expr::Global(i) => self.w(pick(GLOBALS, *i)),
             Expr::Arguments => self.w(if self.flow.args { "arguments" } else { "0" }),
             Expr::NewTarget => self.w(if self.flow.new_target {
                 "new.target"
             } else {
                 "undefined"
             }),
-            Expr::WellKnown(i) => self.w(&format!("Symbol.{}", pick_str(SYMBOLS, *i))),
+            Expr::WellKnown(i) => self.w(&format!("Symbol.{}", pick(SYMBOLS, *i))),
             Expr::Regex(p, f) => {
-                self.w(&format!("/{}/{}", pick_str(REGEX, *p), pick_str(FLAGS, *f)))
+                self.w(&format!("/{}/{}", pick(REGEX, *p), pick(FLAGS, *f)))
             }
-            Expr::Eval(i) => self.w(&format!("eval(\"{}\")", pick_str(EVALS, *i))),
+            Expr::Eval(i) => self.w(&format!("eval(\"{}\")", pick(EVALS, *i))),
             Expr::SuperMember(p) if self.flow.super_prop => {
                 self.w("super");
-                self.prop_access(pick_str(PROPS, *p), false);
+                self.prop_access(pick(PROPS, *p), false);
             }
             Expr::SuperMember(_) => self.w("undefined"),
             Expr::Template(parts, last) => self.template(parts, *last),
@@ -287,12 +287,12 @@ impl Printer {
             }
             Expr::MethodCall(o, m, args, opt) => {
                 self.paren(o);
-                self.prop_access(pick_str(METHODS, *m), *opt);
+                self.prop_access(pick(METHODS, *m), *opt);
                 self.args(args);
             }
             Expr::StaticCall(g, m, args) => {
                 let (global, methods) = STATICS[*g as usize % STATICS.len()];
-                self.w(&format!("{global}.{}", pick_str(methods, *m)));
+                self.w(&format!("{global}.{}", pick(methods, *m)));
                 self.args(args);
             }
             Expr::New(f, args) => {
@@ -307,7 +307,7 @@ impl Printer {
             Expr::SuperCall(_) => self.w("0"),
             Expr::Member(o, p, opt) => {
                 self.paren(o);
-                self.prop_access(pick_str(PROPS, *p), *opt);
+                self.prop_access(pick(PROPS, *p), *opt);
             }
             Expr::Index(o, k, opt) => {
                 self.paren(o);

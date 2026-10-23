@@ -52,7 +52,7 @@ pub(crate) struct Printer {
 
 pub fn print(program: &Program) -> String {
     let mut p = Printer {
-        out: String::new(),
+        out: String::with_capacity(SOFT_CAP + 1024),
         flow: Flow::default(),
         depth: 0,
         strict: program.strict,
@@ -62,7 +62,7 @@ pub fn print(program: &Program) -> String {
     if program.strict {
         p.w("\"use strict\";\n");
     }
-    p.w("var a, b, c, d, e, f, $g = 0;\n");
+    p.w(&format!("var {}, $g = 0;\n", VARS.join(", ")));
     p.stmts(&program.body);
     p.out
 }
@@ -74,12 +74,8 @@ pub(crate) fn is_ident_name(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn pick<'a>(pool: &[&'a str], ix: Ix) -> &'a str {
+pub(crate) fn pick<'a>(pool: &[&'a str], ix: Ix) -> &'a str {
     pool[ix as usize % pool.len()]
-}
-
-pub(crate) fn pick_str(pool: &[&'static str], ix: Ix) -> &'static str {
-    pick(pool, ix)
 }
 
 impl Printer {
@@ -92,11 +88,11 @@ impl Printer {
     }
 
     pub fn name(&self, ix: Ix) -> String {
-        let lex: Vec<&String> = self.scopes.iter().flatten().collect();
-        let i = ix as usize % (VARS.len() + lex.len());
+        let lex = || self.scopes.iter().flatten();
+        let i = ix as usize % (VARS.len() + lex().count());
         match i.checked_sub(VARS.len()) {
             None => VARS[i].to_string(),
-            Some(j) => lex[j].clone(),
+            Some(j) => lex().nth(j).cloned().unwrap_or_default(),
         }
     }
 
@@ -225,7 +221,11 @@ impl Printer {
         if setter {
             self.bind(PARAMS[0].to_string());
         }
-        self.w(if setter { "(p0) {\n" } else { "() {\n" });
+        if setter {
+            self.w(&format!("({}) {{\n", PARAMS[0]));
+        } else {
+            self.w("() {\n");
+        }
         self.stmts(body);
         self.w("}");
         self.leave(saved);
