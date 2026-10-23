@@ -44,3 +44,16 @@ fn gc_unobservable_inputs_are_not_compared() {
     assert!(!fuzz_input_is_gc_observable("gcSomething"));
     assert!(!fuzz_input_is_gc_observable("var a = {};"));
 }
+
+#[test]
+fn uncaught_error_survives_collections_in_later_jobs() {
+    let src = "async function f() { await 1; await 2; } f(); nope;";
+    for bytecode in [true, false] {
+        let (base, _) = stressed(src, bytecode, 0);
+        assert_eq!(base.outcome, jsse::SigOutcome::Threw("ReferenceError".into()));
+        for period in [1, 2, 3] {
+            let (sig, _) = stressed(src, bytecode, period);
+            assert_eq!(base, sig, "period {period}, bytecode={bytecode}");
+        }
+    }
+}

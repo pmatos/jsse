@@ -85,6 +85,17 @@ impl Interpreter {
         true
     }
 
+    /// Drain the job queues after a program run, keeping its completion value
+    /// reachable: a collection inside a job must not free the pending result.
+    pub(crate) fn drain_after_run(&mut self, result: &Completion) {
+        let frame = self.gc_root_frame();
+        if let Completion::Normal(value) | Completion::Throw(value) = result {
+            self.gc_root_value(value);
+        }
+        self.drain_microtasks_until_idle();
+        self.gc_unroot_frame(frame);
+    }
+
     /// Drain already-queued jobs, then wait for host async jobs such as
     /// Atomics.waitAsync/getReportAsync when JS code is still awaiting them.
     ///

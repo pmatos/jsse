@@ -2407,7 +2407,7 @@ impl Interpreter {
         if let Completion::Exit(code) = &result {
             self.pending_exit = Some(*code);
         }
-        self.drain_microtasks_until_idle();
+        self.drain_after_run(&result);
         result
     }
 
@@ -2448,7 +2448,7 @@ impl Interpreter {
                         interp.pending_exit = Some(*code);
                     }
                     // Async callbacks need the file's key for relative imports.
-                    interp.drain_microtasks_until_idle();
+                    interp.drain_after_run(&r);
                     r
                 })
             }
@@ -2460,7 +2460,7 @@ impl Interpreter {
                 }
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 self.with_module_key(Some(module_key), |interp| {
-                    interp.drain_microtasks_until_idle()
+                    interp.drain_after_run(&r)
                 });
                 r
             }
