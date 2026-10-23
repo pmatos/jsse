@@ -53,7 +53,7 @@ The trade-off, stated plainly rather than glossed over: throughput is
 bounded by two process spawns per iteration (tens of ms each), so this
 target runs at tens of iterations/sec, not the thousands/sec libFuzzer
 normally achieves fuzzing in-process. That's why it's a `workflow_dispatch`/
-`schedule` (nightly) target only (`fuzz-deep` in `.github/workflows/fuzz.yml`),
+`schedule` (nightly) target only (the nightly job in `.github/workflows/fuzz.yml`),
 never the `pull_request` gate.
 
 ### Resource limits mirror `scripts/run-test262.py`, but asymmetrically
@@ -122,6 +122,10 @@ a mutation pass can hit this exact bug (or another latent one) on any
 future PR, at random, which would make the fuzz gate itself flaky for
 reasons that have nothing to do with the PR under test.
 
+> Update: ADR-2026-10-23-0854 moved `parse` to ClusterFuzzLite with a blocking
+> mutation-fuzzing PR check, so the replay-only gate described here no longer
+> exists.
+
 ## Deliberately out of scope
 
 - **Module-source (`.mjs`) fuzzing.** The seed corpus and `parse`
@@ -140,7 +144,8 @@ reasons that have nothing to do with the PR under test.
   usage is small (29 hits, grep-confirmed) and ASan roughly doubles build
   time on an already `icu`-heavy dependency tree. `fuzz-deep` could opt in
   later if UB detection beyond debug-assertions/overflow-checks turns out
-  to matter.
+  to matter. (Update: ADR-2026-10-23-0854 runs `parse` under ASan in ClusterFuzzLite;
+  `differential` still has no sanitizer.)
 - **An in-process differential target with an interpreter step budget.**
   Would let `differential` run at libFuzzer speed instead of subprocess
   speed, but needs a real engine feature (an instruction/step budget) with

@@ -36,8 +36,7 @@ build/corpus/artifact state), then, only if it finds something,
    cargo +nightly fuzz run parse -- -runs=0 fuzz/corpus/parse
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
-   This is exactly what CI's `fuzz-smoke` job runs on every PR. It replays
-   the committed seed corpus with no new mutation — if this fails, something
+   This replays the committed seed corpus with no new mutation — if this fails, something
    in the current tree broke a previously-clean input; that's worth
    investigating immediately, unlike a new-mutation finding (see below).
 3. **New-mutation fuzzing (can find fresh, previously-unknown bugs at any
@@ -49,10 +48,36 @@ build/corpus/artifact state), then, only if it finds something,
    `parse` runs at libFuzzer's normal in-process speed.
    `differential` is much slower (two subprocess spawns per iteration,
    tens of iterations/sec, not thousands) by design — see the ADR. Budget
-   accordingly; CI's nightly `fuzz-deep` job gives each target 5 minutes.
+   accordingly; CI's nightly `Fuzz` workflow gives `differential` 5 minutes.
 4. **A crash writes an artifact** to `fuzz/artifacts/<target>/crash-<hash>`
    (or `fuzz/artifacts/<target>/oom-<hash>` / `timeout-<hash>`) and prints
    its path. That file is the input to triage below.
+
+## Where CI runs each target
+
+- `parse`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
+  is a blocking per-PR check (120 s of fuzzing); `clusterfuzzlite-batch.yml`
+  runs 30 minutes daily and stores the merged corpus as a GitHub Actions
+  artifact that later batch and PR runs start from.
+- `differential`: `fuzz.yml`, nightly, 5 minutes, no sanitizer (needs `node`
+  and `target/release/jsse`).
+
+### Triaging a ClusterFuzzLite finding
+
+1. Open the failed `ClusterFuzzLite PR` or `ClusterFuzzLite batch` run. The
+   log shows the ASan report and testcase path; the `clusterfuzzlite-*-crashes`
+   artifact holds the testcase file(s).
+2. Download it (`gh run download <run-id> -n clusterfuzzlite-pr-crashes`) and
+   reproduce locally: `cargo +nightly fuzz run parse <testcase>` (cargo-fuzz
+   uses ASan by default), then `cargo +nightly fuzz tmin parse <testcase>`.
+3. Decide if the PR caused it: re-run against `main`'s commit. A crash that
+   also reproduces on `main` is a latent bug unrelated to the PR (the
+   continuous build normally filters these out, but not every one); file it
+   under "Root-cause and file" below and re-run the check.
+4. To seed a local session with the stored corpus, download the latest corpus
+   artifact from the batch workflow's runs (`gh run list -w "ClusterFuzzLite batch"`,
+   `gh run download <run-id>`) and pass the extracted directory to
+   `cargo +nightly fuzz run parse`.
 
 ## Triaging a finding
 
@@ -127,4 +152,5 @@ local new-mutation session. That's normal; nothing here separates "seed"
 from "discovered" corpus into different directories. Don't commit
 discovered-corpus growth casually — if a specific discovered input is
 worth keeping as a regression seed (e.g. after fixing the bug it found),
-add it deliberately, not as a side effect of `git add -A`.
+add it deliberately, not as a side effect of `git add -A`. ClusterFuzzLite's
+corpus lives in a CI artifact, not in the tree.

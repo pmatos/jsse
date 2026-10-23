@@ -185,12 +185,29 @@ cargo build --release   # differential needs the release binary
 cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
 ```
 
-CI runs a corpus-replay smoke check (`-runs=0`, deterministic) on every PR;
-new-mutation fuzzing for both targets runs nightly via
-`.github/workflows/fuzz.yml`'s `fuzz-deep` job and never gates a PR — see the
-ADR for why. A finding from either target is a lead, not a fix to make in the
-PR that touches the fuzz tooling itself: file it as its own issue and fix it
-against `spec/`/test262, never by matching `node`'s observed behavior.
+Where each target runs in CI:
+
+| Target | Workflow | Sanitizer | Cadence |
+| --- | --- | --- | --- |
+| `parse` | `clusterfuzzlite-pr.yml` (ClusterFuzzLite, code-change mode, 120 s fuzz time, blocking) | ASan | every PR |
+| `parse` | `clusterfuzzlite-batch.yml` (ClusterFuzzLite, batch mode, 30 min) | ASan | daily |
+| `differential` | `fuzz.yml` (needs `node` and a release `jsse`, so it stays outside ClusterFuzzLite) | none | nightly |
+
+`clusterfuzzlite-build.yml` uploads an ASan build of `main` on every push so a
+PR run can tell a crash the PR introduced from one already on `main`. The
+corpus found by batch runs is stored as a GitHub Actions artifact; the next
+batch run and every PR run start from it (plus the committed seeds in
+`fuzz/corpus/parse/`). The artifact expires with the repository's artifact
+retention, after which fuzzing restarts from the committed seeds.
+
+To triage a ClusterFuzzLite failure, open the failed run, download its
+`clusterfuzzlite-*-crashes` artifact (or copy the testcase from the log) and
+reproduce with `cargo +nightly fuzz run parse <testcase>`; see
+`.claude/skills/fuzzing/SKILL.md`. A finding from either target is a lead, not
+a fix to make in the PR that touches the fuzz tooling itself: file it as its
+own issue and fix it against `spec/`/test262, never by matching `node`'s
+observed behavior. A PR check can also fail on a latent bug the PR did not
+touch; file it and re-run.
 
 ## Running JetStream 3
 
