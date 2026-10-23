@@ -37,7 +37,7 @@ pub(crate) struct GcPacer {
     /// Safepoints seen while stress mode is on. Every `stress_period`th one
     /// collects, alternating major (finds missing roots) and minor (finds
     /// missing write barriers).
-    stress_count: u64,
+    pub(crate) stress_count: u64,
     /// Every `begin_collection()` call, unconditionally — one per production
     /// `Interpreter::gc_safepoint()`, plus one per direct `begin_collection()`
     /// call from this module's own unit tests below. Unlike `stress_count`
@@ -117,7 +117,6 @@ impl GcPacer {
         self.poll = true;
     }
 
-    #[cfg(test)]
     pub(crate) fn set_stress_period(&mut self, period: u32) {
         self.stress_period = period;
         self.stress_count = 0;

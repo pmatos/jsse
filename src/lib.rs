@@ -207,15 +207,40 @@ pub struct RunSignature {
 /// VM or the tree-walker, and returns its [`RunSignature`]. Call it on an
 /// engine-sized stack (`run_on_engine_stack`).
 pub fn run_script_observed(src: &str, budget: u64, bytecode: bool) -> RunSignature {
+    observe(src, budget, bytecode, None).0
+}
+
+/// [`run_script_observed`] with the GC stress period forced to `period` (0 turns
+/// stress off, whatever `JSSE_GC_STRESS` says), plus the number of safepoints
+/// that counted towards stress. Backs the `gc_stress` fuzz target.
+pub fn run_script_gc_stressed(
+    src: &str,
+    budget: u64,
+    bytecode: bool,
+    period: u32,
+) -> (RunSignature, u64) {
+    observe(src, budget, bytecode, Some(period))
+}
+
+fn observe(
+    src: &str,
+    budget: u64,
+    bytecode: bool,
+    stress_period: Option<u32>,
+) -> (RunSignature, u64) {
     let Some(program) = parse_script(src) else {
-        return RunSignature {
+        let signature = RunSignature {
             outcome: SigOutcome::ParseError,
             output: String::new(),
         };
+        return (signature, 0);
     };
     let mut interp = interpreter::Interpreter::new();
     interp.bytecode_enabled = bytecode;
     interp.set_step_budget(Some(budget));
+    if let Some(period) = stress_period {
+        interp.set_gc_stress_period(period);
+    }
     interp.use_virtual_timers();
     interp.set_math_random_seed(FUZZ_EXECUTE_RANDOM_SEED);
     interp.capture_host_output();
@@ -229,10 +254,29 @@ pub fn run_script_observed(src: &str, budget: u64, bytecode: bool) -> RunSignatu
             _ => SigOutcome::Completed(String::new()),
         }
     };
-    RunSignature {
+    let signature = RunSignature {
         outcome,
         output: interp.take_captured_host_output(),
-    }
+    };
+    (signature, interp.gc_stress_safepoints())
+}
+
+/// Whether `src` is safe to run in-process: it names none of the identifiers
+/// that would hang or escape the step budget (`$262.agent`, `sleep`,
+/// `waitAsync`).
+pub fn fuzz_input_is_runnable(src: &str) -> bool {
+    !FUZZ_EXECUTE_SKIP_IDENTS
+        .iter()
+        .any(|ident| contains_ident(src, ident))
+}
+
+/// Whether `src` names an identifier through which GC timing, the clock or
+/// shared memory can leak into the observable outcome, so two runs of it need
+/// not agree.
+pub fn fuzz_input_is_gc_observable(src: &str) -> bool {
+    FUZZ_EXECUTE_NONDETERMINISTIC_IDENTS
+        .iter()
+        .any(|ident| contains_ident(src, ident))
 }
 
 fn contains_ident(src: &str, ident: &str) -> bool {
@@ -264,18 +308,12 @@ pub fn execution_divergence(bytecode: &RunSignature, tree_walker: &RunSignature)
 /// that would hang or escape the budget) or its outcome is not comparable.
 /// Skipped-for-nondeterminism inputs still run in both modes.
 pub fn fuzz_execute_signatures(src: &str) -> Option<(RunSignature, RunSignature)> {
-    if FUZZ_EXECUTE_SKIP_IDENTS
-        .iter()
-        .any(|ident| contains_ident(src, ident))
-    {
+    if !fuzz_input_is_runnable(src) {
         return None;
     }
     let bytecode = run_script_observed(src, FUZZ_EXECUTE_STEP_BUDGET, true);
     let tree_walker = run_script_observed(src, FUZZ_EXECUTE_STEP_BUDGET, false);
-    if FUZZ_EXECUTE_NONDETERMINISTIC_IDENTS
-        .iter()
-        .any(|ident| contains_ident(src, ident))
-    {
+    if fuzz_input_is_gc_observable(src) {
         return None;
     }
     Some((bytecode, tree_walker))
