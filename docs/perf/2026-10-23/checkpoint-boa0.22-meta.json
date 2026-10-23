@@ -1,0 +1,16 @@
+{
+ "sha": "136b059826bf232d151ba344dadbc8338facced8",
+ "subject": "refactor(builtins): centralize reduction traversal (#1169)",
+ "jsse_sha256": "29927ee8a0d8393371a0e3cf99660e17bc15d73f137cdc7421e8a2e0d3ab902b",
+ "jsse_version": "jsse 0.11.0",
+ "boa": "/home/igalia/pmatos/dev/bench-workspace/boa-0.22.0/boa",
+ "boa_version": "0.22.0",
+ "boa_sha256": "600ab67e207e12a8eaa84f2cd49d3ed87015e0d7eed4ccfe235f62529587e29e",
+ "runner_sha256": "d061f395bdadc64911696f121bb495343d4b66cad6c0133e22254a5f2bce5ffb",
+ "jetstream": "/home/igalia/pmatos/dev/bench-workspace/JetStream",
+ "jetstream_commit": "c603c04 Use JetStream Next for main branch (#300)",
+ "jetstream_tests": "",
+ "host": "buildbox3",
+ "rustc": "rustc 1.100.0-nightly (330d31712 2026-09-17)",
+ "started": "2026-10-23T08:46:28Z"
+}
