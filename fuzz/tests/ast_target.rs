@@ -93,7 +93,7 @@ fn printed_programs_parse_in_the_engine() {
         bytes / samples
     );
     assert!(
-        rate >= 0.90,
+        rate >= 0.98,
         "parse rate {rate:.3}; first failures:\n{}",
         failures.join("\n=====\n")
     );
@@ -312,5 +312,19 @@ fn classes_with_privates_heritage_and_static_blocks_parse() {
             members: vec![],
         }))),
     ]);
+    assert!(parses(&src), "{src}");
+}
+
+#[test]
+fn trailing_array_holes_survive_printing() {
+    let src = program(vec![
+        stmt(Expr::Array(vec![Elem::Val(Expr::Int(1)), Elem::Hole])),
+        stmt(Expr::DestructAssign(
+            Box::new(Pat::Arr(vec![None], None)),
+            Box::new(Expr::Array(vec![])),
+        )),
+    ]);
+    assert!(src.contains("[(1), ,]"), "{src}");
+    assert!(src.contains("[,] = "), "{src}");
     assert!(parses(&src), "{src}");
 }

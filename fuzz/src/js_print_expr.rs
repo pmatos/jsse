@@ -118,6 +118,9 @@ impl Printer {
                 }
             }
         }
+        if holes && matches!(es.last(), Some(Elem::Hole)) {
+            self.w(",");
+        }
     }
 
     fn args(&mut self, es: &[Elem]) {

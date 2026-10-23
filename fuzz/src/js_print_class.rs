@@ -170,6 +170,8 @@ impl Printer {
                 if let Some(t) = rest {
                     self.w(if elems.is_empty() { "" } else { ", " });
                     self.rest(t, binding);
+                } else if matches!(elems.last(), Some(None)) {
+                    self.w(",");
                 }
                 self.w("]");
             }

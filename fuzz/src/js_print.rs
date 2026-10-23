@@ -173,9 +173,7 @@ impl Printer {
                 for name in &PARAMS[..n] {
                     self.bind(name.to_string());
                 }
-                if n == 0 {
-                    self.w("");
-                } else {
+                if n > 0 {
                     self.w(&format!("{} = (", PARAMS[0]));
                     self.expr(e);
                     self.w(")");
@@ -525,7 +523,11 @@ impl Printer {
                 self.w(&format!("{}: ", LABELS[l]));
                 self.flow.labels.push((l, is_loop));
                 if wrap {
-                    self.block(&vec![(**inner).clone()]);
+                    self.w("{\n");
+                    self.scopes.push(vec![]);
+                    self.stmt(inner);
+                    self.scopes.pop();
+                    self.w("}");
                 } else {
                     self.stmt_inner(inner);
                 }
