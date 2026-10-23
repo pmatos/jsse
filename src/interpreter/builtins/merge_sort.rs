@@ -50,7 +50,8 @@ fn find_runs<E>(
     cmp: &mut impl FnMut(&JsValue, &JsValue) -> Result<std::cmp::Ordering, E>,
 ) -> Result<Vec<usize>, E> {
     let n = src.len();
-    let mut bounds = vec![0];
+    let mut bounds = Vec::with_capacity(n / 2 + 2);
+    bounds.push(0);
     let mut lo = 0;
     while lo < n {
         let mut hi = lo + 1;
