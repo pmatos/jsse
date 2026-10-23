@@ -5,20 +5,22 @@ description: >-
   "run cargo fuzz", "fuzz jsse vs node", "check for fuzzer crashes",
   "triage a fuzz crash", "minimize a fuzz artifact", or wants to drive
   a cargo-fuzz run or triage a crash/divergence it found. Covers both
-  the parse, execute, typed_array and differential targets under fuzz/.
+  the parse, execute, typed_array, execute_ast and differential targets under fuzz/.
 version: 0.1.0
 ---
 
 # Fuzzing
 
-Four `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
+Five `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
 arbitrary bytes must never panic), `execute` (run in-process under a step
 budget on the bytecode VM and the tree-walker; panics and differences between
 the two are findings), `typed_array` (the same oracle over generated
 ArrayBuffer/typed array/`DataView`/`Atomics` operation sequences, whose input is
-a byte-encoded op list, not JS source) and `differential` (jsse vs `node` on the same source).
+a byte-encoded op list, not JS source), `execute_ast` (the same check on programs printed from
+an `arbitrary`-decoded AST, so they parse) and `differential` (jsse vs `node` on the same source).
 See `docs/adr/2026-10-23-1400-execute-fuzz-target.md` for `execute`,
-`docs/adr/2026-10-23-1600-typed-array-fuzz-target.md` for `typed_array`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
+`docs/adr/2026-10-23-1600-typed-array-fuzz-target.md` for `typed_array`,
+`docs/adr/2026-10-23-1630-execute-ast-fuzz-target.md` for `execute_ast`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
 for why they're built the way they are, and the `Divergence Tier` entry
 in `CONTEXT.md` for the tiering `differential` uses.
 
@@ -41,6 +43,7 @@ build/corpus/artifact state), then, only if it finds something,
    cargo +nightly fuzz run parse -- -runs=0 fuzz/corpus/parse
    cargo +nightly fuzz run execute -- -runs=0 -max_len=16384 fuzz/corpus/execute
    cargo +nightly fuzz run typed_array -- -runs=0 -max_len=768 fuzz/corpus/typed_array
+   cargo +nightly fuzz run execute_ast -- -runs=0 -max_len=4096 fuzz/corpus/execute_ast
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
    This replays the committed seed corpus with no new mutation — if this fails, something
@@ -52,11 +55,14 @@ build/corpus/artifact state), then, only if it finds something,
    cargo +nightly fuzz run parse -- -max_total_time=60
    cargo +nightly fuzz run execute -- -max_total_time=60 -max_len=16384 -timeout=30
    cargo +nightly fuzz run typed_array -- -max_total_time=60 -max_len=768 -timeout=30
+   cargo +nightly fuzz run execute_ast -- -max_total_time=60 -max_len=4096 -timeout=30
    cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
    ```
    `parse` runs at libFuzzer's normal in-process speed; `execute` runs two
    interpreters per input, about 200 executions/sec under ASan; `typed_array`
-   does the same but with larger generated programs, about 10 executions/sec.
+   does the same but with larger generated programs, about 10 executions/sec;
+   `execute_ast` runs only parseable programs, so each input pays two full
+   interpreter setups and runs at roughly a fifth of `execute`'s rate.
    `differential` is much slower (two subprocess spawns per iteration,
    tens of iterations/sec, not thousands) by design — see the ADR. Budget
    accordingly; CI's nightly `Fuzz` workflow gives `differential` 5 minutes.
@@ -66,7 +72,7 @@ build/corpus/artifact state), then, only if it finds something,
 
 ## Where CI runs each target
 
-- `parse`, `execute` and `typed_array`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
+- `parse`, `execute`, `typed_array` and `execute_ast`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
   is a blocking per-PR check (120 s of fuzzing, shared between the targets); `clusterfuzzlite-batch.yml`
   runs 30 minutes daily and stores the merged corpus as a GitHub Actions
   artifact that later batch and PR runs start from.
@@ -111,6 +117,12 @@ build/corpus/artifact state), then, only if it finds something,
     root cause. If the difference is spec-unspecified (for example error
     message wording) the fix is to normalise it in `RunSignature` with a
     comment naming the unspecified clause, never to hide a spec-defined one.
+  - on `execute_ast` the artifact holds `Arbitrary` bytes, not source. Print
+    the source with a throwaway test calling
+    `jsse_fuzz::js_print::print(&Program::arbitrary(&mut Unstructured::new(&bytes))?)`
+    (see `fuzz/tests/ast_target.rs`), then triage and `tmin` that source through
+    `execute`. Fix generator rules in `fuzz/src/js_print*.rs`, never in the
+    engine, when the printer emitted an early error.
   - a libFuzzer `timeout-*` or `oom-*` artifact: work the step budget does not
     count (regex backtracking, huge `repeat`, some arrow-function loops). A
     real missing resource limit; file it.
@@ -174,6 +186,23 @@ prelude, `scripts/node-test262-prelude.js`). Only promote one to a filed
 issue if reading the actual stderr from both sides shows something that
 looks like a genuine spec violation rather than an expected gap — most
 don't, and filing every Tier 3 sample would just create noise.
+
+## Comparing target coverage
+
+To compare two targets on the same budget, run each into its own scratch
+directory with a fixed seed, seeded and from an empty corpus, and compare
+libFuzzer's final `cov:` edge count (all targets link the same engine, so the
+counts are comparable). Budget by executions (`-runs=10000`) and by wall time
+(`-max_total_time=300`) because `execute_ast` pays two interpreter setups per
+valid program:
+
+```bash
+D=$(mktemp -d)
+cargo +nightly fuzz build -O --debug-assertions execute execute_ast
+B=fuzz/target/x86_64-unknown-linux-gnu/release
+$B/execute     $D/ex  fuzz/corpus/execute     -max_len=16384 -runs=10000 -seed=1 -timeout=30
+$B/execute_ast $D/ast fuzz/corpus/execute_ast -max_len=4096  -runs=10000 -seed=1 -timeout=30
+```
 
 ## Corpus hygiene
 
