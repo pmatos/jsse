@@ -69,6 +69,7 @@ the oracle for the other and no `node` is needed.
 - Rejected: comparing step counts or error messages (noise); comparing only
   against `node` (slow, no sanitizer, wrong oracle for an engine-internal
   invariant).
-- Follow-ups: dictionaries or a grammar-aware mutator, module inputs, counting
+- Follow-ups: dictionaries or a grammar-aware mutator (the structure-aware
+  generator landed as `execute_ast`, ADR 2026-10-23-1630), module inputs, counting
   function entries and native loops in the budget, a bytecode vs tree-walker
   check over test262.

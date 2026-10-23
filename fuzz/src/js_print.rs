@@ -9,6 +9,9 @@ use crate::js_ast::*;
 use crate::js_pools::*;
 
 pub const MAX_DEPTH: u32 = 10;
+/// Loop bodies share the `$g` counter, so a program runs at most this many
+/// iterations in total instead of burning the step budget in an endless loop.
+const LOOP_FUEL: u32 = 48;
 const SOFT_CAP: usize = 16_000;
 
 #[derive(Default, Clone)]
@@ -59,7 +62,7 @@ pub fn print(program: &Program) -> String {
     if program.strict {
         p.w("\"use strict\";\n");
     }
-    p.w("var a, b, c, d, e, f;\n");
+    p.w("var a, b, c, d, e, f, $g = 0;\n");
     p.stmts(&program.body);
     p.out
 }
@@ -272,7 +275,13 @@ impl Printer {
 
     fn loop_block(&mut self, b: &Block) {
         let saved = std::mem::replace(&mut self.flow.in_loop, true);
-        self.block(b);
+        self.w("{\nif ($g++ > ");
+        self.w(&LOOP_FUEL.to_string());
+        self.w(") break;\n");
+        self.scopes.push(vec![]);
+        self.stmts(b);
+        self.scopes.pop();
+        self.w("}");
         self.flow.in_loop = saved;
     }
 
