@@ -1,6 +1,7 @@
 //! Host hooks for the in-process `execute` fuzz target: captured `print` /
 //! `console.*` output, a virtual timer clock and a fixed `Math.random` seed.
-//! All inert by default.
+//! All inert by default. Also a per-interpreter GC stress period for the
+//! `gc_stress` target.
 
 use super::Interpreter;
 
@@ -42,6 +43,17 @@ impl Interpreter {
         for index in 0..self.realms.len() {
             self.seed_new_realm_random(index);
         }
+    }
+
+    /// Force a collection at every `period`th safepoint, overriding
+    /// `JSSE_GC_STRESS`; zero turns stress mode off.
+    pub(crate) fn set_gc_stress_period(&mut self, period: u32) {
+        self.gc.set_stress_period(period);
+    }
+
+    /// Safepoints that counted towards the stress period so far.
+    pub(crate) fn gc_stress_safepoints(&self) -> u64 {
+        self.gc.stress_count
     }
 
     pub(crate) fn seed_new_realm_random(&mut self, realm_index: usize) {

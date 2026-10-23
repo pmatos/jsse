@@ -1,0 +1,11 @@
+var log = [];
+var p = new Proxy({ a: 1 }, {
+  get: function (t, k, r) { log.push({ k: String(k) }); return { v: t[k] }; },
+  has: function (t, k) { return { r: k in t }.r; },
+  ownKeys: function (t) { return ['a', 'b' + [1].length]; },
+  getOwnPropertyDescriptor: function (t, k) { return { value: { k: k }, configurable: true, enumerable: true }; }
+});
+var n = 0;
+for (var i = 0; i < 20; i++) { n += p.a.v + ('a' in p ? 1 : 0) + Object.keys(p).length; }
+n += Reflect.apply(function (a, b) { return { a: a, b: [b] }.b[0]; }, null, [{ x: 1 }, 2]);
+n + log.length;

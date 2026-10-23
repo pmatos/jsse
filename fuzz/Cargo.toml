@@ -49,3 +49,10 @@ path = "fuzz_targets/execute_ast.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "gc_stress"
+path = "fuzz_targets/gc_stress.rs"
+test = false
+doc = false
+bench = false

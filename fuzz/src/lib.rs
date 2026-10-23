@@ -14,6 +14,7 @@ pub mod js_print;
 mod js_print_class;
 mod js_print_expr;
 
+pub mod gc_stress;
 pub mod typed_array;
 
 use std::io::Read;

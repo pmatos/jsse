@@ -1,0 +1,5 @@
+class A { #p = { a: [1] }; static s = [{ z: 1 }]; constructor(x) { this.x = { x: x }; } get p() { return this.#p; } m() { return { m: [this.x.x] }; } }
+class B extends A { #q = [{ q: 2 }]; constructor(x) { super({ w: x }); this.y = [x]; } m() { return { b: super.m(), q: this.#q }; } }
+var n = 0;
+for (var i = 0; i < 30; i++) { var b = new B(i); n += b.m().b.m[0].w + b.p.a[0] + B.s[0].z; }
+n;

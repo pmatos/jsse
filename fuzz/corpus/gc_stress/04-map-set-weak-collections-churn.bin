@@ -1,0 +1,10 @@
+var m = new Map(), s = new Set(), wm = new WeakMap(), ws = new WeakSet();
+for (var i = 0; i < 60; i++) {
+  var k = { i: i };
+  m.set(k, [i]); s.add('v' + i); wm.set(k, { v: i }); ws.add(k);
+  if (i % 3 == 0) { m.delete(k); s.delete('v' + i); }
+}
+var n = 0;
+m.forEach(function (v, key) { n += v[0] + wm.get(key).v; });
+for (var x of s) n += x.length;
+n;

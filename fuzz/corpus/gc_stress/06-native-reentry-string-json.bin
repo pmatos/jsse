@@ -1,0 +1,4 @@
+var s = 'a-b-c-d-e-f'.replace(/-/g, function (m) { return ['x', { y: m }][0] + { z: m }.z; });
+var j = JSON.parse('{"a":[1,2,{"b":3}],"c":{"d":[4,5]}}');
+var t = JSON.stringify({ a: { toJSON: function () { return { q: [1, 2, 3] }; } }, b: [{ toJSON: function () { return 'z' + [1].length; } }] });
+s + t + j.c.d[0];

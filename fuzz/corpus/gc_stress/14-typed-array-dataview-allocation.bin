@@ -1,0 +1,10 @@
+var views = [];
+for (var i = 0; i < 40; i++) {
+  var b = new ArrayBuffer(16 + i);
+  var u = new Uint8Array(b), d = new DataView(b), f = new Float64Array(2);
+  u.fill(i); d.setInt16(2, i); f[0] = d.getInt16(2);
+  views.push({ u: u, d: d, f: f, s: u.subarray(1, 5) });
+}
+var n = 0;
+for (var v of views) n += v.s.length + v.f[0] + v.u.map(function (x) { return { x: x }.x; }).length;
+n;

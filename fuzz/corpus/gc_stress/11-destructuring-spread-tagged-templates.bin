@@ -1,0 +1,10 @@
+
+function tag(s, ...v) { return { s: s.raw, v: v, n: [s.length] }; }
+var n = 0;
+for (var i = 0; i < 30; i++) {
+  var { a, b: [c, ...d], ...rest } = { a: { i: i }, b: [{ c: 1 }, [2], { e: 3 }], f: [4], g: { h: 5 } };
+  var [x, { y }] = [[i], { y: { z: i } }];
+  var t = tag`a${{ i: i }}b${[i]}c`;
+  n += a.i + d.length + Object.keys(rest).length + x[0] + y.z + t.v.length;
+}
+n;

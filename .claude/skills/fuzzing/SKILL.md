@@ -5,22 +5,24 @@ description: >-
   "run cargo fuzz", "fuzz jsse vs node", "check for fuzzer crashes",
   "triage a fuzz crash", "minimize a fuzz artifact", or wants to drive
   a cargo-fuzz run or triage a crash/divergence it found. Covers both
-  the parse, execute, typed_array, execute_ast and differential targets under fuzz/.
+  the parse, execute, typed_array, execute_ast, gc_stress and differential targets under fuzz/.
 version: 0.1.0
 ---
 
 # Fuzzing
 
-Five `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
+Six `cargo-fuzz` targets live under `fuzz/`: `parse` (parsing
 arbitrary bytes must never panic), `execute` (run in-process under a step
 budget on the bytecode VM and the tree-walker; panics and differences between
 the two are findings), `typed_array` (the same oracle over generated
 ArrayBuffer/typed array/`DataView`/`Atomics` operation sequences, whose input is
 a byte-encoded op list, not JS source), `execute_ast` (the same check on programs printed from
-an `arbitrary`-decoded AST, so they parse) and `differential` (jsse vs `node` on the same source).
+an `arbitrary`-decoded AST, so they parse), `gc_stress` (JS source behind a one-byte header that picks the
+GC stress period and engine; run with and without forced collections and the two must agree) and `differential` (jsse vs `node` on the same source).
 See `docs/adr/2026-10-23-1400-execute-fuzz-target.md` for `execute`,
 `docs/adr/2026-10-23-1600-typed-array-fuzz-target.md` for `typed_array`,
-`docs/adr/2026-10-23-1630-execute-ast-fuzz-target.md` for `execute_ast`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
+`docs/adr/2026-10-23-1630-execute-ast-fuzz-target.md` for `execute_ast`,
+`docs/adr/2026-10-23-1800-gc-stress-fuzz-target.md` for `gc_stress`, and `docs/adr/0004-fuzz-lib-target-and-subprocess-differential.md`
 for why they're built the way they are, and the `Divergence Tier` entry
 in `CONTEXT.md` for the tiering `differential` uses.
 
@@ -44,6 +46,7 @@ build/corpus/artifact state), then, only if it finds something,
    cargo +nightly fuzz run execute -- -runs=0 -max_len=16384 fuzz/corpus/execute
    cargo +nightly fuzz run typed_array -- -runs=0 -max_len=768 fuzz/corpus/typed_array
    cargo +nightly fuzz run execute_ast -- -runs=0 -max_len=4096 fuzz/corpus/execute_ast
+   cargo +nightly fuzz run gc_stress -- -runs=0 -max_len=4096 fuzz/corpus/gc_stress
    cargo +nightly fuzz run differential -- -runs=0 fuzz/corpus/differential
    ```
    This replays the committed seed corpus with no new mutation — if this fails, something
@@ -56,6 +59,7 @@ build/corpus/artifact state), then, only if it finds something,
    cargo +nightly fuzz run execute -- -max_total_time=60 -max_len=16384 -timeout=30
    cargo +nightly fuzz run typed_array -- -max_total_time=60 -max_len=768 -timeout=30
    cargo +nightly fuzz run execute_ast -- -max_total_time=60 -max_len=4096 -timeout=30
+   cargo +nightly fuzz run gc_stress -- -max_total_time=60 -max_len=4096 -timeout=30
    cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
    ```
    `parse` runs at libFuzzer's normal in-process speed; `execute` runs two
@@ -72,7 +76,7 @@ build/corpus/artifact state), then, only if it finds something,
 
 ## Where CI runs each target
 
-- `parse`, `execute`, `typed_array` and `execute_ast`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
+- `parse`, `execute`, `typed_array`, `execute_ast` and `gc_stress`: ClusterFuzzLite under AddressSanitizer. `clusterfuzzlite-pr.yml`
   is a blocking per-PR check (120 s of fuzzing, shared between the targets); `clusterfuzzlite-batch.yml`
   runs 30 minutes daily and stores the merged corpus as a GitHub Actions
   artifact that later batch and PR runs start from.
@@ -132,6 +136,14 @@ build/corpus/artifact state), then, only if it finds something,
   `JSSE_FUZZ_DUMP_SCRIPT=1 cargo +nightly fuzz run typed_array <artifact>` and
   triage that JS (`jsse f.js` vs `jsse --no-bytecode f.js`; the script needs
   `print` and `$262`). `tmin` works on the byte input.
+- **`gc_stress` failed**: a panic or sanitizer report is as for `parse`. A panic
+  starting `gc stress divergence (period N, mode)` means the stressed run differs
+  from the unstressed one, so a live value was unreachable from `collect_gc_roots`
+  at a safepoint or a write barrier is missing. The first artifact byte is the
+  header (`PERIODS[b & 7]`, bit 3 = tree-walker). Reproduce with the CLI,
+  `JSSE_GC_STRESS=<period> jsse [--no-bytecode] f.js` against the same command
+  without the variable, minimize with `tmin`, and see `AGENTS.md` "GC Stress Mode".
+  Print the script with `JSSE_FUZZ_DUMP_SCRIPT=1`.
 - **`differential` panicked**: the panic message says which tier fired.
   Only Tier 1 and Tier 2 panic (see the `Divergence Tier` glossary entry);
   Tier 3 is recorded, never a panic, so if `differential` panics at all,
