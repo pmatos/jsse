@@ -1,4 +1,4 @@
-# Scheduled batch fuzzing of the parse, execute and reentrancy targets under AddressSanitizer. Batch
+# Scheduled batch fuzzing of the parse, execute, typed_array and reentrancy targets under AddressSanitizer. Batch
 # runs merge their findings into the stored corpus (a GitHub Actions artifact)
 # that the next batch and the PR runs start from. See README.md "Fuzzing".
 
