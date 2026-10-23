@@ -10327,14 +10327,12 @@ impl Interpreter {
             if done.get() {
                 break;
             }
-            // Terminal-sink read for `__host_exit` (issue #242): stop draining
-            // immediately so no further queued user job runs after the exit.
-            // Inert unless the node host floor is on.
+            // `__host_exit` latched (issue #242): run no further queued job.
             if self.pending_exit.is_some() {
                 break;
             }
             if let Some(task) = self.scheduler.pop_microtask() {
-                let job_result = self.run_microtask(task);
+                let job_result = self.run_budgeted_microtask(task);
                 // A `__host_exit` inside the job (issue #242) latches the
                 // terminal sink; the post-loop check turns it into a
                 // `Completion::Exit` returned from this `await`.
