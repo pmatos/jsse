@@ -9,7 +9,6 @@ const MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 #[derive(Default)]
 pub(crate) struct FuzzHost {
     capture: Option<String>,
-    pub(crate) virtual_timers: bool,
     pub(crate) math_random_seed: Option<u64>,
 }
 
@@ -32,11 +31,8 @@ impl Interpreter {
 
     /// Fire timers in deadline order without sleeping: when nothing is due the
     /// event loop jumps straight to the earliest deadline.
-    pub(crate) fn set_virtual_timers(&mut self, enabled: bool) {
-        self.fuzz_host.virtual_timers = enabled;
-        if enabled {
-            self.scheduler.timers_mut().use_virtual_clock();
-        }
+    pub(crate) fn use_virtual_timers(&mut self) {
+        self.scheduler.timers_mut().use_virtual_clock();
     }
 
     /// Seed `Math.random` in every realm, current and future, from `seed`

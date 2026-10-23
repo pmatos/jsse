@@ -141,7 +141,7 @@ impl Interpreter {
                 continue;
             }
 
-            if self.fuzz_host.virtual_timers {
+            if self.scheduler.timers_mut().is_virtual() {
                 if !self.fast_forward_to_next_timer() {
                     break;
                 }

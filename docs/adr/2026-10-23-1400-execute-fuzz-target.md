@@ -41,7 +41,7 @@ the oracle for the other and no `node` is needed.
 - Inputs containing the identifiers `agent`, `waitAsync` or `sleep` are not run
   at all: `$262.agent.start` spawns an unbudgeted thread, `agent.sleep` really
   sleeps and `Atomics.waitAsync` parks the event loop on a condvar. Inputs
-  containing `Date`, `Temporal`, `WeakRef`, `FinalizationRegistry`, `$262`,
+  containing `Date`, `DateTimeFormat`, `Temporal`, `WeakRef`, `FinalizationRegistry`, `$262`,
   `Atomics`, `SharedArrayBuffer`, `performance` or `gc` still run in both modes
   (for panic and sanitizer coverage) but are not compared. Matching is on
   identifier boundaries.

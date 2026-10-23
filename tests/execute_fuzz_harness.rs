@@ -152,3 +152,8 @@ fn divergence_is_reported_and_exhaustion_is_not() {
     };
     assert!(execution_divergence(&a, &noisy).is_some());
 }
+
+#[test]
+fn wall_clock_reading_intl_formatter_is_not_compared() {
+    assert!(signatures("new Intl.DateTimeFormat('en').format()").is_none());
+}

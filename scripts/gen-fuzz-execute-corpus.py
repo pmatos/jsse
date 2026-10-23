@@ -25,7 +25,7 @@ ROOTS = ("language", "built-ins")
 # Mirrors src/lib.rs: inputs with these identifiers are skipped or not compared,
 # which would make a seed's replay prove nothing.
 MARKERS = (
-    "agent", "waitAsync", "sleep", "Date", "Temporal", "WeakRef",
+    "agent", "waitAsync", "sleep", "Date", "DateTimeFormat", "Temporal", "WeakRef",
     "FinalizationRegistry", "$262", "Atomics", "SharedArrayBuffer",
     "performance", "gc",
 )  # fmt: skip

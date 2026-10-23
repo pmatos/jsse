@@ -49,6 +49,10 @@ impl TimerQueue {
         self.virtual_now.unwrap_or_else(Instant::now)
     }
 
+    pub(crate) fn is_virtual(&self) -> bool {
+        self.virtual_now.is_some()
+    }
+
     pub(crate) fn use_virtual_clock(&mut self) {
         self.virtual_now = Some(Instant::now());
     }

@@ -171,6 +171,7 @@ const FUZZ_EXECUTE_SKIP_IDENTS: &[&str] = &["agent", "waitAsync", "sleep"];
 /// not compared. Both modes still run for panic and sanitizer coverage.
 const FUZZ_EXECUTE_NONDETERMINISTIC_IDENTS: &[&str] = &[
     "Date",
+    "DateTimeFormat",
     "Temporal",
     "WeakRef",
     "FinalizationRegistry",
@@ -215,7 +216,7 @@ pub fn run_script_observed(src: &str, budget: u64, bytecode: bool) -> RunSignatu
     let mut interp = interpreter::Interpreter::new();
     interp.bytecode_enabled = bytecode;
     interp.set_step_budget(Some(budget));
-    interp.set_virtual_timers(true);
+    interp.use_virtual_timers();
     interp.set_math_random_seed(FUZZ_EXECUTE_RANDOM_SEED);
     interp.capture_host_output();
     let completion = interp.run(&program);
