@@ -8,6 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
 
 [dependencies.jsse]
@@ -38,6 +39,13 @@ bench = false
 [[bin]]
 name = "typed_array"
 path = "fuzz_targets/typed_array.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "execute_ast"
+path = "fuzz_targets/execute_ast.rs"
 test = false
 doc = false
 bench = false

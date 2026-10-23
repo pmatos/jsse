@@ -177,7 +177,9 @@ must never panic on arbitrary bytes), `execute` (scripts run in-process under a
 step budget on the bytecode VM and the tree-walker; a panic or a difference
 between the two is a finding), `typed_array` (structured sequences of
 resizable/shared buffer, view, detach, transfer and `Atomics` operations, run
-the same way; see `docs/adr/2026-10-23-1600-typed-array-fuzz-target.md`), `gc_stress` (allocation-heavy scripts
+the same way; see `docs/adr/2026-10-23-1600-typed-array-fuzz-target.md`), `execute_ast` (the same check, but the input is
+a JS AST decoded with `arbitrary` and printed to source, so almost every input
+parses), `gc_stress` (allocation-heavy scripts
 run with and without forced GC at every Nth safepoint, the period taken from the
 first input byte; any panic or observable difference is a finding, see
 `docs/adr/2026-10-23-1800-gc-stress-fuzz-target.md`) and `differential` (jsse vs `node` on the same
@@ -190,6 +192,7 @@ cargo install cargo-fuzz --locked
 cargo +nightly fuzz run parse -- -max_total_time=60
 cargo +nightly fuzz run execute -- -max_total_time=60 -max_len=16384
 cargo +nightly fuzz run typed_array -- -max_total_time=60 -max_len=768
+cargo +nightly fuzz run execute_ast -- -max_total_time=60 -max_len=4096
 cargo +nightly fuzz run gc_stress -- -max_total_time=60 -max_len=4096
 cargo build --release   # differential needs the release binary
 cargo +nightly fuzz run differential -- -max_total_time=60 -timeout=30
@@ -203,8 +206,10 @@ Where each target runs in CI:
 | `parse` | `clusterfuzzlite-batch.yml` (ClusterFuzzLite, batch mode, 30 min) | ASan | daily |
 | `execute` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
 | `execute` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
-| `typed_array` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the targets) | ASan | every PR |
+| `typed_array` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the five targets) | ASan | every PR |
 | `typed_array` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
+| `execute_ast` | `clusterfuzzlite-pr.yml` (same job as `parse`; the 120 s is shared between the five targets) | ASan | every PR |
+| `execute_ast` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
 | `gc_stress` | `clusterfuzzlite-pr.yml` (same job as `parse`) | ASan | every PR |
 | `gc_stress` | `clusterfuzzlite-batch.yml` (same job as `parse`) | ASan | daily |
 | `differential` | `fuzz.yml` (needs `node` and a release `jsse`, so it stays outside ClusterFuzzLite) | none | nightly |
@@ -213,7 +218,7 @@ Where each target runs in CI:
 PR run can tell a crash the PR introduced from one already on `main`. The
 corpus found by batch runs is stored as a GitHub Actions artifact; the next
 batch run and every PR run start from it (plus the committed seeds in
-`fuzz/corpus/parse/`, `fuzz/corpus/execute/`, `fuzz/corpus/typed_array/` and `fuzz/corpus/gc_stress/`). The artifact expires with the repository's artifact
+`fuzz/corpus/parse/`, `fuzz/corpus/execute/`, `fuzz/corpus/typed_array/`, `fuzz/corpus/execute_ast/` and `fuzz/corpus/gc_stress/`). The artifact expires with the repository's artifact
 retention, after which fuzzing restarts from the committed seeds.
 
 To triage a ClusterFuzzLite failure, open the failed run, download its

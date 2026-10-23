@@ -3,6 +3,16 @@
 //! classifies the result. Lives in the `fuzz` crate (not `jsse` itself)
 //! since it's fuzz-harness-only: it shells out to compiled binaries rather
 //! than linking the interpreter in-process (see the ADR for why).
+//!
+//! The `execute_ast` target's structure-aware generator lives in `js_ast`
+//! (the `Arbitrary` AST), `js_pools` (fixed identifier/string pools) and
+//! `js_print` / `js_print_expr` (AST to source).
+
+pub mod js_ast;
+pub mod js_pools;
+pub mod js_print;
+mod js_print_class;
+mod js_print_expr;
 
 pub mod gc_stress;
 pub mod typed_array;

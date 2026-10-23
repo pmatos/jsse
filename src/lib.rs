@@ -328,6 +328,12 @@ pub fn fuzz_execute_bytes(data: &[u8]) {
     let Ok(src) = std::str::from_utf8(data) else {
         return;
     };
+    fuzz_execute_source(src);
+}
+
+/// The shared body of the execute-style fuzz targets (`execute`,
+/// `execute_ast`): runs `src` on both engines and panics on a divergence.
+pub fn fuzz_execute_source(src: &str) {
     run_on_engine_stack(move || {
         if let Some((bytecode, tree_walker)) = fuzz_execute_signatures(src)
             && let Some(report) = execution_divergence(&bytecode, &tree_walker)
@@ -375,6 +381,17 @@ mod lib_tests {
             ));
             assert!(!bench_eval_with_check("", Some("let =")));
         });
+    }
+
+    #[test]
+    fn fuzz_execute_source_accepts_equal_modes() {
+        fuzz_execute_source("var a = [1,2,3].map(x => x * 2); a.join();");
+        fuzz_execute_source("throw new TypeError('both modes agree');");
+    }
+
+    #[test]
+    fn fuzz_execute_source_skips_unsafe_idents() {
+        fuzz_execute_source("while (true) { agent; }");
     }
 
     #[test]
