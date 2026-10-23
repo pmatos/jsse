@@ -49,13 +49,13 @@ executions suggest. A structure-aware generator keeps every input a program.
   `max_len = 4096` (`execute_ast.options`) and a six-file seed corpus in
   `fuzz/corpus/execute_ast/` (random `Arbitrary` buffers whose programs cover
   classes, generators, async, loops, labels, `try` and `switch`). The workflows
-  are unchanged; `fuzz-seconds` is split between three targets now.
+  are unchanged; `fuzz-seconds` is split between four targets now.
 
 ## Measurements
 
 Local, `cargo +nightly fuzz build -O --debug-assertions` (no ASan), `-seed=1`,
 four runs sharing a loaded 24-core host, so absolute rates are noisy.
-`cov:` is libFuzzer's edge count over the whole binary; all three targets link
+`cov:` is libFuzzer's edge count over the whole binary; all four targets link
 the same engine, so it is comparable.
 
 Parse rate (`printed_programs_parse_in_the_engine`, 2,000 pseudo-random
