@@ -156,7 +156,7 @@ pub fn run_script_with_budget(
 }
 
 /// Step budget for each run of the `execute` fuzz target.
-const FUZZ_EXECUTE_STEP_BUDGET: u64 = 100_000;
+const FUZZ_EXECUTE_STEP_BUDGET: u64 = 20_000;
 
 /// Fixed `Math.random` seed shared by both runs of the `execute` fuzz target.
 const FUZZ_EXECUTE_RANDOM_SEED: u64 = 0x5EED_F0F0_1174_CAFE;

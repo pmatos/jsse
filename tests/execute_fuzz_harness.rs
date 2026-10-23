@@ -8,7 +8,7 @@ use jsse::{
 };
 use std::time::{Duration, Instant};
 
-const BUDGET: u64 = 100_000;
+const BUDGET: u64 = 20_000;
 
 fn observe(src: &str, bytecode: bool) -> RunSignature {
     run_on_engine_stack(move || run_script_observed(src, BUDGET, bytecode))

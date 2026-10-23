@@ -1,0 +1,146 @@
+// Date.parse (§21.4.3.2) may fall back to implementation-specific formats for
+// strings outside the Date Time String Format. jsse accepts date-only legacy
+// forms (numeric `M/D/YYYY` and `Y/M/D`, two-digit years, written months
+// such as `May 1, 2000`, and a bare month number such as `5`), interpreted as
+// local midnight, and returns NaN for anything unrecognizable or out of
+// bounds. Like V8 and SpiderMonkey it does not validate the day against the
+// month length (`2/30/2000` rolls over), but unlike V8 it takes zero-padded
+// 3+ digit years literally. The written-month
+// form also accepts a `-`-prefixed 4+ digit year token (e.g. `-0001`), so that
+// jsse's own `toDateString()`/`toString()` output for negative years round-trips
+// through `Date.parse`; the numeric-slash form keeps rejecting a `-`-prefixed
+// year (`1/1/-5`).
+
+function sameValue(actual, expected, label) {
+  if (!Object.is(actual, expected)) {
+    throw new Error(label + ": expected " + String(expected) +
+      ", got " + String(actual));
+  }
+}
+
+function local(y, m, d) {
+  return new Date(y, m, d).getTime();
+}
+
+sameValue(Date.parse("08/04/2011"), local(2011, 7, 4), "08/04/2011");
+sameValue(Date.parse("8/4/2011"), local(2011, 7, 4), "8/4/2011");
+sameValue(Date.parse("2/29/2000"), local(2000, 1, 29), "2/29/2000");
+sameValue(Date.parse("12/31/1999"), local(1999, 11, 31), "12/31/1999");
+sameValue(Date.parse(" 08/04/2011 "), local(2011, 7, 4), "surrounding whitespace");
+sameValue(new Date("08/04/2011").getTime(), local(2011, 7, 4), "Date constructor");
+
+sameValue(Date.parse("2010-07-02") < Date.parse("08/04/2011"), true, "ordering");
+
+var invalid = [
+  "1/32/2000", "0/1/2000", "1/0/2000", "13/13/13",
+  "1/1/", "1//2000", "/1/2000", "1/1/2000/1", "1/1/-5", "1/1/+2000",
+];
+for (var i = 0; i < invalid.length; i++) {
+  sameValue(Date.parse(invalid[i]), NaN, JSON.stringify(invalid[i]));
+}
+
+// Two-digit years: < 50 maps to 20xx, >= 50 to 19xx; 3+ digits are literal.
+sameValue(Date.parse("1/1/0"), local(2000, 0, 1), "1/1/0");
+sameValue(Date.parse("1/1/49"), local(2049, 0, 1), "1/1/49");
+sameValue(Date.parse("1/1/50"), local(1950, 0, 1), "1/1/50");
+sameValue(Date.parse("1/1/99"), local(1999, 0, 1), "1/1/99");
+sameValue(Date.parse("12/1/1"), local(2001, 11, 1), "12/1/1");
+
+var literalYear = new Date(2000, 0, 1);
+literalYear.setFullYear(100);
+sameValue(Date.parse("1/1/100"), literalYear.getTime(), "1/1/100");
+literalYear.setFullYear(999);
+sameValue(Date.parse("1/1/999"), literalYear.getTime(), "1/1/999");
+literalYear.setFullYear(99);
+sameValue(Date.parse("1/1/0099"), literalYear.getTime(), "1/1/0099 is a literal year");
+
+sameValue(Date.parse("2/30/2000"), local(2000, 2, 1), "2/30/2000 rolls over");
+
+// A first component that cannot be a month selects year-first Y/M/D.
+sameValue(Date.parse("2011/08/04"), local(2011, 7, 4), "2011/08/04");
+sameValue(Date.parse("2011/8/4"), local(2011, 7, 4), "2011/8/4");
+sameValue(Date.parse("50/1/1"), local(1950, 0, 1), "50/1/1");
+sameValue(Date.parse("32/1/1"), local(2032, 0, 1), "32/1/1");
+
+var invalidShort = ["13/1/1", "31/1/1", "99/1/99", "0/10/0"];
+for (var j = 0; j < invalidShort.length; j++) {
+  sameValue(Date.parse(invalidShort[j]), NaN, JSON.stringify(invalidShort[j]));
+}
+
+// Written months: one month name, two numbers, optional weekday name.
+var may2000 = local(2000, 4, 1);
+var writtenMay2000 = [
+  "may 1 2000", "1 may 2000", "1 2000 may", "may 2000 1", "2000 may 1",
+  "2000 1 may", "May 1, 2000", "Mon, May 1 2000", "MAY 1 2000",
+  "Monday May 1 2000", "1 May, 2000",
+];
+for (var k = 0; k < writtenMay2000.length; k++) {
+  sameValue(Date.parse(writtenMay2000[k]), may2000, JSON.stringify(writtenMay2000[k]));
+}
+sameValue(Date.parse("September 3 2001"), local(2001, 8, 3), "September 3 2001");
+sameValue(Date.parse("dec 31 1999"), local(1999, 11, 31), "dec 31 1999");
+sameValue(Date.parse("may 1 5"), local(2005, 4, 1), "may 1 5");
+sameValue(Date.parse("may 1 0"), local(2000, 4, 1), "may 1 0");
+literalYear.setFullYear(100);
+literalYear.setMonth(4);
+sameValue(Date.parse("may 1 100"), literalYear.getTime(), "may 1 100");
+
+var invalidWritten = [
+  "may 1999 1999", "may 0 0", "may 32 2000", "invalid date", "foo", "may",
+  "may 1", "Mon May", "5/1 may 2000", "may may 1 2000", "Mon Tue may 1 2000",
+  "may 1 2000 2001", "may 1st 2000", "may-1-2000",
+  "may 1 -5", "-1 -2 may", "may 1 2000 -0001", "2000-13-01",
+];
+for (var n = 0; n < invalidWritten.length; n++) {
+  sameValue(Date.parse(invalidWritten[n]), NaN, JSON.stringify(invalidWritten[n]));
+}
+
+// A bare one- or two-digit decimal string is read as a month number in the
+// reference year 2001, at local midnight on the first of the month.
+sameValue(Date.parse("5"), local(2001, 4, 1), "bare month 5");
+sameValue(Date.parse("05"), local(2001, 4, 1), "bare month 05");
+sameValue(Date.parse("1"), local(2001, 0, 1), "bare month 1");
+sameValue(Date.parse("12"), local(2001, 11, 1), "bare month 12");
+sameValue(Date.parse(" 5 "), local(2001, 4, 1), "bare month with surrounding whitespace");
+sameValue(new Date("5").getTime(), local(2001, 4, 1), "Date constructor bare month");
+
+var bareMonth = new Date("5");
+sameValue(bareMonth.getFullYear(), 2001, "bare month year");
+sameValue(bareMonth.getMonth(), 4, "bare month month");
+sameValue(bareMonth.getDate(), 1, "bare month day");
+sameValue(bareMonth.getHours(), 0, "bare month local midnight");
+
+var invalidBare = [
+  "0", "13", "32", "100", "5.0", "-5", "+5", "5a", "a5", "٥", "1 2", "5,",
+];
+for (var b = 0; b < invalidBare.length; b++) {
+  sameValue(Date.parse(invalidBare[b]), NaN, "bare " + JSON.stringify(invalidBare[b]));
+}
+sameValue(Date.parse(""), NaN, "empty string");
+sameValue(Date.parse(" "), NaN, "blank string");
+
+// toDateString() output round-trips to local midnight of the same day.
+var dayStarts = [new Date(2026, 8, 21), new Date(2026, 0, 15), new Date(2026, 6, 15)];
+for (var x = 0; x < dayStarts.length; x++) {
+  sameValue(Date.parse(dayStarts[x].toDateString()), dayStarts[x].getTime(),
+    "toDateString round trip " + dayStarts[x].toDateString());
+}
+sameValue(new Date(new Date(2026, 8, 21).toDateString()).getTime(), local(2026, 8, 21),
+  "Date constructor toDateString round trip");
+
+// Negative-year written-month tokens (round-trips `toDateString()` output for
+// years before 0, e.g. "Fri Jan 01 -0001").
+var negYear = new Date(-62198755200000);
+sameValue(
+  Date.parse(negYear.toDateString()),
+  local(negYear.getFullYear(), negYear.getMonth(), negYear.getDate()),
+  "toDateString round-trip for year -1"
+);
+
+var negYear1 = local(-1, 4, 1);
+var writtenNegYear1 = [
+  "-0001 may 1", "may 1 -0001", "Mon may 1 -0001", "1 -0001 may",
+];
+for (var p = 0; p < writtenNegYear1.length; p++) {
+  sameValue(Date.parse(writtenNegYear1[p]), negYear1, JSON.stringify(writtenNegYear1[p]));
+}
