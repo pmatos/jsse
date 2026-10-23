@@ -60,7 +60,8 @@ pub fn step_budget(period: u32) -> u64 {
 }
 
 /// Runs `input` unstressed and stressed and describes how the observable
-/// results differ, if they do.
+/// results differ, if they do. GC-observable scripts only run stressed, for
+/// panic and sanitizer coverage.
 pub fn stress_divergence(input: &Input<'_>) -> Option<String> {
     let Input {
         period,
@@ -68,13 +69,19 @@ pub fn stress_divergence(input: &Input<'_>) -> Option<String> {
         src,
     } = *input;
     let budget = step_budget(period);
+    if jsse::fuzz_input_is_gc_observable(src) {
+        jsse::run_on_engine_stack(move || {
+            jsse::run_script_gc_stressed(src, budget, bytecode, period)
+        });
+        return None;
+    }
     let (plain, stressed) = jsse::run_on_engine_stack(move || {
         (
             jsse::run_script_gc_stressed(src, budget, bytecode, 0).0,
             jsse::run_script_gc_stressed(src, budget, bytecode, period).0,
         )
     });
-    if jsse::fuzz_input_is_gc_observable(src) || plain == stressed {
+    if plain == stressed {
         return None;
     }
     Some(format!("unstressed: {plain:?}\nstressed:   {stressed:?}"))
