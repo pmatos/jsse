@@ -507,27 +507,24 @@ impl<'a> Parser<'a> {
     }
 
     fn pop_private_scope(&mut self) -> Result<(), ParseError> {
-        if let Some((declared, used)) = self.private_name_scopes.pop() {
-            for (name, _pos) in &used {
-                let mut found = declared.contains(name);
-                if !found {
-                    for (parent_declared, _) in self.private_name_scopes.iter().rev() {
-                        if parent_declared.contains(name) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if !found {
+        let Some((declared, used)) = self.private_name_scopes.pop() else {
+            return Ok(());
+        };
+        for (name, pos) in used {
+            if declared.contains(&name) {
+                continue;
+            }
+            // The enclosing class may declare the name after this class body.
+            match self.private_name_scopes.last_mut() {
+                Some((_, parent_used)) => parent_used.push((name, pos)),
+                None => {
                     return Err(self.error(format!(
                         "Reference to undeclared private field or method '#{name}'"
                     )));
                 }
             }
-            Ok(())
-        } else {
-            Ok(())
         }
+        Ok(())
     }
 
     fn eat_star(&mut self) -> Result<bool, ParseError> {
