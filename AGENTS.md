@@ -80,6 +80,7 @@ local hook was bypassed.
     - `iterators.rs` — setup_iterator_prototypes, setup_generator_prototype
     - `collections.rs` — setup_map/set/weakmap/weakset_prototype
     - `date.rs` — setup_date_builtin
+  - `helpers/json_internalize.rs` — `JSON.parse` reviver walk (InternalizeJSONProperty); roots the holder and walked value across each reviver call
   - `atom.rs` — `Atom`: randomised-interner identifier atoms (pointer equality, precomputed hash)
   - `binding_map.rs` — `BindingMap`: atom-keyed `Environment.bindings` storage and the `BindingKey`/`BindingName` lookup traits
   - `element_vec.rs` — `ElementVec`: Array element storage (`Vec<JsValue>` plus a dead-slot head offset) so `shift` is amortised O(1); derefs to the live `[JsValue]` window
