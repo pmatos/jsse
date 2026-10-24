@@ -37,16 +37,13 @@ impl ElementVec {
     }
 
     /// Removes and returns the first element; `None` when empty.
-    pub(crate) fn pop_front(&mut self) -> Option<JsValue> {
+    pub(crate) fn shift(&mut self) -> Option<JsValue> {
         let slot = self.buf.get_mut(self.head)?;
         let first = std::mem::replace(slot, JsValue::UNDEFINED);
         self.head += 1;
-        if self.head == self.buf.len() {
-            self.buf.clear();
-            self.head = 0;
-        } else if self.head >= MIN_COMPACT_HEAD && self.head >= self.buf.len() - self.head {
-            self.buf.drain(..self.head);
-            self.head = 0;
+        self.reset_if_empty();
+        if self.head >= MIN_COMPACT_HEAD && self.head >= self.buf.len() - self.head {
+            self.compact();
         }
         Some(first)
     }
@@ -78,21 +75,10 @@ impl ElementVec {
         self.buf.splice(range, replace_with).collect()
     }
 
-    pub(crate) fn remove(&mut self, index: usize) -> JsValue {
-        if index == 0 && !self.is_empty() {
-            return self.pop_front().expect("non-empty");
-        }
-        self.buf.remove(self.head + index)
-    }
-
-    pub(crate) fn into_vec(mut self) -> Vec<JsValue> {
-        self.compact();
-        self.buf
-    }
-
     /// Moves the live elements out, leaving the vector empty.
     pub(crate) fn take(&mut self) -> Vec<JsValue> {
-        std::mem::take(self).into_vec()
+        self.compact();
+        std::mem::take(&mut self.buf)
     }
 
     fn compact(&mut self) {
@@ -208,11 +194,20 @@ mod tests {
         JsValue::number(f64::from(n))
     }
 
+    /// Elements `dead..total`, with `dead` leading slots already removed.
+    fn shifted(total: i32, dead: i32) -> ElementVec {
+        let mut v = ElementVec::from((0..total).map(num).collect::<Vec<_>>());
+        for _ in 0..dead {
+            v.shift();
+        }
+        v
+    }
+
     #[test]
-    fn pop_front_preserves_order_and_compacts() {
+    fn shift_preserves_order_and_compacts() {
         let mut v = ElementVec::from((0..200).map(num).collect::<Vec<_>>());
         for i in 0..150 {
-            assert_eq!(v.pop_front().unwrap().as_number(), Some(f64::from(i)));
+            assert_eq!(v.shift().unwrap().as_number(), Some(f64::from(i)));
             assert_eq!(v.len(), 199 - i as usize);
         }
         assert_eq!(v[0].as_number(), Some(150.0));
@@ -222,63 +217,37 @@ mod tests {
     }
 
     #[test]
-    fn pop_to_empty_resets_the_dead_prefix() {
-        let mut v = ElementVec::from((0..40).map(num).collect::<Vec<_>>());
-        for _ in 0..10 {
-            v.pop_front();
+    fn emptied_vector_resets_and_is_reusable() {
+        let mut by_front = shifted(2, 0);
+        assert!(by_front.shift().is_some() && by_front.shift().is_some());
+        assert!(by_front.shift().is_none() && by_front.is_empty());
+        let mut by_back = shifted(40, 10);
+        while by_back.pop().is_some() {}
+        assert!(by_back.is_empty());
+        for v in [&mut by_front, &mut by_back] {
+            v.push(num(1));
+            assert_eq!((v.len(), v[0].as_number()), (1, Some(1.0)));
         }
-        while v.pop().is_some() {}
-        assert!(v.is_empty());
-        v.push(num(1));
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].as_number(), Some(1.0));
     }
 
     #[test]
-    fn splice_resize_extend_and_clone_see_only_live_window() {
-        let mut v = ElementVec::from((0..40).map(num).collect::<Vec<_>>());
-        for _ in 0..10 {
-            v.pop_front();
-        }
+    fn mutators_see_only_the_live_window() {
+        let mut v = shifted(40, 10);
         let removed = v.splice(0..2, [num(-1)]);
         assert_eq!(removed.len(), 2);
         assert_eq!(removed[0].as_number(), Some(10.0));
-        assert_eq!(v.len(), 29);
-        assert_eq!(v[0].as_number(), Some(-1.0));
+        assert_eq!((v.len(), v[0].as_number()), (29, Some(-1.0)));
         v.extend([num(100)]);
         v.resize(32, JsValue::UNDEFINED);
         assert_eq!(v.len(), 32);
-        assert!(v[31].is_undefined());
         assert_eq!(v[28].as_number(), Some(39.0));
         assert_eq!(v[29].as_number(), Some(100.0));
-        let c = v.clone();
-        assert_eq!(c.len(), 32);
-        assert_eq!(c[0].as_number(), Some(-1.0));
-        assert_eq!(v.take().len(), 32);
-        assert!(v.is_empty());
-    }
-
-    #[test]
-    fn drains_to_empty_and_resets() {
-        let mut v = ElementVec::from(vec![num(1), num(2)]);
-        assert!(v.pop_front().is_some());
-        assert!(v.pop_front().is_some());
-        assert!(v.pop_front().is_none());
-        assert!(v.is_empty());
-        v.push(num(3));
-        assert_eq!(v.len(), 1);
-    }
-
-    #[test]
-    fn indexed_ops_see_only_live_window() {
-        let mut v = ElementVec::from((0..40).map(num).collect::<Vec<_>>());
-        for _ in 0..10 {
-            v.pop_front();
-        }
-        assert_eq!(v.remove(1).as_number(), Some(11.0));
-        assert_eq!(v[0].as_number(), Some(10.0));
+        assert!(v[31].is_undefined());
         v.truncate(3);
         assert_eq!(v.len(), 3);
-        assert_eq!(v.into_vec().len(), 3);
+        let c = v.clone();
+        assert_eq!((c.len(), c[0].as_number()), (3, Some(-1.0)));
+        assert_eq!(v.take().len(), 3);
+        assert!(v.is_empty());
     }
 }

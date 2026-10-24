@@ -2324,7 +2324,7 @@ impl Interpreter {
                             Ok(Some(value)) => {
                                 let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     if elements.len() == window_size {
-                                        elements.remove(0);
+                                        elements.shift();
                                     }
                                     elements.push(value);
                                     (elements.len() == window_size).then(|| elements.to_vec())

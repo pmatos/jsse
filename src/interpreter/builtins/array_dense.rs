@@ -134,8 +134,12 @@ fn array_cell<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a ObjectHand
 // Moving elements across holes lands present elements on holes (creating
 // properties, so the receiver must be extensible) and must keep holes absent
 // (so nothing inherited may supply an index).
+fn movable_across_holes(interp: &Interpreter, b: &JsObjectData) -> bool {
+    b.extensible && proto_chain_index_free(interp, b.prototype_id)
+}
+
 fn holes_movable(interp: &Interpreter, b: &JsObjectData, holes: bool) -> bool {
-    !holes || (b.extensible && proto_chain_index_free(interp, b.prototype_id))
+    !holes || movable_across_holes(interp, b)
 }
 
 pub(super) fn try_pop(interp: &Interpreter, o: &JsValue, len: usize) -> Option<JsValue> {
@@ -160,15 +164,13 @@ pub(super) fn try_shift(interp: &Interpreter, o: &JsValue, len: usize) -> Option
         if len == 0 || !b.is_plain_dense_array(len) {
             return None;
         }
-        // Holes only matter when moving across them is unsafe, and the O(n)
-        // scan for them is worth running only then.
-        let movable_across_holes = b.extensible && proto_chain_index_free(interp, b.prototype_id);
-        if !movable_across_holes && has_hole(b.array_elements()?) {
+        // The O(n) hole scan is only needed when holes would block the move.
+        if !movable_across_holes(interp, &b) && has_hole(b.array_elements()?) {
             return None;
         }
     }
     let mut b = cell.borrow_mut();
-    let first = b.array_elements_mut()?.pop_front()?;
+    let first = b.array_elements_mut()?.shift()?;
     b.set_dense_array_length(len - 1);
     Some(first)
 }
