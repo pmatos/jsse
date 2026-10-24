@@ -53,3 +53,25 @@ accepted.forEach(function (src) {
 rejected.forEach(function (src) {
   assert.sameValue(accepts(src), false, src);
 });
+
+class Q {
+  #q() {
+    return eval("(class B { m() { return this.#q; } })");
+  }
+  static check() {
+    return typeof new Q().#q();
+  }
+}
+assert.sameValue(Q.check(), "function", "eval inside a private method sees #q");
+
+class R {
+  #q() {
+    eval("class B { m() { return this.#z; } }");
+  }
+  static run() {
+    new R().#q();
+  }
+}
+assert.throws(SyntaxError, function () {
+  R.run();
+}, "eval inside a private method rejects an undeclared name");
