@@ -2,6 +2,7 @@ mod collator;
 mod datetimeformat;
 mod displaynames;
 mod durationformat;
+mod fmt_cache;
 mod listformat;
 mod locale;
 mod numberformat;
@@ -10,8 +11,7 @@ mod relativetimeformat;
 mod segmenter;
 
 use super::super::*;
-use icu::locale::Locale as IcuLocale;
-use icu::locale::LocaleCanonicalizer;
+use icu::locale::{Locale as IcuLocale, LocaleCanonicalizer};
 
 impl Interpreter {
     pub(crate) fn setup_intl(&mut self) {

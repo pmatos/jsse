@@ -2132,7 +2132,6 @@ fn normalize_icu_datetime_parts(
 }
 
 fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> {
-    use icu::datetime::DateTimeFormatter;
     use icu::datetime::input::{Date, DateTime, Time, ZonedDateTime};
     use icu::time::zone::{IanaParser, UtcOffset};
 
@@ -2140,7 +2139,7 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
     let mixed_width_pattern = icu_mixed_width_pattern(opts, &locale);
     let formatter = if mixed_width_pattern.is_none() {
         let field_set = icu_datetime_field_set(opts)?;
-        Some(DateTimeFormatter::try_new(locale.clone().into(), field_set).ok()?)
+        super::fmt_cache::datetime_formatter(&locale, field_set)
     } else {
         None
     };
