@@ -2196,7 +2196,7 @@ impl Interpreter {
                             Ok(Some(value)) => {
                                 let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     elements.push(value);
-                                    (elements.len() == chunk_size).then(|| std::mem::take(elements))
+                                    (elements.len() == chunk_size).then(|| elements.take())
                                 });
                                 if let Some(values) = values {
                                     let chunk = interp.create_array(values);
@@ -2207,8 +2207,7 @@ impl Interpreter {
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
-                                let values =
-                                    interp.with_array_elements_mut(&buffer, std::mem::take);
+                                let values = interp.with_array_elements_mut(&buffer, |e| e.take());
                                 if values.is_empty() {
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::UNDEFINED, true),
@@ -2325,10 +2324,10 @@ impl Interpreter {
                             Ok(Some(value)) => {
                                 let values = interp.with_array_elements_mut(&buffer, |elements| {
                                     if elements.len() == window_size {
-                                        elements.remove(0);
+                                        elements.shift();
                                     }
                                     elements.push(value);
-                                    (elements.len() == window_size).then(|| elements.clone())
+                                    (elements.len() == window_size).then(|| elements.to_vec())
                                 });
                                 if let Some(values) = values {
                                     let window = interp.create_array(values);
@@ -2339,8 +2338,7 @@ impl Interpreter {
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
-                                let values =
-                                    interp.with_array_elements_mut(&buffer, std::mem::take);
+                                let values = interp.with_array_elements_mut(&buffer, |e| e.take());
                                 if allow_partial && !values.is_empty() && values.len() < window_size
                                 {
                                     let window = interp.create_array(values);

@@ -55,7 +55,7 @@ fn walk_index_free_chain(interp: &Interpreter, start: Option<u64>, scan_keys: bo
             // properties that never reach `properties`.
             ObjectKind::Ordinary if !b.primitive_value.as_ref().is_some_and(JsValue::is_string) => {
             }
-            ObjectKind::Array(_) if b.array_elements().is_some_and(Vec::is_empty) => {}
+            ObjectKind::Array(_) if b.array_elements().is_some_and(|e| e.is_empty()) => {}
             _ => return false,
         }
         if b.properties.may_hold_index_key()
@@ -110,7 +110,7 @@ pub(crate) fn try_intrinsic_iteration(
     if has_hole(elements) && !proto_chain_index_free(interp, b.prototype_id) {
         return None;
     }
-    Some(elements.clone())
+    Some(elements.to_vec())
 }
 
 /// The elements of an Array the generator lowering built to spread without
@@ -120,7 +120,7 @@ pub(crate) fn fresh_array_values(interp: &Interpreter, o: &JsValue) -> Option<Ve
     let b = array_cell(interp, o)?.borrow();
     let elements = b.array_elements()?;
     b.is_plain_dense_array(elements.len())
-        .then(|| elements.clone())
+        .then(|| elements.to_vec())
 }
 
 fn has_hole(elements: &[JsValue]) -> bool {
@@ -134,8 +134,12 @@ fn array_cell<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a ObjectHand
 // Moving elements across holes lands present elements on holes (creating
 // properties, so the receiver must be extensible) and must keep holes absent
 // (so nothing inherited may supply an index).
+fn movable_across_holes(interp: &Interpreter, b: &JsObjectData) -> bool {
+    b.extensible && proto_chain_index_free(interp, b.prototype_id)
+}
+
 fn holes_movable(interp: &Interpreter, b: &JsObjectData, holes: bool) -> bool {
-    !holes || (b.extensible && proto_chain_index_free(interp, b.prototype_id))
+    !holes || movable_across_holes(interp, b)
 }
 
 pub(super) fn try_pop(interp: &Interpreter, o: &JsValue, len: usize) -> Option<JsValue> {
@@ -157,15 +161,16 @@ pub(super) fn try_shift(interp: &Interpreter, o: &JsValue, len: usize) -> Option
     let cell = array_cell(interp, o)?;
     {
         let b = cell.borrow();
-        if len == 0
-            || !b.is_plain_dense_array(len)
-            || !holes_movable(interp, &b, has_hole(b.array_elements()?))
-        {
+        if len == 0 || !b.is_plain_dense_array(len) {
+            return None;
+        }
+        // The O(n) hole scan is only needed when holes would block the move.
+        if !movable_across_holes(interp, &b) && has_hole(b.array_elements()?) {
             return None;
         }
     }
     let mut b = cell.borrow_mut();
-    let first = b.array_elements_mut()?.remove(0);
+    let first = b.array_elements_mut()?.shift()?;
     b.set_dense_array_length(len - 1);
     Some(first)
 }
@@ -208,7 +213,7 @@ pub(super) fn try_unshift(
 fn is_fresh_result_array(b: &JsObjectData, expected_len: usize) -> bool {
     b.extensible
         && b.properties.len() == 1
-        && b.array_elements().is_some_and(Vec::is_empty)
+        && b.array_elements().is_some_and(|e| e.is_empty())
         && b.has_writable_array_length(expected_len)
 }
 
@@ -267,8 +272,7 @@ pub(super) fn try_splice(
     let removed: Vec<JsValue> = ob
         .array_elements_mut()
         .unwrap()
-        .splice(start..start + delete_count, items.iter().cloned())
-        .collect();
+        .splice(start..start + delete_count, items.iter().cloned());
     ob.set_dense_array_length(new_len);
     if !removed.is_empty() {
         ab.array_elements_mut().unwrap().extend(removed);

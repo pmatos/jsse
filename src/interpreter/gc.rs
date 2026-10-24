@@ -331,7 +331,7 @@ impl RootedSlots {
     }
 
     pub(crate) fn snapshot(&self, interp: &Interpreter) -> Vec<JsValue> {
-        interp.with_array_elements(&self.0, |elements| elements.clone())
+        interp.with_array_elements(&self.0, |e| e.to_vec())
     }
 }
 

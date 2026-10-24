@@ -95,7 +95,7 @@ fn assign_from_ordinary_source(
                 .iter()
                 .filter(|(_, d)| d.enumerable() != Some(false))
                 .count()
-                + s.array_elements().map_or(0, Vec::len)
+                + s.array_len()
         };
         let mut t = cell.borrow_mut_untracked();
         if copied > 0 && t.proxy().is_none() && t.array_data().is_none() && t.extensible {

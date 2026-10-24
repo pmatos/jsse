@@ -1,7 +1,6 @@
 use crate::ast::*;
 mod function_props;
 use crate::interpreter::Atom;
-use crate::interpreter::PropertyMap;
 use crate::interpreter::binding_map::{BindingMap, BindingName};
 use crate::interpreter::generator_transform::{
     GeneratorStateMachine, LoopControlTarget, SentValueBinding,
@@ -10,6 +9,7 @@ use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::interpreter::keyed_entries::KeyedEntries;
 use crate::interpreter::property_map::PropertyRecord;
+use crate::interpreter::{ElementVec, PropertyMap};
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
@@ -2558,7 +2558,7 @@ pub(crate) enum DenseArraySet {
 /// Array properties without scanning descriptor-backed element indices.
 #[derive(Default)]
 pub(crate) struct ArrayData {
-    elements: Vec<JsValue>,
+    elements: ElementVec,
     /// Allocated on the first extra String key, so a plain Array pays one
     /// pointer.
     #[allow(clippy::box_collection)] // a pointer, not the 24-byte Vec, per Array
@@ -2616,7 +2616,7 @@ impl ArrayData {
     #[cfg(test)]
     pub(crate) fn new(elements: Vec<JsValue>) -> Self {
         Self {
-            elements,
+            elements: elements.into(),
             extra_string_property_order: None,
             dirty_cards: None,
         }
@@ -3040,14 +3040,14 @@ impl JsObjectData {
         DisposableStackData
     );
 
-    pub(crate) fn array_elements(&self) -> Option<&Vec<JsValue>> {
+    pub(crate) fn array_elements(&self) -> Option<&ElementVec> {
         self.array_data().map(|data| &data.elements)
     }
 
     /// The element vector for arbitrary mutation. The caller's writes are
     /// unknown, so every card becomes dirty; precise single-slot stores use
     /// [`Self::overwrite_array_element`] and [`Self::mark_element_card`].
-    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
+    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut ElementVec> {
         self.array_data_mut().map(|data| {
             data.dirty_cards = None;
             &mut data.elements
@@ -3090,7 +3090,7 @@ impl JsObjectData {
     pub(crate) fn array_elements_and_cards(&self) -> Option<(&[JsValue], Option<&[u64]>)> {
         self.array_data().map(|data| {
             (
-                data.elements.as_slice(),
+                &data.elements[..],
                 data.dirty_cards.as_deref().map(Vec::as_slice),
             )
         })
@@ -5756,7 +5756,7 @@ mod kind_accessor_tests {
             "length",
             PropertyDescriptor::data(JsValue::number(length as f64), true, false, false),
         );
-        *obj.array_elements_mut().unwrap() = elements;
+        obj.set_array_elements(elements);
         obj
     }
 
@@ -5915,7 +5915,7 @@ mod kind_accessor_tests {
             "length",
             PropertyDescriptor::data(JsValue::number(3.0), true, false, false),
         );
-        *obj.array_elements_mut().unwrap() = vec![JsValue::TRUE, JsValue::TRUE, JsValue::TRUE];
+        obj.set_array_elements(vec![JsValue::TRUE, JsValue::TRUE, JsValue::TRUE]);
         obj.insert_value("tag", JsValue::TRUE);
         obj.insert_property(
             "1",
