@@ -156,7 +156,7 @@ pub(crate) struct Parser<'a> {
     no_in: bool,
     pub last_string_literal_has_escape: bool,
     pub last_string_literal_has_legacy_octal: bool,
-    private_name_scopes: Vec<(HashSet<String>, Vec<(String, usize)>)>,
+    private_name_scopes: Vec<(HashSet<String>, Vec<String>)>,
     in_field_initializer_eval: bool,
     in_static_block: bool,
     function_param_names: Option<HashSet<String>>,
@@ -494,7 +494,7 @@ impl<'a> Parser<'a> {
             )));
         }
         if let Some((_, used)) = self.private_name_scopes.last_mut() {
-            used.push((name.to_string(), self.current_token_start));
+            used.push(name.to_string());
         }
         Ok(())
     }
@@ -507,27 +507,24 @@ impl<'a> Parser<'a> {
     }
 
     fn pop_private_scope(&mut self) -> Result<(), ParseError> {
-        if let Some((declared, used)) = self.private_name_scopes.pop() {
-            for (name, _pos) in &used {
-                let mut found = declared.contains(name);
-                if !found {
-                    for (parent_declared, _) in self.private_name_scopes.iter().rev() {
-                        if parent_declared.contains(name) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if !found {
+        let Some((declared, used)) = self.private_name_scopes.pop() else {
+            return Ok(());
+        };
+        for name in used {
+            if declared.contains(&name) {
+                continue;
+            }
+            // The enclosing class may declare the name after this class body.
+            match self.private_name_scopes.last_mut() {
+                Some((_, parent_used)) => parent_used.push(name),
+                None => {
                     return Err(self.error(format!(
                         "Reference to undeclared private field or method '#{name}'"
                     )));
                 }
             }
-            Ok(())
-        } else {
-            Ok(())
         }
+        Ok(())
     }
 
     fn eat_star(&mut self) -> Result<bool, ParseError> {
