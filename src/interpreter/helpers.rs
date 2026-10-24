@@ -1184,7 +1184,7 @@ fn json_validate_string(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn json_unescape_js_string(s: &str, stand_ins: bool) -> JsString {
+fn json_unescape_js_string(s: &str, stand_ins: bool) -> JsString {
     let mut result = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {

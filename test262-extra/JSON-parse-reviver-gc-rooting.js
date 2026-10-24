@@ -27,12 +27,22 @@ assert.sameValue(result.a.c[1].d, 3, "result.a.c[1].d");
 assert.sameValue(result.e[0][0], 4, "result.e[0][0]");
 assert.sameValue(result.e[1][0], 5, "result.e[1][0]");
 
-var holders = [];
-JSON.parse('[[1],[2]]', function (k, v) {
-  holders.push(this);
+var replaced = JSON.parse('{"a":[1,2],"b":{"c":3}}', function (k, v) {
+  $262.gc();
+  return typeof v === "number" ? { n: v } : v;
+});
+
+assert.sameValue(replaced.a[0].n, 1, "replaced.a[0].n");
+assert.sameValue(replaced.a[1].n, 2, "replaced.a[1].n");
+assert.sameValue(replaced.b.c.n, 3, "replaced.b.c.n");
+
+var deleted = JSON.parse('{"a":{"x":1},"b":{"y":2}}', function (k, v) {
+  if (k === "a") {
+    delete this.b;
+  }
   $262.gc();
   return v;
 });
 
-assert.sameValue(holders.length, 5, "reviver call count");
-assert.sameValue(holders[0][0], 1, "holder of first element");
+assert.sameValue(deleted.a.x, 1, "deleted.a.x");
+assert.sameValue(Object.prototype.hasOwnProperty.call(deleted, "b"), false, "deleted.b");

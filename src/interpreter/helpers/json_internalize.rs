@@ -164,7 +164,9 @@ fn json_internalize_walk<K: PropertyKeyLike + ?Sized>(
             };
             for i in 0..len {
                 let key = i.to_string();
-                match json_internalize(interp, &val, &key, reviver, source_map, stand_ins) {
+                match interp.with_gc_root_scope(|interp| {
+                    json_internalize_walk(interp, &val, &key, reviver, source_map, stand_ins)
+                }) {
                     Completion::Normal(new_val) => {
                         if let Err(e) = json_internalize_apply(interp, obj_id, &key, new_val) {
                             return Completion::Throw(e);
@@ -180,7 +182,9 @@ fn json_internalize_walk<K: PropertyKeyLike + ?Sized>(
                 Err(e) => return Completion::Throw(e),
             };
             for key in keys {
-                match json_internalize(interp, &val, &key, reviver, source_map, stand_ins) {
+                match interp.with_gc_root_scope(|interp| {
+                    json_internalize_walk(interp, &val, &key, reviver, source_map, stand_ins)
+                }) {
                     Completion::Normal(new_val) => {
                         if let Err(e) = json_internalize_apply(interp, obj_id, &key, new_val) {
                             return Completion::Throw(e);
