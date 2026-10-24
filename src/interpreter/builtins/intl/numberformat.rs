@@ -5,8 +5,6 @@ use fixed_decimal::{
 use icu::decimal::options::GroupingStrategy;
 use icu::locale::Locale as IcuLocale;
 
-pub(super) mod format_cache;
-
 /// ECMA-402 UnwrapNumberFormat: resolve the receiver of an Intl.NumberFormat
 /// prototype method to the object carrying the [[InitializedNumberFormat]]
 /// slot. If `this` lacks the slot but is an instance of %NumberFormat%, read
@@ -1340,7 +1338,7 @@ pub(crate) fn format_number_internal(
         );
     }
 
-    let formatter = format_cache::decimal_formatter(locale_str, use_grouping);
+    let formatter = super::fmt_cache::decimal_formatter(locale_str, use_grouping);
 
     let work_value = if rounding_increment > 1 && minimum_significant_digits.is_none() {
         let scale = 10f64.powi(maximum_fraction_digits as i32);
@@ -1777,7 +1775,7 @@ fn format_number_from_string_decimal(
 
     let mut dec = dec_result.unwrap();
 
-    let formatter = format_cache::decimal_formatter(locale_str, use_grouping);
+    let formatter = super::fmt_cache::decimal_formatter(locale_str, use_grouping);
 
     dec.round_with_mode(
         -(maximum_fraction_digits as i16),
@@ -2203,7 +2201,7 @@ fn format_compact(
     let abs_scaled = scaled.abs();
 
     let grp = if divisor > 1.0 { "false" } else { "min2" };
-    let formatter = format_cache::decimal_formatter(locale_str, grp);
+    let formatter = super::fmt_cache::decimal_formatter(locale_str, grp);
 
     let mut dec = if let Some(min_sd) = min_sig_digits {
         let max_sd = max_sig_digits.unwrap_or(*min_sd);

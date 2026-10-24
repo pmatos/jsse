@@ -2139,9 +2139,7 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
     let mixed_width_pattern = icu_mixed_width_pattern(opts, &locale);
     let formatter = if mixed_width_pattern.is_none() {
         let field_set = icu_datetime_field_set(opts)?;
-        Some(super::numberformat::format_cache::datetime_formatter(
-            &locale, field_set,
-        )?)
+        super::fmt_cache::datetime_formatter(&locale, field_set)
     } else {
         None
     };
