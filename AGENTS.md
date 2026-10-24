@@ -74,6 +74,7 @@ local hook was bypassed.
     - `global_object.rs` — setup_global_object (globalThis, global-object wiring, $262)
     - `array.rs` — setup_array_prototype
     - `array_dense.rs` — dense-array fast paths for `Array.prototype` (pop/shift/unshift/splice/slice/concat/reverse/fill/sort write-back and indexOf/includes scans). Each helper acts only on a plain dense Array (`JsObjectData::is_plain_dense_array`: no own property but a synced, writable `length`, so `undefined` backing slots are holes) after re-checking the guard at the point the spec's element loop would start, and returns `None`/`false` without side effects otherwise so the spec-literal loop runs. Holes and growth additionally require `proto_chain_index_free`
+    - `merge_sort.rs` — `merge_sort_by`, the stable natural merge sort behind comparefn sorts (`Array`/`%TypedArray%` `sort`/`toSorted`): reverses strictly descending runs, so sorted or reverse-sorted input costs n-1 comparefn calls
     - `string.rs` — setup_string_prototype
     - `number.rs` — setup_number_prototype, setup_boolean_prototype, setup_symbol_prototype
     - `iterators.rs` — setup_iterator_prototypes, setup_generator_prototype

@@ -16,6 +16,7 @@ mod intl;
 mod iterators;
 mod json;
 mod math;
+mod merge_sort;
 pub(crate) mod node_host;
 mod number;
 mod object;
