@@ -12,6 +12,7 @@ mod array_pattern;
 mod call_ic;
 mod compiled_call_record;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
+mod eval_private_names;
 mod generator_runtime;
 mod literals;
 pub(crate) use literals::{
@@ -6512,12 +6513,10 @@ impl Interpreter {
                     }
                     function_boundary_count += 1;
                 }
-                if let Some(ref names) = borrowed.class_private_names {
-                    let name_set: HashSet<String> = names.names().map(str::to_string).collect();
-                    p.set_eval_in_class_with_names(name_set);
-                    break;
-                }
                 env_walk = borrowed.parent.clone();
+            }
+            if let Some(names) = eval_private_names::enclosing_private_names(caller_env) {
+                p.set_eval_in_class_with_names(names);
             }
             if found_function {
                 p.set_eval_new_target_allowed();
