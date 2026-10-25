@@ -200,3 +200,38 @@ try {
 } catch (e) {
   assert(e instanceof RangeError, "deep nesting must be a RangeError, got " + e);
 }
+
+// The globals are properties of the global object, like setTimeout.
+for (const name of ["structuredClone", "btoa", "atob"]) {
+  assert(typeof globalThis[name] === "function" && name in globalThis, name + " on globalThis");
+  const d = Object.getOwnPropertyDescriptor(globalThis, name);
+  assert(d && d.writable && !d.enumerable && d.configurable, name + " descriptor");
+}
+
+// Views that fell out of bounds cannot be cloned.
+{
+  const rab = new ArrayBuffer(8, { maxByteLength: 16 });
+  const u = new Uint8Array(rab, 4, 4);
+  const dv = new DataView(rab, 4, 4);
+  rab.resize(2);
+  dataCloneError(() => structuredClone(u), "out-of-bounds typed array");
+  dataCloneError(() => structuredClone({ u }), "nested out-of-bounds typed array");
+  dataCloneError(() => structuredClone(dv), "out-of-bounds DataView");
+}
+
+// Bytes written by a getter after the buffer was first reached survive a transfer.
+{
+  const b = new ArrayBuffer(4);
+  const u = new Uint8Array(b);
+  const out = structuredClone(
+    { v: u, get a() { u[0] = 7; return 1; } },
+    { transfer: [b] },
+  );
+  assert(out.v[0] === 7 && b.byteLength === 0, "late write reaches transferred clone");
+}
+{
+  const b = new ArrayBuffer(4);
+  const u = new Uint8Array(b);
+  const out = structuredClone({ get a() { u[0] = 7; return 1; }, v: u }, { transfer: [b] });
+  assert(out.v[0] === 7, "write before the buffer is reached");
+}

@@ -2,46 +2,42 @@ use super::super::*;
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-fn require_argument(interp: &mut Interpreter, name: &str, args: &[JsValue]) -> Result<(), JsValue> {
-    if args.is_empty() {
+fn string_arg(interp: &mut Interpreter, name: &str, args: &[JsValue]) -> Result<JsString, JsValue> {
+    let Some(arg) = args.first() else {
         return Err(
             interp.create_type_error(&format!("{name}: 1 argument required, but only 0 present."))
         );
-    }
-    Ok(())
+    };
+    interp.to_js_string(arg)
 }
 
 fn sextet(unit: u16) -> Option<u32> {
-    let unit = u8::try_from(unit).ok()?;
-    ALPHABET.iter().position(|&c| c == unit).map(|i| i as u32)
+    match u8::try_from(unit).ok()? {
+        c @ b'A'..=b'Z' => Some(u32::from(c - b'A')),
+        c @ b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+        c @ b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
 }
 
 /// The HTML `btoa` algorithm over code units: every unit must fit in Latin-1.
-fn encode_latin1(units: &[u16]) -> Option<String> {
-    let bytes: Vec<u8> = units
-        .iter()
-        .map(|&u| u8::try_from(u).ok())
-        .collect::<Option<_>>()?;
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[n as usize & 63] as char
-        } else {
-            '='
-        });
+fn encode_latin1(units: &[u16]) -> Option<Vec<u16>> {
+    let mut out = Vec::with_capacity(units.len().div_ceil(3) * 4);
+    for chunk in units.chunks(3) {
+        let mut n = 0u32;
+        for &unit in chunk {
+            n = (n << 8) | u32::from(u8::try_from(unit).ok()?);
+        }
+        n <<= 8 * (3 - chunk.len() as u32);
+        for i in 0..4 {
+            out.push(if i <= chunk.len() {
+                u16::from(ALPHABET[(n >> (18 - 6 * i)) as usize & 63])
+            } else {
+                u16::from(b'=')
+            });
+        }
     }
     Some(out)
 }
@@ -77,40 +73,35 @@ fn decode_forgiving(units: &[u16]) -> Option<Vec<u16>> {
     Some(out)
 }
 
-fn btoa(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
-    if let Err(e) = require_argument(interp, "btoa", args) {
-        return Completion::Throw(e);
-    }
-    let input = match interp.to_js_string(&args[0]) {
-        Ok(s) => s,
-        Err(e) => return Completion::Throw(e),
-    };
+fn invalid_character(interp: &mut Interpreter, message: &str) -> JsValue {
+    interp.create_dom_exception("InvalidCharacterError", 5, message)
+}
+
+fn btoa_impl(interp: &mut Interpreter, args: &[JsValue]) -> Result<JsValue, JsValue> {
+    let input = string_arg(interp, "btoa", args)?;
     match encode_latin1(input.as_units()) {
-        Some(encoded) => Completion::Normal(JsValue::from_str(&encoded)),
-        None => Completion::Throw(interp.create_dom_exception(
-            "InvalidCharacterError",
-            5,
-            "Invalid character",
+        Some(encoded) => Ok(JsValue::string(JsString::from_vec(encoded))),
+        None => Err(invalid_character(interp, "Invalid character")),
+    }
+}
+
+fn atob_impl(interp: &mut Interpreter, args: &[JsValue]) -> Result<JsValue, JsValue> {
+    let input = string_arg(interp, "atob", args)?;
+    match decode_forgiving(input.as_units()) {
+        Some(decoded) => Ok(JsValue::string(JsString::from_vec(decoded))),
+        None => Err(invalid_character(
+            interp,
+            "The string to be decoded is not correctly encoded.",
         )),
     }
 }
 
+fn btoa(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
+    btoa_impl(interp, args).map_or_else(Completion::Throw, Completion::Normal)
+}
+
 fn atob(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
-    if let Err(e) = require_argument(interp, "atob", args) {
-        return Completion::Throw(e);
-    }
-    let input = match interp.to_js_string(&args[0]) {
-        Ok(s) => s,
-        Err(e) => return Completion::Throw(e),
-    };
-    match decode_forgiving(input.as_units()) {
-        Some(decoded) => Completion::Normal(JsValue::string(JsString::from_vec(decoded))),
-        None => Completion::Throw(interp.create_dom_exception(
-            "InvalidCharacterError",
-            5,
-            "The string to be decoded is not correctly encoded.",
-        )),
-    }
+    atob_impl(interp, args).map_or_else(Completion::Throw, Completion::Normal)
 }
 
 impl Interpreter {

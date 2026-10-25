@@ -3,26 +3,9 @@
 use super::super::super::*;
 use super::Cloner;
 use crate::interpreter::types::{
-    ArrayBufferData, BufferData, DataViewInfo, ObjectKind, TypedArrayInfo, TypedArrayKind,
+    ArrayBufferData, BufferData, DataViewInfo, ObjectKind, TypedArrayInfo,
+    is_typed_array_out_of_bounds,
 };
-
-fn typed_array_prototype(interp: &Interpreter, kind: TypedArrayKind) -> Option<u64> {
-    let realm = interp.realm();
-    match kind {
-        TypedArrayKind::Int8 => realm.int8array_prototype,
-        TypedArrayKind::Uint8 => realm.uint8array_prototype,
-        TypedArrayKind::Uint8Clamped => realm.uint8clampedarray_prototype,
-        TypedArrayKind::Int16 => realm.int16array_prototype,
-        TypedArrayKind::Uint16 => realm.uint16array_prototype,
-        TypedArrayKind::Int32 => realm.int32array_prototype,
-        TypedArrayKind::Uint32 => realm.uint32array_prototype,
-        TypedArrayKind::Float16 => realm.float16array_prototype,
-        TypedArrayKind::Float32 => realm.float32array_prototype,
-        TypedArrayKind::Float64 => realm.float64array_prototype,
-        TypedArrayKind::BigInt64 => realm.bigint64array_prototype,
-        TypedArrayKind::BigUint64 => realm.biguint64array_prototype,
-    }
-}
 
 impl Cloner {
     pub(super) fn clone_buffer(
@@ -34,7 +17,7 @@ impl Cloner {
             let cell = interp.get_object_cell_expect(id).borrow();
             let Some(ab) = cell.arraybuffer() else {
                 drop(cell);
-                return Err(interp.data_clone_error("#<ArrayBuffer> could not be cloned."));
+                return Err(interp.uncloneable("ArrayBuffer"));
             };
             ab.clone()
         };
@@ -46,9 +29,10 @@ impl Cloner {
                     interp.data_clone_error("An ArrayBuffer is detached and could not be cloned.")
                 );
             }
-            let bytes = match &*data.data.borrow() {
-                BufferData::Owned(v) => v.clone(),
-                BufferData::Shared(_) => Vec::new(),
+            let bytes = if self.transfer.contains(&id) {
+                Vec::new()
+            } else {
+                data.data.borrow().to_vec()
             };
             interp.gc_track_external_bytes(bytes.len());
             ArrayBufferData {
@@ -58,6 +42,36 @@ impl Cloner {
             }
         };
         Ok(self.install_buffer(interp, id, clone_data))
+    }
+
+    /// Move the final bytes of a transferred `source` into its `clone`: a
+    /// getter may have written to the buffer after the walk reached it.
+    pub(super) fn move_bytes(interp: &mut Interpreter, source: &JsValue, clone: u64) {
+        let Some(src) = source
+            .as_object_id()
+            .and_then(|id| interp.get_object_cell(id))
+        else {
+            return;
+        };
+        let bytes = {
+            let src = src.borrow();
+            let Some(ab) = src.arraybuffer() else { return };
+            if ab.detached.as_ref().is_some_and(|d| d.get()) {
+                return;
+            }
+            let BufferData::Owned(bytes) = &mut *ab.data.borrow_mut() else {
+                return;
+            };
+            std::mem::take(bytes)
+        };
+        interp.gc_track_external_bytes(bytes.len());
+        if let Some(dst) = interp
+            .get_object_cell_expect(clone)
+            .borrow()
+            .arraybuffer_data()
+        {
+            *dst.borrow_mut() = BufferData::Owned(bytes);
+        }
     }
 
     fn install_buffer(&mut self, interp: &mut Interpreter, id: u64, data: ArrayBufferData) -> u64 {
@@ -83,7 +97,7 @@ impl Cloner {
         buffer_id: Option<u64>,
     ) -> Result<(u64, Rc<RefCell<BufferData>>, Rc<Cell<bool>>), JsValue> {
         let Some(buffer_id) = buffer_id else {
-            return Err(interp.data_clone_error("#<Object> could not be cloned."));
+            return Err(interp.uncloneable("Object"));
         };
         let cloned = self.clone_value(interp, &JsValue::object(buffer_id))?;
         let clone_id = cloned.as_object_id().unwrap_or(buffer_id);
@@ -97,7 +111,7 @@ impl Cloner {
                 data,
                 detached.unwrap_or_else(|| Rc::new(Cell::new(false))),
             )),
-            None => Err(interp.data_clone_error("#<Object> could not be cloned.")),
+            None => Err(interp.uncloneable("Object")),
         }
     }
 
@@ -107,15 +121,13 @@ impl Cloner {
         id: u64,
         mut info: TypedArrayInfo,
     ) -> Result<u64, JsValue> {
+        if is_typed_array_out_of_bounds(&info) {
+            return Err(interp.uncloneable("Object"));
+        }
         let (buffer_id, data, detached) = self.clone_view_buffer(interp, info.buffer_object_id)?;
-        let proto = typed_array_prototype(interp, info.kind);
         info.buffer = data;
         info.is_detached = detached;
-        let Some(proto) = proto else {
-            return Err(interp.data_clone_error("#<Object> could not be cloned."));
-        };
-        let clone =
-            interp.create_typed_array_object_with_proto(info, JsValue::object(buffer_id), proto);
+        let clone = interp.create_typed_array_object(info, JsValue::object(buffer_id));
         self.register(interp, id, clone);
         Ok(clone)
     }
@@ -126,6 +138,15 @@ impl Cloner {
         id: u64,
         mut info: DataViewInfo,
     ) -> Result<u64, JsValue> {
+        let buf_len = info.buffer.borrow().len();
+        let end = if info.is_length_tracking {
+            info.byte_offset
+        } else {
+            info.byte_offset + info.byte_length
+        };
+        if info.is_detached.get() || end > buf_len {
+            return Err(interp.uncloneable("Object"));
+        }
         let (buffer_id, data, detached) = self.clone_view_buffer(interp, info.buffer_object_id)?;
         info.buffer = data;
         info.is_detached = detached;

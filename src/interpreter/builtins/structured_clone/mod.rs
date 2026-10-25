@@ -10,6 +10,7 @@ use super::array::create_data_property_or_throw;
 use super::errors::error_class_name;
 use crate::interpreter::helpers::enumerable_own_keys;
 use crate::interpreter::types::{DataViewInfo, ObjectKind, TypedArrayInfo};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 const NATIVE_ERROR_NAMES: [&str; 7] = [
     "Error",
@@ -23,10 +24,23 @@ const NATIVE_ERROR_NAMES: [&str; 7] = [
 
 type CloneResult = Result<JsValue, JsValue>;
 
+fn get_or_throw<K: PropertyKeyLike + ?Sized>(
+    interp: &mut Interpreter,
+    id: u64,
+    key: &K,
+    receiver: &JsValue,
+) -> CloneResult {
+    match interp.get_object_property(id, key, receiver) {
+        Completion::Normal(v) => Ok(v),
+        Completion::Throw(e) => Err(e),
+        _ => Ok(JsValue::UNDEFINED),
+    }
+}
+
 /// What a source object is, decided under one borrow so that no user code
 /// runs while the object is borrowed.
 enum Shape {
-    Reject,
+    Reject(&'static str),
     Wrapper(JsValue),
     Date(JsValue),
     RegExp(JsString, JsString),
@@ -42,11 +56,11 @@ enum Shape {
 
 fn classify(interp: &Interpreter, id: u64) -> Shape {
     let Some(cell) = interp.get_object_cell(id) else {
-        return Shape::Reject;
+        return Shape::Reject("Object");
     };
     let b = cell.borrow();
     if b.callable.is_some() || b.proxy().is_some() {
-        return Shape::Reject;
+        return Shape::Reject(b.class_name);
     }
     match &b.kind {
         ObjectKind::RegExp(data) => Shape::RegExp(data.source.clone(), data.flags.clone()),
@@ -64,19 +78,23 @@ fn classify(interp: &Interpreter, id: u64) -> Shape {
             match (b.class_name, &b.primitive_value) {
                 ("Date", Some(t)) if t.is_number() => Shape::Date(t.clone()),
                 ("String" | "Number" | "Boolean" | "BigInt", Some(p)) => Shape::Wrapper(p.clone()),
+                ("Object" | "Math", _) if matches!(b.kind, ObjectKind::Ordinary) => Shape::Plain,
                 (name, _) if NATIVE_ERROR_NAMES.contains(&name) => Shape::Error,
                 ("AggregateError" | "SuppressedError", _) => Shape::Error,
-                ("Object" | "Math", _) if matches!(b.kind, ObjectKind::Ordinary) => Shape::Plain,
-                _ => Shape::Reject,
+                (name, _) => Shape::Reject(name),
             }
         }
-        _ => Shape::Reject,
+        _ => Shape::Reject(b.class_name),
     }
 }
 
 impl Interpreter {
     fn data_clone_error(&mut self, message: &str) -> JsValue {
         self.create_dom_exception("DataCloneError", 25, message)
+    }
+
+    fn uncloneable(&mut self, class: &str) -> JsValue {
+        self.data_clone_error(&format!("#<{class}> could not be cloned."))
     }
 
     fn new_object_with(
@@ -96,7 +114,10 @@ impl Interpreter {
 }
 
 struct Cloner {
-    memory: HashMap<u64, u64>,
+    memory: FxHashMap<u64, u64>,
+    /// Source ArrayBuffers in the transfer list: their clones start empty and
+    /// receive the source's final bytes just before it is detached.
+    transfer: FxHashSet<u64>,
     depth: usize,
 }
 
@@ -130,31 +151,19 @@ impl Cloner {
     }
 
     fn clone_object(&mut self, interp: &mut Interpreter, id: u64) -> CloneResult {
-        let realm = interp.realm();
-        let (object_proto, date_proto, regexp_proto, map_proto, set_proto) = (
-            realm.object_prototype,
-            realm.date_prototype,
-            realm.regexp_prototype,
-            realm.map_prototype,
-            realm.set_prototype,
-        );
         let clone = match classify(interp, id) {
-            Shape::Reject => {
-                return Err(interp.data_clone_error("#<Object> could not be cloned."));
-            }
+            Shape::Reject(class) => return Err(interp.uncloneable(class)),
             Shape::Wrapper(prim) => {
-                if prim.is_symbol() {
-                    return Err(interp.data_clone_error("#<Symbol> could not be cloned."));
-                }
                 let Completion::Normal(wrapper) = interp.to_object(&prim) else {
-                    return Err(interp.data_clone_error("#<Object> could not be cloned."));
+                    return Err(interp.uncloneable("Object"));
                 };
                 let clone = wrapper.as_object_id().unwrap_or(id);
                 self.register(interp, id, clone);
                 clone
             }
             Shape::Date(time) => {
-                let clone = interp.new_object_with("Date", date_proto, ObjectKind::Ordinary);
+                let proto = interp.realm().date_prototype;
+                let clone = interp.new_object_with("Date", proto, ObjectKind::Ordinary);
                 interp
                     .get_object_cell_expect(clone)
                     .borrow_mut()
@@ -163,16 +172,10 @@ impl Cloner {
                 clone
             }
             Shape::RegExp(source, flags) => {
-                let data = crate::interpreter::types::RegExpData::new(source, flags);
-                let clone =
-                    interp.new_object_with("RegExp", regexp_proto, ObjectKind::RegExp(data));
-                interp
-                    .get_object_cell_expect(clone)
-                    .borrow_mut()
-                    .insert_property(
-                        "lastIndex".to_string(),
-                        PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
-                    );
+                let clone = interp
+                    .alloc_regexp_literal(source, flags)
+                    .as_object_id()
+                    .unwrap_or(id);
                 self.register(interp, id, clone);
                 clone
             }
@@ -180,8 +183,8 @@ impl Cloner {
             Shape::TypedArray(info) => self.clone_typed_array(interp, id, info)?,
             Shape::DataView(info) => self.clone_data_view(interp, id, info)?,
             Shape::Map(entries) => {
-                let clone =
-                    interp.new_object_with("Map", map_proto, ObjectKind::Map(Box::default()));
+                let proto = interp.realm().map_prototype;
+                let clone = interp.new_object_with("Map", proto, ObjectKind::Map(Box::default()));
                 self.register(interp, id, clone);
                 for (k, v) in &entries {
                     interp.gc_root_value(k);
@@ -200,8 +203,8 @@ impl Cloner {
                 clone
             }
             Shape::Set(entries) => {
-                let clone =
-                    interp.new_object_with("Set", set_proto, ObjectKind::Set(Box::default()));
+                let proto = interp.realm().set_prototype;
+                let clone = interp.new_object_with("Set", proto, ObjectKind::Set(Box::default()));
                 self.register(interp, id, clone);
                 for v in &entries {
                     interp.gc_root_value(v);
@@ -221,11 +224,7 @@ impl Cloner {
             Shape::Error => return self.clone_error(interp, id),
             Shape::Array => {
                 let source = JsValue::object(id);
-                let len = match interp.get_object_property(id, "length", &source) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
+                let len = get_or_throw(interp, id, "length", &source)?;
                 let array = interp.create_array(Vec::new());
                 let clone = array.as_object_id().unwrap_or(id);
                 self.register(interp, id, clone);
@@ -234,7 +233,8 @@ impl Cloner {
                 clone
             }
             Shape::Plain => {
-                let clone = interp.new_object_with("Object", object_proto, ObjectKind::Ordinary);
+                let proto = interp.realm().object_prototype;
+                let clone = interp.new_object_with("Object", proto, ObjectKind::Ordinary);
                 self.register(interp, id, clone);
                 self.copy_properties(interp, id, clone)?;
                 clone
@@ -260,11 +260,7 @@ impl Cloner {
             if !still_own {
                 continue;
             }
-            let value = match interp.get_object_property(source, &key, &source_val) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => JsValue::UNDEFINED,
-            };
+            let value = get_or_throw(interp, source, &key, &source_val)?;
             let cloned = self.clone_value(interp, &value)?;
             create_data_property_or_throw(interp, &clone_val, &key, cloned)?;
         }
@@ -273,11 +269,7 @@ impl Cloner {
 
     fn clone_error(&mut self, interp: &mut Interpreter, id: u64) -> CloneResult {
         let source = JsValue::object(id);
-        let name_val = match interp.get_object_property(id, "name", &source) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
-            _ => JsValue::UNDEFINED,
-        };
+        let name_val = get_or_throw(interp, id, "name", &source)?;
         let name = name_val
             .as_string()
             .map(|s| s.to_rust_string())
@@ -327,20 +319,18 @@ impl Cloner {
     }
 }
 
-/// Validate and pre-clone the `transfer` list. Each ArrayBuffer is copied into
-/// the memory map up front so every view of it resolves to the transferred
-/// buffer; the sources are detached only once the whole clone has succeeded.
-fn prepare_transfer(
+/// Validate the `transfer` list. Sources are detached only once the whole
+/// clone has succeeded.
+fn validate_transfer(
     interp: &mut Interpreter,
-    cloner: &mut Cloner,
     items: &[JsValue],
-) -> Result<Vec<JsValue>, JsValue> {
-    let mut sources = Vec::new();
+) -> Result<FxHashSet<u64>, JsValue> {
+    let mut ids = FxHashSet::default();
     for item in items {
         let Some(id) = item.as_object_id() else {
             return Err(interp.create_type_error("transfer list entries must be objects"));
         };
-        if cloner.memory.contains_key(&id) {
+        if !ids.insert(id) {
             return Err(interp.data_clone_error("Transfer list contains duplicate ArrayBuffer"));
         }
         let is_buffer = interp.get_object_cell(id).is_some_and(|cell| {
@@ -350,10 +340,8 @@ fn prepare_transfer(
         if !is_buffer {
             return Err(interp.data_clone_error("Cannot transfer object of unsupported type."));
         }
-        cloner.clone_buffer(interp, id)?;
-        sources.push(item.clone());
     }
-    Ok(sources)
+    Ok(ids)
 }
 
 fn structured_clone(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
@@ -375,11 +363,7 @@ fn transfer_list(interp: &mut Interpreter, options: &JsValue) -> Result<Vec<JsVa
     let Some(options_id) = options.as_object_id() else {
         return Err(interp.create_type_error("Options cannot be converted to a dictionary"));
     };
-    let list = match interp.get_object_property(options_id, "transfer", options) {
-        Completion::Normal(v) => v,
-        Completion::Throw(e) => return Err(e),
-        _ => JsValue::UNDEFINED,
-    };
+    let list = get_or_throw(interp, options_id, "transfer", options)?;
     if list.is_undefined() {
         return Ok(Vec::new());
     }
@@ -399,12 +383,15 @@ fn run_clone(interp: &mut Interpreter, args: &[JsValue]) -> CloneResult {
     interp.gc_root_value(value);
     let items = transfer_list(interp, args.get(1).unwrap_or(JsValue::undefined_ref()))?;
     let mut cloner = Cloner {
-        memory: HashMap::new(),
+        memory: FxHashMap::default(),
+        transfer: validate_transfer(interp, &items)?,
         depth: 0,
     };
-    let transferred = prepare_transfer(interp, &mut cloner, &items)?;
     let result = cloner.clone_value(interp, value)?;
-    for buffer in &transferred {
+    for buffer in &items {
+        if let Some(&clone) = buffer.as_object_id().and_then(|id| cloner.memory.get(&id)) {
+            Cloner::move_bytes(interp, buffer, clone);
+        }
         if let Completion::Throw(e) = interp.detach_arraybuffer(buffer) {
             return Err(e);
         }
