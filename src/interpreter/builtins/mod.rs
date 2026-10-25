@@ -12,6 +12,7 @@ mod function_constructors;
 mod global_functions;
 mod global_object;
 mod host;
+mod host_base64;
 mod intl;
 mod iterators;
 mod json;
@@ -30,6 +31,7 @@ pub(crate) mod regexp;
 mod regexp_lookbehind;
 mod shadow_realm;
 pub(crate) mod string;
+mod structured_clone;
 mod temporal;
 pub(crate) mod typedarray;
 
