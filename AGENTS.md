@@ -65,6 +65,8 @@ local hook was bypassed.
     - `function.rs` — setup_function_prototype (call, apply, bind, toString)
     - `function_constructors.rs` — setup_function_constructors (eval, Function, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction and their prototype wiring)
     - `host.rs` — setup_host_globals (console, print, timers)
+    - `host_base64.rs` — `btoa`/`atob` (HTML Latin-1 base64, forgiving decode, InvalidCharacterError)
+    - `structured_clone/` — `structuredClone`: `mod.rs` fuses HTML structured serialize/deserialize into one pass (memory map for cycles/shared refs, `transfer` of ArrayBuffers, DataCloneError for uncloneable objects) and roots every clone and source for the whole call because getters run mid-walk; `buffers.rs` clones ArrayBuffer/SharedArrayBuffer and their views
     - `errors.rs` — setup_error_builtins (Error, native errors, AggregateError, SuppressedError)
     - `math.rs` — setup_math (the `Math` namespace object and its f16/precise-sum helpers)
     - `json.rs` — setup_json (the `JSON` namespace object)

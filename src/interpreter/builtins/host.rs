@@ -84,6 +84,24 @@ impl Interpreter {
         self.setup_console();
         self.setup_print();
         self.setup_timers();
+        self.setup_base64_globals();
+        self.setup_structured_clone();
+    }
+
+    /// A DOMException-shaped error for host APIs: it inherits from
+    /// `%Error.prototype%` and carries the legacy numeric `code`.
+    pub(super) fn create_dom_exception(&mut self, name: &str, code: u32, message: &str) -> JsValue {
+        let proto = self.realm().error_prototype;
+        let id = self.create_object_id();
+        {
+            let mut o = self.get_object_cell_expect(id).borrow_mut();
+            o.class_name = "Error";
+            o.prototype_id = proto;
+            o.insert_builtin("message".to_string(), JsValue::from_str(message));
+            o.insert_builtin("name".to_string(), JsValue::from_str(name));
+            o.insert_builtin("code".to_string(), JsValue::number(f64::from(code)));
+        }
+        JsValue::object(id)
     }
 
     fn setup_console(&mut self) {
