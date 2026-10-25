@@ -83,3 +83,54 @@ assert.sameValue(e.p(new C()), "ce", "names from three enclosing classes resolve
 assert.throws(TypeError, function () {
   e.q();
 }, "middle-class name resolves (receiver lacks it, so TypeError not SyntaxError)");
+
+class F {
+  #f = "f";
+  static run() {
+    class G {
+      #g = "g";
+      arrow(o) {
+        return (() => eval("o.#f + this.#g"))();
+      }
+      static sblock(o) {
+        var r;
+        class H {
+          static {
+            r = eval("o.#f");
+          }
+        }
+        return r;
+      }
+      field = eval("this.#g");
+      makes(o) {
+        return eval("(() => class Q { m(x) { return x.#f; } })()").prototype.m.call(null, o);
+      }
+    }
+    return G;
+  }
+}
+
+var G = F.run();
+var f = new F();
+var g = new G();
+assert.sameValue(g.arrow(f), "fg", "arrow caller sees outer and inner names");
+assert.sameValue(G.sblock(f), "f", "static block caller sees outer name");
+assert.sameValue(g.field, "g", "field initializer eval sees own class name");
+assert.sameValue(g.makes(f), "f", "class declared inside eval sees outer name");
+
+class Sibling {
+  #sib = 1;
+}
+class Host {
+  m() {
+    class Inner {
+      n() {
+        return eval("this.#sib");
+      }
+    }
+    return new Inner().n();
+  }
+}
+assert.throws(SyntaxError, function () {
+  new Host().m();
+}, "name of a non-enclosing class is rejected");
