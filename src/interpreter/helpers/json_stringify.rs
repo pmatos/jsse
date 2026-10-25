@@ -46,22 +46,9 @@ fn json_quote_units_into(result: &mut Vec<u16>, units: &[u16]) {
     result.push(0x22);
 }
 
+// `val` and `replacer` are the native call's arguments, which the call
+// dispatch keeps rooted for the whole call.
 pub(crate) fn json_stringify_full(
-    interp: &mut Interpreter,
-    val: &JsValue,
-    replacer: &Option<JsValue>,
-    space: &[u16],
-) -> Result<Option<Vec<u16>>, JsValue> {
-    interp.with_gc_root_scope(|interp| {
-        interp.gc_root_value(val);
-        if let Some(rep) = replacer {
-            interp.gc_root_value(rep);
-        }
-        json_stringify_rooted(interp, val, replacer, space)
-    })
-}
-
-fn json_stringify_rooted(
     interp: &mut Interpreter,
     val: &JsValue,
     replacer: &Option<JsValue>,
@@ -133,7 +120,6 @@ fn json_stringify_rooted(
         .borrow_mut()
         .insert_value("".to_string(), val.clone());
     let holder_id = wrapper_id;
-    interp.gc_root_id(holder_id);
 
     let root_key = JsPropertyKey::from_str("");
     let mut out = Vec::new();
