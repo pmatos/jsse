@@ -80,6 +80,7 @@ local hook was bypassed.
     - `iterators.rs` — setup_iterator_prototypes, setup_generator_prototype
     - `collections.rs` — setup_map/set/weakmap/weakset_prototype
     - `date.rs` — setup_date_builtin
+  - `helpers/json_stringify.rs` — `JSON.stringify` serializer (SerializeJSONProperty/QuoteJSONString); roots the holder and each post-`toJSON`/replacer value across nested calls
   - `helpers/json_internalize.rs` — `JSON.parse` reviver walk (InternalizeJSONProperty); roots the holder and walked value across each reviver call
   - `atom.rs` — `Atom`: randomised-interner identifier atoms (pointer equality, precomputed hash)
   - `binding_map.rs` — `BindingMap`: atom-keyed `Environment.bindings` storage and the `BindingKey`/`BindingName` lookup traits

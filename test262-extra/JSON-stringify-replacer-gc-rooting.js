@@ -48,8 +48,14 @@ var withGap = JSON.stringify(source, function (k, v) {
 
 assert.sameValue(withGap, '{\n "a": [\n  [\n   1\n  ],\n  [\n   2\n  ]\n ]\n}', "replacer with gap");
 
-var listItem = new String("a");
-listItem.toString = function () { $262.gc(); return "a"; };
-var propertyList = JSON.stringify({ a: { b: 1 }, c: 2 }, [listItem, new String("b")]);
+var list = [null, new String("b")];
+Object.defineProperty(list, "0", {
+  get: function () {
+    var item = new String("a");
+    item.toString = function () { $262.gc(); return "a"; };
+    return item;
+  }
+});
+var propertyList = JSON.stringify({ a: { b: 1 }, c: 2 }, list);
 
 assert.sameValue(propertyList, '{"a":{"b":1}}', "property list items");

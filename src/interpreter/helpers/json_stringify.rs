@@ -95,7 +95,6 @@ fn json_stringify_rooted(
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
-                interp.gc_root_value(&item);
                 let key_str = if let Some(s) = item.as_string() {
                     Some(JsPropertyKey::from_js_string(&s))
                 } else if let Some(n) = item.as_number() {
@@ -104,7 +103,10 @@ fn json_stringify_rooted(
                     if let Some(inner) = interp.get_object_cell(item_id) {
                         let cn = inner.borrow().class_name;
                         if cn == "String" || cn == "Number" {
-                            let s = interp.to_js_string(&item)?;
+                            let s = interp.with_gc_root_scope(|interp| {
+                                interp.gc_root_value(&item);
+                                interp.to_js_string(&item)
+                            })?;
                             Some(JsPropertyKey::from(s))
                         } else {
                             None
