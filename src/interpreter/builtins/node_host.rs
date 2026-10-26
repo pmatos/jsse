@@ -268,6 +268,7 @@ impl Interpreter {
         {
             self.setup_node_host_fs();
             self.setup_node_host_fs_meta();
+            self.setup_node_host_fs_ops();
         }
         self.setup_node_host_loop();
         self.setup_node_host_idna();

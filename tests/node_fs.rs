@@ -149,3 +149,60 @@ fn a_large_file_is_read_and_written_without_extra_copies() {
     // staging copy of either would add another 128 MiB.
     assert!(grew < 2 * mib + mib / 2, "peak RSS grew {grew} MiB: {out}");
 }
+
+#[test]
+fn the_long_tail_floor_is_private() {
+    let out = jsse(&[
+        "--node",
+        "-e",
+        r#"print(Object.getOwnPropertyNames(globalThis).filter(function (k) { return /^__host_fs_|^__node_fs/.test(k); }).length)"#,
+    ]);
+    assert_eq!(stdout(&out), "0");
+}
+
+#[test]
+fn stats_carry_exact_nanosecond_times_and_lazy_dates() {
+    let dir = scratch("stats");
+    let out = run_node(
+        &dir,
+        r#"
+        fs.writeFileSync(D + "/f", "12345");
+        fs.utimesSync(D + "/f", 1700000000.25, 1234567890.123456);
+        const s = fs.statSync(D + "/f");
+        const b = fs.statSync(D + "/f", { bigint: true });
+        console.log(s.atimeMs, s.mtime.toISOString(), Object.keys(s).includes("mtime"));
+        console.log(b.size, b.atimeNs, b.mtimeNs, b.mtimeMs, b.isFile());
+        console.log(fs.statSync(D + "/f/x", { throwIfNoEntry: false }), fs.lstatSync(D + "/nope", { throwIfNoEntry: false }));
+        "#,
+    );
+    assert_eq!(
+        out,
+        "1700000000250 2009-02-13T23:31:30.123Z true\n5n 1700000000250000000n 1234567890123456001n 1234567890123n true\nundefined undefined"
+    );
+}
+
+#[test]
+fn mkdir_recursive_rm_and_cp_work_on_trees() {
+    let dir = scratch("tree");
+    let out = run_node(
+        &dir,
+        r#"
+        const rel = (s) => s === undefined ? s : s.split(D).join("<D>");
+        console.log(rel(fs.mkdirSync(D + "/a/b/c", { recursive: true })), fs.mkdirSync(D + "/a/b/c", { recursive: true }));
+        fs.writeFileSync(D + "/a/b/c/f.txt", "x");
+        fs.symlinkSync("f.txt", D + "/a/b/c/l");
+        fs.cpSync(D + "/a", D + "/copy", { recursive: true });
+        console.log(fs.readdirSync(D + "/copy", { recursive: true }).join(","));
+        console.log(fs.readdirSync(D + "/copy/b/c", { withFileTypes: true }).map((d) => d.name + d.isSymbolicLink()).join(","));
+        try { fs.rmSync(D + "/a"); } catch (e) { console.log(e.name, e.code, e.errno, e.info.syscall); }
+        fs.rmSync(D + "/a", { recursive: true });
+        fs.rmSync(D + "/a", { recursive: true, force: true });
+        console.log(fs.existsSync(D + "/a"), fs.existsSync(D + "/copy/b/c/f.txt"));
+        try { fs.cpSync(D + "/copy", D + "/copy/b/in", { recursive: true }); } catch (e) { console.log(e.code); }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "<D>/a undefined\nb,b/c,b/c/f.txt,b/c/l\nf.txtfalse,ltrue\nSystemError ERR_FS_EISDIR 21 rm\nfalse true\nERR_FS_CP_EINVAL"
+    );
+}

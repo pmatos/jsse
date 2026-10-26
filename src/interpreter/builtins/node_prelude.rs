@@ -56,8 +56,24 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         include_str!("../../../scripts/node-fs-support.js"),
     ),
     (
+        "node-fs-stats.js",
+        include_str!("../../../scripts/node-fs-stats.js"),
+    ),
+    (
         "node-fs-meta.js",
         include_str!("../../../scripts/node-fs-meta.js"),
+    ),
+    (
+        "node-fs-dirs.js",
+        include_str!("../../../scripts/node-fs-dirs.js"),
+    ),
+    (
+        "node-fs-ops.js",
+        include_str!("../../../scripts/node-fs-ops.js"),
+    ),
+    (
+        "node-fs-cp.js",
+        include_str!("../../../scripts/node-fs-cp.js"),
     ),
     (
         "node-fs-shim.js",
