@@ -149,7 +149,10 @@
       }
       var snapshot = list.slice();
       for (var i = 0; i < snapshot.length; i++) {
-        if (snapshot[i].once) emitterMethods.off.call(this, type, snapshot[i].fn);
+        if (snapshot[i].once) {
+          var at = list.indexOf(snapshot[i]);
+          if (at !== -1) list.splice(at, 1);
+        }
         snapshot[i].fn.apply(this, args);
       }
       return true;
