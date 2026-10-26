@@ -14,6 +14,7 @@ const {
   MathCeil,
   MathLog2,
   MathSqrt,
+  MathTrunc,
   NumberIsNaN,
   NumberMAX_SAFE_INTEGER,
   ObjectFromEntries,
@@ -185,7 +186,7 @@ class HdrState {
 
   percentileBigInt(percentile) {
     const requested = percentile > 100 ? 100 : percentile;
-    let target = BigInt(Math.trunc((requested / 100) * Number(this.total) + 0.5));
+    let target = BigInt(MathTrunc((requested / 100) * Number(this.total) + 0.5));
     if (target < 1n) target = 1n;
     let cumulative = 0n;
     for (const [slot, count] of this.sortedSlots()) {
@@ -220,7 +221,7 @@ class HdrState {
         const current = (100 * Number(cumulative)) / Number(this.total);
         if (toIterateTo <= current) {
           out.push([toIterateTo, value]);
-          const temp = Math.trunc(MathLog2(100 / (100 - toIterateTo))) + 1;
+          const temp = MathTrunc(MathLog2(100 / (100 - toIterateTo))) + 1;
           toIterateTo += 100 / 2 ** temp;
           emitted = true;
           break;
