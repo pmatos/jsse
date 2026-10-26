@@ -231,7 +231,7 @@ fn prelude_owns_the_process_floor_primitives() {
         "-e",
         "print(['__host_argv','__host_argv0','__host_env_snapshot','__host_cwd','__host_chdir','__host_set_exit_code'].map(function (n) { return typeof globalThis[n]; }).join())",
     ]);
-    assert_eq!(stdout(&out), vec!["undefined"; 6].join(","));
+    assert_eq!(stdout(&out), ["undefined"; 6].join(","));
 }
 
 #[test]
