@@ -34,6 +34,9 @@ pub(crate) struct NodeHostState {
     /// `process.exitCode` sink (`__host_set_exit_code`), read by the CLI when
     /// the run ends without an explicit `__host_exit`.
     pub(crate) exit_code: Option<i32>,
+    pub(crate) stack: super::node_host_stack::NodeStackState,
+    /// Source offset plus one of the call this frame is making (0 = unknown).
+    pub(crate) call_pos: u32,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     /// Test-only: the platform name the `os` binding reports.
@@ -92,6 +95,7 @@ impl Interpreter {
     }
 
     fn setup_node_host(&mut self) {
+        self.setup_node_host_stack();
         // __host_write(fd, str) -> bytesWritten
         //
         // Byte-accurate write of the UTF-8 encoding of `str` (from jsse's

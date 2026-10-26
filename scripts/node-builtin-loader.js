@@ -202,6 +202,10 @@
       toUnicode: takeHost("__host_idna_to_unicode"),
     },
   };
+  // The CommonJS loader names each module's source for stack frames (#1228).
+  cache["internal/host/stack"] = {
+    exports: { nameSource: takeHost("__host_stack_name_source") },
+  };
   // The native `os` binding (#1222) is private to node-lib/os.js.
   var hostOs = globalThis.__host_os;
   delete globalThis.__host_os;

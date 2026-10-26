@@ -1519,11 +1519,12 @@ impl Compiler {
             }
         }
         if calls::has_spread(args) {
-            return self.compile_spread_arguments(args, 2);
+            return self.compile_spread_arguments(args, 2, site_id);
         }
         for arg in args {
             self.compile_expr(arg)?;
         }
+        self.emit_call_pos(site_id);
         self.emit(op);
         self.emit_u16(argc);
         self.emit_u32(site_id.0);
@@ -1627,13 +1628,11 @@ impl Compiler {
     }
 
     /// Compiles a statement list, emitting an `Op::Safepoint` before each
-    /// entry so the VM can reach a GC safepoint at every statement-list
-    /// position, matching the tree-walker's per-statement safepoint (issue
-    /// #808). Every statement list a compiled chunk can hold runs through
-    /// here: the function/script top level and `Statement::Block`'s body.
-    /// A statement that compiles to no bytecode (e.g. `;` or `var a;`) drops
-    /// its safepoint too — nothing could have been allocated since the prior
-    /// one, so it would just be a wasted dispatch.
+    /// entry so the VM reaches a GC safepoint at every statement-list
+    /// position, as the tree-walker does (issue #808). Every statement list a
+    /// compiled chunk can hold runs through here. A statement that compiles
+    /// to no bytecode (e.g. `;`) drops its safepoint too: nothing could have
+    /// been allocated since the prior one.
     fn compile_statement_list(&mut self, body: &[Statement]) -> Result<(), CompileError> {
         self.compile_statements(body, false, false)
     }

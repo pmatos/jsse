@@ -17,6 +17,7 @@ use crate::interpreter::literal_frame::LiteralFrame;
 
 /// A suspended or running async function body.
 pub(crate) struct AsyncActivation {
+    func_obj_id: u64,
     chunk: Rc<Chunk>,
     body: Body,
     frame_info: Rc<LiteralFrame>,
@@ -128,6 +129,7 @@ impl Interpreter {
             return Some(Completion::Normal(promise.clone()));
         }
         let activation = AsyncActivation {
+            func_obj_id,
             frame: GeneratorFrame::for_chunk(self, &chunk),
             chunk,
             body: body.clone(),
@@ -181,6 +183,7 @@ impl Interpreter {
             .resolvers
             .for_each_value(|value| self.gc_root_value(value));
         self.call_stack_envs.push(activation.env.clone());
+        let stack_frame = self.push_async_stack_frame(activation.func_obj_id);
         #[cfg(feature = "perf-counters")]
         {
             self.perf.body_non_function += 1;
@@ -208,6 +211,9 @@ impl Interpreter {
         if !activation.chunk.ast.is_empty() {
             let exclusive = self.perf.leave_ast_body();
             self.perf.ast_units_in_fallbacks += exclusive;
+        }
+        if stack_frame {
+            self.pop_call_frame();
         }
         self.call_stack_envs.pop();
         self.current_realm_id = caller_realm;
