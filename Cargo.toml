@@ -45,6 +45,8 @@ icu_provider_legacy = { package = "icu_provider", version = "=1.5.0" }
 fixed_decimal = { version = "0.7", features = ["ryu"] }
 tinystr = "0.8"
 icu_normalizer = "2.1.1"
+# UTS #46 for the WHATWG URL host parser under --node (#1230).
+idna = { version = "1.1", default-features = false, features = ["std", "compiled_data"] }
 writeable = "0.6"
 rustc-hash = "2"
 # Randomly seeded fast hasher for property-key maps (not for identifier/binding
