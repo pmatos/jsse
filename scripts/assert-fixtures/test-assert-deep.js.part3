@@ -1,0 +1,397 @@
+
+test('Verify object types being identical on both sides', () => {
+  let a = Buffer.from('test');
+  let b = Object.create(
+    Object.getPrototypeOf(a),
+    Object.getOwnPropertyDescriptors(a)
+  );
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'Uint8Array'
+  });
+  assertNotDeepOrStrict(a, b);
+
+  a = new Uint8Array(10);
+  b = new Int8Array(10);
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'Uint8Array'
+  });
+  Object.setPrototypeOf(b, Uint8Array.prototype);
+  assertNotDeepOrStrict(a, b);
+
+  a = [1, 2, 3];
+  b = { 0: 1, 1: 2, 2: 3 };
+  Object.setPrototypeOf(b, Array.prototype);
+  Object.defineProperty(b, 'length', { value: 3, enumerable: false });
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'Array'
+  });
+  assertNotDeepOrStrict(a, b);
+
+  a = new ArrayBuffer(3);
+  b = new Uint8Array(3);
+  Object.setPrototypeOf(b, ArrayBuffer.prototype);
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'ArrayBuffer'
+  });
+  assertNotDeepOrStrict(a, b);
+
+  a = new Date(2000);
+  b = Object.create(
+    Object.getPrototypeOf(a),
+    Object.getOwnPropertyDescriptors(a)
+  );
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'Date'
+  });
+  assertNotDeepOrStrict(a, b);
+
+  a = /abc/g;
+  b = Object.create(
+    Object.getPrototypeOf(a),
+    Object.getOwnPropertyDescriptors(a)
+  );
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'RegExp'
+  });
+  assertNotDeepOrStrict(a, b);
+
+  a = [];
+  b = /abc/;
+  Object.setPrototypeOf(b, Array.prototype);
+  Object.defineProperty(b, Symbol.toStringTag, {
+    value: 'Array'
+  });
+  assertNotDeepOrStrict(a, b);
+
+  a = { __proto__: null };
+  b = new RangeError('abc');
+  Object.defineProperty(a, Symbol.toStringTag, {
+    value: 'Error'
+  });
+  Object.setPrototypeOf(b, null);
+  assertNotDeepOrStrict(a, b, assert.AssertionError);
+});
+
+test('Verify commutativity', () => {
+  // Regression test for https://github.com/nodejs/node/issues/37710
+  const a = { x: 1 };
+  const b = { y: 1 };
+  Object.defineProperty(b, 'x', { value: 1 });
+
+  assertNotDeepOrStrict(a, b);
+});
+
+test('Crypto', { skip: !hasCrypto }, async () => {
+  const crypto = require('crypto');  // eslint-disable-line node-core/crypto-check
+  const { subtle } = globalThis.crypto;
+
+  {
+    const a = crypto.createSecretKey(Buffer.alloc(1, 0));
+    const b = crypto.createSecretKey(Buffer.alloc(1, 1));
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = crypto.createSecretKey(Buffer.alloc(0));
+    const b = crypto.createSecretKey(Buffer.alloc(0));
+
+    assertDeepAndStrictEqual(a, b);
+  }
+
+  {
+    const a = await subtle.importKey('raw', Buffer.alloc(1, 0),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+    const b = await subtle.importKey('raw', Buffer.alloc(1, 1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+    const b = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     false, ['sign']);
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+    const b = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-384' },
+                                     true, ['sign']);
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+    const b = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['verify']);
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+    const b = await subtle.importKey('raw', Buffer.alloc(1),
+                                     { name: 'HMAC', hash: 'SHA-256' },
+                                     true, ['sign']);
+
+    assertDeepAndStrictEqual(a, b);
+  }
+});
+
+test('Comparing two identical WeakMap instances', () => {
+  const weakMap = new WeakMap();
+  assertDeepAndStrictEqual(weakMap, weakMap);
+});
+
+test('Comparing two different WeakMap instances', () => {
+  const weakMap1 = new WeakMap();
+  const objA = {};
+  weakMap1.set(objA, 'ok');
+
+  const weakMap2 = new WeakMap();
+  const objB = {};
+  weakMap2.set(objB, 'ok');
+
+  assertNotDeepOrStrict(weakMap1, weakMap2);
+});
+
+test('Comparing two identical WeakSet instances', () => {
+  const weakSet = new WeakSet();
+  assertDeepAndStrictEqual(weakSet, weakSet);
+});
+
+test('Comparing two different WeakSet instances', () => {
+  const weakSet1 = new WeakSet();
+  const weakSet2 = new WeakSet();
+  assertNotDeepOrStrict(weakSet1, weakSet2);
+});
+
+test('Comparing two arrays nested inside object, with overlapping elements', () => {
+  const actual = { a: { b: [1, 2, 3] } };
+  const expected = { a: { b: [3, 4, 5] } };
+
+  assert.throws(
+    () => assert.deepStrictEqual(actual, expected),
+    {
+      code: 'ERR_ASSERTION',
+      name: 'AssertionError',
+      message: 'Expected values to be strictly deep-equal:\n' +
+        '+ actual - expected\n' +
+        '\n' +
+        '  {\n' +
+        '    a: {\n' +
+        '      b: [\n' +
+        '+       1,\n' +
+        '+       2,\n' +
+        '        3,\n' +
+        '-       4,\n' +
+        '-       5\n' +
+        '      ]\n' +
+        '    }\n' +
+        '  }\n'
+    }
+  );
+});
+
+test('Comparing two arrays nested inside object, with overlapping elements, swapping keys', () => {
+  const actual = { a: { b: [1, 2, 3], c: 2 } };
+  const expected = { a: { b: 1, c: [3, 4, 5] } };
+
+  assert.throws(
+    () => assert.deepStrictEqual(actual, expected),
+    {
+      code: 'ERR_ASSERTION',
+      name: 'AssertionError',
+      message: 'Expected values to be strictly deep-equal:\n' +
+        '+ actual - expected\n' +
+        '\n' +
+        '  {\n' +
+        '    a: {\n' +
+        '+     b: [\n' +
+        '+       1,\n' +
+        '+       2,\n' +
+        '-     b: 1,\n' +
+        '-     c: [\n' +
+        '        3,\n' +
+        '-       4,\n' +
+        '-       5\n' +
+        '      ],\n' +
+        '+     c: 2\n' +
+        '    }\n' +
+        '  }\n'
+    }
+  );
+});
+
+test('Detects differences in deeply nested arrays instead of seeing a new object', () => {
+  const actual = [
+    { a: 1 },
+    2,
+    3,
+    4,
+    { c: [1, 2, 3] },
+  ];
+  const expected = [
+    { a: 1 },
+    2,
+    3,
+    4,
+    { c: [3, 4, 5] },
+  ];
+
+  assert.throws(
+    () => assert.deepStrictEqual(actual, expected),
+    {
+      code: 'ERR_ASSERTION',
+      name: 'AssertionError',
+      message: 'Expected values to be strictly deep-equal:\n' +
+      '+ actual - expected\n' +
+      '... Skipped lines\n' +
+      '\n' +
+      '  [\n' +
+      '    {\n' +
+      '      a: 1\n' +
+      '    },\n' +
+      '    2,\n' +
+      '...\n' +
+      '      c: [\n' +
+      '+       1,\n' +
+      '+       2,\n' +
+      '        3,\n' +
+      '-       4,\n' +
+      '-       5\n' +
+      '      ]\n' +
+      '    }\n' +
+      '  ]\n'
+    }
+  );
+});
+
+test('URLs', () => {
+  // check URL
+  {
+    const a = new URL('http://foo');
+    const b = new URL('http://bar');
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = new URL('http://foo');
+    const b = new URL('http://foo');
+
+    assertDeepAndStrictEqual(a, b);
+  }
+
+  {
+    const a = new URL('http://foo');
+    const b = new URL('http://foo');
+    a.bar = 1;
+    b.bar = 2;
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = new URL('http://foo');
+    const b = new URL('http://foo');
+    a.bar = 1;
+    b.bar = 1;
+    assertDeepAndStrictEqual(a, b);
+  }
+
+  {
+    const a = new URL('http://foo');
+    const b = new URL('http://bar');
+    assert.throws(
+      () => assert.deepStrictEqual(a, b),
+      {
+        code: 'ERR_ASSERTION',
+        name: 'AssertionError',
+        message: /http:\/\/bar/
+      }
+    );
+  }
+});
+
+test('Own property constructor properties should check against the original prototype', () => {
+  const a = { constructor: { name: 'Foo' } };
+  const b = { constructor: { name: 'Foo' } };
+  assertDeepAndStrictEqual(a, b);
+
+  let prototype = {};
+  Object.setPrototypeOf(a, prototype);
+  Object.setPrototypeOf(b, prototype);
+  assertDeepAndStrictEqual(a, b);
+
+  Object.setPrototypeOf(b, {});
+  assertNotDeepOrStrict(a, {});
+
+  prototype = { __proto__: null };
+  Object.setPrototypeOf(a, prototype);
+  Object.setPrototypeOf(b, prototype);
+  assertDeepAndStrictEqual(a, b);
+
+  Object.setPrototypeOf(b, { __proto__: null });
+  assert.notDeepStrictEqual(a, b);
+  assert.notDeepStrictEqual(b, a);
+
+  // Turn off no-restricted-properties because we are testing deepEqual!
+  /* eslint-disable no-restricted-properties */
+  assert.deepEqual(a, b);
+  assert.deepEqual(b, a);
+});
+
+test('Inherited null prototype without own constructor properties should check the correct prototype', () => {
+  const a = { foo: { name: 'Foo' } };
+  const b = { foo: { name: 'Foo' } };
+  assertDeepAndStrictEqual(a, b);
+
+  let prototype = {};
+  Object.setPrototypeOf(a, prototype);
+  Object.setPrototypeOf(b, prototype);
+  assertDeepAndStrictEqual(a, b);
+
+  Object.setPrototypeOf(b, {});
+  assertNotDeepOrStrict(a, {});
+
+  prototype = { __proto__: null };
+  Object.setPrototypeOf(a, prototype);
+  Object.setPrototypeOf(b, prototype);
+  assertDeepAndStrictEqual(a, b);
+
+  Object.setPrototypeOf(b, { __proto__: null });
+  assert.notDeepStrictEqual(a, b);
+  assert.notDeepStrictEqual(b, a);
+
+  assert.notDeepStrictEqual({ __proto__: null }, { __proto__: { __proto__: null } });
+  assert.notDeepStrictEqual({ __proto__: { __proto__: null } }, { __proto__: null });
+
+  // Turn off no-restricted-properties because we are testing deepEqual!
+  /* eslint-disable no-restricted-properties */
+  assert.deepEqual(a, b);
+  assert.deepEqual(b, a);
+});
+
+test('Promises should fail deepEqual', () => {
+  const a = Promise.resolve(1);
+  const b = Promise.resolve(1);
+  assertDeepAndStrictEqual(a, a);
+  assertNotDeepOrStrict(a, b);
+});

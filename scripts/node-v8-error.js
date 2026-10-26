@@ -172,6 +172,7 @@
 
   function setStack(value) {
     defineProperty(this, "stack", {
+      __proto__: null,
       value: value,
       writable: true,
       enumerable: false,

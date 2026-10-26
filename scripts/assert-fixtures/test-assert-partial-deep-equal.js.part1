@@ -1,0 +1,38 @@
+'use strict';
+
+const common = require('../common');
+const vm = require('node:vm');
+const assert = require('node:assert');
+const { describe, it } = require('node:test');
+
+const x = ['x'];
+
+function createCircularObject() {
+  const obj = {};
+  obj.self = obj;
+  obj.set = new Set([x, ['y']]);
+  return obj;
+}
+
+function createDeepNestedObject() {
+  return { level1: { level2: { level3: 'deepValue' } } };
+}
+
+async function generateCryptoKey() {
+  const { KeyObject } = require('node:crypto');
+  const { subtle } = globalThis.crypto;
+
+  const cryptoKey = await subtle.generateKey(
+    {
+      name: 'HMAC',
+      hash: 'SHA-256',
+      length: 256,
+    },
+    true,
+    ['sign', 'verify']
+  );
+
+  const keyObject = KeyObject.from(cryptoKey);
+
+  return { cryptoKey, keyObject };
+}

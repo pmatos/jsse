@@ -1,0 +1,710 @@
+'use strict';
+
+const { mustCall, hasCrypto } = require('../common');
+const assert = require('assert');
+const util = require('util');
+const { test } = require('node:test');
+const defaultMsgStart = 'Expected values to be strictly deep-equal:\n';
+const defaultMsgStartFull = `${defaultMsgStart}+ actual - expected`;
+
+// Disable colored output to prevent color codes from breaking assertion
+// message comparisons. This should only be an issue when process.stdout
+// is a TTY.
+if (process.stdout.isTTY)
+  process.env.NODE_DISABLE_COLORS = '1';
+
+// Template tag function turning an error message into a RegExp
+// for assert.throws()
+function re(literals, ...values) {
+  let result = 'Expected values to be loosely deep-equal:\n\n';
+  for (const [i, value] of values.entries()) {
+    const str = util.inspect(value, {
+      compact: false,
+      depth: 1000,
+      customInspect: false,
+      maxArrayLength: Infinity,
+      breakLength: Infinity,
+      sorted: true,
+      getters: true
+    });
+    // Need to escape special characters.
+    result += `${str}${literals[i + 1]}`;
+  }
+  return {
+    code: 'ERR_ASSERTION',
+    message: result
+  };
+}
+
+const date = new Date('2016');
+
+class MyDate extends Date {
+  constructor(...args) {
+    super(...args);
+    this[0] = '1';
+  }
+}
+
+const date2 = new MyDate('2016');
+
+class MyRegExp extends RegExp {
+  constructor(...args) {
+    super(...args);
+    this[0] = '1';
+  }
+}
+
+// The following deepEqual tests might seem very weird.
+// They just describe what it is now.
+// That is why we discourage using deepEqual in our own tests.
+
+// Turn off no-restricted-properties because we are testing deepEqual!
+/* eslint-disable no-restricted-properties */
+
+test('deepEqual', () => {
+  const arr = new Uint8Array([120, 121, 122, 10]);
+  const buf = Buffer.from(arr);
+  // They have different [[Prototype]]
+  assert.throws(
+    () => assert.deepStrictEqual(arr, buf),
+    {
+      code: 'ERR_ASSERTION',
+      message: 'Expected values to be strictly deep-equal:\n' +
+        '+ actual - expected\n' +
+        '\n' +
+        '+ Uint8Array(4) [\n' +
+        '- Buffer(4) [Uint8Array] [\n' +
+        '    120,\n' +
+        '    121,\n' +
+        '    122,\n' +
+        '    10\n' +
+        '  ]\n'
+    }
+  );
+  assert.deepEqual(arr, buf);
+
+  {
+    const buf2 = Buffer.from(arr);
+    buf2.prop = 1;
+
+    assert.throws(
+      () => assert.deepStrictEqual(buf2, buf),
+      {
+        code: 'ERR_ASSERTION',
+        message: `${defaultMsgStartFull}\n\n` +
+                '  Buffer(4) [Uint8Array] [\n' +
+                '    120,\n' +
+                '    121,\n' +
+                '    122,\n' +
+                '    10,\n' +
+                '+   prop: 1\n' +
+                '  ]\n'
+      }
+    );
+    assert.notDeepEqual(buf2, buf);
+  }
+
+  {
+    const arr2 = new Uint8Array([120, 121, 122, 10]);
+    arr2.prop = 5;
+    assert.throws(
+      () => assert.deepStrictEqual(arr, arr2),
+      {
+        code: 'ERR_ASSERTION',
+        message: `${defaultMsgStartFull}\n\n` +
+                '  Uint8Array(4) [\n' +
+                '    120,\n' +
+                '    121,\n' +
+                '    122,\n' +
+                '    10,\n' +
+                '-   prop: 5\n' +
+                '  ]\n'
+      }
+    );
+    assert.notDeepEqual(arr, arr2);
+  }
+});
+
+test('loose deepEqual', () => {
+  assertOnlyDeepEqual([null, undefined, undefined], [null, undefined, null]);
+  assertNotDeepOrStrict([null, undefined, undefined, 1], [null, undefined, null, 2]);
+});
+
+test('date', () => {
+  assertNotDeepOrStrict(date, date2);
+  assert.throws(
+    () => assert.deepStrictEqual(date, date2),
+    {
+      code: 'ERR_ASSERTION',
+      message: `${defaultMsgStartFull}\n\n` +
+              '+ 2016-01-01T00:00:00.000Z\n- MyDate 2016-01-01T00:00:00.000Z' +
+              " {\n-   '0': '1'\n- }\n"
+    }
+  );
+  assert.throws(
+    () => assert.deepStrictEqual(date2, date),
+    {
+      code: 'ERR_ASSERTION',
+      message: `${defaultMsgStartFull}\n\n` +
+              '+ MyDate 2016-01-01T00:00:00.000Z {\n' +
+              "+   '0': '1'\n+ }\n- 2016-01-01T00:00:00.000Z\n"
+    }
+  );
+});
+
+test('regexp', () => {
+  const re1 = new RegExp('test');
+  const re2 = new MyRegExp('test');
+
+  assertNotDeepOrStrict(re1, re2);
+  assert.throws(
+    () => assert.deepStrictEqual(re1, re2),
+    {
+      code: 'ERR_ASSERTION',
+      message: `${defaultMsgStartFull}\n\n` +
+              "+ /test/\n- MyRegExp /test/ {\n-   '0': '1'\n- }\n"
+    }
+  );
+});
+
+// For these weird cases, deepEqual should pass (at least for now),
+// but deepStrictEqual should throw.
+test('deepEqual should pass for these weird cases', () => {
+  const re2 = new MyRegExp('test');
+  const similar = new Set([
+    { 0: 1 },  // Object
+    new String('1'),  // Object
+    [1],  // Array
+    date2,  // Date with this[0] = '1'
+    re2,  // RegExp with this[0] = '1'
+    new Int8Array([1]), // Int8Array
+    new Int16Array([1]), // Int16Array
+    new Uint16Array([1]), // Uint16Array
+    new Int32Array([1]), // Int32Array
+    new Uint32Array([1]), // Uint32Array
+    Buffer.from([1]), // Uint8Array
+    (function() { return arguments; })(1),
+  ]);
+
+  for (const a of similar) {
+    for (const b of similar) {
+      if (a !== b) {
+        assert.notDeepEqual(a, b);
+        assert.throws(
+          () => assert.deepStrictEqual(a, b),
+          { code: 'ERR_ASSERTION' }
+        );
+      }
+    }
+  }
+});
+
+function assertDeepAndStrictEqual(a, b) {
+  assert.deepEqual(a, b);
+  assert.deepStrictEqual(a, b);
+  assert.partialDeepStrictEqual(a, b);
+
+  assert.deepEqual(b, a);
+  assert.deepStrictEqual(b, a);
+  assert.partialDeepStrictEqual(b, a);
+}
+
+function assertNotDeepOrStrict(a, b, err, options) {
+  assert.throws(
+    () => assert.deepEqual(a, b),
+    err || re`${a}\n\nshould loosely deep-equal\n\n${b}`
+  );
+  assert.throws(
+    () => assert.deepStrictEqual(a, b),
+    err || { code: 'ERR_ASSERTION' }
+  );
+
+  assert.throws(
+    () => assert.deepEqual(b, a),
+    err || re`${b}\n\nshould loosely deep-equal\n\n${a}`
+  );
+  assert.throws(
+    () => assert.deepStrictEqual(b, a),
+    err || { code: 'ERR_ASSERTION' }
+  );
+  const partial = mustCall(() => {
+    assert.partialDeepStrictEqual(b, a);
+    assert.partialDeepStrictEqual(a, b);
+  });
+  if (options?.partial === 'pass') {
+    partial();
+  } else {
+    assert.throws(partial, err || { code: 'ERR_ASSERTION' });
+  }
+}
+
+function assertOnlyDeepEqual(a, b, err) {
+  assert.deepEqual(a, b);
+  assert.throws(
+    () => assert.deepStrictEqual(a, b),
+    err || { code: 'ERR_ASSERTION' }
+  );
+
+  assert.deepEqual(b, a);
+  assert.throws(
+    () => assert.deepStrictEqual(b, a),
+    err || { code: 'ERR_ASSERTION' }
+  );
+
+  const partial = mustCall(() => {
+    assert.partialDeepStrictEqual(b, a);
+    assert.partialDeepStrictEqual(a, b);
+  });
+
+  assert.throws(partial, err || { code: 'ERR_ASSERTION' });
+}
+
+function activateMemoizedCycleDetection() {
+  const circA = {};
+  circA.self = circA;
+  const circB = {};
+  circB.self = circB;
+  assert.deepStrictEqual(circA, circB);
+}
+
+test('es6 Maps and Sets', () => {
+  assertDeepAndStrictEqual(new Set(), new Set());
+  assertDeepAndStrictEqual(new Map(), new Map());
+
+  assertDeepAndStrictEqual(new Set([1, 2, 3]), new Set([1, 2, 3]));
+  assertNotDeepOrStrict(new Set([1, 2, 3]), new Set([1, 2, 3, 4]));
+  assertNotDeepOrStrict(new Set([1, 2, 3, 4]), new Set([1, 2, 3]));
+  assertDeepAndStrictEqual(new Set(['1', '2', '3']), new Set(['1', '2', '3']));
+  assertDeepAndStrictEqual(new Set([[1, 2], [3, 4]]), new Set([[3, 4], [1, 2]]));
+  assertNotDeepOrStrict(new Set([{ a: 0 }]), new Set([{ a: 1 }]));
+  assertNotDeepOrStrict(new Set([Symbol()]), new Set([Symbol()]));
+
+  {
+    const a = [ 1, 2 ];
+    const b = [ 3, 4 ];
+    const c = [ 1, 2 ];
+    const d = [ 3, 4 ];
+
+    assertDeepAndStrictEqual(
+      { a: a, b: b, s: new Set([a, b]) },
+      { a: c, b: d, s: new Set([d, c]) }
+    );
+  }
+
+  assertDeepAndStrictEqual(new Map([[1, 1], [2, 2]]), new Map([[1, 1], [2, 2]]));
+  assertDeepAndStrictEqual(new Map([[1, 1], [2, 2]]), new Map([[2, 2], [1, 1]]));
+  assertNotDeepOrStrict(new Map([[1, 1], [2, 2]]), new Map([[1, 2], [2, 1]]));
+  assertNotDeepOrStrict(
+    new Map([[[1], 1], [{}, 2]]),
+    new Map([[[1], 2], [{}, 1]])
+  );
+
+  assertNotDeepOrStrict(new Set([1]), [1]);
+  assertNotDeepOrStrict(new Set(), []);
+  assertNotDeepOrStrict(new Set(), {});
+
+  assertNotDeepOrStrict(new Map([['a', 1]]), { a: 1 });
+  assertNotDeepOrStrict(new Map(), []);
+  assertNotDeepOrStrict(new Map(), {});
+
+  assertOnlyDeepEqual(new Set(['1']), new Set([1]));
+
+  assertOnlyDeepEqual(new Map([['1', 'a']]), new Map([[1, 'a']]));
+  assertOnlyDeepEqual(new Map([['a', '1']]), new Map([['a', 1]]));
+  assertNotDeepOrStrict(new Map([['a', '1']]), new Map([['a', 2]]));
+
+  assertDeepAndStrictEqual(new Set([{}]), new Set([{}]));
+
+  // Ref: https://github.com/nodejs/node/issues/13347
+  assertNotDeepOrStrict(
+    new Set([{ a: 1 }, { a: 1 }]),
+    new Set([{ a: 1 }, { a: 2 }])
+  );
+  assertNotDeepOrStrict(
+    new Set([{ a: 1 }, { a: 1 }, { a: 2 }]),
+    new Set([{ a: 1 }, { a: 2 }, { a: 2 }])
+  );
+  assertNotDeepOrStrict(
+    new Map([[{ x: 1 }, 5], [{ x: 1 }, 5]]),
+    new Map([[{ x: 1 }, 5], [{ x: 2 }, 5]])
+  );
+
+  assertNotDeepOrStrict(new Set([3, '3']), new Set([3, 4]));
+  assertNotDeepOrStrict(new Map([[3, 0], ['3', 0]]), new Map([[3, 0], [4, 0]]));
+
+  assertNotDeepOrStrict(
+    new Set([{ a: 1 }, { a: 1 }, { a: 2 }]),
+    new Set([{ a: 1 }, { a: 2 }, { a: 2 }])
+  );
+
+  // Mixed primitive and object keys
+  assertDeepAndStrictEqual(
+    new Map([[1, 'a'], [{}, 'a']]),
+    new Map([[1, 'a'], [{}, 'a']])
+  );
+  assertDeepAndStrictEqual(
+    new Set([1, 'a', [{}, 'a']]),
+    new Set([1, 'a', [{}, 'a']])
+  );
+
+  // This is an awful case, where a map contains multiple equivalent keys:
+  assertOnlyDeepEqual(
+    new Map([[1, 'a'], ['1', 'b']]),
+    new Map([['1', 'a'], [true, 'b']])
+  );
+  assertNotDeepOrStrict(
+    new Set(['a']),
+    new Set(['b'])
+  );
+  assertDeepAndStrictEqual(
+    new Map([[{}, 'a'], [{}, 'b']]),
+    new Map([[{}, 'b'], [{}, 'a']])
+  );
+  assertOnlyDeepEqual(
+    new Map([[true, 'a'], ['1', 'b'], [1, 'a']]),
+    new Map([['1', 'a'], [1, 'b'], [true, 'a']])
+  );
+  assertNotDeepOrStrict(
+    new Map([[true, 'a'], ['1', 'b'], [1, 'c']]),
+    new Map([['1', 'a'], [1, 'b'], [true, 'a']])
+  );
+
+  // Similar object keys
+  assertNotDeepOrStrict(
+    new Set([{}, {}]),
+    new Set([{}, 1])
+  );
+  assertNotDeepOrStrict(
+    new Set([[{}, 1], [{}, 1]]),
+    new Set([[{}, 1], [1, 1]])
+  );
+  assertNotDeepOrStrict(
+    new Map([[{}, 1], [{}, 1]]),
+    new Map([[{}, 1], [1, 1]])
+  );
+  assertOnlyDeepEqual(
+    new Map([[{}, 1], [true, 1]]),
+    new Map([[{}, 1], [1, 1]])
+  );
+
+  // Similar primitive key / values
+  assertNotDeepOrStrict(
+    new Set([1, true, false]),
+    new Set(['1', 0, '0'])
+  );
+  assertNotDeepOrStrict(
+    new Map([[1, 5], [true, 5], [false, 5]]),
+    new Map([['1', 5], [0, 5], ['0', 5]])
+  );
+
+  // Undefined value in Map
+  assertDeepAndStrictEqual(
+    new Map([[1, undefined]]),
+    new Map([[1, undefined]])
+  );
+  assertOnlyDeepEqual(
+    new Map([[1, null], ['', '0']]),
+    new Map([['1', undefined], [false, 0]])
+  );
+  assertNotDeepOrStrict(
+    new Map([[1, undefined]]),
+    new Map([[2, undefined]])
+  );
+
+  // null as key
+  assertDeepAndStrictEqual(
+    new Map([[null, 3]]),
+    new Map([[null, 3]])
+  );
+  assertOnlyDeepEqual(
+    new Map([[undefined, null], ['+000', 2n]]),
+    new Map([[null, undefined], [false, '2']]),
+  );
+  // A null key whose value is an object, alongside another object key and a
+  // matching map size, must not crash the unordered object-key matching (null
+  // is `typeof 'object'`). Refs: https://github.com/nodejs/node/issues/64433
+  assertNotDeepOrStrict(
+    new Map([[null, { v: 1 }], [{ a: 1 }, 1]]),
+    new Map([[{ b: 2 }, { v: 1 }], [{ a: 1 }, 1]])
+  );
+  assertDeepAndStrictEqual(
+    new Map([[null, { v: 1 }], [{ a: 1 }, 1]]),
+    new Map([[null, { v: 1 }], [{ a: 1 }, 1]])
+  );
+  const xarray = ['x'];
+  assertDeepAndStrictEqual(
+    new Set([xarray, ['y']]),
+    new Set([xarray, ['y']])
+  );
+  assertDeepAndStrictEqual(
+    new Set([2, xarray, ['y'], 1]),
+    new Set([xarray, ['y'], 1, 2])
+  );
+  assertDeepAndStrictEqual(
+    new Set([{ a: 1 }, { a: 3 }, { a: 2 }, { a: 4 }]),
+    new Set([{ a: 2 }, { a: 1 }, { a: 4 }, { a: 3 }])
+  );
+  assertNotDeepOrStrict(
+    new Set([{ a: 1 }, { a: 2 }, { a: 3 }, { a: 4 }]),
+    new Set([{ a: 1 }, { a: 2 }, { a: 3 }, { a: 5 }])
+  );
+  assertOnlyDeepEqual(
+    new Set([null, '', 1n, 5, 2n, false]),
+    new Set([undefined, 0, 5n, true, '2', '-000'])
+  );
+  assertNotDeepOrStrict(
+    new Set(['']),
+    new Set(['0'])
+  );
+  assertOnlyDeepEqual(
+    new Map([[1, {}]]),
+    new Map([[true, {}]])
+  );
+  assertOnlyDeepEqual(
+    new Map([[undefined, true]]),
+    new Map([[null, true]])
+  );
+  assertNotDeepOrStrict(
+    new Map([[undefined, true]]),
+    new Map([[true, true]])
+  );
+  {
+    const values = [
+      123,
+      Infinity,
+      0,
+      null,
+      undefined,
+      false,
+      true,
+      {},
+      [],
+      () => {},
+    ];
+    assertDeepAndStrictEqual(new Set(values), new Set(values));
+    assertDeepAndStrictEqual(new Set(values), new Set(values.reverse()));
+
+    const mapValues = values.map((v) => [v, { a: 5 }]);
+    assertDeepAndStrictEqual(new Map(mapValues), new Map(mapValues));
+    assertDeepAndStrictEqual(new Map(mapValues), new Map(mapValues.reverse()));
+  }
+
+  {
+    const s1 = new Set();
+    const s2 = new Set();
+    s1.add(1);
+    s1.add(2);
+    s2.add(2);
+    s2.add(1);
+    assertDeepAndStrictEqual(s1, s2);
+  }
+
+  {
+    const m1 = new Map();
+    const m2 = new Map();
+    const obj = { a: 5, b: 6 };
+    m1.set(1, obj);
+    m1.set(2, 'hi');
+    m1.set(3, [1, 2, 3]);
+
+    m2.set(2, 'hi'); // different order
+    m2.set(1, obj);
+    m2.set(3, [1, 2, 3]); // Deep equal, but not reference equal.
+
+    assertDeepAndStrictEqual(m1, m2);
+  }
+
+  {
+    const m1 = new Map();
+    const m2 = new Map();
+
+    // m1 contains itself.
+    m1.set(1, m1);
+    m2.set(1, new Map());
+
+    assertNotDeepOrStrict(m1, m2);
+  }
+
+  {
+    const map1 = new Map([[1, 1]]);
+    const map2 = new Map([[1, '1']]);
+    assert.deepEqual(map1, map2);
+    assert.throws(
+      () => assert.deepStrictEqual(map1, map2),
+      {
+        code: 'ERR_ASSERTION',
+        message: `${defaultMsgStartFull}\n\n` +
+                 "  Map(1) {\n+   1 => 1\n-   1 => '1'\n  }\n"
+      }
+    );
+  }
+
+  {
+    // Two equivalent sets / maps with different key/values applied shouldn't be
+    // the same. This is a terrible idea to do in practice, but deepEqual should
+    // still check for it.
+    const s1 = new Set();
+    const s2 = new Set();
+    s1.x = 5;
+    assertNotDeepOrStrict(s1, s2);
+
+    const m1 = new Map();
+    const m2 = new Map();
+    m1.x = 5;
+    assertNotDeepOrStrict(m1, m2);
+  }
+
+  {
+    // Circular references.
+    const s1 = new Set();
+    s1.add(s1);
+    const s2 = new Set();
+    s2.add(s2);
+    assertDeepAndStrictEqual(s1, s2);
+
+    const m1 = new Map();
+    m1.set(2, m1);
+    const m2 = new Map();
+    m2.set(2, m2);
+    assertDeepAndStrictEqual(m1, m2);
+
+    const m3 = new Map();
+    m3.set(m3, 2);
+    const m4 = new Map();
+    m4.set(m4, 2);
+    assertDeepAndStrictEqual(m3, m4);
+  }
+});
+
+test('GH-6416. Make sure circular refs do not throw', () => {
+  const b = {};
+  b.b = b;
+  const c = {};
+  c.b = c;
+
+  assertDeepAndStrictEqual(b, c);
+
+  const d = {};
+  d.a = 1;
+  d.b = d;
+  const e = {};
+  e.a = 1;
+  e.b = {};
+
+  assertNotDeepOrStrict(d, e);
+});
+
+test('GH-14441. Circular structures should be consistent', () => {
+  {
+    const a = {};
+    a.a = a;
+
+    const b = {};
+    b.a = {};
+    b.a.a = a;
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = {};
+    a.a = a;
+    const b = {};
+    b.a = b;
+    const c = {};
+    c.a = a;
+    assertNotDeepOrStrict(b, c);
+  }
+
+  {
+    const a = new Set();
+    a.add(a);
+    const b = new Set();
+    b.add(b);
+    const c = new Set();
+    c.add(a);
+    assertNotDeepOrStrict(b, c);
+  }
+});
+
+test('deepStrictEqual handles shared expected array elements after cycle detection', () => {
+  const sharedExpected = { outer: { inner: 0 } };
+  const actualValues = [{ outer: { inner: 0 } }, { outer: { inner: 0 } }];
+  const expectedValues = [sharedExpected, sharedExpected];
+
+  activateMemoizedCycleDetection();
+
+  assertDeepAndStrictEqual(actualValues[0], expectedValues[0]);
+  assertDeepAndStrictEqual(actualValues[1], expectedValues[1]);
+  assertDeepAndStrictEqual(actualValues, expectedValues);
+});
+
+test('deepStrictEqual handles cross-root aliases after cycle detection', () => {
+  activateMemoizedCycleDetection();
+
+  const nestedExpected = {};
+  nestedExpected.loop = nestedExpected;
+  nestedExpected.payload = { value: 1 };
+
+  const expected = {};
+  expected.loop = nestedExpected;
+  expected.payload = { value: 1 };
+
+  const actual = {};
+  actual.loop = expected;
+  actual.payload = { value: 1 };
+
+  assertDeepAndStrictEqual(actual, expected);
+});
+
+// https://github.com/nodejs/node-v0.x-archive/pull/7178
+test('Ensure reflexivity of deepEqual with `arguments` objects.', () => {
+  const args = (function() { return arguments; })();
+  assertNotDeepOrStrict([], args);
+});
+
+test('More checking that arguments objects are handled correctly', () => {
+  // eslint-disable-next-line func-style
+  const returnArguments = function() { return arguments; };
+
+  const someArgs = returnArguments('a');
+  const sameArgs = returnArguments('a');
+  const diffArgs = returnArguments('b');
+
+  assertNotDeepOrStrict(someArgs, ['a']);
+  assertNotDeepOrStrict(someArgs, { '0': 'a' });
+  assertNotDeepOrStrict(someArgs, diffArgs);
+  assertDeepAndStrictEqual(someArgs, sameArgs);
+});
+
+test('Handle sparse arrays', () => {
+  /* eslint-disable no-sparse-arrays */
+  assertDeepAndStrictEqual([1, , , 3], [1, , , 3]);
+  assertNotDeepOrStrict([1, , , 3], [1, , , 3, , , ]);
+  assertNotDeepOrStrict([1, , , 3], [1, undefined, , 3]);
+  /* eslint-enable no-sparse-arrays */
+  const a = new Array(3);
+  const b = new Array(3);
+  a[2] = true;
+  b[1] = true;
+  assertNotDeepOrStrict(a, b, assert.AssertionError, { partial: 'pass' });
+  b[2] = true;
+  assertNotDeepOrStrict(a, b);
+  a[0] = true;
+  assertNotDeepOrStrict(a, b, assert.AssertionError, { partial: 'pass' });
+});
+
+test('Handle sets and maps with mixed keys', () => {
+  // https://github.com/nodejs/node/issues/61386
+  const aSet = new Set([0, new Set([1, 2, 3]), new Set([4, 5, 6])]);
+  const bSet = new Set([
+    0,
+    new Set([1, new Set([2, 3]), new Set([20, 30])]),
+    new Set([4, new Set([5, 6]), new Set([50, 60])]),
+  ]);
+  assertNotDeepOrStrict(aSet, bSet);
+
+  const aMap = new Map([[0, 'zero'], [1, 'one'], [new Set([1, 2, 3]), 'A']]);
+  const bMap = new Map([[0, 'zero'], [new Set([1, 2, 3]), 'A'], [new Set([9]), 'B']]);
+  assertNotDeepOrStrict(aMap, bMap);
+});
