@@ -46,7 +46,7 @@ switch (mode) {
   case "null": process.exitCode = 3; process.exitCode = null; show("readback", typeof process.exitCode); break;
   case "undef": process.exitCode = 3; process.exitCode = undefined; show("readback", typeof process.exitCode); break;
   case "timer": setTimeout(function () { process.exitCode = 6; show("timer", true); }, 5); break;
-  case "promise": Promise.resolve().then(function () { process.exitCode = 8; show("promise", true); }); break;
+  case "promise": void Promise.resolve().then(function () { process.exitCode = 8; show("promise", true); }); break;
   case "skip-catch":
     try { process.exit(9); } catch (e) { show("caught", true); } finally { show("finally", true); }
     break;

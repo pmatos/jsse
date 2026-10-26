@@ -10,12 +10,13 @@ function attempt(label, fn) {
     show(label, ["throws", e.name, e.code === undefined ? null : e.code, e.message]);
   }
 }
+function byCodeUnit(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
 var env = process.env;
 show("FOO", env.FOO);
 show("EMPTY", env.EMPTY);
 show("has EMPTY", "EMPTY" in env);
 show("missing", env.NOPE_NOT_SET);
-show("keys", Object.keys(env).filter(function (k) { return k !== "PATH"; }).sort());
+show("keys", Object.keys(env).filter(function (k) { return k !== "PATH"; }).sort(byCodeUnit));
 attempt("set number", function () { env.N = 5; return [typeof env.N, env.N]; });
 attempt("set undefined", function () { env.U = undefined; return [typeof env.U, env.U]; });
 attempt("set null", function () { env.L = null; return env.L; });
@@ -40,5 +41,5 @@ attempt("integer key", function () { env[1] = 2; return env["1"]; });
 attempt("for-in", function () {
   var out = [];
   for (var k in env) if (k === "SPACED" || k === "Z") out.push(k);
-  return out.sort();
+  return out.sort(byCodeUnit);
 });
