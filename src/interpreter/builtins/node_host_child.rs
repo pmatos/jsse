@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::node_host_child_spawn::{decode_spec, reap, signal_unless_exited, spawn_process};
-use super::node_host_fs_args::{Res, arg, int, last_errno, uint8array_from_vec, view_of};
+use super::node_host_fs_args::{arg, int, last_errno, uint8array_from_vec, view_of};
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::sync::mpsc::{Receiver, Sender, channel};
