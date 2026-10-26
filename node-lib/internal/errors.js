@@ -19,6 +19,7 @@ const {
   ObjectCreate,
   ObjectDefineProperty,
   ObjectSetPrototypeOf,
+  ReflectApply,
   RegExpPrototypeExec,
   StringPrototypeEndsWith,
   StringPrototypeIncludes,
@@ -45,13 +46,13 @@ function E(code, Base, message) {
   function NodeError(...args) {
     const error = new Base();
     ObjectSetPrototypeOf(error, proto);
+    error.code = code;
     ObjectDefineProperty(error, 'message', {
-      value: typeof message === 'function' ? message(...args) : message,
+      value: typeof message === 'function' ? ReflectApply(message, error, args) : message,
       writable: true,
       enumerable: false,
       configurable: true,
     });
-    error.code = code;
     return error;
   }
   NodeError.prototype = proto;
@@ -197,6 +198,7 @@ E('ERR_INVALID_ARG_TYPE', TypeError, (name, expected, actual) => {
 
 E('ERR_EVENT_RECURSION', Error, (name) => `The event "${name}" is already being dispatched`);
 E('ERR_ILLEGAL_CONSTRUCTOR', TypeError, 'Illegal constructor');
+E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
 E('ERR_INVALID_ARG_VALUE', TypeError, (name, value, reason = 'is invalid') => {
   let inspected = inspect(value);
   if (inspected.length > 128) {
@@ -252,6 +254,36 @@ E('ERR_UNHANDLED_ERROR', Error, (err = undefined) => {
   const msg = 'Unhandled error.';
   if (err === undefined) return msg;
   return `${msg} (${err})`;
+E('ERR_INVALID_FILE_URL_HOST', TypeError,
+  (platform) => `File URL host must be "localhost" or empty on ${platform}`);
+E('ERR_INVALID_FILE_URL_PATH', TypeError, function(reason, input) {
+  this.input = input;
+  return `File URL path ${reason}`;
+});
+E('ERR_INVALID_THIS', TypeError, (type) => `Value of "this" must be of type ${type}`);
+E('ERR_INVALID_TUPLE', TypeError, (x, y) => `${x} must be an iterable ${y} tuple`);
+E('ERR_INVALID_URI', URIError, 'URI malformed');
+E('ERR_INVALID_URL', TypeError, function(input, base = null) {
+  this.input = input;
+  if (base != null) {
+    this.base = base;
+  }
+  return 'Invalid URL';
+});
+E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
+  if (typeof expected === 'string')
+    expected = [expected];
+  const res = expected.length === 2 ?
+    `one of scheme ${expected[0]} or ${expected[1]}` :
+    `of scheme ${expected[0]}`;
+  return `The URL must be ${res}`;
+});
+E('ERR_MISSING_ARGS', TypeError, (...args) => {
+  const wrap = (a) => `"${a}"`;
+  args = ArrayPrototypeMap(args, (a) => (ArrayIsArray(a) ?
+    ArrayPrototypeJoin(ArrayPrototypeMap(a, wrap), ' or ') :
+    wrap(a)));
+  return `The ${formatList(args)} argument${args.length > 1 ? 's' : ''} must be specified`;
 });
 E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
 
