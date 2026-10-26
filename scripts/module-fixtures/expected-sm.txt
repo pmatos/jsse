@@ -1,0 +1,84 @@
+SourceMap shape {"ok":["SourceMap",1,["constructor","payload","lineLengths","findEntry","findOrigin"]]}
+new SourceMap(undefined) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"payload\" argument must be of type object. Received undefined"]}
+new SourceMap({}) {"error":["TypeError","[undefined]","Cannot read properties of undefined (reading 'length')"]}
+new SourceMap(5) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"payload\" argument must be of type object. Received type number (5)"]}
+new SourceMap(null) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"payload\" argument must be of type object. Received null"]}
+new SourceMap({"version":3}) {"error":["TypeError","[undefined]","Cannot read properties of undefined (reading 'length')"]}
+empty payload {"ok":{"version":3,"sources":[],"mappings":""}}
+payload {"ok":[{"version":3,"file":"a.js","sources":["a.ts"],"names":["foo","bar"],"mappings":"AAAA,SAASA,GAAG;AACZ,IAAIC","sourceRoot":"/r"},{},true]}
+findEntry(0,0) {"ok":{"generatedLine":0,"generatedColumn":0,"originalSource":"a.ts","originalLine":0,"originalColumn":0,"name":"[undefined]"}}
+findEntry(0,5) {"ok":{"generatedLine":0,"generatedColumn":0,"originalSource":"a.ts","originalLine":0,"originalColumn":0,"name":"[undefined]"}}
+findEntry(0,9) {"ok":{"generatedLine":0,"generatedColumn":9,"originalSource":"a.ts","originalLine":0,"originalColumn":9,"name":"foo"}}
+findEntry(0,100) {"ok":{"generatedLine":0,"generatedColumn":12,"originalSource":"a.ts","originalLine":0,"originalColumn":12,"name":"[undefined]"}}
+findEntry(1,0) {"ok":{"generatedLine":1,"generatedColumn":0,"originalSource":"a.ts","originalLine":1,"originalColumn":0,"name":"[undefined]"}}
+findEntry(1,6) {"ok":{"generatedLine":1,"generatedColumn":4,"originalSource":"a.ts","originalLine":1,"originalColumn":4,"name":"bar"}}
+findEntry(2,0) {"ok":{"generatedLine":1,"generatedColumn":4,"originalSource":"a.ts","originalLine":1,"originalColumn":4,"name":"bar"}}
+findEntry(-1,0) {"ok":{}}
+findEntry(0,-1) {"ok":{}}
+findEntry(undefined,undefined) {"ok":{"generatedLine":1,"generatedColumn":4,"originalSource":"a.ts","originalLine":1,"originalColumn":4,"name":"bar"}}
+findEntry(a,b) {"ok":{"generatedLine":1,"generatedColumn":4,"originalSource":"a.ts","originalLine":1,"originalColumn":4,"name":"bar"}}
+findOrigin(1,1) {"ok":{"name":"[undefined]","fileName":"a.ts","lineNumber":1,"columnNumber":1}}
+findOrigin(1,10) {"ok":{"name":"foo","fileName":"a.ts","lineNumber":1,"columnNumber":10}}
+findOrigin(2,1) {"ok":{"name":"[undefined]","fileName":"a.ts","lineNumber":2,"columnNumber":1}}
+findOrigin(2,6) {"ok":{"name":"bar","fileName":"a.ts","lineNumber":2,"columnNumber":6}}
+findOrigin(3,1) {"ok":{"name":"bar","fileName":"a.ts","lineNumber":3,"columnNumber":1}}
+findOrigin(0,0) {"ok":{}}
+findOrigin(a,b) {"ok":{"name":"bar","fileName":"a.ts","lineNumber":null,"columnNumber":null}}
+lineLengths {"ok":["[undefined]",[3,4],"[undefined]","[undefined]"]}
+sections {"ok":[{"generatedLine":2,"generatedColumn":4,"originalSource":"r.ts","originalLine":0,"originalColumn":0,"name":"n"},{"generatedLine":0,"generatedColumn":0,"originalSource":"q.ts","originalLine":0,"originalColumn":0,"name":"[undefined]"},{"name":"n","fileName":"r.ts","lineNumber":1,"columnNumber":1},{"version":3,"sections":[{"offset":{"line":0,"column":0},"map":{"version":3,"sources":["q.ts"],"names":[],"mappings":"AAAA"}},{"offset":{"line":2,"column":4},"map":{"version":3,"sources":["r.ts"],"names":["n"],"mappings":"AAAAA"}}]}]}
+multi source {"ok":[{"generatedLine":0,"generatedColumn":1,"originalSource":"b.ts","originalLine":1,"originalColumn":1,"name":"[undefined]"},{"generatedLine":1,"generatedColumn":0,"originalSource":"[undefined]","originalLine":1,"originalColumn":1,"name":"[undefined]"},{"generatedLine":1,"generatedColumn":3,"originalSource":"[undefined]","originalLine":3,"originalColumn":4,"name":"n0"},{"generatedLine":1,"generatedColumn":3,"originalSource":"[undefined]","originalLine":3,"originalColumn":4,"name":"n0"}]}
+segment of one field {"ok":[{"generatedLine":0,"generatedColumn":0,"originalSource":"[undefined]","originalLine":"[undefined]","originalColumn":"[undefined]","name":"[undefined]"},{},{"name":"n0","fileName":"a.ts","lineNumber":1,"columnNumber":2}]}
+invalid vlq {"ok":{"name":"n0","fileName":"a.ts","lineNumber":1,"columnNumber":1}}
+skipped lines {"ok":[{"generatedLine":3,"generatedColumn":0,"originalSource":"a.ts","originalLine":1,"originalColumn":0,"name":"n0"},{"name":"n0","fileName":"a.ts","lineNumber":2,"columnNumber":1},{"name":"[undefined]","fileName":"a.ts","lineNumber":2,"columnNumber":1}]}
+absolute source and root {"ok":{"name":"[undefined]","fileName":"http://x/a.ts","lineNumber":1,"columnNumber":1}}
+negative deltas {"ok":[{"generatedLine":0,"generatedColumn":5,"originalSource":"a.ts","originalLine":0,"originalColumn":5,"name":"[undefined]"},{"generatedLine":1,"generatedColumn":1,"originalSource":"a.ts","originalLine":0,"originalColumn":9,"name":"n0"}]}
+big vlq {"ok":[{"generatedLine":0,"generatedColumn":16,"originalSource":"a.ts","originalLine":0,"originalColumn":16,"name":"n0"},{}]}
+support initial {"ok":[{"enabled":false,"nodeModules":false,"generatedCode":false},false,null]}
+process descriptors {"ok":[[true,true,true,"[undefined]","function","get",0],[true,true,false,true,"function","setSourceMapsEnabled",1]]}
+setSourceMapsSupport(true) {"ok":{"enabled":true,"nodeModules":false,"generatedCode":false}}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsSupport(false) {"ok":{"enabled":false,"nodeModules":false,"generatedCode":false}}
+  process.sourceMapsEnabled {"ok":false}
+setSourceMapsSupport(1) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"enabled\" argument must be of type boolean. Received type number (1)"]}
+  process.sourceMapsEnabled {"ok":false}
+setSourceMapsSupport() {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"enabled\" argument must be of type boolean. Received undefined"]}
+  process.sourceMapsEnabled {"ok":false}
+setSourceMapsSupport(true,{"nodeModules":true}) {"ok":{"enabled":true,"nodeModules":true,"generatedCode":false}}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsSupport(true,{"nodeModules":1}) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"options.nodeModules\" property must be of type boolean. Received type number (1)"]}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsSupport(true,5) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"options\" argument must be of type object. Received type number (5)"]}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsSupport(true,{"generatedCode":true}) {"ok":{"enabled":true,"nodeModules":false,"generatedCode":true}}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsSupport(false,{"nodeModules":true}) {"ok":{"enabled":false,"nodeModules":true,"generatedCode":false}}
+  process.sourceMapsEnabled {"ok":false}
+setSourceMapsSupport(true,null) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"options\" argument must be of type object. Received null"]}
+  process.sourceMapsEnabled {"ok":false}
+setSourceMapsSupport(true,) {"ok":{"enabled":true,"nodeModules":false,"generatedCode":false}}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsSupport(true,{}) {"ok":{"enabled":true,"nodeModules":false,"generatedCode":false}}
+  process.sourceMapsEnabled {"ok":true}
+setSourceMapsEnabled(true) {"ok":["[undefined]",{"enabled":true,"nodeModules":true,"generatedCode":true}]}
+setSourceMapsEnabled(1) {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"enabled\" argument must be of type boolean. Received type number (1)"]}
+setSourceMapsEnabled() {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"enabled\" argument must be of type boolean. Received undefined"]}
+setSourceMapsEnabled(false) {"ok":["[undefined]",false,{"enabled":false,"nodeModules":false,"generatedCode":false}]}
+disabled {"ok":"[undefined]"}
+loaded before enabling {"ok":"[undefined]"}
+findSourceMap gen {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/gen.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[17,21,31,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/gen.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/gen.ts","lineNumber":2,"columnNumber":1}}}
+findSourceMap inline {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/gen.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[19,178,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/gen.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/gen.ts","lineNumber":2,"columnNumber":1}}}
+findSourceMap inlineraw {"ok":"[undefined]"}
+findSourceMap missing {"ok":"[undefined]"}
+findSourceMap badmap {"ok":"[undefined]"}
+findSourceMap old {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/gen.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[19,31,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/gen.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/gen.ts","lineNumber":2,"columnNumber":1}}}
+findSourceMap none {"ok":"[undefined]"}
+findSourceMap two {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/other.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[19,31,30,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/other.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/other.ts","lineNumber":2,"columnNumber":1}}}
+findSourceMap block {"ok":"[undefined]"}
+file url {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/gen.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[17,21,31,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/gen.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/gen.ts","lineNumber":2,"columnNumber":1}}}
+same object {"ok":true}
+not loaded {"ok":"[undefined]"}
+non-string {"ok":["[undefined]","[undefined]","[undefined]"]}
+node_modules (nodeModules on) {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/node_modules/dep/gen.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[20,31,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/node_modules/dep/gen.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/node_modules/dep/gen.ts","lineNumber":2,"columnNumber":1}}}
+answers after disabling {"ok":{"cls":"SourceMap","payload":{"version":3,"file":"gen.js","sources":["file://<root>/gen.ts"],"names":["foo"],"mappings":"AAAA,SAASA;AACT","sourceRoot":""},"lineLengths":[17,21,31,0],"e":{"generatedLine":0,"generatedColumn":9,"originalSource":"file://<root>/gen.ts","originalLine":0,"originalColumn":9,"name":"foo"},"o":{"name":"foo","fileName":"file://<root>/gen.ts","lineNumber":2,"columnNumber":1}}}
+loaded while disabled {"ok":"[undefined]"}
+node_modules (nodeModules off) {"ok":"[undefined]"}

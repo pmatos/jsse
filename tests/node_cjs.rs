@@ -364,7 +364,7 @@ fn create_require_accepts_paths_and_file_urls() {
         r#"
         const create = module.constructor.createRequire;
         const viaPath = create({d:?} + "/x.js"), viaUrl = create("file://" + {d:?} + "/x.js");
-        const viaObject = create({{ href: "file://" + {d:?} + "/dir/" }});
+        const viaObject = create(new URL("file://" + {d:?} + "/dir/"));
         print(viaPath("./dep"), viaUrl("./dep"), viaObject("../dep"), viaPath.resolve("./dep") === {d:?} + "/dep.js");
         try {{ create("relative.js"); }} catch (e) {{ print(e.code); }}
         "#
