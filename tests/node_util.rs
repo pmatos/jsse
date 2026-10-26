@@ -1,6 +1,5 @@
-//! The embedded `util` module under `--node` (#1224), reached through the
-//! hidden `__node_builtin` accessor until the CommonJS loader (#1219) adds
-//! `require`, and the `console` built on it. The Node-oracle diff is
+//! The embedded `util` module under `--node` (#1224), reached through
+//! `require` (#1219), and the `console` built on it. The Node-oracle diff is
 //! `scripts/run-node-util-oracle.sh`; this pins the digest of that corpus and
 //! checks the opt-in gate, the introspection floor and the console output.
 
@@ -175,7 +174,7 @@ fn console_formats_primitives_and_format_strings() {
 #[test]
 fn inspect_reads_internal_slots_without_running_user_code() {
     let source = r#"
-      const util = __node_builtin("util");
+      const util = require("util");
       const trap = new Proxy({ a: 1 }, new Proxy({}, { get() { throw new Error("trap ran"); } }));
       const revoked = Proxy.revocable({}, {});
       revoked.revoke();
@@ -207,7 +206,7 @@ fn inspect_reads_internal_slots_without_running_user_code() {
 #[test]
 fn events_max_listeners_warning_names_the_emitter_class() {
     let source = r#"
-      const EventEmitter = __node_builtin("events");
+      const EventEmitter = require("events");
       class FakeInput extends EventEmitter {}
       const e = new FakeInput();
       e.setMaxListeners(1);
@@ -225,7 +224,7 @@ fn events_max_listeners_warning_names_the_emitter_class() {
 #[test]
 fn util_module_surface_matches_node() {
     let source = r#"
-      const util = __node_builtin("util");
+      const util = require("util");
       print(Object.keys(util).sort().join());
       print(util.inspect.custom === Symbol.for("nodejs.util.inspect.custom"), util.types.isTypedArray(Buffer.alloc(1)));
       print(util.format("%s %d %i %f %j %o %O %%", "s", 1.5, 2.5, "3.5", { j: 1 }, [1], { O: 1 }));
@@ -249,7 +248,7 @@ fn util_module_surface_matches_node() {
 #[test]
 fn debuglog_and_colors_honour_the_environment() {
     let source = r#"
-      const util = __node_builtin("util");
+      const util = require("util");
       const d = util.debuglog("foo");
       d("a", "b", "c");
       d("%s-%d", "x", 5);
@@ -280,7 +279,7 @@ fn debuglog_and_colors_honour_the_environment() {
     );
     assert_eq!(
         eval(
-            r#"print(JSON.stringify(__node_builtin("util").styleText("red", "x")))"#,
+            r#"print(JSON.stringify(require("util").styleText("red", "x")))"#,
             &[],
             None
         ),
@@ -296,7 +295,7 @@ fn module_namespace_objects_and_shadow_realms() {
     let main = dir.0.join("main.js");
     let source = format!(
         r#"
-      const util = __node_builtin("util");
+      const util = require("util");
       const hits = (v) => Object.keys(util.types).filter((k) => typeof util.types[k] === "function" && util.types[k](v)).join();
       import({:?}).then((ns) => {{
         print(hits(ns), util.inspect(ns));

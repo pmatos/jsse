@@ -1,24 +1,21 @@
 // `console` for `--node`: the shim's console method set formatted by the
 // embedded util module (Node's util.inspect/format, node-lib/util.js) instead
-// of the shim's best-effort inspect. The module is loaded on the first call
-// that needs it; calls whose arguments are all plain strings or primitives are
-// formatted here. The shim's global `util` is left as it is until the
-// CommonJS loader (#1219) lands.
+// of the shim's best-effort inspect. The builtin loader evaluates this once at
+// startup; the util module is loaded on the first call that needs it, and
+// calls whose arguments are all plain strings or primitives are formatted
+// here. The shim's global `util` is left as it is.
 
-(function () {
-  "use strict";
+'use strict';
 
-  if (typeof __node_builtin !== "function") return;
-
-  var loadBuiltin = __node_builtin;
-  var hrtime = globalThis.process.hrtime;
+{
+  var hrtime = process.hrtime;
   var util;
   var groupIndent = "";
   var counts = Object.create(null);
   var timers = Object.create(null);
 
   function getUtil() {
-    return util || (util = loadBuiltin("util"));
+    return util || (util = require("util"));
   }
 
   function simple(value) {
@@ -176,4 +173,4 @@
   for (var method in c) {
     console[method] = c[method];
   }
-})();
+}

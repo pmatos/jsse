@@ -7,9 +7,9 @@
 #
 # 1. Every test in scripts/events-fixtures/manifest.txt (Node's own
 #    test/parallel files, verbatim) is wrapped by scripts/events-fixtures/harness.js
-#    and must print "events-fixture: ok" and exit 0 on jsse (`--node`, via __node_builtin("events"))
-#    and on Node. Tests marked needs-process-events are skipped on
-#    jsse until process.on/emit work (#1229).
+#    and must print "events-fixture: ok" and exit 0 on jsse (`--node`, via require("events"))
+#    and on Node. Tests marked needs-process-events / needs-inspect are skipped on
+#    jsse until process.on/emit work (#1229) / util.inspect names classes (#1224).
 # 2. scripts/events-fixtures/corpus-emitter.js followed by corpus-web.js (events,
 #    EventTarget, AbortSignal.any/timeout, errors) must print byte-identical
 #    stdout on both, and its digest must equal scripts/events-fixtures/corpus.digest.
@@ -49,9 +49,12 @@ if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
 fi
 
 HAVE_PROCESS_EVENTS=0
+HAVE_INSPECT=0
 if [ "$NODE_ONLY" -eq 0 ]; then
     probe="$("$JSSE" --node -e 'process.on("x", function () {}); print(process.emit("x"))' 2>/dev/null || true)"
     [ "$probe" = "true" ] && HAVE_PROCESS_EVENTS=1
+    probe="$("$JSSE" --node -e 'print(require("util").inspect(new (class Foo {})(), { depth: -1 }))' 2>/dev/null || true)"
+    [ "$probe" = "[Foo]" ] && HAVE_INSPECT=1
 fi
 
 FAIL=0
@@ -65,7 +68,8 @@ while read -r name flags; do
     } > "$WORK/$name.js"
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
-        if [[ " $flags " == *" needs-process-events "* ]] && [ "$HAVE_PROCESS_EVENTS" -eq 0 ]; then
+        if { [[ " $flags " == *" needs-process-events "* ]] && [ "$HAVE_PROCESS_EVENTS" -eq 0 ]; } ||
+            { [[ " $flags " == *" needs-inspect "* ]] && [ "$HAVE_INSPECT" -eq 0 ]; }; then
             status="skip"
         else
             rc=0

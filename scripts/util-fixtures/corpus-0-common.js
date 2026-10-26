@@ -3,10 +3,7 @@
 // and on `jsse --node`: stdout must be byte-identical and its last line is
 // pinned in corpus.digest. Error stacks, timings and the process environment
 // are never printed: errors get a fixed .stack, or are shown by code/message.
-var load = function (id) {
-  return typeof __node_builtin === "function" ? __node_builtin(id) : require(id);
-};
-var util = load("util");
+var util = require("util");
 var inspect = util.inspect;
 var types = util.types;
 process.noDeprecation = true;

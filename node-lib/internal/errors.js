@@ -19,11 +19,13 @@ const {
   ObjectCreate,
   ObjectDefineProperty,
   ObjectSetPrototypeOf,
+  ReflectApply,
   RegExpPrototypeExec,
   StringPrototypeEndsWith,
   StringPrototypeIncludes,
   StringPrototypeIndexOf,
   StringPrototypeSlice,
+  StringPrototypeStartsWith,
   StringPrototypeToLowerCase,
 } = primordials;
 
@@ -49,19 +51,52 @@ function E(code, Base, message) {
   function NodeError(...args) {
     const error = new Base();
     ObjectSetPrototypeOf(error, proto);
+    error.code = code;
     ObjectDefineProperty(error, 'message', {
-      value: typeof message === 'function' ? message.call(error, ...args) : message,
+      value: typeof message === 'function' ? ReflectApply(message, error, args) : message,
       writable: true,
       enumerable: false,
       configurable: true,
     });
-    error.code = code;
     return error;
   }
   NodeError.prototype = proto;
   NodeError.HideStackFramesError = NodeError;
   codes[code] = NodeError;
 }
+
+class SystemError extends Error {
+  constructor(context) {
+    super();
+    let message = `A system error occurred: ${context.syscall} returned ` +
+      `${context.code} (${context.message})`;
+    if (context.path !== undefined) message += ` ${context.path}`;
+    if (context.dest !== undefined) message += ` => ${context.dest}`;
+    this.code = 'ERR_SYSTEM_ERROR';
+    primordials.ObjectDefineProperties(this, {
+      name: { value: 'SystemError', enumerable: false, writable: true, configurable: true },
+      message: { value: message, enumerable: false, writable: true, configurable: true },
+      info: { value: context, enumerable: true, configurable: true, writable: false },
+      errno: {
+        get() { return context.errno; },
+        set(value) { context.errno = value; },
+        enumerable: true,
+        configurable: true,
+      },
+      syscall: {
+        get() { return context.syscall; },
+        set(value) { context.syscall = value; },
+        enumerable: true,
+        configurable: true,
+      },
+    });
+  }
+
+  toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
+  }
+}
+codes.ERR_SYSTEM_ERROR = SystemError;
 
 function determineSpecificType(value) {
   if (value === null) {
@@ -283,6 +318,66 @@ E('ERR_PARSE_ARGS_UNKNOWN_OPTION', TypeError, (option, allowPositionals) => {
   return `Unknown option '${option}'${suggestDashDash}`;
 });
 E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
+
+E('ERR_INVALID_MODULE_SPECIFIER', TypeError, (request, reason, base = undefined) => {
+  return `Invalid module "${request}" ${reason}${base ? ` imported from ${base}` : ''}`;
+});
+
+E('ERR_INVALID_PACKAGE_CONFIG', Error, (path, base, message) => {
+  return `Invalid package config ${path}${base ? ` while importing ${base}` : ''}${message ? `. ${message}` : ''}`;
+});
+
+E('ERR_INVALID_PACKAGE_TARGET', Error, (pkgPath, key, target, isImport = false, base = undefined) => {
+  const relatedError = typeof target === 'string' && !isImport &&
+    target.length && !StringPrototypeStartsWith(target, './');
+  target = JSONStringify(target);
+  if (key === '.') {
+    return `Invalid "exports" main target ${target} defined ` +
+      `in the package config ${pkgPath}package.json${base ? ` imported from ${base}` : ''}` +
+      `${relatedError ? '; targets must start with "./"' : ''}`;
+  }
+  return `Invalid "${isImport ? 'imports' : 'exports'}" target ${target} defined for '${key}' in the package config ${pkgPath}package.json${base ? ` imported from ${base}` : ''}${relatedError ? '; targets must start with "./"' : ''}`;
+});
+
+E('ERR_PACKAGE_IMPORT_NOT_DEFINED', TypeError, (specifier, packagePath, base) => {
+  return `Package import specifier "${specifier}" is not defined${packagePath ? ` in package ${packagePath}package.json` : ''} imported from ${base}`;
+});
+
+E('ERR_PACKAGE_PATH_NOT_EXPORTED', Error, (pkgPath, subpath, base = undefined) => {
+  if (subpath === '.') {
+    return `No "exports" main defined in ${pkgPath}package.json${base ? ` imported from ${base}` : ''}`;
+  }
+  return `Package subpath '${subpath}' is not defined by "exports" in ${pkgPath}package.json${base ? ` imported from ${base}` : ''}`;
+});
+
+E('ERR_REQUIRE_ESM', Error, (filename) => {
+  return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
+});
+
+E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
+E('ERR_INVALID_FILE_URL_HOST', TypeError,
+  (platform) => `File URL host must be "localhost" or empty on ${platform}`);
+E('ERR_INVALID_FILE_URL_PATH', TypeError, function(reason, input) {
+  this.input = input;
+  return `File URL path ${reason}`;
+});
+E('ERR_INVALID_TUPLE', TypeError, (x, y) => `${x} must be an iterable ${y} tuple`);
+E('ERR_INVALID_URI', URIError, 'URI malformed');
+E('ERR_INVALID_URL', TypeError, function(input, base = null) {
+  this.input = input;
+  if (base != null) {
+    this.base = base;
+  }
+  return 'Invalid URL';
+});
+E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
+  if (typeof expected === 'string')
+    expected = [expected];
+  const res = expected.length === 2 ?
+    `one of scheme ${expected[0]} or ${expected[1]}` :
+    `of scheme ${expected[0]}`;
+  return `The URL must be ${res}`;
+});
 
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {

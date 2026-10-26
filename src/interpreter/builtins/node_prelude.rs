@@ -63,10 +63,6 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         "node-builtin-loader.js",
         include_str!("../../../scripts/node-builtin-loader.js"),
     ),
-    (
-        "node-console.js",
-        include_str!("../../../scripts/node-console.js"),
-    ),
     ("hide-globals", HIDE_GLOBALS),
 ];
 
@@ -154,9 +150,10 @@ mod tests {
             const got = [
               typeof process, typeof Buffer, typeof TextEncoder, typeof TextDecoder,
               typeof crypto.getRandomValues, typeof __host_argv, typeof __host_cwd, typeof __host_write,
-              typeof __host_builtin_source, typeof __node_builtin,
+              typeof __host_builtin_source, typeof __node_builtin, typeof __node_builtins,
+              typeof __host_main_kind, typeof __node_run_main, typeof require, typeof require("fs").readFileSync,
             ].join(",");
-            const want = "object,function,function,function,function,undefined,undefined,function,undefined,function";
+            const want = "object,function,function,function,function,undefined,undefined,function,undefined,undefined,undefined,undefined,undefined,function,function";
             if (got !== want) throw new Error(got);
             "#,
         );

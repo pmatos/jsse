@@ -2,7 +2,7 @@
 // line per call plus a final "digest" line; the output must be byte-identical
 // on Node and on jsse --node (scripts/run-node-path-oracle.sh), and the digest
 // is pinned in corpus.digest (tests/node_path.rs).
-var path = typeof __node_builtin === "function" ? __node_builtin("path") : require("path");
+var path = require("path");
 process.chdir("/");
 
 var seed = 0x9e3779b9;

@@ -4,7 +4,7 @@
 // appends `console.log("ok")`. Only the pieces of `assert` and
 // `test/common` that the path tests use are provided.
 function __nodePathLoad(id) {
-  return typeof __node_builtin === "function" ? __node_builtin(id) : require(id);
+  return require(id);
 }
 var __nodePathInspect = typeof util === "object" && util !== null
   ? util.inspect

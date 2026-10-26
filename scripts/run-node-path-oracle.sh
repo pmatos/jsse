@@ -6,7 +6,7 @@
 #
 # 1. Every scripts/path-fixtures/test-path-*.js (Node's own test/parallel path tests,
 #    verbatim) is wrapped by scripts/path-fixtures/harness.js and must exit 0 on jsse
-#    (`--node`, via __node_builtin("path")) and on Node.
+#    (`--node`, via require("path")) and on Node.
 # 2. scripts/path-fixtures/corpus.js (a deterministic ~41k-call corpus over posix and
 #    win32, errors and matchesGlob included) must print byte-identical stdout
 #    and stderr on both, and its digest must equal scripts/path-fixtures/corpus.digest.
