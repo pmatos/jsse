@@ -251,10 +251,14 @@ E('ERR_INVALID_ARG_VALUE', TypeError, (name, value, reason = 'is invalid') => {
 });
 E('ERR_INVALID_RETURN_VALUE', TypeError, (input, name, value) =>
   `Expected ${input} to be returned from the "${name}" function but got ${determineSpecificType(value)}.`);
+E('ERR_AMBIGUOUS_ARGUMENT', TypeError, (name, message) => `The "${name}" argument is ambiguous. ${message}`);
+E('ERR_CONSTRUCT_CALL_REQUIRED', TypeError, (name) => `Class constructor ${name} cannot be invoked without \`new\``);
 E('ERR_INVALID_STATE', Error, (message) => format('Invalid state: %s', message));
 E('ERR_METHOD_NOT_IMPLEMENTED', Error, (method) => format('The %s method is not implemented', method));
 E('ERR_MULTIPLE_CALLBACK', Error, 'Callback called multiple times');
 E('ERR_OPERATION_FAILED', Error, (message) => format('Operation failed: %s', message));
+E('ERR_PERFORMANCE_INVALID_TIMESTAMP', TypeError, (timestamp) => format('%d is not a valid timestamp', timestamp));
+E('ERR_PERFORMANCE_MEASURE_INVALID_OPTIONS', TypeError, (message) => message);
 E('ERR_STREAM_ALREADY_FINISHED', Error,
   (method) => format('Cannot call %s after a stream was finished', method));
 E('ERR_STREAM_CANNOT_PIPE', Error, 'Cannot pipe, not readable');
@@ -478,5 +482,11 @@ function isStackOverflowError(err) {
   return err.name === maxStackErrorName && err.message === maxStackErrorMessage;
 }
 
-module.exports = { AbortError, codes, genericNodeError, isStackOverflowError };
+function isErrorStackTraceLimitWritable() {
+  const desc = primordials.ObjectGetOwnPropertyDescriptor(Error, 'stackTraceLimit');
+  if (desc === undefined) return primordials.ObjectIsExtensible(Error);
+  return desc.writable !== undefined ? desc.writable : desc.set !== undefined;
+}
+
+module.exports = { AbortError, codes, genericNodeError, isErrorStackTraceLimitWritable, isStackOverflowError };
 module.exports.aggregateTwoErrors = aggregateTwoErrors;
