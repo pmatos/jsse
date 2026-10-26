@@ -37,6 +37,7 @@ mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
+mod node_host_process_metrics;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
 mod node_host_util;

@@ -274,6 +274,7 @@ impl Interpreter {
         self.setup_node_host_idna();
         self.setup_node_host_os();
         self.setup_node_host_util();
+        self.setup_node_host_process_metrics();
     }
 }
 
