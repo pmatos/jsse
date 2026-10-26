@@ -68,7 +68,7 @@
   var DIRENT_DIR = 2;
   var DIRENT_LINK = 3;
 
-  function getDirent(path, name, type, encoding) {
+  function getDirent(path, name, type) {
     if (type === DIRENT_UNKNOWN) {
       var st = meta.lstatSync(join(path, String(name)));
       return stats.direntFromStats(name, st, path);
@@ -94,9 +94,9 @@
     var prefixes = [""];
     for (var i = 0; i < dirs.length; i++) {
       var dir = dirs[i];
-      var names_types = listing(dir, options);
-      var names = names_types[0];
-      var types = names_types[1];
+      var listed = listing(dir, options);
+      var names = listed[0];
+      var types = listed[1];
       for (var j = 0; j < names.length; j++) {
         var name = names[j];
         var relative = prefixes[i] === "" ? name : prefixes[i] + "/" + name;
