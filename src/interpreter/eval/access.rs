@@ -105,7 +105,7 @@ impl Interpreter {
         }
     }
 
-    /// Evaluate optional chain tail with a known `this` from the base member access.
+    /// Evaluate an optional chain tail with a known `this` from the base.
     /// This is used when the optional chain base is `obj.method?.()` so that
     /// the call uses `obj` as `this`.
     pub(super) fn eval_optional_chain_tail_with_base_this(
@@ -146,13 +146,14 @@ impl Interpreter {
                     Ok((val, base_val.clone()))
                 }
             }
-            Expression::Call(callee, args, _) => {
+            Expression::Call(callee, args, site) => {
                 let (func_val, this_val) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, callee, env)?;
                 self.with_gc_root_scope(|i| {
                     i.gc_root_value(&func_val);
                     i.gc_root_value(&this_val);
                     let evaluated_args = i.eval_spread_args(args, env).into_abrupt()?;
+                    i.node_host.call_pos = site.1;
                     i.call_function(&func_val, &this_val, &evaluated_args)
                         .into_abrupt()
                         .map(|v| (v, JsValue::UNDEFINED))
@@ -161,7 +162,7 @@ impl Interpreter {
             Expression::Member(inner, mp, _) => {
                 let (inner_val, _) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, inner, env)?;
-                // Non-optional member access within optional chain: null/undefined throws
+                // Non-optional access in the chain throws on nullish
                 if inner_val.is_nullish() {
                     let key_str = match mp {
                         MemberProperty::Dot(name) => name.clone(),
@@ -250,7 +251,7 @@ impl Interpreter {
                 self.eval_delete_on_object(base_val, name, env)
             }
             Expression::Member(inner, mp, _) => {
-                // Evaluate inner to get the object, then delete the last property
+                // Evaluate inner to get the object, then delete the property
                 let (inner_val, _) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
                     &JsValue::UNDEFINED,
@@ -292,7 +293,7 @@ impl Interpreter {
                 self.eval_delete_on_object(&inner_val, &key, env)
             }
             Expression::Call(callee, args, _) => {
-                // delete obj?.method() — evaluate the call for side effects, return true
+                // delete obj?.method(): call for effects, return true
                 let (func_val, this_val) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
                     &JsValue::UNDEFINED,

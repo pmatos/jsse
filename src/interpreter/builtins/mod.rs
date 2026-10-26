@@ -5,6 +5,7 @@ pub(crate) mod bigint;
 mod collections;
 mod date;
 mod disposable;
+mod dynamic_source;
 mod errors;
 mod find_via_predicate;
 mod function;
@@ -29,12 +30,16 @@ mod node_host_fs_args;
 mod node_host_fs_error;
 #[cfg(unix)]
 mod node_host_fs_meta;
+#[cfg(unix)]
+mod node_host_fs_ops;
 mod node_host_idna;
 mod node_host_loop;
 mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
+pub(crate) mod node_host_stack;
+mod node_host_stack_sources;
 mod node_host_util;
 mod node_prelude;
 mod number;

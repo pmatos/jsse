@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-check the synchronous `fs` of `jsse --node` (issue #1217) against Node
+# Cross-check the synchronous `fs` of `jsse --node` (issues #1217, #1218) against Node
 # on a fixture directory tree.
 #
 # Usage:
@@ -138,6 +138,13 @@ if [ "$NODE_ONLY" -eq 0 ]; then
         FAIL=1
     else
         echo "ok   gate (--node): fs floor is private"
+    fi
+    got="$("$JSSE" --node -e 'var f = require("fs"); print(typeof f.cpSync, require("node:fs") === f, typeof f.rmSync)' 2>&1 || true)"
+    if [ "$got" != "function true function" ]; then
+        echo "FAIL gate (--node): fs is not served by require: $got"
+        FAIL=1
+    else
+        echo "ok   gate (--node): require('fs') and node:fs serve the same module"
     fi
 fi
 

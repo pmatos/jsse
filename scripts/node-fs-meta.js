@@ -1,8 +1,7 @@
-// Node host-compat `fs` metadata half (issue #1217): Stats, stat/lstat/fstat,
-// readdir, mkdir/rmdir/unlink/rename, access and realpath on the
-// `__host_fs_*` floor. Runs between node-fs-support.js and node-fs-shim.js and
-// parks the functions on `__node_fs_support.meta`. Stats/Dirent classes,
-// mkdir `recursive`, `withFileTypes` and the rest of the sync surface are #1218.
+// Node host-compat `fs` metadata half (issues #1217, #1218): stat/lstat/fstat,
+// rmdir/unlink/rename, access and realpath on the `__host_fs_*` floor. Runs
+// after node-fs-stats.js and parks the functions on
+// `__node_fs_support.meta`; readdir and mkdir live in node-fs-dirs.js.
 
 (function () {
   "use strict";
@@ -14,92 +13,21 @@
   var hostConstants = S.hostConstants;
   var S_IFMT = S.S_IFMT;
   var nodeError = S.nodeError;
-  var notImplemented = S.notImplemented;
+  var getStats = S.stats.getStats;
   var getValidatedPath = S.getValidatedPath;
   var getValidatedFd = S.getValidatedFd;
   var getOptions = S.getOptions;
-  var parseFileMode = S.parseFileMode;
 
-
-  var kAtime = Symbol("atime");
-  var kMtime = Symbol("mtime");
-  var kCtime = Symbol("ctime");
-  var kBirthtime = Symbol("birthtime");
-
-  function dateFromMs(ms) {
-    return new Date(Math.round(ms));
-  }
-
-  function Stats(v) {
-    this.dev = v[0];
-    this.mode = v[1];
-    this.nlink = v[2];
-    this.uid = v[3];
-    this.gid = v[4];
-    this.rdev = v[5];
-    this.blksize = v[6];
-    this.ino = v[7];
-    this.size = v[8];
-    this.blocks = v[9];
-    this.atimeMs = v[10] * 1e3 + v[11] / 1e6;
-    this.mtimeMs = v[12] * 1e3 + v[13] / 1e6;
-    this.ctimeMs = v[14] * 1e3 + v[15] / 1e6;
-    this.birthtimeMs = v[16] * 1e3 + v[17] / 1e6;
-  }
-
-  function lazyDate(name, key, msName) {
-    Object.defineProperty(Stats.prototype, name, {
-      enumerable: true,
-      configurable: true,
-      get: function () {
-        if (!Object.prototype.hasOwnProperty.call(this, key)) {
-          Object.defineProperty(this, key, {
-            value: dateFromMs(this[msName]),
-            writable: true,
-          });
-        }
-        return this[key];
-      },
-      set: function (value) {
-        Object.defineProperty(this, name, {
-          value: value,
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-      },
-    });
-  }
-  lazyDate("atime", kAtime, "atimeMs");
-  lazyDate("mtime", kMtime, "mtimeMs");
-  lazyDate("ctime", kCtime, "ctimeMs");
-  lazyDate("birthtime", kBirthtime, "birthtimeMs");
-
-  [
-    ["isDirectory", "S_IFDIR"],
-    ["isFile", "S_IFREG"],
-    ["isBlockDevice", "S_IFBLK"],
-    ["isCharacterDevice", "S_IFCHR"],
-    ["isSymbolicLink", "S_IFLNK"],
-    ["isFIFO", "S_IFIFO"],
-    ["isSocket", "S_IFSOCK"],
-  ].forEach(function (entry) {
-    var type = hostConstants[entry[1]];
-    Object.defineProperty(Stats.prototype, entry[0], {
-      value: function () {
-        return (this.mode & S_IFMT) === type;
-      },
-      writable: true,
-      configurable: true,
-    });
-  });
 
   function statWith(kind, target, options) {
-    if (options && options.bigint) throw notImplemented("bigint stat");
+    var big = Boolean(options && options.bigint);
     try {
-      return new Stats(host.stat(target, kind));
+      return getStats(host.stat(target, kind, big));
     } catch (e) {
-      if (options && options.throwIfNoEntry === false && e.code === "ENOENT") {
+      if (
+        options && options.throwIfNoEntry === false && kind !== 2 &&
+        (e.code === "ENOENT" || (kind === 0 && e.code === "ENOTDIR"))
+      ) {
         return undefined;
       }
       throw e;
@@ -130,30 +58,6 @@
     }
     var buffer = Buffer.from(value.buffer, value.byteOffset, value.length);
     return encoding === "buffer" ? buffer : buffer.toString(encoding);
-  }
-
-  function readdirSync(path, options) {
-    options = getOptions(options, {});
-    if (options.withFileTypes || options.recursive) {
-      throw notImplemented("readdirSync withFileTypes/recursive");
-    }
-    var raw = !plainEncoding(options.encoding);
-    var names = host.readdir(getValidatedPath(path), raw);
-    return raw
-      ? names.map(function (n) { return encodeName(n, options.encoding); })
-      : names;
-  }
-
-  function mkdirSync(path, options) {
-    var mode = 0o777;
-    if (options !== undefined && options !== null && typeof options === "object") {
-      if (options.recursive) throw notImplemented("mkdirSync recursive");
-      mode = options.mode;
-    } else {
-      mode = options;
-    }
-    path = getValidatedPath(path);
-    host.mkdir(path, parseFileMode(mode, "mode", 0o777));
   }
 
   function rmdirSync(path) {
@@ -256,12 +160,12 @@
   };
 
   S.meta = {
-    Stats: Stats,
+    Stats: S.stats.Stats,
+    encodeName: encodeName,
+    plainEncoding: plainEncoding,
     statSync: statSync,
     lstatSync: lstatSync,
     fstatSync: fstatSync,
-    readdirSync: readdirSync,
-    mkdirSync: mkdirSync,
     rmdirSync: rmdirSync,
     unlinkSync: unlinkSync,
     renameSync: renameSync,

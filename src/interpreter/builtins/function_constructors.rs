@@ -1,4 +1,5 @@
 use super::super::*;
+use super::dynamic_source;
 
 // ToString of each CreateDynamicFunction argument, joined as the spec's P and
 // bodyString. Lone surrogates travel through the UTF-8 parser as private-use
@@ -166,9 +167,7 @@ impl Interpreter {
                             is_generator: false,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(
-                                SourceText::from(fn_source_text).with_pua_encoded(pua),
-                            ),
+                            source_text: Some(dynamic_source::of(fe, fn_source_text, pua)),
                             uses_arguments: true, // conservative for dynamic Function()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -717,9 +716,7 @@ impl Interpreter {
                             is_generator: false,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(
-                                SourceText::from(fn_source_text).with_pua_encoded(pua),
-                            ),
+                            source_text: Some(dynamic_source::of(fe, fn_source_text, pua)),
                             uses_arguments: true, // conservative for dynamic AsyncFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -849,9 +846,7 @@ impl Interpreter {
                             is_generator: true,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(
-                                SourceText::from(fn_source_text).with_pua_encoded(pua),
-                            ),
+                            source_text: Some(dynamic_source::of(fe, fn_source_text, pua)),
                             uses_arguments: true, // conservative for dynamic GeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
@@ -983,9 +978,7 @@ impl Interpreter {
                             is_generator: true,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(
-                                SourceText::from(fn_source_text).with_pua_encoded(pua),
-                            ),
+                            source_text: Some(dynamic_source::of(fe, fn_source_text, pua)),
                             uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };

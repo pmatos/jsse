@@ -35,6 +35,10 @@ function inspect(...args) {
   return lazyInspect(...args);
 }
 
+function format(...args) {
+  return require('internal/util/inspect').format(...args);
+}
+
 const codes = {};
 
 function E(code, Base, message) {
@@ -245,6 +249,24 @@ E('ERR_INVALID_ARG_VALUE', TypeError, (name, value, reason = 'is invalid') => {
   const type = StringPrototypeIncludes(name, '.') ? 'property' : 'argument';
   return `The ${type} '${name}' ${reason}. Received ${inspected}`;
 });
+E('ERR_INVALID_RETURN_VALUE', TypeError, (input, name, value) =>
+  `Expected ${input} to be returned from the "${name}" function but got ${determineSpecificType(value)}.`);
+E('ERR_INVALID_STATE', Error, (message) => format('Invalid state: %s', message));
+E('ERR_METHOD_NOT_IMPLEMENTED', Error, (method) => format('The %s method is not implemented', method));
+E('ERR_MULTIPLE_CALLBACK', Error, 'Callback called multiple times');
+E('ERR_OPERATION_FAILED', Error, (message) => format('Operation failed: %s', message));
+E('ERR_STREAM_ALREADY_FINISHED', Error,
+  (method) => format('Cannot call %s after a stream was finished', method));
+E('ERR_STREAM_CANNOT_PIPE', Error, 'Cannot pipe, not readable');
+E('ERR_STREAM_DESTROYED', Error,
+  (method) => format('Cannot call %s after a stream was destroyed', method));
+E('ERR_STREAM_NULL_VALUES', TypeError, 'May not write null values to stream');
+E('ERR_STREAM_PREMATURE_CLOSE', Error, 'Premature close');
+E('ERR_STREAM_PUSH_AFTER_EOF', Error, 'stream.push() after EOF');
+E('ERR_STREAM_UNABLE_TO_PIPE', Error, 'Cannot pipe to a closed or destroyed stream');
+E('ERR_STREAM_UNSHIFT_AFTER_END_EVENT', Error, 'stream.unshift() after end event');
+E('ERR_STREAM_WRITE_AFTER_END', Error, 'write after end');
+E('ERR_UNKNOWN_ENCODING', TypeError, (encoding) => format('Unknown encoding: %s', encoding));
 E('ERR_INVALID_THIS', TypeError, (type) => `Value of "this" must be of type ${type}`);
 E('ERR_MISSING_ARGS', TypeError, (...args) => {
   let msg = 'The ';
@@ -396,6 +418,19 @@ class AbortError extends Error {
   }
 }
 
+function aggregateTwoErrors(innerError, outerError) {
+  if (innerError && outerError && innerError !== outerError) {
+    if (ArrayIsArray(outerError.errors)) {
+      ArrayPrototypePush(outerError.errors, innerError);
+      return outerError;
+    }
+    const err = new AggregateError([outerError, innerError], outerError.message);
+    err.code = outerError.code;
+    return err;
+  }
+  return innerError || outerError;
+}
+
 function genericNodeError(message, errorProperties) {
   const err = new Error(message);
   ObjectAssign(err, errorProperties);
@@ -419,3 +454,4 @@ function isStackOverflowError(err) {
 }
 
 module.exports = { AbortError, codes, genericNodeError, isStackOverflowError };
+module.exports.aggregateTwoErrors = aggregateTwoErrors;
