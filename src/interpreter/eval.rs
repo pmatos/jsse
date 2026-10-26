@@ -1018,7 +1018,6 @@ impl Interpreter {
                 Completion::Normal(meta_val)
             }
             Expression::Import(source_expr, options_expr) => {
-                // Dynamic import() - returns a Promise
                 // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
                 let source_val = match self.eval_expr(source_expr, env) {
                     Completion::Normal(v) => v,
@@ -1039,7 +1038,7 @@ impl Interpreter {
                         Ok(t) => t,
                         Err(c) => return c,
                     };
-                self.dynamic_import(&source, dynamic_import_type)
+                self.dynamic_import_from(&source, dynamic_import_type, env)
             }
             Expression::ImportDefer(source_expr, options_expr) => {
                 let source_val = match self.eval_expr(source_expr, env) {
@@ -1062,7 +1061,7 @@ impl Interpreter {
                     };
                 // import.defer() loads module without evaluation, returns deferred namespace
                 // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
-                let module_path = self.current_module_path.clone();
+                let module_path = self.import_referrer(env);
                 let resolved = match self.resolve_module_specifier(
                     &source,
                     module_path.as_ref().and_then(ModuleKey::file_path),
@@ -1110,7 +1109,7 @@ impl Interpreter {
                 // ContinueDynamicImport with source phase: resolve to the
                 // target module's [[ModuleSource]]. A Source Text Module has an
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
-                let referrer = self.current_module_path.clone();
+                let referrer = self.import_referrer(env);
                 match self.resolve_source_phase_target(
                     &source,
                     referrer.as_ref().and_then(ModuleKey::file_path),

@@ -328,6 +328,13 @@
     exports: { canBeRequiredByUsers: canBeRequiredByUsers, loadBuiltin: requireBuiltin },
   };
 
+  cache["internal/host/module"] = {
+    exports: { tagFunction: takeHost("__host_tag_function") },
+  };
+  takeHost("__host_esm_install")(function (op, a, b, c) {
+    return requireBuiltin("internal/modules/esm/host").host(op, a, b, c);
+  });
+
   function cjsLoader() {
     return requireBuiltin("internal/modules/cjs/loader");
   }

@@ -40,6 +40,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { canBeRequiredByUsers, loadBuiltin } = require('internal/modules/builtins');
+const { tagFunction } = require('internal/host/module');
 const { getNearestParentPackageJSON, readPackage } = require('internal/modules/package_json_reader');
 const { packageExportsResolve, packageImportsResolve } = require('internal/modules/exports');
 const {
@@ -500,9 +501,8 @@ function wrapSafe(content, filename) {
     content = `//${StringPrototypeSlice(content, 2)}`;
   }
   const wrapper = new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
-  // Function() puts two header lines before the body; -2 makes frame
-  // positions match the file, as vm.compileFunction does in Node. Like that
-  // wrapper, this one is anonymous (frames read `Object.<anonymous>`).
+  tagFunction(wrapper, filename);
+  // -2 undoes Function()'s two header lines; anonymous like Node's wrapper.
   ObjectDefineProperty(wrapper, 'name', { value: '', configurable: true });
   if (nameSource !== undefined) nameSource(wrapper, filename, -2);
   return wrapper;
