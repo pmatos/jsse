@@ -198,7 +198,6 @@ E('ERR_INVALID_ARG_TYPE', TypeError, (name, expected, actual) => {
 
 E('ERR_EVENT_RECURSION', Error, (name) => `The event "${name}" is already being dispatched`);
 E('ERR_ILLEGAL_CONSTRUCTOR', TypeError, 'Illegal constructor');
-E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
 E('ERR_INVALID_ARG_VALUE', TypeError, (name, value, reason = 'is invalid') => {
   let inspected = inspect(value);
   if (inspected.length > 128) {
@@ -254,13 +253,17 @@ E('ERR_UNHANDLED_ERROR', Error, (err = undefined) => {
   const msg = 'Unhandled error.';
   if (err === undefined) return msg;
   return `${msg} (${err})`;
+});
+E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
+
+// Node's AbortError is a plain Error with .code and .name, not a DOMException.
+E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
 E('ERR_INVALID_FILE_URL_HOST', TypeError,
   (platform) => `File URL host must be "localhost" or empty on ${platform}`);
 E('ERR_INVALID_FILE_URL_PATH', TypeError, function(reason, input) {
   this.input = input;
   return `File URL path ${reason}`;
 });
-E('ERR_INVALID_THIS', TypeError, (type) => `Value of "this" must be of type ${type}`);
 E('ERR_INVALID_TUPLE', TypeError, (x, y) => `${x} must be an iterable ${y} tuple`);
 E('ERR_INVALID_URI', URIError, 'URI malformed');
 E('ERR_INVALID_URL', TypeError, function(input, base = null) {
@@ -278,16 +281,7 @@ E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
     `of scheme ${expected[0]}`;
   return `The URL must be ${res}`;
 });
-E('ERR_MISSING_ARGS', TypeError, (...args) => {
-  const wrap = (a) => `"${a}"`;
-  args = ArrayPrototypeMap(args, (a) => (ArrayIsArray(a) ?
-    ArrayPrototypeJoin(ArrayPrototypeMap(a, wrap), ' or ') :
-    wrap(a)));
-  return `The ${formatList(args)} argument${args.length > 1 ? 's' : ''} must be specified`;
-});
-E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
 
-// Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = undefined) {
     if (options !== undefined && typeof options !== 'object') {
