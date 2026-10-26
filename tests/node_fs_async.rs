@@ -333,3 +333,38 @@ fn piping_a_large_sparse_file_to_a_write_stream_is_bounded_too() {
     assert!(rss < 250 * 1024, "max RSS {} MiB", rss / 1024);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn closing_a_file_handle_waits_for_the_stream_that_holds_it() {
+    let dir = scratch("handle-close");
+    let file = dir.join("f");
+    std::fs::write(&file, "payload").unwrap();
+    let (out, err, rc) = run(&format!(
+        "const fsp = require('fs/promises');
+         (async () => {{
+           const h = await fsp.open({file:?});
+           const s = h.createReadStream();
+           const closed = new Promise((r) => s.on('close', r));
+           s.on('error', (e) => console.log(e.code));
+           s.resume();
+           await h.close();
+           await closed;
+           console.log('closed', h.fd);
+         }})().catch((e) => console.log('FAIL', e.code));"
+    ));
+    assert_eq!((out.as_str(), rc), ("closed -1", 0), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn promises_write_file_rejects_invalid_data_before_truncating() {
+    let dir = scratch("write-invalid");
+    let file = dir.join("f");
+    std::fs::write(&file, "keep").unwrap();
+    let (out, err, rc) = run(&format!(
+        "require('fs/promises').writeFile({file:?}, {{}}).then(() => console.log('ok'), (e) => console.log(e.code))"
+    ));
+    assert_eq!((out.as_str(), rc), ("ERR_INVALID_ARG_TYPE", 0), "{err}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -81,12 +81,19 @@ function toBytes(data, options) {
   return S.bytesOf(data);
 }
 
+function closeFd(handle) {
+  const fd = handle[kFd];
+  handle[kFd] = -1;
+  return call.close(fd);
+}
+
 class FileHandle extends EventEmitter {
   constructor(fd) {
     super();
     this[kFd] = fd;
     this[kRefs] = 1;
     this[kClosePromise] = null;
+    this[kCloseResolve] = null;
   }
 
   get fd() { return this[kFd]; }
@@ -94,23 +101,28 @@ class FileHandle extends EventEmitter {
   [kRef]() { this[kRefs]++; }
 
   [kUnref]() {
-    if (--this[kRefs] === 0) {
-      this[kFd] = -1;
-      this.emit('close');
+    if (--this[kRefs] !== 0) return;
+    const closing = closeFd(this);
+    const pending = this[kCloseResolve];
+    if (pending) {
+      this[kCloseResolve] = null;
+      closing.then(pending.resolve, pending.reject);
+    } else {
+      this[kClosePromise] = closing.finally(() => { this[kClosePromise] = null; });
     }
   }
 
   close() {
     if (this[kFd] === -1) return Promise.resolve();
     if (this[kClosePromise]) return this[kClosePromise];
-    this[kRefs]--;
-    this[kClosePromise] = call.close(this[kFd]).then(() => {
-      if (this[kRefs] === 0) {
-        this[kFd] = -1;
-        this[kClosePromise] = null;
-        this.emit('close');
-      }
-    });
+    if (--this[kRefs] === 0) {
+      this[kClosePromise] = closeFd(this).finally(() => { this[kClosePromise] = null; });
+    } else {
+      this[kClosePromise] = new Promise((resolve, reject) => {
+        this[kCloseResolve] = { resolve, reject };
+      }).finally(() => { this[kClosePromise] = null; });
+    }
+    this.emit('close');
     return this[kClosePromise];
   }
 
@@ -187,6 +199,10 @@ async function writeFile(path, data, options) {
   if (path instanceof FileHandle) return path.writeFile(data, options);
   if (typeof data === 'string' || S.isView(data)) {
     return promisify(cbs.writeFile)(path, data, options);
+  }
+  if (data == null || (typeof data[Symbol.asyncIterator] !== 'function' &&
+                       typeof data[Symbol.iterator] !== 'function')) {
+    S.validateDataArg(data, 'data');
   }
   const flags = (options && options.flag) || 'w';
   return withFile(path, flags, async (handle) => {

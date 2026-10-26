@@ -65,13 +65,19 @@ in bounded memory.
   copy. `read`/`write` pass `(err, n, buffer)`, void results call `cb(null)`.
   Functions that make several syscalls or are written in JS (`rm`, `cp`,
   `truncate`, recursive `readdir`, JS `realpath`) cannot be probed; they run
-  whole on a later loop turn.
+  whole on a later loop turn. The probe stubs are built once, but each call
+  still swaps the host properties twice and runs the synchronous function
+  twice, so a callback call costs a few times its synchronous counterpart; a
+  synchronous function that catches around a floor call would swallow the
+  sentinel, so none may.
 - **Promises** (`internal/fs/promises.js`, `fs/promises`) wrap the callback
   functions, so validation failures become rejections. `FileHandle` is an
   `EventEmitter` over an fd with `read`, `write`, `readFile`, `writeFile`,
   `appendFile`, `stat`, `chmod`, `chown`, `utimes`, `truncate`, `sync`,
   `datasync`, `createReadStream`, `createWriteStream`, `close`,
-  `[Symbol.asyncDispose]`. `promises.realpath` is the native one, as in Node.
+  `[Symbol.asyncDispose]`. As in Node, `close()` while a stream holds a
+  reference emits `close` at once but closes the descriptor only when the last
+  reference is released. `promises.realpath` is the native one, as in Node.
 - **Streams** (`internal/fs/streams.js`) are Node's `internal/fs/streams.js`
   minus `windowsHandle`, on `fs.open/read/write/close` and `Readable`/`Writable`
   of the merged `stream` module: 64 KiB chunks, `start`/`end`, `fd` as a number

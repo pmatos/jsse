@@ -28,15 +28,21 @@ function checkCallback(cb) {
   }
 }
 
+let probeHit = null;
+const probes = {};
+const saved = {};
+for (const name of PROBED) {
+  probes[name] = function() {
+    probeHit = { op: name, args: Array.prototype.slice.call(arguments) };
+    throw STOP;
+  };
+}
+
 function probe(syncFn, args) {
-  const saved = {};
-  let hit = null;
+  probeHit = null;
   for (const name of PROBED) {
     saved[name] = host[name];
-    host[name] = function() {
-      hit = { op: name, args: Array.prototype.slice.call(arguments) };
-      throw STOP;
-    };
+    host[name] = probes[name];
   }
   let value;
   try {
@@ -46,6 +52,8 @@ function probe(syncFn, args) {
   } finally {
     for (const name of PROBED) host[name] = saved[name];
   }
+  const hit = probeHit;
+  probeHit = null;
   return { hit, value };
 }
 

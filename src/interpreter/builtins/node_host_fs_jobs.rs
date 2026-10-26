@@ -39,7 +39,9 @@ pub(super) fn spawn(task: Task) {
         }
         sender
     });
-    let _ = sender.send(task);
+    if let Err(failed) = sender.send(task) {
+        (failed.0)();
+    }
 }
 
 pub(super) struct AsyncError {
@@ -225,7 +227,14 @@ fn status(rc: i32, syscall: &'static str) -> Outcome {
     }
 }
 
+/// Run `job`, reporting a panic in a syscall helper as `EIO` so the request
+/// still completes and the event loop can exit.
 pub(super) fn run(job: Job) -> Outcome {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(job)))
+        .unwrap_or_else(|_| Err(AsyncError::new(libc::EIO, "fs")))
+}
+
+fn execute(job: Job) -> Outcome {
     match job {
         Job::Open(path, flags, mode) => open_fd(&cstring(&path)?, flags, mode)
             .map(|fd| Reply::Number(f64::from(fd)))

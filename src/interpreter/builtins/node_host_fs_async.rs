@@ -162,15 +162,17 @@ fn value_of(interp: &mut Interpreter, post: Post, reply: Reply, keep: Option<&Js
     match (post, reply) {
         (Post::ReadInto(off, len), Reply::Bytes(bytes)) => {
             let n = bytes.len().min(len);
+            let mut copied = 0;
             if let Some(view) = keep.and_then(|dest| view_of(interp, dest)) {
                 let start = view.offset + off;
                 view.buffer.borrow_mut().with_write(|b| {
                     if let Some(window) = b.get_mut(start..start + n) {
                         window.copy_from_slice(&bytes[..n]);
+                        copied = n;
                     }
                 });
             }
-            JsValue::number(n as f64)
+            JsValue::number(copied as f64)
         }
         (Post::Text, Reply::Bytes(bytes)) => js_str(&String::from_utf8_lossy(&bytes)),
         (_, Reply::Bytes(bytes)) => uint8array_from_vec(interp, bytes),
