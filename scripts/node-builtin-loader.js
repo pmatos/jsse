@@ -223,6 +223,17 @@
   hostCrypto.webcrypto = globalThis.crypto;
   cache["internal/host/crypto"] = { exports: hostCrypto };
 
+  // The child process and signal floor (#1236), assembled by node-process-signals.js.
+  var childKey = Symbol.for("jsse.node.child");
+  var childBinding = globalThis[childKey];
+  delete globalThis[childKey];
+  if (childBinding !== undefined) {
+    childBinding.load = function () {
+      return requireBuiltin("internal/process/signals");
+    };
+    cache["internal/host/child_process"] = { exports: childBinding };
+  }
+
   function requireBuiltin(id) {
     var cached = cache[id];
     if (cached !== undefined) return cached.exports;
