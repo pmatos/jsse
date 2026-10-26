@@ -94,7 +94,11 @@ fn lines_are_read_by_the_tree_walker_too() {
           console.log(n);
         })();
     "#;
-    let out = run_with_stdin(&["--node", "--no-bytecode", "-e", source], "ab\ncde\n", None);
+    let out = run_with_stdin(
+        &["--node", "--no-bytecode", "-e", source],
+        "ab\ncde\n",
+        None,
+    );
     assert_eq!(stdout(&out), "5\n");
 }
 
@@ -150,10 +154,7 @@ fn a_broken_pipe_is_reported_on_the_stream_and_not_by_console() {
         .expect("spawn jsse");
     drop(child.stdout.take());
     let out = child.wait_with_output().unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&out.stderr),
-        "EPIPE|write EPIPE\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "EPIPE|write EPIPE\n");
 }
 
 #[test]
@@ -166,7 +167,10 @@ fn uncaught_errors_reach_stderr_through_process_stderr() {
 #[test]
 fn stdio_and_tty_are_absent_without_node() {
     let out = run_with_stdin(
-        &["-e", "print(typeof process, typeof __host_tty, typeof require)"],
+        &[
+            "-e",
+            "print(typeof process, typeof __host_tty, typeof require)",
+        ],
         "",
         None,
     );
