@@ -55,6 +55,11 @@ rustc-hash = "2"
 foldhash = "0.2"
 smallvec = "1"
 getrandom = "0.4"
+# Digests behind the `crypto` module of `--node` mode (#1226); one shared `digest` 0.10.
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
 
 # Shipped build: fat LTO and one codegen unit, +6.4% JetStream 3 score geomean
 # and -5.9% micro-suite wall time for ~2.5-3x crate build time (issue #935;

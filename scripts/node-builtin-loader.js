@@ -222,6 +222,14 @@
   hostProcess.load = requireBuiltin;
   cache["internal/host/process"] = { exports: hostProcess };
 
+  // The native `crypto` binding (#1226), plus the entropy floor and the global
+  // Web Crypto object the module re-exports as `webcrypto`.
+  var hostCrypto = globalThis.__host_crypto;
+  delete globalThis.__host_crypto;
+  hostCrypto.randomBytes = globalThis.__host_random_bytes;
+  hostCrypto.webcrypto = globalThis.crypto;
+  cache["internal/host/crypto"] = { exports: hostCrypto };
+
   function requireBuiltin(id) {
     var cached = cache[id];
     if (cached !== undefined) return cached.exports;
@@ -315,6 +323,16 @@
         this, depth, ctx, utilInspect
       );
     };
+  }
+
+  if (hostCrypto.webcrypto) {
+    Object.defineProperty(hostCrypto.webcrypto, "subtle", {
+      get: function () {
+        return requireBuiltin("internal/crypto/webcrypto").subtle;
+      },
+      enumerable: true,
+      configurable: true,
+    });
   }
 
   // `console` writes through the embedded util module (Node's inspect/format).

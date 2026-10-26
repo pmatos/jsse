@@ -39,6 +39,7 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    pub(crate) crypto: super::node_host_crypto::CryptoState,
     /// Test-only: the platform name the `os` binding reports.
     #[cfg(test)]
     pub(crate) platform_override: Option<&'static str>,
@@ -273,6 +274,7 @@ impl Interpreter {
         self.setup_node_host_loop();
         self.setup_node_host_idna();
         self.setup_node_host_os();
+        self.setup_node_host_crypto();
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
     }
