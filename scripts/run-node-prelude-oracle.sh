@@ -88,8 +88,8 @@ for fixture in "${FIXTURES[@]}"; do
 done
 
 if [ "$NODE_ONLY" -eq 0 ]; then
-    GATE='print(["process","Buffer","TextEncoder","TextDecoder","crypto","util"].map(function (n) { return n + ":" + typeof globalThis[n]; }).join(" "), typeof console.group, typeof __host_write)'
-    EXPECT='process:undefined Buffer:undefined TextEncoder:undefined TextDecoder:undefined crypto:undefined util:undefined undefined undefined'
+    GATE='print(["process","Buffer","TextEncoder","TextDecoder","crypto","util"].map(function (n) { return n + ":" + typeof globalThis[n]; }).join(" "), typeof console.group, typeof __host_write, typeof __node_builtin, typeof __host_builtin_source)'
+    EXPECT='process:undefined Buffer:undefined TextEncoder:undefined TextDecoder:undefined crypto:undefined util:undefined undefined undefined undefined undefined'
     echo 'void 0;' > "$WORK/empty-prelude.js"
     for mode in plain prelude; do
         args=()
