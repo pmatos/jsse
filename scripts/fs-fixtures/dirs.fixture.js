@@ -117,3 +117,4 @@ t("rm recursive EACCES", () => {
   fs.mkdirSync(p("ro2")); fs.mkdirSync(p("ro2/s")); fs.writeFileSync(p("ro2/s/f"), "x"); fs.chmodSync(p("ro2/s"), 0o555);
   try { fs.rmSync(p("ro2"), { recursive: true }); } finally { fs.chmodSync(p("ro2/s"), 0o755); }
 });
+t("rm force recursive under file", () => fs.rmSync(p("target.txt/x"), { recursive: true, force: true }));

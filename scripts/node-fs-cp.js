@@ -59,6 +59,33 @@
     return e;
   }
 
+  var STRERROR = {
+    EEXIST: "File exists",
+    ENOENT: "No such file or directory",
+    ENOTDIR: "Not a directory",
+    EISDIR: "Is a directory",
+    EACCES: "Permission denied",
+    EPERM: "Operation not permitted",
+    ENOTEMPTY: "Directory not empty",
+    EINVAL: "Invalid argument",
+    EXDEV: "Invalid cross-device link",
+    ELOOP: "Too many levels of symbolic links",
+    EROFS: "Read-only file system",
+    ENOSPC: "No space left on device",
+    ENAMETOOLONG: "File name too long",
+  };
+
+  // The ErrnoException the C++ cp halves throw: "CODE, strerror 'path'", positive errno.
+  function errnoShape(e, path) {
+    if (STRERROR[e.code] === undefined) return reshape(e, "cp", path);
+    var error = new Error(e.code + ", " + STRERROR[e.code] + " '" + path + "'");
+    error.errno = -e.errno;
+    error.code = e.code;
+    error.path = path;
+    error.syscall = "cp";
+    return error;
+  }
+
   function cpError(code, message) {
     return nodeError(Error, code, message);
   }
@@ -101,16 +128,13 @@
     };
     if (srcIsDir && dest.slice(0, srcSlash.length) === srcSlash) throw subdirOfSelf();
     var destParent = parentPath(dest);
-    while (
+    if (
       parentPath(src) !== destParent && parentPath(destParent) !== "" &&
       parentPath(destParent) !== destParent
     ) {
-      var parent = parentPath(dest);
       var a = status(src, true);
-      var b = status(parent, true);
-      if (!a || !b) break;
-      if (a[0] === b[0] && a[7] === b[7]) throw subdirOfSelf();
-      destParent = parentPath(destParent);
+      var b = status(destParent, true);
+      if (a && b && a[0] === b[0] && a[7] === b[7]) throw subdirOfSelf();
     }
     if (srcIsDir && !recursive) {
       throw cpError(
@@ -199,19 +223,14 @@
           host.unlink(to);
         } else if (typeOf(toStat) === C.S_IFREG) {
           if (!o.dereference || (!o.force && o.errorOnExist)) {
-            var exist = new Error("EEXIST: file already exists, cp '" + to + "'");
-            exist.errno = -17;
-            exist.code = "EEXIST";
-            exist.syscall = "cp";
-            exist.path = to;
-            throw exist;
+            throw errnoShape({ code: "EEXIST", errno: -17 }, to);
           }
         }
       }
       var absolute = P.isAbsolute(target) ? target : P.resolve(srcDir, target);
       host.symlink(weaklyCanonical(absolute), to);
     } catch (e) {
-      if (e.syscall && e.syscall !== "cp") throw reshape(e, "cp", destDir);
+      if (e.syscall && e.syscall !== "cp") throw errnoShape(e, destDir);
       throw e;
     }
   }
@@ -244,7 +263,7 @@
     try {
       host.copyfile(from, to, 0);
     } catch (e) {
-      throw reshape(e, "cp", destDir);
+      throw errnoShape(e, destDir);
     }
     if (o.preserveTimestamps) copyUtimes(from, to);
   }
@@ -253,7 +272,7 @@
     try {
       host.mkdirp(dest, 0o777);
     } catch (e) {
-      throw reshape(e, "cp", dest);
+      throw errnoShape(e, dest);
     }
     copyDirContents(src, dest, o);
   }
@@ -263,7 +282,7 @@
     try {
       host.copyfile(src, dest, mode);
     } catch (e) {
-      throw mode === 0 ? reshape(e, "cp", dest) : reshape(e, "cp", src, dest);
+      throw mode === 0 ? errnoShape(e, dest) : reshape(e, "cp", src, dest);
     }
     if (preserveTimestamps) copyUtimes(src, dest);
   }
@@ -324,8 +343,8 @@
       }
     } finally {
       dir.closeSync();
-      if (srcMode !== undefined) ops.chmodSync(dest, srcMode);
     }
+    if (srcMode !== undefined) ops.chmodSync(dest, srcMode);
   }
 
   function onLink(destStat, src, dest, verbatimSymlinks) {

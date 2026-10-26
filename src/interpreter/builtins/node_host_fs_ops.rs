@@ -32,8 +32,18 @@ fn uv_dirent_type(t: &std::fs::FileType) -> f64 {
 }
 
 /// libuv's `uv__fs_to_timespec`: nanosecond resolution, floored for
-/// negative times.
+/// negative times, infinity means "now" and NaN leaves the time alone.
 fn timespec_of(time: f64) -> libc::timespec {
+    if !time.is_finite() {
+        return libc::timespec {
+            tv_sec: 0,
+            tv_nsec: if time.is_nan() {
+                libc::UTIME_OMIT
+            } else {
+                libc::UTIME_NOW
+            } as _,
+        };
+    }
     let mut sec = time as libc::time_t;
     let mut nsec = ((time - sec as f64) * 1e9) as i64;
     if nsec < 0 {
@@ -44,6 +54,16 @@ fn timespec_of(time: f64) -> libc::timespec {
         tv_sec: sec,
         tv_nsec: nsec as _,
     }
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn sync_data(fd: i32) -> i32 {
+    unsafe { libc::fdatasync(fd) }
+}
+
+#[cfg(target_vendor = "apple")]
+fn sync_data(fd: i32) -> i32 {
+    unsafe { libc::fsync(fd) }
 }
 
 fn file_stat(fd: i32) -> Result<libc::stat, i32> {
@@ -302,7 +322,7 @@ impl Interpreter {
         self.host_fs_fn("__host_fs_fsync", 2, |interp, args| {
             let fd = int(interp, arg(args, 0))? as i32;
             let (rc, name) = if arg(args, 1).as_boolean() == Some(true) {
-                (unsafe { libc::fdatasync(fd) }, "fdatasync")
+                (sync_data(fd), "fdatasync")
             } else {
                 (unsafe { libc::fsync(fd) }, "fsync")
             };

@@ -81,6 +81,7 @@ t("lutimes", () => { fs.lutimesSync(p("link-file"), 21, 22); return [fs.lstatSyn
 t("futimes", () => { const fd = fs.openSync(p("target.txt")); fs.futimesSync(fd, 31, 32); fs.closeSync(fd); return fs.statSync(p("target.txt")).mtimeMs; });
 t("utimes bad atime", () => fs.utimesSync(p("target.txt"), "x", 1));
 t("utimes bad mtime", () => fs.utimesSync(p("target.txt"), 1, {}));
+t("utimes Date NaN is omitted", () => { fs.utimesSync(p("target.txt"), 5, 6); fs.utimesSync(p("target.txt"), new Date(NaN), new Date(NaN)); const s = fs.statSync(p("target.txt")); return [s.atimeMs, s.mtimeMs]; });
 t("utimes NaN", () => fs.utimesSync(p("target.txt"), NaN, 1));
 t("utimes missing", () => fs.utimesSync(p("nope"), 1, 1));
 t("lutimes missing", () => fs.lutimesSync(p("nope"), 1, 1));

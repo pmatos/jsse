@@ -77,3 +77,17 @@ t("cp options mode", () => fs.cpSync(p("file"), p("o1"), { mode: 9 }));
 t("cp bad src", () => fs.cpSync(1, p("o1")));
 t("cp bad dest", () => fs.cpSync(p("file"), 1));
 t("cp src null byte", () => fs.cpSync("a\0b", p("o1")));
+t("cp symlink over directory", () => { fs.mkdirSync(p("sd1/rel-link"), { recursive: true }); return fs.cpSync(p("src"), p("sd1"), { recursive: true }); });
+t("cp symlink over file", () => { fs.mkdirSync(p("sd2")); fs.writeFileSync(p("sd2/rel-link"), "x"); return fs.cpSync(p("src"), p("sd2"), { recursive: true }); });
+t("cp filter throws keeps mode", () => {
+  fs.mkdirSync(p("ro"));
+  fs.writeFileSync(p("ro/f"), "x");
+  fs.chmodSync(p("ro"), 0o555);
+  try {
+    fs.cpSync(p("ro"), p("ro2"), { recursive: true, filter: () => { throw new Error("stop"); } });
+  } catch (e) {
+    return [e.message, (fs.statSync(p("ro2")).mode & 0o777).toString(8)];
+  } finally {
+    fs.chmodSync(p("ro"), 0o755);
+  }
+});

@@ -271,7 +271,7 @@
       if (options.recursive) removeAll(path);
       else host.unlink(path);
     } catch (e) {
-      if (e.code === "ENOENT") return;
+      if (e.code === "ENOENT" || (options.force && e.code === "ENOTDIR")) return;
       var text = RM_MESSAGES[e.code];
       if (text === undefined) throw e;
       var error = new Error(e.code + ", " + text + ": " + path + " '" + path + "'");
