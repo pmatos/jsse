@@ -278,6 +278,7 @@ impl Interpreter {
         self.setup_node_host_os();
         self.setup_node_host_crypto();
         self.setup_node_host_util();
+        self.setup_node_host_process_metrics();
         self.setup_node_host_esm();
     }
 }

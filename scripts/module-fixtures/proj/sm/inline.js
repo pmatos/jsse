@@ -1,0 +1,2 @@
+module.exports = 1;
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiZ2VuLmpzIiwic291cmNlcyI6WyJnZW4udHMiXSwibmFtZXMiOlsiZm9vIl0sIm1hcHBpbmdzIjoiQUFBQSxTQUFTQTtBQUNUIn0=

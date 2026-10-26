@@ -82,8 +82,8 @@ every test runner.
    - Module code is compiled with `new Function`, so a syntax error carries no
      file name or line, and a body that closes the synthetic wrapper early is
      accepted instead of rejected (jsse#1320).
-   - `require('module')`, `Module.builtinModules`/`isBuiltin`/`wrap` and
-     `runMain` are absent, and only the modules registered in the embedded
+   - `require('module')` is the #1220 module
+     (`2026-10-26-2100-node-host-module.md`), and only the modules registered in the embedded
      table (and `fs`, `timers` and the other prelude registrations) can be
      required: `buffer` and `process` are globals with no
      requirable module yet (`require("util")` is the #1224 module; the `util` global is

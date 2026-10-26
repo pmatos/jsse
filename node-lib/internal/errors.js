@@ -257,6 +257,8 @@ E('ERR_INVALID_STATE', Error, (message) => format('Invalid state: %s', message))
 E('ERR_METHOD_NOT_IMPLEMENTED', Error, (method) => format('The %s method is not implemented', method));
 E('ERR_MULTIPLE_CALLBACK', Error, 'Callback called multiple times');
 E('ERR_OPERATION_FAILED', Error, (message) => format('Operation failed: %s', message));
+E('ERR_PERFORMANCE_INVALID_TIMESTAMP', TypeError, (timestamp) => format('%d is not a valid timestamp', timestamp));
+E('ERR_PERFORMANCE_MEASURE_INVALID_OPTIONS', TypeError, (message) => message);
 E('ERR_STREAM_ALREADY_FINISHED', Error,
   (method) => format('Cannot call %s after a stream was finished', method));
 E('ERR_STREAM_CANNOT_PIPE', Error, 'Cannot pipe, not readable');
@@ -398,6 +400,9 @@ E('ERR_UNSUPPORTED_ESM_URL_SCHEME', Error, (protocol, supported) => {
   return `Only URLs with a scheme in: ${list} are supported by the default ESM loader. ` +
     `Received protocol '${protocol}'`;
 });
+E('ERR_UNSUPPORTED_RESOLVE_REQUEST', TypeError, (request, base) =>
+  `Failed to resolve module specifier "${request}" from "${base}": ` +
+  'Invalid relative URL or base scheme is not hierarchical.');
 E('ERR_IMPORT_ATTRIBUTE_MISSING', TypeError,
   (url, key, value) => `Module "${url}" needs an import attribute of "${key}: ${value}"`);
 E('ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE', TypeError,

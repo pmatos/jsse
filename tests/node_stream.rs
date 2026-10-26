@@ -31,7 +31,6 @@ fn probe(source: &str) -> String {
 }
 
 struct Needs {
-    string_decoder: bool,
     webstreams: bool,
 }
 
@@ -48,7 +47,6 @@ fn node_tests() -> Vec<(String, Needs)> {
             let name = words.next().unwrap().to_string();
             let flags: Vec<&str> = words.collect();
             let needs = Needs {
-                string_decoder: flags.contains(&"needs-string-decoder"),
                 webstreams: flags.contains(&"needs-webstreams"),
             };
             (name, needs)
@@ -103,14 +101,12 @@ fn run_node_tests(
     select: &dyn Fn(usize, &str) -> bool,
 ) {
     let dir = scratch(tag);
-    let string_decoder =
-        probe(r#"print(typeof require("string_decoder").StringDecoder)"#) == "function";
     let webstreams = probe("print(typeof ReadableStream)") == "function";
     for (index, (name, needs)) in node_tests().into_iter().enumerate() {
         if !select(index, &name) {
             continue;
         }
-        if (needs.string_decoder && !string_decoder) || (needs.webstreams && !webstreams) {
+        if needs.webstreams && !webstreams {
             continue;
         }
         let script = compose(&name, &dir.0);
