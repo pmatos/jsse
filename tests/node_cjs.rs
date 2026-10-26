@@ -125,7 +125,7 @@ fn registries_and_entry_points_are_private() {
         &main,
         r#"
         const names = ["__node_run_main", "__node_builtin", "__node_builtins", "__host_main_kind", "__host_builtin_source"];
-        print(names.map((n) => typeof globalThis[n]).join(), Object.getOwnPropertySymbols(globalThis).length);
+        print(names.map((n) => typeof globalThis[n]).join(), typeof globalThis[Symbol.for("jsse.node.builtins")]);
         "#,
     )
     .unwrap();
@@ -134,7 +134,7 @@ fn registries_and_entry_points_are_private() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "undefined,undefined,undefined,undefined,undefined 0"
+        "undefined,undefined,undefined,undefined,undefined undefined"
     );
     let eval = jsse(
         &[
@@ -154,6 +154,8 @@ fn builtin_registries_unify_behind_require() {
       const fs = require("fs");
       print(typeof fs.readFileSync, require("node:fs") === fs, require("path") === require("node:path"));
       print(require.resolve("fs"), require.resolve("node:path"));
+      const timers = require("timers");
+      print(require("node:timers") === timers, require("timers/promises") === timers.promises, timers.setTimeout === setTimeout);
       for (const id of ["os", "node:fs/nope", "fs/"]) {
         try { require(id); print("no throw", id); } catch (e) { print(id, e.code); }
       }
@@ -162,7 +164,7 @@ fn builtin_registries_unify_behind_require() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "function true true\nfs node:path\nos MODULE_NOT_FOUND\nnode:fs/nope ERR_UNKNOWN_BUILTIN_MODULE\nfs/ MODULE_NOT_FOUND"
+        "function true true\nfs node:path\ntrue true true\nos MODULE_NOT_FOUND\nnode:fs/nope ERR_UNKNOWN_BUILTIN_MODULE\nfs/ MODULE_NOT_FOUND"
     );
 }
 

@@ -1,6 +1,7 @@
 path===node:path {"ok":true}
 fs===node:fs {"ok":true}
 fs.readFileSync {"ok":"function"}
+timers {"ok":[true,"function",true,true]}
 path.sep {"ok":"/"}
 resolve builtin {"ok":["path","node:path"]}
 unknown node: builtin {"error":{"name":"Error","code":"ERR_UNKNOWN_BUILTIN_MODULE","message":"No such built-in module: node:nope","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}

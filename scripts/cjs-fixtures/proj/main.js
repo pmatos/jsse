@@ -43,6 +43,7 @@ const req = (id) => () => require(id);
 t('path===node:path', () => require('path') === require('node:path'));
 t('fs===node:fs', () => require('fs') === require('node:fs'));
 t('fs.readFileSync', () => typeof require('fs').readFileSync);
+t('timers', () => [require('timers') === require('node:timers'), typeof require('timers').setTimeout, require('timers/promises') === require('timers').promises, require('timers').setTimeout === setTimeout]);
 t('path.sep', () => require('path').sep);
 t('resolve builtin', () => [require.resolve('path'), require.resolve('node:path')]);
 t('unknown node: builtin', req('node:nope'));
