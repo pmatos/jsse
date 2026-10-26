@@ -57,4 +57,7 @@ jobs:
             @semantic-release/git@10
             @semantic-release/exec@7
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The `main` ruleset requires status checks that a direct push
+          # cannot satisfy, so the chore(release) commit is pushed with a
+          # token whose owner is a ruleset bypass actor, not GITHUB_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
