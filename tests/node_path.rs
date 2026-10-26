@@ -50,10 +50,18 @@ fn compose(name: &str, dir: &Path) -> PathBuf {
     path
 }
 
-fn scratch(tag: &str) -> PathBuf {
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("jsse-node-path-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
 }
 
 fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&str]) {
@@ -62,7 +70,7 @@ fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&s
         if !only.is_empty() && !only.contains(&name.as_str()) {
             continue;
         }
-        let script = compose(&name, &dir);
+        let script = compose(&name, &dir.0);
         let mut args = vec!["--node"];
         args.extend_from_slice(flags);
         args.push(script.to_str().unwrap());
@@ -88,7 +96,14 @@ fn path_tests_pass_under_gc_stress() {
         "stress",
         &[],
         Some("50"),
-        &["test-path-glob", "test-path-join", "test-path-resolve"],
+        &[
+            "test-path-glob",
+            "test-path-join",
+            "test-path-resolve",
+            "test-path-parse-format",
+            "test-path-relative",
+            "test-path-win32-normalize-device-names",
+        ],
     );
 }
 
@@ -145,8 +160,34 @@ fn builtin_modules_are_absent_without_node() {
     let out = run(&["-e", probe], None);
     assert_eq!(stdout(&out), "undefined undefined undefined");
     let dir = scratch("gate");
-    let empty = dir.join("empty.js");
+    let empty = dir.0.join("empty.js");
     std::fs::write(&empty, "void 0;").unwrap();
     let out = run(&["--prelude", empty.to_str().unwrap(), "-e", probe], None);
     assert_eq!(stdout(&out), "undefined undefined undefined");
+}
+
+#[test]
+fn builtin_loader_validates_ids_and_survives_intrinsic_tampering() {
+    let source = r#"
+      const load = __node_builtin;
+      Array.prototype.join = function () { return "tampered"; };
+      String.prototype.slice = function () { return "tampered"; };
+      Array.prototype[Symbol()] = 1;
+      delete globalThis.Map;
+      for (const id of [undefined, {}, 7]) {
+        try { load(id); print("no throw"); }
+        catch (e) { print(e.code, e instanceof TypeError); }
+      }
+      try { load("nope"); } catch (e) { print(e.code); }
+      try { load("nope"); } catch (e) { print(e.code); }
+      const path = load("path");
+      print(path.join("a", "b"), path.resolve("/a", "b"), path.win32.join("a", "b"));
+    "#;
+    let out = run(&["--node", "-e", source], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "ERR_INVALID_ARG_TYPE true\nERR_INVALID_ARG_TYPE true\nERR_INVALID_ARG_TYPE true\n\
+         ERR_UNKNOWN_BUILTIN_MODULE\nERR_UNKNOWN_BUILTIN_MODULE\na/b /a/b a\\b"
+    );
 }

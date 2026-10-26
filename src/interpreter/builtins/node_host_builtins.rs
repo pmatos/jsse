@@ -17,7 +17,6 @@ macro_rules! builtin {
     };
 }
 
-/// Add a module with one `builtin!("name")` line; the file is `node-lib/<name>.js`.
 const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("path"),
     builtin!("path/posix"),
@@ -47,7 +46,6 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
 
 impl Interpreter {
     pub(super) fn setup_node_host_builtins(&mut self) {
-        // __host_builtin_source(name) -> source string, or undefined
         let source_fn = self.create_function(JsFunction::native(
             "__host_builtin_source".to_string(),
             1,

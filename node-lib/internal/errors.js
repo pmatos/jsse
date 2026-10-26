@@ -50,6 +50,7 @@ function E(code, Base, message) {
     error.code = code;
     return error;
   }
+  NodeError.prototype = proto;
   codes[code] = NodeError;
 }
 
