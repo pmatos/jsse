@@ -1,0 +1,35 @@
+# Node v26.8.2 test/parallel files in this directory, verbatim. One name per
+# line; further words mark what a test needs from the --node prelude. They run
+# when the probe below passes and are skipped (and reported) before:
+#   needs-process-events  process.on/emit work (Node event loop, #1229)
+#   needs-inspect         util.inspect(x, {depth: -1}) names the class, e.g. [Foo] (#1224)
+test-abortcontroller
+test-event-emitter-add-listeners
+test-event-emitter-check-listener-leaks
+test-event-emitter-emit-context
+test-event-emitter-error-monitor
+test-event-emitter-get-max-listeners
+test-event-emitter-invalid-listener
+test-event-emitter-listener-count
+test-event-emitter-listeners
+test-event-emitter-listeners-side-effects
+test-event-emitter-max-listeners
+test-event-emitter-max-listeners-warning needs-process-events needs-inspect
+test-event-emitter-max-listeners-warning-for-null needs-process-events needs-inspect
+test-event-emitter-max-listeners-warning-for-symbol needs-process-events needs-inspect
+test-event-emitter-method-names
+test-event-emitter-modify-in-emit
+test-event-emitter-num-args
+test-event-emitter-once
+test-event-emitter-remove-all-listeners
+test-event-emitter-set-max-listeners-side-effects
+test-event-emitter-special-event-names needs-process-events
+test-event-emitter-subclass
+test-event-emitter-symbols
+test-event-target
+test-eventtarget-custom-inspect-does-not-throw
+test-eventtarget-once-twice
+test-events-getmaxlisteners
+test-events-list
+test-events-listener-count-with-listener
+test-events-once

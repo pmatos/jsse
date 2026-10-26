@@ -38,13 +38,14 @@
   }
 
   // Node's `primordials` (lib/internal/per_context/primordials.js) naming:
-  // statics are `ObjectKeys`, prototype methods are uncurried
-  // `ArrayPrototypeJoin`, accessors are `TypedArrayPrototypeGetLength`.
+  // statics are `ObjectKeys` (bound for Promise, whose statics need `this`),
+  // prototype methods are uncurried `ArrayPrototypeJoin`, accessors are
+  // `TypedArrayPrototypeGetLength`.
   // The intrinsic values are snapshotted here, before user code runs; the
   // uncurried wrappers are created on first use of each name.
   var table = Object.create(null);
   var resolved = Object.create(null);
-  function snapshot(source, prefix, uncurry) {
+  function snapshot(source, prefix, uncurry, bindTo) {
     Reflect.ownKeys(source).forEach(function (key) {
       if (key === "constructor" || key === "__proto__") return;
       var d = Object.getOwnPropertyDescriptor(source, key);
@@ -53,14 +54,18 @@
         if (d.get) table[prefix + "Get" + pascal(key)] = [d.get, true];
         if (d.set) table[prefix + "Set" + pascal(key)] = [d.set, true];
       } else {
-        table[base] = [d.value, uncurry && typeof d.value === "function"];
+        var value = d.value;
+        if (bindTo && typeof value === "function") {
+          value = Function.prototype.bind.call(value, bindTo);
+        }
+        table[base] = [value, uncurry && typeof value === "function"];
       }
     });
   }
   INTRINSICS.forEach(function (name) {
     var ctor = globalThis[name];
     table[name] = [ctor, false];
-    snapshot(ctor, name, false);
+    snapshot(ctor, name, false, name === "Promise" ? ctor : undefined);
     if (typeof ctor === "function" && ctor.prototype) {
       table[name + "Prototype"] = [ctor.prototype, false];
       snapshot(ctor.prototype, name + "Prototype", true);
@@ -124,6 +129,45 @@
     }
     return requireBuiltin(name);
   }
+
+  // Node's exposeLazyInterfaces: an accessor that loads the module on first
+  // touch and then settles into the plain writable, non-enumerable data
+  // property the global has in Node.
+  var LAZY_GLOBALS = [
+    ["internal/event_target", "Event"],
+    ["internal/event_target", "EventTarget"],
+    ["internal/event_target", "CustomEvent"],
+    ["internal/abort_controller", "AbortController"],
+    ["internal/abort_controller", "AbortSignal"],
+    ["internal/per_context/domexception", "DOMException"],
+  ];
+
+  function defineLazyGlobal(id, name) {
+    function settle(value) {
+      Object.defineProperty(globalThis, name, {
+        value: value,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+      });
+      return value;
+    }
+    Object.defineProperty(globalThis, name, {
+      get: function () {
+        var value = requireBuiltin(id)[name];
+        if (value === undefined) {
+          throw new Error("builtin " + id + " does not export " + name);
+        }
+        return settle(value);
+      },
+      set: settle,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  LAZY_GLOBALS.forEach(function (entry) {
+    defineLazyGlobal(entry[0], entry[1]);
+  });
 
   Object.defineProperty(globalThis, "__node_builtin", {
     value: loadPublic,
