@@ -1,0 +1,104 @@
+identity {"ok":[true,true,true,true,true,"Module",0]}
+static isBuiltin {"ok":["function",["isBuiltin",1],[true,true,true]]}
+static _findPath {"ok":["function",["",3],[true,true,true]]}
+static _nodeModulePaths {"ok":["function",["",1],[true,true,true]]}
+static _resolveLookupPaths {"ok":["function",["",2],[true,true,true]]}
+static _load {"ok":["function",["",3],[true,true,true]]}
+static _resolveFilename {"ok":["function",["",4],[true,true,true]]}
+static createRequire {"ok":["function",["createRequire",1],[true,true,true]]}
+static _initPaths {"ok":["function",["",0],[true,true,true]]}
+static _preloadModules {"ok":["function",["",1],[true,true,true]]}
+static syncBuiltinESMExports {"ok":["function",["syncBuiltinESMExports",0],[true,true,true]]}
+static runMain {"ok":["function",["executeUserEntryPoint",0],[true,true,true]]}
+static enableCompileCache {"ok":["function",["enableCompileCache",1],[true,true,true]]}
+static findPackageJSON {"ok":["function",["findPackageJSON",1],[true,true,true]]}
+static flushCompileCache {"ok":["function",["flushCompileCache",0],[true,true,true]]}
+static getCompileCacheDir {"ok":["function",["getCompileCacheDir",0],[true,true,true]]}
+static stripTypeScriptTypes {"ok":["function",["stripTypeScriptTypes",1],[true,true,true]]}
+static findSourceMap {"ok":["function",["findSourceMap",1],[true,true,true]]}
+static getSourceMapsSupport {"ok":["function",["getSourceMapsSupport",0],[true,true,true]]}
+static setSourceMapsSupport {"ok":["function",["setSourceMapsSupport",1],[true,true,true]]}
+static SourceMap {"ok":["function",["SourceMap",1],[true,true,true]]}
+static Module {"ok":["function",["Module",0],[true,true,true]]}
+static builtinModules {"ok":["object","",[true,true,true]]}
+static constants {"ok":["object","",[true,true,true]]}
+static _cache {"ok":["object","",[true,true,true]]}
+static _pathCache {"ok":["object","",[true,true,true]]}
+static _extensions {"ok":["object","",[true,true,true]]}
+static globalPaths {"ok":["object","",[true,true,true]]}
+static wrap {"ok":["function",["wrap",1],[false,"accessor",false]]}
+static wrapper {"ok":["object","",[false,"accessor",false]]}
+prototype {"ok":[["_compile","constructor","isPreloading","load","parent","require"],false,false]}
+cache identity {"ok":[true,true,[".js",".json",".node"],null]}
+builtinModules {"ok":[66,"_http_agent,_http_client,_http_common,_http_incoming,_http_outgoing,_http_server,_tls_common,_tls_wrap,assert,assert/strict,async_hooks,buffer,child_process,cluster,console,constants,crypto,dgram,diagnostics_channel,dns,dns/promises,domain,events,fs,fs/promises,http,http2,https,inspector,inspector/promises,module,net,os,path,path/posix,path/win32,perf_hooks,process,punycode,querystring,readline,readline/promises,repl,stream,stream/consumers,stream/promises,stream/web,string_decoder,sys,timers,timers/promises,tls,trace_events,tty,url,util,util/types,v8,vm,wasi,worker_threads,zlib,node:sea,node:sqlite,node:test,node:test/reporters",true,true]}
+isBuiltin {"ok":"true,true,true,false,false,true,true,false,true,false,false,true,true,true,false,false,false,false,true,true,true,true,false,true"}
+isBuiltin non-string {"ok":[false,false,false,false,false,false]}
+wrapper {"ok":[["(function (exports, require, module, __filename, __dirname) { ","\n});"],"(function (exports, require, module, __filename, __dirname) { x\n});","(function (exports, require, module, __filename, __dirname) { \n});"]}
+wrap descriptors {"ok":[[false,"accessor",false],[false,"accessor",false],true]}
+constants {"ok":[{"compileCacheStatus":{"FAILED":0,"ENABLED":1,"ALREADY_ENABLED":2,"DISABLED":3}},true,true,null]}
+compile cache {"ok":["[undefined]","[undefined]","[undefined]"]}
+enableCompileCache result {"ok":[["status","message"],3,"string"]}
+enableCompileCache args {"ok":["ERR_INVALID_ARG_TYPE","ERR_INVALID_ARG_TYPE","ok","ERR_INVALID_ARG_TYPE"]}
+createRequire path {"ok":"a"}
+createRequire file url string {"ok":"a"}
+createRequire URL object {"ok":"<root>/lib/a.js"}
+createRequire trailing slash {"ok":"<root>/lib/a.js"}
+createRequire bare {"ok":"pkg"}
+createRequire subpath {"ok":"pkg/sub"}
+createRequire builtin {"ok":true}
+createRequire module {"ok":true}
+createRequire bad rel.js {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received 'rel.js'"]}
+createRequire bad http://x/a {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received 'http://x/a'"]}
+createRequire bad 5 {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received 5"]}
+createRequire bad undefined {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received undefined"]}
+createRequire bad null {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received null"]}
+createRequire bad file:///a%2fb {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received 'file:///a%2fb'"]}
+createRequire bad [object Object] {"error":["TypeError","ERR_INVALID_ARG_VALUE","The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received {}"]}
+createRequire shape {"ok":["function","require",["resolve","main","extensions","cache"],true,true,true,["<root>/lib/node_modules","<root>/node_modules"],["<root>/lib"],null]}
+createRequire missing {"error":["Error","MODULE_NOT_FOUND","Cannot find module './nope'"]}
+createRequire child of fake parent {"ok":["<root>/lib/b.js","<root>/lib/b.js",true]}
+findPackageJSON relative {"ok":"<root>/package.json"}
+findPackageJSON file url base {"ok":"<root>/package.json"}
+findPackageJSON URL base {"ok":"<root>/package.json"}
+findPackageJSON dir base {"ok":"<root>/package.json"}
+findPackageJSON bare {"ok":"<root>/node_modules/pkg/package.json"}
+findPackageJSON bare subpath {"ok":"<root>/node_modules/pkg/package.json"}
+findPackageJSON bare package.json {"ok":"<root>/node_modules/pkg/package.json"}
+findPackageJSON bare missing subpath {"ok":"<root>/node_modules/pkg/package.json"}
+findPackageJSON bare missing {"error":["Error","ERR_MODULE_NOT_FOUND","Cannot find package 'nopkg' imported from <root>/lib/b.js"]}
+findPackageJSON scoped missing {"error":["Error","ERR_MODULE_NOT_FOUND","Cannot find package '@s/x' imported from <root>/lib/b.js"]}
+findPackageJSON missing file {"error":["Error","ERR_MODULE_NOT_FOUND","Cannot find module '<root>/lib/nofile.js' imported from <root>/lib/b.js"]}
+findPackageJSON absolute specifier {"ok":"<root>/package.json"}
+findPackageJSON file url specifier {"ok":"<root>/package.json"}
+findPackageJSON no base {"error":["TypeError","ERR_UNSUPPORTED_RESOLVE_REQUEST","Failed to resolve module specifier \"./a.js\" from \"data:\": Invalid relative URL or base scheme is not hierarchical."]}
+findPackageJSON builtin bare {"error":["Error","ERR_MODULE_NOT_FOUND","Cannot find package 'fs' imported from <root>/lib/b.js"]}
+findPackageJSON builtin url {"error":["TypeError","ERR_INVALID_URL_SCHEME","The URL must be of scheme file"]}
+findPackageJSON no args {"error":["TypeError","ERR_MISSING_ARGS","The \"specifier\" argument must be specified"]}
+findPackageJSON number specifier {"error":["Error","ERR_MODULE_NOT_FOUND","Cannot find package '5' imported from <root>/lib/b.js"]}
+findPackageJSON number base {"error":["TypeError","ERR_INVALID_ARG_TYPE","The \"base\" argument must be of type string. Received type number (5)"]}
+findPackageJSON relative base {"error":["TypeError","ERR_INVALID_URL","Invalid URL"]}
+findPackageJSON parent dir {"ok":"<root>/package.json"}
+findPackageJSON dot {"ok":"<root>/package.json"}
+findPackageJSON into node_modules {"ok":"<root>/node_modules/pkg/package.json"}
+findPackageJSON http base {"error":["TypeError","ERR_INVALID_URL_SCHEME","The URL must be of scheme file"]}
+findPackageJSON http specifier {"error":["TypeError","ERR_INVALID_URL_SCHEME","The URL must be of scheme file"]}
+findPackageJSON directory {"ok":"<root>/package.json"}
+findPackageJSON length {"ok":1}
+patched .js extension {"ok":["lib/uses_pkg.js"]}
+custom .txt extension {"ok":["hello text",[".js",".json",".node",".txt"]]}
+require.resolve custom ext {"ok":"lib/hello.txt"}
+patched _resolveFilename {"ok":["aliased","lib/alias_target.js"]}
+restored _resolveFilename {"ok":"aliased"}
+patched _load {"ok":[{"virtual":true},"a",true,["virtual","./lib/a","fs","node:fs"]]}
+patched _compile {"ok":["patched",["node_modules/pkg/sub/x.js"]]}
+_nodeModulePaths {"ok":[["<root>/lib/node_modules","<root>/node_modules"],["/node_modules"],["/a/node_modules/b/node_modules","/a/node_modules","/node_modules"]]}
+_resolveLookupPaths {"ok":[null,["<root>/lib"],["/p"]]}
+_findPath {"ok":["<root>/node_modules/pkg/index.js",false,"<root>/lib/a.js"]}
+_initPaths {"ok":[true,true]}
+patched wrap {"ok":["plain",42,true]}
+patched wrapper {"ok":[7,"(function (exports, require, module, __filename, __dirname) { x\n});"]}
+_preloadModules {"ok":["<root>/lib/b.js","<root>/lib/b.js",false]}
+isPreloading while preloading {"ok":[true,false]}
+runMain {"ok":["function",0,"executeUserEntryPoint"]}
+esm import {"ok":[true,"function",true,"function"]}
+esm import node: {"ok":true}

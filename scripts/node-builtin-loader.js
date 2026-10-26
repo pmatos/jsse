@@ -328,6 +328,24 @@
     exports: { canBeRequiredByUsers: canBeRequiredByUsers, loadBuiltin: requireBuiltin },
   };
 
+  // process.sourceMapsEnabled and setSourceMapsEnabled (#1220); the support
+  // module loads on first use.
+  Object.defineProperty(proc, "sourceMapsEnabled", {
+    get: function () {
+      return requireBuiltin("internal/source_map/support").getSourceMapsSupport().enabled;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(proc, "setSourceMapsEnabled", {
+    value: function setSourceMapsEnabled(enabled) {
+      requireBuiltin("internal/source_map/support").setSourceMapsEnabled(enabled);
+    },
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
   cache["internal/host/module"] = {
     exports: { tagFunction: takeHost("__host_tag_function") },
   };

@@ -19,6 +19,7 @@ macro_rules! builtin {
 
 const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("os"),
+    builtin!("module"),
     builtin!("crypto"),
     builtin!("internal/crypto/hash"),
     builtin!("internal/crypto/random"),
@@ -45,10 +46,14 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/util"),
     builtin!("internal/validators"),
     builtin!("internal/modules/cjs/loader"),
+    builtin!("internal/modules/cjs/statics"),
     builtin!("internal/modules/esm/host"),
     builtin!("internal/modules/esm/resolve"),
     builtin!("internal/modules/exports"),
+    builtin!("internal/modules/find_package_json"),
     builtin!("internal/modules/package_json_reader"),
+    builtin!("internal/source_map/source_map"),
+    builtin!("internal/source_map/support"),
     builtin!("internal/os/cidr"),
     builtin!("internal/path/common"),
     builtin!("internal/path/glob"),

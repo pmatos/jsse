@@ -396,6 +396,9 @@ E('ERR_UNSUPPORTED_ESM_URL_SCHEME', Error, (protocol, supported) => {
   return `Only URLs with a scheme in: ${list} are supported by the default ESM loader. ` +
     `Received protocol '${protocol}'`;
 });
+E('ERR_UNSUPPORTED_RESOLVE_REQUEST', TypeError, (request, base) =>
+  `Failed to resolve module specifier "${request}" from "${base}": ` +
+  'Invalid relative URL or base scheme is not hierarchical.');
 E('ERR_IMPORT_ATTRIBUTE_MISSING', TypeError,
   (url, key, value) => `Module "${url}" needs an import attribute of "${key}: ${value}"`);
 E('ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE', TypeError,
