@@ -19,6 +19,7 @@ const {
   ObjectCreate,
   ObjectDefineProperty,
   ObjectSetPrototypeOf,
+  ReflectApply,
   RegExpPrototypeExec,
   StringPrototypeEndsWith,
   StringPrototypeIncludes,
@@ -45,13 +46,13 @@ function E(code, Base, message) {
   function NodeError(...args) {
     const error = new Base();
     ObjectSetPrototypeOf(error, proto);
+    error.code = code;
     ObjectDefineProperty(error, 'message', {
-      value: typeof message === 'function' ? message(...args) : message,
+      value: typeof message === 'function' ? ReflectApply(message, error, args) : message,
       writable: true,
       enumerable: false,
       configurable: true,
     });
-    error.code = code;
     return error;
   }
   NodeError.prototype = proto;
@@ -256,6 +257,31 @@ E('ERR_UNHANDLED_ERROR', Error, (err = undefined) => {
 E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
 
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
+E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
+E('ERR_INVALID_FILE_URL_HOST', TypeError,
+  (platform) => `File URL host must be "localhost" or empty on ${platform}`);
+E('ERR_INVALID_FILE_URL_PATH', TypeError, function(reason, input) {
+  this.input = input;
+  return `File URL path ${reason}`;
+});
+E('ERR_INVALID_TUPLE', TypeError, (x, y) => `${x} must be an iterable ${y} tuple`);
+E('ERR_INVALID_URI', URIError, 'URI malformed');
+E('ERR_INVALID_URL', TypeError, function(input, base = null) {
+  this.input = input;
+  if (base != null) {
+    this.base = base;
+  }
+  return 'Invalid URL';
+});
+E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
+  if (typeof expected === 'string')
+    expected = [expected];
+  const res = expected.length === 2 ?
+    `one of scheme ${expected[0]} or ${expected[1]}` :
+    `of scheme ${expected[0]}`;
+  return `The URL must be ${res}`;
+});
+
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = undefined) {
     if (options !== undefined && typeof options !== 'object') {

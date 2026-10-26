@@ -93,6 +93,19 @@
     exports: { inspect: globalThis.util.inspect },
   };
 
+  function takeHost(name) {
+    var fn = globalThis[name];
+    delete globalThis[name];
+    return fn;
+  }
+  cache["internal/host/buffer"] = { exports: { Buffer: globalThis.Buffer } };
+  cache["internal/url/idna"] = {
+    exports: {
+      toASCII: takeHost("__host_idna_to_ascii"),
+      toUnicode: takeHost("__host_idna_to_unicode"),
+    },
+  };
+
   function requireBuiltin(id) {
     var cached = cache[id];
     if (cached !== undefined) return cached.exports;
@@ -174,5 +187,39 @@
     writable: true,
     enumerable: false,
     configurable: true,
+  });
+
+  // URL and URLSearchParams are non-enumerable data properties in Node. Here
+  // they are accessors until first use, so launches that never touch them do
+  // not parse the url sources; the first read or write turns them into data
+  // properties.
+  ["URL", "URLSearchParams"].forEach(function (name) {
+    function settle(value) {
+      Object.defineProperty(globalThis, name, {
+        value: value,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+      });
+      return value;
+    }
+    Object.defineProperty(globalThis, name, {
+      get: function () {
+        return settle(requireBuiltin("internal/url")[name]);
+      },
+      set: function (value) {
+        if (this === globalThis) settle(value);
+        else if (Object(this) === this) {
+          Object.defineProperty(this, name, {
+            value: value,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+        }
+      },
+      enumerable: false,
+      configurable: true,
+    });
   });
 })();

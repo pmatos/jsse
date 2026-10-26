@@ -54,6 +54,22 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/deps/minimatch/minimatch"),
     builtin!("internal/deps/minimatch/optimize"),
     builtin!("internal/deps/minimatch/unescape"),
+    builtin!("url"),
+    builtin!("querystring"),
+    builtin!("punycode"),
+    builtin!("internal/querystring"),
+    builtin!("internal/url"),
+    builtin!("internal/url/binding"),
+    builtin!("internal/url/domain"),
+    builtin!("internal/url/encode"),
+    builtin!("internal/url/host"),
+    builtin!("internal/url/legacy_parse"),
+    builtin!("internal/url/legacy_resolve"),
+    builtin!("internal/url/params"),
+    builtin!("internal/url/parser"),
+    builtin!("internal/url/serialize"),
+    builtin!("internal/url/url"),
+    builtin!("internal/url/util"),
 ];
 
 impl Interpreter {
