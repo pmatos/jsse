@@ -39,6 +39,7 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
     /// Test-only: the platform name the `os` binding reports.
     #[cfg(test)]
@@ -277,6 +278,7 @@ impl Interpreter {
         self.setup_node_host_crypto();
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
+        self.setup_node_host_esm();
     }
 }
 

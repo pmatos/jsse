@@ -45,6 +45,8 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/util"),
     builtin!("internal/validators"),
     builtin!("internal/modules/cjs/loader"),
+    builtin!("internal/modules/esm/host"),
+    builtin!("internal/modules/esm/resolve"),
     builtin!("internal/modules/exports"),
     builtin!("internal/modules/package_json_reader"),
     builtin!("internal/os/cidr"),

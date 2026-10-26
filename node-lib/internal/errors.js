@@ -382,6 +382,29 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
   return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
 });
 
+E('ERR_MODULE_NOT_FOUND', Error, function(path, base, exactUrl) {
+  if (exactUrl) this.url = `${exactUrl}`;
+  return `Cannot find ${exactUrl ? 'module' : 'package'} '${path}' imported from ${base}`;
+});
+E('ERR_UNSUPPORTED_DIR_IMPORT', Error, function(path, base, exactUrl) {
+  this.url = exactUrl;
+  return `Directory import '${path}' is not supported resolving ES modules imported from ${base}`;
+});
+E('ERR_UNKNOWN_FILE_EXTENSION', TypeError,
+  (extension, path) => `Unknown file extension "${extension}" for ${path}`);
+E('ERR_UNSUPPORTED_ESM_URL_SCHEME', Error, (protocol, supported) => {
+  const list = supported.length === 2 ? `${supported[0]} and ${supported[1]}` :
+    `${supported.slice(0, -1).join(', ')}, and ${supported[supported.length - 1]}`;
+  return `Only URLs with a scheme in: ${list} are supported by the default ESM loader. ` +
+    `Received protocol '${protocol}'`;
+});
+E('ERR_IMPORT_ATTRIBUTE_MISSING', TypeError,
+  (url, key, value) => `Module "${url}" needs an import attribute of "${key}: ${value}"`);
+E('ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE', TypeError,
+  (url, type) => `Module "${url}" is not of type "${type}"`);
+E('ERR_IMPORT_ATTRIBUTE_UNSUPPORTED', TypeError,
+  (key, value, url) => `Import attribute "${key}" with value "${value}" is not supported in ${url}`);
+
 E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
 E('ERR_INVALID_FILE_URL_HOST', TypeError,
   (platform) => `File URL host must be "localhost" or empty on ${platform}`);

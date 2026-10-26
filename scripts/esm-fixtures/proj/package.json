@@ -1,0 +1,13 @@
+{
+  "name": "esm-proj",
+  "type": "module",
+  "imports": {
+    "#int": "./src/internal.js",
+    "#cond": { "import": "./src/cond-import.js", "default": "./src/cond-default.js" },
+    "#star/*": "./src/star-*.js",
+    "#dep": "dual",
+    "#node": "node:path",
+    "#bad": "../outside.js"
+  },
+  "exports": { ".": "./main.mjs", "./self": "./src/self.js" }
+}

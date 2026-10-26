@@ -395,17 +395,15 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn dynamic_import(
+    pub(crate) fn dynamic_import(
         &mut self,
         specifier: &str,
         import_type: Option<super::ImportModuleType>,
     ) -> Completion {
-        let resolved = match self.resolve_module_specifier(
-            specifier,
-            self.current_module_path
-                .as_ref()
-                .and_then(ModuleKey::file_path),
-        ) {
+        let referrer = self.current_module_path.clone();
+        let resolved = match self
+            .resolve_module_specifier(specifier, referrer.as_ref().and_then(ModuleKey::file_path))
+        {
             Ok(p) => p,
             Err(e) => {
                 return self.create_rejected_promise(e);

@@ -344,6 +344,7 @@
       if (kind === "beforeExit") {
         proc.emit("beforeExit", proc.exitCode || 0);
       } else {
+        if (kind === "unsettled") proc.exitCode = 13;
         emitExit(proc.exitCode || 0);
       }
     } catch (e) {
