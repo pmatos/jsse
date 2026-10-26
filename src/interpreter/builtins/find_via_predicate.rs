@@ -214,24 +214,18 @@ mod tests {
             interp.create_function(JsFunction::native("never".to_string(), 0, |_, _, _| {
                 Completion::Normal(JsValue::boolean(false))
             }));
+        let never = [never];
         for method in [FindMethod::Find, FindMethod::FindLast] {
-            assert!(
-                normal(method.array(&mut interp, &array, std::slice::from_ref(&never)))
-                    .is_undefined()
-            );
-            assert!(
-                normal(method.typed_array(&mut interp, &typed, std::slice::from_ref(&never)))
-                    .is_undefined()
-            );
+            assert!(normal(method.array(&mut interp, &array, &never)).is_undefined());
+            assert!(normal(method.typed_array(&mut interp, &typed, &never)).is_undefined());
         }
         for method in [FindMethod::FindIndex, FindMethod::FindLastIndex] {
             assert_eq!(
-                normal(method.array(&mut interp, &array, std::slice::from_ref(&never))).as_number(),
+                normal(method.array(&mut interp, &array, &never)).as_number(),
                 Some(-1.0)
             );
             assert_eq!(
-                normal(method.typed_array(&mut interp, &typed, std::slice::from_ref(&never)))
-                    .as_number(),
+                normal(method.typed_array(&mut interp, &typed, &never)).as_number(),
                 Some(-1.0)
             );
         }
@@ -267,9 +261,10 @@ mod tests {
             interp.create_function(JsFunction::native("abrupt".to_string(), 0, |_, _, _| {
                 Completion::Throw(JsValue::number(42.0))
             }));
+        let abrupt = [abrupt];
         for result in [
-            FindMethod::Find.array(&mut interp, &array, std::slice::from_ref(&abrupt)),
-            FindMethod::FindLast.typed_array(&mut interp, &typed, &[abrupt]),
+            FindMethod::Find.array(&mut interp, &array, &abrupt),
+            FindMethod::FindLast.typed_array(&mut interp, &typed, &abrupt),
         ] {
             assert!(matches!(result, Completion::Throw(value) if value.as_number() == Some(42.0)));
         }
