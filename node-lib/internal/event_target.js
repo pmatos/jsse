@@ -4,6 +4,8 @@ const {
   Boolean,
   Error,
   FunctionPrototypeCall,
+  NumberIsInteger,
+  ObjectAssign,
   ObjectDefineProperties,
   ObjectDefineProperty,
   ReflectApply,

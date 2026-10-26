@@ -95,7 +95,14 @@ fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&s
     let process_events =
         probe(r#"process.on("x", function () {}); print(process.emit("x"))"#) == "true";
     let inspect = probe("print(util.inspect(new (class Foo {})(), { depth: -1 }))") == "[Foo]";
-    for (name, needs) in node_tests() {
+    let tests = node_tests();
+    for wanted in only {
+        assert!(
+            tests.iter().any(|(name, _)| name == wanted),
+            "no fixture named {wanted} in the manifest"
+        );
+    }
+    for (name, needs) in tests {
         if !only.is_empty() && !only.contains(&name.as_str()) {
             continue;
         }
