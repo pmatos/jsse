@@ -284,11 +284,11 @@ impl Interpreter {
             self.node_run_loop();
         }
         if self.pending_exit.is_none() {
-            self.node_lifecycle("exit");
-            if self.pending_exit.is_none() && self.node_esm_unsettled_main() {
+            let unsettled = self.node_esm_unsettled_main();
+            if unsettled {
                 eprintln!("Warning: Detected unsettled top-level await");
-                self.node_host.exit_code = Some(13);
             }
+            self.node_lifecycle(if unsettled { "unsettled" } else { "exit" });
         }
     }
 }

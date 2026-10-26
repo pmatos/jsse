@@ -94,12 +94,14 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<ModuleKey, JsValue> {
-        if let Some(key) = self.node_host.esm.lookup(specifier, referrer) {
+        if referrer.is_some()
+            && let Some(key) = self.node_host.esm.lookup(specifier, referrer)
+        {
             return Ok(key);
         }
         let parent = referrer.map_or(JsValue::UNDEFINED, |p| js_str(&p.to_string_lossy()));
         let answer = self.node_esm_call(&[js_str("resolve"), js_str(specifier), parent])?;
-        let (format, target) = self.node_esm_answer(&answer);
+        let (format, target) = self.node_esm_answer(&answer)?;
         let key = match format {
             EsmFormat::Builtin => ModuleKey(PathBuf::from(format!("node:{target}"))),
             _ => ModuleKey::for_file(PathBuf::from(&target)),
@@ -113,15 +115,21 @@ impl Interpreter {
         Ok(key)
     }
 
-    fn node_esm_answer(&mut self, answer: &JsValue) -> (EsmFormat, String) {
-        let part = |interp: &mut Interpreter, index: usize| {
-            let value = answer.as_object_id().map_or(JsValue::UNDEFINED, |id| {
-                interp.get_property_on_id(id, &index.to_string())
-            });
-            interp.to_string_lossy(&value).unwrap_or_default()
+    fn node_esm_answer(&mut self, answer: &JsValue) -> Result<(EsmFormat, String), JsValue> {
+        let part = |interp: &mut Interpreter, index: usize| -> Option<String> {
+            let value = interp.get_property_on_id(answer.as_object_id()?, &index.to_string());
+            value
+                .is_string()
+                .then(|| interp.to_string_lossy(&value).ok())?
         };
-        let format = EsmFormat::parse(&part(self, 0)).unwrap_or(EsmFormat::Module);
-        (format, part(self, 1))
+        let format = part(self, 0).and_then(|name| EsmFormat::parse(&name));
+        match (format, part(self, 1)) {
+            (Some(format), Some(target)) => Ok((format, target)),
+            _ => Err(self.create_error(
+                "TypeError",
+                "the ES module host hook returned a malformed [format, target] answer",
+            )),
+        }
     }
 
     /// The module a hook-resolved key names, or `None` when the engine's own
@@ -162,6 +170,44 @@ impl Interpreter {
         }
     }
 
+    /// `default` plus every enumerable own property of a builtin module's
+    /// exports. Property getters run JavaScript, so everything gathered so far
+    /// stays rooted until the walk ends.
+    fn node_esm_builtin_names(&mut self, target: &str) -> Result<Vec<(String, JsValue)>, JsValue> {
+        let exports = self.node_esm_call(&[js_str("load"), js_str("builtin"), js_str(target)])?;
+        let frame = self.gc_root_frame();
+        self.gc_root_value(&exports);
+        let mut names = vec![("default".to_string(), exports.clone())];
+        let result = self.node_esm_collect_names(&exports, &mut names);
+        self.gc_unroot_frame(frame);
+        result.map(|()| names)
+    }
+
+    fn node_esm_collect_names(
+        &mut self,
+        exports: &JsValue,
+        names: &mut Vec<(String, JsValue)>,
+    ) -> Result<(), JsValue> {
+        let Some(id) = exports.as_object_id() else {
+            return Ok(());
+        };
+        for name in crate::interpreter::helpers::enumerable_own_keys(self, id)? {
+            let name = name.to_string();
+            if name == "default" {
+                continue;
+            }
+            match self.get_object_property(id, name.as_str(), exports) {
+                Completion::Normal(value) => {
+                    self.gc_root_value(&value);
+                    names.push((name, value));
+                }
+                Completion::Throw(error) => return Err(error),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn node_esm_synthetic(
         &mut self,
         key: &ModuleKey,
@@ -171,29 +217,15 @@ impl Interpreter {
         if let Some(existing) = self.module_registry_get(key) {
             return Ok(existing);
         }
-        let mut names: Vec<(String, JsValue)> = Vec::new();
         let evaluated = format == EsmFormat::Builtin;
-        if evaluated {
-            let exports =
-                self.node_esm_call(&[js_str("load"), js_str("builtin"), js_str(target)])?;
-            names.push(("default".to_string(), exports.clone()));
-            if let Some(id) = exports.as_object_id() {
-                for name in crate::interpreter::helpers::enumerable_own_keys(self, id)? {
-                    let name = name.to_string();
-                    if name == "default" {
-                        continue;
-                    }
-                    match self.get_object_property(id, name.as_str(), &exports) {
-                        Completion::Normal(value) => names.push((name, value)),
-                        Completion::Throw(error) => return Err(error),
-                        _ => {}
-                    }
-                }
-            }
+        let names = if evaluated {
+            self.node_esm_builtin_names(target)?
         } else {
-            names.push(("default".to_string(), JsValue::UNDEFINED));
-            names.push(("module.exports".to_string(), JsValue::UNDEFINED));
-        }
+            vec![
+                ("default".to_string(), JsValue::UNDEFINED),
+                ("module.exports".to_string(), JsValue::UNDEFINED),
+            ]
+        };
 
         let env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         env.borrow_mut().strict = true;
@@ -269,6 +301,15 @@ impl Interpreter {
         Some(Ok(()))
     }
 
+    pub(super) fn import_referrer(&self, env: &EnvRef) -> Option<ModuleKey> {
+        if self.node_host.esm.is_active()
+            && let Some(key) = Environment::find_module_path(env)
+        {
+            return Some(key);
+        }
+        self.current_module_path.clone()
+    }
+
     /// `import()` resolves against the module the calling code was compiled
     /// for (the CommonJS wrapper's file, or the ES module), not against the
     /// main program, and always loads from a microtask like Node.
@@ -281,8 +322,7 @@ impl Interpreter {
         if !self.node_host.esm.is_active() {
             return self.dynamic_import(specifier, import_type);
         }
-        let referrer =
-            Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
+        let referrer = self.import_referrer(env);
         self.static_module_load_depth += 1;
         let result = self.with_module_key(referrer, |interp| {
             interp.dynamic_import(specifier, import_type)

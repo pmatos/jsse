@@ -1061,7 +1061,7 @@ impl Interpreter {
                     };
                 // import.defer() loads module without evaluation, returns deferred namespace
                 // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
-                let module_path = self.current_module_path.clone();
+                let module_path = self.import_referrer(env);
                 let resolved = match self.resolve_module_specifier(
                     &source,
                     module_path.as_ref().and_then(ModuleKey::file_path),
@@ -1109,7 +1109,7 @@ impl Interpreter {
                 // ContinueDynamicImport with source phase: resolve to the
                 // target module's [[ModuleSource]]. A Source Text Module has an
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
-                let referrer = self.current_module_path.clone();
+                let referrer = self.import_referrer(env);
                 match self.resolve_source_phase_target(
                     &source,
                     referrer.as_ref().and_then(ModuleKey::file_path),

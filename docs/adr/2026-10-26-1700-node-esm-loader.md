@@ -63,8 +63,10 @@ and `require(esm)` (#1241) and the tsc/test-runner work that imports packages.
    run through the CommonJS loader is the main file. `Expression::Import` now
    calls `dynamic_import_from`, which, only with the hook active, takes the
    referrer from the lexical environment chain first (`Environment::find_module_path`)
-   and always defers loading to a microtask, so `import(x); log()` logs first
-   as in Node. The CommonJS wrapper (`new Function(...)`) is tagged with its file
+   and defers loading of untyped imports to a microtask, so `import(x); log()`
+   logs first as in Node (`with { type }` imports load before `import()` returns).
+   `import.defer()` and `import.source()` take the same referrer
+   (`import_referrer`). The CommonJS wrapper (`new Function(...)`) is tagged with its file
    by `__host_tag_function`, which sets `module_path` on the function's own
    closure environment, so `import('./sibling.mjs')` in a required file, also from
    a timer callback, resolves against that file. `-e` and the REPL have no
@@ -103,6 +105,14 @@ and `require(esm)` (#1241) and the tsc/test-runner work that imports packages.
    - Module namespaces are not GC roots (jsse#1327, pre-existing): the fixture
      under `JSSE_GC_STRESS` is limited to graphs that do not re-import an
      evaluated module.
+   - A typeless `.js` file is classified by compiling it as CommonJS (a leading
+     `#!` is tolerated) and, on a SyntaxError, looking for import/export syntax;
+     a file that fails only because of a top-level `await` stays CommonJS
+     (Node 22+ retries it as ESM).
+   - The unsettled-top-level-await warning has no source location; `exit`
+     listeners see code 13 as in Node.
+   - A resolution with no referrer is never served from the memo, because it
+     depends on the working directory.
 9. **Verification.** `scripts/run-node-esm-oracle.sh` runs
    `scripts/esm-fixtures/proj/main.mjs` (57 scenarios: static graph evaluation
    order with a CommonJS and a top-level-await sibling, cycles and live

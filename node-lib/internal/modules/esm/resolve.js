@@ -37,7 +37,6 @@ const conditions = ['node', 'import', 'module-sync', 'node-addons'];
 const schemeRegEx = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const esmSyntaxRegEx = /(^|[\n;])\s*(import\s*[\w${*"']|export\s*[\w${*]|export\s+default\b)|\bimport\.meta\b/;
 const invalidPackageNameRegEx = /^\.|%|\\/;
-const extensionRegEx = /\.[^./\\]*$/;
 
 function statKind(file) {
   try {
@@ -154,12 +153,16 @@ function relativePath(specifier, parentDir) {
   return StringPrototypeCharAt(ref, ref.length - 1) === '/' && resolved !== '/' ? resolved + '/' : resolved;
 }
 
+function fileUrl(file) {
+  return require('url').pathToFileURL(file).href;
+}
+
 function finalizeResolution(resolved, base) {
   const trailingSlash = StringPrototypeCharAt(resolved, resolved.length - 1) === '/';
   const file = trailingSlash ? StringPrototypeSlice(resolved, 0, -1) || '/' : resolved;
   const kind = statKind(file);
-  if (kind === 'dir') throw new ERR_UNSUPPORTED_DIR_IMPORT(file, base, resolved);
-  if (kind !== 'file' || trailingSlash) throw new ERR_MODULE_NOT_FOUND(file, base, resolved);
+  if (kind === 'dir') throw new ERR_UNSUPPORTED_DIR_IMPORT(file, base, fileUrl(resolved));
+  if (kind !== 'file' || trailingSlash) throw new ERR_MODULE_NOT_FOUND(file, base, fileUrl(resolved));
   return fs.realpathSync(file);
 }
 
@@ -168,7 +171,8 @@ function detectsEsmSyntax(file) {
   let source;
   try {
     source = fs.readFileSync(file, 'utf8');
-    new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', source);
+    const body = StringPrototypeStartsWith(source, '#!') ? `//${source}` : source;
+    new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', body);
     return false;
   } catch (e) {
     return e instanceof SyntaxError && source !== undefined &&
@@ -177,8 +181,7 @@ function detectsEsmSyntax(file) {
 }
 
 function defaultGetFormat(file) {
-  const match = RegExpPrototypeExec(extensionRegEx, path.basename(file));
-  const ext = match === null ? '' : match[0];
+  const ext = path.extname(file);
   switch (ext) {
     case '.mjs': return 'module';
     case '.cjs': return 'commonjs';

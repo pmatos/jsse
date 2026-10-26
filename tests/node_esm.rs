@@ -169,11 +169,12 @@ fn unsettled_top_level_await_exits_13() {
     write(
         &dir,
         "main.mjs",
-        "console.log('a'); await new Promise(() => {}); console.log('never');",
+        "process.on('exit', (code) => console.log('exit', code, process.exitCode));\n\
+         console.log('a'); await new Promise(() => {}); console.log('never');",
     );
     let out = run_main(&dir, "main.mjs", &[]);
     assert_eq!(out.status.code(), Some(13));
-    assert_eq!(stdout(&out), "a");
+    assert_eq!(stdout(&out), "a\nexit 13 13");
 }
 
 #[test]
@@ -246,6 +247,28 @@ fn dynamic_import_loads_after_the_calling_code_finishes() {
     );
     let out = run_main(&dir, "main.mjs", &[]);
     assert_eq!(stdout(&out), "after\ndep");
+}
+
+#[test]
+fn import_defer_and_dotfile_imports_resolve_from_the_calling_file() {
+    let dir = scratch("referrer");
+    std::fs::create_dir_all(dir.0.join("sub")).unwrap();
+    write(&dir, "sub/dep.mjs", "export const v = 'dep';");
+    write(&dir, "sub/.hooks", "exports.hooked = true;");
+    write(
+        &dir,
+        "sub/lib.cjs",
+        "exports.run = async () => (await import.defer('./dep.mjs')).v;\n\
+         exports.dot = async () => (await import('./.hooks')).default.hooked;",
+    );
+    write(
+        &dir,
+        "main.cjs",
+        "const lib = require('./sub/lib.cjs');\n\
+         lib.run().then(console.log).then(lib.dot).then(console.log);",
+    );
+    let out = run_main(&dir, "main.cjs", &[]);
+    assert_eq!(stdout(&out), "dep\ntrue", "{}", stderr(&out));
 }
 
 #[test]
