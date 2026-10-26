@@ -18,7 +18,7 @@ fn stdout(out: &Output) -> String {
 
 fn run_node(dir: &std::path::Path, source: &str) -> String {
     let script = format!(
-        "const fs = __node_builtins.fs; const D = {:?};\n{source}",
+        "const fs = require(\"fs\"); const D = {:?};\n{source}",
         dir.to_str().unwrap()
     );
     let out = jsse(&["--node", "-e", &script]);

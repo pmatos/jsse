@@ -30,7 +30,11 @@ mod node_host_fs_error;
 mod node_host_fs_meta;
 #[cfg(unix)]
 mod node_host_fs_ops;
+mod node_host_idna;
 mod node_host_loop;
+mod node_host_os;
+mod node_host_os_constants;
+mod node_host_os_sys;
 mod node_host_process;
 mod node_prelude;
 mod number;

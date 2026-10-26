@@ -7,7 +7,16 @@
 use super::super::*;
 use std::path::{Component, Path, PathBuf};
 
+/// The program a `--node` launch runs in place of the script file: the
+/// prelude's CommonJS loader reads `process.argv[1]` and runs it as the main
+/// module. The entry point is a hidden global that is taken private here.
+const NODE_MAIN_BOOTSTRAP: &str = "(function () {\n  var run = globalThis.__node_run_main;\n  delete globalThis.__node_run_main;\n  run();\n})();";
+
 impl Interpreter {
+    pub(crate) fn node_main_bootstrap() -> &'static str {
+        NODE_MAIN_BOOTSTRAP
+    }
+
     pub(super) fn setup_node_host_process(&mut self) {
         // __host_argv() -> [execPath, absScriptPath?, ...args]
         let argv_fn = self.create_function(JsFunction::native(
@@ -26,6 +35,15 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_argv", argv_fn);
+
+        // __host_main_kind() -> "cjs" | "esm" | "eval": how the launcher runs
+        // the main program (see `Interpreter::node_main_bootstrap`)
+        let main_kind_fn = self.create_function(JsFunction::native(
+            "__host_main_kind".to_string(),
+            0,
+            |interp, _this, _args| Completion::Normal(js_str(interp.node_host.main_kind.as_str())),
+        ));
+        self.install_host_global("__host_main_kind", main_kind_fn);
 
         // __host_argv0() -> the launcher's original argv[0]
         let argv0_fn = self.create_function(JsFunction::native(

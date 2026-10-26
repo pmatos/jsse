@@ -139,6 +139,13 @@ if [ "$NODE_ONLY" -eq 0 ]; then
     else
         echo "ok   gate (--node): fs floor is private"
     fi
+    got="$("$JSSE" --node -e 'var f = require("fs"); print(typeof f.cpSync, require("node:fs") === f, typeof f.rmSync)' 2>&1 || true)"
+    if [ "$got" != "function true function" ]; then
+        echo "FAIL gate (--node): fs is not served by require: $got"
+        FAIL=1
+    else
+        echo "ok   gate (--node): require('fs') and node:fs serve the same module"
+    fi
 fi
 
 if [ "$FAIL" -ne 0 ]; then

@@ -1,6 +1,5 @@
 //! The embedded `events` module, `EventTarget` and `AbortSignal` under `--node`
-//! (#1223), reached through the hidden `__node_builtin` accessor until the
-//! CommonJS loader (#1219) adds `require`. Runs Node's own event tests
+//! (#1223), reached through `require` (#1219). Runs Node's own event tests
 //! (scripts/events-fixtures, verbatim from nodejs/node v26.8.2) and pins the
 //! digest of the differential corpus that `scripts/run-node-events-oracle.sh`
 //! diffs against Node.
@@ -228,10 +227,10 @@ fn web_globals_and_events_are_absent_without_node() {
 #[test]
 fn events_module_ids_resolve_and_internals_stay_private() {
     let source = r#"
-      const EE = __node_builtin("events");
-      print(__node_builtin("node:events") === EE, EE.EventEmitter === EE);
+      const EE = require("events");
+      print(require("node:events") === EE, EE.EventEmitter === EE);
       for (const id of ["internal/event_target", "node:internal/events/statics", "internal/abort_controller"]) {
-        try { __node_builtin(id); print("no throw " + id); }
+        try { require(id); print("no throw " + id); }
         catch (e) { print(e.code); }
       }
     "#;
@@ -239,14 +238,14 @@ fn events_module_ids_resolve_and_internals_stay_private() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "true true\nERR_UNKNOWN_BUILTIN_MODULE\nERR_UNKNOWN_BUILTIN_MODULE\nERR_UNKNOWN_BUILTIN_MODULE"
+        "true true\nMODULE_NOT_FOUND\nERR_UNKNOWN_BUILTIN_MODULE\nMODULE_NOT_FOUND"
     );
 }
 
 #[test]
 fn events_survive_intrinsic_tampering() {
     let source = r#"
-      const EE = __node_builtin("events");
+      const EE = require("events");
       const e = new EE();
       const seen = [];
       Array.prototype.slice = function () { throw new Error("tampered slice"); };
@@ -265,7 +264,7 @@ fn events_survive_intrinsic_tampering() {
 #[test]
 fn max_listeners_warning_reaches_stderr_with_a_trace_hint() {
     let source = r#"
-      const EE = __node_builtin("events");
+      const EE = require("events");
       const e = new EE();
       e.setMaxListeners(1);
       e.on("a", function () {});
@@ -309,7 +308,7 @@ fn abort_signal_timeout_and_any_ride_the_timer_queue() {
 #[test]
 fn once_and_on_helpers_settle_across_event_loop_turns() {
     let source = r#"
-      const EE = __node_builtin("events");
+      const EE = require("events");
       (async () => {
         const e = new EE();
         setTimeout(() => e.emit("go", 1, 2), 5);

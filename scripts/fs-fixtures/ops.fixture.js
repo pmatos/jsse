@@ -1,4 +1,4 @@
-const fs = typeof require === "function" ? require("fs") : __node_builtins.fs;
+const fs = require("fs");
 const D = process.env.FS_ORACLE_DIR;
 if (!D) throw new Error("FS_ORACLE_DIR is not set");
 const norm = (s) => String(s).split(D).join("<D>");
