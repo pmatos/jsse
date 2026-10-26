@@ -13,11 +13,11 @@ const {
 const { ALL_PROPERTIES, ONLY_ENUMERABLE } = require('internal/binding/util').constants;
 const { getOwnNonIndexProperties } = require('internal/binding/util');
 
-const INSPECT_MAX_BYTES = 50;
+const state = { max: 50 };
 
 function inspect(recurseTimes, ctx, utilInspect) {
-  const actualMax = MathMin(INSPECT_MAX_BYTES, this.length);
-  const remaining = this.length - INSPECT_MAX_BYTES;
+  const actualMax = MathMin(state.max, this.length);
+  const remaining = this.length - state.max;
   let str = '';
   for (let i = 0; i < actualMax; i++) {
     str += (i > 0 ? ' ' : '') + (this[i] < 16 ? '0' : '') + NumberPrototypeToString(this[i], 16);
@@ -45,4 +45,4 @@ function inspect(recurseTimes, ctx, utilInspect) {
   return `<${this.constructor.name} ${str}>`;
 }
 
-module.exports = { inspect };
+module.exports = { inspect, state };

@@ -7,9 +7,8 @@
 # 1. Every test in scripts/stream-fixtures/manifest.txt (Node's own
 #    test/parallel/test-stream-*.js, verbatim) is wrapped by harness-assert.js and
 #    harness.js and must print "stream-fixture: ok" and exit 0 on jsse (`--node`,
-#    via require("stream")) and on Node. Tests flagged needs-string-decoder or
-#    needs-webstreams run once `require("string_decoder")` works (#1231) or web
-#    streams exist, and are skipped (and reported) before. Lines starting with "!" document tests that are not vendored.
+#    via require("stream")) and on Node. Tests flagged needs-webstreams run once
+#    web streams exist, and are skipped (and reported) before. Lines starting with "!" document tests that are not vendored.
 # 2. scripts/stream-fixtures/corpus-{a,b,run}.js (event order, backpressure and drain,
 #    pipe, pipeline, finished, compose, operators, errors) must print
 #    byte-identical stdout on both, and its digest must equal
@@ -49,11 +48,8 @@ if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
     (cd "$PROJECT_DIR" && cargo build --release)
 fi
 
-HAVE_STRING_DECODER=0
 HAVE_WEBSTREAMS=0
 if [ "$NODE_ONLY" -eq 0 ]; then
-    probe="$("$JSSE" --node -e 'print(typeof require("string_decoder").StringDecoder)' 2>/dev/null || true)"
-    [ "$probe" = "function" ] && HAVE_STRING_DECODER=1
     probe="$("$JSSE" --node -e 'print(typeof ReadableStream)' 2>/dev/null || true)"
     [ "$probe" = "function" ] && HAVE_WEBSTREAMS=1
 fi
@@ -69,8 +65,7 @@ while read -r name flags; do
     } > "$WORK/$name.js"
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
-        if { [[ " $flags " == *" needs-string-decoder "* ]] && [ "$HAVE_STRING_DECODER" -eq 0 ]; } ||
-            { [[ " $flags " == *" needs-webstreams "* ]] && [ "$HAVE_WEBSTREAMS" -eq 0 ]; }; then
+        if [[ " $flags " == *" needs-webstreams "* ]] && [ "$HAVE_WEBSTREAMS" -eq 0 ]; then
             status="skip"
         else
             rc=0
