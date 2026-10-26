@@ -25,10 +25,10 @@ fi
 echo ""
 echo "=== clippy ==="
 if $FIX; then
-    cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
+    cargo clippy --fix --allow-dirty --allow-staged --all-targets -- -D warnings
     echo "Fixed."
 else
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets -- -D warnings
     echo "Clippy OK."
 fi
 
@@ -37,10 +37,10 @@ echo "=== clippy (perf-counters) ==="
 # The issue-#526 counter facility is behind a Cargo feature, so the default
 # clippy run above never compiles it. Lint it here or it rots silently.
 if $FIX; then
-    cargo clippy --fix --allow-dirty --allow-staged --features perf-counters -- -D warnings
+    cargo clippy --fix --allow-dirty --allow-staged --all-targets --features perf-counters -- -D warnings
     echo "Fixed."
 else
-    cargo clippy --features perf-counters -- -D warnings
+    cargo clippy --all-targets --features perf-counters -- -D warnings
     echo "Clippy OK."
 fi
 
