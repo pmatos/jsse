@@ -1,6 +1,6 @@
 //! Event-loop floor for Node host mode (issue #1229). The prelude's tick and
 //! immediate queues, timers and `process` lifecycle events are built on these;
-//! the loop itself is `interpreter/event_loop/node_event_loop.rs`.
+//! the loop itself is `src/interpreter/node_event_loop.rs`.
 
 use super::super::*;
 

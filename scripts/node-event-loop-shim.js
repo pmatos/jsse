@@ -2,7 +2,7 @@
 // queue ahead of promise jobs, queueMicrotask, the `process` event methods and
 // the exit / beforeExit / uncaughtException / unhandledRejection / warning
 // lifecycle, on the `__host_loop_*` floor (builtins/node_host_loop.rs). The
-// loop itself is interpreter/event_loop/node_event_loop.rs. node-timers-shim.js
+// loop itself is src/interpreter/node_event_loop.rs. node-timers-shim.js
 // (part 2) picks up the helpers this file leaves on a one-shot handoff key.
 // A no-op unless the --node floor is present, so a stray evaluation elsewhere
 // cannot disturb the default global environment. See
