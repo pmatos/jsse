@@ -34,6 +34,9 @@ pub(crate) struct NodeHostState {
     /// `process.exitCode` sink (`__host_set_exit_code`), read by the CLI when
     /// the run ends without an explicit `__host_exit`.
     pub(crate) exit_code: Option<i32>,
+    /// Test-only: the platform name the `os` binding reports.
+    #[cfg(test)]
+    pub(crate) platform_override: Option<&'static str>,
 }
 
 impl Interpreter {
@@ -258,6 +261,7 @@ impl Interpreter {
         }
         self.setup_node_host_loop();
         self.setup_node_host_idna();
+        self.setup_node_host_os();
     }
 }
 

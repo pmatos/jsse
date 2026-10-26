@@ -35,6 +35,18 @@ function validateObject(value, name, options = kValidateObjectNone) {
   }
   const throwOnNullable = (kValidateObjectAllowNullable & options) === 0;
   if (throwOnNullable && value === null) {
+function validateInt32(value, name, min = -2147483648, max = 2147483647) {
+  const { ERR_OUT_OF_RANGE } = require('internal/errors').codes;
+  if (typeof value !== 'number')
+    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  if (!primordials.NumberIsInteger(value))
+    throw new ERR_OUT_OF_RANGE(name, 'an integer', value);
+  if (value < min || value > max)
+    throw new ERR_OUT_OF_RANGE(name, `>= ${min} && <= ${max}`, value);
+}
+
+function validateObject(value, name) {
+  if (value === null || ArrayIsArray(value) || typeof value !== 'object')
     throw new ERR_INVALID_ARG_TYPE(name, 'Object', value);
   }
   const throwOnArray = (kValidateObjectAllowArray & options) === 0;
@@ -117,6 +129,7 @@ module.exports = {
   validateFunction,
   validateInteger,
   validateNumber,
+  validateInt32,
   validateObject,
   validateString,
   validateThisInternalField,

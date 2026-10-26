@@ -105,6 +105,11 @@
       toUnicode: takeHost("__host_idna_to_unicode"),
     },
   };
+  // The native `os` binding (#1222) is private to node-lib/os.js.
+  var hostOs = globalThis.__host_os;
+  delete globalThis.__host_os;
+  hostOs.Buffer = globalThis.Buffer;
+  cache["internal/host/os"] = { exports: hostOs };
 
   function requireBuiltin(id) {
     var cached = cache[id];
