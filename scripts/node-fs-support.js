@@ -19,7 +19,9 @@
   [
     "open", "close", "read", "write", "read_file", "write_file", "stat",
     "exists", "access", "readdir", "readlink", "realpath", "mkdir", "rmdir",
-    "unlink", "rename", "constants",
+    "unlink", "rename", "constants", "symlink", "link", "chmod", "chown",
+    "utimes", "ftruncate", "fsync", "mkdtemp", "statfs", "copyfile",
+    "readdir_types", "mkdirp",
   ].forEach(function (name) {
     host[name] = globalThis["__host_fs_" + name];
     delete globalThis["__host_fs_" + name];
@@ -63,10 +65,11 @@
   }
 
   function invalidArgType(name, expected, value) {
+    var kind = name.indexOf(".") === -1 ? "argument" : "property";
     return nodeError(
       TypeError,
       "ERR_INVALID_ARG_TYPE",
-      'The "' + name + '" argument must be ' + expected + "." +
+      'The "' + name + '" ' + kind + " must be " + expected + "." +
         describeReceived(value)
     );
   }
@@ -105,7 +108,8 @@
     return nodeError(
       TypeError,
       "ERR_INVALID_ARG_VALUE",
-      "The argument '" + name + "' " + (reason || "is invalid") +
+      "The " + (name.indexOf(".") === -1 ? "argument" : "property") + " '" +
+        name + "' " + (reason || "is invalid") +
         ". Received " + shown(value)
     );
   }
@@ -137,7 +141,47 @@
     );
   }
 
+  // Node's SystemError (lib/internal/errors.js): `info` holds the context and
+  // the message reads `<prefix>: <syscall> returned <code> (<message>) <path>`.
+  function systemError(code, prefix, ctx) {
+    var message = prefix + ": " + ctx.syscall + " returned " + ctx.code +
+      " (" + ctx.message + ")";
+    if (ctx.path !== undefined) message += " " + ctx.path;
+    if (ctx.dest !== undefined) message += " => " + ctx.dest;
+    var e = new Error(message);
+    Object.defineProperty(e, "name", {
+      value: "SystemError",
+      writable: true,
+      configurable: true,
+    });
+    e.code = code;
+    e.info = ctx;
+    e.errno = ctx.errno;
+    e.syscall = ctx.syscall;
+    if (ctx.path !== undefined) e.path = ctx.path;
+    if (ctx.dest !== undefined) e.dest = ctx.dest;
+    return e;
+  }
+
   // ---- validators ------------------------------------------------------
+
+  function validateBoolean(value, name) {
+    if (typeof value !== "boolean") {
+      throw invalidArgType(name, "of type boolean", value);
+    }
+  }
+
+  function validateFunction(value, name) {
+    if (typeof value !== "function") {
+      throw invalidArgType(name, "of type function", value);
+    }
+  }
+
+  function validateObject(value, name) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw invalidArgType(name, "of type object", value);
+    }
+  }
 
   function validateInteger(value, name, min, max) {
     if (typeof value !== "number") {
@@ -343,10 +387,15 @@
       O_RDONLY: O_RDONLY,
       nodeError: nodeError,
       invalidArgType: invalidArgType,
+      describeReceived: describeReceived,
       invalidArgValue: invalidArgValue,
       outOfRange: outOfRange,
       notImplemented: notImplemented,
       validateInteger: validateInteger,
+      validateBoolean: validateBoolean,
+      validateFunction: validateFunction,
+      validateObject: validateObject,
+      systemError: systemError,
       getValidatedFd: getValidatedFd,
       isInt32: isInt32,
       isView: isView,

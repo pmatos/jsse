@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-check the synchronous `fs` of `jsse --node` (issue #1217) against Node
+# Cross-check the synchronous `fs` of `jsse --node` (issues #1217, #1218) against Node
 # on a fixture directory tree.
 #
 # Usage:
