@@ -1,0 +1,57 @@
+log-after-static-graph ["cycle-b runs","cycle-a sees b=b0 getA=a0","order-a","order-cjs","tla-delay start","order-b","tla-delay end","order body true"]
+builtins {"fsDefault":"function","fsNamed":true,"pathNsHasJoin":true,"pathNsDefault":true,"pathJoin":true,"emitter":"function","util":"function","tag":"[object Module]"}
+json {"data":{"answer":42,"list":[1,2]},"same":true}
+es {"named":"default-fn","x":1,"counter":0,"ns":["bump","counter","nsutil","util","x","y"],"nsutil":["bump","counter","default","x"],"y":1,"util":true}
+live-binding {"counter":1,"viaNs":1}
+cycle {"a":"a0","b":"b0"}
+cycle-live {"a":"a1"}
+cjs-default {"legacyFn":"legacy-b","plainCjs":{"typeless":"cjs"},"typeless":"esm","cjsInEsmPackage":{"kind":"cjs-in-esm-package","n":7}}
+imports {"which":"import","where":"internal","star":"a","dualSub":"dual-esm","impUse":"imp-lib/dual-esm"}
+packages {"dual":"dual-esm","selfref":"index+other","scoped":"scope-index","feature":"scope-feature","esmOnly":"esm-only","extra":1,"legacyMain":{"legacy":"main"},"selfExport":"self","condorder":"na","pkgName":"dual","pkgData":{"from":"json-pkg"}}
+ns-cjs-default {"ok":["name","dynamicSibling","dynamicLater","dynamicEsmAbove","self"]}
+ns-cjs-same-as-static {"ok":true}
+ns-esm-shape {"ok":{"keys":["default","named"],"default":"dyn-default"}}
+ns-builtin-has-default {"ok":"stringstring"}
+ns-frozen {"ok":[false,true,false]}
+dyn-url-file {"ok":{"default":"dyn-default","named":"dyn-named"}}
+dyn-encoded {"ok":"with space"}
+dyn-query-same-file {"ok":["default","named"]}
+dyn-deep-relative {"ok":"sub-deep"}
+dyn-parent-relative {"ok":"dyn-named"}
+dyn-absolute {"ok":"dyn-named"}
+cjs-dynamic-sibling {"ok":"legacy-sibling"}
+cjs-dynamic-later {"ok":"legacy-sibling"}
+cjs-dynamic-esm-above {"ok":"dyn-named"}
+cjs-exports-identity {"ok":true}
+typeless-cjs-dynamic {"ok":{"typeless":"cjs"}}
+esm-scope-dynamic {"ok":["bump","counter","default","x"]}
+importer-relative-to-importer {"ok":["bump","counter","default","x"]}
+err-not-found {"error":{"name":"Error","code":"ERR_MODULE_NOT_FOUND","message":"Cannot find module '<root>/src/nope.js' imported from <root>/main.mjs"}}
+err-missing-extension {"error":{"name":"Error","code":"ERR_MODULE_NOT_FOUND","message":"Cannot find module '<root>/src/util' imported from <root>/main.mjs"}}
+err-directory {"error":{"name":"Error","code":"ERR_UNSUPPORTED_DIR_IMPORT","message":"Directory import '<root>/sub' is not supported resolving ES modules imported from <root>/main.mjs"}}
+err-package-missing {"error":{"name":"Error","code":"ERR_MODULE_NOT_FOUND","message":"Cannot find package 'nope-pkg' imported from <root>/main.mjs"}}
+err-package-subpath {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './missing' is not defined by \"exports\" in <root>/node_modules/dual/package.json imported from <root>/main.mjs"}}
+err-package-hidden {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './hidden' is not defined by \"exports\" in <root>/node_modules/dual/package.json imported from <root>/main.mjs"}}
+err-package-no-main-export {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"No \"exports\" main defined in <root>/node_modules/json-pkg/package.json imported from <root>/main.mjs"}}
+err-bad-target {"error":{"name":"Error","code":"ERR_INVALID_PACKAGE_TARGET","message":"Invalid \"exports\" main target \"../x.js\" defined in the package config <root>/node_modules/badtarget/package.json imported from <root>/main.mjs; targets must start with \"./\""}}
+ok-bad-target-other {"ok":{"keys":["default"],"default":"ok"}}
+err-imports-undefined {"error":{"name":"TypeError","code":"ERR_PACKAGE_IMPORT_NOT_DEFINED","message":"Package import specifier \"#nope\" is not defined in package <root>/package.json imported from <root>/main.mjs"}}
+err-imports-bad-target {"error":{"name":"Error","code":"ERR_INVALID_PACKAGE_TARGET","message":"Invalid \"imports\" target \"../outside.js\" defined for '#bad' in the package config <root>/package.json imported from <root>/main.mjs"}}
+err-invalid-package-name {"error":{"name":"TypeError","code":"ERR_INVALID_MODULE_SPECIFIER","message":"Invalid module \".hidden/x\" is not a valid package name imported from <root>/main.mjs"}}
+err-scheme-http {"error":{"name":"Error","code":"ERR_UNSUPPORTED_ESM_URL_SCHEME","message":"Only URLs with a scheme in: file and data are supported by the default ESM loader. Received protocol 'http:'"}}
+err-scheme-unknown {"error":{"name":"Error","code":"ERR_UNSUPPORTED_ESM_URL_SCHEME","message":"Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. Received protocol 'foo:'"}}
+err-unknown-builtin {"error":{"name":"Error","code":"ERR_UNKNOWN_BUILTIN_MODULE","message":"No such built-in module: node:nope"}}
+err-unknown-extension {"error":{"name":"TypeError","code":"ERR_UNKNOWN_FILE_EXTENSION","message":"Unknown file extension \".txt\" for <root>/src/unknown.txt"}}
+err-json-missing-attr {"error":{"name":"TypeError","code":"ERR_IMPORT_ATTRIBUTE_MISSING","message":"Module \"<root-url>/src/data.json\" needs an import attribute of \"type: json\""}}
+err-json-wrong-type {"error":{"name":"TypeError","code":"ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE","message":"Module \"<root-url>/src/util.js\" is not of type \"json\""}}
+err-json-builtin {"error":{"name":"TypeError","code":"ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE","message":"Module \"node:fs\" is not of type \"json\""}}
+err-throws-at-eval {"error":{"name":"RangeError","code":"[undefined]","message":"thrown at evaluation"}}
+err-throws-twice {"error":{"name":"RangeError","code":"[undefined]","message":"thrown at evaluation"}}
+err-tla-reject {"error":{"name":"TypeError","code":"[undefined]","message":"tla rejected"}}
+err-bad-options {"error":{"name":"TypeError","code":"[undefined]","message":"The second argument to import() must be an object"}}
+ok-pkg-conditions-dynamic {"ok":{"keys":["default"],"default":"dual-esm"}}
+ok-pkg-pattern {"ok":{"v":"dual-lib-x"}}
+ok-json-dynamic {"ok":{"keys":["default"],"default":{"answer":42,"list":[1,2]}}}
+ok-builtin-prefixless {"ok":true}
+ok-builtin-subpath {"ok":"function"}
+log-end ["cycle-b runs","cycle-a sees b=b0 getA=a0","order-a","order-cjs","tla-delay start","order-b","tla-delay end","order body true","legacy/a.cjs"]

@@ -17,8 +17,8 @@ every test runner.
    sees the loader). With `--node` a `.mjs` file, `--module`, or a `.js` file
    whose nearest package.json (not crossing `node_modules`) says
    `"type": "module"` still runs as an ES module and gets no `require`; the
-   launcher decides this (`src/cli_node.rs`), so ES modules have no route to
-   the builtins until the ESM issue adds `import 'node:path'`. `-e` and the REPL get `require`, `module`,
+   launcher decides this (`src/cli_node.rs`); it reaches the builtins with
+   `import 'node:path'` (`2026-10-26-1700-node-esm-loader.md`). `-e` and the REPL get `require`, `module`,
    `exports`, `__filename` (`[eval]`) and `__dirname` (`.`) as enumerable
    globals, as in Node. **Behaviour change for `--node` users:** library
    bundles and fixtures that relied on script-global semantics now see CommonJS

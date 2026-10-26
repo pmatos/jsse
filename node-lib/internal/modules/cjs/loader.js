@@ -40,6 +40,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { canBeRequiredByUsers, loadBuiltin } = require('internal/modules/builtins');
+const { tagFunction } = require('internal/host/module');
 const { getNearestParentPackageJSON, readPackage } = require('internal/modules/package_json_reader');
 const { packageExportsResolve, packageImportsResolve } = require('internal/modules/exports');
 const {
@@ -494,15 +495,17 @@ function stripBOM(content) {
     StringPrototypeSlice(content, 1) : content;
 }
 
-function wrapSafe(content) {
+function wrapSafe(content, filename) {
   if (StringPrototypeStartsWith(content, '#!')) {
     content = `//${StringPrototypeSlice(content, 2)}`;
   }
-  return new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
+  const wrapper = new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
+  tagFunction(wrapper, filename);
+  return wrapper;
 }
 
 Module.prototype._compile = function(content, filename) {
-  const compiledWrapper = wrapSafe(content);
+  const compiledWrapper = wrapSafe(content, filename);
   const dirname = path.dirname(filename);
   const require = makeRequireFunction(this);
   return ReflectApply(compiledWrapper, this.exports,

@@ -1018,7 +1018,6 @@ impl Interpreter {
                 Completion::Normal(meta_val)
             }
             Expression::Import(source_expr, options_expr) => {
-                // Dynamic import() - returns a Promise
                 // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
                 let source_val = match self.eval_expr(source_expr, env) {
                     Completion::Normal(v) => v,
@@ -1039,7 +1038,7 @@ impl Interpreter {
                         Ok(t) => t,
                         Err(c) => return c,
                     };
-                self.dynamic_import(&source, dynamic_import_type)
+                self.dynamic_import_from(&source, dynamic_import_type, env)
             }
             Expression::ImportDefer(source_expr, options_expr) => {
                 let source_val = match self.eval_expr(source_expr, env) {
