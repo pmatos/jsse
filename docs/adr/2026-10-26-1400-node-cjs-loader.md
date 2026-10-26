@@ -79,6 +79,16 @@ every test runner.
      `index`).
    - `imports` targets that name another package resolve through the CommonJS
      algorithm, not the ESM one.
+   - Module code is compiled with `new Function`, so a syntax error carries no
+     file name or line, and a body that closes the synthetic wrapper early is
+     accepted instead of rejected (jsse#1320).
+   - `require('module')`, `Module.builtinModules`/`isBuiltin`/`wrap` and
+     `runMain` are absent, and only the modules registered in the embedded
+     table (and `fs`, `timers` and the other prelude registrations) can be
+     required: `util`, `buffer` and `process` are globals with no
+     requirable module yet.
+   - The loader needs `fs`, which is `cfg(unix)`, so `--node` script launches
+     are unix-only for now (`tests/node_cjs.rs` is too).
    - The prefix global path (`<execPath>/../../lib/node`) is derived from the
      jsse binary, so it differs from Node's.
 7. **Verification.** `scripts/run-node-cjs-oracle.sh` runs the fixture tree in

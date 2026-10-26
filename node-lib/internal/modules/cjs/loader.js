@@ -241,15 +241,8 @@ function resolveExports(nmPath, request) {
   const expansion = match[2] === undefined ? '' : match[2];
   const pkg = readPackage(path.resolve(nmPath, name));
   if (pkg.exists && pkg.exports != null) {
-    try {
-      const resolved = packageExportsResolve(pkg, `.${expansion}`, undefined, cjsConditions);
-      return finalizeEsmResolution(resolved, pkg.dir);
-    } catch (e) {
-      if (e.code === 'ERR_MODULE_NOT_FOUND') {
-        throw createEsmNotFoundErr(request, `${pkg.dir}/package.json`);
-      }
-      throw e;
-    }
+    const resolved = packageExportsResolve(pkg, `.${expansion}`, undefined, cjsConditions);
+    return finalizeEsmResolution(resolved, pkg.dir);
   }
   return undefined;
 }
@@ -331,15 +324,8 @@ function trySelf(parentPath, request) {
   } else {
     return false;
   }
-  try {
-    const resolved = packageExportsResolve(pkg, expansion, parentPath, cjsConditions);
-    return finalizeEsmResolution(resolved, pkg.dir);
-  } catch (e) {
-    if (e.code === 'ERR_MODULE_NOT_FOUND') {
-      throw createEsmNotFoundErr(request, pkg.pjsonPath);
-    }
-    throw e;
-  }
+  const resolved = packageExportsResolve(pkg, expansion, parentPath, cjsConditions);
+  return finalizeEsmResolution(resolved, pkg.dir);
 }
 
 Module._resolveFilename = function(request, parent, isMain, options) {
@@ -378,16 +364,11 @@ Module._resolveFilename = function(request, parent, isMain, options) {
   if (request[0] === '#' && parentPath) {
     const pkg = getNearestParentPackageJSON(parentPath);
     if (pkg !== undefined && pkg.imports != null) {
-      try {
-        const resolved = packageImportsResolve(request, parentPath, cjsConditions);
-        if (typeof resolved === 'object') {
-          return Module._resolveFilename(resolved.bare, parent, isMain);
-        }
-        return finalizeEsmResolution(resolved, pkg.dir);
-      } catch (e) {
-        if (e.code === 'ERR_MODULE_NOT_FOUND') throw createEsmNotFoundErr(request);
-        throw e;
+      const resolved = packageImportsResolve(request, parentPath, cjsConditions);
+      if (typeof resolved === 'object') {
+        return Module._resolveFilename(resolved.bare, parent, isMain);
       }
+      return finalizeEsmResolution(resolved, pkg.dir);
     }
   }
 

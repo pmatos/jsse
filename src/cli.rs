@@ -148,6 +148,12 @@ fn read_main_source(path: &Path, node: Option<&NodeLaunch>) -> std::io::Result<S
     }
 }
 
+fn is_module_main(path: &Path, force_module: bool, node: Option<&NodeLaunch>) -> bool {
+    force_module
+        || path.extension().is_some_and(|ext| ext == "mjs")
+        || node.is_some_and(|n| n.main_kind == NodeMainKind::Esm)
+}
+
 enum EngineError {
     Parse(String),
     Runtime(String),
@@ -314,9 +320,7 @@ fn run_file(
             return ExitCode::from(1);
         }
     };
-    let is_module = force_module
-        || path.extension().is_some_and(|ext| ext == "mjs")
-        || node.is_some_and(|n| n.main_kind == NodeMainKind::Esm);
+    let is_module = is_module_main(path, force_module, node);
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     execute_code(
         &source,
@@ -476,9 +480,7 @@ fn run_with_preludes(
                 return exit_after_execution(interp, 1);
             }
         };
-        let is_module = cli.module
-            || path.extension().is_some_and(|ext| ext == "mjs")
-            || node.is_some_and(|n| n.main_kind == NodeMainKind::Esm);
+        let is_module = is_module_main(path, cli.module, node);
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
         interp.node_host_finish();

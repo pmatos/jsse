@@ -13,7 +13,7 @@ use std::path::{Component, Path, PathBuf};
 const NODE_MAIN_BOOTSTRAP: &str = "(function () {\n  var run = globalThis.__node_run_main;\n  delete globalThis.__node_run_main;\n  run();\n})();";
 
 impl Interpreter {
-    pub fn node_main_bootstrap() -> &'static str {
+    pub(crate) fn node_main_bootstrap() -> &'static str {
         NODE_MAIN_BOOTSTRAP
     }
 

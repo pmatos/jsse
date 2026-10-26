@@ -24,15 +24,16 @@ impl NodeMainKind {
         }
     }
 
-    /// `.mjs`, `--module`, and `.js` under a `"type": "module"` package are ES
-    /// modules; every other script file is CommonJS.
+    /// `.mjs`, `--module`, and `.js` or extensionless files under a
+    /// `"type": "module"` package are ES modules; every other script file is
+    /// CommonJS.
     pub(crate) fn for_launch(file: Option<&Path>, eval: bool, module: bool) -> Self {
         match file {
             Some(path) if !eval => {
                 let ext = path.extension();
                 if module
                     || ext.is_some_and(|e| e == "mjs")
-                    || (ext.is_some_and(|e| e == "js") && package_type_is_module(path))
+                    || (ext.is_none_or(|e| e == "js") && package_type_is_module(path))
                 {
                     Self::Esm
                 } else {

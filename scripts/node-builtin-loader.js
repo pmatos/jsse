@@ -144,10 +144,12 @@
     if (typeof id !== "string" || id.charAt(0) === "/" || id.charAt(0) === ".") {
       return false;
     }
-    if (id in requirable) return requirable[id];
-    return (requirable[id] =
+    if (id in requirable) return true;
+    var found =
       id in registered ||
-      (strSlice(id, 0, 9) !== "internal/" && hostSource(id) !== undefined));
+      (strSlice(id, 0, 9) !== "internal/" && hostSource(id) !== undefined);
+    if (found) requirable[id] = true;
+    return found;
   }
 
   // Node's exposeLazyInterfaces: an accessor that loads the module on first

@@ -4,6 +4,7 @@
 //! by `scripts/run-node-cjs-oracle.sh`, which also pins Node's output in
 //! expected-{main,eval}.txt; these tests check jsse against the pinned output
 //! (so they need no Node) and cover the launcher contract.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -309,6 +310,11 @@ fn a_main_script_in_a_type_module_package_runs_as_an_es_module() {
         "print(typeof require, this === module.exports);",
     )
     .unwrap();
+    std::fs::write(
+        dir.0.join("app"),
+        "print(typeof require, import.meta.url.startsWith('file:'));",
+    )
+    .unwrap();
     let out = jsse(
         &["--node", dir.0.join("main.js").to_str().unwrap()],
         &dir.0,
@@ -316,6 +322,13 @@ fn a_main_script_in_a_type_module_package_runs_as_an_es_module() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "undefined undefined true");
+    let out = jsse(
+        &["--node", dir.0.join("app").to_str().unwrap()],
+        &dir.0,
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "undefined true");
     let out = jsse(
         &["--node", dir.0.join("legacy.cjs").to_str().unwrap()],
         &dir.0,

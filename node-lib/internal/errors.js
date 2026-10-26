@@ -291,7 +291,6 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
   return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
 });
 
-module.exports = { codes };
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = undefined) {
