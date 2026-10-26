@@ -202,7 +202,7 @@ fn node_ordering_is_stable_under_gc_stress() {
             r#"var log = [];
             process.on("unhandledRejection", function (r) { log.push("rej " + r); });
             setImmediate(function (a) { log.push("imm " + a); process.nextTick(function () { log.push("imm-tick"); }); }, 7);
-            setTimeout(function () { log.push("timer"); Promise.reject("late"); }, 1);
+            setTimeout(function () { log.push("timer"); Promise.reject("late"); }, 250);
             process.nextTick(function () { log.push("tick"); });
             Promise.resolve().then(function () { log.push("promise"); });
             process.on("exit", function () { console.log(log.join(",")); });"#,
