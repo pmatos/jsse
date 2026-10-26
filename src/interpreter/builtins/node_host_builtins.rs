@@ -18,6 +18,7 @@ macro_rules! builtin {
 }
 
 const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
+    builtin!("os"),
     builtin!("path"),
     builtin!("path/posix"),
     builtin!("path/win32"),
@@ -40,6 +41,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/modules/cjs/loader"),
     builtin!("internal/modules/exports"),
     builtin!("internal/modules/package_json_reader"),
+    builtin!("internal/os/cidr"),
     builtin!("internal/path/common"),
     builtin!("internal/path/glob"),
     builtin!("internal/path/posix"),

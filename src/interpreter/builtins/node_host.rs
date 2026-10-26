@@ -36,6 +36,9 @@ pub(crate) struct NodeHostState {
     pub(crate) exit_code: Option<i32>,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    /// Test-only: the platform name the `os` binding reports.
+    #[cfg(test)]
+    pub(crate) platform_override: Option<&'static str>,
 }
 
 impl Interpreter {
@@ -264,6 +267,7 @@ impl Interpreter {
         }
         self.setup_node_host_loop();
         self.setup_node_host_idna();
+        self.setup_node_host_os();
     }
 }
 

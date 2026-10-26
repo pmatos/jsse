@@ -45,7 +45,7 @@ every test runner.
    `builtin!("<id>")` line. `require("internal/...")` and unknown names fall
    through to file resolution (`MODULE_NOT_FOUND`) as in Node;
    `require("node:<unknown or internal>")` is `ERR_UNKNOWN_BUILTIN_MODULE`.
-   Node core modules jsse does not ship yet (`os`, `util`, ...) are
+   Node core modules jsse does not ship yet (`util`, `http`, ...) are
    `MODULE_NOT_FOUND`, not their Node behaviour, until their issues land.
 4. **Layout.** `node-lib/internal/modules/cjs/loader.js` (`Module`, resolution,
    wrapper, `runMain`, `setupEval`), `.../exports.js` (package

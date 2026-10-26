@@ -60,6 +60,39 @@ function E(code, Base, message) {
   codes[code] = NodeError;
 }
 
+class SystemError extends Error {
+  constructor(context) {
+    super();
+    let message = `A system error occurred: ${context.syscall} returned ` +
+      `${context.code} (${context.message})`;
+    if (context.path !== undefined) message += ` ${context.path}`;
+    if (context.dest !== undefined) message += ` => ${context.dest}`;
+    this.code = 'ERR_SYSTEM_ERROR';
+    primordials.ObjectDefineProperties(this, {
+      name: { value: 'SystemError', enumerable: false, writable: true, configurable: true },
+      message: { value: message, enumerable: false, writable: true, configurable: true },
+      info: { value: context, enumerable: true, configurable: true, writable: false },
+      errno: {
+        get() { return context.errno; },
+        set(value) { context.errno = value; },
+        enumerable: true,
+        configurable: true,
+      },
+      syscall: {
+        get() { return context.syscall; },
+        set(value) { context.syscall = value; },
+        enumerable: true,
+        configurable: true,
+      },
+    });
+  }
+
+  toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
+  }
+}
+codes.ERR_SYSTEM_ERROR = SystemError;
+
 function determineSpecificType(value) {
   if (value === null) {
     return 'null';

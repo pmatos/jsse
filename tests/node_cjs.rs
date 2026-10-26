@@ -157,7 +157,7 @@ fn builtin_registries_unify_behind_require() {
       print(require.resolve("fs"), require.resolve("node:path"));
       const timers = require("timers");
       print(require("node:timers") === timers, require("timers/promises") === timers.promises, timers.setTimeout === setTimeout);
-      for (const id of ["os", "node:fs/nope", "fs/"]) {
+      for (const id of ["http", "node:fs/nope", "fs/"]) {
         try { require(id); print("no throw", id); } catch (e) { print(id, e.code); }
       }
     "#;
@@ -165,7 +165,7 @@ fn builtin_registries_unify_behind_require() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "function true true\nfs node:path\ntrue true true\nos MODULE_NOT_FOUND\nnode:fs/nope ERR_UNKNOWN_BUILTIN_MODULE\nfs/ MODULE_NOT_FOUND"
+        "function true true\nfs node:path\ntrue true true\nhttp MODULE_NOT_FOUND\nnode:fs/nope ERR_UNKNOWN_BUILTIN_MODULE\nfs/ MODULE_NOT_FOUND"
     );
 }
 
