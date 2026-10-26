@@ -22,6 +22,7 @@ pub(crate) mod node_host;
 mod number;
 mod object;
 pub(crate) mod plural_rules_state;
+mod predicate_quantification;
 mod primitive_constructors;
 mod promise;
 mod proxy;

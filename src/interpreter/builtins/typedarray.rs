@@ -1,5 +1,6 @@
 use super::super::*;
 use super::find_via_predicate::FindMethod;
+use super::predicate_quantification::{self, Quantifier};
 use super::reduction::{self, Reduction};
 use crate::interpreter::types::BufferData;
 use crate::types::{JsBigInt, JsValue, ValueKind, number_ops};
@@ -2686,28 +2687,12 @@ impl Interpreter {
             "every".to_string(),
             1,
             |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-                for i in 0..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if !interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::boolean(false));
-                            }
-                        }
-                        other => return other,
-                    }
-                }
-                Completion::Normal(JsValue::boolean(true))
+                predicate_quantification::quantify(
+                    interp,
+                    Quantifier::TypedArrayEvery,
+                    this_val,
+                    args,
+                )
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2719,28 +2704,12 @@ impl Interpreter {
             "some".to_string(),
             1,
             |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-                for i in 0..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val, JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if interp.to_boolean_val(&result) {
-                                return Completion::Normal(JsValue::boolean(true));
-                            }
-                        }
-                        other => return other,
-                    }
-                }
-                Completion::Normal(JsValue::boolean(false))
+                predicate_quantification::quantify(
+                    interp,
+                    Quantifier::TypedArraySome,
+                    this_val,
+                    args,
+                )
             },
         ));
         self.get_object_cell_expect(proto_id)

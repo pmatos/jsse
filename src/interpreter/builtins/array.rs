@@ -1,6 +1,7 @@
 use super::super::*;
 use super::array_dense;
 use super::find_via_predicate::FindMethod;
+use super::predicate_quantification::{self, Quantifier};
 use super::reduction::{self, Reduction};
 use crate::interpreter::gc::RootedSlots;
 
@@ -1944,79 +1945,12 @@ impl Interpreter {
 
         // Array.prototype.some
         self.define_method(proto_id, "some", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(interp, &callback, "some callback is not a function") {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            for k in 0..len {
-                match get_if_present(interp, &o, k) {
-                    Ok(Some(kvalue)) => {
-                        match interp.call_function(
-                            &callback,
-                            &this_arg,
-                            &[kvalue, JsValue::number(k as f64), o.clone()],
-                        ) {
-                            Completion::Normal(v) => {
-                                if interp.to_boolean_val(&v) {
-                                    return Completion::Normal(JsValue::boolean(true));
-                                }
-                            }
-                            other => return other,
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(c) => return c,
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            predicate_quantification::quantify(interp, Quantifier::ArraySome, this_val, args)
         });
 
         // Array.prototype.every
         self.define_method(proto_id, "every", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(interp, &callback, "every callback is not a function")
-            {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            for k in 0..len {
-                match get_if_present(interp, &o, k) {
-                    Ok(Some(kvalue)) => {
-                        match interp.call_function(
-                            &callback,
-                            &this_arg,
-                            &[kvalue, JsValue::number(k as f64), o.clone()],
-                        ) {
-                            Completion::Normal(v) => {
-                                if !interp.to_boolean_val(&v) {
-                                    return Completion::Normal(JsValue::boolean(false));
-                                }
-                            }
-                            other => return other,
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(c) => return c,
-                }
-            }
-            Completion::Normal(JsValue::boolean(true))
+            predicate_quantification::quantify(interp, Quantifier::ArrayEvery, this_val, args)
         });
 
         // Array.prototype.find
