@@ -215,6 +215,9 @@
   delete globalThis.__host_os;
   hostOs.Buffer = globalThis.Buffer;
   cache["internal/host/os"] = { exports: hostOs };
+  // The terminal and standard-stream floor (#1232), private to the stdio and
+  // tty modules.
+  cache["internal/host/tty"] = { exports: takeHost("__host_tty") };
   // The native `crypto` binding (#1226), plus the entropy floor and the global
   // Web Crypto object the module re-exports as `webcrypto`.
   var hostCrypto = globalThis.__host_crypto;
@@ -323,6 +326,7 @@
 
   // `console` writes through the embedded util module (Node's inspect/format).
   requireBuiltin("internal/console/node");
+  requireBuiltin("internal/process/stdio");
 
   cache["internal/modules/builtins"] = {
     exports: { canBeRequiredByUsers: canBeRequiredByUsers, loadBuiltin: requireBuiltin },

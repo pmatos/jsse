@@ -1,0 +1,4 @@
+exit=0
+--- stdout
+end true true "x\ny\r\nz\n"
+--- stderr

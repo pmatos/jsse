@@ -430,6 +430,10 @@ E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
   return `The URL must be ${res}`;
 });
 
+E('ERR_INVALID_FD', RangeError, (value) => format('"fd" must be a positive integer: %s', value));
+E('ERR_INVALID_CURSOR_POS', TypeError, 'Cannot set cursor row without setting its column');
+E('ERR_USE_AFTER_CLOSE', Error, (name) => `${name} was closed`);
+
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = undefined) {

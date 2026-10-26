@@ -1,0 +1,4 @@
+exit=0
+--- tty
+{ a: 1, s: 'str' }\r
+1 false\r

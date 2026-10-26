@@ -1,0 +1,9 @@
+exit=0
+--- tty
+stdin ReadStream  0 true true true   undefined undefined function true true true true true\r
+stdout WriteStream tty 1 true true true 100 30 function function undefined true true true true true\r
+stderr WriteStream tty 2 true true true 100 30 function function undefined true true true true true\r
+true true true false false false false\r
+true\r
+true\r
+ReadStream,WriteStream,isatty\r

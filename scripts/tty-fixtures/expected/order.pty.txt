@@ -1,0 +1,17 @@
+exit=0
+--- tty
+1 console.log\r
+2 stdout.write\r
+3 console.error\r
+4 stderr.write\r
+5 fmt 7\r
+6 no newline ... continued\r
+7 buffer\r
+8 u8\r
+9 café ☃\r
+10 latin1 \xe9\r
+12 hex\r
+13 base64\r
+g\r
+  14 grouped\r
+15 last\r

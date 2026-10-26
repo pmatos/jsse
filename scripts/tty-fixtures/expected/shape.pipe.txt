@@ -1,0 +1,10 @@
+exit=0
+--- stdout
+stdin Socket  0  true false   undefined undefined undefined true true true true true
+stdout Socket pipe 1  false true   undefined undefined undefined true true true true true
+stderr Socket pipe 2  false true   undefined undefined undefined true true true true true
+false false false false false false false
+true
+true
+ReadStream,WriteStream,isatty
+--- stderr
