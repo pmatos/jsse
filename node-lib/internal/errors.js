@@ -59,6 +59,65 @@ function E(code, Base, message) {
   codes[code] = NodeError;
 }
 
+function addNumericalSeparator(val) {
+  let res = '';
+  let i = val.length;
+  const start = val[0] === '-' ? 1 : 0;
+  for (; i >= start + 4; i -= 3) {
+    res = `_${primordials.StringPrototypeSlice(val, i - 3, i)}${res}`;
+  }
+  return `${primordials.StringPrototypeSlice(val, 0, i)}${res}`;
+}
+
+E('ERR_OUT_OF_RANGE', RangeError, (str, range, input) => {
+  let received;
+  if (primordials.NumberIsInteger(input) && primordials.MathAbs(input) > 2 ** 32) {
+    received = addNumericalSeparator(`${input}`);
+  } else if (typeof input === 'bigint') {
+    received = `${input}`;
+    if (input > 2n ** 32n || input < -(2n ** 32n)) {
+      received = addNumericalSeparator(received);
+    }
+    received += 'n';
+  } else {
+    received = inspect(input);
+  }
+  return `The value of "${str}" is out of range. It must be ${range}. Received ${received}`;
+});
+
+class SystemError extends Error {
+  constructor(context) {
+    super();
+    let message = `A system error occurred: ${context.syscall} returned ` +
+      `${context.code} (${context.message})`;
+    if (context.path !== undefined) message += ` ${context.path}`;
+    if (context.dest !== undefined) message += ` => ${context.dest}`;
+    this.code = 'ERR_SYSTEM_ERROR';
+    primordials.ObjectDefineProperties(this, {
+      name: { value: 'SystemError', enumerable: false, writable: true, configurable: true },
+      message: { value: message, enumerable: false, writable: true, configurable: true },
+      info: { value: context, enumerable: true, configurable: true, writable: false },
+      errno: {
+        get() { return context.errno; },
+        set(value) { context.errno = value; },
+        enumerable: true,
+        configurable: true,
+      },
+      syscall: {
+        get() { return context.syscall; },
+        set(value) { context.syscall = value; },
+        enumerable: true,
+        configurable: true,
+      },
+    });
+  }
+
+  toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
+  }
+}
+codes.ERR_SYSTEM_ERROR = SystemError;
+
 function determineSpecificType(value) {
   if (value === null) {
     return 'null';

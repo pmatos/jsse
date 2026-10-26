@@ -58,6 +58,10 @@ function validateInteger(
     throw new ERR_OUT_OF_RANGE(name, `>= ${min} && <= ${max}`, value);
 }
 
+function validateInt32(value, name, min = -2147483648, max = 2147483647) {
+  validateInteger(value, name, min, max);
+}
+
 function validateUint32(value, name, positive = false) {
   if (typeof value !== 'number') {
     throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
@@ -115,6 +119,7 @@ module.exports = {
   validateAbortSignal,
   validateBoolean,
   validateFunction,
+  validateInt32,
   validateInteger,
   validateNumber,
   validateObject,
