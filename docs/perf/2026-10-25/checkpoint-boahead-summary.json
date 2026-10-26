@@ -1,0 +1,516 @@
+{
+ "meta": {
+  "sha": "58606ad14640042275c24b01897f27a1f0871338",
+  "subject": "feat(host): add structuredClone, btoa and atob globals (#1207)",
+  "jsse_sha256": "f8d21592620df4f8d250bc9792ab65eed3bfbb60fa8ac06834f7ca9850caf206",
+  "jsse_version": "jsse 0.11.0",
+  "boa": "/home/igalia/pmatos/dev/boa-head/target/release/boa",
+  "boa_version": "0.22.0",
+  "boa_sha256": "67440462902fc53a8e7b8eca9e636ee618234149f77f1d4dee4d210b16629cdf",
+  "runner_sha256": "d061f395bdadc64911696f121bb495343d4b66cad6c0133e22254a5f2bce5ffb",
+  "jetstream": "/home/igalia/pmatos/dev/bench-workspace/JetStream",
+  "jetstream_commit": "c603c04 Use JetStream Next for main branch (#300)",
+  "jetstream_tests": "",
+  "host": "buildbox3",
+  "rustc": "rustc 1.100.0-nightly (330d31712 2026-09-17)",
+  "started": "2026-10-25T20:14:04Z"
+ },
+ "micro": {
+  "rows": [
+   {
+    "bench": "bench_fib",
+    "jsse_s": 0.9505638917908072,
+    "boa_s": 1.2065554158762097,
+    "ratio": 0.7878327669686854,
+    "flags": [
+     "jsse range 6%"
+    ]
+   },
+   {
+    "bench": "bench_closures",
+    "jsse_s": 1.3071502386592329,
+    "boa_s": 1.8976284209638834,
+    "ratio": 0.6888336115851793,
+    "flags": []
+   },
+   {
+    "bench": "bench_opmix",
+    "jsse_s": 6.917826290708035,
+    "boa_s": 10.864122004248202,
+    "ratio": 0.6367588920672057,
+    "flags": []
+   },
+   {
+    "bench": "bench_string",
+    "jsse_s": 0.10797122912481427,
+    "boa_s": 0.46313495514914393,
+    "ratio": 0.2331312459238672,
+    "flags": [
+     "boa range 6%"
+    ]
+   },
+   {
+    "bench": "bench_array",
+    "jsse_s": 0.18082938762381673,
+    "boa_s": 0.30964269395917654,
+    "ratio": 0.5839937164726301,
+    "flags": []
+   },
+   {
+    "bench": "bench_object",
+    "jsse_s": 0.36013153614476323,
+    "boa_s": 0.5271152406930923,
+    "ratio": 0.6832121485829818,
+    "flags": [
+     "jsse range 9%"
+    ]
+   },
+   {
+    "bench": "bench_loop",
+    "jsse_s": 0.6157315815798938,
+    "boa_s": 1.537654479034245,
+    "ratio": 0.40043559198462875,
+    "flags": []
+   },
+   {
+    "bench": "bench_json",
+    "jsse_s": 0.10747563885524869,
+    "boa_s": 0.3079132456332445,
+    "ratio": 0.34904519496788045,
+    "flags": []
+   },
+   {
+    "bench": "bench_regex",
+    "jsse_s": 0.07186091877520084,
+    "boa_s": 0.16034802980720997,
+    "ratio": 0.44815591973035673,
+    "flags": []
+   }
+  ],
+  "geomean_slowdown": 0.5016915531471895,
+  "n": 9,
+  "startup": {
+   "jsse_ms": 15.133600682020187,
+   "boa_ms": 28.801704291254282
+  },
+  "loadavg_start": [
+   1.26,
+   1.72,
+   1.72
+  ],
+  "loadavg_end": [
+   1.94,
+   1.72,
+   1.71
+  ],
+  "repeats": 5
+ },
+ "jetstream": {
+  "n_both_pass": 44,
+  "geomean_time_ratio": 0.5310673650593439,
+  "geomean_jsse_score": 4.494368012677522,
+  "geomean_boa_score": 2.3868121780996514,
+  "jsse_wins": 44,
+  "jsse_losses": 0,
+  "jsse_pass": 48,
+  "boa_pass": 44,
+  "total": 48,
+  "jsse_only_pass": [
+   "Basic",
+   "OfflineAssembler",
+   "typescript-octane",
+   "validatorjs"
+  ],
+  "boa_only_pass": [],
+  "jsse_fail": [],
+  "boa_fail": [
+   "Basic(error)",
+   "OfflineAssembler(error)",
+   "typescript-octane(error)",
+   "validatorjs(error)"
+  ],
+  "rows": [
+   {
+    "name": "Air",
+    "jsse": 13.368983957219251,
+    "boa": 6.613756613756614,
+    "ratio": 0.4947089947089947,
+    "unstable": false
+   },
+   {
+    "name": "Babylon",
+    "jsse": 8.375209380234503,
+    "boa": 5.257623554153523,
+    "ratio": 0.6277602523659308,
+    "unstable": false
+   },
+   {
+    "name": "Box2D",
+    "jsse": 4.108463434675431,
+    "boa": 2.99043062200957,
+    "ratio": 0.7278708133971293,
+    "unstable": false
+   },
+   {
+    "name": "FlightPlanner",
+    "jsse": 13.927576601671312,
+    "boa": 6.849315068493151,
+    "ratio": 0.4917808219178082,
+    "unstable": false
+   },
+   {
+    "name": "ML",
+    "jsse": 0.4696599661844824,
+    "boa": 0.2423772359300015,
+    "ratio": 0.5160696107421592,
+    "unstable": false
+   },
+   {
+    "name": "UniPoker",
+    "jsse": 5.399568034557236,
+    "boa": 3.5038542396636303,
+    "ratio": 0.6489138051857043,
+    "unstable": false
+   },
+   {
+    "name": "ai-astar",
+    "jsse": 5.707762557077626,
+    "boa": 3.080714725816389,
+    "ratio": 0.5397412199630314,
+    "unstable": false
+   },
+   {
+    "name": "async-fs",
+    "jsse": 4.553734061930783,
+    "boa": 1.968503937007874,
+    "ratio": 0.4322834645669292,
+    "unstable": true
+   },
+   {
+    "name": "bigint-bigdenary",
+    "jsse": 4.655493482309125,
+    "boa": 3.453038674033149,
+    "ratio": 0.7417127071823204,
+    "unstable": false
+   },
+   {
+    "name": "bigint-noble-bls12-381",
+    "jsse": 0.3610890445583881,
+    "boa": 0.24648755237860487,
+    "ratio": 0.6826226275573084,
+    "unstable": false
+   },
+   {
+    "name": "bigint-noble-ed25519",
+    "jsse": 4.1017227235438884,
+    "boa": 3.6153289949385394,
+    "ratio": 0.8814172089660159,
+    "unstable": false
+   },
+   {
+    "name": "bigint-noble-secp256k1",
+    "jsse": 4.8543689320388355,
+    "boa": 4.317789291882556,
+    "ratio": 0.8894645941278064,
+    "unstable": false
+   },
+   {
+    "name": "bigint-paillier",
+    "jsse": 2.450980392156863,
+    "boa": 1.3838915029061722,
+    "ratio": 0.5646277331857182,
+    "unstable": true
+   },
+   {
+    "name": "cdjs",
+    "jsse": 0.9023641941887746,
+    "boa": 0.5425347222222222,
+    "ratio": 0.6012369791666666,
+    "unstable": false
+   },
+   {
+    "name": "crypto",
+    "jsse": 5.567928730512249,
+    "boa": 3.276539973787681,
+    "ratio": 0.5884665792922675,
+    "unstable": false
+   },
+   {
+    "name": "delta-blue",
+    "jsse": 3.5612535612535607,
+    "boa": 2.7563395810363835,
+    "ratio": 0.7739801543550167,
+    "unstable": false
+   },
+   {
+    "name": "doxbee-async",
+    "jsse": 8.865248226950355,
+    "boa": 2.8105677346824054,
+    "ratio": 0.3170320404721753,
+    "unstable": false
+   },
+   {
+    "name": "doxbee-promise",
+    "jsse": 5.727376861397479,
+    "boa": 1.5015015015015014,
+    "ratio": 0.2621621621621622,
+    "unstable": false
+   },
+   {
+    "name": "earley-boyer",
+    "jsse": 4.11522633744856,
+    "boa": 2.3496240601503757,
+    "ratio": 0.5709586466165413,
+    "unstable": false
+   },
+   {
+    "name": "first-inspector-code-load",
+    "jsse": 24.390243902439025,
+    "boa": 4.363001745200698,
+    "ratio": 0.17888307155322863,
+    "unstable": false
+   },
+   {
+    "name": "gaussian-blur",
+    "jsse": 1.6818028927009754,
+    "boa": 1.1208249271463797,
+    "ratio": 0.6664425016812374,
+    "unstable": false
+   },
+   {
+    "name": "gbemu",
+    "jsse": 1.1646866992778941,
+    "boa": 0.6939625260235948,
+    "ratio": 0.5958362248438586,
+    "unstable": false
+   },
+   {
+    "name": "hash-map",
+    "jsse": 1.5782828282828283,
+    "boa": 1.2807377049180328,
+    "ratio": 0.8114754098360656,
+    "unstable": false
+   },
+   {
+    "name": "js-tokens",
+    "jsse": 3.872966692486444,
+    "boa": 0.6943480072212193,
+    "ratio": 0.17928065546451882,
+    "unstable": true
+   },
+   {
+    "name": "json-parse-inspector",
+    "jsse": 4.807692307692307,
+    "boa": 3.1645569620253164,
+    "ratio": 0.658227848101266,
+    "unstable": false
+   },
+   {
+    "name": "json-stringify-inspector",
+    "jsse": 36.76470588235294,
+    "boa": 4.122011541632316,
+    "ratio": 0.112118713932399,
+    "unstable": false
+   },
+   {
+    "name": "lazy-collections",
+    "jsse": 5.747126436781609,
+    "boa": 3.65764447695684,
+    "ratio": 0.6364301389904903,
+    "unstable": false
+   },
+   {
+    "name": "mandreel",
+    "jsse": 0.2452062184296994,
+    "boa": 0.18653236336504384,
+    "ratio": 0.7607162842753217,
+    "unstable": false
+   },
+   {
+    "name": "multi-inspector-code-load",
+    "jsse": 24.27184466019418,
+    "boa": 4.355400696864112,
+    "ratio": 0.17944250871080136,
+    "unstable": false
+   },
+   {
+    "name": "navier-stokes",
+    "jsse": 8.635578583765112,
+    "boa": 5.440696409140369,
+    "ratio": 0.6300326441784547,
+    "unstable": false
+   },
+   {
+    "name": "octane-code-load",
+    "jsse": 106.38297872340426,
+    "boa": 46.296296296296305,
+    "ratio": 0.43518518518518523,
+    "unstable": true
+   },
+   {
+    "name": "pdfjs",
+    "jsse": 3.4602076124567476,
+    "boa": 1.614465611882467,
+    "ratio": 0.4665805618340329,
+    "unstable": false
+   },
+   {
+    "name": "proxy-mobx",
+    "jsse": 31.446540880503143,
+    "boa": 23.255813953488367,
+    "ratio": 0.7395348837209301,
+    "unstable": false
+   },
+   {
+    "name": "proxy-vue",
+    "jsse": 16.83501683501683,
+    "boa": 12.626262626262625,
+    "ratio": 0.7500000000000001,
+    "unstable": true
+   },
+   {
+    "name": "raytrace",
+    "jsse": 1.7863522686673812,
+    "boa": 1.0640561821664183,
+    "ratio": 0.595658650776761,
+    "unstable": false
+   },
+   {
+    "name": "raytrace-private-class-fields",
+    "jsse": 1.3154433043935807,
+    "boa": 0.790263948158685,
+    "ratio": 0.6007586533902323,
+    "unstable": false
+   },
+   {
+    "name": "raytrace-public-class-fields",
+    "jsse": 1.4277555682467162,
+    "boa": 0.9485866059571239,
+    "ratio": 0.6643900588123696,
+    "unstable": false
+   },
+   {
+    "name": "regexp-octane",
+    "jsse": 5.065856129685917,
+    "boa": 1.2230919765166341,
+    "ratio": 0.24143835616438356,
+    "unstable": false
+   },
+   {
+    "name": "richards",
+    "jsse": 2.540650406504065,
+    "boa": 2.1376656690893543,
+    "ratio": 0.8413852073535699,
+    "unstable": false
+   },
+   {
+    "name": "splay",
+    "jsse": 5.434782608695652,
+    "boa": 4.317789291882556,
+    "ratio": 0.7944732297063902,
+    "unstable": false
+   },
+   {
+    "name": "stanford-crypto-aes",
+    "jsse": 4.006410256410256,
+    "boa": 2.5627883136852896,
+    "ratio": 0.6396719630958483,
+    "unstable": true
+   },
+   {
+    "name": "stanford-crypto-pbkdf2",
+    "jsse": 6.622516556291391,
+    "boa": 4.712535344015081,
+    "ratio": 0.7115928369462773,
+    "unstable": false
+   },
+   {
+    "name": "stanford-crypto-sha256",
+    "jsse": 6.134969325153374,
+    "boa": 4.219409282700421,
+    "ratio": 0.6877637130801686,
+    "unstable": true
+   },
+   {
+    "name": "sync-fs",
+    "jsse": 3.5486160397444997,
+    "boa": 2.003205128205128,
+    "ratio": 0.5645032051282051,
+    "unstable": false
+   }
+  ],
+  "worst10": [
+   {
+    "name": "bigint-noble-secp256k1",
+    "jsse": 4.8543689320388355,
+    "boa": 4.317789291882556,
+    "ratio": 0.8894645941278064,
+    "unstable": false
+   },
+   {
+    "name": "bigint-noble-ed25519",
+    "jsse": 4.1017227235438884,
+    "boa": 3.6153289949385394,
+    "ratio": 0.8814172089660159,
+    "unstable": false
+   },
+   {
+    "name": "richards",
+    "jsse": 2.540650406504065,
+    "boa": 2.1376656690893543,
+    "ratio": 0.8413852073535699,
+    "unstable": false
+   },
+   {
+    "name": "hash-map",
+    "jsse": 1.5782828282828283,
+    "boa": 1.2807377049180328,
+    "ratio": 0.8114754098360656,
+    "unstable": false
+   },
+   {
+    "name": "splay",
+    "jsse": 5.434782608695652,
+    "boa": 4.317789291882556,
+    "ratio": 0.7944732297063902,
+    "unstable": false
+   },
+   {
+    "name": "delta-blue",
+    "jsse": 3.5612535612535607,
+    "boa": 2.7563395810363835,
+    "ratio": 0.7739801543550167,
+    "unstable": false
+   },
+   {
+    "name": "mandreel",
+    "jsse": 0.2452062184296994,
+    "boa": 0.18653236336504384,
+    "ratio": 0.7607162842753217,
+    "unstable": false
+   },
+   {
+    "name": "proxy-vue",
+    "jsse": 16.83501683501683,
+    "boa": 12.626262626262625,
+    "ratio": 0.7500000000000001,
+    "unstable": true
+   },
+   {
+    "name": "bigint-bigdenary",
+    "jsse": 4.655493482309125,
+    "boa": 3.453038674033149,
+    "ratio": 0.7417127071823204,
+    "unstable": false
+   },
+   {
+    "name": "proxy-mobx",
+    "jsse": 31.446540880503143,
+    "boa": 23.255813953488367,
+    "ratio": 0.7395348837209301,
+    "unstable": false
+   }
+  ],
+  "subset": null
+ }
+}
