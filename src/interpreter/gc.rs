@@ -1,5 +1,7 @@
 use super::*;
 
+mod module_roots;
+
 /// Allocation-pressure pacing for the garbage collector.
 ///
 /// Owns the accounting that decides *when* to collect: how many objects and
@@ -595,32 +597,7 @@ impl Interpreter {
         if let Some(id) = self.new_target.as_ref().and_then(JsValue::as_object_id) {
             roots.push(id);
         }
-        // Module environments are not necessarily reachable from global_env.
-        for module in self.module_registry.values() {
-            let m = module.borrow();
-            Self::collect_env_roots(&m.env, &mut roots, &mut seen_envs);
-            for val in m.exports.values() {
-                Self::collect_value_roots(val, &mut roots);
-            }
-            if let Some(ms) = &m.module_source {
-                Self::collect_value_roots(ms, &mut roots);
-            }
-            if let Some((promise, resolve, reject)) = &m.top_level_capability {
-                Self::collect_value_roots(promise, &mut roots);
-                Self::collect_value_roots(resolve, &mut roots);
-                Self::collect_value_roots(reject, &mut roots);
-            }
-        }
-        for module in self.synthetic_module_registry.values() {
-            let m = module.borrow();
-            Self::collect_env_roots(&m.env, &mut roots, &mut seen_envs);
-            for val in m.exports.values() {
-                Self::collect_value_roots(val, &mut roots);
-            }
-            if let Some(ms) = &m.module_source {
-                Self::collect_value_roots(ms, &mut roots);
-            }
-        }
+        self.collect_module_roots(&mut roots, &mut seen_envs);
         for env in &self.call_stack_envs {
             Self::collect_env_roots(env, &mut roots, &mut seen_envs);
         }
