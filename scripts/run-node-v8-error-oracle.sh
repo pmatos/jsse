@@ -4,15 +4,16 @@
 # Usage:
 #   ./scripts/run-node-v8-error-oracle.sh [--node] [--no-cross-check]
 #
-# scripts/v8-error-fixtures/cases.js runs on Node and on `jsse --node`. Each
-# run's stdout is normalised (the fixture directory becomes <dir>; stack frames
-# outside cases.js, and the top-level `Object.<anonymous>` frame Node adds, are
-# dropped) and the two must be identical and equal expected-cases.txt, which
+# Each fixture in scripts/v8-error-fixtures (cases.js: frame shapes; modules.js:
+# frames of code loaded through require()) runs on Node and on `jsse --node`.
+# Each run's stdout is normalised (the fixture directory becomes <dir>; stack
+# frames outside it, and the top-level `Object.<anonymous>` frame Node adds, are
+# dropped) and the two must be identical and equal expected-<name>.txt, which
 # is Node's own output.
 #
 # Options:
-#   --node             run on Node only and rewrite expected-cases.txt
-#   --no-cross-check   run on jsse only and compare with expected-cases.txt
+#   --node             run on Node only and rewrite the expected-*.txt files
+#   --no-cross-check   run on jsse only and compare with the expected-*.txt files
 
 set -euo pipefail
 
@@ -46,34 +47,40 @@ fi
 
 normalise() {
     sed -e "s#$DIR#<dir>#g" | awk '
-        /^[[:space:]]+at / { if ($0 ~ /<dir>\/cases\.js/ && $0 !~ /Object\.<anonymous>/) print; next }
+        /^[[:space:]]+at / { if ($0 ~ /<dir>\// && $0 !~ /Object\.<anonymous>/) print; next }
         { print }'
 }
 
 FAIL=0
-if [ "$NODE_ONLY" -eq 1 ]; then
-    "$NODE_BIN" "$DIR/cases.js" 2>&1 | normalise > "$DIR/expected-cases.txt"
-    echo "wrote $DIR/expected-cases.txt"
-    exit 0
-fi
-
-"$JSSE" --node "$DIR/cases.js" 2>&1 | normalise > "$WORK/jsse.out" || true
-if ! diff -u "$DIR/expected-cases.txt" "$WORK/jsse.out" > "$WORK/jsse.diff"; then
-    echo "FAIL: jsse differs from expected-cases.txt (--- expected, +++ jsse)"
-    head -80 "$WORK/jsse.diff"
-    FAIL=1
-else
-    echo "ok   jsse matches expected-cases.txt"
-fi
-if [ "$CROSS_CHECK" -eq 1 ]; then
-    "$NODE_BIN" "$DIR/cases.js" 2>&1 | normalise > "$WORK/node.out" || true
-    if ! diff -u "$DIR/expected-cases.txt" "$WORK/node.out" > "$WORK/node.diff"; then
-        echo "FAIL: node differs from expected-cases.txt (stale snapshot?)"
-        head -40 "$WORK/node.diff"
+for NAME in cases modules; do
+    FIXTURE="$DIR/$NAME.js"
+    EXPECTED="$DIR/expected-$NAME.txt"
+    if [ "$NODE_ONLY" -eq 1 ]; then
+        "$NODE_BIN" "$FIXTURE" 2>&1 | normalise > "$EXPECTED"
+        echo "wrote $EXPECTED"
+        continue
+    fi
+    "$JSSE" --node "$FIXTURE" 2>&1 | normalise > "$WORK/jsse.out" || true
+    if ! diff -u "$EXPECTED" "$WORK/jsse.out" > "$WORK/jsse.diff"; then
+        echo "FAIL: $NAME: jsse differs from expected-$NAME.txt (--- expected, +++ jsse)"
+        head -80 "$WORK/jsse.diff"
         FAIL=1
     else
-        echo "ok   node matches expected-cases.txt"
+        echo "ok   $NAME: jsse matches expected-$NAME.txt"
     fi
+    if [ "$CROSS_CHECK" -eq 1 ]; then
+        "$NODE_BIN" "$FIXTURE" 2>&1 | normalise > "$WORK/node.out" || true
+        if ! diff -u "$EXPECTED" "$WORK/node.out" > "$WORK/node.diff"; then
+            echo "FAIL: $NAME: node differs from expected-$NAME.txt (stale snapshot?)"
+            head -40 "$WORK/node.diff"
+            FAIL=1
+        else
+            echo "ok   $NAME: node matches expected-$NAME.txt"
+        fi
+    fi
+done
+if [ "$NODE_ONLY" -eq 1 ]; then
+    exit 0
 fi
 if [ "$FAIL" -ne 0 ]; then
     echo "node-v8-error oracle: FAILED"

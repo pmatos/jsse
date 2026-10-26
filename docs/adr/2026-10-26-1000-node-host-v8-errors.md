@@ -61,13 +61,21 @@ test262 measures, so everything here is `--node` only.
    re-entrancy flag makes nested errors inside `prepareStackTrace` use the
    default format.
 6. **File names.** Frames of the main script carry its path
-   (`Interpreter::note_script_source`, called from the CLI); a source with a
-   `//# sourceURL=` directive on a line of its own uses it; `__host_stack_name_source(fn, name,
-   lineDelta)` names the source of `fn` explicitly. *Contract for the CommonJS
-   loader (#1219):* after compiling a module wrapper with `Function`, call it
-   with the module filename and `-2`, the two header lines `Function` adds, so
-   line numbers match `vm.compileFunction`. It stays on `globalThis` until the
-   loader captures it. The other floor primitives are private to the script.
+   (`Interpreter::note_script_source`, called from the CLI; the CommonJS
+   bootstrap stub is not named); a source with a `//# sourceURL=` directive on a
+   line of its own uses it; `__host_stack_name_source(fn, name, lineDelta)` names
+   the source of `fn` explicitly. The CommonJS loader (ADR-2026-10-26-1400)
+   calls it from `wrapSafe` with the module filename and `-2`, the two header
+   lines `Function` adds, so frames of required modules read `file:line:col`
+   like Node's `vm.compileFunction` (a leading `#!` line keeps its line). The
+   builtin loader captures the primitive into the private
+   `internal/host/stack` and deletes the global, like the other floor
+   primitives. The wrapper is anonymous (`name` is `""`), so its frame reads
+   `Object.<anonymous>`. For this to name nested functions too, the `Function`
+   family now gives the wrapper the parser's `SourceText` (one shared origin)
+   instead of a copy; this also fixes the wrapper frame's column, which was
+   one too high. Builtin module sources (`node-lib/`) stay `<anonymous>` and
+   `node:internal/...` naming is future work.
 7. **Inspection.** The shim's `util.inspect` renders an error as its stack, then
    own enumerable properties, `[cause]` and `[errors]` in a `{ }` block (`[text]`
    when the stack has no frame), and hides `name`/`message`/`stack` keys the
@@ -98,9 +106,9 @@ test262 measures, so everything here is `--node` only.
 on Node and on `jsse --node`, normalises paths and drops frames outside the
 fixture (and Node's top-level `Object.<anonymous>`), and diffs both against
 `expected-cases.txt` (Node 26.8's own output; regenerate with `--node`).
-`tests/node_v8_error.rs` replays it under the VM, the tree-walker and
+`modules.js` (with `lib/`) does the same for frames of required modules, including a shebang module. `tests/node_v8_error.rs` replays both under the VM, the tree-walker and
 `JSSE_GC_STRESS=7`, and adds default-mode absence, engine-thrown errors, spread
-and construct positions, `sourceURL`/`__host_stack_name_source`, an allocating
+and construct positions, `sourceURL` and loader-named module sources, an allocating
 `prepareStackTrace` that calls `$262.gc()`, and the uncaught-error printer.
 Oversized files this touches stay byte-neutral: edits there are offset by
 shortening comments, per the staged-file ratchet.

@@ -1,0 +1,17 @@
+## created in a module function
+at Object.inner (<dir>/lib/thrower.js:2:27)
+at main (<dir>/modules.js:26:55)
+## created at module top level
+at Object.<anonymous> (<dir>/lib/thrower.js:6:18)
+## through two modules
+at Object.inner (<dir>/lib/thrower.js:2:27)
+at Object.run (<dir>/lib/second.js:4:18)
+at main (<dir>/modules.js:28:45)
+## thrown from a module
+TypeError: thrown in module
+at Object.fail (<dir>/lib/thrower.js:4:9)
+at caught (<dir>/modules.js:19:13)
+## main module
+at main (<dir>/modules.js:30:30)
+## wrapper name
+function,true

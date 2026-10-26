@@ -50,6 +50,7 @@ const {
   },
 } = require('internal/errors');
 const { validateString } = require('internal/validators');
+const { nameSource } = require('internal/host/stack');
 
 // Node 26 also matches `module-sync`; it is left out while require() of an
 // ES module is unsupported, so such packages fall back to their CJS entry.
@@ -494,15 +495,21 @@ function stripBOM(content) {
     StringPrototypeSlice(content, 1) : content;
 }
 
-function wrapSafe(content) {
+function wrapSafe(content, filename) {
   if (StringPrototypeStartsWith(content, '#!')) {
     content = `//${StringPrototypeSlice(content, 2)}`;
   }
-  return new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
+  const wrapper = new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
+  // Function() puts two header lines before the body; -2 makes frame
+  // positions match the file, as vm.compileFunction does in Node. Like that
+  // wrapper, this one is anonymous (frames read `Object.<anonymous>`).
+  ObjectDefineProperty(wrapper, 'name', { value: '', configurable: true });
+  if (nameSource !== undefined) nameSource(wrapper, filename, -2);
+  return wrapper;
 }
 
 Module.prototype._compile = function(content, filename) {
-  const compiledWrapper = wrapSafe(content);
+  const compiledWrapper = wrapSafe(content, filename);
   const dirname = path.dirname(filename);
   const require = makeRequireFunction(this);
   return ReflectApply(compiledWrapper, this.exports,

@@ -29,14 +29,14 @@ fn stderr(out: &Output) -> String {
 }
 
 /// The oracle script's normalisation: the fixture directory becomes `<dir>`
-/// and stack frames outside the fixture (plus its top-level frame) go.
+/// and stack frames outside the fixture directory (plus top-level frames) go.
 fn normalise(text: &str, dir: &Path) -> String {
     let dir = dir.to_string_lossy();
     let text = text.replace(dir.as_ref(), "<dir>");
     let mut kept = Vec::new();
     for line in text.lines() {
-        let frame = line.trim_start().starts_with("at ");
-        if frame && (!line.contains("<dir>/cases.js") || line.contains("Object.<anonymous>")) {
+        let frame = line.starts_with(char::is_whitespace) && line.trim_start().starts_with("at ");
+        if frame && (!line.contains("<dir>/") || line.contains("Object.<anonymous>")) {
             continue;
         }
         kept.push(line);
@@ -45,14 +45,19 @@ fn normalise(text: &str, dir: &Path) -> String {
 }
 
 fn replay_fixture(extra: &[&str], stress: Option<&str>) {
+    replay_named("cases", extra, stress);
+}
+
+fn replay_named(name: &str, extra: &[&str], stress: Option<&str>) {
     let dir = root().join("scripts/v8-error-fixtures");
-    let cases = dir.join("cases.js");
+    let cases = dir.join(format!("{name}.js"));
     let mut args = vec!["--node"];
     args.extend_from_slice(extra);
     args.push(cases.to_str().expect("utf-8 path"));
     let out = jsse(&args, stress);
     assert!(out.status.success(), "{}", stderr(&out));
-    let expected = std::fs::read_to_string(dir.join("expected-cases.txt")).expect("snapshot");
+    let expected =
+        std::fs::read_to_string(dir.join(format!("expected-{name}.txt"))).expect("snapshot");
     let mut actual = normalise(&stdout(&out), &dir);
     let mut expected = expected.trim_end().to_string();
     if extra.contains(&"--no-bytecode") {
@@ -77,6 +82,17 @@ fn fixture_matches_node_under_the_bytecode_vm() {
 #[test]
 fn fixture_matches_node_under_the_tree_walker() {
     replay_fixture(&["--no-bytecode"], None);
+}
+
+#[test]
+fn required_modules_report_their_file_line_and_column() {
+    for (extra, stress) in [
+        (&[][..], None),
+        (&["--no-bytecode"][..], None),
+        (&[][..], Some("7")),
+    ] {
+        replay_named("modules", extra, stress);
+    }
 }
 
 #[test]
@@ -110,12 +126,15 @@ fn floor_globals_are_taken_private_by_the_prelude() {
         &[
             "--node",
             "-e",
-            r#"print(["install", "capture", "frames", "locate"].map((n) => typeof globalThis["__host_stack_" + n]).join())"#,
+            r#"print(["install", "capture", "frames", "locate", "name_source"].map((n) => typeof globalThis["__host_stack_" + n]).join())"#,
         ],
         None,
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "undefined,undefined,undefined,undefined");
+    assert_eq!(
+        stdout(&out),
+        "undefined,undefined,undefined,undefined,undefined"
+    );
 }
 
 #[test]
@@ -156,23 +175,47 @@ print(construct().stack.split('\\n').length);";
 }
 
 #[test]
-fn named_sources_supply_file_and_line() {
+fn source_url_comments_supply_file_and_line() {
     let out = jsse(
         &[
             "--node",
             "-e",
             r#"const tagged = new Function("return new Error('t')\n//# sourceURL=/virtual/tagged.js");
-const named = new Function("return new Error('n')");
-__host_stack_name_source(named, "/virtual/named.js", -2);
 const mention = new Function("return new Error('m') + '\\n//# sourceURL=/not/a/comment.js'");
-print(tagged().stack.split("\n")[1]); print(named().stack.split("\n")[1]); print(new Function("return new Error('q')")().stack.split("\n")[1]);"#,
+print(tagged().stack.split("\n")[1]); print(new Function("return new Error('q')")().stack.split("\n")[1]);"#,
         ],
         None,
     );
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "    at anonymous (/virtual/tagged.js:3:9)\n    at anonymous (/virtual/named.js:1:9)\n    at anonymous (<anonymous>:3:9)"
+        "    at anonymous (/virtual/tagged.js:3:8)\n    at anonymous (<anonymous>:3:8)"
+    );
+}
+
+#[test]
+fn the_commonjs_loader_names_module_sources() {
+    let dir = std::env::temp_dir().join(format!("jsse-v8-error-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(
+        dir.join("mod.js"),
+        "#!/usr/bin/env node\nexports.make = function make() { return new Error('m'); };\n",
+    )
+    .expect("module");
+    std::fs::write(
+        dir.join("main.js"),
+        "const m = require('./mod');\nconst f = m.make().stack.split('\\n');\nconsole.log(f[1].trim());\nconsole.log(new Function('return new Error(\"q\")')().stack.split('\\n')[1].trim());\n",
+    )
+    .expect("main");
+    let main = dir.join("main.js");
+    let out = jsse(&["--node", main.to_str().expect("utf-8 path")], None);
+    let dir_text = dir.canonicalize().expect("canonical");
+    let text = stdout(&out).replace(dir_text.to_str().expect("utf-8 path"), "<dir>");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        text,
+        "at Object.make (<dir>/mod.js:2:41)\nat anonymous (<anonymous>:3:8)"
     );
 }
 
