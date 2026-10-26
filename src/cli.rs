@@ -1,3 +1,4 @@
+use crate::cli_node::NodeMainKind;
 use crate::{interpreter, parser};
 
 use clap::{CommandFactory, Parser};
@@ -132,6 +133,25 @@ fn split_script_args(argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) {
 struct NodeLaunch {
     script: Option<PathBuf>,
     args: Vec<String>,
+    main_kind: NodeMainKind,
+}
+
+/// The program to run for the script `path`. Under `--node` a script file is
+/// the CommonJS main module: the prelude's loader reads it, so the launcher
+/// runs a stub instead.
+fn read_main_source(path: &Path, node: Option<&NodeLaunch>) -> std::io::Result<String> {
+    match node {
+        Some(n) if n.main_kind == NodeMainKind::Cjs => {
+            Ok(interpreter::Interpreter::node_main_bootstrap().to_string())
+        }
+        _ => std::fs::read_to_string(path),
+    }
+}
+
+fn is_module_main(path: &Path, force_module: bool, node: Option<&NodeLaunch>) -> bool {
+    force_module
+        || path.extension().is_some_and(|ext| ext == "mjs")
+        || node.is_some_and(|n| n.main_kind == NodeMainKind::Esm)
 }
 
 enum EngineError {
@@ -249,6 +269,7 @@ fn new_interp(
         let exec_path = std::env::current_exe()
             .map_or_else(|_| argv0.clone(), |p| p.to_string_lossy().into_owned());
         interp.set_node_host_argv(argv0, exec_path, launch.script.clone(), launch.args.clone());
+        interp.set_node_host_main_kind(launch.main_kind);
         if let Err(msg) = interp.load_node_prelude() {
             eprintln!("jsse: internal error: {msg}");
             std::process::exit(70);
@@ -293,14 +314,14 @@ fn run_file(
     node: Option<&NodeLaunch>,
     step_budget: Option<u64>,
 ) -> ExitCode {
-    let source = match std::fs::read_to_string(path) {
+    let source = match read_main_source(path, node) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error reading {}: {e}", path.display());
             return ExitCode::from(1);
         }
     };
-    let is_module = force_module || path.extension().is_some_and(|ext| ext == "mjs");
+    let is_module = is_module_main(path, force_module, node);
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     execute_code(
         &source,
@@ -365,6 +386,7 @@ pub(crate) fn run_main() -> ExitCode {
     let mut cli = Cli::parse_from(head);
     cli.script_args = script_args;
     let launch = cli.node.then(|| NodeLaunch {
+        main_kind: NodeMainKind::for_launch(cli.file.as_deref(), cli.eval.is_some(), cli.module),
         script: cli.file.clone(),
         args: cli
             .script_args
@@ -408,12 +430,16 @@ pub(crate) fn run_main() -> ExitCode {
 
     // With preludes, we need to use a single interpreter instance
     let mut interp = new_interp(cli.can_block, !cli.no_bytecode, node, cli.step_budget);
-    let code = run_with_preludes(&mut interp, &cli);
+    let code = run_with_preludes(&mut interp, &cli, node);
     retire_interpreter(interp);
     code
 }
 
-fn run_with_preludes(interp: &mut interpreter::Interpreter, cli: &Cli) -> ExitCode {
+fn run_with_preludes(
+    interp: &mut interpreter::Interpreter,
+    cli: &Cli,
+    node: Option<&NodeLaunch>,
+) -> ExitCode {
     // Run prelude files as scripts
     for prelude_path in &cli.prelude {
         let source = match std::fs::read_to_string(prelude_path) {
@@ -448,14 +474,14 @@ fn run_with_preludes(interp: &mut interpreter::Interpreter, cli: &Cli) -> ExitCo
         interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else if let Some(path) = &cli.file {
-        let source = match std::fs::read_to_string(path) {
+        let source = match read_main_source(path, node) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error reading {}: {e}", path.display());
                 return exit_after_execution(interp, 1);
             }
         };
-        let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");
+        let is_module = is_module_main(path, cli.module, node);
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
         interp.node_host_finish();

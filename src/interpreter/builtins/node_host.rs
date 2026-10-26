@@ -37,6 +37,11 @@ pub(crate) struct NodeHostState {
     pub(crate) stack: super::node_host_stack::NodeStackState,
     /// Source offset plus one of the call this frame is making (0 = unknown).
     pub(crate) call_pos: u32,
+    /// What the launch runs as its main program; read by `__host_main_kind`.
+    pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    /// Test-only: the platform name the `os` binding reports.
+    #[cfg(test)]
+    pub(crate) platform_override: Option<&'static str>,
 }
 
 impl Interpreter {
@@ -53,6 +58,10 @@ impl Interpreter {
             script,
             args,
         });
+    }
+
+    pub(crate) fn set_node_host_main_kind(&mut self, kind: crate::cli_node::NodeMainKind) {
+        self.node_host.main_kind = kind;
     }
 
     /// Exit status requested through `process.exitCode`, if any.
@@ -261,6 +270,8 @@ impl Interpreter {
             self.setup_node_host_fs_meta();
         }
         self.setup_node_host_loop();
+        self.setup_node_host_idna();
+        self.setup_node_host_os();
     }
 }
 

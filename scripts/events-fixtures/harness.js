@@ -6,7 +6,7 @@
 // them only once the Node event loop lands, #1229): expectations are verified
 // after the test body and a quiet period.
 var __eventsLoad = function (id) {
-  return typeof __node_builtin === "function" ? __node_builtin(id) : require(id);
+  return require(id);
 };
 var __eventsInspect = typeof util === "object" && util !== null
   ? util.inspect
@@ -223,15 +223,6 @@ var __eventsCommon = {
 };
 var __eventsFailures = [];
 
-var __eventsTimers = {
-  setTimeout: function (ms, value) {
-    return new Promise(function (resolve) { setTimeout(function () { resolve(value); }, ms); });
-  },
-  setImmediate: function (value) {
-    return new Promise(function (resolve) { setTimeout(function () { resolve(value); }, 0); });
-  },
-};
-
 // Subtests jsse cannot run yet, skipped on jsse only (they pass on Node).
 var __eventsJsseSkips = {
   "AbortController inspection depth 1 or null works": "util.inspect.custom is not implemented (#1224)",
@@ -242,7 +233,7 @@ var __eventsNodeTest = (function () {
   function register(name, options, fn) {
     if (typeof options === "function") { fn = options; options = {}; }
     var skip = options && options.skip ||
-      (typeof __node_builtin === "function" && Object.prototype.hasOwnProperty.call(__eventsJsseSkips, name));
+      (typeof __host_write === "function" && Object.prototype.hasOwnProperty.call(__eventsJsseSkips, name));
     __eventsTests.push({ name: name, fn: fn, skip: skip });
   }
   function describe(name, fn) { fn(); }
@@ -268,7 +259,7 @@ var __eventsRequire = function (id) {
     case "assert": return __eventsAssert;
     case "events": return __eventsLoad("events");
     case "util": return typeof util === "object" && util !== null ? util : require("util");
-    case "timers/promises": return typeof __node_builtin === "function" ? __eventsTimers : require("timers/promises");
+    case "timers/promises": return require("timers/promises");
     case "test": return __eventsNodeTest;
   }
   throw new Error("test requires unsupported module " + id);
