@@ -3,10 +3,17 @@
 // Small helpers shared by the url modules (the parts of Node's
 // internal/util and internal/validators they use).
 
-const { ObjectFreeze } = primordials;
+const {
+  ArrayIsArray,
+  ArrayPrototypeSymbolIterator,
+  ObjectFreeze,
+  ObjectGetOwnPropertyDescriptor,
+  ObjectGetPrototypeOf,
+  SymbolFor,
+} = primordials;
 const { ERR_INVALID_ARG_TYPE } = require('internal/errors').codes;
 
-const kInspect = Symbol.for('nodejs.util.inspect.custom');
+const kInspect = SymbolFor('nodejs.util.inspect.custom');
 const kEnumerableProperty = { __proto__: null, enumerable: true };
 ObjectFreeze(kEnumerableProperty);
 const kEmptyObject = ObjectFreeze({ __proto__: null });
@@ -20,13 +27,13 @@ function removeColors(str) {
 
 function getConstructorOf(obj) {
   while (obj) {
-    const descriptor = Object.getOwnPropertyDescriptor(obj, 'constructor');
+    const descriptor = ObjectGetOwnPropertyDescriptor(obj, 'constructor');
     if (descriptor !== undefined &&
         typeof descriptor.value === 'function' &&
         descriptor.value.name !== '') {
       return descriptor.value;
     }
-    obj = Object.getPrototypeOf(obj);
+    obj = ObjectGetPrototypeOf(obj);
   }
   return null;
 }
@@ -47,7 +54,7 @@ function validateString(value, name) {
 }
 
 function validateObject(value, name) {
-  if (value === null || Array.isArray(value) || typeof value !== 'object')
+  if (value === null || ArrayIsArray(value) || typeof value !== 'object')
     throw new ERR_INVALID_ARG_TYPE(name, 'Object', value);
 }
 
@@ -57,8 +64,8 @@ function spliceOne(list, index) {
   list.pop();
 }
 
-const IteratorPrototype = Object.getPrototypeOf(
-  Object.getPrototypeOf([][Symbol.iterator]()));
+const IteratorPrototype = ObjectGetPrototypeOf(
+  ObjectGetPrototypeOf(ArrayPrototypeSymbolIterator([])));
 
 // State the URL and URLSearchParams classes hand to each other: they live in
 // separate files but need each other's private fields.

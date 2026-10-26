@@ -124,6 +124,23 @@ fn globals_are_non_enumerable_and_settle_into_data_properties() {
 }
 
 #[test]
+fn lazy_globals_keep_receiver_semantics_and_the_buffer_stand_in_stays_private() {
+    let source = r#"
+      const child = Object.create(globalThis);
+      child.URL = 5;
+      print(Object.keys(child).join(), typeof Object.getOwnPropertyDescriptor(globalThis, "URL").get);
+      Array.prototype.fill = () => { throw new Error("fill"); };
+      print(new URL("http://a.com/b?c#d").href);
+      try { __node_builtin("buffer"); } catch (e) { print(e.code); }
+      print(__node_builtin("querystring").unescapeBuffer("a%20b").toString());
+    "#;
+    assert_eq!(
+        eval(source, &[], None),
+        "URL function\nhttp://a.com/b?c#d\nERR_UNKNOWN_BUILTIN_MODULE\na b"
+    );
+}
+
+#[test]
 fn whatwg_parsing_setters_and_search_params() {
     let source = r#"
       const u = new URL("https://user:pa ss@EXAMPLE.com:8080/a/./b/../c?x=1&y=2#frag");

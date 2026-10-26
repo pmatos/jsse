@@ -3,10 +3,15 @@
 // Percent-encode sets and UTF-8 helpers for the WHATWG URL parser
 // (https://url.spec.whatwg.org/#percent-encoded-bytes).
 
-const { StringFromCharCode } = primordials;
+const {
+  ArrayPrototypeSlice,
+  StringFromCharCode,
+  StringFromCodePoint,
+} = primordials;
 
 function makeSet(parent, extra) {
-  const table = parent ? parent.slice() : new Array(128).fill(false);
+  const table = parent ? ArrayPrototypeSlice(parent) : [];
+  if (!parent) for (let i = 0; i < 128; i++) table[i] = false;
   for (let i = 0; i < extra.length; i++) table[extra.charCodeAt(i)] = true;
   return table;
 }
@@ -136,7 +141,7 @@ function utf8Decode(bytes) {
     upper = 0xbf;
     cp = (cp << 6) | (b & 0x3f);
     if (++seen === needed) {
-      out += String.fromCodePoint(cp);
+      out += StringFromCodePoint(cp);
       cp = needed = seen = 0;
     }
   }

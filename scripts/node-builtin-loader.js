@@ -98,7 +98,7 @@
     delete globalThis[name];
     return fn;
   }
-  cache["buffer"] = { exports: { Buffer: globalThis.Buffer } };
+  cache["internal/host/buffer"] = { exports: { Buffer: globalThis.Buffer } };
   cache["internal/url/idna"] = {
     exports: {
       toASCII: takeHost("__host_idna_to_ascii"),
@@ -207,7 +207,17 @@
       get: function () {
         return settle(requireBuiltin("internal/url")[name]);
       },
-      set: settle,
+      set: function (value) {
+        if (this === globalThis) settle(value);
+        else if (Object(this) === this) {
+          Object.defineProperty(this, name, {
+            value: value,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+        }
+      },
       enumerable: false,
       configurable: true,
     });

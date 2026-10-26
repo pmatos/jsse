@@ -36,7 +36,7 @@ const {
   decodeURIComponent,
 } = primordials;
 
-const { Buffer } = require('buffer');
+const { Buffer } = require('internal/host/buffer');
 const {
   encodeStr,
   hexTable,

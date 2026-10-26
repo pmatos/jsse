@@ -101,6 +101,8 @@ function update(href, action, value) {
     return url === null ? false : serialize(url);
   }
   const url = basicParse(href, null);
+  // false: the setter's guard rejected the call. null: a state-override parse
+  // failed, which per the URL Standard keeps what it had already changed.
   if (applySetter(url, action, value) === false) return false;
   return serialize(url);
 }
