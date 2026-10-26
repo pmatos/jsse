@@ -2,6 +2,9 @@
 
 const {
   ArrayIsArray,
+  ArrayPrototypeIncludes,
+  ArrayPrototypeJoin,
+  ArrayPrototypeMap,
   NumberIsInteger,
   NumberIsNaN,
   NumberMAX_SAFE_INTEGER,
@@ -10,6 +13,7 @@ const {
 } = primordials;
 const {
   ERR_INVALID_ARG_TYPE,
+  ERR_INVALID_ARG_VALUE,
   ERR_INVALID_THIS,
   ERR_OUT_OF_RANGE,
 } = require('internal/errors').codes;
@@ -114,7 +118,58 @@ function validateThisInternalField(object, fieldKey, className) {
   }
 }
 
+function validateOneOf(value, name, oneOf) {
+  if (!ArrayPrototypeIncludes(oneOf, value)) {
+    const allowed = ArrayPrototypeJoin(
+      ArrayPrototypeMap(oneOf, (v) =>
+        (typeof v === 'string' ? `'${v}'` : String(v))),
+      ', ');
+    const reason = 'must be one of: ' + allowed;
+    throw new ERR_INVALID_ARG_VALUE(name, value, reason);
+  }
+}
+
+function validateArray(value, name, minLength = 0) {
+  if (!ArrayIsArray(value)) {
+    throw new ERR_INVALID_ARG_TYPE(name, 'Array', value);
+  }
+  if (value.length < minLength) {
+    const reason = `must have a length of at least ${minLength}`;
+    throw new ERR_INVALID_ARG_VALUE(name, value, reason);
+  }
+}
+
+function validateStringArray(value, name) {
+  validateArray(value, name);
+  for (let i = 0; i < value.length; ++i) {
+    if (typeof value[i] !== 'string') {
+      throw new ERR_INVALID_ARG_TYPE(`${name}[${i}]`, 'string', value[i]);
+    }
+  }
+}
+
+function validateBooleanArray(value, name) {
+  validateArray(value, name);
+  for (let i = 0; i < value.length; ++i) {
+    if (value[i] !== true && value[i] !== false) {
+      throw new ERR_INVALID_ARG_TYPE(`${name}[${i}]`, 'boolean', value[i]);
+    }
+  }
+}
+
+function validateUnion(value, name, union) {
+  if (!ArrayPrototypeIncludes(union, value)) {
+    throw new ERR_INVALID_ARG_TYPE(name, `('${ArrayPrototypeJoin(union, '|')}')`, value);
+  }
+}
+
 module.exports = {
+  kValidateObjectAllowArray,
+  validateArray,
+  validateBooleanArray,
+  validateOneOf,
+  validateStringArray,
+  validateUnion,
   kValidateObjectAllowObjects,
   validateAbortSignal,
   validateBoolean,

@@ -45,7 +45,7 @@ every test runner.
    `builtin!("<id>")` line. `require("internal/...")` and unknown names fall
    through to file resolution (`MODULE_NOT_FOUND`) as in Node;
    `require("node:<unknown or internal>")` is `ERR_UNKNOWN_BUILTIN_MODULE`.
-   Node core modules jsse does not ship yet (`util`, `http`, ...) are
+   Node core modules jsse does not ship yet (`http`, ...) are
    `MODULE_NOT_FOUND`, not their Node behaviour, until their issues land.
 4. **Layout.** `node-lib/internal/modules/cjs/loader.js` (`Module`, resolution,
    wrapper, `runMain`, `setupEval`), `.../exports.js` (package
@@ -85,8 +85,9 @@ every test runner.
    - `require('module')`, `Module.builtinModules`/`isBuiltin`/`wrap` and
      `runMain` are absent, and only the modules registered in the embedded
      table (and `fs`, `timers` and the other prelude registrations) can be
-     required: `util`, `buffer` and `process` are globals with no
-     requirable module yet.
+     required: `buffer` and `process` are globals with no
+     requirable module yet (`require("util")` is the #1224 module; the `util` global is
+     still the prelude's).
    - The loader needs `fs`, which is `cfg(unix)`, so `--node` script launches
      are unix-only for now (`tests/node_cjs.rs` is too).
    - The prefix global path (`<execPath>/../../lib/node`) is derived from the

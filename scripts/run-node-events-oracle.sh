@@ -53,7 +53,7 @@ HAVE_INSPECT=0
 if [ "$NODE_ONLY" -eq 0 ]; then
     probe="$("$JSSE" --node -e 'process.on("x", function () {}); print(process.emit("x"))' 2>/dev/null || true)"
     [ "$probe" = "true" ] && HAVE_PROCESS_EVENTS=1
-    probe="$("$JSSE" --node -e 'print(util.inspect(new (class Foo {})(), { depth: -1 }))' 2>/dev/null || true)"
+    probe="$("$JSSE" --node -e 'print(require("util").inspect(new (class Foo {})(), { depth: -1 }))' 2>/dev/null || true)"
     [ "$probe" = "[Foo]" ] && HAVE_INSPECT=1
 fi
 
