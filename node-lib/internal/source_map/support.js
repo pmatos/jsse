@@ -1,14 +1,10 @@
 'use strict';
 
-// Source map support (#1220): `module.findSourceMap`, `getSourceMapsSupport`,
-// `setSourceMapsSupport` and `process.setSourceMapsEnabled`, after Node's
+// Source map support (#1220), after Node's
 // lib/internal/source_map/source_map_cache.js. jsse does not rewrite stack
 // traces, so the flags only decide which loaded CommonJS files
-// `findSourceMap` answers for. Node registers a file's map when it compiles
-// it; here a file counts as compiled "while enabled" when it first shows up
-// in `Module._cache` at a point where the flag was on (the cache is scanned
-// whenever the flags or `findSourceMap` are used), and its map is read on the
-// first lookup.
+// `findSourceMap` answers for: a file counts as compiled "while enabled" when
+// it first shows up in `Module._cache` with the flag on (see the ADR).
 
 const {
   JSONParse,
@@ -31,13 +27,22 @@ const known = ObjectCreate(null);
 const eligible = ObjectCreate(null);
 const found = ObjectCreate(null);
 
-// CR LF, LF, CR, LS and PS end a line.
 const kLineBreak = new RegExp('\\r\\n|[\\n\\r' + String.fromCharCode(0x2028, 0x2029) + ']');
 const kSourceMappingURL = /\/\/[#@]\s+sourceMappingURL=([^\s'"]+)/g;
 
 function scanCache() {
   const { Module } = require('internal/modules/cjs/loader');
-  const files = ObjectKeys(Module._cache);
+  const cache = Module._cache;
+  const gone = ObjectKeys(known);
+  for (let i = 0; i < gone.length; i++) {
+    const file = gone[i];
+    if (cache[file] === undefined) {
+      delete known[file];
+      delete eligible[file];
+      delete found[file];
+    }
+  }
+  const files = ObjectKeys(cache);
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     if (known[file]) continue;

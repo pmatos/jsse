@@ -59,10 +59,9 @@ function isSeparator(char) {
 function cloneSourceMapV3(payload) {
   validateObject(payload, 'payload');
   payload = { ...payload };
-  const { sources, sourcesContent, sections } = payload;
-  if (ArrayIsArray(sources)) payload.sources = ArrayPrototypeSlice(sources);
-  if (ArrayIsArray(sourcesContent)) payload.sourcesContent = ArrayPrototypeSlice(sourcesContent);
-  if (ArrayIsArray(sections)) payload.sections = ArrayPrototypeMap(sections, cloneSourceMapV3);
+  for (const key in payload) {
+    if (ArrayIsArray(payload[key])) payload[key] = ArrayPrototypeSlice(payload[key]);
+  }
   return payload;
 }
 

@@ -75,6 +75,7 @@ for kind in main sm; do
     fi
     want="$PROJECT_DIR/scripts/module-fixtures/expected-$kind.txt"
     if [ "$NODE_ONLY" -eq 1 ]; then
+        [ "$rc" -eq 0 ] || continue
         cp "$WORK/node.$kind.out" "$want"
         echo "wrote $want ($(wc -l < "$want") lines)"
         continue

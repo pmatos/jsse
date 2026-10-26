@@ -118,7 +118,7 @@ fn tsc_startup_probes_work() {
         process.setSourceMapsEnabled(true);
         const m = require("node:module");
         let sms = "";
-        try { require("source-map-support"); sms = "found"; } catch (e) { sms = e.code; }
+        try { require("jsse-absent-package-1220"); sms = "found"; } catch (e) { sms = e.code; }
         const req = m.createRequire(require("url").pathToFileURL(process.cwd() + "/lib/x.js"));
         print(process.sourceMapsEnabled, typeof m.enableCompileCache, sms,
           req("./a"), req.resolve("pkg").endsWith("node_modules/pkg/index.js"),
@@ -126,6 +126,39 @@ fn tsc_startup_probes_work() {
         "#,
     );
     assert_eq!(out, "true function MODULE_NOT_FOUND a true true true");
+}
+
+#[test]
+fn source_map_is_registered_when_a_file_is_recompiled_while_enabled() {
+    let out = eval(
+        r#"
+        const m = require("module");
+        const f = require("path").join(process.cwd(), "sm/gen.js");
+        require(f);
+        m.setSourceMapsSupport(false);
+        const before = m.findSourceMap(f);
+        delete require.cache[f];
+        m.setSourceMapsSupport(true);
+        require(f);
+        print(before === undefined, m.findSourceMap(f) instanceof m.SourceMap);
+        "#,
+    );
+    assert_eq!(out, "true true");
+}
+
+#[test]
+fn source_map_payload_is_isolated_from_its_input() {
+    let out = eval(
+        r#"
+        const { SourceMap } = require("module");
+        const p = { version: 3, sources: ["a"], names: ["foo"], mappings: "AAAA" };
+        const sm = new SourceMap(p);
+        p.names[0] = "z";
+        sm.payload.names.push("x");
+        print(sm.payload.names.join());
+        "#,
+    );
+    assert_eq!(out, "foo");
 }
 
 #[test]

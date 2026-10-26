@@ -60,7 +60,8 @@ ESM/CommonJS interop (#1241) build on `createRequire` and `Module` from here.
    does. It keeps answering after the flag is turned off, as Node does. The cache
    scan runs when the flags change and when `findSourceMap` is called, not at
    compile time, so a file loaded and deleted from `require.cache` between two
-   calls is not tracked.
+   scans is not tracked; a file missing from the cache at a scan is forgotten, so
+   loading it again counts as a fresh compile.
 6. **Known divergences** (none is in the oracle tree):
    - Enabling source maps does not change `error.stack` or uncaught-exception
      output; there is no `--enable-source-maps` flag. Only `findSourceMap` and

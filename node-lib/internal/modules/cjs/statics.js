@@ -1,10 +1,7 @@
 'use strict';
 
-// The parts of `Module` that tools patch or call and that the loader does not
-// need itself, after Node's lib/internal/modules/cjs/loader.js: the
-// `wrap`/`wrapper` pair (patching either makes the loader compile through
-// `Module.wrap`), `createRequire`, `_preloadModules`, `isPreloading` and
-// `runMain`. `module.js` adds the rest of the public `module` API.
+// The parts of `Module` that tools patch or call and the loader does not
+// need itself (#1220); `module.js` adds the rest of the public API.
 
 const {
   ArrayIsArray,

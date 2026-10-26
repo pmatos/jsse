@@ -1,10 +1,6 @@
 'use strict';
 
-// The public `module` builtin (#1220): `Module` from the CommonJS loader with
-// the rest of Node's static API. The compile cache is a no-op (jsse compiles
-// nothing to disk), `register`/`registerHooks` are absent, and
-// `stripTypeScriptTypes` is unsupported. Source maps: see
-// internal/source_map/support.js.
+// The public `module` builtin (#1220); what jsse leaves out is in the ADR.
 
 const {
   ArrayPrototypeIncludes,
