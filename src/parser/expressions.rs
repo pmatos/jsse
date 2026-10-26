@@ -753,11 +753,12 @@ impl<'a> Parser<'a> {
                 Token::OptionalChain => {
                     self.advance()?;
                     let mut prop = if self.current == Token::LeftParen {
+                        let site = CallSiteId::at(self.current_token_start);
                         let args = self.parse_arguments()?;
                         Expression::Call(
                             ExprBox::new(Expression::Identifier("".into())),
                             args,
-                            CallSiteId::UNASSIGNED,
+                            site,
                         )
                     } else if self.current == Token::LeftBracket {
                         self.advance()?;
@@ -813,12 +814,9 @@ impl<'a> Parser<'a> {
                                 );
                             }
                             Token::LeftParen => {
+                                let site = self.call_site(&prop);
                                 let args = self.parse_arguments()?;
-                                prop = Expression::Call(
-                                    ExprBox::new(prop),
-                                    args,
-                                    CallSiteId::UNASSIGNED,
-                                );
+                                prop = Expression::Call(ExprBox::new(prop), args, site);
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                                 return Err(self

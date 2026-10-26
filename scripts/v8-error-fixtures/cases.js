@@ -197,6 +197,13 @@ function caseCauseDisplay() {
   show("no frames with cause", noStack);
 }
 
+function casePositions() {
+  const holder = { make: inner, maybe: () => inner() };
+  const at = (error, n) => error.stack.split("\n")[n];
+  show("parenthesized callee", at((inner)(), 2) + "\n" + at((holder.make)(), 2));
+  show("optional calls", at(holder?.make(), 2) + "\n" + at(holder.maybe?.(), 3));
+}
+
 async function beforeAwait() {
   return new Error("before await").stack;
 }
@@ -216,4 +223,5 @@ caseLimit();
 caseHeader();
 caseCallSites();
 caseCauseDisplay();
+casePositions();
 caseAsync();

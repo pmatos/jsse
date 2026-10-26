@@ -117,10 +117,16 @@ Error: scalar
 [Error: bare]
 ## no frames with cause
 [Error: gone] { [cause]: 1 }
+## parenthesized callee
+    at casePositions (<dir>/cases.js:203:42)
+    at casePositions (<dir>/cases.js:203:74)
+## optional calls
+    at casePositions (<dir>/cases.js:204:37)
+    at casePositions (<dir>/cases.js:204:74)
 ## async before await
 Error: before await
-    at beforeAwait (<dir>/cases.js:201:10)
-    at caseAsync (<dir>/cases.js:209:3)
+    at beforeAwait (<dir>/cases.js:208:10)
+    at caseAsync (<dir>/cases.js:216:3)
 ## async after await
 Error: after await
-    at afterAwait (<dir>/cases.js:205:10)
+    at afterAwait (<dir>/cases.js:212:10)

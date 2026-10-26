@@ -29,8 +29,8 @@ test262 measures, so everything here is `--node` only.
    everything V8 does on first read: the header, `Error.prepareStackTrace`, the
    CallSite class, the `at fn (file:line:col)` text.
 3. **Positions.** `CallSiteId` is now `(id, offset + 1)`; the parser stores the
-   position V8 reports: the callee's last identifier (`f()`, `o.m()`), else the
-   `(`; `new` for `new X`. `0` means unknown. Tree-walker calls store it in
+   position V8 reports: the callee's last identifier (`f()`, `o.m()`, as written: a
+   parenthesized or escaped callee gets the `(`), else the `(`, in optional chains too; `new` for `new X`. `0` means unknown. Tree-walker calls store it in
    `NodeHostState::call_pos` just before dispatch; the VM does the same with
    `Op::SetCallPos <u32>`, emitted before `Call`/`Construct`/the spread calls
    only while the hooks are installed, so default-mode chunks are byte-identical.
