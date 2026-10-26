@@ -1,4 +1,4 @@
-// Self-verifying TextDecoder label fixture for scripts/node-buffer-shim.js.
+// Self-verifying TextDecoder label fixture for the prelude's node-buffer-shim.js.
 //
 // The Encoding Standard has a different label table from Node's Buffer API.
 // Run through run-shim-fixtures.sh, these assertions compare the shim on jsse

@@ -15,7 +15,7 @@
 LIB_REPO="https://github.com/uuidjs/uuid.git"
 LIB_REF="v14.0.1"
 LIB_ENTRY="dist/uuid-jsse-entry.js"
-LIB_SHIMS=("node-crypto-shim.js" "node-test-harness.js" "libs/uuid-jsse-require-shim.js")
+LIB_SHIMS=("node-test-harness.js" "libs/uuid-jsse-require-shim.js")
 LIB_EXPECT_COUNT="75"   # locked: v14.0.1 upstream node:test suite, equal on jsse and Node
 LIB_TIMEOUT="120"
 

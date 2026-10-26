@@ -1,18 +1,17 @@
-// Shared Node host-compat prelude for jsse library-test bundles.
+// Node host-compat prelude: process, console, util.
 //
-// This shim is prepended (via scripts/run-library-tests.sh) to an esbuild
-// bundle so that a real-world npm library's own test runner — written against
-// Node globals — can execute on jsse. It is a pure-JS shim: nothing here is
-// baked into jsse's default global object, so test262 is unaffected.
+// Embedded in the jsse binary and evaluated by `--node` only (never otherwise,
+// so the default globals and test262 are unaffected), letting real-world npm
+// libraries written against Node globals run on jsse.
 //
 // The readable-output layer (process, the full console method set, and the
 // util.format / util.inspect core they share) is built on top of the flag-gated
 // Rust host floor (issue #229): __host_write (byte-accurate fd I/O),
 // __host_hrtime (monotonic clock), __host_exit (real process exit), and
 // __host_proxy_target / __host_array_extra_keys (trap-free inspection
-// metadata). The harness runs jsse with `--node` so those primitives exist;
-// when they are absent (jsse without --node) each surface degrades to a pure-JS
-// fallback.
+// metadata). `--node` installs them before this file runs; when absent (the
+// self-test prepends this file to a plain jsse run) each surface degrades to a
+// pure-JS fallback.
 //
 // Everything below is skipped on real Node, where `process`, the full
 // `console`, and `require('util')` already exist. That inertness is what lets

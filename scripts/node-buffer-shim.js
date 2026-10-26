@@ -1,11 +1,11 @@
-// Buffer + TextEncoder/TextDecoder shim for jsse library-test bundles.
+// Buffer + TextEncoder/TextDecoder for the Node prelude embedded in `--node`.
 //
 // The keystone of the Node host-compat layer: many npm libraries reference
 // `Buffer` / `TextEncoder` at import time and fail to even load without them.
 // This is a pure-JS shim — Buffer is a subclass of Uint8Array riding jsse's
 // existing TypedArray / ArrayBuffer / DataView, so it needs zero new engine
 // object kinds. Nothing here is baked into jsse's default global object; the
-// shim is only prepended to library bundles, so test262 never sees it.
+// prelude only runs under --node, so test262 never sees it.
 //
 // Every global is guarded so that on Node (where Buffer/TextEncoder already
 // exist) the shim is an inert no-op. That lets `run-library-tests.sh --node`

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Cross-check the Node host-compat readable-output layer (scripts/node-shim.js,
-# issue #230) on jsse against Node.
+# Cross-check the Node host-compat readable-output layer (the prelude's
+# node-shim.js, issue #230) on jsse against Node.
 #
-# It concatenates the shim in front of scripts/node-shim.selftest.js (exactly as
-# run-library-tests.sh prepends the shim to a bundle), runs the result on jsse
-# with --node and on Node, and requires BOTH to exit 0 and produce byte-identical
-# stdout. Node is the reference oracle for the deterministic surfaces the
+# It runs scripts/node-shim.selftest.js on jsse with --node (the prelude is
+# embedded in the binary) and on Node, and requires BOTH to exit 0 and produce
+# byte-identical stdout. Node is the reference oracle for the deterministic surfaces the
 # self-test asserts (util.format specifiers, byte-accurate stdout, console
 # shapes); util.inspect is only smoke-tested, never byte-compared.
 #
@@ -15,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-JSSE="$PROJECT_DIR/target/release/jsse"
+JSSE="${JSSE:-$PROJECT_DIR/target/release/jsse}"
 
 BUILD=1
 for arg in "$@"; do
@@ -33,7 +32,7 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FINAL="$TMP/selftest.bundle.cjs"
-cat "$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-shim.selftest.js" > "$FINAL"
+cp "$SCRIPT_DIR/node-shim.selftest.js" "$FINAL"
 
 run_engine() {  # <label> <cmd...> → writes $TMP/<label>.out, sets RC
     local label="$1"; shift
@@ -82,8 +81,7 @@ fi
 echo ""
 echo "== process.exit probe =="
 EXIT_PROBE="$TMP/exit-probe.cjs"
-cat "$SCRIPT_DIR/node-shim.js" > "$EXIT_PROBE"
-cat >> "$EXIT_PROBE" <<'PROBE'
+cat > "$EXIT_PROBE" <<'PROBE'
 try { process.exit(3); } catch (e) {}
 console.log("UNREACHABLE");
 PROBE
@@ -107,8 +105,9 @@ check_exit jsse "$JSSE" --node
 command -v node >/dev/null 2>&1 && check_exit node node
 
 # ---- no-host fallback probe -----------------------------------------------
-# The library harness always passes --node, but node-shim.js documents a
-# degraded pure-JS fallback for plain jsse runs. Cover that path directly so the
+# node-shim.js documents a degraded pure-JS fallback for plain jsse runs. The
+# prelude is never installed without --node, so this probe prepends the embedded
+# source file by hand. Cover that path directly so the
 # fallback stream never recurses through the shimmed console methods, and so the
 # array extra-property fallback (which, without the host floor, cannot unwrap a
 # Proxy first) stays non-throwing for both the ownKeys enumeration and the

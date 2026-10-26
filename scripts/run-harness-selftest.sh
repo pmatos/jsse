@@ -10,7 +10,7 @@
 #
 #     // Expected summary: PASS: <p>  FAIL: <f>  TOTAL: <t>
 #
-# This runner prepends the shared shims exactly as run-library-tests.sh does,
+# This runner prepends the harness shim exactly as run-library-tests.sh does,
 # runs the fixture on jsse --node, and checks the emitted summary matches.
 #
 # Usage: ./scripts/run-harness-selftest.sh [--no-build]
@@ -19,7 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-JSSE="$PROJECT_DIR/target/release/jsse"
+JSSE="${JSSE:-$PROJECT_DIR/target/release/jsse}"
 FIXTURE_DIR="$SCRIPT_DIR/harness-fixtures"
 
 NO_BUILD=0
@@ -35,7 +35,7 @@ if [ "$NO_BUILD" -eq 0 ]; then
     (cd "$PROJECT_DIR" && cargo build --release)
 fi
 
-SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$SCRIPT_DIR/node-buffer-shim.js" "$SCRIPT_DIR/node-test-harness.js")
+SHIMS=("$SCRIPT_DIR/node-test-harness.js")
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

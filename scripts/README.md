@@ -3,14 +3,15 @@
 Run real-world npm libraries' own test suites on jsse as engine stress tests
 (part of the Node host-compat epic). The recipe generalizes the original acorn
 harness: clone a pinned library, bundle its test entry with esbuild into a
-single IIFE, prepend a Node-globals shim, and run it on `target/release/jsse`.
+single IIFE, and run it with `target/release/jsse --node`.
 
-The Node/host surface ships **only** as prepended JS shims
-(`scripts/node-shim.js` for `process`/`console`, `scripts/node-buffer-shim.js`
-for `Buffer`/`TextEncoder`/`TextDecoder`) — never added to jsse's default global
-object, so test262 is unaffected. Both are prepended to every bundle.
-Everything here lives under `scripts/`; no `src/` change is required to add a
-library.
+The Node/host surface is the **Node prelude** embedded in the jsse binary:
+`node-shim.js` (`process`/`console`/`util`), `node-process-shim.js`
+(`argv`/`env`/`cwd`/`exitCode`), `node-buffer-shim.js`
+(`Buffer`/`TextEncoder`/`TextDecoder`), `node-crypto-shim.js`
+(`crypto.getRandomValues`). `--node` evaluates it; without `--node` it never
+runs, so test262 is unaffected. Only per-library `LIB_SHIM`/`LIB_SHIMS` are
+prepended. Adding a library needs no `src/` change.
 
 ## Buffer / TextEncoder / TextDecoder (`node-buffer-shim.js`)
 
@@ -91,7 +92,7 @@ and (optionally) overrides hook functions:
 | `LIB_ENTRY` (required) | bundle entry file, relative to the repo root |
 | `LIB_ESBUILD_PLATFORM` | esbuild `--platform` (default `node`; acorn uses `neutral`) |
 | `LIB_ESBUILD_EXTRA` | bash array of extra esbuild flags (e.g. `(--main-fields=main,module)`) |
-| `LIB_SHIM` | extra per-lib shim file (relative to `scripts/`) layered after `node-shim.js` |
+| `LIB_SHIM` | extra per-lib shim file (relative to `scripts/`) layered after the prelude |
 | `LIB_SHIMS` | ordered array of additional shim files; use when a library needs more than `LIB_SHIM` |
 | `LIB_BUNDLE_PREFIXES` | ordered prefix files; when set, build one isolated copy of the bundle after each prefix (for the same corpus in multiple modes) |
 | `LIB_SEPARATE_BUNDLES` | with bundle prefixes, run each prefixed copy in a separate engine process and concatenate their output before verdict evaluation (default `0`) |
@@ -129,8 +130,7 @@ independent of any library:
 ./scripts/run-node-shim-selftest.sh [--no-build]
 ```
 
-It concatenates `node-shim.js` in front of `node-shim.selftest.js` (exactly as
-the runner prepends the shim to a bundle), runs the result on **jsse `--node`**
+It runs `node-shim.selftest.js` on **jsse `--node`**
 and on **Node**, and requires both to exit 0 and emit byte-identical stdout.
 Node is the oracle for the deterministic surfaces — the `util.format` specifiers
 (`%s %d %i %f %j %c %%`), byte-accurate `process.stdout.write`, and the
@@ -170,7 +170,7 @@ focus, direct-test precedence, and focused skipped tests; the exclusive table
 form `test.only.each` registers each generated row as a focused test.
 
 Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
-prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
+prepended). Like the prelude
 it is **inert on Node** — it activates only under jsse's `--node` host mode
 (keyed off the `__host_write` syscall floor, which real Node never has). That
 inertness is what makes the cross-check meaningful: on Node the suite's *own*
@@ -269,7 +269,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
 | `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
 | `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
-| `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
+| `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via `crypto.getRandomValues`/`randomUUID` (`node-crypto-shim.js`) backed by `__host_random_bytes` |
 | `tweetnacl-js` | 1.0.3 | ✅ 7,362 (cross-checked) | ~50 min; tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; scalarmult/box at full upstream count, sign.spec.js still sampled (256/1024) — see below |
 
 ### Zod normal and jitless corpus
@@ -342,7 +342,7 @@ forces), not a behavior change.
 `nacl.min.js`'s own PRNG auto-init prefers the browser path
 (`self.crypto.getRandomValues`) before falling back to Node's
 `require('crypto')`. The jsse entry sets `self`, and `node-crypto-shim.js`
-(the Web Crypto shim already wired for the uuid harness, backed by the #229
+(the prelude's Web Crypto shim, backed by the #229
 `__host_random_bytes` syscall floor) supplies `self.crypto`, so nacl's own
 auto-init configures its PRNG with no jsse-specific code here — the same
 mechanism as upstream's unmodified browser path. `node-test-harness.js`
@@ -717,7 +717,7 @@ uuid's own upstream suite (`src/test/*.test.ts`, compiled by `tsc`) imports
 tape/QUnit-style adapter file like other libraries. Two new pieces make that
 possible:
 
-- **`node-crypto-shim.js`** (shared, opt-in via `LIB_SHIMS`) installs
+- **`node-crypto-shim.js`** (in the prelude since #1216) installs
   `globalThis.crypto.getRandomValues`/`.randomUUID`, backed by the
   `__host_random_bytes` syscall-floor primitive (#229). It only activates when
   `crypto` isn't already present — real Node has had a native global `crypto`

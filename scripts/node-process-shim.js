@@ -1,6 +1,6 @@
 // Node host-compat `process` surface (issue #1215) on top of the --node floor:
-// argv, argv0, execPath, env, cwd()/chdir(), exitCode and exit(). Load AFTER
-// scripts/node-shim.js, which creates `globalThis.process`. A no-op unless the
+// argv, argv0, execPath, env, cwd()/chdir(), exitCode and exit(). Loaded AFTER
+// node-shim.js (see node_prelude.rs), which creates `globalThis.process`. A no-op unless the
 // floor primitives exist (jsse `--node`), so real Node and plain jsse keep their
 // own `process`. See docs/adr/2026-10-26-0854-node-host-mode.md.
 

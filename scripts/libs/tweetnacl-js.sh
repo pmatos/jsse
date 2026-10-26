@@ -66,7 +66,7 @@ LIB_ESBUILD_PLATFORM="node"
 LIB_ESBUILD_EXTRA=(
     --alias:tape=./test/jsse-tape.js
 )
-LIB_SHIMS=("node-crypto-shim.js" "node-test-harness.js")
+LIB_SHIMS=("node-test-harness.js")
 LIB_EXPECT_COUNT="7362"   # locked: raised corpus (#361), equal on jsse and Node
 LIB_TIMEOUT="6000"        # 100min: measured 50m15s real on a loaded shared host (~2x margin)
 
