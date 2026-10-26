@@ -1,6 +1,11 @@
-// Builtin-module registry for `--node` (#1221): module sources come from
-// node-lib/ via the native `__host_builtin_source`. The CommonJS loader (#1219)
-// should capture `__node_builtin` and then delete it from the global object.
+// Builtin-module registry for `--node` (#1221, #1219): module sources come from
+// node-lib/ via the native `__host_builtin_source`; the prelude modules that
+// register themselves (fs, timers) are collected here and all of them are
+// reached through `require`. This is the last prelude script before the
+// globals are hidden: it captures and deletes the registries and the hidden
+// entry points, and installs the CommonJS entry (`internal/modules/cjs/loader`)
+// for the main module (`__node_run_main`, consumed by the launcher) or for
+// `-e`/REPL (`require` and friends as globals); an ES module main gets neither.
 // See docs/adr/2026-10-26-0854-node-host-mode.md.
 
 (function () {
@@ -9,7 +14,23 @@
   if (typeof __host_builtin_source === "undefined") return;
 
   var hostSource = __host_builtin_source;
+  var mainKind = __host_main_kind();
   delete globalThis.__host_builtin_source;
+  delete globalThis.__host_main_kind;
+
+  // Preludes that register a public module put it in one of these; both are
+  // taken private here.
+  var loopKey = Symbol.for("jsse.node.builtins");
+  var registries = [globalThis.__node_builtins, globalThis[loopKey]];
+  delete globalThis.__node_builtins;
+  delete globalThis[loopKey];
+  var registered = Object.create(null);
+  registries.forEach(function (registry) {
+    if (registry === undefined) return;
+    Object.keys(registry).forEach(function (id) {
+      registered[id] = registry[id];
+    });
+  });
 
   var indirectEval = eval;
   var proc = globalThis.process;
@@ -91,6 +112,7 @@
   function requireBuiltin(id) {
     var cached = cache[id];
     if (cached !== undefined) return cached.exports;
+    if (id in registered) return registered[id];
     var source = hostSource(id);
     if (source === undefined) {
       var codes = requireBuiltin("internal/errors").codes;
@@ -112,23 +134,33 @@
     return module.exports;
   }
 
-  function loadPublic(id) {
-    if (typeof id !== "string") {
-      var codes = requireBuiltin("internal/errors").codes;
-      throw new codes.ERR_INVALID_ARG_TYPE("id", "string", id);
-    }
-    var name = strSlice(id, 0, 5) === "node:" ? strSlice(id, 5) : id;
-    if (strSlice(name, 0, 9) === "internal/") {
-      codes = requireBuiltin("internal/errors").codes;
-      throw new codes.ERR_UNKNOWN_BUILTIN_MODULE(id);
-    }
-    return requireBuiltin(name);
+  var requirable = Object.create(null);
+  function canBeRequiredByUsers(id) {
+    if (typeof id !== "string") return false;
+    if (id in requirable) return requirable[id];
+    return (requirable[id] =
+      id in registered ||
+      (strSlice(id, 0, 9) !== "internal/" && hostSource(id) !== undefined));
   }
 
-  Object.defineProperty(globalThis, "__node_builtin", {
-    value: loadPublic,
-    writable: true,
-    enumerable: false,
-    configurable: true,
-  });
+  cache["internal/modules/builtins"] = {
+    exports: { canBeRequiredByUsers: canBeRequiredByUsers, loadBuiltin: requireBuiltin },
+  };
+
+  function cjsLoader() {
+    return requireBuiltin("internal/modules/cjs/loader");
+  }
+
+  if (mainKind === "cjs") {
+    Object.defineProperty(globalThis, "__node_run_main", {
+      value: function () {
+        cjsLoader().runMain();
+      },
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  } else if (mainKind === "eval") {
+    cjsLoader().setupEval();
+  }
 })();

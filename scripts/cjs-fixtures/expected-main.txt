@@ -1,0 +1,100 @@
+path===node:path {"ok":true}
+fs===node:fs {"ok":true}
+fs.readFileSync {"ok":"function"}
+path.sep {"ok":"/"}
+resolve builtin {"ok":["path","node:path"]}
+unknown node: builtin {"error":{"name":"Error","code":"ERR_UNKNOWN_BUILTIN_MODULE","message":"No such built-in module: node:nope","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+node:internal {"error":{"name":"Error","code":"ERR_UNKNOWN_BUILTIN_MODULE","message":"No such built-in module: node:internal/errors","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+internal is a plain name {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module 'internal/errors'\nRequire stack:\n- <root>/main.js","requireStack":["<root>/main.js"],"path":"[undefined]","requestPath":"[undefined]"}}
+non-string id {"error":{"name":"TypeError","code":"ERR_INVALID_ARG_TYPE","message":"The \"id\" argument must be of type string. Received type number (1)","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+empty id {"error":{"name":"TypeError","code":"ERR_INVALID_ARG_VALUE","message":"The argument 'id' must be a non-empty string. Received ''","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+object id {"error":{"name":"TypeError","code":"ERR_INVALID_ARG_TYPE","message":"The \"id\" argument must be of type string. Received an instance of Object","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+relative with ext {"ok":"dir-index"}
+relative without ext {"ok":"dir-index"}
+directory index {"ok":"dir-index"}
+directory trailing slash {"ok":"trailing-index"}
+directory ./lib/trailing/. {"ok":"trailing-index"}
+package main {"ok":"pkgdir-entry"}
+package main missing, index fallback {"ok":"pkgbad-index-fallback"}
+package main missing, no index {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module '<root>/lib/pkgnoindex/missing.js'. Please verify that the package.json has a valid \"main\" entry","requireStack":"[undefined]","path":"<root>/lib/pkgnoindex/package.json","requestPath":"./lib/pkgnoindex"}}
+absolute {"ok":"dir-index"}
+dotted name a.b {"ok":"a.b"}
+dotfile {"ok":"hidden"}
+missing relative {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module './lib/missing'\nRequire stack:\n- <root>/main.js","requireStack":["<root>/main.js"],"path":"[undefined]","requestPath":"[undefined]"}}
+missing bare {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module 'no-such-package'\nRequire stack:\n- <root>/main.js","requireStack":["<root>/main.js"],"path":"[undefined]","requestPath":"[undefined]"}}
+missing scoped {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module '@scope/nothing'\nRequire stack:\n- <root>/main.js","requireStack":["<root>/main.js"],"path":"[undefined]","requestPath":"[undefined]"}}
+file as directory {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module './lib/dir/index.js/x'\nRequire stack:\n- <root>/main.js","requireStack":["<root>/main.js"],"path":"[undefined]","requestPath":"[undefined]"}}
+up and down {"ok":"dir-index"}
+up and down, from a nested directory {"ok":"sub-deep"}
+unregistered extension is loaded as .js {"ok":"plain text"}
+json {"ok":{"name":"data","list":[1,2,{"x":null}]}}
+json without extension {"ok":{"name":"data","list":[1,2,{"x":null}]}}
+json bom {"ok":{"bom":true}}
+json invalid {"ok":["SyntaxError",true]}
+json cached identity {"ok":true}
+wrapper {"ok":{"thisIsExports":true,"thisIsModuleExports":true,"args":5,"strict":true,"names":["object","function","object","string","string"],"ret":"function"}}
+no globals from module scope {"ok":["undefined","undefined","number"]}
+shebang {"ok":"shebang-ok"}
+toplevel return {"ok":{}}
+syntax error {"ok":"SyntaxError"}
+main module {"ok":[".",null,false,true,true,true,true]}
+module.paths {"ok":["<root>/node_modules","<ancestor>/node_modules"]}
+module.path {"ok":"<root>"}
+global leak {"ok":["undefined","undefined","undefined","undefined","undefined","undefined","undefined","undefined","undefined"]}
+this at top level {"ok":true}
+cycle {"ok":[{"early":"a-early","sawB":{"aEarly":"a-early","aDone":"[undefined]","aLoaded":false},"done":true},{"snapshot":{"aEarly":"a-early","aDone":"[undefined]","aLoaded":false}}]}
+throwing module not cached {"ok":["boom from throws.js","boom from throws.js",false,true]}
+cache key and identity {"ok":["dir-index",true,true,true,true]}
+cache delete reloads {"ok":[1,1,2]}
+module.children {"ok":["lib/dir/index.js","lib/a.js"]}
+module.parent of required {"ok":[true,true]}
+relative resolution cache after delete {"ok":["dir-index",true]}
+plain package {"ok":"plain-index"}
+plain/package.json {"ok":{"name":"plain","version":"1.0.0"}}
+plain/index.js {"ok":"plain-index"}
+scoped main {"ok":"scoped-main"}
+scoped deep {"ok":"scoped-extra"}
+no exports: main {"ok":"noexports-main"}
+no exports: deep {"ok":"noexports-deep"}
+nested node_modules {"ok":["nested","inner-index","plain-index"]}
+file wins over directory {"ok":"file-wins"}
+directory when ending slash {"ok":"dual-index"}
+NODE_PATH {"ok":"npmod"}
+HOME .node_modules {"ok":"home-node-modules"}
+exports: conditions (require) {"ok":"exp-main"}
+exports: subpath {"ok":"feature-one"}
+exports: pattern {"ok":"feature-one"}
+exports: longer pattern {"ok":{"feature":"data"}}
+exports: null pattern {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './features/private/secret' is not defined by \"exports\" in <root>/node_modules/exp/package.json","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: array fallback {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module '<root>/node_modules/exp/lib/missing-first.js'","requireStack":"[undefined]","path":"<root>/node_modules/exp","requestPath":"[undefined]"}}
+exports: nested conditions {"ok":"feature-two"}
+exports: null target {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './nullish' is not defined by \"exports\" in <root>/node_modules/exp/package.json","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: trailing slash key {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './dir/one' is not defined by \"exports\" in <root>/node_modules/exp/package.json","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: missing file {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module '<root>/node_modules/exp/lib/does-not-exist.js'","requireStack":"[undefined]","path":"<root>/node_modules/exp","requestPath":"[undefined]"}}
+exports: package.json export {"ok":{"name":"exp","main":"./lib/ignored-main.js","exports":{".":{"import":"./lib/esm.mjs","require":"./lib/main.js","default":"./lib/default.js"},"./feature":"./lib/features/one.js","./features/*":"./lib/features/*.js","./features/*.json":"./lib/features/*.json","./features/private/*":null,"./array":["./lib/missing-first.js","./lib/features/one.js"],"./cond":{"node":{"require":"./lib/features/two.js"},"default":"./lib/features/one.js"},"./nullish":null,"./dir/":"./lib/features/","./missing":"./lib/does-not-exist.js","./package.json":"./package.json","./abs":"/etc/passwd","./escape":"./../outside.js","./bare":"somewhere"}}}
+exports: not exported {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './lib/main.js' is not defined by \"exports\" in <root>/node_modules/exp/package.json","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: absolute target {"error":{"name":"Error","code":"ERR_INVALID_PACKAGE_TARGET","message":"Invalid \"exports\" target \"/etc/passwd\" defined for './abs' in the package config <root>/node_modules/exp/package.json; targets must start with \"./\"","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: escaping target {"error":{"name":"Error","code":"ERR_INVALID_PACKAGE_TARGET","message":"Invalid \"exports\" target \"./../outside.js\" defined for './escape' in the package config <root>/node_modules/exp/package.json","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: bare target {"error":{"name":"Error","code":"ERR_INVALID_PACKAGE_TARGET","message":"Invalid \"exports\" target \"somewhere\" defined for './bare' in the package config <root>/node_modules/exp/package.json; targets must start with \"./\"","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: string sugar {"ok":"expstr-entry"}
+exports: string sugar, not exported subpath {"error":{"name":"Error","code":"ERR_PACKAGE_PATH_NOT_EXPORTED","message":"Package subpath './other.js' is not defined by \"exports\" in <root>/node_modules/expstr/package.json","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: conditions order {"ok":"expcond-sync"}
+exports: mixed keys {"error":{"name":"Error","code":"ERR_INVALID_PACKAGE_CONFIG","message":"Invalid package config <root>/node_modules/expbad/package.json. \"exports\" cannot contain some keys starting with '.' and some not. The exports object must either be an object of package subpath keys or an object of main entry condition name keys only.","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+exports: resolve {"ok":["<root>/node_modules/exp/lib/main.js","<root>/node_modules/exp/lib/features/one.js","<root>/node_modules/exp/lib/features/one.js"]}
+exports: self reference {"ok":{"util":"selfref-util","self":"object"}}
+exports: imports {"ok":{"internal":"imp-internal","cond":"imp-cond-require","dir":"imp-dir-x","dep":"plain-index","#nope":["ERR_PACKAGE_IMPORT_NOT_DEFINED","Package import specifier \"#nope\" is not defined in package <root>/node_modules/imp/package.json imported from <imp>/main.js"],"#missing":["MODULE_NOT_FOUND","Cannot find module '<imp>/missing.js'"],"#bad":["ERR_INVALID_PACKAGE_TARGET","Invalid \"imports\" target \"../escape.js\" defined for '#bad' in the package config <root>/node_modules/imp/package.json imported from <imp>/main.js"],"#":["ERR_INVALID_MODULE_SPECIFIER","Invalid module \"#\" is not a valid internal imports specifier name imported from <imp>/main.js"],"#/x":["ERR_PACKAGE_IMPORT_NOT_DEFINED","Package import specifier \"#/x\" is not defined in package <root>/node_modules/imp/package.json imported from <imp>/main.js"]}}
+exports: self reference, missing target {"ok":["MODULE_NOT_FOUND","Cannot find module '<d>/x.js'","<d>"]}
+resolve relative {"ok":"<root>/lib/dir/index.js"}
+resolve missing {"error":{"name":"Error","code":"MODULE_NOT_FOUND","message":"Cannot find module './lib/missing'\nRequire stack:\n- <root>/main.js","requireStack":["<root>/main.js"],"path":"[undefined]","requestPath":"[undefined]"}}
+resolve non-string {"error":{"name":"TypeError","code":"ERR_INVALID_ARG_TYPE","message":"The \"request\" argument must be of type string. Received type number (1)","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+resolve options.paths relative {"ok":"<root>/sub/deep/mod.js"}
+resolve options.paths bare {"ok":"<root>/np/npmod/index.js"}
+resolve options.paths bare, node_modules {"ok":"<root>/node_modules/plain/index.js"}
+resolve options.paths invalid {"error":{"name":"TypeError","code":"ERR_INVALID_ARG_VALUE","message":"The property 'options.paths' is invalid. Received 'x'","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+resolve.paths bare {"ok":["<root>/node_modules","<ancestor>/node_modules","<root>/np","<root>/home/.node_modules","<root>/home/.node_libraries","<prefix>/lib/node"]}
+resolve.paths relative {"ok":["<root>"]}
+resolve.paths builtin {"ok":null}
+resolve.paths non-string {"error":{"name":"TypeError","code":"ERR_INVALID_ARG_TYPE","message":"The \"request\" argument must be of type string. Received type number (1)","requireStack":"[undefined]","path":"[undefined]","requestPath":"[undefined]"}}
+require shape {"ok":[["resolve","main","extensions","cache"],[".js",".json",".node"],true,"function","require","resolve"]}
+custom extension {"ok":"plain text"}
+required module sees its own require.main {"ok":["object","function","object","string","string"]}

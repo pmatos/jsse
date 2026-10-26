@@ -34,6 +34,30 @@ pub(crate) struct NodeHostState {
     /// `process.exitCode` sink (`__host_set_exit_code`), read by the CLI when
     /// the run ends without an explicit `__host_exit`.
     pub(crate) exit_code: Option<i32>,
+    /// What the launch runs as its main program; read by `__host_main_kind`.
+    pub(crate) main_kind: NodeMainKind,
+}
+
+/// How the prelude's CommonJS loader treats the main program.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum NodeMainKind {
+    /// A script file, run as the CommonJS main module.
+    Cjs,
+    /// A script file run as an ES module: no `require`.
+    Esm,
+    /// `-e` or the REPL: `require` and `module` are globals.
+    #[default]
+    Eval,
+}
+
+impl NodeMainKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Cjs => "cjs",
+            Self::Esm => "esm",
+            Self::Eval => "eval",
+        }
+    }
 }
 
 impl Interpreter {
@@ -50,6 +74,16 @@ impl Interpreter {
             script,
             args,
         });
+    }
+
+    /// `"cjs"` (a script file, run as the CommonJS main module), `"esm"`
+    /// (a script file run as an ES module) or anything else for `-e`/REPL.
+    pub fn set_node_host_main_kind(&mut self, kind: &str) {
+        self.node_host.main_kind = match kind {
+            "cjs" => NodeMainKind::Cjs,
+            "esm" => NodeMainKind::Esm,
+            _ => NodeMainKind::Eval,
+        };
     }
 
     /// Exit status requested through `process.exitCode`, if any.
