@@ -20,6 +20,14 @@ mod math;
 mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_builtins;
+#[cfg(unix)]
+mod node_host_fs;
+#[cfg(unix)]
+mod node_host_fs_args;
+#[cfg(unix)]
+mod node_host_fs_error;
+#[cfg(unix)]
+mod node_host_fs_meta;
 mod node_host_process;
 mod node_prelude;
 mod number;

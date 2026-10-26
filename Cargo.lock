@@ -1180,6 +1180,7 @@ dependencies = [
  "icu_normalizer",
  "icu_provider 1.5.0",
  "jiff",
+ "libc",
  "num-bigint 0.5.1",
  "regex",
  "regex-automata",
