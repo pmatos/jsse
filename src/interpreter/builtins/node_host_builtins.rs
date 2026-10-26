@@ -19,6 +19,14 @@ macro_rules! builtin {
 
 const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("os"),
+    builtin!("fs"),
+    builtin!("fs/promises"),
+    builtin!("internal/fs/callbacks"),
+    builtin!("internal/fs/dir"),
+    builtin!("internal/fs/glob"),
+    builtin!("internal/fs/glob_sync"),
+    builtin!("internal/fs/promises"),
+    builtin!("internal/fs/streams"),
     builtin!("crypto"),
     builtin!("internal/crypto/hash"),
     builtin!("internal/crypto/random"),
