@@ -25,7 +25,7 @@
 // is the native `__host_os` object, seeded as `internal/host/os`. Deviations:
 // HOME/USERPROFILE and TMPDIR/TMP/TEMP are read from `process.env` at call time
 // (the OS environment is never mutated, see the ADR), and platform/arch come
-// from the binding because the prelude's `process.platform` is a constant.
+// from the binding, which `process.platform`/`arch` share (#1227).
 
 const {
   ArrayPrototypePush,

@@ -64,7 +64,7 @@ fn pairs(table: Table) -> Vec<JsValue> {
         .collect()
 }
 
-fn platform(interp: &Interpreter) -> String {
+pub(super) fn platform(interp: &Interpreter) -> String {
     #[cfg(test)]
     if let Some(p) = interp.node_host.platform_override {
         return p.to_string();

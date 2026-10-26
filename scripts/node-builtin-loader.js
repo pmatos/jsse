@@ -217,6 +217,13 @@
   delete globalThis.__host_os;
   hostOs.Buffer = globalThis.Buffer;
   cache["internal/host/os"] = { exports: hostOs };
+  // The native process-metrics binding (#1227): the prelude's `process` already
+  // holds it; `load` lets those methods reach per_thread.js on first use.
+  var hostProcess = globalThis.__host_process;
+  delete globalThis.__host_process;
+  hostProcess.load = requireBuiltin;
+  cache["internal/host/process"] = { exports: hostProcess };
+
   // The native `crypto` binding (#1226), plus the entropy floor and the global
   // Web Crypto object the module re-exports as `webcrypto`.
   var hostCrypto = globalThis.__host_crypto;
@@ -273,6 +280,13 @@
     ["internal/abort_controller", "AbortController"],
     ["internal/abort_controller", "AbortSignal"],
     ["internal/per_context/domexception", "DOMException"],
+    ["perf_hooks", "performance"],
+    ["perf_hooks", "PerformanceEntry"],
+    ["perf_hooks", "PerformanceMark"],
+    ["perf_hooks", "PerformanceMeasure"],
+    ["perf_hooks", "PerformanceObserver"],
+    ["perf_hooks", "PerformanceObserverEntryList"],
+    ["perf_hooks", "PerformanceResourceTiming"],
   ];
 
   function defineLazyGlobal(id, name) {
