@@ -20,6 +20,9 @@ struct Timer {
     fire_at: Option<Instant>,
     /// `Some` for `setInterval`; the timer re-arms after every fire.
     interval: Option<Duration>,
+    /// False once `unref` has been called (Node host): the timer still fires
+    /// while the loop is alive but does not keep it alive.
+    refed: bool,
 }
 
 /// Timers owned by the interpreter and serviced on the event loop, replacing a
@@ -85,6 +88,7 @@ impl TimerQueue {
                 args,
                 fire_at,
                 interval: repeating.then_some(delay),
+                refed: true,
             },
         );
         self.compact_index_if_stale();
@@ -114,6 +118,17 @@ impl TimerQueue {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.timers.is_empty()
+    }
+
+    pub(crate) fn set_ref(&mut self, id: u64, refed: bool) {
+        if let Some(timer) = self.timers.get_mut(&id) {
+            timer.refed = refed;
+        }
+    }
+
+    /// Whether any armed timer still keeps the event loop alive.
+    pub(crate) fn has_refed(&self) -> bool {
+        self.timers.values().any(|t| t.refed)
     }
 
     /// Earliest live deadline, pruning stale heap entries off the top. `None`

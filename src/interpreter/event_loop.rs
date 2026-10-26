@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "node_event_loop.rs"]
+pub(crate) mod node_event_loop;
+
 impl Interpreter {
     /// How long a wait on the host-async completion queue may block.
     ///
@@ -92,7 +95,11 @@ impl Interpreter {
         if let Completion::Normal(value) | Completion::Throw(value) = result {
             self.gc_root_value(value);
         }
-        self.drain_microtasks_until_idle();
+        if self.scheduler.node_loop.installed {
+            self.node_drain_after_run(result);
+        } else {
+            self.drain_microtasks_until_idle();
+        }
         self.gc_unroot_frame(frame);
     }
 

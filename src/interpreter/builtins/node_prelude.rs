@@ -20,8 +20,8 @@ const HIDE_GLOBALS: &str = r#"(function (names) {
 })(["process", "Buffer", "TextEncoder", "TextDecoder", "util"]);"#;
 
 /// Load order matters: the process shim extends the `process` object that the
-/// console/util shim creates, the fs scripts need `Buffer` and `util`, and the
-/// globals are hidden last.
+/// console/util shim creates, the timers shim needs the event-loop shim's
+/// handoff, the fs scripts need `Buffer` and `util`, and the globals are hidden last.
 const NODE_PRELUDE: &[(&str, &str)] = &[
     (
         "node-shim.js",
@@ -38,6 +38,14 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
     (
         "node-crypto-shim.js",
         include_str!("../../../scripts/node-crypto-shim.js"),
+    ),
+    (
+        "node-event-loop-shim.js",
+        include_str!("../../../scripts/node-event-loop-shim.js"),
+    ),
+    (
+        "node-timers-shim.js",
+        include_str!("../../../scripts/node-timers-shim.js"),
     ),
     (
         "node-fs-support.js",
