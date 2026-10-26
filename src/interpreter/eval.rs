@@ -4789,6 +4789,7 @@ impl Interpreter {
                     nt if nt.is_undefined() => super_ctor.clone(),
                     nt => nt,
                 };
+                interp.node_host.call_pos = site_id.1;
                 let result = interp.construct_super(&super_ctor, &arg_vals, new_target);
                 let Completion::Normal(v) = result else {
                     return result;
@@ -4843,6 +4844,7 @@ impl Interpreter {
                                     args: evaluated_args,
                                 };
                             }
+                            i.node_host.call_pos = site_id.1;
                             i.call_function(&func_val, &obj_val, &evaluated_args)
                         });
                     }
@@ -5032,6 +5034,7 @@ impl Interpreter {
                 args: evaluated_args,
             };
         }
+        self.node_host.call_pos = site_id.1;
         let result = self.call_at_site(site_id, &func_val, &this_val, &evaluated_args);
         self.gc_unroot_frame(gc_frame);
         result
@@ -6306,11 +6309,9 @@ impl Interpreter {
         self.finish_user_call(result)
     }
 
-    /// Runs `run` as the activation of `func_obj_id` in `exec_env`: the frame
-    /// and environment are visible to `fn.arguments`/`fn.caller` and the
-    /// collector for its duration, tail positions are independent of the
-    /// caller's try/finally regions, and resources declared in the body are
-    /// disposed on exit.
+    /// Runs `run` as the activation of `func_obj_id` in `exec_env`, visible to
+    /// `fn.arguments`/`fn.caller` and the collector; resources declared in the
+    /// body are disposed on exit.
     #[inline(always)]
     fn run_activation(
         &mut self,
@@ -6319,10 +6320,13 @@ impl Interpreter {
         exec_env: &EnvRef,
         run: impl FnOnce(&mut Self) -> Completion,
     ) -> Completion {
+        let caller_pos = self.take_call_pos();
         self.call_stack_frames.push(CallFrame {
             func_obj_id,
             arguments,
             is_eval: false,
+            caller_pos,
+            env_index: self.call_stack_envs.len(),
         });
         let frame_depth = self.call_stack_frames.len();
         self.call_stack_envs.push(exec_env.clone());
@@ -6332,7 +6336,7 @@ impl Interpreter {
         self.tco_suppress_depth = saved_tco_suppress;
         self.call_stack_envs.pop();
         debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
-        self.call_stack_frames.pop();
+        self.pop_call_frame();
         if exec_env.borrow().has_dispose_stack() {
             self.dispose_resources(exec_env, result)
         } else {
@@ -6573,14 +6577,12 @@ impl Interpreter {
             new_env.borrow_mut().strict = true;
             (new_env.clone(), new_env)
         } else if direct {
-            // Non-strict direct eval: var goes to caller's var scope,
-            // lex is a new declarative environment for let/const/class
+            // Non-strict direct eval: var goes to caller's var scope
             let var_env = Environment::find_var_scope(caller_env);
             let lex_env = Environment::new(Some(caller_env.clone()));
             (var_env, lex_env)
         } else {
-            // Non-strict indirect eval: var is global, lex is new child of global
-            // For cross-realm eval, caller_env is already the eval function's realm's global env
+            // Non-strict indirect eval: var is global, lex a new child of global
             let lex_env = Environment::new(Some(caller_env.clone()));
             lex_env.borrow_mut().strict = false;
             (caller_env.clone(), lex_env)
@@ -6599,15 +6601,18 @@ impl Interpreter {
         }
 
         // Execute statements in lex_env
+        let caller_pos = self.take_call_pos();
         self.call_stack_frames.push(CallFrame {
             func_obj_id: 0,
             arguments: CallFrameArguments::None,
             is_eval: true,
+            caller_pos,
+            env_index: self.call_stack_envs.len(),
         });
         self.call_stack_envs.push(lex_env.clone());
         let result = self.exec_eval_body(&program.body, &lex_env);
         self.call_stack_envs.pop();
-        self.call_stack_frames.pop();
+        self.pop_call_frame();
         self.dispose_resources(&lex_env, result.update_empty(JsValue::UNDEFINED))
     }
 
@@ -6984,7 +6989,7 @@ impl Interpreter {
         callee: &Expression,
         args: &[Expression],
         env: &EnvRef,
-        _site_id: CallSiteId,
+        site_id: CallSiteId,
     ) -> Completion {
         let gc_frame = self.gc_root_frame();
         let callee_val = match self.eval_expr(callee, env) {
@@ -6999,6 +7004,7 @@ impl Interpreter {
                 return Completion::Throw(e);
             }
         };
+        self.node_host.call_pos = site_id.1;
         let result = self.construct_from_evaluated(&callee_val, &evaluated_args);
         self.gc_unroot_frame(gc_frame);
         result
@@ -8464,21 +8470,16 @@ impl Interpreter {
 
         // Helper: close the for-of loops from `$from` inward, surfacing an
         // abrupt completion from a disposer or an iterator `return` method.
-        // `$seed` is the completion driving the unwind (mirroring
-        // `unwind_scopes_to!`'s own seed/tag signature) rather than always
-        // starting from `Completion::Empty`, so a parked-then-resumed
-        // re-entry (via `$then`) can seed with the value the cursor's own
-        // finished completion carries and continue unwinding from there —
-        // provably equivalent to the original call never having suspended
-        // (see the ADR for this issue). Each level's `iteration_env` dispose
-        // may itself suspend: on `ForOfUnwindOutcome::Parked` this parks the
-        // function with `$then` and returns, leaving the loop being closed
-        // on `for_of_stack` with its `iteration_env` already taken so the
-        // resumed re-entry finds nothing left to dispose for it and
-        // idempotently proceeds straight to `close_for_of_iterator`. The
-        // per-level handler-boundary re-check below re-runs after *every*
-        // level's dispose, synchronous or resumed, because it is part of
-        // this same per-level loop body either way.
+        // `$seed` is the completion driving the unwind (as in
+        // `unwind_scopes_to!`), so a parked-then-resumed re-entry (via
+        // `$then`) continues from the cursor's own finished completion,
+        // equivalent to never having suspended (see the ADR for this issue).
+        // Each level's `iteration_env` dispose may suspend: on
+        // `ForOfUnwindOutcome::Parked` this parks the function with `$then`
+        // and returns, leaving the loop on `for_of_stack` with its
+        // `iteration_env` taken, so the resumed re-entry proceeds straight to
+        // `close_for_of_iterator`. The per-level handler-boundary re-check
+        // re-runs after every level's dispose, synchronous or resumed.
         macro_rules! unwind_for_of {
             ($from:expr, $seed:expr, $then:expr) => {
                 let unwind_from = $from;

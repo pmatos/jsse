@@ -52,6 +52,10 @@ impl SourceText {
     pub(crate) fn as_str(&self) -> &str {
         &self.source[(self.start & !PUA_ENCODED) as usize..self.end as usize]
     }
+
+    pub(crate) fn origin(&self) -> (&Rc<str>, usize) {
+        (&self.source, (self.start & !PUA_ENCODED) as usize)
+    }
 }
 
 impl From<String> for SourceText {
@@ -77,10 +81,10 @@ pub(crate) enum SourceType {
     Module,
 }
 
-/// Dense identifier for a call IC site within a single `Body`.
+/// Dense identifier for a call IC site within a single `Body`, plus the call's
+/// source offset plus one (0 = unknown), which only stack traces read.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-#[repr(transparent)]
-pub(crate) struct CallSiteId(pub u32);
+pub(crate) struct CallSiteId(pub u32, pub u32);
 
 /// Dense identifier for a property-access IC site within a single `Body`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
@@ -88,7 +92,15 @@ pub(crate) struct CallSiteId(pub u32);
 pub(crate) struct PropSiteId(pub u32);
 
 impl CallSiteId {
-    pub(crate) const UNASSIGNED: Self = Self(u32::MAX);
+    pub(crate) const UNASSIGNED: Self = Self(u32::MAX, 0);
+
+    pub(crate) fn at(offset: usize) -> Self {
+        Self(u32::MAX, u32::try_from(offset + 1).unwrap_or(0))
+    }
+
+    pub(crate) fn is_unassigned(self) -> bool {
+        self.0 == u32::MAX
+    }
 }
 
 impl PropSiteId {
@@ -1905,24 +1917,17 @@ enum SiteWork<'a> {
 /// Number every call/new/member site reachable from `expr`, walked with an
 /// explicit stack.
 ///
-/// Flat operand chains (`a + b + c + ...`) and member/call chains
-/// (`a.b.b.b...`) parse in a continuation loop rather than by recursive
-/// descent, so they are deliberately not bounded by `MAX_PARSE_DEPTH` and nest
-/// as deeply as the source is long. Native recursion here overflowed the engine
-/// stack — SIGABRT, uncatchable — at ~122k operands on a debug build and ~3-4M
-/// on release (jsse#612). This pass runs on every successful parse and has no
-/// way to report a failure, so it must use O(1) native stack.
-///
-/// Nested function, arrow, and class-method bodies each open a *fresh* id
-/// namespace via [`assign_ic_sites`], so they stay ordinary nested calls: that
-/// recursion is bounded by function/class nesting depth, which recursive
-/// descent does funnel through `MAX_PARSE_DEPTH`.
+/// Flat operand and member/call chains parse in a loop, so they nest as deeply
+/// as the source is long; native recursion overflowed the stack (jsse#612) and
+/// this pass cannot report failure, so it needs O(1) native stack. Nested
+/// function bodies open a fresh id namespace via [`assign_ic_sites`]; that
+/// recursion is bounded by `MAX_PARSE_DEPTH`.
 fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &mut u32) {
     let mut stack: Vec<SiteWork<'a>> = vec![SiteWork::Expr(expr)];
     while let Some(work) = stack.pop() {
         let expr = match work {
             SiteWork::SetCall(site) => {
-                *site = CallSiteId(*call_id);
+                *site = CallSiteId(*call_id, site.1);
                 *call_id += 1;
                 continue;
             }
@@ -2083,7 +2088,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
     while let Some(expr) = stack.pop() {
         match expr {
             Expression::Call(callee, args, site) | Expression::New(callee, args, site) => {
-                *site = CallSiteId::UNASSIGNED;
+                site.0 = u32::MAX;
                 stack.push(callee);
                 stack.extend(args.iter_mut());
             }

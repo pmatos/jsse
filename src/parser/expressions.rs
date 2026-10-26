@@ -698,9 +698,7 @@ impl<'a> Parser<'a> {
             self.parse_primary_expression()?
         };
 
-        // ArrowFunction is not a LeftHandSideExpression per spec §13.3,
-        // so member access, calls, and tagged templates cannot extend it
-        // unless it was parenthesized (making it a PrimaryExpression).
+        // §13.3: an unparenthesized ArrowFunction is not a LeftHandSideExpression.
         if matches!(expr, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
             return Ok(expr);
         }
@@ -744,8 +742,9 @@ impl<'a> Parser<'a> {
                     );
                 }
                 Token::LeftParen => {
+                    let site = self.call_site(&expr);
                     let args = self.parse_arguments()?;
-                    expr = Expression::Call(ExprBox::new(expr), args, CallSiteId::UNASSIGNED);
+                    expr = Expression::Call(ExprBox::new(expr), args, site);
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     let tmpl = self.parse_template_literal_expr(true)?;
@@ -754,11 +753,12 @@ impl<'a> Parser<'a> {
                 Token::OptionalChain => {
                     self.advance()?;
                     let mut prop = if self.current == Token::LeftParen {
+                        let site = CallSiteId::at(self.current_token_start);
                         let args = self.parse_arguments()?;
                         Expression::Call(
                             ExprBox::new(Expression::Identifier("".into())),
                             args,
-                            CallSiteId::UNASSIGNED,
+                            site,
                         )
                     } else if self.current == Token::LeftBracket {
                         self.advance()?;
@@ -814,12 +814,9 @@ impl<'a> Parser<'a> {
                                 );
                             }
                             Token::LeftParen => {
+                                let site = self.call_site(&prop);
                                 let args = self.parse_arguments()?;
-                                prop = Expression::Call(
-                                    ExprBox::new(prop),
-                                    args,
-                                    CallSiteId::UNASSIGNED,
-                                );
+                                prop = Expression::Call(ExprBox::new(prop), args, site);
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                                 return Err(self
@@ -846,6 +843,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_new_expression_inner(&mut self) -> Result<Expression, ParseError> {
+        let new_pos = self.current_token_start;
         self.advance()?; // new
         if self.current == Token::Dot {
             self.advance()?; // .
@@ -919,7 +917,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::New(
             ExprBox::new(callee),
             args,
-            CallSiteId::UNASSIGNED,
+            CallSiteId::at(new_pos),
         ))
     }
 

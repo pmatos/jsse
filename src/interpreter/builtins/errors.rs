@@ -26,6 +26,7 @@ impl Interpreter {
         self.setup_native_error_constructors(error_prototype.clone());
         self.setup_suppressed_error(error_prototype.clone());
         self.setup_aggregate_error(error_prototype);
+        self.wrap_error_constructors_for_stack();
     }
 
     fn setup_error_constructor(&mut self) -> Option<ObjectHandle> {
@@ -106,9 +107,8 @@ impl Interpreter {
                     Completion::Normal(JsValue::object(id))
                 }),
             );
-            // Mark Error constructor as deferred_construct so construct_with_new_target
-            // doesn't do an early prototype lookup (the constructor body handles it via
-            // get_prototype_from_new_target_realm, per spec §20.5.1.1 step 2).
+            // deferred_construct: the body picks the prototype itself
+            // (§20.5.1.1 step 2), so skip construct_with_new_target's lookup.
             if let Some(error_val) = self.get_global_var("Error")
                 && let Some(error_id) = error_val.as_object_id()
                 && let Some(func_obj) = self.get_object(error_id)

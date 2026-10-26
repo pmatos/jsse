@@ -7,6 +7,7 @@ use std::rc::Rc;
 mod declarations;
 mod expressions;
 mod modules;
+mod positions;
 mod statements;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -178,8 +179,8 @@ pub(crate) struct Parser<'a> {
 /// (assignment, exponentiation, unary).
 ///
 /// Profile-aware because the resource really being bounded is stack *bytes*,
-/// not units. Measured by disabling the guard and binary searching the abort
-/// point over the most stack-hungry nestings (`[`, `({a:`, `({a:[`, `` `${ ``):
+/// not units. Measured by binary searching the abort point over the most
+/// stack-hungry nestings (`[`, `({a:`, `({a:[`, `` `${ ``):
 /// the engine stack holds ~37,000 depth units in release but only ~3,800 in
 /// debug, and each limit is set ~9x below its own profile's capacity. A single
 /// 4,000 sat *above* debug's capacity, which is why deeply nested source

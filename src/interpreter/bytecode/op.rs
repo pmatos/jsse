@@ -273,6 +273,10 @@ pub(crate) enum Op {
     /// `new` whose only argument is a spread: `[..., callee, iterable]` →
     /// `[..., result]`.
     ConstructSpreadSole = 114,
+    /// Records the source position (u32 offset plus one) of the call about to
+    /// run, for `--node` stack traces. Emitted only when the Node prelude
+    /// installed its hooks; no stack effect.
+    SetCallPos = 115,
 }
 
 /// Where `Op::Yield`'s operands sit counted back from the end of the op, which
@@ -399,6 +403,7 @@ impl Op {
             112 => Some(Op::ConstructSpread),
             113 => Some(Op::CallSpreadSole),
             114 => Some(Op::ConstructSpreadSole),
+            115 => Some(Op::SetCallPos),
             _ => None,
         }
     }
