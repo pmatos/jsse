@@ -21,6 +21,7 @@ mod math;
 mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_builtins;
+mod node_host_crypto;
 mod node_host_esm;
 #[cfg(unix)]
 mod node_host_fs;
