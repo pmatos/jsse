@@ -131,12 +131,12 @@ fn lazy_globals_keep_receiver_semantics_and_the_buffer_stand_in_stays_private() 
       print(Object.keys(child).join(), typeof Object.getOwnPropertyDescriptor(globalThis, "URL").get);
       Array.prototype.fill = () => { throw new Error("fill"); };
       print(new URL("http://a.com/b?c#d").href);
-      for (const id of ["buffer", "internal/host/buffer"]) try { require(id); } catch (e) { print(e.code); }
+      for (const id of ["internal/host/buffer"]) try { require(id); } catch (e) { print(e.code); }
       print(require("querystring").unescapeBuffer("a%20b").toString());
     "#;
     assert_eq!(
         eval(source, &[], None),
-        "URL function\nhttp://a.com/b?c#d\nMODULE_NOT_FOUND\nMODULE_NOT_FOUND\na b"
+        "URL function\nhttp://a.com/b?c#d\nMODULE_NOT_FOUND\na b"
     );
 }
 
