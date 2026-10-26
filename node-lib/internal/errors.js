@@ -318,6 +318,11 @@ E('ERR_PARSE_ARGS_UNKNOWN_OPTION', TypeError, (option, allowPositionals) => {
   return `Unknown option '${option}'${suggestDashDash}`;
 });
 E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
+E('ERR_CRYPTO_HASH_FINALIZED', Error, 'Digest already called');
+E('ERR_CRYPTO_INVALID_DIGEST', TypeError, (digest) => `Invalid digest: ${digest}`);
+E('ERR_UNKNOWN_ENCODING', TypeError, (encoding) => `Unknown encoding: ${encoding}`);
+E('ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH', RangeError,
+  'Input buffers must have the same byte length');
 
 E('ERR_INVALID_MODULE_SPECIFIER', TypeError, (request, reason, base = undefined) => {
   return `Invalid module "${request}" ${reason}${base ? ` imported from ${base}` : ''}`;
