@@ -207,7 +207,9 @@ struct Compiler {
     name_index: Option<NameIndex>,
     /// Name-pool entries that duplicate an ordinary entry for sites resolving
     /// from the frame environment (see `name_site`).
-    frame_sites: Vec<u16>,
+    frame_sites: NameIndex,
+    /// Parallel to `names`: whether the entry is a frame site.
+    at_frame: Vec<bool>,
     private_names: Vec<String>,
     var_names: Vec<u16>,
     current_stack: u16,
@@ -291,7 +293,8 @@ impl Compiler {
             constants: Vec::new(),
             names: Vec::new(),
             name_index: None,
-            frame_sites: Vec::new(),
+            frame_sites: NameIndex::default(),
+            at_frame: Vec::new(),
             private_names: Vec::new(),
             var_names: Vec::new(),
             current_stack: 0,
@@ -463,14 +466,13 @@ impl Compiler {
     }
 
     fn compile_load_name(&mut self, name: &str) -> Result<(), CompileError> {
+        let idx = self.name_site(name)?;
         if let Some(slot) = self.local_slot(name) {
-            let idx = self.add_name(name)?;
             self.emit(Op::LoadLocal);
             self.emit_u16(idx);
             self.emit_u16(slot);
             self.push_n(1);
         } else {
-            let idx = self.name_site(name)?;
             self.emit_load_name(idx);
         }
         Ok(())
@@ -1269,13 +1271,8 @@ impl Compiler {
         value: &Expression,
         discard: bool,
     ) -> Result<(), CompileError> {
-        let slot = self.local_slot(name);
-        let idx = if slot.is_some() {
-            self.add_name(name)?
-        } else {
-            self.name_site(name)?
-        };
-        if let Some(slot) = slot {
+        let idx = self.name_site(name)?;
+        if let Some(slot) = self.local_slot(name) {
             // A local of this frame: no `with`, closure or direct eval can
             // change what the name resolves to while the right-hand side
             // runs, so the reference needs no early resolution.
@@ -1340,13 +1337,12 @@ impl Compiler {
         };
         match target {
             Expression::Identifier(name) => {
+                let idx = self.name_site(name)?;
                 if let Some(slot) = self.local_slot(name) {
-                    let idx = self.add_name(name)?;
                     self.emit(Op::UpdateLocal);
                     self.emit_u16(idx);
                     self.emit_u16(slot);
                 } else {
-                    let idx = self.name_site(name)?;
                     self.emit(Op::UpdateName);
                     self.emit_u16(idx);
                 }
@@ -2583,11 +2579,10 @@ impl Compiler {
     /// Stores the value on top of the stack into the existing binding `name`
     /// (the `var` of a for-in/of head, or an assignment target).
     fn emit_store_name(&mut self, name: &str) -> Result<(), CompileError> {
+        let idx = self.name_site(name)?;
         if let Some(slot) = self.local_slot(name) {
-            let idx = self.add_name(name)?;
             self.emit_store_local(idx, slot, true);
         } else {
-            let idx = self.name_site(name)?;
             self.emit_resolve_name(idx);
             self.emit_store_resolved_name(idx, true);
         }
@@ -3063,7 +3058,7 @@ impl Compiler {
             .iter()
             .enumerate()
             .map(|(i, name)| {
-                if self.frame_sites.binary_search(&(i as u16)).is_ok() {
+                if self.at_frame[i] {
                     GlobalHint::from_frame(name.as_str())
                 } else {
                     GlobalHint::new(name.as_str())

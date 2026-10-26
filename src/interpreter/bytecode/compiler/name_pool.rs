@@ -21,15 +21,11 @@ impl Compiler {
             .names
             .iter()
             .enumerate()
-            .position(|(i, n)| n.as_str() == name && !self.is_frame_site(i as u16))
+            .position(|(i, n)| n.as_str() == name && !self.at_frame[i])
         {
             return Ok(i as u16);
         }
         self.push_name(crate::interpreter::Atom::intern(name))
-    }
-
-    pub(super) fn is_frame_site(&self, idx: u16) -> bool {
-        self.frame_sites.binary_search(&idx).is_ok()
     }
 
     /// The name-pool index for a bare-name reference site. Inside a Script's
@@ -38,6 +34,7 @@ impl Compiler {
     /// hint starts the scope walk there instead of verifying every block scope
     /// in between. Block scopes are the only environments a chunk opens, and
     /// `scopes` lists everything each declares.
+    #[allow(clippy::mutable_key_type)]
     pub(super) fn name_site(&mut self, name: &str) -> Result<u16, CompileError> {
         if self.goal != CompileGoal::Script
             || self.scopes.is_empty()
@@ -48,17 +45,15 @@ impl Compiler {
         {
             return self.add_name(name);
         }
-        if let Some(&idx) = self
-            .frame_sites
-            .iter()
-            .find(|&&i| self.names[usize::from(i)].as_str() == name)
-        {
+        let atom = crate::interpreter::Atom::intern(name);
+        if let Some(&idx) = self.frame_sites.get(&atom) {
             return Ok(idx);
         }
         let idx = u16::try_from(self.names.len())
             .map_err(|_| CompileError::Ineligible("name pool overflow"))?;
-        self.names.push(crate::interpreter::Atom::intern(name));
-        self.frame_sites.push(idx);
+        self.names.push(atom.clone());
+        self.at_frame.push(true);
+        self.frame_sites.insert(atom, idx);
         Ok(idx)
     }
 
@@ -73,7 +68,7 @@ impl Compiler {
                 self.names
                     .iter()
                     .enumerate()
-                    .filter(|&(i, _)| !self.is_frame_site(i as u16))
+                    .filter(|&(i, _)| !self.at_frame[i])
                     .map(|(i, n)| (n.clone(), i as u16))
                     .collect(),
             );
@@ -82,6 +77,7 @@ impl Compiler {
             index.insert(atom.clone(), idx as u16);
         }
         self.names.push(atom);
+        self.at_frame.push(false);
         Ok(idx as u16)
     }
 

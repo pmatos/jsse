@@ -89,3 +89,17 @@ assert.sameValue(globalThis.warm, 12, "the global object property keeps its own 
   assert.sameValue(blockOnly, 4);
 }
 assert.sameValue(typeof blockOnly, "undefined");
+
+function evalLoop() {
+  var l = 1;
+  eval('for (let i = 0; i < 3; i++) { l++; l += 1; }');
+  return l;
+}
+assert.sameValue(evalLoop(), 7, "direct eval loop writes the function's variable");
+
+let indirectCount = 0;
+(0, eval)('for (let i = 0; i < 3; i++) { indirectCount++; indirectCount += 1; }');
+assert.sameValue(indirectCount, 6, "indirect eval loop writes the global lexical");
+
+(0, eval)('var evalGlobalVar = 0; for (let i = 0; i < 3; i++) { evalGlobalVar += i; }');
+assert.sameValue(evalGlobalVar, 3, "indirect eval loop writes its own global var");

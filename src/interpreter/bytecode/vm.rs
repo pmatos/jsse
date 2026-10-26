@@ -1199,11 +1199,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
     // The environment a bare-name site resolves from: the frame's, for a site
     // the compiler proved no open block scope can bind (`Compiler::name_site`).
     macro_rules! site_env {
-        ($idx:expr) => {
-            if chunk
-                .global_hint($idx)
-                .is_some_and(GlobalHint::starts_at_frame)
-            {
+        ($hint:expr) => {
+            if $hint.is_some_and(GlobalHint::starts_at_frame) {
                 frame_env
             } else {
                 cur_env!()
@@ -1411,7 +1408,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
-                    match interp.resolve_name_hinted(name, site_env!(idx), chunk.global_hint(idx)) {
+                    let hint = chunk.global_hint(idx);
+                    match interp.resolve_name_hinted(name, site_env!(hint), hint) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
                     }
@@ -1517,14 +1515,11 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     let strict = frame_env.borrow().strict;
                     interp.last_identifier_with_base = None;
-                    let callee_result = interp.resolve_identifier_hinted(
-                        name,
-                        site_env!(idx),
-                        strict,
-                        chunk.global_hint(idx),
-                    );
+                    let callee_result =
+                        interp.resolve_identifier_hinted(name, site_env!(hint), strict, hint);
                     let this_value = match interp.last_identifier_with_base.take() {
                         Some(id) => JsValue::object(id),
                         None => JsValue::UNDEFINED,
@@ -1540,7 +1535,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
-                    let site_env = site_env!(idx);
+                    let hint = chunk.global_hint(idx);
+                    let site_env = site_env!(hint);
                     let local_ref = {
                         let scope = site_env.borrow();
                         scope.with_object.is_none()
@@ -1550,11 +1546,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     if local_ref {
                         refs.push(IdentifierRef::SpecificEnv(site_env.clone()));
                     } else {
-                        match interp.resolve_identifier_ref_hinted(
-                            name,
-                            site_env,
-                            chunk.global_hint(idx),
-                        ) {
+                        match interp.resolve_identifier_ref_hinted(name, site_env, hint) {
                             Ok(id_ref) => refs.push(id_ref),
                             Err(e) => throw!('dispatch, e),
                         }
@@ -1564,14 +1556,15 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     let id_ref = refs
                         .last()
                         .expect("reference stack underflow on LoadResolvedName");
                     match interp.get_identifier_value_by_ref_hinted(
                         name,
                         id_ref,
-                        site_env!(idx),
-                        chunk.global_hint(idx),
+                        site_env!(hint),
+                        hint,
                     ) {
                         Completion::Normal(value) => push_value(interp, stack, value),
                         abrupt => bail!('dispatch, abrupt),
@@ -1581,18 +1574,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     let id_ref = refs
                         .pop()
                         .expect("reference stack underflow on StoreResolvedName");
                     let value = stack.last().expect("stack underflow on StoreResolvedName");
-                    if let Err(e) = store_resolved_name(
-                        interp,
-                        name,
-                        &id_ref,
-                        site_env!(idx),
-                        value,
-                        chunk.global_hint(idx),
-                    ) {
+                    if let Err(e) =
+                        store_resolved_name(interp, name, &id_ref, site_env!(hint), value, hint)
+                    {
                         throw!('dispatch, e);
                     }
                     if op == Op::StoreResolvedNamePop {
@@ -1605,12 +1594,13 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 3;
                     let (op, prefix, discard) = update_mode(mode);
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     match interp.eval_identifier_update_hinted(
                         op,
                         prefix,
                         name,
-                        site_env!(idx),
-                        chunk.global_hint(idx),
+                        site_env!(hint),
+                        hint,
                     ) {
                         Completion::Normal(value) => {
                             if !discard {
@@ -2323,7 +2313,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
-                    match interp.eval_typeof_identifier(name, site_env!(idx)) {
+                    let hint = chunk.global_hint(idx);
+                    match interp.eval_typeof_identifier(name, site_env!(hint)) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
                     }
