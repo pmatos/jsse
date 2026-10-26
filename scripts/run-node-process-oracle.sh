@@ -9,10 +9,11 @@
 #   // RUN: <expected-exit-status> [script args...]   (one or more)
 #   // ENV: K=V ...                                    (default: empty environment)
 #   // CWD: tmp|repo                                   (default: tmp, with sub/inner and file.txt)
-# The runner prepends the shims to the fixture at one path and runs the same
-# path with the identical argument tail on both engines under `env -i`. A run
-# passes iff stdout and the exit status match Node's and the status equals the
-# RUN line (stderr is not compared).
+# The runner copies the fixture to one path (the prelude is embedded in
+# `jsse --node`, nothing is prepended) and runs the same path with the
+# identical argument tail on both engines under `env -i`. A run passes iff
+# stdout and the exit status match Node's and the status equals the RUN line
+# (stderr is not compared).
 #
 # Options:
 #   --node             run on Node only (reference / debugging)
@@ -75,7 +76,7 @@ for fixture in "${FIXTURES[@]}"; do
     where="$(sed -n 's|^// CWD: *||p' "$fixture" | head -1)"
     cwd="$TMPCWD"
     [ "$where" = "repo" ] && cwd="$PROJECT_DIR"
-    cat "$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$fixture" > "$BUNDLE"
+    cp "$fixture" "$BUNDLE"
     n=0
     while IFS= read -r line; do
         n=$((n + 1))

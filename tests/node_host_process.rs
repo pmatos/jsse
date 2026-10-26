@@ -1,6 +1,8 @@
-//! Node host mode `process` floor (#1215): script-argument splitting, the
-//! `__host_*` argv/env/cwd/exit-code primitives, and exit-status precedence.
-//! Child-process checks, because the behaviour is the real argv and exit status.
+//! Node host mode `process` (#1215): script-argument splitting, `process.argv`/
+//! `env`/`cwd`/`chdir`/`exitCode`/`exit` built on the `__host_*` floor, and
+//! exit-status precedence. Child-process checks, because the behaviour is the
+//! real argv and exit status. Under `--node` the embedded prelude (#1216) owns
+//! the floor primitives, so these go through `process`.
 
 use std::process::{Command, Output};
 
@@ -23,8 +25,8 @@ fn script(name: &str, source: &str) -> std::path::PathBuf {
     path
 }
 
-const PRINT_ARGV: &str = "print(JSON.stringify(__host_argv().slice(2)))";
-const PRINT_EVAL_ARGV: &str = "print(JSON.stringify(__host_argv().slice(1)))";
+const PRINT_ARGV: &str = "print(JSON.stringify(process.argv.slice(2)))";
+const PRINT_EVAL_ARGV: &str = "print(JSON.stringify(process.argv.slice(1)))";
 
 fn argv_tail(flags_and_script: &[&str]) -> String {
     let out = jsse(flags_and_script);
@@ -102,17 +104,17 @@ fn jsse_options_before_the_script_are_still_handled_by_clap() {
 fn argv_shape_follows_node() {
     let s = script(
         "argv-shape.js",
-        "var a = __host_argv(); print(a.length, a[0].charAt(0), a[1].split('/').pop(), __host_argv0().length > 0)",
+        "var a = process.argv; print(a.length, a[0].charAt(0), a[1].split('/').pop(), process.argv0.length > 0)",
     );
     let out = jsse(&["--node", s.to_str().unwrap(), "x"]);
     assert_eq!(stdout(&out), "3 / argv-shape.js true");
-    let out = jsse(&["--node", "-e", "print(__host_argv().length)"]);
+    let out = jsse(&["--node", "-e", "print(process.argv.length)"]);
     assert_eq!(stdout(&out), "1");
 }
 
 #[test]
 fn script_path_is_absolute_and_lexically_normalised() {
-    let s = script("argv-path.js", "print(__host_argv()[1])");
+    let s = script("argv-path.js", "print(process.argv[1])");
     let dir = s.parent().unwrap();
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
@@ -124,17 +126,17 @@ fn script_path_is_absolute_and_lexically_normalised() {
 }
 
 #[test]
-fn env_snapshot_reflects_the_os_environment() {
+fn process_env_reflects_the_os_environment() {
     let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .env("JSSE_NODE_HOST_PROBE", "va lue")
         .args([
             "--node",
             "-e",
-            "var a = __host_env_snapshot(); var i = a.indexOf('JSSE_NODE_HOST_PROBE'); print(i % 2, a[i + 1])",
+            "print(process.env.JSSE_NODE_HOST_PROBE, Object.keys(process.env).indexOf('JSSE_NODE_HOST_PROBE') >= 0)",
         ])
         .output()
         .unwrap();
-    assert_eq!(stdout(&out), "0 va lue");
+    assert_eq!(stdout(&out), "va lue true");
 }
 
 #[test]
@@ -142,13 +144,13 @@ fn chdir_and_cwd_round_trip_and_report_node_style_errors() {
     let dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     let source = format!(
         r#"
-        __host_chdir({dir:?});
-        var ok = __host_cwd();
+        process.chdir({dir:?});
+        var ok = process.cwd();
         var e;
-        try {{ __host_chdir("/nonexistent-jsse-dir"); }} catch (x) {{ e = x; }}
+        try {{ process.chdir("/nonexistent-jsse-dir"); }} catch (x) {{ e = x; }}
         print(ok, e.code, e.errno, e.syscall, e.path === ok, e.dest);
         print(e.message === "ENOENT: no such file or directory, chdir '" + ok + "' -> '/nonexistent-jsse-dir'");
-        print(__host_cwd() === ok);
+        print(process.cwd() === ok);
         "#,
         dir = dir.to_string_lossy()
     );
@@ -171,34 +173,32 @@ fn exit_status(source: &str) -> i32 {
 }
 
 #[test]
-fn exit_code_sink_sets_the_process_status() {
-    assert_eq!(exit_status("__host_set_exit_code(3)"), 3);
-    assert_eq!(exit_status("__host_set_exit_code(300)"), 44);
-    assert_eq!(exit_status("__host_set_exit_code(-1)"), 255);
+fn exit_code_sets_the_process_status() {
+    assert_eq!(exit_status("process.exitCode = 3"), 3);
+    assert_eq!(exit_status("process.exitCode = 300"), 44);
+    assert_eq!(exit_status("process.exitCode = -1"), 255);
     assert_eq!(
-        exit_status("__host_set_exit_code(3); __host_set_exit_code(undefined)"),
+        exit_status("process.exitCode = 3; process.exitCode = undefined"),
         0
     );
     assert_eq!(
-        exit_status("setTimeout(function () { __host_set_exit_code(5); }, 5)"),
+        exit_status("setTimeout(function () { process.exitCode = 5; }, 5)"),
         5
     );
     assert_eq!(
-        exit_status("Promise.resolve().then(function () { __host_set_exit_code(6); })"),
+        exit_status("Promise.resolve().then(function () { process.exitCode = 6; })"),
         6
     );
 }
 
 #[test]
 fn exit_status_precedence() {
+    assert_eq!(exit_status("process.exitCode = 4; throw new Error('x')"), 1);
+    assert_eq!(exit_status("process.exitCode = 4; process.exit(0)"), 0);
+    assert_eq!(exit_status("process.exitCode = 4; process.exit(9)"), 9);
+    assert_eq!(exit_status("process.exitCode = 4; process.exit()"), 4);
     assert_eq!(
-        exit_status("__host_set_exit_code(4); throw new Error('x')"),
-        1
-    );
-    assert_eq!(exit_status("__host_set_exit_code(4); __host_exit(0)"), 0);
-    assert_eq!(exit_status("__host_set_exit_code(4); __host_exit(9)"), 9);
-    assert_eq!(
-        exit_status("__host_set_exit_code(4); try { __host_exit(9) } catch (e) {} finally {}"),
+        exit_status("process.exitCode = 4; try { process.exit(9) } catch (e) {} finally {}"),
         9
     );
 }
@@ -225,13 +225,13 @@ fn floor_primitives_absent_without_node_flag() {
 }
 
 #[test]
-fn floor_primitives_are_non_enumerable_configurable_functions() {
+fn prelude_owns_the_process_floor_primitives() {
     let out = jsse(&[
         "--node",
         "-e",
-        "print(['__host_argv','__host_argv0','__host_env_snapshot','__host_cwd','__host_chdir','__host_set_exit_code'].map(function (n) { var d = Object.getOwnPropertyDescriptor(globalThis, n); return typeof d.value + d.enumerable + d.configurable; }).join())",
+        "print(['__host_argv','__host_argv0','__host_env_snapshot','__host_cwd','__host_chdir','__host_set_exit_code'].map(function (n) { return typeof globalThis[n]; }).join())",
     ]);
-    assert_eq!(stdout(&out), vec!["functionfalsetrue"; 6].join(","));
+    assert_eq!(stdout(&out), ["undefined"; 6].join(","));
 }
 
 #[test]

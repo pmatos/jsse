@@ -5,10 +5,10 @@
 #   ./scripts/run-shim-fixtures.sh [--node] [--no-cross-check]
 #
 # Each fixture in scripts/shim-fixtures/*.fixture.js is a self-verifying test
-# for the shared shims and selector modules. The runner prepends the shims and
+# for the Node prelude and selector modules. The runner prepends the
 # string_decoder selector to the fixture and runs the result on:
-#   - jsse (release) — the shims define the Node-compatible APIs
-#   - Node           — the selectors expose native APIs as the oracle
+#   - jsse (release) with --node — the embedded prelude defines the Node-compatible APIs
+#   - Node           — native APIs are the oracle
 # A fixture passes iff the engine exits 0. By default the two engines must also
 # report the same "N of N assertions passed" count, so a fixture silently
 # skipping checks on jsse cannot masquerade as a pass.
@@ -22,8 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$SCRIPT_DIR/shim-fixtures"
-JSSE="$PROJECT_DIR/target/release/jsse"
-SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
+JSSE="${JSSE:-$PROJECT_DIR/target/release/jsse}"
 STRING_DECODER="$SCRIPT_DIR/node-string-decoder-module.js"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -82,7 +81,6 @@ for fixture in "${FIXTURES[@]}"; do
     name="$(basename "$fixture")"
     bundle="$WORK/bundle-$name.cjs"
     {
-        cat "${SHIMS[@]}"
         echo 'var module = { exports: {} };'
         cat "$STRING_DECODER" "$fixture"
     } > "$bundle"

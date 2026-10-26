@@ -11,8 +11,10 @@
 #   1. clones the pinned ref (cached under /tmp/jsse-libtests/<lib>/repo),
 #   2. runs the library's prepare hook (npm install / build / patches),
 #   3. bundles the entry with a pinned esbuild into a single IIFE,
-#   4. prepends the shared Node-global shims (node-shim.js + node-buffer-shim.js;
-#      test262 never sees them),
+#   4. adds only the per-library shims (LIB_SHIM/LIB_SHIMS); the Node globals
+#      (process, console, util, Buffer, TextEncoder/Decoder, crypto) come from
+#      the prelude embedded in jsse and installed by --node, which test262 never
+#      passes,
 #   5. runs the bundle on jsse (release) and reports the verdict.
 #
 # By default it also runs the same bundle on Node as a reference oracle and
@@ -29,8 +31,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIBS_DIR="$SCRIPT_DIR/libs"
-CACHE_ROOT="/tmp/jsse-libtests"
-JSSE="$PROJECT_DIR/target/release/jsse"
+CACHE_ROOT="${JSSE_LIBTESTS_CACHE:-/tmp/jsse-libtests}"
+JSSE="${JSSE:-$PROJECT_DIR/target/release/jsse}"
 
 # Pinned esbuild so every library bundles identically and reproducibly (the
 # per-repo `npx esbuild` this replaces silently tracked npx-latest). The
@@ -195,11 +197,10 @@ else
     echo "Using cached bundle at $BUNDLE"
 fi
 
-# ---- step 5: prepend shims -------------------------------------------------
-# node-buffer-shim.js (Buffer + TextEncoder/TextDecoder) is a shared shim
-# alongside node-shim.js: Buffer is the highest-value host object (many
-# libraries reference it at import time), so every bundle gets it.
-SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
+# ---- step 5: prepend per-library shims -------------------------------------
+# The shared Node globals are embedded in jsse and installed by --node (#1216);
+# only a library's own LIB_SHIM/LIB_SHIMS are prepended here.
+SHIMS=()
 if [ -n "$LIB_SHIM" ]; then
     SHIMS+=("$SCRIPT_DIR/$LIB_SHIM")
 fi
@@ -218,7 +219,8 @@ elif [ "$LIB_SEPARATE_BUNDLES" -eq 1 ]; then
         variant_index=$((variant_index + 1))
     done
 else
-    cat "${SHIMS[@]}" > "$FINAL"
+    : > "$FINAL"
+    [ "${#SHIMS[@]}" -eq 0 ] || cat "${SHIMS[@]}" >> "$FINAL"
     for prefix in "${LIB_BUNDLE_PREFIXES[@]}"; do
         cat "$SCRIPT_DIR/$prefix" "$BUNDLE" >> "$FINAL"
     done
@@ -238,10 +240,10 @@ VERDICT=""; COUNT=""
 evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     local engine="$1" label="$2"
     local out="$LIB_CACHE/out-$label.txt" rc=0 result run_rc run_index run_file variant_out
-    # jsse needs --node to install the #229 __host_* syscall floor (byte I/O,
-    # monotonic clock, process exit) that node-shim.js builds process/console/
-    # util on. Node has no such flag, and the shim is guarded so it stays inert
-    # there — that is what keeps `--node` a valid same-bundle reference oracle.
+    # jsse needs --node to install the embedded Node prelude (process, console,
+    # util, Buffer, ...) and the #229 __host_* floor it is built on. Node has no
+    # such flag and already provides those globals, so the same bundle runs on
+    # both engines.
     local engine_args=()
     [ "$label" = "jsse" ] && engine_args=(--node)
     echo ""

@@ -4,8 +4,8 @@
 // Backed by the flag-gated Rust "syscall floor" (issue #229): __host_random_bytes
 // reads straight from the OS entropy source. Like node-shim.js and
 // node-buffer-shim.js, this is a pure-JS prelude that is never baked into
-// jsse's default global object, so test262 is unaffected. It is opt-in per
-// library via LIB_SHIM/LIB_SHIMS, not prepended universally.
+// jsse's default global object, so test262 is unaffected. It is part of the
+// prelude embedded in `--node`.
 //
 // Guarded inert on real Node, which has had a native Web Crypto `crypto`
 // global (including getRandomValues and randomUUID) since Node 19.

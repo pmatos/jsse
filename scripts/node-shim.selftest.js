@@ -1,5 +1,5 @@
-// Self-test for the Node host-compat readable-output layer (scripts/node-shim.js,
-// issue #230). It runs on BOTH jsse (`--node`, with the shim prepended) and Node
+// Self-test for the Node host-compat readable-output layer (prelude node-shim.js,
+// issue #230). It runs on BOTH jsse (`--node`) and Node
 // (where the shim is inert) and must produce byte-identical output and exit 0 on
 // both. Node is the oracle: the expected literals below are whatever Node emits,
 // so a jsse divergence fails the run.
@@ -14,8 +14,8 @@
 // `hasNodeHost` and labelled "(jsse only)", so stdout stays byte-identical
 // without claiming Node verified something it never ran.
 //
-// This file is not esbuild-bundled: scripts/run-node-shim-selftest.sh simply
-// concatenates the shim in front of it. On jsse the shim installs globalThis.util;
+// This file is not esbuild-bundled: scripts/run-node-shim-selftest.sh runs it
+// directly under `jsse --node`. On jsse the prelude installs globalThis.util;
 // on Node `util` is require-only, so fall back to require().
 
 "use strict";

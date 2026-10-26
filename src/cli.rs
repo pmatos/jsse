@@ -32,11 +32,12 @@ struct Cli {
     #[arg(long = "no-bytecode")]
     no_bytecode: bool,
 
-    /// Enable the Node host-compat syscall floor (issue #229): installs the
-    /// internal, non-enumerable `__host_*` globals (byte I/O, OS entropy,
-    /// monotonic clock, process exit) used by the Node prelude. Off by default;
-    /// deliberately NOT auto-enabled by `--prelude`, since the test262 harness
-    /// loads via `--prelude` and must keep the default global environment.
+    /// Enable Node host mode: installs the syscall floor (issue #229, the
+    /// internal `__host_*` globals) and evaluates the embedded Node prelude
+    /// (issue #1216: `process`, `console`, `util`, `Buffer`, `TextEncoder`,
+    /// `TextDecoder`, `crypto`). Off by default; deliberately NOT auto-enabled
+    /// by `--prelude`, since the test262 harness loads via `--prelude` and must
+    /// keep the default global environment.
     #[arg(long = "node")]
     node: bool,
 
@@ -238,7 +239,6 @@ fn new_interp(
     let mut interp = interpreter::Interpreter::new();
     interp.can_block = can_block;
     interp.bytecode_enabled = bytecode;
-    interp.set_step_budget(step_budget);
     if let Some(launch) = node {
         interp.enable_node_host();
         let argv0 = std::env::args_os()
@@ -247,7 +247,12 @@ fn new_interp(
         let exec_path = std::env::current_exe()
             .map_or_else(|_| argv0.clone(), |p| p.to_string_lossy().into_owned());
         interp.set_node_host_argv(argv0, exec_path, launch.script.clone(), launch.args.clone());
+        if let Err(msg) = interp.load_node_prelude() {
+            eprintln!("jsse: internal error: {msg}");
+            std::process::exit(70);
+        }
     }
+    interp.set_step_budget(step_budget);
     interp
 }
 
