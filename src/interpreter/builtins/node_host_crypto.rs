@@ -15,223 +15,108 @@ use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256};
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Algo {
-    Md5,
-    Sha1,
-    Sha224,
-    Sha256,
-    Sha384,
-    Sha512,
-    Sha512_224,
-    Sha512_256,
-    Sha3_224,
-    Sha3_256,
-    Sha3_384,
-    Sha3_512,
-    Shake128,
-    Shake256,
+fn fixed<D: Digest>(h: D, _out_len: usize) -> Result<Vec<u8>, ()> {
+    Ok(h.finalize().to_vec())
 }
 
-impl Algo {
-    /// OpenSSL's spellings, matched case-insensitively (Node: `RSA-SHA256`,
-    /// `SHA-256`, `sha256WithRSAEncryption`, `SHA-512/256`, ...).
-    fn parse(name: &str) -> Option<Algo> {
-        const ALIASES: &[(&str, Algo)] = &[
-            ("md5", Algo::Md5),
-            ("rsa-md5", Algo::Md5),
-            ("md5withrsaencryption", Algo::Md5),
-            ("ssl3-md5", Algo::Md5),
-            ("sha1", Algo::Sha1),
-            ("sha-1", Algo::Sha1),
-            ("rsa-sha1", Algo::Sha1),
-            ("sha1withrsaencryption", Algo::Sha1),
-            ("ssl3-sha1", Algo::Sha1),
-            ("rsa-sha1-2", Algo::Sha1),
-            ("sha224", Algo::Sha224),
-            ("sha-224", Algo::Sha224),
-            ("sha2-224", Algo::Sha224),
-            ("rsa-sha224", Algo::Sha224),
-            ("sha224withrsaencryption", Algo::Sha224),
-            ("sha256", Algo::Sha256),
-            ("sha-256", Algo::Sha256),
-            ("sha2-256", Algo::Sha256),
-            ("rsa-sha256", Algo::Sha256),
-            ("sha256withrsaencryption", Algo::Sha256),
-            ("sha384", Algo::Sha384),
-            ("sha-384", Algo::Sha384),
-            ("sha2-384", Algo::Sha384),
-            ("rsa-sha384", Algo::Sha384),
-            ("sha384withrsaencryption", Algo::Sha384),
-            ("sha512", Algo::Sha512),
-            ("sha-512", Algo::Sha512),
-            ("sha2-512", Algo::Sha512),
-            ("rsa-sha512", Algo::Sha512),
-            ("sha512withrsaencryption", Algo::Sha512),
-            ("sha512-224", Algo::Sha512_224),
-            ("sha512-224withrsaencryption", Algo::Sha512_224),
-            ("sha-512/224", Algo::Sha512_224),
-            ("sha2-512/224", Algo::Sha512_224),
-            ("rsa-sha512/224", Algo::Sha512_224),
-            ("sha512-256", Algo::Sha512_256),
-            ("sha512-256withrsaencryption", Algo::Sha512_256),
-            ("sha-512/256", Algo::Sha512_256),
-            ("sha2-512/256", Algo::Sha512_256),
-            ("rsa-sha512/256", Algo::Sha512_256),
-            ("sha3-224", Algo::Sha3_224),
-            ("rsa-sha3-224", Algo::Sha3_224),
-            ("id-rsassa-pkcs1-v1_5-with-sha3-224", Algo::Sha3_224),
-            ("sha3-256", Algo::Sha3_256),
-            ("rsa-sha3-256", Algo::Sha3_256),
-            ("id-rsassa-pkcs1-v1_5-with-sha3-256", Algo::Sha3_256),
-            ("sha3-384", Algo::Sha3_384),
-            ("rsa-sha3-384", Algo::Sha3_384),
-            ("id-rsassa-pkcs1-v1_5-with-sha3-384", Algo::Sha3_384),
-            ("sha3-512", Algo::Sha3_512),
-            ("rsa-sha3-512", Algo::Sha3_512),
-            ("id-rsassa-pkcs1-v1_5-with-sha3-512", Algo::Sha3_512),
-            ("shake128", Algo::Shake128),
-            ("shake-128", Algo::Shake128),
-            ("shake256", Algo::Shake256),
-            ("shake-256", Algo::Shake256),
-        ];
-        let lower = name.to_ascii_lowercase();
-        ALIASES.iter().find(|(n, _)| *n == lower).map(|(_, a)| *a)
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Algo::Md5 => "md5",
-            Algo::Sha1 => "sha1",
-            Algo::Sha224 => "sha224",
-            Algo::Sha256 => "sha256",
-            Algo::Sha384 => "sha384",
-            Algo::Sha512 => "sha512",
-            Algo::Sha512_224 => "sha512-224",
-            Algo::Sha512_256 => "sha512-256",
-            Algo::Sha3_224 => "sha3-224",
-            Algo::Sha3_256 => "sha3-256",
-            Algo::Sha3_384 => "sha3-384",
-            Algo::Sha3_512 => "sha3-512",
-            Algo::Shake128 => "shake128",
-            Algo::Shake256 => "shake256",
-        }
-    }
-
-    /// The default (for the XOFs) output size in bytes.
-    fn digest_size(self) -> usize {
-        match self {
-            Algo::Md5 | Algo::Shake128 => 16,
-            Algo::Sha1 => 20,
-            Algo::Sha224 | Algo::Sha512_224 | Algo::Sha3_224 => 28,
-            Algo::Sha256 | Algo::Sha512_256 | Algo::Sha3_256 | Algo::Shake256 => 32,
-            Algo::Sha384 | Algo::Sha3_384 => 48,
-            Algo::Sha512 | Algo::Sha3_512 => 64,
-        }
-    }
-
-    /// The HMAC block size; for SHA-3 and SHAKE it is the sponge rate.
-    fn block_size(self) -> usize {
-        match self {
-            Algo::Md5 | Algo::Sha1 | Algo::Sha224 | Algo::Sha256 => 64,
-            Algo::Sha384 | Algo::Sha512 | Algo::Sha512_224 | Algo::Sha512_256 => 128,
-            Algo::Sha3_224 => 144,
-            Algo::Sha3_256 => 136,
-            Algo::Sha3_384 => 104,
-            Algo::Sha3_512 => 72,
-            Algo::Shake128 => 168,
-            Algo::Shake256 => 136,
-        }
-    }
-
-    fn is_xof(self) -> bool {
-        matches!(self, Algo::Shake128 | Algo::Shake256)
-    }
-}
-
-#[derive(Clone)]
-enum Hasher {
-    Md5(Md5),
-    Sha1(Sha1),
-    Sha224(Sha224),
-    Sha256(Sha256),
-    Sha384(Sha384),
-    Sha512(Sha512),
-    Sha512_224(Sha512_224),
-    Sha512_256(Sha512_256),
-    Sha3_224(Sha3_224),
-    Sha3_256(Sha3_256),
-    Sha3_384(Sha3_384),
-    Sha3_512(Sha3_512),
-    Shake128(Shake128),
-    Shake256(Shake256),
-}
-
-impl Hasher {
-    fn new(algo: Algo) -> Hasher {
-        match algo {
-            Algo::Md5 => Hasher::Md5(Md5::new()),
-            Algo::Sha1 => Hasher::Sha1(Sha1::new()),
-            Algo::Sha224 => Hasher::Sha224(Sha224::new()),
-            Algo::Sha256 => Hasher::Sha256(Sha256::new()),
-            Algo::Sha384 => Hasher::Sha384(Sha384::new()),
-            Algo::Sha512 => Hasher::Sha512(Sha512::new()),
-            Algo::Sha512_224 => Hasher::Sha512_224(Sha512_224::new()),
-            Algo::Sha512_256 => Hasher::Sha512_256(Sha512_256::new()),
-            Algo::Sha3_224 => Hasher::Sha3_224(Sha3_224::new()),
-            Algo::Sha3_256 => Hasher::Sha3_256(Sha3_256::new()),
-            Algo::Sha3_384 => Hasher::Sha3_384(Sha3_384::new()),
-            Algo::Sha3_512 => Hasher::Sha3_512(Sha3_512::new()),
-            Algo::Shake128 => Hasher::Shake128(Shake128::default()),
-            Algo::Shake256 => Hasher::Shake256(Shake256::default()),
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        match self {
-            Hasher::Md5(h) => Digest::update(h, data),
-            Hasher::Sha1(h) => Digest::update(h, data),
-            Hasher::Sha224(h) => Digest::update(h, data),
-            Hasher::Sha256(h) => Digest::update(h, data),
-            Hasher::Sha384(h) => Digest::update(h, data),
-            Hasher::Sha512(h) => Digest::update(h, data),
-            Hasher::Sha512_224(h) => Digest::update(h, data),
-            Hasher::Sha512_256(h) => Digest::update(h, data),
-            Hasher::Sha3_224(h) => Digest::update(h, data),
-            Hasher::Sha3_256(h) => Digest::update(h, data),
-            Hasher::Sha3_384(h) => Digest::update(h, data),
-            Hasher::Sha3_512(h) => Digest::update(h, data),
-            Hasher::Shake128(h) => Update::update(h, data),
-            Hasher::Shake256(h) => Update::update(h, data),
-        }
-    }
-
-    /// `out_len` only matters for the XOFs.
-    fn finalize(self, out_len: usize) -> Vec<u8> {
-        match self {
-            Hasher::Md5(h) => h.finalize().to_vec(),
-            Hasher::Sha1(h) => h.finalize().to_vec(),
-            Hasher::Sha224(h) => h.finalize().to_vec(),
-            Hasher::Sha256(h) => h.finalize().to_vec(),
-            Hasher::Sha384(h) => h.finalize().to_vec(),
-            Hasher::Sha512(h) => h.finalize().to_vec(),
-            Hasher::Sha512_224(h) => h.finalize().to_vec(),
-            Hasher::Sha512_256(h) => h.finalize().to_vec(),
-            Hasher::Sha3_224(h) => h.finalize().to_vec(),
-            Hasher::Sha3_256(h) => h.finalize().to_vec(),
-            Hasher::Sha3_384(h) => h.finalize().to_vec(),
-            Hasher::Sha3_512(h) => h.finalize().to_vec(),
-            Hasher::Shake128(h) => squeeze(h, out_len),
-            Hasher::Shake256(h) => squeeze(h, out_len),
-        }
-    }
-}
-
-fn squeeze(h: impl ExtendableOutput, out_len: usize) -> Vec<u8> {
-    let mut out = vec![0u8; out_len];
+fn xof<D: ExtendableOutput>(h: D, out_len: usize) -> Result<Vec<u8>, ()> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(out_len).map_err(|_| ())?;
+    out.resize(out_len, 0);
     h.finalize_xof().read(&mut out);
-    out
+    Ok(out)
 }
+
+/// One row per algorithm: variant, hasher type, canonical name, default digest
+/// size, HMAC block size (the sponge rate for SHA-3), finaliser and OpenSSL's
+/// case-insensitive spellings (Node: `RSA-SHA256`, `SHA-256`,
+/// `sha256WithRSAEncryption`, `SHA-512/256`, ...).
+macro_rules! algorithms {
+    ($($v:ident($t:ty) $name:literal $size:literal $block:literal $fin:ident [$($alias:literal),*];)*) => {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Algo {
+            $($v),*
+        }
+
+        #[derive(Clone)]
+        enum Hasher {
+            $($v($t)),*
+        }
+
+        impl Algo {
+            fn parse(name: &str) -> Option<Algo> {
+                const ALIASES: &[(&str, Algo)] = &[$($(($alias, Algo::$v)),*),*];
+                let lower = name.to_ascii_lowercase();
+                ALIASES.iter().find(|(n, _)| *n == lower).map(|(_, a)| *a)
+            }
+
+            fn name(self) -> &'static str {
+                match self {
+                    $(Algo::$v => $name),*
+                }
+            }
+
+            /// The default (for the XOFs) output size in bytes.
+            fn digest_size(self) -> usize {
+                match self {
+                    $(Algo::$v => $size),*
+                }
+            }
+
+            fn block_size(self) -> usize {
+                match self {
+                    $(Algo::$v => $block),*
+                }
+            }
+
+            fn is_xof(self) -> bool {
+                match self {
+                    $(Algo::$v => stringify!($fin) == "xof"),*
+                }
+            }
+        }
+
+        impl Hasher {
+            fn new(algo: Algo) -> Hasher {
+                match algo {
+                    $(Algo::$v => Hasher::$v(<$t>::default())),*
+                }
+            }
+
+            fn update(&mut self, data: &[u8]) {
+                match self {
+                    $(Hasher::$v(h) => Update::update(h, data)),*
+                }
+            }
+
+            /// `out_len` only matters for the XOFs; `Err` is an allocation failure.
+            fn finalize(self, out_len: usize) -> Result<Vec<u8>, ()> {
+                match self {
+                    $(Hasher::$v(h) => $fin(h, out_len)),*
+                }
+            }
+        }
+    };
+}
+
+algorithms! {
+    Md5(Md5) "md5" 16 64 fixed ["md5", "rsa-md5", "md5withrsaencryption", "ssl3-md5"];
+    Sha1(Sha1) "sha1" 20 64 fixed ["sha1", "sha-1", "rsa-sha1", "sha1withrsaencryption", "ssl3-sha1", "rsa-sha1-2"];
+    Sha224(Sha224) "sha224" 28 64 fixed ["sha224", "sha-224", "sha2-224", "rsa-sha224", "sha224withrsaencryption"];
+    Sha256(Sha256) "sha256" 32 64 fixed ["sha256", "sha-256", "sha2-256", "rsa-sha256", "sha256withrsaencryption"];
+    Sha384(Sha384) "sha384" 48 128 fixed ["sha384", "sha-384", "sha2-384", "rsa-sha384", "sha384withrsaencryption"];
+    Sha512(Sha512) "sha512" 64 128 fixed ["sha512", "sha-512", "sha2-512", "rsa-sha512", "sha512withrsaencryption"];
+    Sha512_224(Sha512_224) "sha512-224" 28 128 fixed ["sha512-224", "sha512-224withrsaencryption", "sha-512/224", "sha2-512/224", "rsa-sha512/224"];
+    Sha512_256(Sha512_256) "sha512-256" 32 128 fixed ["sha512-256", "sha512-256withrsaencryption", "sha-512/256", "sha2-512/256", "rsa-sha512/256"];
+    Sha3_224(Sha3_224) "sha3-224" 28 144 fixed ["sha3-224", "rsa-sha3-224", "id-rsassa-pkcs1-v1_5-with-sha3-224"];
+    Sha3_256(Sha3_256) "sha3-256" 32 136 fixed ["sha3-256", "rsa-sha3-256", "id-rsassa-pkcs1-v1_5-with-sha3-256"];
+    Sha3_384(Sha3_384) "sha3-384" 48 104 fixed ["sha3-384", "rsa-sha3-384", "id-rsassa-pkcs1-v1_5-with-sha3-384"];
+    Sha3_512(Sha3_512) "sha3-512" 64 72 fixed ["sha3-512", "rsa-sha3-512", "id-rsassa-pkcs1-v1_5-with-sha3-512"];
+    Shake128(Shake128) "shake128" 16 168 xof ["shake128", "shake-128"];
+    Shake256(Shake256) "shake256" 32 136 xof ["shake256", "shake-256"];
+}
+
+const MAX_OUTPUT: usize = i32::MAX as usize;
 
 struct Entry {
     algo: Algo,
@@ -242,10 +127,10 @@ struct Entry {
 }
 
 impl Entry {
-    fn finish(self) -> Vec<u8> {
-        let inner = self.hasher.finalize(self.out_len);
+    fn finish(self) -> Result<Vec<u8>, ()> {
+        let inner = self.hasher.finalize(self.out_len)?;
         let Some(key) = self.outer_key else {
-            return inner;
+            return Ok(inner);
         };
         let mut outer = Hasher::new(self.algo);
         outer.update(&key);
@@ -259,7 +144,7 @@ fn hmac_entry(algo: Algo, key: &[u8]) -> Entry {
     let mut key_block = if key.len() > block {
         let mut h = Hasher::new(algo);
         h.update(key);
-        h.finalize(algo.digest_size())
+        h.finalize(algo.digest_size()).unwrap_or_default()
     } else {
         key.to_vec()
     };
@@ -306,8 +191,63 @@ fn stale(interp: &mut Interpreter) -> Completion {
     Completion::Throw(interp.create_type_error("crypto: invalid or finished handle"))
 }
 
-/// Run `f` over the bytes of a string (as UTF-8, lone surrogates replaced) or a
-/// typed array / DataView window, without copying the latter.
+macro_rules! tri {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => return Completion::Throw(e),
+        }
+    };
+}
+
+/// The bytes behind an ArrayBuffer, typed array or DataView, read through the
+/// engine's own slots (never through properties the caller can shadow). A
+/// detached buffer is empty, as it is for Node.
+struct Window {
+    buffer: std::rc::Rc<std::cell::RefCell<BufferData>>,
+    offset: usize,
+    len: usize,
+}
+
+fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
+    let cell = interp.get_object_cell(v.as_object_id()?)?;
+    let obj = cell.borrow();
+    let (buffer, offset, len, detached) = match &obj.kind {
+        ObjectKind::TypedArray(ta) => (
+            ta.buffer.clone(),
+            ta.byte_offset,
+            ta.byte_length,
+            ta.is_detached.get(),
+        ),
+        ObjectKind::DataView(dv) => (
+            dv.buffer.clone(),
+            dv.byte_offset,
+            dv.byte_length,
+            dv.is_detached.get(),
+        ),
+        ObjectKind::ArrayBuffer(ab) => {
+            let len = ab.data.borrow().len();
+            let detached = ab.detached.as_ref().is_some_and(|d| d.get());
+            (ab.data.clone(), 0, len, detached)
+        }
+        _ => return None,
+    };
+    Some(if detached {
+        Window {
+            buffer,
+            offset: 0,
+            len: 0,
+        }
+    } else {
+        Window {
+            buffer,
+            offset,
+            len,
+        }
+    })
+}
+
+/// Run `f` over a string (as UTF-8, lone surrogates replaced) or a byte window.
 fn with_bytes<R>(
     interp: &mut Interpreter,
     v: &JsValue,
@@ -317,35 +257,29 @@ fn with_bytes<R>(
         let s = interp.to_string_lossy(v)?;
         return Ok(f(s.as_bytes()));
     }
-    let view = v
-        .as_object_id()
-        .and_then(|id| interp.get_object_cell(id))
-        .and_then(|cell| {
-            let obj = cell.borrow();
-            let ta = obj.typed_array_info()?;
-            (!ta.is_detached.get()).then(|| (ta.buffer.clone(), ta.byte_offset, ta.byte_length))
-        });
-    let Some((buffer, offset, len)) = view else {
-        return Err(interp.create_type_error("crypto: expected a string or Uint8Array"));
+    let Some(w) = window(interp, v) else {
+        return Err(interp.create_type_error("crypto: expected a string or buffer source"));
     };
-    buffer.borrow().with_read(|b| {
-        b.get(offset..offset + len)
-            .map(f)
-            .ok_or_else(|| interp.create_type_error("crypto: detached or out-of-range view"))
-    })
+    let bytes = w
+        .buffer
+        .borrow()
+        .with_read(|b| b.get(w.offset..w.offset + w.len).map(f));
+    bytes.ok_or_else(|| interp.create_type_error("crypto: out-of-range view"))
 }
 
-fn bytes_value(interp: &mut Interpreter, bytes: Vec<u8>) -> Completion {
-    super::typedarray::create_uint8array_from_bytes(interp, &bytes)
+fn bytes_value(interp: &mut Interpreter, bytes: Result<Vec<u8>, ()>) -> Completion {
+    match bytes {
+        Ok(bytes) => super::typedarray::create_uint8array_from_bytes(interp, &bytes),
+        Err(()) => Completion::Throw(interp.create_range_error("crypto: output allocation failed")),
+    }
 }
 
-macro_rules! tri {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(e) => return Completion::Throw(e),
-        }
-    };
+fn out_len_arg(interp: &mut Interpreter, v: &JsValue, default: usize) -> Result<usize, JsValue> {
+    match v.as_number() {
+        Some(n) if n >= 0.0 && n <= MAX_OUTPUT as f64 => Ok(n as usize),
+        Some(_) => Err(interp.create_range_error("crypto: invalid output length")),
+        None => Ok(default),
+    }
 }
 
 /// (name) -> [canonicalName, digestSize, isXof] | undefined
@@ -361,16 +295,15 @@ fn info(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion 
     })
 }
 
+fn algo_arg(interp: &mut Interpreter, v: &JsValue) -> Result<Algo, JsValue> {
+    let name = interp.to_string_lossy(v)?;
+    Algo::parse(&name).ok_or_else(|| interp.create_type_error("crypto: unknown algorithm"))
+}
+
 /// (canonicalName, outputLength | undefined, hmacKey | undefined) -> handle
 fn create(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
-    let name = tri!(interp.to_string_lossy(arg(args, 0)));
-    let Some(algo) = Algo::parse(&name) else {
-        return Completion::Throw(interp.create_type_error("crypto: unknown algorithm"));
-    };
-    let out_len = match arg(args, 1).as_number() {
-        Some(n) => n as usize,
-        None => algo.digest_size(),
-    };
+    let algo = tri!(algo_arg(interp, arg(args, 0)));
+    let out_len = tri!(out_len_arg(interp, arg(args, 1), algo.digest_size()));
     let entry = if arg(args, 2).is_undefined() {
         Entry {
             algo,
@@ -384,6 +317,15 @@ fn create(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completio
         e
     };
     Completion::Normal(JsValue::number(interp.node_host.crypto.insert(entry)))
+}
+
+/// (canonicalName, outputLength | undefined, data) -> Uint8Array, with no handle.
+fn digest_once(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
+    let algo = tri!(algo_arg(interp, arg(args, 0)));
+    let out_len = tri!(out_len_arg(interp, arg(args, 1), algo.digest_size()));
+    let mut hasher = Hasher::new(algo);
+    tri!(with_bytes(interp, arg(args, 2), |b| hasher.update(b)));
+    bytes_value(interp, hasher.finalize(out_len))
 }
 
 fn update(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
@@ -402,14 +344,18 @@ fn copy(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion 
     let Some(src) = interp.node_host.crypto.entries.get(&id) else {
         return stale(interp);
     };
+    let (algo, hasher, current, outer_key) = (
+        src.algo,
+        src.hasher.clone(),
+        src.out_len,
+        src.outer_key.clone(),
+    );
+    let out_len = tri!(out_len_arg(interp, arg(args, 1), current));
     let entry = Entry {
-        algo: src.algo,
-        hasher: src.hasher.clone(),
-        out_len: match arg(args, 1).as_number() {
-            Some(n) => n as usize,
-            None => src.out_len,
-        },
-        outer_key: src.outer_key.clone(),
+        algo,
+        hasher,
+        out_len,
+        outer_key,
     };
     Completion::Normal(JsValue::number(interp.node_host.crypto.insert(entry)))
 }
@@ -422,29 +368,57 @@ fn digest(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completio
     }
 }
 
-/// (a, b) -> boolean; the views must have the same length.
+/// (a, b) -> boolean | null; null when the byte lengths differ.
 fn timing_safe_equal(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
     let a = tri!(with_bytes(interp, arg(args, 0), <[u8]>::to_vec));
     let equal = tri!(with_bytes(interp, arg(args, 1), |b| {
-        let diff = a
-            .iter()
-            .zip(b)
-            .fold(a.len() ^ b.len(), |acc, (x, y)| acc | usize::from(x ^ y));
-        std::hint::black_box(diff) == 0
+        (a.len() == b.len()).then(|| {
+            let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+            std::hint::black_box(diff) == 0
+        })
     }));
-    Completion::Normal(JsValue::boolean(equal))
+    Completion::Normal(equal.map_or(JsValue::NULL, JsValue::boolean))
+}
+
+/// (target, offset, size): fill that byte range of an ArrayBuffer or view in place.
+fn random_fill(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
+    let Some(w) = window(interp, arg(args, 0)) else {
+        return Completion::Throw(interp.create_type_error("crypto: expected a buffer source"));
+    };
+    let offset = tri!(out_len_arg(interp, arg(args, 1), 0));
+    let size = tri!(out_len_arg(
+        interp,
+        arg(args, 2),
+        w.len.saturating_sub(offset)
+    ));
+    if offset + size > w.len {
+        return Completion::Throw(interp.create_range_error("crypto: fill range exceeds buffer"));
+    }
+    let start = w.offset + offset;
+    let filled = w.buffer.borrow_mut().with_write(|b| {
+        b.get_mut(start..start + size)
+            .is_some_and(|window| getrandom::fill(window).is_ok())
+    });
+    if !filled {
+        return Completion::Throw(
+            interp.create_error("Error", "crypto: OS entropy source unavailable"),
+        );
+    }
+    Completion::Normal(JsValue::UNDEFINED)
 }
 
 impl Interpreter {
     pub(super) fn setup_node_host_crypto(&mut self) {
         let binding = self.create_object_id();
-        let functions: [(&str, usize, Native); 6] = [
+        let functions: [(&str, usize, Native); 8] = [
             ("info", 1, info),
             ("create", 3, create),
+            ("digestOnce", 3, digest_once),
             ("update", 2, update),
             ("copy", 2, copy),
             ("digest", 1, digest),
             ("timingSafeEqual", 2, timing_safe_equal),
+            ("randomFill", 3, random_fill),
         ];
         for (name, arity, native) in functions {
             let f = self.create_function(JsFunction::native(String::new(), arity, native));
@@ -468,13 +442,13 @@ mod tests {
         let algo = Algo::parse(name).expect("algo");
         let mut h = Hasher::new(algo);
         h.update(data);
-        hex(&h.finalize(out_len))
+        hex(&h.finalize(out_len).expect("digest"))
     }
 
     fn hmac(name: &str, key: &[u8], data: &[u8]) -> String {
         let mut e = hmac_entry(Algo::parse(name).expect("algo"), key);
         e.hasher.update(data);
-        hex(&e.finish())
+        hex(&e.finish().expect("digest"))
     }
 
     #[test]

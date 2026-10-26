@@ -60,11 +60,6 @@ function assertSize(size, elementSize, offset, length) {
   return size >>> 0;
 }
 
-function bytesOf(buf) {
-  return isAnyArrayBuffer(buf) ? new Uint8Array(buf) :
-    new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-}
-
 function randomBytes(size, callback) {
   size = assertSize(size, 1, 0, Infinity);
   if (callback !== undefined) validateFunction(callback, 'callback');
@@ -85,7 +80,7 @@ function randomFillSync(buf, offset = 0, size) {
   } else {
     size = assertSize(size, elementSize, offset, buf.byteLength);
   }
-  if (size !== 0) bytesOf(buf).set(native.randomBytes(size), offset);
+  native.randomFill(buf, offset, size);
   return buf;
 }
 
@@ -110,8 +105,14 @@ function randomFill(buf, offset, size, callback) {
   } else {
     size = assertSize(size, elementSize, offset, buf.byteLength);
   }
-  if (size !== 0) bytesOf(buf).set(native.randomBytes(size), offset);
-  setImmediate(function() { callback.call(this, null, buf); });
+  if (size === 0) {
+    callback(null, buf);
+    return;
+  }
+  setImmediate(function() {
+    native.randomFill(buf, offset, size);
+    callback.call(this, null, buf);
+  });
 }
 
 // Largest integer readable from six bytes: Buffer.from("ff".repeat(6), "hex").readUIntBE(0, 6).

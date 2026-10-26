@@ -125,6 +125,21 @@ attempt("digest twice", () => { const h = crypto.createHash("md5"); h.digest(); 
 attempt("update after digest", () => { const h = crypto.createHash("md5"); h.digest(); return h.update("a"); });
 attempt("hmac digest twice", () => { const h = crypto.createHmac("md5", "k"); h.update("a").digest(); const r = h.digest("hex"); const r2 = h.digest(); return [r, hex(r2), Buffer.isBuffer(r2)]; });
 attempt("hmac update after digest", () => { const h = crypto.createHmac("md5", "k"); h.digest(); return h.update("a"); });
+for (const enc of ["", null, 5, Symbol("e"), {}, "buffer", "utf8", "UTF-8"]) {
+  attempt(`hmac encoding ${typeof enc === "symbol" ? "symbol" : JSON.stringify(enc)}`, () => crypto.createHmac("md5", "6b", { encoding: enc }).update("a").digest("hex"));
+  attempt(`update encoding ${typeof enc === "symbol" ? "symbol" : JSON.stringify(enc)}`, () => crypto.createHash("md5").update("a", enc).digest("hex"));
+}
+attempt("update spoofed byteLength", () => {
+  const u = new Uint8Array([97, 98, 99]);
+  Object.defineProperty(u, "byteLength", { value: 0 });
+  Object.defineProperty(u, "buffer", { value: new ArrayBuffer(0) });
+  return [crypto.createHash("md5").update(u).digest("hex"), crypto.hash("md5", u), crypto.createHmac("md5", u).update("a").digest("hex"), crypto.timingSafeEqual(u, new Uint8Array(3))];
+});
+attempt("update detached", () => {
+  const u = new Uint8Array([97, 98, 99]);
+  structuredClone(u.buffer, { transfer: [u.buffer] });
+  return [crypto.createHash("md5").update(u).digest("hex"), crypto.hash("md5", u)];
+});
 attempt("update hex odd", () => crypto.createHash("md5").update("abc", "hex"));
 attempt("update hex invalid", () => crypto.createHash("md5").update("zz", "hex").digest("hex"));
 

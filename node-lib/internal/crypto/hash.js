@@ -108,13 +108,10 @@ function Hash(algorithm, options) {
 
 function toBytes(data, encoding, name) {
   if (typeof data === 'string') {
-    if (encoding === undefined || encoding === null ||
-        StringPrototypeToLowerCase(`${encoding}`) === 'utf8' ||
-        StringPrototypeToLowerCase(`${encoding}`) === 'utf-8' ||
-        !Buffer.isEncoding(encoding)) {
-      return data;
-    }
-    if (StringPrototypeToLowerCase(`${encoding}`) === 'hex' && data.length % 2 !== 0) {
+    if (typeof encoding !== 'string' || !Buffer.isEncoding(encoding)) return data;
+    const lower = StringPrototypeToLowerCase(encoding);
+    if (lower === 'utf8' || lower === 'utf-8') return data;
+    if (lower === 'hex' && data.length % 2 !== 0) {
       throw new ERR_INVALID_ARG_VALUE('encoding', encoding,
                                       `is invalid for data of length ${data.length}`);
     }
@@ -125,12 +122,6 @@ function toBytes(data, encoding, name) {
       name, ['string', 'Buffer', 'TypedArray', 'DataView'], data);
   }
   return data;
-}
-
-// The native side reads the bytes of any typed array; a DataView has none.
-function asUint8Array(view) {
-  if (typeof view === 'string') return view;
-  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
 }
 
 Hash.prototype.copy = function copy(options) {
@@ -144,7 +135,7 @@ Hash.prototype.copy = function copy(options) {
 Hash.prototype.update = function update(data, encoding) {
   const state = this[kState];
   if (state[kFinalized]) throw new ERR_CRYPTO_HASH_FINALIZED();
-  native.update(this[kHandle], asUint8Array(toBytes(data, encoding, 'data')));
+  native.update(this[kHandle], toBytes(data, encoding, 'data'));
   return this;
 };
 
@@ -169,12 +160,11 @@ Hash.prototype.digest = function digest(outputEncoding) {
 
 function secretKey(key, encoding) {
   if (typeof key === 'string') {
-    if (encoding === undefined || encoding === 'buffer') return key;
+    if (!encoding || encoding === 'buffer') return key;
     if (!Buffer.isEncoding(encoding)) throw new ERR_UNKNOWN_ENCODING(encoding);
     return Buffer.from(key, encoding);
   }
-  if (isAnyArrayBuffer(key)) return new Uint8Array(key);
-  if (ArrayBufferIsView(key)) return asUint8Array(key);
+  if (isAnyArrayBuffer(key) || ArrayBufferIsView(key)) return key;
   throw new ERR_INVALID_ARG_TYPE(
     'key',
     ['ArrayBuffer', 'Buffer', 'TypedArray', 'DataView', 'string', 'KeyObject', 'CryptoKey'],
@@ -184,8 +174,10 @@ function secretKey(key, encoding) {
 function Hmac(hmac, key, options) {
   if (!(this instanceof Hmac)) return new Hmac(hmac, key, options);
   validateString(hmac, 'hmac');
-  const encoding = typeof options === 'object' && options !== null ?
-    options.encoding : undefined;
+  let encoding;
+  if (options && (encoding = options.encoding) != null) {
+    validateString(encoding, 'options.encoding');
+  }
   const bytes = secretKey(key, encoding);
   const info = native.info(hmac);
   if (info === undefined) throw new ERR_CRYPTO_INVALID_DIGEST(hmac);
@@ -232,9 +224,8 @@ function hash(algorithm, input, options) {
   const info = lookup(algorithm, `Digest method ${algorithm} is not supported`);
   if (outputLength === undefined) maybeWarnShake(info);
   checkOutputLength(info, outputLength, algorithm);
-  const handle = native.create(info[0], outputLength);
-  native.update(handle, asUint8Array(input));
-  return encode(native.digest(handle), StringPrototypeToLowerCase(outputEncoding));
+  return encode(native.digestOnce(info[0], outputLength, input),
+                StringPrototypeToLowerCase(outputEncoding));
 }
 
 module.exports = { Hash, Hmac, hash, kHashes };

@@ -36,22 +36,18 @@ function getHashes() {
   return kHashes.slice();
 }
 
-function bytesOf(value, name) {
-  if (isAnyArrayBuffer(value)) return new Uint8Array(value);
-  if (ArrayBufferIsView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  const err = new TypeError(
-    `The "${name}" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.`);
-  err.code = 'ERR_INVALID_ARG_TYPE';
-  throw err;
-}
-
 function timingSafeEqual(buf1, buf2) {
-  const a = bytesOf(buf1, 'buf1');
-  const b = bytesOf(buf2, 'buf2');
-  if (a.length !== b.length) throw new ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH();
-  return native.timingSafeEqual(a, b);
+  for (const [name, value] of [['buf1', buf1], ['buf2', buf2]]) {
+    if (!isAnyArrayBuffer(value) && !ArrayBufferIsView(value)) {
+      const err = new TypeError(
+        `The "${name}" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.`);
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+  }
+  const equal = native.timingSafeEqual(buf1, buf2);
+  if (equal === null) throw new ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH();
+  return equal;
 }
 
 module.exports = {

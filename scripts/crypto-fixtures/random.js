@@ -102,6 +102,7 @@ async function main() {
   await new Promise((resolve) => {
     const target = new Uint8Array(6);
     crypto.randomFill(target, 1, 4, function (err, t) { order.push(["randomFill", err, t === target, target[0], target.slice(1, 5).some((v) => v !== 0)]); resolve(); });
+    order.push(["randomFill deferred", target.every((v) => v === 0)]);
   });
   await new Promise((resolve) => {
     crypto.randomFill(new Uint16Array(4), function (err, t) { order.push(["randomFill2", err, t.length]); resolve(); });

@@ -17,8 +17,13 @@ without `--node`; the default global environment is unchanged.
    hmacKey)`, `update(handle, string | typed array)`, `copy(handle,
    outputLength)` and `digest(handle)` work on a handle table in
    `NodeHostState::crypto`; a string goes in as UTF-8 (lone surrogates become
-   U+FFFD, as in Node), a typed array is read in place. `digest` releases the
-   handle; handles are never reused. A `Hash` dropped without `digest()` keeps
+   U+FFFD, as in Node), a typed array is read in place. `digestOnce`
+   (`hash()`, `subtle.digest`) needs no handle. Buffer sources (ArrayBuffer,
+   typed array, DataView) are read from the engine's own slots, never through
+   properties a caller can shadow; a detached buffer reads as empty, as in
+   Node. `digest` releases the handle; handles are never reused. XOF output
+   is capped at 2^31-1 bytes and allocated fallibly (a `RangeError`, not an
+   abort). A `Hash` dropped without `digest()` keeps
    its state until exit: the engine runs no `FinalizationRegistry` callbacks,
    so the module does not pretend to use one. Revisit if they ever run or an
    opaque-handle object kind appears.
@@ -46,7 +51,7 @@ without `--node`; the default global environment is unchanged.
    objects: jsse has no `stream` module, so `write`/`pipe` are absent. HMAC
    keys are strings or buffer sources (no `KeyObject`). Not provided: ciphers,
    keys, sign/verify, DH/ECDH, pbkdf2/scrypt/hkdf, `randomUUIDv7`, `Certificate`.
-5. **Random.** Entropy is `getrandom` through `__host_random_bytes`.
+5. **Random.** Entropy is `getrandom`: `randomFill` fills the target buffer in place natively, the rest uses `__host_random_bytes`.
    `randomBytes`/`randomFill` callbacks run from `setImmediate` (Node: after
    the threadpool job); `randomInt` uses a 6 KiB cache with rejection sampling
    and its callback runs from `process.nextTick`, as Node does on a warm cache.

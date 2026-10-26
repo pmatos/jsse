@@ -7,11 +7,13 @@
 
 const {
   ArrayBufferIsView,
+  ArrayPrototypeForEach,
+  ObjectDefineProperty,
   PromiseReject,
+  PromiseResolve,
   StringPrototypeToLowerCase,
+  SymbolToStringTag,
   TypedArrayPrototypeGetBuffer,
-  TypedArrayPrototypeGetByteLength,
-  TypedArrayPrototypeGetByteOffset,
 } = primordials;
 
 const native = require('internal/host/crypto');
@@ -65,34 +67,25 @@ class SubtleCrypto {
           `but only ${arguments.length} present.`, 'ERR_MISSING_ARGS');
       }
       const name = normalizeAlgorithm(algorithm);
-      let bytes;
-      if (isArrayBuffer(data)) {
-        bytes = new Uint8Array(data);
-      } else if (ArrayBufferIsView(data)) {
-        bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-      } else {
+      if (!isArrayBuffer(data) && !ArrayBufferIsView(data)) {
         throw codedTypeError(
           'Failed to execute \'digest\' on \'SubtleCrypto\': 2nd argument is not ' +
           'instance of ArrayBuffer, Buffer, TypedArray, or DataView.',
           'ERR_INVALID_ARG_TYPE');
       }
-      const handle = native.create(name);
-      native.update(handle, bytes);
-      const out = native.digest(handle);
-      return Promise.resolve(TypedArrayPrototypeGetBuffer(out).slice(
-        TypedArrayPrototypeGetByteOffset(out),
-        TypedArrayPrototypeGetByteOffset(out) + TypedArrayPrototypeGetByteLength(out)));
+      return PromiseResolve(TypedArrayPrototypeGetBuffer(native.digestOnce(name, undefined, data)));
     } catch (err) {
       return PromiseReject(err);
     }
   }
 }
 
-for (const method of [
+ArrayPrototypeForEach([
   'encrypt', 'decrypt', 'sign', 'verify', 'generateKey', 'deriveKey', 'deriveBits',
   'importKey', 'exportKey', 'wrapKey', 'unwrapKey',
-]) {
-  Object.defineProperty(SubtleCrypto.prototype, method, {
+], (method) => {
+  ObjectDefineProperty(SubtleCrypto.prototype, method, {
+    __proto__: null,
     value: function() {
       return PromiseReject(lazyDOMException(
         `SubtleCrypto.${method} is not supported`, 'NotSupportedError'));
@@ -101,9 +94,10 @@ for (const method of [
     enumerable: true,
     configurable: true,
   });
-}
+});
 
-Object.defineProperty(SubtleCrypto.prototype, Symbol.toStringTag, {
+ObjectDefineProperty(SubtleCrypto.prototype, SymbolToStringTag, {
+  __proto__: null,
   value: 'SubtleCrypto',
   configurable: true,
 });
