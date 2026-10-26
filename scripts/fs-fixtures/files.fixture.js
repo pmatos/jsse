@@ -66,6 +66,14 @@ t("open/read/close", () => {
   fs.closeSync(fd);
   return [typeof fd, n, n2, n3, buf.toString("hex")];
 });
+t("readSync null options", () => {
+  const fd = fs.openSync(p("a.txt"), "r");
+  const buf = Buffer.alloc(5);
+  const n = fs.readSync(fd, buf, null);
+  const n2 = fs.readSync(fd, buf, null, 5, null);
+  fs.closeSync(fd);
+  return [n, n2, buf.toString("hex")];
+});
 t("readSync positioned", () => {
   const fd = fs.openSync(p("a.txt"));
   const b = Buffer.alloc(4);

@@ -10,7 +10,8 @@ use super::node_host_fs_args::*;
 use super::node_host_fs_error::{io_error, uv_error};
 use std::ffi::CString;
 
-/// path opened (and closed) here.
+/// The operand of a whole-file call: a caller-owned descriptor, or a path
+/// opened (and closed) here.
 enum Target {
     Fd(i32),
     Path(Vec<u8>, CString),

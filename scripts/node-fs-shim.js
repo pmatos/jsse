@@ -111,7 +111,7 @@
     var offset = offsetOrOptions;
     if (arguments.length <= 3 || typeof offsetOrOptions === "object") {
       if (offsetOrOptions !== undefined) {
-        if (typeof offsetOrOptions !== "object" || offsetOrOptions === null) {
+        if (typeof offsetOrOptions !== "object") {
           throw invalidArgType("options", "of type object", offsetOrOptions);
         }
       }
