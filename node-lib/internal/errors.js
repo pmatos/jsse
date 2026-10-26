@@ -8,10 +8,14 @@ const {
   ArrayPrototypeIncludes,
   ArrayPrototypeIndexOf,
   ArrayPrototypeJoin,
+  ArrayPrototypeMap,
   ArrayPrototypePush,
   ArrayPrototypeSlice,
   ArrayPrototypeSplice,
   JSONStringify,
+  MathAbs,
+  NumberIsInteger,
+  ObjectAssign,
   ObjectCreate,
   ObjectDefineProperty,
   ObjectSetPrototypeOf,
@@ -192,8 +196,8 @@ E('ERR_INVALID_ARG_TYPE', TypeError, (name, expected, actual) => {
   return msg;
 });
 
-E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
-
+E('ERR_EVENT_RECURSION', Error, (name) => `The event "${name}" is already being dispatched`);
+E('ERR_ILLEGAL_CONSTRUCTOR', TypeError, 'Illegal constructor');
 E('ERR_INVALID_ARG_VALUE', TypeError, (name, value, reason = 'is invalid') => {
   let inspected = inspect(value);
   if (inspected.length > 128) {
@@ -202,6 +206,55 @@ E('ERR_INVALID_ARG_VALUE', TypeError, (name, value, reason = 'is invalid') => {
   const type = StringPrototypeIncludes(name, '.') ? 'property' : 'argument';
   return `The ${type} '${name}' ${reason}. Received ${inspected}`;
 });
+E('ERR_INVALID_THIS', TypeError, (type) => `Value of "this" must be of type ${type}`);
+E('ERR_MISSING_ARGS', TypeError, (...args) => {
+  let msg = 'The ';
+  const len = args.length;
+  const wrap = (a) => `"${a}"`;
+  args = ArrayPrototypeMap(
+    args,
+    (a) => (ArrayIsArray(a) ?
+      ArrayPrototypeJoin(ArrayPrototypeMap(a, wrap), ' or ') :
+      wrap(a)),
+  );
+  msg += `${formatList(args)} argument${len > 1 ? 's' : ''}`;
+  return `${msg} must be specified`;
+});
+
+function addNumericalSeparator(val) {
+  let res = '';
+  let i = val.length;
+  const start = val[0] === '-' ? 1 : 0;
+  for (; i >= start + 4; i -= 3) {
+    res = `_${StringPrototypeSlice(val, i - 3, i)}${res}`;
+  }
+  return `${StringPrototypeSlice(val, 0, i)}${res}`;
+}
+
+E('ERR_OUT_OF_RANGE', RangeError, (str, range, input, replaceDefaultBoolean = false) => {
+  let msg = replaceDefaultBoolean ? str :
+    `The value of "${str}" is out of range.`;
+  let received;
+  if (NumberIsInteger(input) && MathAbs(input) > 2 ** 32) {
+    received = addNumericalSeparator(String(input));
+  } else if (typeof input === 'bigint') {
+    received = String(input);
+    if (input > 2n ** 32n || input < -(2n ** 32n)) {
+      received = addNumericalSeparator(received);
+    }
+    received += 'n';
+  } else {
+    received = inspect(input);
+  }
+  msg += ` It must be ${range}. Received ${received}`;
+  return msg;
+});
+E('ERR_UNHANDLED_ERROR', Error, (err = undefined) => {
+  const msg = 'Unhandled error.';
+  if (err === undefined) return msg;
+  return `${msg} (${err})`;
+});
+E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
 
 E('ERR_INVALID_MODULE_SPECIFIER', TypeError, (request, reason, base = undefined) => {
   return `Invalid module "${request}" ${reason}${base ? ` imported from ${base}` : ''}`;
@@ -239,3 +292,22 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
 });
 
 module.exports = { codes };
+// Node's AbortError is a plain Error with .code and .name, not a DOMException.
+class AbortError extends Error {
+  constructor(message = 'The operation was aborted', options = undefined) {
+    if (options !== undefined && typeof options !== 'object') {
+      throw new codes.ERR_INVALID_ARG_TYPE('options', 'Object', options);
+    }
+    super(message, options);
+    this.code = 'ABORT_ERR';
+    this.name = 'AbortError';
+  }
+}
+
+function genericNodeError(message, errorProperties) {
+  const err = new Error(message);
+  ObjectAssign(err, errorProperties);
+  return err;
+}
+
+module.exports = { AbortError, codes, genericNodeError };
