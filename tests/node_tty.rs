@@ -4,6 +4,8 @@
 //! output recorded from Node (expected/), and `scripts/run-node-tty-oracle.sh`
 //! cross-checks against a live Node.
 
+#![cfg(unix)]
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -118,6 +120,8 @@ fn an_unref_stdin_does_not_keep_the_loop_alive() {
     let source = r#"
         process.stdin.unref();
         process.stdin.on("data", () => {});
+        process.stdout.ref();
+        process.stderr.unref();
         process.on("exit", () => console.log("exit"));
     "#;
     let mut child = jsse()
@@ -190,4 +194,13 @@ fn internal_stdio_modules_stay_private() {
         stdout(&out),
         "MODULE_NOT_FOUND\nMODULE_NOT_FOUND\nMODULE_NOT_FOUND\nfunction function\n"
     );
+}
+
+#[test]
+fn a_tty_read_stream_of_another_descriptor_is_not_implemented() {
+    let source = r#"
+        try { new (require("tty").ReadStream)(3); } catch (e) { console.log(e.code); }
+    "#;
+    let out = run_with_stdin(&["--node", "-e", source], "", None);
+    assert_eq!(stdout(&out), "ERR_METHOD_NOT_IMPLEMENTED\n");
 }

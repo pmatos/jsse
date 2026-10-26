@@ -6,7 +6,7 @@
 class StringDecoder {
   constructor(encoding) {
     this.encoding = encoding;
-    this._decoder = new TextDecoder('utf-8');
+    this._decoder = new TextDecoder('utf-8', { ignoreBOM: true });
   }
 
   write(chunk) {

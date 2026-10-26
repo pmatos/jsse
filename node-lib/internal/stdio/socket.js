@@ -52,8 +52,8 @@ class Handle {
     host.stdinStop();
   }
 
-  ref() { host.stdinRef(true); }
-  unref() { host.stdinRef(false); }
+  ref() { if (this.fd === 0) host.stdinRef(true); }
+  unref() { if (this.fd === 0) host.stdinRef(false); }
   setBlocking() {}
 }
 

@@ -4,7 +4,7 @@
 //! `uv_guess_handle`), window size, raw mode, a synchronous full write to a
 //! descriptor, and an on-demand reader for fd 0 that wakes the Node event loop
 //! (`node_event_loop.rs`) when bytes arrive. See
-//! `docs/adr/2026-10-26-1930-node-host-tty.md`.
+//! `docs/adr/2026-10-26-2230-node-host-tty.md`.
 
 use super::super::*;
 use super::node_host_fs_args::{
@@ -64,13 +64,14 @@ impl StdinState {
     }
 }
 
-static ORIGINAL_TERMIOS: Mutex<Option<(i32, libc::termios)>> = Mutex::new(None);
+static ORIGINAL_TERMIOS: Mutex<Vec<(i32, libc::termios)>> = Mutex::new(Vec::new());
+static RESTORE_HOOK: std::sync::Once = std::sync::Once::new();
 
 extern "C" fn restore_terminal() {
-    if let Ok(guard) = ORIGINAL_TERMIOS.lock()
-        && let Some((fd, original)) = guard.as_ref()
-    {
-        unsafe { libc::tcsetattr(*fd, libc::TCSADRAIN, original) };
+    if let Ok(guard) = ORIGINAL_TERMIOS.lock() {
+        for (fd, original) in guard.iter() {
+            unsafe { libc::tcsetattr(*fd, libc::TCSADRAIN, original) };
+        }
     }
 }
 
@@ -172,7 +173,7 @@ fn get_window_size(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) 
     ]))
 }
 
-/// `setRawMode(fd, raw)` -> 0, or a positive errno.
+/// `setRawMode(fd, raw)` -> 0, or a uv-style error object (`code`, `errno`).
 fn set_raw_mode(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
     let fd = match int(interp, arg(args, 0)) {
         Ok(n) => n as i32,
@@ -182,13 +183,16 @@ fn set_raw_mode(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> 
     let mut guard = ORIGINAL_TERMIOS.lock().unwrap_or_else(|e| e.into_inner());
     let mut current: libc::termios = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(fd, &mut current) } != 0 {
-        return Completion::Normal(JsValue::number(f64::from(last_errno())));
+        return Completion::Normal(uv_error(interp, last_errno(), "setRawMode", None, None));
     }
-    let target = match (raw, guard.as_ref()) {
+    let saved = guard.iter().position(|(f, _)| *f == fd);
+    let target = match (raw, saved) {
         (true, saved) => {
             if saved.is_none() {
-                *guard = Some((fd, current));
-                unsafe { libc::atexit(restore_terminal) };
+                guard.push((fd, current));
+                RESTORE_HOOK.call_once(|| {
+                    unsafe { libc::atexit(restore_terminal) };
+                });
             }
             let mut t = current;
             t.c_iflag &= !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON);
@@ -199,15 +203,13 @@ fn set_raw_mode(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> 
             t.c_cc[libc::VTIME] = 0;
             t
         }
-        (false, Some((_, original))) => *original,
+        (false, Some(i)) => guard[i].1,
         (false, None) => return Completion::Normal(JsValue::number(0.0)),
     };
-    let rc = unsafe { libc::tcsetattr(fd, libc::TCSADRAIN, &target) };
-    Completion::Normal(JsValue::number(if rc == 0 {
-        0.0
-    } else {
-        f64::from(last_errno())
-    }))
+    if unsafe { libc::tcsetattr(fd, libc::TCSADRAIN, &target) } != 0 {
+        return Completion::Normal(uv_error(interp, last_errno(), "setRawMode", None, None));
+    }
+    Completion::Normal(JsValue::number(0.0))
 }
 
 /// `write(fd, stringOrBytes)`: a synchronous, complete write; throws a uv-style

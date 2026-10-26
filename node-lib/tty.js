@@ -11,6 +11,7 @@ const {
   codes: {
     ERR_INVALID_FD,
     ERR_INVALID_ARG_VALUE,
+    ERR_METHOD_NOT_IMPLEMENTED,
   },
 } = require('internal/errors');
 const {
@@ -31,6 +32,8 @@ function ReadStream(fd, options) {
     return new ReadStream(fd, options);
   if (fd >> 0 !== fd || fd < 0)
     throw new ERR_INVALID_FD(fd);
+  if (fd !== 0)
+    throw new ERR_METHOD_NOT_IMPLEMENTED('tty.ReadStream on a descriptor other than 0');
 
   Socket.call(this, {
     readableHighWaterMark: 0,
@@ -58,8 +61,9 @@ ReadStream.prototype.setRawMode = function(mode) {
   }
   const err = host.setRawMode(this.fd, rawMode !== false);
   if (err) {
-    const error = new Error(`setRawMode ${err}`);
-    error.errno = -err;
+    const error = new Error(`setRawMode ${err.code}`);
+    error.errno = err.errno;
+    error.code = err.code;
     error.syscall = 'setRawMode';
     this.emit('error', error);
     return this;

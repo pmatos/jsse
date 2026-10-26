@@ -5,7 +5,8 @@ usage: pty-run.py [--rows N] [--cols N] [--input TEXT] [--stdout-pipe] -- cmd ar
 
 The child gets the pty as stdin/stdout/stderr (with --stdout-pipe, stdout is a
 pipe and only stdin/stderr are the tty). --input is written to the terminal
-after the child starts (\\n and \\r escapes allowed; a trailing \\x04 sends EOF).
+when the child is ready: it left canonical mode, or --delay
+seconds passed (\\n and \\r escapes allowed; a trailing \\x04 sends EOF).
 Output is the raw bytes the child produced, with the tty's output processing
 (\\n to \\r\\n) left in place.
 """
@@ -53,13 +54,22 @@ os.close(slave)
 if pipe_w is not None:
     os.close(pipe_w)
 
+
+def child_ready():
+    try:
+        return not termios.tcgetattr(master)[3] & termios.ICANON
+    except termios.error:
+        return False
+
+
 data = args.input.encode().decode("unicode_escape").encode("latin-1")
 out = b""
 sent = False
 start = time.time()
 fds = [master] + ([pipe_r] if pipe_r is not None else [])
 while True:
-    if not sent and time.time() - start >= args.delay:
+    elapsed = time.time() - start
+    if not sent and (elapsed >= args.delay or child_ready()):
         if data:
             os.write(master, data)
         sent = True

@@ -216,8 +216,26 @@
   hostOs.Buffer = globalThis.Buffer;
   cache["internal/host/os"] = { exports: hostOs };
   // The terminal and standard-stream floor (#1232), private to the stdio and
-  // tty modules.
-  cache["internal/host/tty"] = { exports: takeHost("__host_tty") };
+  // tty modules; without the unix floor, stdout and stderr go through
+  // __host_write and stdin is empty.
+  var hostTty = takeHost("__host_tty");
+  if (hostTty === undefined) {
+    var hostWrite = globalThis.__host_write;
+    var utf8 = new TextDecoder();
+    hostTty = {
+      guessHandleType: function (fd) { return fd >= 0 && fd <= 2 ? "PIPE" : "INVALID"; },
+      isTTY: function () { return false; },
+      getWindowSize: function () {},
+      setRawMode: function () { return { code: "ENOTTY", errno: -25 }; },
+      write: function (fd, data) {
+        return hostWrite(fd, typeof data === "string" ? data : utf8.decode(data));
+      },
+      stdinStart: function (cb) { Promise.resolve().then(function () { cb(null); }); },
+      stdinStop: function () {},
+      stdinRef: function () {},
+    };
+  }
+  cache["internal/host/tty"] = { exports: hostTty };
   // The native `crypto` binding (#1226), plus the entropy floor and the global
   // Web Crypto object the module re-exports as `webcrypto`.
   var hostCrypto = globalThis.__host_crypto;
