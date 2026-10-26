@@ -215,18 +215,23 @@ mod tests {
                 Completion::Normal(JsValue::boolean(false))
             }));
         for method in [FindMethod::Find, FindMethod::FindLast] {
-            assert!(normal(method.array(&mut interp, &array, &[never.clone()])).is_undefined());
             assert!(
-                normal(method.typed_array(&mut interp, &typed, &[never.clone()])).is_undefined()
+                normal(method.array(&mut interp, &array, std::slice::from_ref(&never)))
+                    .is_undefined()
+            );
+            assert!(
+                normal(method.typed_array(&mut interp, &typed, std::slice::from_ref(&never)))
+                    .is_undefined()
             );
         }
         for method in [FindMethod::FindIndex, FindMethod::FindLastIndex] {
             assert_eq!(
-                normal(method.array(&mut interp, &array, &[never.clone()])).as_number(),
+                normal(method.array(&mut interp, &array, std::slice::from_ref(&never))).as_number(),
                 Some(-1.0)
             );
             assert_eq!(
-                normal(method.typed_array(&mut interp, &typed, &[never.clone()])).as_number(),
+                normal(method.typed_array(&mut interp, &typed, std::slice::from_ref(&never)))
+                    .as_number(),
                 Some(-1.0)
             );
         }
@@ -263,7 +268,7 @@ mod tests {
                 Completion::Throw(JsValue::number(42.0))
             }));
         for result in [
-            FindMethod::Find.array(&mut interp, &array, &[abrupt.clone()]),
+            FindMethod::Find.array(&mut interp, &array, std::slice::from_ref(&abrupt)),
             FindMethod::FindLast.typed_array(&mut interp, &typed, &[abrupt]),
         ] {
             assert!(matches!(result, Completion::Throw(value) if value.as_number() == Some(42.0)));

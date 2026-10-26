@@ -708,8 +708,8 @@ mod tests {
         let atom = Atom::intern("a");
         let other = Atom::intern("other");
         let mutators: Vec<(&str, Box<dyn Fn(&mut BindingMap)>)> = vec![
-            ("get_mut", Box::new(|m| drop(m.get_mut("a")))),
-            ("entry_at_mut", Box::new(|m| drop(m.entry_at_mut(0)))),
+            ("get_mut", Box::new(|m| _ = m.get_mut("a"))),
+            ("entry_at_mut", Box::new(|m| _ = m.entry_at_mut(0))),
             ("insert", Box::new(|m| drop(m.insert("a", b(2.0))))),
             (
                 "insert_atom",

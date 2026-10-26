@@ -190,7 +190,7 @@ mod merge_sort_tests {
         let mut flip = 0u32;
         merge_sort_by(&mut items, |_, _| {
             flip += 1;
-            Ok::<_, ()>(if flip % 2 == 0 {
+            Ok::<_, ()>(if flip.is_multiple_of(2) {
                 Ordering::Less
             } else {
                 Ordering::Greater

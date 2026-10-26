@@ -2911,7 +2911,7 @@ mod tests {
 
         {
             let _held = handle.borrow_mut_untracked();
-            interp.gc_write_barrier_element(&handle, 3 * CARD_ELEMENTS, &obj(child));
+            interp.gc_write_barrier_element(handle, 3 * CARD_ELEMENTS, &obj(child));
         }
         assert_eq!(dirty_cards(&interp, array_id), Some(vec![]));
         assert!(
@@ -2999,7 +2999,7 @@ mod tests {
 
     fn map_set(interp: &Interpreter, id: u64, key: JsValue, value: JsValue) {
         let handle = interp.objects.get_cell_expect(id);
-        let young = interp.gc_write_barrier_entry(&handle, &[&key, &value]);
+        let young = interp.gc_write_barrier_entry(handle, &[&key, &value]);
         handle
             .borrow_mut_untracked()
             .map_data_mut()
@@ -3009,7 +3009,7 @@ mod tests {
 
     fn set_add(interp: &Interpreter, id: u64, value: JsValue) {
         let handle = interp.objects.get_cell_expect(id);
-        let young = interp.gc_write_barrier_entry(&handle, &[&value]);
+        let young = interp.gc_write_barrier_entry(handle, &[&value]);
         handle
             .borrow_mut_untracked()
             .set_data_mut()

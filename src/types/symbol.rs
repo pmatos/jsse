@@ -212,7 +212,6 @@ impl JsSymbol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr as _;
 
     #[test]
     fn symbol_property_key_is_built_once_per_symbol() {
