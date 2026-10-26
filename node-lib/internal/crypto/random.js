@@ -110,7 +110,12 @@ function randomFill(buf, offset, size, callback) {
     return;
   }
   setImmediate(function() {
-    native.randomFill(buf, offset, size);
+    try {
+      native.randomFill(buf, offset, size);
+    } catch (err) {
+      callback.call(this, err);
+      return;
+    }
     callback.call(this, null, buf);
   });
 }

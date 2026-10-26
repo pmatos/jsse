@@ -207,4 +207,18 @@ for (const [label, a, b] of [
   attempt(`timingSafeEqual ${label}`, () => crypto.timingSafeEqual(a, b));
 }
 
+// Views over resizable buffers read the live length.
+{
+  const rab = new ArrayBuffer(4, { maxByteLength: 16 });
+  new Uint8Array(rab).set([1, 2, 3, 4]);
+  const views = { tracking: new Uint8Array(rab), fixed: new Uint8Array(rab, 0, 4), dv: new DataView(rab), dvFixed: new DataView(rab, 0, 4) };
+  for (const size of [8, 2, 0, 4]) {
+    rab.resize(size);
+    for (const [label, v] of Object.entries(views)) {
+      attempt(`resizable ${size} ${label}`, () => hex(crypto.createHash("md5").update(v).digest()));
+      attempt(`resizable hmac ${size} ${label}`, () => hex(crypto.createHmac("md5", v).update("a").digest()));
+    }
+  }
+}
+
 flush();

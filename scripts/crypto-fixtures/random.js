@@ -45,6 +45,12 @@ const buf = Buffer.alloc(16);
 emit("randomFillSync", [crypto.randomFillSync(buf) === buf, buf.some((b) => b !== 0)]);
 const u32 = new Uint32Array(8);
 emit("randomFillSync u32", [crypto.randomFillSync(u32, 2, 3) === u32, u32[0], u32[1], u32[5], u32[6], u32[7], u32.slice(2, 5).some((v) => v !== 0)]);
+{
+  const rab = new ArrayBuffer(8, { maxByteLength: 32 });
+  const tracking = new Uint8Array(rab);
+  rab.resize(16);
+  emit("randomFillSync resizable", [crypto.randomFillSync(tracking) === tracking, tracking.length, tracking.slice(8).some((v) => v !== 0)]);
+}
 const ab = new ArrayBuffer(8);
 emit("randomFillSync ab", [crypto.randomFillSync(ab, 4) === ab, new Uint8Array(ab).slice(0, 4).join(""), new Uint8Array(ab).slice(4).some((v) => v !== 0)]);
 for (const [label, args] of [["offset", [Buffer.alloc(4), 5]], ["size", [Buffer.alloc(4), 0, 5]], ["neg", [Buffer.alloc(4), -1]], ["type", ["x"]], ["nan", [Buffer.alloc(4), NaN]], ["sizeoff", [Buffer.alloc(4), 2, 3]], ["u32", [new Uint32Array(2), 3]]]) {
@@ -84,6 +90,9 @@ async function main() {
     try { await crypto.subtle.digest(...args); } catch (e) { emit(`subtle args ${args.length}`, e.name + "|" + e.code + "|" + e.message); }
   }
   try { await crypto.subtle.digest.call({}, "SHA-1", data); } catch (e) { emit("subtle this", e.name + "|" + e.code + "|" + e.message); }
+  for (const alg of ["constructor", "__proto__", "toString"]) {
+    await crypto.subtle.digest(alg, data).then(() => emit(`subtle proto ${alg}`, "resolved"), (e) => emit(`subtle proto ${alg}`, "rejects " + e.name + "|" + e.code + "|" + e.message));
+  }
   emit("subtle returns promise", crypto.subtle.digest("SHA-1", data) instanceof Promise);
   emit("subtle rejects not throws", await crypto.subtle.digest().then(() => "resolved", (e) => "rejected " + e.code));
   const mutated = new Uint8Array([1, 2, 3]);
@@ -115,6 +124,7 @@ async function main() {
     crypto.randomInt(3, function (err, n) { order.push(["randomInt1", err, n >= 0 && n < 3]); resolve(); });
   });
   emit("async random", order);
+  attempt("randomFill ab offset cb", () => crypto.randomFill(new ArrayBuffer(8), 2, () => {}));
   attempt("randomFill bad cb", () => crypto.randomFill(Buffer.alloc(2), 0, 1, 5));
   attempt("randomFill bad buf", () => crypto.randomFill("x", () => {}));
 

@@ -22,6 +22,7 @@ const { codes: { ERR_INVALID_THIS } } = require('internal/errors');
 const { isArrayBuffer } = require('internal/util/types');
 
 const kDigests = {
+  __proto__: null,
   'sha-1': 'sha1',
   'sha-256': 'sha256',
   'sha-384': 'sha384',

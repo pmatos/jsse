@@ -1,11 +1,7 @@
-//! The `crypto` binding for Node host mode (issue #1226): one hidden global,
-//! `__host_crypto`, with incremental digests and HMAC behind integer handles
-//! and a constant-time compare. `node-builtin-loader.js` captures the object,
-//! deletes the global and seeds it as the private module `internal/host/crypto`;
-//! `node-lib/internal/crypto/hash.js` is the only consumer. State lives in
-//! `NodeHostState::crypto`, so nothing here exists without `--node`. `digest`
-//! releases a handle; one dropped without `digest` stays until exit (the engine
-//! runs no FinalizationRegistry callbacks). See `docs/adr/2026-10-26-1930-node-host-crypto.md`.
+//! The `crypto` binding for Node host mode (issue #1226): a hidden `__host_crypto`
+//! global that `node-builtin-loader.js` seeds as the private module
+//! `internal/host/crypto`. Digest and HMAC state lives in `NodeHostState::crypto`
+//! behind integer handles. See `docs/adr/2026-10-26-1930-node-host-crypto.md`.
 
 use super::super::*;
 use md5::Md5;
@@ -139,24 +135,24 @@ impl Entry {
     }
 }
 
-fn hmac_entry(algo: Algo, key: &[u8]) -> Entry {
+fn hmac_entry(algo: Algo, key: &[u8], out_len: usize) -> Result<Entry, ()> {
     let block = algo.block_size();
     let mut key_block = if key.len() > block {
         let mut h = Hasher::new(algo);
         h.update(key);
-        h.finalize(algo.digest_size()).unwrap_or_default()
+        h.finalize(algo.digest_size())?
     } else {
         key.to_vec()
     };
     key_block.resize(block, 0);
     let mut hasher = Hasher::new(algo);
     hasher.update(&key_block.iter().map(|b| b ^ 0x36).collect::<Vec<_>>());
-    Entry {
+    Ok(Entry {
         algo,
         hasher,
-        out_len: algo.digest_size(),
+        out_len,
         outer_key: Some(key_block.iter().map(|b| b ^ 0x5c).collect()),
-    }
+    })
 }
 
 #[derive(Default)]
@@ -209,6 +205,17 @@ struct Window {
     len: usize,
 }
 
+fn data_view_byte_length(dv: &DataViewInfo) -> usize {
+    let buf_len = dv.buffer.borrow().len();
+    if dv.is_length_tracking {
+        buf_len.saturating_sub(dv.byte_offset)
+    } else if dv.byte_offset + dv.byte_length > buf_len {
+        0
+    } else {
+        dv.byte_length
+    }
+}
+
 fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
     let cell = interp.get_object_cell(v.as_object_id()?)?;
     let obj = cell.borrow();
@@ -216,13 +223,13 @@ fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
         ObjectKind::TypedArray(ta) => (
             ta.buffer.clone(),
             ta.byte_offset,
-            ta.byte_length,
+            typed_array_byte_length(ta),
             ta.is_detached.get(),
         ),
         ObjectKind::DataView(dv) => (
             dv.buffer.clone(),
             dv.byte_offset,
-            dv.byte_length,
+            data_view_byte_length(dv),
             dv.is_detached.get(),
         ),
         ObjectKind::ArrayBuffer(ab) => {
@@ -247,24 +254,41 @@ fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
     })
 }
 
-/// Run `f` over a string (as UTF-8, lone surrogates replaced) or a byte window.
+enum Source {
+    Text(String),
+    Bytes(Window),
+}
+
+impl Source {
+    fn with<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+        match self {
+            Source::Text(s) => Some(f(s.as_bytes())),
+            Source::Bytes(w) => w
+                .buffer
+                .borrow()
+                .with_read(|b| b.get(w.offset..w.offset + w.len).map(f)),
+        }
+    }
+}
+
+/// A string (as UTF-8, lone surrogates replaced) or a byte window.
+fn source(interp: &mut Interpreter, v: &JsValue) -> Result<Source, JsValue> {
+    if v.is_string() {
+        return Ok(Source::Text(interp.to_string_lossy(v)?));
+    }
+    window(interp, v)
+        .map(Source::Bytes)
+        .ok_or_else(|| interp.create_type_error("crypto: expected a string or buffer source"))
+}
+
 fn with_bytes<R>(
     interp: &mut Interpreter,
     v: &JsValue,
     f: impl FnOnce(&[u8]) -> R,
 ) -> Result<R, JsValue> {
-    if v.is_string() {
-        let s = interp.to_string_lossy(v)?;
-        return Ok(f(s.as_bytes()));
-    }
-    let Some(w) = window(interp, v) else {
-        return Err(interp.create_type_error("crypto: expected a string or buffer source"));
-    };
-    let bytes = w
-        .buffer
-        .borrow()
-        .with_read(|b| b.get(w.offset..w.offset + w.len).map(f));
-    bytes.ok_or_else(|| interp.create_type_error("crypto: out-of-range view"))
+    let src = source(interp, v)?;
+    src.with(f)
+        .ok_or_else(|| interp.create_type_error("crypto: out-of-range view"))
 }
 
 fn bytes_value(interp: &mut Interpreter, bytes: Result<Vec<u8>, ()>) -> Completion {
@@ -312,9 +336,10 @@ fn create(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completio
             outer_key: None,
         }
     } else {
-        let mut e = tri!(with_bytes(interp, arg(args, 2), |k| hmac_entry(algo, k)));
-        e.out_len = out_len;
-        e
+        let built = tri!(with_bytes(interp, arg(args, 2), |k| hmac_entry(
+            algo, k, out_len
+        )));
+        tri!(built.map_err(|()| interp.create_range_error("crypto: output allocation failed")))
     };
     Completion::Normal(JsValue::number(interp.node_host.crypto.insert(entry)))
 }
@@ -330,12 +355,13 @@ fn digest_once(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Comp
 
 fn update(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
     let id = tri!(handle(interp, arg(args, 0)));
-    let Some(mut entry) = interp.node_host.crypto.entries.remove(&id) else {
+    let src = tri!(source(interp, arg(args, 1)));
+    let Some(entry) = interp.node_host.crypto.entries.get_mut(&id) else {
         return stale(interp);
     };
-    let result = with_bytes(interp, arg(args, 1), |b| entry.hasher.update(b));
-    interp.node_host.crypto.entries.insert(id, entry);
-    tri!(result);
+    if src.with(|b| entry.hasher.update(b)).is_none() {
+        return Completion::Throw(interp.create_type_error("crypto: out-of-range view"));
+    }
     Completion::Normal(JsValue::UNDEFINED)
 }
 
@@ -446,7 +472,8 @@ mod tests {
     }
 
     fn hmac(name: &str, key: &[u8], data: &[u8]) -> String {
-        let mut e = hmac_entry(Algo::parse(name).expect("algo"), key);
+        let algo = Algo::parse(name).expect("algo");
+        let mut e = hmac_entry(algo, key, algo.digest_size()).expect("key");
         e.hasher.update(data);
         hex(&e.finish().expect("digest"))
     }
