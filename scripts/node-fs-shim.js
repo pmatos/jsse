@@ -227,11 +227,9 @@
     existsSync: existsSync,
     fstatSync: meta.fstatSync,
     lstatSync: meta.lstatSync,
-    mkdirSync: meta.mkdirSync,
     openSync: openSync,
     readFileSync: readFileSync,
     readSync: readSync,
-    readdirSync: meta.readdirSync,
     realpathSync: meta.realpathSync,
     renameSync: meta.renameSync,
     rmdirSync: meta.rmdirSync,
@@ -240,6 +238,7 @@
     writeFileSync: writeFileSync,
     writeSync: writeSync,
   };
+  Object.assign(fs, S.dirs, S.ops, S.cp);
 
   if (!Object.prototype.hasOwnProperty.call(globalThis, "__node_builtins")) {
     Object.defineProperty(globalThis, "__node_builtins", {

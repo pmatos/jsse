@@ -1444,8 +1444,7 @@ impl Interpreter {
                 JsValue::string(JsString::from_str(name)),
             );
         }
-        let id = obj_id;
-        JsValue::object(id)
+        self.node_capture_error(obj_id)
     }
 }
 

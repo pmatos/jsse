@@ -1097,10 +1097,9 @@ fn run_chunk_with_var_prologue(
     } else if refs.capacity() == 0 {
         std::mem::forget(refs);
     }
-    // `Throw`/`Exit` are abrupt and can leave operands from an
-    // outer-in-progress expression still on the stack (issue #331) — every
-    // other completion is produced only after the chunk's own opcode
-    // handlers have already popped/unrooted their one live value.
+    // `Throw`/`Exit` can leave operands of an outer in-progress expression on
+    // the stack (issue #331); every other completion follows the chunk's own
+    // handlers popping/unrooting their one live value.
     if !matches!(result, Completion::Throw(_) | Completion::Exit(_)) {
         interp
             .gc_bytecode_roots
@@ -1144,9 +1143,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
     let frame_plain = is_plain_declarative(frame_env);
     // Block environments `PushEnv` opened, innermost last, mirrored in
     // `call_stack_envs` from `envs_base` so the GC sees their bindings. The
-    // frame environment stays the one the caller rooted. Local-op slot hints
-    // address `frame_env` or one of these directly; every other environment
-    // use goes through `cur_env!()`.
+    // frame environment stays the caller-rooted one. Local-op slot hints
+    // address `frame_env` or these directly; other uses go through `cur_env!()`.
     let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
     let envs_base = interp.call_stack_envs.len();
     let roots_base = interp.gc_bytecode_roots.len();
@@ -1832,7 +1830,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 Op::Call | Op::ReturnCall => {
                     let argc = decode_u16(chunk, pc) as usize;
                     pc += 2;
-                    let site_id = CallSiteId(decode_u32(chunk, pc));
+                    let site_id = CallSiteId(decode_u32(chunk, pc), 0);
                     pc += 4;
                     // Counted before the strict tail-call return below, which leaves
                     // the VM without reaching the dispatch site: strict tail calls
@@ -1889,19 +1887,21 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         bail!('dispatch, abrupt);
                     }
                 }
+                Op::SetCallPos => {
+                    interp.node_host.call_pos = decode_u32(chunk, pc);
+                    pc += 4;
+                }
                 Op::Construct => {
                     let argc = decode_u16(chunk, pc) as usize;
                     pc += 2;
-                    let _site_id = CallSiteId(decode_u32(chunk, pc));
+                    let _site_id = CallSiteId(decode_u32(chunk, pc), 0);
                     pc += 4;
                     assert!(stack.len() > argc, "stack underflow on construct operands");
                     let base = stack.len() - argc - 1;
                     let callee = stack[base].clone();
                     // The operands stay on the operand stack (and in
-                    // gc_bytecode_roots) for the complete nested construction,
-                    // mirroring Op::Call: construct_from_evaluated can run
-                    // arbitrary JS (constructor body, field initializers) and hit
-                    // any number of safepoints before returning.
+                    // gc_bytecode_roots) for the whole nested construction, as
+                    // for Op::Call: it can run arbitrary JS and safepoints.
                     let result = interp.construct_from_evaluated(&callee, &stack[base + 1..]);
                     pop_operands(interp, stack, argc + 1);
                     match result {

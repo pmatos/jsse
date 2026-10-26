@@ -51,6 +51,7 @@ const {
   },
 } = require('internal/errors');
 const { validateString } = require('internal/validators');
+const { nameSource } = require('internal/host/stack');
 
 // Node 26 also matches `module-sync`; it is left out while require() of an
 // ES module is unsupported, so such packages fall back to their CJS entry.
@@ -501,6 +502,9 @@ function wrapSafe(content, filename) {
   }
   const wrapper = new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
   tagFunction(wrapper, filename);
+  // -2 undoes Function()'s two header lines; anonymous like Node's wrapper.
+  ObjectDefineProperty(wrapper, 'name', { value: '', configurable: true });
+  if (nameSource !== undefined) nameSource(wrapper, filename, -2);
   return wrapper;
 }
 

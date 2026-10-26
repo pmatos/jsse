@@ -10,7 +10,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
-fn stat_values(md: &std::fs::Metadata) -> Vec<f64> {
+fn stat_values(md: &std::fs::Metadata) -> Vec<i128> {
     let birth = md
         .created()
         .ok()
@@ -18,34 +18,33 @@ fn stat_values(md: &std::fs::Metadata) -> Vec<f64> {
         .map(|d| (d.as_secs() as i64, i64::from(d.subsec_nanos())))
         .unwrap_or((md.ctime(), md.ctime_nsec()));
     [
-        md.dev() as i64,
-        i64::from(md.mode()),
-        md.nlink() as i64,
-        i64::from(md.uid()),
-        i64::from(md.gid()),
-        md.rdev() as i64,
-        md.blksize() as i64,
-        md.ino() as i64,
-        md.size() as i64,
-        md.blocks() as i64,
-        md.atime(),
-        md.atime_nsec(),
-        md.mtime(),
-        md.mtime_nsec(),
-        md.ctime(),
-        md.ctime_nsec(),
-        birth.0,
-        birth.1,
+        i128::from(md.dev()),
+        i128::from(md.mode()),
+        i128::from(md.nlink()),
+        i128::from(md.uid()),
+        i128::from(md.gid()),
+        i128::from(md.rdev()),
+        i128::from(md.blksize()),
+        i128::from(md.ino()),
+        i128::from(md.size()),
+        i128::from(md.blocks()),
+        i128::from(md.atime()),
+        i128::from(md.atime_nsec()),
+        i128::from(md.mtime()),
+        i128::from(md.mtime_nsec()),
+        i128::from(md.ctime()),
+        i128::from(md.ctime_nsec()),
+        i128::from(birth.0),
+        i128::from(birth.1),
     ]
-    .iter()
-    .map(|&n| n as f64)
-    .collect()
+    .to_vec()
 }
 
 impl Interpreter {
     pub(super) fn setup_node_host_fs_meta(&mut self) {
-        // (pathOrFd, kind) with kind 0 stat, 1 lstat, 2 fstat -> number[18]
-        self.host_fs_fn("__host_fs_stat", 2, |interp, args| {
+        // (pathOrFd, kind, bigint) with kind 0 stat, 1 lstat, 2 fstat ->
+        // number[18], or bigint[18] so 64-bit fields stay exact
+        self.host_fs_fn("__host_fs_stat", 3, |interp, args| {
             let kind = int(interp, arg(args, 1))?;
             let (md, syscall, path) = if kind == 2 {
                 let fd = int(interp, arg(args, 0))? as i32;
@@ -62,7 +61,17 @@ impl Interpreter {
             };
             match md {
                 Ok(md) => {
-                    let items = stat_values(&md).into_iter().map(JsValue::number).collect();
+                    let big = arg(args, 2).as_boolean() == Some(true);
+                    let items = stat_values(&md)
+                        .into_iter()
+                        .map(|n| {
+                            if big {
+                                JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(n)))
+                            } else {
+                                JsValue::number(n as f64)
+                            }
+                        })
+                        .collect();
                     Ok(interp.create_array(items))
                 }
                 Err(e) => Err(io_error(interp, &e, syscall, path.as_deref(), None)),
@@ -113,10 +122,11 @@ impl Interpreter {
             Ok(interp.create_array(items))
         });
 
-        self.host_fs_fn("__host_fs_readlink", 1, |interp, args| {
+        self.host_fs_fn("__host_fs_readlink", 2, |interp, args| {
             let bytes = path_bytes(interp, arg(args, 0))?;
+            let as_buffer = arg(args, 1).as_boolean() == Some(true);
             match std::fs::read_link(as_path(&bytes)) {
-                Ok(target) => Ok(js_str(&target.to_string_lossy())),
+                Ok(target) => Ok(name_value(interp, target.as_os_str().as_bytes(), as_buffer)),
                 Err(e) => Err(io_error(interp, &e, "readlink", Some(&bytes), None)),
             }
         });

@@ -1,22 +1,12 @@
 // Node host-compat prelude: process, console, util.
 //
-// Embedded in the jsse binary and evaluated by `--node` only (never otherwise,
-// so the default globals and test262 are unaffected), letting real-world npm
-// libraries written against Node globals run on jsse.
-//
-// The readable-output layer (process, the full console method set, and the
-// util.format / util.inspect core they share) is built on top of the flag-gated
-// Rust host floor (issue #229): __host_write (byte-accurate fd I/O),
-// __host_hrtime (monotonic clock), __host_exit (real process exit), and
-// __host_proxy_target / __host_array_extra_keys (trap-free inspection
-// metadata). `--node` installs them before this file runs; when absent (the
-// self-test prepends this file to a plain jsse run) each surface degrades to a
-// pure-JS fallback.
-//
-// Everything below is skipped on real Node, where `process`, the full
-// `console`, and `require('util')` already exist. That inertness is what lets
-// `run-library-tests.sh --node` run the exact same bundle against Node as a
-// reference oracle.
+// Embedded in the jsse binary and evaluated by `--node` only, so the default
+// globals and test262 are unaffected. Built on the flag-gated Rust host floor
+// (issue #229): __host_write, __host_hrtime, __host_exit and
+// __host_proxy_target / __host_array_extra_keys; when absent (the self-test
+// prepends this file to a plain jsse run) each surface degrades to a pure-JS
+// fallback. Skipped on real Node, which is what lets
+// `run-library-tests.sh --node` run the same bundle there as a reference.
 
 (function () {
   "use strict";
@@ -50,12 +40,10 @@
 
   // ---- util.inspect (best-effort) ------------------------------------------
   //
-  // A readable, Node-flavoured rendering of arbitrary values for console.dir,
-  // the %o/%O format specifiers, and console.log of non-strings. It is
-  // deliberately NOT byte-compatible with Node's util.inspect (colour
-  // heuristics, `<ref *N>` back-references, hidden keys, getters, Map/Set
-  // internals — a bottomless pit); it only needs to be correct on depth,
-  // cycles, and the common types.
+  // A readable rendering of values for console.dir, %o/%O and console.log of
+  // non-strings. Deliberately NOT byte-compatible with Node's util.inspect
+  // (colours, `<ref *N>`, hidden keys, getters, Map/Set internals); it only
+  // needs to be correct on depth, cycles, and the common types.
   // `String.prototype.replace` with a RegExp dispatches through
   // `RegExp.prototype[@@replace]`, which reads `rx.exec` — a bundled library
   // that monkey-patches `RegExp.prototype.exec` would therefore run during a
@@ -365,20 +353,12 @@
     );
   }
 
-  function renderError(v) {
-    // Test the raw descriptor value first. Stringifying a falsy primitive
-    // such as 0 or false would otherwise turn it into a truthy string and
-    // suppress the normal `[Error: message]` fallback.
-    var stackValue = dataDescriptorValue(findPropertyDescriptor(v, "stack"));
-    if (stackValue) {
-      var stack = primitiveString(stackValue, "");
-      if (stack) return stack;
-    }
+  // node-v8-error.js's lazy `stack` getter, called only as the property's own.
+  var lazyStack = globalThis.__node_stack_getter;
+  delete globalThis.__node_stack_getter;
 
-    var name = errorField(v, "name", "Error");
-    var message = errorField(v, "message", "");
-    var text = !name ? message : !message ? name : name + ": " + message;
-    return "[" + text + "]";
+  function indentTail(text, pad) {
+    return arrayJoin(stringSplit(text, "\n"), "\n" + pad);
   }
 
   function renderNullPrototypeError(v) {
@@ -482,7 +462,7 @@
             "Cannot perform 'get' on a proxy that has been revoked"
           );
         }
-        if (errorKind === "builtin") return renderError(v);
+        if (errorKind === "builtin") return renderError(v, depth);
         if (errorKind === "null" && errorIsError && errorIsError(v)) {
           return renderNullPrototypeError(v);
         }
@@ -642,18 +622,53 @@
       return label + ": " + renderDescriptor(desc, depth);
     }
 
+    // Own enumerable properties, then the non-enumerable `cause` and `errors`
+    // Node shows in brackets.
+    function errorMembers(v, depth, base) {
+      var parts = [];
+      var keys = objectKeys(v);
+      for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        if (key === "name" || key === "message" || key === "stack") {
+          var own = ownDataValue(v, key);
+          if (typeof own !== "string" || stringIndexOf(base, own) !== -1) continue;
+        }
+        arrayPush(parts, renderMember(v, key, depth));
+      }
+      var hidden = ["cause", "errors"];
+      for (var j = 0; j < hidden.length; j++) {
+        var desc = objectGetOwnPropertyDescriptor(v, hidden[j]);
+        if (desc && !desc.enumerable) {
+          arrayPush(parts, "[" + hidden[j] + "]: " + renderDescriptor(desc, depth));
+        }
+      }
+      return parts;
+    }
+
+    function renderError(v, depth) {
+      var desc = findPropertyDescriptor(v, "stack");
+      var stackValue = dataDescriptorValue(desc);
+      if (lazyStack && desc && desc.get === lazyStack) stackValue = lazyStack.call(v);
+      var base = stackValue ? primitiveString(stackValue, "") : "";
+      if (!base) {
+        var name = errorField(v, "name", "Error");
+        var message = errorField(v, "message", "");
+        base = !name ? message : !message ? name : name + ": " + message;
+      }
+      if (stringIndexOf(base, "\n    at") === -1) base = "[" + base + "]";
+      var members = errorMembers(v, depth, base);
+      if (!members.length) return base;
+      if (stringIndexOf(base, "\n") === -1) {
+        return base + " { " + arrayJoin(members, ", ") + " }";
+      }
+      return base + " {\n  " + indentTail(arrayJoin(members, ",\n"), "  ") + "\n}";
+    }
+
     // Node-visible extra named properties, rendered after the element phase.
-    // The host metadata hook walks the Array's dedicated non-index String-key
-    // order, never dense elements or descriptor-backed indices, so this pass
-    // cannot undo the 100-index cap. It reads an unwrapped target, so no handler
-    // trap runs.
-    //
-    // Without --node there is no unwrapping seam: `v` may still be a Proxy, so
-    // both the enumeration and every per-key descriptor read are user code. A
-    // diagnostic print must not start throwing where it previously rendered, so
-    // the whole phase is guarded and degrades to no extra properties. Parts are
-    // accumulated locally and returned only on success, so a throw mid-way
-    // cannot leave the caller with a half-rendered tail.
+    // The host hook walks only the non-index String keys of an unwrapped
+    // target, so it cannot undo the 100-index cap and runs no handler trap.
+    // Without --node `v` may still be a Proxy, so the phase is guarded and
+    // degrades to no extra properties; parts are returned only on success.
     function arrayExtraMembers(v, truncated, depth) {
       if (hostArrayExtraKeys) {
         return namedMembers(v, hostArrayExtraKeys(v), depth);
@@ -680,16 +695,11 @@
       return parts;
     }
 
-    // Array length and elements are read from own descriptors on the unwrapped
-    // target. A missing descriptor is a hole, never an invitation to read
-    // through Array.prototype (which could invoke an inherited getter).
-    // Keep descriptor probes bounded even for enormous sparse arrays. The
-    // O(elements) own-index-key form needed for Node-exact sparse truncation is
-    // rejected on cost, not availability: Object.getOwnPropertyNames and
-    // Reflect.ownKeys both materialize every present index key before the shim
-    // can filter, which would undo this cap. Object.keys is reliable here, but
-    // has that same cost and omits non-enumerable array elements besides; use
-    // it only for Node-visible extra named properties, below the cap.
+    // Length and elements are read from own descriptors on the unwrapped
+    // target; a missing descriptor is a hole, never a read through
+    // Array.prototype. Probes stay bounded for huge sparse arrays: the
+    // own-index-key forms (getOwnPropertyNames, Reflect.ownKeys, Object.keys)
+    // materialize every index key, so only extra named properties use them.
     function renderArray(v, depth) {
       var length = ownDataValue(v, "length");
       if (typeof length !== "number" || length < 0) return "[]";

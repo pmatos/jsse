@@ -13,7 +13,7 @@ impl Interpreter {
         this_value: &JsValue,
         args: &[JsValue],
     ) -> Completion {
-        let callee_id = if site_id != CallSiteId::UNASSIGNED && self.with_scope_depth == 0 {
+        let callee_id = if !site_id.is_unassigned() && self.with_scope_depth == 0 {
             callee.as_object_id()
         } else {
             None
@@ -101,7 +101,7 @@ mod tests {
     use super::*;
     use crate::ast::BodyIcInfo;
 
-    const SITE: CallSiteId = CallSiteId(0);
+    const SITE: CallSiteId = CallSiteId(0, 0);
 
     fn with_site(test: impl FnOnce(&mut Interpreter)) {
         let body = Body {
