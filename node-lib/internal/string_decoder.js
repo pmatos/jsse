@@ -30,7 +30,7 @@ function makeString(bytes, start, end, encoding) {
 }
 
 function copyInto(state, at, bytes, start, end) {
-  for (let i = start; i < end; i++) state[at + i - start] = bytes[i];
+  if (end > start) state.set(bytes.subarray(start, end), at);
 }
 
 function decode(state, buf) {

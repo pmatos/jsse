@@ -31,6 +31,9 @@
 const {
   ObjectDefineProperties,
   ObjectDefineProperty,
+  ReflectApply,
+  StringFromCharCode,
+  Uint16Array,
   Uint8Array,
 } = primordials;
 
@@ -119,9 +122,13 @@ function transcodeError(code, errno) {
 
 function decodeFrom(source, encoding) {
   if (encoding === 'ascii') {
-    let text = '';
+    const codes = new Uint16Array(source.length);
     for (let i = 0; i < source.length; i++) {
-      text += source[i] > 0x7f ? '\ufffd' : String.fromCharCode(source[i]);
+      codes[i] = source[i] > 0x7f ? 0xfffd : source[i];
+    }
+    let text = '';
+    for (let i = 0; i < codes.length; i += 8192) {
+      text += ReflectApply(StringFromCharCode, null, codes.subarray(i, i + 8192));
     }
     return text;
   }
@@ -148,12 +155,16 @@ function encodeTo(text, encoding) {
     return Buffer.from(text, encoding);
   }
   const limit = encoding === 'ascii' ? 0x7f : 0xff;
-  const out = [];
-  for (const ch of text) {
-    const code = ch.codePointAt(0);
-    out.push(code <= limit ? code : 0x3f);
+  const out = new Uint8Array(text.length);
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.codePointAt(i);
+    if (code > 0xffff) i++;
+    // ICU drops U+FFF8 on this path.
+    if (code === 0xfff8) continue;
+    out[n++] = code <= limit ? code : 0x3f;
   }
-  return Buffer.from(out);
+  return Buffer.from(out.buffer, 0, n);
 }
 
 // Node routes some pairs around ICU, and those paths fail on malformed input
@@ -184,7 +195,9 @@ function transcode(source, fromEncoding, toEncoding) {
       throw transcodeError('U_INVALID_CHAR_FOUND', 10);
     }
     if (toEncoding === 'utf16le') {
-      text = text.toWellFormed() + (source.length % 2 === 1 ? '\ufffd' : '');
+      const last = text.charCodeAt(text.length - 1);
+      const tail = source.length % 2 === 1 && !(last >= 0xd800 && last <= 0xdbff);
+      text = text.toWellFormed() + (tail ? '\ufffd' : '');
     }
   }
   return encodeTo(text, toEncoding);

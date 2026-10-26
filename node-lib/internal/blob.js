@@ -15,6 +15,7 @@ const {
   ObjectAssign,
   PromiseReject,
   PromiseResolve,
+  ReflectApply,
   StringPrototypeReplace,
   StringPrototypeToLowerCase,
   SymbolIterator,
@@ -48,13 +49,13 @@ function bytesOf(source) {
 }
 
 function toSequence(sources) {
-  if (Object(sources) !== sources ||
-      typeof sources[SymbolIterator] !== 'function') {
+  const method = Object(sources) === sources ? sources[SymbolIterator] : undefined;
+  if (typeof method !== 'function') {
     const err = new TypeError('Value cannot be converted to sequence.');
     err.code = 'ERR_INVALID_ARG_TYPE';
     throw err;
   }
-  return sources;
+  return { [SymbolIterator]() { return ReflectApply(method, sources, []); } };
 }
 
 function validateDictionary(value, name) {
@@ -84,7 +85,7 @@ class Blob {
   #type;
 
   constructor(sources = [], options = kEmptyObject) {
-    toSequence(sources);
+    const sequence = toSequence(sources);
     validateDictionary(options, 'options');
     let endings = options?.endings;
     endings = endings === undefined ? 'transparent' : `${endings}`;
@@ -93,13 +94,13 @@ class Blob {
     }
     const type = options?.type;
     this.#type = type === undefined ? '' : normalizeType(type);
-    this.#bytes = Blob.#collect(sources, endings);
+    this.#bytes = Blob.#collect(sequence, endings);
   }
 
-  static #collect(sources, endings) {
+  static #collect(sequence, endings) {
     const parts = [];
     let total = 0;
-    for (const source of toSequence(sources)) {
+    for (const source of sequence) {
       let bytes;
       if (Blob.#is(source)) {
         bytes = source.#bytes;
@@ -211,12 +212,12 @@ class File extends Blob {
   }
 
   get name() {
-    if (!(#name in this)) throw new ERR_INVALID_THIS('File');
+    if (Object(this) !== this || !(#name in this)) throw new ERR_INVALID_THIS('File');
     return this.#name;
   }
 
   get lastModified() {
-    if (!(#name in this)) throw new ERR_INVALID_THIS('File');
+    if (Object(this) !== this || !(#name in this)) throw new ERR_INVALID_THIS('File');
     return this.#lastModified;
   }
 

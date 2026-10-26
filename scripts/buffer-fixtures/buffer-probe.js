@@ -70,6 +70,9 @@ const bytesets = {
   loneHigh: [0x3d, 0xd8, 0x61, 0x00],
   loneLow: [0x4d, 0xdc, 0x61, 0x00],
   odd16: [0x61, 0x00, 0x62],
+  oddHigh: [0x3d, 0xd8, 0x62],
+  fff8: [0xf8, 0xff, 0x61, 0x00],
+  fff8utf8: Array.from(Buffer.from('a\uFFF8\uFFF9b')),
   one: [0x41],
 };
 const names = ['utf8', 'utf-8', 'ucs2', 'ucs-2', 'utf16le', 'UTF-16LE', 'latin1', 'binary', 'ascii',
@@ -170,6 +173,12 @@ attempt('File name coercion', () => [new File([], undefined).name, new File([], 
 attempt('File symbol name', () => new File([], Symbol()));
 attempt('File inspect', () => require('util').inspect(new File(['ab'], 'f.txt', { type: 'a/b', lastModified: 5 })));
 attempt('File bad this', () => Object.getOwnPropertyDescriptor(File.prototype, 'name').get.call(new Blob()));
+attempt('File primitive this', () => Object.getOwnPropertyDescriptor(File.prototype, 'lastModified').get.call(undefined));
+attempt('Blob iterator reads', () => {
+  let reads = 0;
+  const p = new Proxy(['a'], { get(t, k, r) { if (k === Symbol.iterator) reads++; return Reflect.get(t, k, r); } });
+  return [new Blob(p).size, reads];
+});
 attempt('Blob from Blob/File', () => new Blob([new Blob(['ab']), new File(['cd'], 'f')]).size);
 attempt('resolveObjectURL', () => [buffer.resolveObjectURL('blob:nodedata:nope'), buffer.resolveObjectURL('x'),
                                    buffer.resolveObjectURL('http://a/'), buffer.resolveObjectURL.length]);
