@@ -1,0 +1,10 @@
+bench_fib {'jsse': (2.0046, ''), 'boa': (1.2021, '')} load1max=1.53
+bench_closures {'jsse': (2.072, ''), 'boa': (2.0784, '')} load1max=3.01
+bench_opmix {'jsse': (53.5953, ''), 'boa': (12.6917, '')} load1max=3.01
+bench_string {'jsse': (0.171, ''), 'boa': (0.4835, '')} load1max=2.47
+bench_array {'jsse': (0.2897, ''), 'boa': (0.2985, '')} load1max=2.47
+bench_object {'jsse': (0.4515, ''), 'boa': (0.5473, '')} load1max=2.43
+bench_loop {'jsse': (1.243, ''), 'boa': (1.8577, '')} load1max=2.39
+bench_json {'jsse': (0.1241, ''), 'boa': (0.3055, '')} load1max=2.31
+bench_regex {'jsse': (0.0807, ''), 'boa': (0.1614, '')} load1max=2.31
+startup_empty {'jsse': (0.0176, ''), 'boa': (0.031, '')} load1max=2.21
