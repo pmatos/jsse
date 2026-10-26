@@ -9,7 +9,6 @@ const {
   ArrayPrototypeIncludes,
   ArrayPrototypePush,
   RegExpPrototypeExec,
-  StringPrototypeCharCodeAt,
   StringPrototypeIndexOf,
   StringPrototypeSlice,
   StringPrototypeSplit,
@@ -23,7 +22,7 @@ const kKeywords = [
   'void', 'delete',
 ];
 const kValueEnders = ['name', 'num', 'string', ')', ']', '}', 'this', 'super',
-                      'null', 'true', 'false', 'template'];
+                      'null', 'true', 'false', '`'];
 const kPunctuators = [
   '>>>=', '...', '===', '!==', '**=', '<<=', '>>=', '>>>', '&&=', '||=', '??=',
   '=>', '==', '!=', '<=', '>=', '&&', '||', '??', '?.', '++', '--', '+=', '-=',
@@ -145,7 +144,7 @@ function tokenize(code) {
         }
       }
       if (c === '{') ArrayPrototypePush(braces, '{');
-      else if (c === '}') braces.length--;
+      else if (c === '}' && braces.length > 0) braces.length--;
     }
     ArrayPrototypePush(tokens, { start, label });
   }
@@ -174,7 +173,9 @@ function readSourceLine(file, lineNumber) {
 function getErrorSourcePositions(error) {
   const stack = error.stack;
   if (typeof stack !== 'string') return {};
-  const match = RegExpPrototypeExec(/^ {4}at (?:.*? \()?(.+?):(\d+):(\d+)\)?$/m, stack);
+  const frame = RegExpPrototypeExec(/^ {4}at .*$/m, stack);
+  if (frame === null) return {};
+  const match = RegExpPrototypeExec(/^ {4}at (?:.*? \()?(.+?):(\d+):(\d+)\)?$/, frame[0]);
   if (match === null) return {};
   let file = match[1];
   if (StringPrototypeSlice(file, 0, 7) === 'file://') file = decodeURIComponent(StringPrototypeSlice(file, 7));

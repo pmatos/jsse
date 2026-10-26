@@ -4,19 +4,37 @@
 //! the digest of the differential corpus that `scripts/run-node-assert-oracle.sh`
 //! diffs against Node.
 
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/assert-fixtures")
 }
 
 fn run(args: &[&str], envs: &[(&str, &str)]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_jsse"))
+    let child = Command::new(env!("CARGO_BIN_EXE_jsse"))
         .args(args)
         .envs(envs.iter().copied())
-        .output()
-        .expect("run jsse")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run jsse");
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(300)) {
+        Ok(out) => out.expect("wait for jsse"),
+        Err(_) => {
+            let _ = Command::new("kill").arg(pid.to_string()).status();
+            panic!("jsse {args:?} timed out after 300s");
+        }
+    }
 }
 
 fn stdout(out: &Output) -> String {
@@ -56,18 +74,30 @@ fn field(prefix: char, name: &str, index: usize) -> Vec<String> {
 
 fn source(name: &str) -> String {
     let whole = fixtures().join(format!("{name}.js"));
-    if whole.exists() {
-        return std::fs::read_to_string(whole).unwrap();
-    }
     let mut text = String::new();
-    for part in 1.. {
-        let path = fixtures().join(format!("{name}.js.part{part}"));
-        if !path.exists() {
-            break;
+    if whole.exists() {
+        text = std::fs::read_to_string(whole).unwrap();
+    } else {
+        for part in 1.. {
+            let path = fixtures().join(format!("{name}.js.part{part}"));
+            if !path.exists() {
+                break;
+            }
+            text += &std::fs::read_to_string(path).unwrap();
         }
-        text += &std::fs::read_to_string(path).unwrap();
     }
     assert!(!text.is_empty(), "no fixture named {name}");
+    let want = manifest()
+        .lines()
+        .find_map(|l| l.strip_prefix(name)?.strip_prefix(' '))
+        .unwrap_or_else(|| panic!("{name} is not in the manifest"))
+        .trim()
+        .to_string();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(text.as_bytes())),
+        want,
+        "{name}: vendored text does not match its sha256"
+    );
     text
 }
 

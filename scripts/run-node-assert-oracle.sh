@@ -8,7 +8,7 @@
 #    test/parallel/test-assert*.js, verbatim) is wrapped by harness.js and must
 #    print "assert-fixture: ok" and exit 0 on jsse (`--node`, via
 #    require("assert")) and on Node. On jsse only, "@test|name|reason" lines skip
-#    single node:test cases and "~test|sed-expression|reason" lines patch the
+#    single node:test cases and "~test|s#from#to# (literal)|reason" lines patch the
 #    wrapped test text (engine gaps, each tied to a reason); lines starting with
 #    "!" document tests that are not vendored.
 # 2. scripts/assert-fixtures/corpus-{a,b,run}.js (the AssertionError message, operator,
@@ -41,9 +41,12 @@ done
 
 NODE_BIN="$(command -v node || true)"
 if [ -z "$NODE_BIN" ] && { [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; }; then
+    if [ "$NODE_ONLY" -eq 1 ]; then
+        echo "node not found; --node needs it" >&2
+        exit 2
+    fi
     echo "WARNING: node not found; running jsse only" >&2
     CROSS_CHECK=0
-    NODE_ONLY=0
 fi
 if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
     echo "Building jsse (release)..."
@@ -58,7 +61,7 @@ while read -r name sum; do
     if [ -f "$DIR/$name.js" ]; then
         cp "$DIR/$name.js" "$WORK/$name.src"
     else
-        cat "$DIR/$name.js".part* > "$WORK/$name.src"
+        cat $(ls "$DIR/$name".js.part* | sort -V) > "$WORK/$name.src"
     fi
     if [ "$(sha256sum "$WORK/$name.src" | cut -d' ' -f1)" != "$sum" ]; then
         echo "FAIL $name: vendored text does not match sha256 $sum"
@@ -73,7 +76,15 @@ while read -r name sum; do
     } > "$WORK/$name.js"
     cp "$WORK/$name.js" "$WORK/$name.jsse.js"
     while IFS='|' read -r _ expr _; do
-        sed -i -e "$expr" "$WORK/$name.jsse.js"
+        python3 -I - "$expr" "$WORK/$name.jsse.js" <<'PY'
+import sys
+expr, path = sys.argv[1:]
+frm, to = expr[2:-1].split("#", 1)
+text = open(path, encoding="utf-8").read()
+if frm not in text:
+    sys.exit("patch does not apply: " + frm)
+open(path, "w", encoding="utf-8").write(text.replace(frm, to))
+PY
     done < <(grep "^~$name|" "$DIR/manifest.txt" || true)
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
