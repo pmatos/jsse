@@ -34,6 +34,7 @@ mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
+mod node_host_util;
 mod node_prelude;
 mod number;
 mod object;

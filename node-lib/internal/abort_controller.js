@@ -37,6 +37,7 @@ const { inspect } = require('internal/util/inspect');
 const {
   codes: {
     ERR_ILLEGAL_CONSTRUCTOR,
+    ERR_INVALID_ARG_TYPE,
     ERR_INVALID_THIS,
   },
 } = require('internal/errors');
@@ -477,8 +478,21 @@ ObjectDefineProperty(AbortController.prototype, SymbolToStringTag, {
   value: 'AbortController',
 });
 
+function transferableAbortController() {
+  return new AbortController();
+}
+
+function transferableAbortSignal(signal) {
+  if (!(signal instanceof AbortSignal)) {
+    throw new ERR_INVALID_ARG_TYPE('signal', 'AbortSignal', signal);
+  }
+  return signal;
+}
+
 module.exports = {
   AbortController,
   AbortSignal,
   aborted,
+  transferableAbortController,
+  transferableAbortSignal,
 };
