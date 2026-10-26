@@ -17,21 +17,60 @@ use super::super::*;
 use super::typedarray::create_uint8array_from_bytes;
 use std::io::Write;
 
+/// The launch arguments `process.argv`/`argv0`/`execPath` are built from.
+pub(crate) struct NodeHostArgv {
+    pub(crate) argv0: String,
+    pub(crate) exec_path: String,
+    pub(crate) script: Option<std::path::PathBuf>,
+    pub(crate) args: Vec<String>,
+}
+
+/// Mutable state behind the `__host_*` floor, held on the `Interpreter`.
+#[derive(Default)]
+pub(crate) struct NodeHostState {
+    /// Monotonic clock anchor for `__host_hrtime`, set when the floor is enabled.
+    pub(crate) clock_start: Option<std::time::Instant>,
+    pub(crate) argv: Option<NodeHostArgv>,
+    /// `process.exitCode` sink (`__host_set_exit_code`), read by the CLI when
+    /// the run ends without an explicit `__host_exit`.
+    pub(crate) exit_code: Option<i32>,
+}
+
 impl Interpreter {
+    pub fn set_node_host_argv(
+        &mut self,
+        argv0: String,
+        exec_path: String,
+        script: Option<std::path::PathBuf>,
+        args: Vec<String>,
+    ) {
+        self.node_host.argv = Some(NodeHostArgv {
+            argv0,
+            exec_path,
+            script,
+            args,
+        });
+    }
+
+    /// Exit status requested through `process.exitCode`, if any.
+    pub fn node_host_exit_code(&self) -> Option<i32> {
+        self.node_host.exit_code
+    }
+
     /// Turn on the Node host floor and install the `__host_*` primitives.
     ///
     /// Must run after `setup_globals` (so the global object exists) and before
     /// the Node prelude/main are executed. Never called under test262.
     pub(crate) fn enable_node_host(&mut self) {
         self.node_host_enabled = true;
-        self.host_clock_start = Some(std::time::Instant::now());
+        self.node_host.clock_start = Some(std::time::Instant::now());
         self.setup_node_host();
     }
 
     /// Install a `__host_*` primitive as a non-enumerable, writable,
     /// configurable property on the realm's global object. This makes it
     /// reachable both as a bare identifier and as `globalThis.__host_*`.
-    fn install_host_global(&mut self, name: &str, val: JsValue) {
+    pub(super) fn install_host_global(&mut self, name: &str, val: JsValue) {
         let Some(gid) = self.realm().global_object else {
             return;
         };
@@ -120,7 +159,8 @@ impl Interpreter {
             0,
             |interp, _this, _args| {
                 let ns = interp
-                    .host_clock_start
+                    .node_host
+                    .clock_start
                     .map(|start| start.elapsed().as_nanos())
                     .unwrap_or(0);
                 Completion::Normal(JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(ns))))
@@ -208,6 +248,8 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_array_extra_keys", array_extra_keys_fn);
+
+        self.setup_node_host_process();
     }
 }
 

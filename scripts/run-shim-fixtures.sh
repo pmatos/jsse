@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$SCRIPT_DIR/shim-fixtures"
 JSSE="$PROJECT_DIR/target/release/jsse"
-SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
+SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
 STRING_DECODER="$SCRIPT_DIR/node-string-decoder-module.js"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

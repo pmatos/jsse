@@ -1,6 +1,7 @@
 use crate::{interpreter, parser};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use std::ffi::OsString;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,6 +44,93 @@ struct Cli {
     /// loop back-edges, microtask jobs, timer callbacks); exits with status 124.
     #[arg(long = "step-budget", value_name = "N")]
     step_budget: Option<u64>,
+
+    /// Everything after the script path (or after `-e CODE`), verbatim. Filled
+    /// by `split_script_args`, never by clap.
+    #[arg(skip)]
+    script_args: Vec<OsString>,
+}
+
+/// Split `argv` into the part clap parses and the script's own arguments.
+///
+/// Matches `node`: the first non-option token is the script and everything
+/// after it is passed through untouched (including `--` and flags like
+/// `--version`). A `--` before the script ends option parsing and is consumed.
+/// With `-e CODE` there is no script, so the first leftover token and
+/// everything after it are script arguments.
+fn split_script_args(argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) {
+    let cmd = Cli::command();
+    let find = |short: Option<char>, long: Option<&str>| {
+        cmd.get_arguments().find(|a| {
+            (short.is_some() && a.get_short() == short) || (long.is_some() && a.get_long() == long)
+        })
+    };
+    let takes_value = |short: Option<char>, long: Option<&str>| {
+        find(short, long).is_some_and(|a| a.get_action().takes_values())
+    };
+    let is_eval = |short: Option<char>, long: Option<&str>| {
+        find(short, long).is_some_and(|a| a.get_id() == "eval")
+    };
+
+    let mut head = Vec::new();
+    let mut has_eval = false;
+    let mut i = 0;
+    let mut only_positionals = false;
+    while i < argv.len() {
+        let tok = argv[i].clone();
+        let text = tok.to_string_lossy().into_owned();
+        if i == 0 {
+            head.push(tok);
+            i += 1;
+            continue;
+        }
+        if !only_positionals && text == "--" {
+            only_positionals = true;
+            head.push(tok);
+            i += 1;
+            continue;
+        }
+        let is_option = !only_positionals && text.starts_with('-') && text != "-";
+        if !is_option {
+            if has_eval {
+                return (head, argv[i..].to_vec());
+            }
+            head.push(tok);
+            return (head, argv[i + 1..].to_vec());
+        }
+        head.push(tok);
+        i += 1;
+        if let Some(long) = text.strip_prefix("--") {
+            if let Some((name, _)) = long.split_once('=') {
+                has_eval |= is_eval(None, Some(name));
+            } else {
+                has_eval |= is_eval(None, Some(long));
+                if takes_value(None, Some(long)) && i < argv.len() {
+                    head.push(argv[i].clone());
+                    i += 1;
+                }
+            }
+        } else {
+            let chars: Vec<char> = text.chars().skip(1).collect();
+            for (n, c) in chars.iter().enumerate() {
+                has_eval |= is_eval(Some(*c), None);
+                if takes_value(Some(*c), None) {
+                    if n + 1 == chars.len() && i < argv.len() {
+                        head.push(argv[i].clone());
+                        i += 1;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    (head, Vec::new())
+}
+
+/// What `process.argv` is built from under `--node`.
+struct NodeLaunch {
+    script: Option<PathBuf>,
+    args: Vec<String>,
 }
 
 enum EngineError {
@@ -119,7 +207,11 @@ fn exit_code_from_result(
         return ExitCode::from((code as u32 & 0xff) as u8);
     }
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => interp
+            .node_host_exit_code()
+            .map_or(ExitCode::SUCCESS, |code| {
+                ExitCode::from((code as u32 & 0xff) as u8)
+            }),
         Err(EngineError::Parse(msg)) => {
             eprintln!("SyntaxError: {msg}");
             ExitCode::from(2)
@@ -140,15 +232,21 @@ fn exit_code_from_result(
 fn new_interp(
     can_block: bool,
     bytecode: bool,
-    node: bool,
+    node: Option<&NodeLaunch>,
     step_budget: Option<u64>,
 ) -> interpreter::Interpreter {
     let mut interp = interpreter::Interpreter::new();
     interp.can_block = can_block;
     interp.bytecode_enabled = bytecode;
     interp.set_step_budget(step_budget);
-    if node {
+    if let Some(launch) = node {
         interp.enable_node_host();
+        let argv0 = std::env::args_os()
+            .next()
+            .map_or_else(|| "jsse".to_string(), |a| a.to_string_lossy().into_owned());
+        let exec_path = std::env::current_exe()
+            .map_or_else(|_| argv0.clone(), |p| p.to_string_lossy().into_owned());
+        interp.set_node_host_argv(argv0, exec_path, launch.script.clone(), launch.args.clone());
     }
     interp
 }
@@ -159,7 +257,7 @@ fn execute_code(
     path: Option<&Path>,
     can_block: bool,
     bytecode: bool,
-    node: bool,
+    node: Option<&NodeLaunch>,
     step_budget: Option<u64>,
 ) -> ExitCode {
     let mut interp = new_interp(can_block, bytecode, node, step_budget);
@@ -184,7 +282,7 @@ fn run_file(
     force_module: bool,
     can_block: bool,
     bytecode: bool,
-    node: bool,
+    node: Option<&NodeLaunch>,
     step_budget: Option<u64>,
 ) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
@@ -255,7 +353,18 @@ fn run_repl(interp: &mut interpreter::Interpreter) -> ExitCode {
 }
 
 pub(crate) fn run_main() -> ExitCode {
-    let cli = Cli::parse();
+    let (head, script_args) = split_script_args(std::env::args_os().collect());
+    let mut cli = Cli::parse_from(head);
+    cli.script_args = script_args;
+    let launch = cli.node.then(|| NodeLaunch {
+        script: cli.file.clone(),
+        args: cli
+            .script_args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
+    });
+    let node = launch.as_ref();
 
     // If no preludes, use simpler path
     if cli.prelude.is_empty() {
@@ -266,7 +375,7 @@ pub(crate) fn run_main() -> ExitCode {
                 None,
                 cli.can_block,
                 !cli.no_bytecode,
-                cli.node,
+                node,
                 cli.step_budget,
             );
         }
@@ -277,12 +386,12 @@ pub(crate) fn run_main() -> ExitCode {
                 cli.module,
                 cli.can_block,
                 !cli.no_bytecode,
-                cli.node,
+                node,
                 cli.step_budget,
             );
         }
 
-        let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node, cli.step_budget);
+        let mut interp = new_interp(cli.can_block, !cli.no_bytecode, node, cli.step_budget);
         let code = run_repl(&mut interp);
         #[cfg(feature = "perf-counters")]
         report_perf_counters(&interp);
@@ -290,7 +399,7 @@ pub(crate) fn run_main() -> ExitCode {
     }
 
     // With preludes, we need to use a single interpreter instance
-    let mut interp = new_interp(cli.can_block, !cli.no_bytecode, cli.node, cli.step_budget);
+    let mut interp = new_interp(cli.can_block, !cli.no_bytecode, node, cli.step_budget);
     let code = run_with_preludes(&mut interp, &cli);
     retire_interpreter(interp);
     code
