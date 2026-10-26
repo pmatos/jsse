@@ -3,6 +3,7 @@
 //! `fs` module only has to let them through.
 
 use super::super::*;
+use super::node_host_fs_args::js_str;
 
 /// `(code, libuv description)` for an errno; anything unlisted is `UNKNOWN`.
 fn describe(errno: i32) -> (&'static str, &'static str) {
@@ -44,10 +45,6 @@ fn describe(errno: i32) -> (&'static str, &'static str) {
 
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
-}
-
-fn js_str(s: &str) -> JsValue {
-    JsValue::string(JsString::from_str(s))
 }
 
 /// An `Error` carrying Node's uvException shape for `errno` (positive, as the
