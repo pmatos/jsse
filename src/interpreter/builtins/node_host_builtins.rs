@@ -19,6 +19,10 @@ macro_rules! builtin {
 
 const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("os"),
+    builtin!("crypto"),
+    builtin!("internal/crypto/hash"),
+    builtin!("internal/crypto/random"),
+    builtin!("internal/crypto/webcrypto"),
     builtin!("path"),
     builtin!("path/posix"),
     builtin!("path/win32"),
