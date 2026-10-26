@@ -23,6 +23,9 @@ class FixedQueue {
     if (this.head === this.items.length) {
       this.items = [];
       this.head = 0;
+    } else if (this.head >= 1024 && this.head * 2 >= this.items.length) {
+      this.items = this.items.slice(this.head);
+      this.head = 0;
     }
     return item;
   }

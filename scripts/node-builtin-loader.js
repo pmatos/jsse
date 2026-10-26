@@ -154,7 +154,11 @@
     }
     Object.defineProperty(globalThis, name, {
       get: function () {
-        return settle(requireBuiltin(id)[name]);
+        var value = requireBuiltin(id)[name];
+        if (value === undefined) {
+          throw new Error("builtin " + id + " does not export " + name);
+        }
+        return settle(value);
       },
       set: settle,
       enumerable: false,

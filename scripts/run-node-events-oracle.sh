@@ -73,7 +73,7 @@ while read -r name flags; do
             status="skip"
         else
             rc=0
-            "$JSSE" --node "$WORK/$name.js" > "$WORK/jsse.out" 2> "$WORK/jsse.err" || rc=$?
+            "$JSSE" --node "$WORK/$name.js" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
             if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/jsse.out"; then
                 echo "FAIL $name: jsse --node exit $rc"
                 head -5 "$WORK/jsse.err" | sed 's/^/  stderr: /'
@@ -83,7 +83,7 @@ while read -r name flags; do
     fi
     if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
         rc=0
-        "$NODE_BIN" --expose-gc --no-warnings "$WORK/$name.js" > "$WORK/node.out" 2> "$WORK/node.err" || rc=$?
+        "$NODE_BIN" --expose-gc --no-warnings "$WORK/$name.js" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/node.out"; then
             echo "FAIL $name: node exit $rc"
             head -5 "$WORK/node.err" | sed 's/^/  stderr: /'
