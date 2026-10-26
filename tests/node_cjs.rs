@@ -294,3 +294,69 @@ fn the_loader_survives_intrinsic_tampering_in_user_code() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "dep a/b true");
 }
+
+#[test]
+fn a_main_script_in_a_type_module_package_runs_as_an_es_module() {
+    let dir = scratch("typemodule");
+    std::fs::write(dir.0.join("package.json"), "{\n  \"type\": \"module\"\n}").unwrap();
+    std::fs::write(
+        dir.0.join("main.js"),
+        "print(typeof require, typeof module, import.meta.url.startsWith('file:'));",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.0.join("legacy.cjs"),
+        "print(typeof require, this === module.exports);",
+    )
+    .unwrap();
+    let out = jsse(
+        &["--node", dir.0.join("main.js").to_str().unwrap()],
+        &dir.0,
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "undefined undefined true");
+    let out = jsse(
+        &["--node", dir.0.join("legacy.cjs").to_str().unwrap()],
+        &dir.0,
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "function true");
+}
+
+#[test]
+fn the_module_sync_condition_is_skipped_until_require_of_esm_exists() {
+    let dir = scratch("modulesync");
+    let pkg = dir.0.join("node_modules/ms");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        pkg.join("package.json"),
+        r#"{"name":"ms","exports":{"module-sync":"./a.mjs","default":"./b.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(pkg.join("a.mjs"), "export default 'esm';").unwrap();
+    std::fs::write(pkg.join("b.js"), "module.exports = 'cjs';").unwrap();
+    let out = jsse(&["--node", "-e", "print(require('ms'))"], &dir.0, None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "cjs");
+}
+
+#[test]
+fn create_require_accepts_paths_and_file_urls() {
+    let dir = scratch("createrequire");
+    std::fs::write(dir.0.join("dep.js"), "module.exports = 'dep';").unwrap();
+    let d = dir.0.to_str().unwrap();
+    let probe = format!(
+        r#"
+        const create = module.constructor.createRequire;
+        const viaPath = create({d:?} + "/x.js"), viaUrl = create("file://" + {d:?} + "/x.js");
+        const viaObject = create({{ href: "file://" + {d:?} + "/dir/" }});
+        print(viaPath("./dep"), viaUrl("./dep"), viaObject("../dep"), viaPath.resolve("./dep") === {d:?} + "/dep.js");
+        try {{ create("relative.js"); }} catch (e) {{ print(e.code); }}
+        "#
+    );
+    let out = jsse(&["--node", "-e", &probe], &dir.0, None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "dep dep dep true\nERR_INVALID_ARG_VALUE");
+}

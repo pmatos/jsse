@@ -51,7 +51,9 @@ const {
 } = require('internal/errors');
 const { validateString } = require('internal/validators');
 
-const cjsConditions = ['require', 'node', 'module-sync'];
+// Node 26 also matches `module-sync`; it is left out while require() of an
+// ES module is unsupported, so such packages fall back to their CJS entry.
+const cjsConditions = ['require', 'node'];
 const EXPORTS_PATTERN = /^((?:@[^/\\%]+\/)?[^./\\%][^/\\%]*)(\/.*)?$/;
 const kNodeModules = 'node_modules';
 
@@ -82,13 +84,6 @@ Module._pathCache = ObjectCreate(null);
 Module._extensions = ObjectCreate(null);
 Module.globalPaths = [];
 Module.Module = Module;
-Module.wrapper = [
-  '(function (exports, require, module, __filename, __dirname) { ',
-  '\n});',
-];
-Module.wrap = function(script) {
-  return Module.wrapper[0] + script + Module.wrapper[1];
-};
 
 function updateChildren(parent, child, scan) {
   const children = parent && parent.children;
@@ -583,7 +578,19 @@ Module._extensions['.node'] = function(module, filename) {
   throw err;
 };
 
+function fileUrlToPath(url) {
+  const match = RegExpPrototypeExec(/^file:\/\/(?:localhost)?(\/.*)$/, url);
+  return match === null ? url : decodeURIComponent(match[1]);
+}
+
 Module.createRequire = function(filename) {
+  if (typeof filename === 'object' && filename !== null &&
+      typeof filename.href === 'string') {
+    filename = filename.href;
+  }
+  if (typeof filename === 'string' && StringPrototypeStartsWith(filename, 'file:')) {
+    filename = fileUrlToPath(filename);
+  }
   if (typeof filename !== 'string' || !path.isAbsolute(filename)) {
     throw new ERR_INVALID_ARG_VALUE('filename', filename,
                                     'must be a file URL object, file URL string, or absolute path string');

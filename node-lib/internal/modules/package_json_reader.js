@@ -29,10 +29,7 @@ function readPackage(dir) {
   let source;
   try {
     source = fs.readFileSync(pjsonPath, 'utf8');
-  } catch (e) {
-    if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR' && e.code !== 'EISDIR') {
-      throw e;
-    }
+  } catch {
     return (cache[dir] = { exists: false, pjsonPath, dir });
   }
   if (StringPrototypeCharCodeAt(source, 0) === 0xFEFF) {

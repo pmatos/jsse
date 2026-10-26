@@ -1,3 +1,4 @@
+use crate::cli_node::NodeMainKind;
 use crate::{interpreter, parser};
 
 use clap::{CommandFactory, Parser};
@@ -132,15 +133,18 @@ fn split_script_args(argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) {
 struct NodeLaunch {
     script: Option<PathBuf>,
     args: Vec<String>,
-    main_kind: &'static str,
+    main_kind: NodeMainKind,
 }
 
-impl NodeLaunch {
-    /// Under `--node` a script file is the CommonJS main module: it is loaded
-    /// by the prelude, so the launcher runs a stub instead of the file.
-    fn main_source(node: Option<&NodeLaunch>) -> Option<&'static str> {
-        node.filter(|n| n.main_kind == "cjs")
-            .map(|_| interpreter::Interpreter::node_main_bootstrap())
+/// The program to run for the script `path`. Under `--node` a script file is
+/// the CommonJS main module: the prelude's loader reads it, so the launcher
+/// runs a stub instead.
+fn read_main_source(path: &Path, node: Option<&NodeLaunch>) -> std::io::Result<String> {
+    match node {
+        Some(n) if n.main_kind == NodeMainKind::Cjs => {
+            Ok(interpreter::Interpreter::node_main_bootstrap().to_string())
+        }
+        _ => std::fs::read_to_string(path),
     }
 }
 
@@ -303,17 +307,16 @@ fn run_file(
     node: Option<&NodeLaunch>,
     step_budget: Option<u64>,
 ) -> ExitCode {
-    let source = match NodeLaunch::main_source(node) {
-        Some(bootstrap) => bootstrap.to_string(),
-        None => match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error reading {}: {e}", path.display());
-                return ExitCode::from(1);
-            }
-        },
+    let source = match read_main_source(path, node) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading {}: {e}", path.display());
+            return ExitCode::from(1);
+        }
     };
-    let is_module = force_module || path.extension().is_some_and(|ext| ext == "mjs");
+    let is_module = force_module
+        || path.extension().is_some_and(|ext| ext == "mjs")
+        || node.is_some_and(|n| n.main_kind == NodeMainKind::Esm);
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     execute_code(
         &source,
@@ -378,16 +381,7 @@ pub(crate) fn run_main() -> ExitCode {
     let mut cli = Cli::parse_from(head);
     cli.script_args = script_args;
     let launch = cli.node.then(|| NodeLaunch {
-        main_kind: match &cli.file {
-            Some(p) if cli.eval.is_none() => {
-                if cli.module || p.extension().is_some_and(|ext| ext == "mjs") {
-                    "esm"
-                } else {
-                    "cjs"
-                }
-            }
-            _ => "eval",
-        },
+        main_kind: NodeMainKind::for_launch(cli.file.as_deref(), cli.eval.is_some(), cli.module),
         script: cli.file.clone(),
         args: cli
             .script_args
@@ -475,17 +469,16 @@ fn run_with_preludes(
         interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else if let Some(path) = &cli.file {
-        let source = match NodeLaunch::main_source(node) {
-            Some(bootstrap) => bootstrap.to_string(),
-            None => match std::fs::read_to_string(path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error reading {}: {e}", path.display());
-                    return exit_after_execution(interp, 1);
-                }
-            },
+        let source = match read_main_source(path, node) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading {}: {e}", path.display());
+                return exit_after_execution(interp, 1);
+            }
         };
-        let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");
+        let is_module = cli.module
+            || path.extension().is_some_and(|ext| ext == "mjs")
+            || node.is_some_and(|n| n.main_kind == NodeMainKind::Esm);
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
         interp.node_host_finish();

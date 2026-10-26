@@ -79,7 +79,8 @@ function resolvePackageTargetString(target, subpath, match, pkg, base, pattern, 
   const resolved = `${pkg.dir}/${inner}`;
   if (subpath === '') return resolved;
 
-  if (RegExpPrototypeExec(invalidSegmentRegEx, subpath) !== null) {
+  if (RegExpPrototypeExec(invalidSegmentRegEx, subpath) !== null &&
+      RegExpPrototypeExec(deprecatedInvalidSegmentRegEx, subpath) !== null) {
     const request = pattern ?
       StringPrototypeReplace(match, '*', () => subpath) : match + subpath;
     throwInvalidSubpath(request, match, pkg, internal, base);

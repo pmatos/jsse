@@ -3,6 +3,7 @@
 
 pub mod ast;
 mod cli;
+mod cli_node;
 pub(crate) mod emoji_strings;
 mod fuzz_reentrancy;
 pub mod interpreter;

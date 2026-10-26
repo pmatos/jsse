@@ -136,7 +136,9 @@
 
   var requirable = Object.create(null);
   function canBeRequiredByUsers(id) {
-    if (typeof id !== "string") return false;
+    if (typeof id !== "string" || id.charAt(0) === "/" || id.charAt(0) === ".") {
+      return false;
+    }
     if (id in requirable) return requirable[id];
     return (requirable[id] =
       id in registered ||
