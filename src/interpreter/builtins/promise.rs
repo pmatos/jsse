@@ -965,7 +965,7 @@ impl Interpreter {
         } else {
             return;
         };
-        self.trigger_promise_reactions(reactions, reason);
+        self.on_reject(promise_id, reactions, reason);
     }
 
     /// The Promise Resolve Functions steps (ECMA-262 §27.2.1.3.2) for a promise

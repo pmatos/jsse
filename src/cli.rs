@@ -159,6 +159,7 @@ fn run_source_with_interp(
         interp.run(&program)
     };
     match result {
+        interpreter::Completion::Throw(_) if interp.node_main_throw_handled() => Ok(()),
         interpreter::Completion::Throw(val) => Err(EngineError::Runtime(interp.format_value(&val))),
         _ => Ok(()),
     }
@@ -267,6 +268,7 @@ fn execute_code(
 ) -> ExitCode {
     let mut interp = new_interp(can_block, bytecode, node, step_budget);
     let result = run_source_with_interp(&mut interp, code, is_module, path);
+    interp.node_host_finish();
     let exit = exit_code_from_result(&interp, result);
     retire_interpreter(interp);
     exit
@@ -442,6 +444,7 @@ fn run_with_preludes(interp: &mut interpreter::Interpreter, cli: &Cli) -> ExitCo
     // Now run the main input.
     if let Some(code) = &cli.eval {
         let result = run_source_with_interp(interp, code, cli.module, None);
+        interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else if let Some(path) = &cli.file {
         let source = match std::fs::read_to_string(path) {
@@ -454,6 +457,7 @@ fn run_with_preludes(interp: &mut interpreter::Interpreter, cli: &Cli) -> ExitCo
         let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
+        interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else {
         let code = run_repl(interp);
