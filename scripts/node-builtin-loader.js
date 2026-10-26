@@ -150,6 +150,10 @@
     },
     false,
   ];
+  table.AsyncIteratorPrototype = [
+    Object.getPrototypeOf(Object.getPrototypeOf(async function* () {}).prototype),
+    false,
+  ];
   if (table.ErrorCaptureStackTrace === undefined) {
     table.ErrorCaptureStackTrace = [function captureStackTrace() {}, false];
   }

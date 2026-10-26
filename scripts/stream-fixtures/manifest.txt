@@ -1,0 +1,264 @@
+# Node v26.8.2 test/parallel/test-stream*.js, test-readable-*.js, test-writable-*.js,
+# test-pipeline-*.js, test-finished-*.js and test-compose-*.js files in this directory,
+# verbatim. One name per line; further words mark what a test needs from --node
+# beyond the stream module, probed by scripts/run-node-stream-oracle.sh and tests/node_stream.rs:
+#   needs-string-decoder  require("string_decoder") works (#1231)
+#   needs-webstreams      ReadableStream and friends exist (web streams)
+# A line starting with "!" names a Node test that is not vendored, with the reason.
+
+test-readable-from
+test-readable-from-iterator-closing
+test-readable-from-web-enqueue-then-close needs-webstreams
+test-readable-large-hwm
+test-readable-single-end
+test-stream-auto-destroy
+test-stream-await-drain-writers-in-synchronously-recursion-write
+test-stream-backpressure
+test-stream-big-packet
+test-stream-big-push needs-string-decoder
+test-stream-catch-rejections
+test-stream-compose needs-webstreams
+test-stream-construct
+test-stream-decoder-objectmode needs-string-decoder
+test-stream-destroy-event-order
+test-stream-drop-take
+test-stream-duplex-destroy
+test-stream-duplex-end
+test-stream-duplex-props
+test-stream-duplex-readable-end
+test-stream-duplex-readable-writable
+test-stream-duplex-writable-finished
+test-stream-duplexpair
+test-stream-end-of-streams
+test-stream-end-paused
+test-stream-err-multiple-callback-construction
+test-stream-error-once
+test-stream-event-names
+test-stream-events-prepend
+test-stream-filter
+test-stream-forEach
+test-stream-inheritance
+test-stream-ispaused
+test-stream-map
+test-stream-objectmode-undefined
+test-stream-once-readable-pipe
+test-stream-passthrough-drain
+test-stream-pipe-after-end
+test-stream-pipe-await-drain
+test-stream-pipe-await-drain-manual-resume
+test-stream-pipe-await-drain-push-while-write
+test-stream-pipe-cleanup
+test-stream-pipe-cleanup-pause
+test-stream-pipe-deadlock
+test-stream-pipe-error-handling
+test-stream-pipe-error-unhandled
+test-stream-pipe-event
+test-stream-pipe-flow
+test-stream-pipe-flow-after-unpipe
+test-stream-pipe-manual-resume
+test-stream-pipe-multiple-destinations-error
+test-stream-pipe-needDrain
+test-stream-pipe-objectmode-to-non-objectmode
+test-stream-pipe-same-destination-twice
+test-stream-pipe-unpipe-streams
+test-stream-pipe-without-listenerCount
+test-stream-pipeline-async-iterator needs-string-decoder
+test-stream-pipeline-duplex
+test-stream-pipeline-listeners
+test-stream-pipeline-queued-end-in-destroy
+test-stream-pipeline-uncaught
+test-stream-pipeline-with-empty-string
+test-stream-push-order needs-string-decoder
+test-stream-push-strings
+test-stream-readable-aborted
+test-stream-readable-add-chunk-during-data
+test-stream-readable-async-iter-half-open-duplex
+test-stream-readable-compose
+test-stream-readable-constructor-set-methods
+test-stream-readable-data needs-string-decoder
+test-stream-readable-default-encoding
+test-stream-readable-destroy
+test-stream-readable-didRead
+test-stream-readable-dispose
+test-stream-readable-emit-readable-short-stream
+test-stream-readable-emittedReadable
+test-stream-readable-end-destroyed
+test-stream-readable-ended
+test-stream-readable-error-end
+test-stream-readable-event needs-string-decoder
+test-stream-readable-flow-recursion
+test-stream-readable-from-web-termination needs-webstreams
+test-stream-readable-hwm-0
+test-stream-readable-hwm-0-async
+test-stream-readable-hwm-0-no-flow-data
+test-stream-readable-infinite-read
+test-stream-readable-invalid-chunk
+test-stream-readable-needReadable
+test-stream-readable-next-no-null
+test-stream-readable-no-unneeded-readable
+test-stream-readable-object-multi-push-async
+test-stream-readable-pause-and-resume needs-string-decoder
+test-stream-readable-readable
+test-stream-readable-readable-one
+test-stream-readable-readable-then-resume
+test-stream-readable-reading-readingMore
+test-stream-readable-resume-hwm
+test-stream-readable-resumeScheduled
+test-stream-readable-setEncoding-existing-buffers needs-string-decoder
+test-stream-readable-setEncoding-null needs-string-decoder
+test-stream-readable-strategy-option needs-webstreams
+test-stream-readable-to-web-byob needs-webstreams
+test-stream-readable-to-web-termination needs-webstreams
+test-stream-readable-to-web-termination-byob needs-webstreams
+test-stream-readable-unshift needs-string-decoder
+test-stream-readable-with-unimplemented-_read
+test-stream-readableListening-state
+test-stream-reduce
+test-stream-set-default-hwm
+test-stream-toArray
+test-stream-transform-callback-twice
+test-stream-transform-constructor-set-methods
+test-stream-transform-destroy
+test-stream-transform-final
+test-stream-transform-final-sync
+test-stream-transform-flush-data
+test-stream-transform-hwm0
+test-stream-transform-objectmode-falsey-value
+test-stream-transform-split-highwatermark
+test-stream-transform-split-objectmode
+test-stream-typedarray needs-string-decoder
+test-stream-uint8array needs-string-decoder
+test-stream-unpipe-event
+test-stream-unshift-empty-chunk
+test-stream-unshift-read-race
+test-stream-writable-aborted
+test-stream-writable-change-default-encoding
+test-stream-writable-clear-buffer
+test-stream-writable-constructor-set-methods
+test-stream-writable-decoded-encoding
+test-stream-writable-destroy
+test-stream-writable-end-cb-error
+test-stream-writable-end-cb-uncaught
+test-stream-writable-end-multiple
+test-stream-writable-ended-state
+test-stream-writable-final-async
+test-stream-writable-final-destroy
+test-stream-writable-final-throw
+test-stream-writable-finish-destroyed
+test-stream-writable-finished
+test-stream-writable-finished-state
+test-stream-writable-invalid-chunk
+test-stream-writable-needdrain-state
+test-stream-writable-null
+test-stream-writable-properties
+test-stream-writable-writable
+test-stream-writable-write-cb-error
+test-stream-writable-write-cb-twice
+test-stream-writable-write-error
+test-stream-writable-write-writev-finish
+test-stream-writableState-ending
+test-stream-writableState-uncorked-bufferedRequestCount
+test-stream-write-destroy
+test-stream-write-drain
+test-stream-write-final
+test-stream-writev
+test-stream2-base64-single-char-read-end needs-string-decoder
+test-stream2-basic needs-string-decoder
+test-stream2-compatibility
+test-stream2-decode-partial needs-string-decoder
+test-stream2-finish-pipe
+test-stream2-finish-pipe-error
+test-stream2-large-read-stall
+test-stream2-objects
+test-stream2-pipe-error-handling
+test-stream2-pipe-error-once-listener
+test-stream2-push needs-string-decoder
+test-stream2-read-correct-num-bytes-in-utf8 needs-string-decoder
+test-stream2-read-sync-stack
+test-stream2-readable-empty-buffer-no-eof needs-string-decoder
+test-stream2-readable-legacy-drain
+test-stream2-readable-non-empty-end
+test-stream2-readable-wrap
+test-stream2-readable-wrap-destroy
+test-stream2-readable-wrap-empty
+test-stream2-readable-wrap-error
+test-stream2-readable-wrap-proxy-methods
+test-stream2-set-encoding needs-string-decoder
+test-stream2-unpipe-drain
+test-stream2-unpipe-leak
+test-stream3-cork-end
+test-stream3-cork-uncork
+test-stream3-pause-then-read
+test-stream3-pipeline-async-iterator
+test-streams-highwatermark
+
+! test-stream-add-abort-signal requires internal/streams/add-abort-signal (not available in jsse yet)
+! test-stream-base-prototype-accessors-enumerability requires internal/test/binding (not available in jsse yet)
+! test-stream-consumers requires stream/consumers, stream/web (not available in jsse yet)
+! test-stream-destroy requires http (not available in jsse yet)
+! test-stream-duplex requires stream/web (not available in jsse yet)
+! test-stream-duplex-from requires buffer, stream/web (not available in jsse yet)
+! test-stream-finished requires fs, http, internal/streams/end-of-stream (not available in jsse yet)
+! test-stream-finished-async-local-storage requires async_hooks, internal/async_context_frame, internal/async_hooks (not available in jsse yet)
+! test-stream-finished-bindAsyncResource-path requires async_hooks, internal/async_hooks (not available in jsse yet)
+! test-stream-finished-default-path requires internal/async_context_frame, internal/async_hooks (not available in jsse yet)
+! test-stream-flatMap requires ../common/fixtures, fs (not available in jsse yet)
+! test-stream-iter-broadcast-backpressure uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-broadcast-basic uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-broadcast-coverage uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-broadcast-from uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-consumers-bytes uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-consumers-merge uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-consumers-tap uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-consumers-text uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-cross-realm uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-disabled uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-duplex uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-from-async uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-from-coverage uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-from-sync uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-from-writable-cache-options uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-namespace uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-pipeto uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-pipeto-edge uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-pipeto-signal uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-pipeto-writev uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-pull-async uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-pull-sync uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-push-backpressure uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-push-basic uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-push-writer uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-readable-interop uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-readable-interop-disabled uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-share-async uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-share-coverage uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-share-from uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-share-sync uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-sharedarraybuffer uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-to-readable uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-compat uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-coverage uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-errors uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-output uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-params uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-roundtrip uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-transform-sync uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-validation uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-writable-from uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-iter-writable-interop uses stream/iter (experimental, behind --experimental-stream-iter, not ported)
+! test-stream-pipeline requires ../common/tmpdir, fs, http, net (not available in jsse yet)
+! test-stream-pipeline-http2 requires http2 (not available in jsse yet)
+! test-stream-pipeline-process requires child_process, os (not available in jsse yet)
+! test-stream-preprocess requires ../common/fixtures, fs, readline (not available in jsse yet)
+! test-stream-promises requires fs (not available in jsse yet)
+! test-stream-readable-async-iterators requires fs, http (not available in jsse yet)
+! test-stream-readable-unpipe-resume requires fs (not available in jsse yet)
+! test-stream-toWeb-allows-server-response requires http (not available in jsse yet)
+! test-stream-wrap requires internal/js_stream_socket, internal/test/binding (not available in jsse yet)
+! test-stream-wrap-drain requires internal/js_stream_socket, internal/test/binding (not available in jsse yet)
+! test-stream-wrap-encoding requires internal/js_stream_socket (not available in jsse yet)
+! test-stream-writable-samecb-singletick requires async_hooks, console (not available in jsse yet)
+! test-stream2-httpclient-response-end requires http (not available in jsse yet)
+! test-stream2-transform the typos hook flags two plural identifiers in the verbatim file (allow-list pending a ruling)
+! test-stream-pipe-multiple-pipes the typos hook flags two plural identifiers in the verbatim file (allow-list pending a ruling)
+! test-stream2-writable the typos hook flags two plural identifiers in the verbatim file (allow-list pending a ruling); also needs process.stdout (#1232)

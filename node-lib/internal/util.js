@@ -20,9 +20,23 @@ const {
   StringPrototypeReplace,
   Symbol,
   SymbolFor,
+  SymbolPrototypeGetDescription,
 } = primordials;
 
 const { isNativeError, isPromise } = require('internal/binding/types');
+const assert = require('internal/assert');
+
+function once(callback, { preserveReturnValue = false } = kEmptyObject) {
+  let called = false;
+  let returnValue;
+  return function(...args) {
+    if (called) return returnValue;
+    called = true;
+    const result = ReflectApply(callback, this, args);
+    returnValue = preserveReturnValue ? result : undefined;
+    return result;
+  };
+}
 
 function getLazy(initializer) {
   let value;
@@ -253,7 +267,26 @@ function defineLazyProperties(target, id, keys, enumerable = true) {
   ObjectDefineProperties(target, descriptors);
 }
 
+function assignFunctionName(name, fn, descriptor = kEmptyObject) {
+  if (typeof name !== 'string') {
+    const symbolDescription = SymbolPrototypeGetDescription(name);
+    assert(symbolDescription !== undefined, 'Attempted to name function after descriptionless Symbol');
+    name = `[${symbolDescription}]`;
+  }
+  return ObjectDefineProperty(fn, 'name', {
+    __proto__: null,
+    writable: false,
+    enumerable: false,
+    configurable: true,
+    ...ObjectGetOwnPropertyDescriptor(fn, 'name'),
+    ...descriptor,
+    value: name,
+  });
+}
+
 module.exports = {
+  assignFunctionName,
+  once,
   customInspectSymbol: SymbolFor('nodejs.util.inspect.custom'),
   defineLazyProperties,
   convertProcessSignalToExitCode,
