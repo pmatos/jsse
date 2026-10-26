@@ -187,7 +187,9 @@
       builtinSource: hostSource,
     },
   };
-  cache["internal/host/buffer"] = { exports: { Buffer: globalThis.Buffer } };
+  cache["internal/host/buffer"] = {
+    exports: { Buffer: globalThis.Buffer, atob: globalThis.atob, btoa: globalThis.btoa },
+  };
   cache["internal/host/encoding"] = {
     exports: {
       TextEncoder: globalThis.TextEncoder,
