@@ -54,7 +54,10 @@ Unix only (`cfg(unix)` floor); on other platforms the floor is absent and
    stops the child instead of buffering without bound. Writes go to a writer
    thread through a channel; `Written` completes each write callback in order.
    `spawnSync` feeds input and drains stdout/stderr on separate threads, so
-   input larger than the pipe buffer cannot deadlock against output.
+   input larger than the pipe buffer cannot deadlock against output. It waits
+   for exit and for every pipe thread to finish (so an `EPIPE` from the stdin
+   writer is never lost), except that after a timeout or `maxBuffer` kill it
+   stops waiting once the child is gone, even if a grandchild holds a pipe.
 8. **Exit reporting.** The waiter uses `waitid(WNOWAIT)`, marks the child exited
    under the mutex `kill` also takes, then reaps, so `kill` never signals a
    recycled pid. `exitCode`/`signalCode` follow libuv (`exitCode` is `-2` after

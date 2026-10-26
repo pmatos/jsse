@@ -21,7 +21,7 @@ const CHUNK: usize = 64 * 1024;
 enum Wake {
     Exit(Option<i32>, Option<i32>),
     Overflow,
-    ReaderDone,
+    PipeDone,
     WriteFailed(i32),
 }
 
@@ -55,6 +55,7 @@ fn feed(fd: Arc<OwnedFd>, input: Option<Vec<u8>>, wake: Sender<Wake>) {
             rest = &rest[n as usize..];
         }
         unsafe { libc::shutdown(fd.as_raw_fd(), libc::SHUT_WR) };
+        let _ = wake.send(Wake::PipeDone);
     });
 }
 
@@ -68,7 +69,7 @@ fn drain(fd: Arc<OwnedFd>, limit: Option<usize>, out: Output, wake: Sender<Wake>
                 continue;
             }
             if n <= 0 {
-                let _ = wake.send(Wake::ReaderDone);
+                let _ = wake.send(Wake::PipeDone);
                 return;
             }
             // After an overflow the child is being killed; keep reading so it
@@ -97,7 +98,7 @@ fn run(
     let pid = spawned.child.id() as i32;
     let (tx, rx) = channel();
     let mut outputs: Vec<Option<Output>> = Vec::new();
-    let mut readers = 0;
+    let mut pipes = 0;
     let mut inputs = inputs.into_iter();
     for (index, parent) in spawned.parents.into_iter().enumerate() {
         let input = inputs.next().flatten();
@@ -107,6 +108,7 @@ fn run(
         };
         if index == 0 || input.is_some() {
             feed(fd.clone(), input, tx.clone());
+            pipes += 1;
         }
         if index == 0 {
             outputs.push(None);
@@ -114,7 +116,7 @@ fn run(
             let out = Output::default();
             drain(fd, max_buffer, out.clone(), tx.clone());
             outputs.push(Some(out));
-            readers += 1;
+            pipes += 1;
         }
     }
     let exited = Arc::new(Mutex::new(false));
@@ -137,14 +139,16 @@ fn run(
             signal_unless_exited(pid, kill_signal, &exited);
         }
     };
-    while status.is_none() || readers > 0 {
+    // Once the child is killed and gone, a pipe some other process still holds
+    // open is not waited for.
+    while status.is_none() || (pipes > 0 && !killed) {
         let message = match deadline {
             Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
         match message {
             Ok(Wake::Exit(code, signal)) => status = Some((code, signal)),
-            Ok(Wake::ReaderDone) => readers -= 1,
+            Ok(Wake::PipeDone) => pipes -= 1,
             Ok(Wake::Overflow) => {
                 if error == 0 {
                     error = -libc::ENOBUFS;
@@ -162,10 +166,6 @@ fn run(
                 }
                 deadline = None;
                 kill(&mut killed);
-                // A pipe some other process still holds open is not waited for.
-                if status.is_some() {
-                    break;
-                }
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }

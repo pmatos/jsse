@@ -1,7 +1,6 @@
 'use strict';
 
 const {
-  ArrayIsArray,
   ArrayPrototypeJoin,
   ArrayPrototypePush,
   ArrayPrototypePushApply,
@@ -15,7 +14,6 @@ const {
 const {
   assignFunctionName,
   getSystemErrorName,
-  kEmptyObject,
   promisify,
 } = require('internal/util');
 const { isArrayBufferView } = require('internal/util/types');

@@ -182,12 +182,15 @@ fn spawn_sync_moves_large_input_and_output_at_once() {
       print(unlimited.error, String(unlimited.stdout).trim());
       const lingering = cp.spawnSync("sh", ["-c", "sleep 3 & echo x"], { timeout: 300 });
       print(lingering.error.code, lingering.status);
+      const t0 = Date.now();
+      const orphaned = cp.spawnSync("sh", ["-c", "sleep 4 & sleep 4"], { timeout: 100 });
+      print(orphaned.error.code, orphaned.signal, Date.now() - t0 < 2000);
       const unread = cp.spawnSync("true", { input: new Uint8Array(8e6) });
       print(unread.error.code, unread.status);
     "#;
     assert_eq!(
         node(source),
-        "0 4194304 2000000 7\nENOBUFS true\nETIMEDOUT SIGTERM null\nundefined x\nETIMEDOUT 0\nEPIPE 0"
+        "0 4194304 2000000 7\nENOBUFS true\nETIMEDOUT SIGTERM null\nundefined x\nETIMEDOUT 0\nETIMEDOUT SIGTERM true\nEPIPE 0"
     );
 }
 
