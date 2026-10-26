@@ -187,11 +187,19 @@ _Avoid_: leaked try context, unpaired pop.
 ## Memory
 
 **Temp-Root Frame**:
-A saved depth marker into the interpreter's `gc_temp_roots` stack — the set of `JsValue`s pinned as GC roots only for the duration of one native operation, so a GC safepoint reached while they exist solely as Rust locals cannot collect them. The stack is a `RootStack` and is strictly LIFO: push, pop-of-the-top and truncate are its only mutations, reached through `gc_root_id`/`gc_unroot_id`/the frame helpers. Anything that must outlive the native call belongs in a Pinned Native Root or `RootedSlots` instead. `gc_root_frame` captures the current depth; `gc_unroot_frame` bulk-truncates back to it. A native that roots temporaries opens a frame, roots values into it, and truncates on exit.
+A saved `gc_temp_roots` depth for one native operation's temporary `JsValue`
+roots. `RootStack` permits only LIFO push/pop/truncate, via `gc_root_id`,
+`gc_unroot_id` and frame helpers. `gc_root_frame` saves the depth;
+`gc_unroot_frame` truncates to it. Values outliving the call belong in a
+Pinned Native Root or Rooted Slot.
+Roots retain Rust locals across GC safepoints.
 _Avoid_: root scope marker, gc stack pointer.
 
 **GC Root Scope**:
-The lexical scoping of a Temp-Root Frame behind the `with_gc_root_scope(|interp| …)` combinator: it captures the frame, runs the body, and truncates on every exit path (tail, early `return`, `?`) so the teardown cannot be forgotten on a branch. Prefer it to a hand-paired `gc_root_frame`/`gc_unroot_frame` for a whole-body, single-frame native; reach for the raw primitive only when frames nest or interleave across early exits.
+`with_gc_root_scope(|interp| …)` captures a Temp-Root Frame and truncates on
+all returned paths, including early `return` and `?`. Prefer it for lexical
+native roots; nested scopes compose. Raw primitives serve interleaved
+per-value releases, not ordinary nesting (ADR-2026-09-10-2014).
 _Avoid_: root guard, unroot epilogue.
 
 **Pinned Native Root**:
@@ -265,6 +273,14 @@ selection, callbacks and abrupt propagation. Array reads skip holes via
 HasProperty/Get; TypedArray reads retain live bounds checks. Each visit roots
 the accumulator before observable reads, then releases replaced accumulators.
 _Avoid_: fold strategy, accumulator cursor.
+
+**Predicate Quantification**:
+Array/TypedArray some/every (`builtins/predicate_quantification.rs`): `quantify`
+and `Quantifier` own preparation, captured length, validation, callbacks,
+truthiness, short-circuit results and GC Root Scopes. Private readers skip Array
+holes via HasProperty/Get or read every TypedArray index with live bounds checks.
+Input roots precede preparation; per-visit roots do not accumulate.
+_Avoid_: predicate loop, quantifier strategy.
 
 **Close-on-Reject**:
 An iterator helper's argument-validation failure: `require_callable_arg`
