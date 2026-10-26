@@ -193,9 +193,6 @@ enum EscapingJump {
     Continue(Option<String>),
 }
 
-/// Name pools up to this size are searched linearly; a larger one gets an index.
-const NAME_SCAN_LIMIT: usize = 16;
-
 type NameIndex = std::collections::HashMap<
     crate::interpreter::Atom,
     u16,
@@ -208,6 +205,11 @@ struct Compiler {
     constants: Vec<Constant>,
     names: Vec<crate::interpreter::Atom>,
     name_index: Option<NameIndex>,
+    /// Name-pool entries that duplicate an ordinary entry for sites resolving
+    /// from the frame environment (see `name_site`).
+    frame_sites: NameIndex,
+    /// Parallel to `names`: whether the entry is a frame site.
+    at_frame: Vec<bool>,
     private_names: Vec<String>,
     var_names: Vec<u16>,
     current_stack: u16,
@@ -291,6 +293,8 @@ impl Compiler {
             constants: Vec::new(),
             names: Vec::new(),
             name_index: None,
+            frame_sites: NameIndex::default(),
+            at_frame: Vec::new(),
             private_names: Vec::new(),
             var_names: Vec::new(),
             current_stack: 0,
@@ -329,58 +333,6 @@ impl Compiler {
             return Err(CompileError::Ineligible("constant pool overflow"));
         }
         self.constants.push(c);
-        Ok(idx as u16)
-    }
-
-    // `Atom` hashes and compares by identity, never through its `OnceCell`.
-    #[allow(clippy::mutable_key_type)]
-    fn add_name(&mut self, name: &str) -> Result<u16, CompileError> {
-        if let Some(index) = &self.name_index {
-            let atom = crate::interpreter::Atom::intern(name);
-            if let Some(&i) = index.get(&atom) {
-                return Ok(i);
-            }
-            return self.push_name(atom);
-        }
-        if let Some(i) = self.names.iter().position(|n| n.as_str() == name) {
-            return Ok(i as u16);
-        }
-        self.push_name(crate::interpreter::Atom::intern(name))
-    }
-
-    #[allow(clippy::mutable_key_type)]
-    fn push_name(&mut self, atom: crate::interpreter::Atom) -> Result<u16, CompileError> {
-        let idx = self.names.len();
-        if idx > u16::MAX as usize {
-            return Err(CompileError::Ineligible("name pool overflow"));
-        }
-        if self.name_index.is_none() && idx >= NAME_SCAN_LIMIT {
-            self.name_index = Some(
-                self.names
-                    .iter()
-                    .enumerate()
-                    .map(|(i, n)| (n.clone(), i as u16))
-                    .collect(),
-            );
-        }
-        if let Some(index) = &mut self.name_index {
-            index.insert(atom.clone(), idx as u16);
-        }
-        self.names.push(atom);
-        Ok(idx as u16)
-    }
-
-    /// Index of a private name's source spelling in the chunk's private-name
-    /// pool. The VM resolves each entry to its Private Name once per frame.
-    fn add_private_name(&mut self, name: &str) -> Result<u16, CompileError> {
-        if let Some(i) = self.private_names.iter().position(|n| n == name) {
-            return Ok(i as u16);
-        }
-        let idx = self.private_names.len();
-        if idx > u16::MAX as usize {
-            return Err(CompileError::Ineligible("private name pool overflow"));
-        }
-        self.private_names.push(name.to_string());
         Ok(idx as u16)
     }
 
@@ -514,7 +466,7 @@ impl Compiler {
     }
 
     fn compile_load_name(&mut self, name: &str) -> Result<(), CompileError> {
-        let idx = self.add_name(name)?;
+        let idx = self.name_site(name)?;
         if let Some(slot) = self.local_slot(name) {
             self.emit(Op::LoadLocal);
             self.emit_u16(idx);
@@ -811,7 +763,7 @@ impl Compiler {
             Expression::Typeof(operand) => {
                 match operand.as_ref() {
                     Expression::Identifier(name) if self.local_slot(name).is_none() => {
-                        let idx = self.add_name(name)?;
+                        let idx = self.name_site(name)?;
                         self.emit(Op::TypeofName);
                         self.emit_u16(idx);
                         self.push_n(1);
@@ -1319,7 +1271,7 @@ impl Compiler {
         value: &Expression,
         discard: bool,
     ) -> Result<(), CompileError> {
-        let idx = self.add_name(name)?;
+        let idx = self.name_site(name)?;
         if let Some(slot) = self.local_slot(name) {
             // A local of this frame: no `with`, closure or direct eval can
             // change what the name resolves to while the right-hand side
@@ -1385,7 +1337,7 @@ impl Compiler {
         };
         match target {
             Expression::Identifier(name) => {
-                let idx = self.add_name(name)?;
+                let idx = self.name_site(name)?;
                 if let Some(slot) = self.local_slot(name) {
                     self.emit(Op::UpdateLocal);
                     self.emit_u16(idx);
@@ -1523,7 +1475,7 @@ impl Compiler {
                 return Err(CompileError::Ineligible("direct eval call"));
             }
             Expression::Identifier(name) => {
-                let name_idx = self.add_name(name)?;
+                let name_idx = self.name_site(name)?;
                 self.emit(Op::LoadCalleeName);
                 self.emit_u16(name_idx);
                 self.push_n(2);
@@ -2627,7 +2579,7 @@ impl Compiler {
     /// Stores the value on top of the stack into the existing binding `name`
     /// (the `var` of a for-in/of head, or an assignment target).
     fn emit_store_name(&mut self, name: &str) -> Result<(), CompileError> {
-        let idx = self.add_name(name)?;
+        let idx = self.name_site(name)?;
         if let Some(slot) = self.local_slot(name) {
             self.emit_store_local(idx, slot, true);
         } else {
@@ -3104,7 +3056,14 @@ impl Compiler {
         let global_hints = self
             .names
             .iter()
-            .map(|name| GlobalHint::new(name.as_str()))
+            .enumerate()
+            .map(|(i, name)| {
+                if self.at_frame[i] {
+                    GlobalHint::from_frame(name.as_str())
+                } else {
+                    GlobalHint::new(name.as_str())
+                }
+            })
             .collect();
         let prop_hints = self.names.iter().map(|_| Cell::new(0)).collect();
         Chunk {
@@ -3789,4 +3748,5 @@ pub(crate) fn compile_script_body(body: &[Statement]) -> Result<Chunk, CompileEr
     Ok(c.finish())
 }
 
+mod name_pool;
 mod suspend;

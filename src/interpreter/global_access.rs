@@ -24,6 +24,10 @@ pub(crate) struct GlobalHint {
     slot: Cell<u32>,
     key: JsPropertyKey,
     scope: Cell<ScopeHint>,
+    /// The site resolves its name from the chunk's frame environment rather
+    /// than the innermost open block environment: the compiler proved no open
+    /// block scope declares the name (see `Compiler::name_site`).
+    from_frame: bool,
 }
 
 /// Where the last full scope walk for this name site found it: `hops` scopes
@@ -58,7 +62,20 @@ impl GlobalHint {
             slot: Cell::new(0),
             key: crate::interpreter::key_intern::intern_key(name),
             scope: Cell::new(NO_SCOPE_HINT),
+            from_frame: false,
         }
+    }
+
+    pub(crate) fn from_frame(name: &str) -> Self {
+        GlobalHint {
+            from_frame: true,
+            ..Self::new(name)
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn starts_at_frame(&self) -> bool {
+        self.from_frame
     }
 }
 

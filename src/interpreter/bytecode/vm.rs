@@ -14,12 +14,14 @@ use smallvec::SmallVec;
 use std::cell::Cell;
 
 mod iteration;
+mod name_store;
 mod spread;
 
 use iteration::{
     bind_head_op, drop_below, end_finally, iteration_close, iteration_close_throw, iteration_head,
     iteration_step,
 };
+use name_store::{store_local, store_resolved_name};
 
 #[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
@@ -221,78 +223,6 @@ fn loose_equality_op(interp: &mut Interpreter, stack: &mut Vec<JsValue>, negate:
     pop_value(interp, stack, "stack underflow on binop lhs");
     stack.push(JsValue::boolean(equal != negate));
     true
-}
-
-/// `StoreLocal`'s store: the frame slot when the hint verifies, else the
-/// by-name reference path.
-#[inline(always)]
-fn store_local(
-    interp: &mut Interpreter,
-    name: &Atom,
-    slot: u16,
-    target: &EnvRef,
-    env: &EnvRef,
-    value: &JsValue,
-    hint: Option<&GlobalHint>,
-) -> Result<(), JsValue> {
-    let stored = match hinted_writable(&mut target.borrow_mut(), name, slot) {
-        Some(binding) => {
-            binding.value = value.clone();
-            true
-        }
-        None => false,
-    };
-    if stored {
-        #[cfg(feature = "perf-counters")]
-        {
-            interp.perf.local_slot_hits += 1;
-        }
-        return Ok(());
-    }
-    #[cfg(feature = "perf-counters")]
-    {
-        interp.perf.local_slot_misses += 1;
-    }
-    let id_ref = interp.resolve_identifier_ref_hinted(name, env, hint)?;
-    match interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint) {
-        Completion::Throw(e) => Err(e),
-        _ => Ok(()),
-    }
-}
-
-/// `StoreResolvedName`'s store through the reference `ResolveName` created.
-#[inline(always)]
-fn store_resolved_name(
-    interp: &mut Interpreter,
-    name: &Atom,
-    id_ref: &IdentifierRef,
-    env: &EnvRef,
-    value: &JsValue,
-    hint: Option<&GlobalHint>,
-) -> Result<(), JsValue> {
-    let local_store = if let IdentifierRef::SpecificEnv(local_env) = id_ref {
-        let mut scope = local_env.borrow_mut();
-        if scope.global_object_id.is_none()
-            && scope.indirect_bindings.is_none()
-            && let Some(binding) = scope.bindings.get_mut(name)
-            && binding.initialized
-            && matches!(binding.kind, BindingKind::Var | BindingKind::Let)
-        {
-            binding.value = value.clone();
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-    if !local_store
-        && let Completion::Throw(e) =
-            interp.put_value_by_ref_hinted(name, value.clone(), id_ref, env, hint)
-    {
-        return Err(e);
-    }
-    Ok(())
 }
 
 const NO_LOCAL_SLOT: u16 = u16::MAX;
@@ -1266,6 +1196,17 @@ fn run_chunk_inner<const GENERATOR: bool>(
             scopes.last().unwrap_or(frame_env)
         };
     }
+    // The environment a bare-name site resolves from: the frame's, for a site
+    // the compiler proved no open block scope can bind (`Compiler::name_site`).
+    macro_rules! site_env {
+        ($hint:expr) => {
+            if $hint.is_some_and(GlobalHint::starts_at_frame) {
+                frame_env
+            } else {
+                cur_env!()
+            }
+        };
+    }
     // Private Names this frame has resolved, by `Chunk::private_names` index.
     // The Private Environment is fixed for the life of a frame (a class
     // evaluated inside it scopes only its own members' closures), so one
@@ -1467,7 +1408,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
-                    match interp.resolve_name_hinted(name, cur_env!(), chunk.global_hint(idx)) {
+                    let hint = chunk.global_hint(idx);
+                    match interp.resolve_name_hinted(name, site_env!(hint), hint) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
                     }
@@ -1573,14 +1515,11 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     let strict = frame_env.borrow().strict;
                     interp.last_identifier_with_base = None;
-                    let callee_result = interp.resolve_identifier_hinted(
-                        name,
-                        cur_env!(),
-                        strict,
-                        chunk.global_hint(idx),
-                    );
+                    let callee_result =
+                        interp.resolve_identifier_hinted(name, site_env!(hint), strict, hint);
                     let this_value = match interp.last_identifier_with_base.take() {
                         Some(id) => JsValue::object(id),
                         None => JsValue::UNDEFINED,
@@ -1596,20 +1535,18 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
+                    let site_env = site_env!(hint);
                     let local_ref = {
-                        let scope = cur_env!().borrow();
+                        let scope = site_env.borrow();
                         scope.with_object.is_none()
                             && scope.indirect_bindings.is_none()
                             && scope.bindings.contains_key(name)
                     };
                     if local_ref {
-                        refs.push(IdentifierRef::SpecificEnv(cur_env!().clone()));
+                        refs.push(IdentifierRef::SpecificEnv(site_env.clone()));
                     } else {
-                        match interp.resolve_identifier_ref_hinted(
-                            name,
-                            cur_env!(),
-                            chunk.global_hint(idx),
-                        ) {
+                        match interp.resolve_identifier_ref_hinted(name, site_env, hint) {
                             Ok(id_ref) => refs.push(id_ref),
                             Err(e) => throw!('dispatch, e),
                         }
@@ -1619,14 +1556,15 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     let id_ref = refs
                         .last()
                         .expect("reference stack underflow on LoadResolvedName");
                     match interp.get_identifier_value_by_ref_hinted(
                         name,
                         id_ref,
-                        cur_env!(),
-                        chunk.global_hint(idx),
+                        site_env!(hint),
+                        hint,
                     ) {
                         Completion::Normal(value) => push_value(interp, stack, value),
                         abrupt => bail!('dispatch, abrupt),
@@ -1636,18 +1574,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     let id_ref = refs
                         .pop()
                         .expect("reference stack underflow on StoreResolvedName");
                     let value = stack.last().expect("stack underflow on StoreResolvedName");
-                    if let Err(e) = store_resolved_name(
-                        interp,
-                        name,
-                        &id_ref,
-                        cur_env!(),
-                        value,
-                        chunk.global_hint(idx),
-                    ) {
+                    if let Err(e) =
+                        store_resolved_name(interp, name, &id_ref, site_env!(hint), value, hint)
+                    {
                         throw!('dispatch, e);
                     }
                     if op == Op::StoreResolvedNamePop {
@@ -1660,12 +1594,13 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 3;
                     let (op, prefix, discard) = update_mode(mode);
                     let name = &chunk.names[idx as usize];
+                    let hint = chunk.global_hint(idx);
                     match interp.eval_identifier_update_hinted(
                         op,
                         prefix,
                         name,
-                        cur_env!(),
-                        chunk.global_hint(idx),
+                        site_env!(hint),
+                        hint,
                     ) {
                         Completion::Normal(value) => {
                             if !discard {
@@ -2378,7 +2313,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     let name = &chunk.names[idx as usize];
-                    match interp.eval_typeof_identifier(name, cur_env!()) {
+                    let hint = chunk.global_hint(idx);
+                    match interp.eval_typeof_identifier(name, site_env!(hint)) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
                     }
