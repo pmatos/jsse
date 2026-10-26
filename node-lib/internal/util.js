@@ -284,8 +284,19 @@ function assignFunctionName(name, fn, descriptor = kEmptyObject) {
   });
 }
 
+function setOwnProperty(obj, key, value) {
+  return ObjectDefineProperty(obj, key, {
+    __proto__: null,
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
 module.exports = {
   assignFunctionName,
+  setOwnProperty,
   once,
   customInspectSymbol: SymbolFor('nodejs.util.inspect.custom'),
   defineLazyProperties,
