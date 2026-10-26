@@ -38,6 +38,10 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         "node-crypto-shim.js",
         include_str!("../../../scripts/node-crypto-shim.js"),
     ),
+    (
+        "node-builtin-loader.js",
+        include_str!("../../../scripts/node-builtin-loader.js"),
+    ),
     ("hide-globals", HIDE_GLOBALS),
 ];
 
@@ -102,7 +106,7 @@ mod tests {
         run_ok(
             &mut interp,
             r#"
-            for (const name of ["__host_argv", "__host_argv0", "__host_env_snapshot", "__host_cwd", "__host_chdir", "__host_set_exit_code"]) {
+            for (const name of ["__host_argv", "__host_argv0", "__host_env_snapshot", "__host_cwd", "__host_chdir", "__host_set_exit_code", "__host_builtin_source"]) {
               const d = Object.getOwnPropertyDescriptor(globalThis, name);
               if (!d) throw new Error(name + " missing");
               if (d.enumerable || !d.configurable) throw new Error(name + " has wrong attributes");
@@ -125,8 +129,9 @@ mod tests {
             const got = [
               typeof process, typeof Buffer, typeof TextEncoder, typeof TextDecoder,
               typeof crypto.getRandomValues, typeof __host_argv, typeof __host_cwd, typeof __host_write,
+              typeof __host_builtin_source, typeof __node_builtin,
             ].join(",");
-            const want = "object,function,function,function,function,undefined,undefined,function";
+            const want = "object,function,function,function,function,undefined,undefined,function,undefined,function";
             if (got !== want) throw new Error(got);
             "#,
         );

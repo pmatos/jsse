@@ -19,6 +19,7 @@ mod json;
 mod math;
 mod merge_sort;
 pub(crate) mod node_host;
+mod node_host_builtins;
 mod node_host_process;
 mod node_prelude;
 mod number;

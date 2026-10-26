@@ -250,6 +250,7 @@ impl Interpreter {
         self.install_host_global("__host_array_extra_keys", array_extra_keys_fn);
 
         self.setup_node_host_process();
+        self.setup_node_host_builtins();
     }
 }
 
