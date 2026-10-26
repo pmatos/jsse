@@ -11,7 +11,7 @@
 //! `__host_loop_ref`. See `docs/adr/2026-10-26-2300-node-host-child-process.md`.
 
 use super::super::*;
-use super::node_host_child_spawn::{decode_spec, exit_parts, spawn_process};
+use super::node_host_child_spawn::{decode_spec, reap, signal_unless_exited, spawn_process};
 use super::node_host_fs_args::{Res, arg, int, last_errno, uint8array_from_vec, view_of};
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
@@ -102,32 +102,11 @@ pub(super) fn post(queue: &Completions, event: ChildEvent) {
 fn spawn_waiter(
     queue: Completions,
     id: u64,
-    pid: i32,
     exited: Arc<Mutex<bool>>,
     mut child: std::process::Child,
 ) {
     std::thread::spawn(move || {
-        // Wait without reaping, so the pid stays reserved while `kill` checks
-        // `exited` under the same lock.
-        loop {
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let rc = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    pid as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOWAIT,
-                )
-            };
-            if rc == 0 || last_errno() != libc::EINTR {
-                break;
-            }
-        }
-        *exited.lock().unwrap() = true;
-        let (code, signal) = match child.wait() {
-            Ok(status) => exit_parts(status),
-            Err(_) => (None, None),
-        };
+        let (code, signal) = reap(&mut child, &exited);
         post(
             &queue,
             ChildEvent::Exit {
@@ -220,15 +199,6 @@ fn spawn_writer(
 }
 
 impl Interpreter {
-    fn child_fn(
-        &mut self,
-        name: &'static str,
-        arity: usize,
-        f: impl Fn(&mut Interpreter, &[JsValue]) -> Res<JsValue> + 'static,
-    ) {
-        self.host_fs_fn(name, arity, f);
-    }
-
     /// Deliver the events that were waiting when the poll phase began. They are
     /// stashed by the completion closures (which any microtask drain runs) and
     /// handed to JS only here, so a `nextTick` queued by user code still runs
@@ -295,14 +265,14 @@ impl Interpreter {
 
     pub(super) fn setup_node_host_child(&mut self) {
         // __host_cp_start(dispatch): the JS function every event is delivered to
-        self.child_fn("__host_cp_start", 1, |interp, args| {
+        self.host_fs_fn("__host_cp_start", 1, |interp, args| {
             interp.scheduler.node_loop.host_dispatch = Some(arg(args, 0).clone());
             Ok(JsValue::UNDEFINED)
         });
 
         // __host_cp_spawn(file, argv, cwd, envPairs, stdio, flags, uid, gid)
         //   -> [id, pid] | negative errno
-        self.child_fn("__host_cp_spawn", 8, |interp, args| {
+        self.host_fs_fn("__host_cp_spawn", 8, |interp, args| {
             let spec = decode_spec(interp, args)?;
             let spawned = match spawn_process(&spec) {
                 Ok(spawned) => spawned,
@@ -326,7 +296,7 @@ impl Interpreter {
                     })
                 })
                 .collect();
-            spawn_waiter(queue, id, pid, exited.clone(), spawned.child);
+            spawn_waiter(queue, id, exited.clone(), spawned.child);
             interp.node_host.child.children.insert(
                 id,
                 ChildCtl {
@@ -342,7 +312,7 @@ impl Interpreter {
         });
 
         // __host_cp_read(id, index): allow one more chunk from a pipe
-        self.child_fn("__host_cp_read", 2, |interp, args| {
+        self.host_fs_fn("__host_cp_read", 2, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             let index = int(interp, arg(args, 1))? as usize;
             let queue = interp.agent_async_completions.clone();
@@ -363,7 +333,7 @@ impl Interpreter {
         });
 
         // __host_cp_write(id, index, bytes): queue a write; `Written` follows
-        self.child_fn("__host_cp_write", 3, |interp, args| {
+        self.host_fs_fn("__host_cp_write", 3, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             let index = int(interp, arg(args, 1))? as usize;
             let view = view_of(interp, arg(args, 2))
@@ -392,7 +362,7 @@ impl Interpreter {
         });
 
         // __host_cp_shutdown(id, index): no more writes; the child sees EOF
-        self.child_fn("__host_cp_shutdown", 2, |interp, args| {
+        self.host_fs_fn("__host_cp_shutdown", 2, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             let index = int(interp, arg(args, 1))? as usize;
             if let Some(end) = interp.child_endpoint(id, index) {
@@ -409,7 +379,7 @@ impl Interpreter {
         });
 
         // __host_cp_close(id, index): release the pipe; frees a finished child
-        self.child_fn("__host_cp_close", 2, |interp, args| {
+        self.host_fs_fn("__host_cp_close", 2, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             let index = int(interp, arg(args, 1))? as usize;
             if let Some(end) = interp.child_endpoint(id, index) {
@@ -426,7 +396,7 @@ impl Interpreter {
         });
 
         // __host_cp_release(id): the child exited and JS is done with it
-        self.child_fn("__host_cp_release", 1, |interp, args| {
+        self.host_fs_fn("__host_cp_release", 1, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             if let Some(child) = interp.node_host.child.children.remove(&id) {
                 for end in child.endpoints.into_iter().flatten() {
@@ -439,22 +409,17 @@ impl Interpreter {
         });
 
         // __host_cp_kill(id, signal) -> 0 | negative errno
-        self.child_fn("__host_cp_kill", 2, |interp, args| {
+        self.host_fs_fn("__host_cp_kill", 2, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             let signal = int(interp, arg(args, 1))? as i32;
             let Some(child) = interp.node_host.child.children.get(&id) else {
                 return Ok(JsValue::number(-f64::from(libc::ESRCH)));
             };
-            let exited = child.exited.lock().unwrap();
-            if *exited {
-                return Ok(JsValue::number(-f64::from(libc::ESRCH)));
-            }
-            let rc = unsafe { libc::kill(child.pid, signal) };
-            Ok(JsValue::number(if rc == 0 {
-                0.0
-            } else {
-                -f64::from(last_errno())
-            }))
+            Ok(JsValue::number(f64::from(signal_unless_exited(
+                child.pid,
+                signal,
+                &child.exited,
+            ))))
         });
     }
 }

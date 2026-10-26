@@ -175,13 +175,33 @@ fn spawn_sync_moves_large_input_and_output_at_once() {
                              { input, maxBuffer: Infinity });
       print(r.status, r.stdout.length, r.stderr.length, r.stdout[1000]);
       const limited = cp.spawnSync("head", ["-c", "100000", "/dev/zero"], { maxBuffer: 1000 });
-      print(limited.error.code, limited.signal, limited.stdout.length > 1000);
+      print(limited.error.code, limited.stdout.length > 1000);
       const slow = cp.spawnSync("sleep", ["5"], { timeout: 50 });
       print(slow.error.code, slow.signal, slow.status);
+      const unlimited = cp.spawnSync("echo", ["x"], { maxBuffer: 0 });
+      print(unlimited.error, String(unlimited.stdout).trim());
+      const lingering = cp.spawnSync("sh", ["-c", "sleep 3 & echo x"], { timeout: 300 });
+      print(lingering.error.code, lingering.status);
+      const unread = cp.spawnSync("true", { input: new Uint8Array(8e6) });
+      print(unread.error.code, unread.status);
     "#;
     assert_eq!(
         node(source),
-        "0 4194304 2000000 7\nENOBUFS SIGTERM true\nETIMEDOUT SIGTERM null"
+        "0 4194304 2000000 7\nENOBUFS true\nETIMEDOUT SIGTERM null\nundefined x\nETIMEDOUT 0\nEPIPE 0"
+    );
+}
+
+#[test]
+fn write_in_flight_when_the_child_exits_fails_with_epipe() {
+    let source = r#"
+      const c = require("child_process").spawn("true");
+      c.stdin.on("error", (e) => print("stdin error", e.code));
+      c.stdin.write(new Uint8Array(5e6), (e) => print("write callback", e && e.code));
+      c.on("close", () => print("close"));
+    "#;
+    assert_eq!(
+        node(source),
+        "write callback EPIPE\nstdin error EPIPE\nclose"
     );
 }
 

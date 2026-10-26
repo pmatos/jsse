@@ -44,15 +44,21 @@ class StdioPipe extends Duplex {
   }
 
   _destroy(error, callback) {
+    let pending = [];
     if (!this._closed) {
       this._closed = true;
       this._activity.deactivate();
-      for (let i = 0; i < this._pending.length; i++) binding.loopRef(-1);
+      pending = this._pending;
       this._pending = [];
+      for (let i = 0; i < pending.length; i++) binding.loopRef(-1);
       if (this._handle.id !== 0) binding.close(this._handle.id, this._index);
       this._handle.pipeClosed(this._index);
     }
-    callback(error);
+    // Writes still in flight when the pipe goes (the child exited) fail with
+    // EPIPE, as libuv reports them.
+    const failure = pending.length > 0 ? new ErrnoException(-32, 'write') : null;
+    callback(error ?? failure);
+    for (let i = 0; i < pending.length; i++) pending[i](failure);
   }
 
   onData(bytes) {

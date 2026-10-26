@@ -217,7 +217,45 @@ pub(super) fn spawn_process(spec: &SpawnSpec) -> Result<Spawned, i32> {
     Ok(Spawned { child, parents })
 }
 
-pub(super) fn exit_parts(status: std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
+fn exit_parts(status: std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
     use std::os::unix::process::ExitStatusExt;
     (status.code(), status.signal())
+}
+
+/// Block until `child` exits and reap it, returning `(code, signal)`. The pid
+/// stays reserved (`WNOWAIT`) while `exited` is set under its lock, which a
+/// killer also takes, so a signal never reaches a recycled pid.
+pub(super) fn reap(
+    child: &mut Child,
+    exited: &std::sync::Mutex<bool>,
+) -> (Option<i32>, Option<i32>) {
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if rc == 0 || last_errno() != libc::EINTR {
+            break;
+        }
+    }
+    *exited.lock().unwrap() = true;
+    child.wait().map(exit_parts).unwrap_or((None, None))
+}
+
+/// Send `signal` to `pid` unless `exited` says it was already waited for.
+pub(super) fn signal_unless_exited(pid: i32, signal: i32, exited: &std::sync::Mutex<bool>) -> i32 {
+    let exited = exited.lock().unwrap();
+    if *exited {
+        return -libc::ESRCH;
+    }
+    if unsafe { libc::kill(pid, signal) } == 0 {
+        0
+    } else {
+        -last_errno()
+    }
 }

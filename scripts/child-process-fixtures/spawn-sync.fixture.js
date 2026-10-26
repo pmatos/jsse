@@ -34,6 +34,9 @@ show('stdio pipe/ignore', summary(cp.spawnSync('sh', ['-c', 'echo a; echo b 1>&2
 show('stdio fd3 out', summary(cp.spawnSync('sh', ['-c', 'echo to-fd3 1>&3; echo to-out'], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] })));
 show('timeout', summary(cp.spawnSync('sleep', ['5'], { timeout: 100 })));
 show('timeout killSignal', summary(cp.spawnSync('sh', ['-c', 'trap "" TERM; sleep 5'], { timeout: 100, killSignal: 'SIGKILL' })));
+show('maxBuffer 0', summary(cp.spawnSync('echo', ['x'], { maxBuffer: 0 })));
+show('input unread', summary(cp.spawnSync('true', { input: Buffer.alloc(8e6) })).error);
+show('timeout lingering pipe', summary(cp.spawnSync('sh', ['-c', 'sleep 2 & echo x'], { timeout: 300 })));
 show('maxBuffer', summary(cp.spawnSync('sh', ['-c', 'head -c 100000 /dev/zero | tr "\\0" a'], { maxBuffer: 1000 })).error);
 const big = cp.spawnSync('sh', ['-c', 'head -c 3000000 /dev/zero | tr "\\0" b'], { maxBuffer: Infinity });
 show('big out', { status: big.status, len: big.stdout.length, md5: md5(big.stdout) });

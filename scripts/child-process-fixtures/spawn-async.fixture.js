@@ -62,6 +62,10 @@ async function main() {
   show('ignore', { stdin: c.stdin, stdout: c.stdout, stdio: c.stdio, ...(await finish(c)) });
   c = cp.spawn('sh', ['-c', 'echo a; echo b 1>&2'], { stdio: ['ignore', 'pipe', 'inherit'] });
   show('stdio mixed', await finish(c));
+  c = cp.spawn('true');
+  c.stdin.on('error', (e) => show('stdin error', err(e)));
+  c.stdin.write(Buffer.alloc(5e6), (e) => show('write callback', err(e)));
+  show('epipe', await finish(c));
   c = cp.spawn('sh', ['-c', 'echo to3 1>&3; echo hello'], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
   const extra = [];
   c.stdio[3].on('data', (d) => extra.push(d));

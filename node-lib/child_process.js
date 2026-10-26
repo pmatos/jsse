@@ -454,44 +454,6 @@ function execSync(command, options) {
 }
 
 
-function validateArgumentNullCheck(arg, propName) {
-  if (typeof arg === 'string' && StringPrototypeIncludes(arg, '\u0000')) {
-    throw new ERR_INVALID_ARG_VALUE(propName, arg, 'must be a string without null bytes');
-  }
-}
-
-
-function validateArgumentsNullCheck(args, propName) {
-  for (let i = 0; i < args.length; ++i) {
-    validateArgumentNullCheck(args[i], `${propName}[${i}]`);
-  }
-}
-
-
-function validateTimeout(timeout) {
-  if (timeout != null) {
-    validateInteger(timeout, 'timeout', 0);
-  }
-}
-
-
-function validateMaxBuffer(maxBuffer) {
-  if (maxBuffer != null) {
-    validateNumber(maxBuffer, 'options.maxBuffer', 0);
-  }
-}
-
-
-function sanitizeKillSignal(killSignal) {
-  if (typeof killSignal === 'string' || typeof killSignal === 'number') {
-    return convertToValidSignal(killSignal);
-  } else if (killSignal != null) {
-    throw new ERR_INVALID_ARG_TYPE('options.killSignal',
-                                   ['string', 'number'],
-                                   killSignal);
-  }
-}
-
 module.exports = {
   ChildProcess,
   exec,
