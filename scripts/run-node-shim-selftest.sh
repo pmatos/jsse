@@ -4,8 +4,8 @@
 #
 # It runs scripts/node-shim.selftest.js on jsse with --node (the prelude is
 # embedded in the binary) and on Node, and requires BOTH to exit 0 and produce
-# byte-identical stdout. Node is the reference oracle for the deterministic surfaces the
-# self-test asserts (util.format specifiers, byte-accurate stdout, console
+# byte-identical stdout. Node is the reference oracle for the deterministic
+# surfaces the self-test asserts (util.format specifiers, byte-accurate stdout, console
 # shapes); util.inspect is only smoke-tested, never byte-compared.
 #
 # Usage: ./scripts/run-node-shim-selftest.sh [--no-build]
@@ -107,11 +107,11 @@ command -v node >/dev/null 2>&1 && check_exit node node
 # ---- no-host fallback probe -----------------------------------------------
 # node-shim.js documents a degraded pure-JS fallback for plain jsse runs. The
 # prelude is never installed without --node, so this probe prepends the embedded
-# source file by hand. Cover that path directly so the
-# fallback stream never recurses through the shimmed console methods, and so the
-# array extra-property fallback (which, without the host floor, cannot unwrap a
-# Proxy first) stays non-throwing for both the ownKeys enumeration and the
-# per-key descriptor reads that follow it.
+# source file by hand. Cover that path directly so the fallback stream never
+# recurses through the shimmed console methods, and so the array extra-property
+# fallback (which, without the host floor, cannot unwrap a Proxy first) stays
+# non-throwing for both the ownKeys enumeration and the per-key descriptor reads
+# that follow it.
 echo ""
 echo "== jsse fallback without --node =="
 FALLBACK_PROBE="$TMP/fallback-probe.cjs"

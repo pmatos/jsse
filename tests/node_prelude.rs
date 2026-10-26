@@ -27,7 +27,7 @@ fn one_liner_works_with_no_prepended_files() {
     let out = jsse(&[
         "--node",
         "-e",
-        r#"console.log(process.version, Buffer.from("a"))"#,
+        r#"console.log(process.version, Buffer.from("a"), Buffer.isBuffer(Buffer.from("a")))"#,
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
@@ -36,14 +36,38 @@ fn one_liner_works_with_no_prepended_files() {
         version.starts_with('v') && version[1..].split('.').count() == 3,
         "unexpected process.version {version:?}"
     );
-    assert!(rest.contains("Buffer") || rest.contains("61"), "{rest:?}");
+    assert!(
+        rest.contains("Buffer") && rest.ends_with("true"),
+        "{rest:?}"
+    );
     assert_eq!(stderr(&out), "");
+}
+
+#[test]
+fn prelude_loads_under_the_tree_walker() {
     let out = jsse(&[
         "--node",
+        "--no-bytecode",
         "-e",
-        r#"console.log(Buffer.from("a").toString("hex"), Buffer.isBuffer(Buffer.from("a")))"#,
+        r#"console.log(Buffer.from("a").toString("hex"), typeof process.argv[0])"#,
     ]);
-    assert_eq!(stdout(&out), "61 true");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "61 string");
+}
+
+#[test]
+fn prelude_loads_under_gc_stress() {
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .env("JSSE_GC_STRESS", "50")
+        .args([
+            "--node",
+            "-e",
+            r#"console.log(Buffer.from("héllo").toString("base64"), crypto.getRandomValues(new Uint8Array(4)).length)"#,
+        ])
+        .output()
+        .expect("run jsse");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "aMOpbGxv 4");
 }
 
 #[test]

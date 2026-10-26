@@ -10,10 +10,10 @@
 #   // ENV: K=V ...                                    (default: empty environment)
 #   // CWD: tmp|repo                                   (default: tmp, with sub/inner and file.txt)
 # The runner copies the fixture to one path (the prelude is embedded in
-# `jsse --node`, nothing is prepended) and runs the same
-# path with the identical argument tail on both engines under `env -i`. A run
-# passes iff stdout and the exit status match Node's and the status equals the
-# RUN line (stderr is not compared).
+# `jsse --node`, nothing is prepended) and runs the same path with the
+# identical argument tail on both engines under `env -i`. A run passes iff
+# stdout and the exit status match Node's and the status equals the RUN line
+# (stderr is not compared).
 #
 # Options:
 #   --node             run on Node only (reference / debugging)

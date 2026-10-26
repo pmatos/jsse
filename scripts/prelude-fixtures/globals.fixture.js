@@ -33,6 +33,14 @@ rows.forEach(function (r) {
   console.log(r[0] + ": " + r[1]);
 });
 
+console.log(
+  Object.keys(globalThis)
+    .filter(function (k) {
+      return ["process", "Buffer", "TextEncoder", "TextDecoder", "crypto", "util"].indexOf(k) >= 0;
+    })
+    .join(),
+);
+
 var rnd = crypto.getRandomValues(new Uint8Array(32));
 console.log(rnd.length, rnd instanceof Uint8Array);
 console.log(

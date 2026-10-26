@@ -7,8 +7,20 @@
 
 use super::super::*;
 
+/// Node defines these as non-enumerable globals (`util` is not a script global
+/// there at all), so they must not show up in `Object.keys(globalThis)`.
+const HIDE_GLOBALS: &str = r#"(function (names) {
+  for (var i = 0; i < names.length; i++) {
+    var d = Object.getOwnPropertyDescriptor(globalThis, names[i]);
+    if (d) {
+      d.enumerable = false;
+      Object.defineProperty(globalThis, names[i], d);
+    }
+  }
+})(["process", "Buffer", "TextEncoder", "TextDecoder", "util"]);"#;
+
 /// Load order matters: the process shim extends the `process` object that the
-/// console/util shim creates.
+/// console/util shim creates, and the globals are hidden last.
 const NODE_PRELUDE: &[(&str, &str)] = &[
     (
         "node-shim.js",
@@ -26,6 +38,7 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         "node-crypto-shim.js",
         include_str!("../../../scripts/node-crypto-shim.js"),
     ),
+    ("hide-globals", HIDE_GLOBALS),
 ];
 
 impl Interpreter {
@@ -107,6 +120,8 @@ mod tests {
         run_ok(
             &mut interp,
             r#"
+            const hidden = Object.keys(globalThis).filter((k) => ["process", "Buffer", "TextEncoder", "TextDecoder", "util"].includes(k));
+            if (hidden.length) throw new Error("enumerable globals: " + hidden);
             const got = [
               typeof process, typeof Buffer, typeof TextEncoder, typeof TextDecoder,
               typeof crypto.getRandomValues, typeof __host_argv, typeof __host_cwd, typeof __host_write,
