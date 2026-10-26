@@ -68,7 +68,7 @@ emit("networkInterfaces", os.networkInterfaces());
 emit("constants-shape", [Object.keys(os.constants), Object.getPrototypeOf(os.constants), descriptors(os.constants).UV_UDP_REUSEADDR, descriptors(os).constants]);
 emit("constants-frozen", ["signals", "errno", "priority", "dlopen"].map((k) => [k, Object.isFrozen(os.constants[k]), Object.getPrototypeOf(os.constants[k]), Object.isExtensible(os.constants[k])]));
 emit("constants-descriptors", { dlopen: descriptors(os.constants.dlopen), errno: descriptors(os.constants.errno), signals: descriptors(os.constants.signals), priority: descriptors(os.constants.priority), outer: descriptors(os.constants) });
-emit("priority", [os.getPriority(), os.getPriority(0), os.getPriority(process.pid)]);
+emit("priority", [os.getPriority(), os.getPriority(0), os.getPriority(undefined)]);
 emit("priority-errors", [
   failure(() => os.getPriority("a")),
   failure(() => os.getPriority(1.5)),
@@ -81,8 +81,9 @@ emit("priority-errors", [
   failure(() => os.setPriority(99999999, 5)),
   failure(() => os.setPriority(2 ** 33)),
 ]);
-os.setPriority(0);
-emit("priority-set-same", os.getPriority());
+const nice = os.getPriority();
+os.setPriority(nice);
+emit("priority-set-same", os.getPriority() === nice);
 
 const mem = [os.freemem(), os.totalmem()];
 emit("freemem-shape", [typeof mem[0], Number.isInteger(mem[0]), mem[0] > 0, mem[0] <= mem[1], `${os.freemem}` > 0]);

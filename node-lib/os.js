@@ -305,13 +305,14 @@ function userInfo(options) {
   if (typeof options !== 'object')
     options = null;
 
+  const asBuffer = options !== null && options.encoding === 'buffer';
   const ctx = {};
-  const user = getUserInfo(ctx);
+  const user = getUserInfo(ctx, asBuffer);
 
   if (user === undefined)
     throw new ERR_SYSTEM_ERROR(ctx);
 
-  if (options !== null && options.encoding === 'buffer') {
+  if (asBuffer) {
     const { Buffer } = binding;
     user.username = Buffer.from(user.username);
     user.homedir = Buffer.from(user.homedir);

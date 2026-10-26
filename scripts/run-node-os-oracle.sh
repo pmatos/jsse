@@ -68,7 +68,7 @@ for entry in "${SCENARIOS[@]}"; do
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
         rc=0
-        env "${env_args[@]}" "$JSSE" --node "$PROBE" "$scenario" > "$WORK/jsse.out" 2> "$WORK/jsse.err" || rc=$?
+        env ${env_args[@]+"${env_args[@]}"} "$JSSE" --node "$PROBE" "$scenario" > "$WORK/jsse.out" 2> "$WORK/jsse.err" || rc=$?
         if [ "$rc" -ne 0 ]; then
             echo "FAIL $name: jsse --node exit $rc"
             head -5 "$WORK/jsse.err" | sed 's/^/  stderr: /'
@@ -77,7 +77,7 @@ for entry in "${SCENARIOS[@]}"; do
     fi
     if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
         rc=0
-        env "${env_args[@]}" "$NODE_BIN" "$PROBE" "$scenario" > "$WORK/node.out" 2> "$WORK/node.err" || rc=$?
+        env ${env_args[@]+"${env_args[@]}"} "$NODE_BIN" "$PROBE" "$scenario" > "$WORK/node.out" 2> "$WORK/node.err" || rc=$?
         if [ "$rc" -ne 0 ]; then
             echo "FAIL $name: node exit $rc"
             head -5 "$WORK/node.err" | sed 's/^/  stderr: /'

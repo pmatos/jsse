@@ -10,7 +10,7 @@
 
 use super::super::*;
 use super::node_host_os_constants::{Table, host_constants};
-use super::node_host_os_sys as sys;
+use super::node_host_os_sys::{self as sys, errno};
 
 fn js_str(s: &str) -> JsValue {
     JsValue::string(JsString::from_str(s))
@@ -27,13 +27,15 @@ fn done(v: JsValue) -> Completion {
 /// libuv's `(code, message)` for the errnos these queries can report.
 fn uv_error(errno: i32) -> (&'static str, &'static str) {
     match errno {
-        1 => ("EPERM", "operation not permitted"),
-        2 => ("ENOENT", "no such file or directory"),
-        3 => ("ESRCH", "no such process"),
-        12 => ("ENOMEM", "not enough memory"),
-        13 => ("EACCES", "permission denied"),
-        22 => ("EINVAL", "invalid argument"),
-        38 => ("ENOSYS", "function not implemented"),
+        errno::EPERM => ("EPERM", "operation not permitted"),
+        errno::ENOENT => ("ENOENT", "no such file or directory"),
+        errno::ESRCH => ("ESRCH", "no such process"),
+        errno::ENOMEM => ("ENOMEM", "not enough memory"),
+        errno::EACCES => ("EACCES", "permission denied"),
+        errno::EINVAL => ("EINVAL", "invalid argument"),
+        errno::ENAMETOOLONG => ("ENAMETOOLONG", "name too long"),
+        errno::ENOSYS => ("ENOSYS", "function not implemented"),
+        errno::ENOBUFS => ("ENOBUFS", "no buffer space available"),
         _ => ("UNKNOWN", "unknown error"),
     }
 }
@@ -98,7 +100,7 @@ fn get_hostname(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Com
 
 fn get_home_directory(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
     match sys::passwd() {
-        Ok(pw) => done(js_str(&pw.dir)),
+        Ok(pw) => done(js_str(&String::from_utf8_lossy(&pw.dir))),
         Err(e) => fail(interp, args.first(), "uv_os_homedir", e),
     }
 }
@@ -155,18 +157,33 @@ fn get_interface_addresses(interp: &mut Interpreter, _t: &JsValue, args: &[JsVal
     done(interp.create_array(flat))
 }
 
+fn text_or_bytes(interp: &mut Interpreter, bytes: &[u8], raw: bool) -> JsValue {
+    if raw {
+        interp.create_array(bytes.iter().map(|b| num(f64::from(*b))).collect())
+    } else {
+        js_str(&String::from_utf8_lossy(bytes))
+    }
+}
+
 fn get_user_info(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
     let pw = match sys::passwd() {
         Ok(pw) => pw,
         Err(e) => return fail(interp, args.first(), "uv_os_get_passwd", e),
     };
+    let raw = args.get(1).is_some_and(|v| interp.to_boolean_val(v));
+    let username = text_or_bytes(interp, &pw.name, raw);
+    let homedir = text_or_bytes(interp, &pw.dir, raw);
+    let shell = pw
+        .shell
+        .as_deref()
+        .map_or(JsValue::NULL, |s| text_or_bytes(interp, s, raw));
     let id = interp.create_object_id();
     let mut o = interp.get_object_cell_expect(id).borrow_mut();
     o.insert_value("uid", num(f64::from(pw.uid)));
     o.insert_value("gid", num(f64::from(pw.gid)));
-    o.insert_value("username", js_str(&pw.name));
-    o.insert_value("homedir", js_str(&pw.dir));
-    o.insert_value("shell", pw.shell.as_deref().map_or(JsValue::NULL, js_str));
+    o.insert_value("username", username);
+    o.insert_value("homedir", homedir);
+    o.insert_value("shell", shell);
     drop(o);
     done(JsValue::object(id))
 }
@@ -221,7 +238,7 @@ impl Interpreter {
             ("getLoadAvg", 0, get_load_avg),
             ("getCPUs", 0, get_cpus),
             ("getInterfaceAddresses", 1, get_interface_addresses),
-            ("getUserInfo", 1, get_user_info),
+            ("getUserInfo", 2, get_user_info),
             ("getPriority", 2, get_priority),
             ("setPriority", 3, set_priority),
         ];

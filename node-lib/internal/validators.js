@@ -20,6 +20,8 @@ const kValidateObjectAllowArray = 1 << 1;
 const kValidateObjectAllowFunction = 1 << 2;
 const kValidateObjectAllowObjects = kValidateObjectAllowArray |
   kValidateObjectAllowFunction;
+const { ArrayIsArray } = primordials;
+const { ERR_INVALID_ARG_TYPE, ERR_OUT_OF_RANGE } = require('internal/errors').codes;
 
 function validateString(value, name) {
   if (typeof value !== 'string')
@@ -36,7 +38,6 @@ function validateObject(value, name, options = kValidateObjectNone) {
   const throwOnNullable = (kValidateObjectAllowNullable & options) === 0;
   if (throwOnNullable && value === null) {
 function validateInt32(value, name, min = -2147483648, max = 2147483647) {
-  const { ERR_OUT_OF_RANGE } = require('internal/errors').codes;
   if (typeof value !== 'number')
     throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
   if (!primordials.NumberIsInteger(value))

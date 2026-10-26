@@ -8,9 +8,9 @@ use std::ffi::CStr;
 pub(super) struct Passwd {
     pub uid: u32,
     pub gid: u32,
-    pub name: String,
-    pub dir: String,
-    pub shell: Option<String>,
+    pub name: Vec<u8>,
+    pub dir: Vec<u8>,
+    pub shell: Option<Vec<u8>>,
 }
 
 pub(super) struct IfAddr {
@@ -29,7 +29,27 @@ pub(super) struct CpuInfo {
     pub times: [f64; 5],
 }
 
-const ENOSYS: i32 = 38;
+/// Host errno values: libuv reports the platform's own numbers, which differ
+/// between Linux, the BSDs and macOS.
+#[cfg(unix)]
+pub(super) mod errno {
+    pub use libc::{EACCES, EINVAL, ENAMETOOLONG, ENOBUFS, ENOENT, ENOMEM, ENOSYS, EPERM, ESRCH};
+}
+
+#[cfg(not(unix))]
+pub(super) mod errno {
+    pub const EPERM: i32 = 1;
+    pub const ENOENT: i32 = 2;
+    pub const ESRCH: i32 = 3;
+    pub const ENOMEM: i32 = 12;
+    pub const EACCES: i32 = 13;
+    pub const EINVAL: i32 = 22;
+    pub const ENAMETOOLONG: i32 = 36;
+    pub const ENOSYS: i32 = 38;
+    pub const ENOBUFS: i32 = 105;
+}
+
+use errno::ENOSYS;
 
 pub(super) fn node_platform(os: &str) -> String {
     match os {
@@ -122,14 +142,27 @@ pub(super) fn last_errno() -> i32 {
 
 #[cfg(unix)]
 fn clear_errno() {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "dragonfly"))]
     unsafe {
         *libc::__errno_location() = 0;
+    }
+    #[cfg(any(target_os = "android", target_os = "netbsd", target_os = "openbsd"))]
+    unsafe {
+        *libc::__errno() = 0;
     }
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
     unsafe {
         *libc::__error() = 0;
     }
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    unsafe {
+        *libc::___errno() = 0;
+    }
+}
+
+#[cfg(unix)]
+fn c_bytes(p: *const libc::c_char) -> Vec<u8> {
+    unsafe { CStr::from_ptr(p) }.to_bytes().to_vec()
 }
 
 #[cfg(unix)]
@@ -198,21 +231,12 @@ pub(super) fn passwd() -> Result<Passwd, i32> {
         if found.is_null() {
             return Err(libc::ENOENT);
         }
-        let shell = (!pwd.pw_shell.is_null()).then(|| {
-            unsafe { CStr::from_ptr(pwd.pw_shell) }
-                .to_string_lossy()
-                .into_owned()
-        });
         return Ok(Passwd {
             uid: pwd.pw_uid,
             gid: pwd.pw_gid,
-            name: unsafe { CStr::from_ptr(pwd.pw_name) }
-                .to_string_lossy()
-                .into_owned(),
-            dir: unsafe { CStr::from_ptr(pwd.pw_dir) }
-                .to_string_lossy()
-                .into_owned(),
-            shell,
+            name: c_bytes(pwd.pw_name),
+            dir: c_bytes(pwd.pw_dir),
+            shell: (!pwd.pw_shell.is_null()).then(|| c_bytes(pwd.pw_shell)),
         });
     }
 }
@@ -345,32 +369,6 @@ pub(super) fn available_parallelism() -> usize {
     std::thread::available_parallelism().map_or(1, usize::from)
 }
 
-#[cfg(target_os = "linux")]
-fn mac_by_name(head: *const libc::ifaddrs, name: &str) -> String {
-    let mut cur = head;
-    while !cur.is_null() {
-        let ent = unsafe { &*cur };
-        cur = ent.ifa_next;
-        if ent.ifa_addr.is_null() || c_name(ent) != name {
-            continue;
-        }
-        if unsafe { (*ent.ifa_addr).sa_family } as i32 == libc::AF_PACKET {
-            let ll = unsafe { &*(ent.ifa_addr as *const libc::sockaddr_ll) };
-            return ll.sll_addr[..6]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(":");
-        }
-    }
-    ZERO_MAC.to_string()
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn mac_by_name(_head: *const libc::ifaddrs, _name: &str) -> String {
-    ZERO_MAC.to_string()
-}
-
 #[cfg(unix)]
 const ZERO_MAC: &str = "00:00:00:00:00:00";
 
@@ -381,17 +379,46 @@ fn c_name(ent: &libc::ifaddrs) -> String {
         .into_owned()
 }
 
+/// Walks a `getifaddrs` list. The caller keeps the list alive (until
+/// `freeifaddrs`) for as long as the returned references are used.
+#[cfg(unix)]
+fn ifaddr_entries<'a>(head: *const libc::ifaddrs) -> impl Iterator<Item = &'a libc::ifaddrs> {
+    std::iter::successors(unsafe { head.as_ref() }, |e| unsafe { e.ifa_next.as_ref() })
+}
+
+#[cfg(target_os = "linux")]
+fn mac_table(head: *const libc::ifaddrs) -> std::collections::HashMap<String, String> {
+    let mut macs = std::collections::HashMap::new();
+    for ent in ifaddr_entries(head) {
+        if ent.ifa_addr.is_null() || unsafe { (*ent.ifa_addr).sa_family } as i32 != libc::AF_PACKET
+        {
+            continue;
+        }
+        let ll = unsafe { &*(ent.ifa_addr as *const libc::sockaddr_ll) };
+        let mac = ll.sll_addr[..6]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(":");
+        macs.entry(c_name(ent)).or_insert(mac);
+    }
+    macs
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn mac_table(_head: *const libc::ifaddrs) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::new()
+}
+
 #[cfg(unix)]
 pub(super) fn interface_addresses() -> Result<Vec<IfAddr>, i32> {
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
     if unsafe { libc::getifaddrs(&mut head) } != 0 {
         return Err(last_errno());
     }
+    let macs = mac_table(head);
     let mut out = Vec::new();
-    let mut cur = head as *const libc::ifaddrs;
-    while !cur.is_null() {
-        let ent = unsafe { &*cur };
-        cur = ent.ifa_next;
+    for ent in ifaddr_entries(head) {
         let flags = ent.ifa_flags as u64;
         let up = (libc::IFF_UP | libc::IFF_RUNNING) as u64;
         if flags & up != up || ent.ifa_addr.is_null() {
@@ -424,7 +451,7 @@ pub(super) fn interface_addresses() -> Result<Vec<IfAddr>, i32> {
             continue;
         };
         let name = c_name(ent);
-        let mac = mac_by_name(head, &name);
+        let mac = macs.get(&name).map_or(ZERO_MAC, String::as_str).to_string();
         out.push(IfAddr {
             name,
             address,
