@@ -1,7 +1,8 @@
 # Node v26.8.2 test/parallel files in this directory, verbatim. One name per
-# line; a second word marks tests that need working `process.on/emit`, which
-# the --node prelude only has once the Node event loop lands (#1229). They run
-# when `process.emit` reports listeners and are skipped (and reported) before.
+# line; further words mark what a test needs from the --node prelude. They run
+# when the probe below passes and are skipped (and reported) before:
+#   needs-process-events  process.on/emit work (Node event loop, #1229)
+#   needs-inspect         util.inspect(x, {depth: -1}) names the class, e.g. [Foo] (#1224)
 test-abortcontroller
 test-event-emitter-add-listeners
 test-event-emitter-check-listener-leaks
@@ -13,9 +14,9 @@ test-event-emitter-listener-count
 test-event-emitter-listeners
 test-event-emitter-listeners-side-effects
 test-event-emitter-max-listeners
-test-event-emitter-max-listeners-warning needs-process-events
-test-event-emitter-max-listeners-warning-for-null needs-process-events
-test-event-emitter-max-listeners-warning-for-symbol needs-process-events
+test-event-emitter-max-listeners-warning needs-process-events needs-inspect
+test-event-emitter-max-listeners-warning-for-null needs-process-events needs-inspect
+test-event-emitter-max-listeners-warning-for-symbol needs-process-events needs-inspect
 test-event-emitter-method-names
 test-event-emitter-modify-in-emit
 test-event-emitter-num-args

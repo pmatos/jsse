@@ -235,8 +235,8 @@ var __eventsTimers = {
 // Subtests jsse cannot run yet, skipped on jsse only (they pass on Node).
 var __eventsJsseSkips = {
   "AbortController inspection depth 1 or null works": "util.inspect.custom is not implemented (#1224)",
-  "AbortSignal.timeout() does not prevent the signal from being collected": "$262.gc() does not collect WeakRef targets",
-  "AbortSignal with a timeout is not collected while there is an active listener": "$262.gc() does not collect WeakRef targets",
+  "AbortSignal.timeout() does not prevent the signal from being collected": "$262.gc() does not collect WeakRef targets (#1317)",
+  "AbortSignal with a timeout is not collected while there is an active listener": "$262.gc() does not collect WeakRef targets (#1317)",
 };
 var __eventsNodeTest = (function () {
   function register(name, options, fn) {

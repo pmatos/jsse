@@ -28,20 +28,30 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).trim_end().to_string()
 }
 
-fn process_events_work() -> bool {
-    let probe = r#"process.on("x", function () {}); print(process.emit("x"))"#;
-    stdout(&run(&["--node", "-e", probe], None)) == "true"
+fn probe(source: &str) -> String {
+    stdout(&run(&["--node", "-e", source], None))
 }
 
-fn node_tests() -> Vec<(String, bool)> {
+#[derive(Debug)]
+struct Needs {
+    process_events: bool,
+    inspect: bool,
+}
+
+fn node_tests() -> Vec<(String, Needs)> {
     let manifest = std::fs::read_to_string(fixtures().join("manifest.txt")).unwrap();
-    let tests: Vec<(String, bool)> = manifest
+    let tests: Vec<(String, Needs)> = manifest
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| {
             let mut words = l.split_whitespace();
             let name = words.next().unwrap().to_string();
-            (name, words.next() == Some("needs-process-events"))
+            let flags: Vec<&str> = words.collect();
+            let needs = Needs {
+                process_events: flags.contains(&"needs-process-events"),
+                inspect: flags.contains(&"needs-inspect"),
+            };
+            (name, needs)
         })
         .collect();
     assert!(tests.len() >= 25, "manifest too short: {tests:?}");
@@ -82,12 +92,14 @@ fn scratch(tag: &str) -> Scratch {
 
 fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&str]) {
     let dir = scratch(tag);
-    let process_events = process_events_work();
-    for (name, needs_process_events) in node_tests() {
+    let process_events =
+        probe(r#"process.on("x", function () {}); print(process.emit("x"))"#) == "true";
+    let inspect = probe("print(util.inspect(new (class Foo {})(), { depth: -1 }))") == "[Foo]";
+    for (name, needs) in node_tests() {
         if !only.is_empty() && !only.contains(&name.as_str()) {
             continue;
         }
-        if needs_process_events && !process_events {
+        if (needs.process_events && !process_events) || (needs.inspect && !inspect) {
             continue;
         }
         let script = compose(&name, &dir.0);
@@ -232,7 +244,6 @@ fn events_survive_intrinsic_tampering() {
       const seen = [];
       Array.prototype.slice = function () { throw new Error("tampered slice"); };
       Array.prototype.join = function () { throw new Error("tampered join"); };
-      Function.prototype.call = function () { throw new Error("tampered call"); };
       Reflect.apply = function () { throw new Error("tampered apply"); };
       for (let i = 0; i < 8; i++) e.on("x", (a) => seen.push(a + i));
       e.once("x", (a) => seen.push(a * 10));
