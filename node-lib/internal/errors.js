@@ -29,7 +29,11 @@ const {
   StringPrototypeToLowerCase,
 } = primordials;
 
-const { inspect } = require('internal/util/inspect');
+let lazyInspect;
+function inspect(...args) {
+  lazyInspect ??= require('internal/util/inspect').inspect;
+  return lazyInspect(...args);
+}
 
 const codes = {};
 
@@ -57,6 +61,7 @@ function E(code, Base, message) {
     return error;
   }
   NodeError.prototype = proto;
+  NodeError.HideStackFramesError = NodeError;
   codes[code] = NodeError;
 }
 
@@ -288,6 +293,30 @@ E('ERR_UNHANDLED_ERROR', Error, (err = undefined) => {
   if (err === undefined) return msg;
   return `${msg} (${err})`;
 });
+E('ERR_FALSY_VALUE_REJECTION', Error, function(reason) {
+  this.reason = reason;
+  return 'Promise was rejected with falsy value';
+});
+E('ERR_INTERNAL_ASSERTION', Error, (message) => {
+  const suffix = 'This is caused by either a bug in Node.js ' +
+    'or incorrect usage of Node.js internals.\n' +
+    'Please open an issue with this stack trace at ' +
+    'https://github.com/nodejs/node/issues\n';
+  return message === undefined ? suffix : `${message}\n${suffix}`;
+});
+E('ERR_INVALID_MIME_SYNTAX', TypeError, (production, str, invalidIndex) => {
+  const msg = invalidIndex !== -1 ? ` at ${invalidIndex}` : '';
+  return `The MIME syntax for a ${production} in "${str}" is invalid` + msg;
+});
+E('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', TypeError, (message) => message);
+E('ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL', TypeError, (positional) =>
+  `Unexpected argument '${positional}'. This command does not take positional arguments`);
+E('ERR_PARSE_ARGS_UNKNOWN_OPTION', TypeError, (option, allowPositionals) => {
+  const suggestDashDash = allowPositionals ? '. To specify a positional ' +
+    "argument starting with a '-', place it at the end of the command after " +
+    `'--', as in '-- ${JSONStringify(option)}` : '';
+  return `Unknown option '${option}'${suggestDashDash}`;
+});
 E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
 
 E('ERR_INVALID_MODULE_SPECIFIER', TypeError, (request, reason, base = undefined) => {
@@ -368,4 +397,20 @@ function genericNodeError(message, errorProperties) {
   return err;
 }
 
-module.exports = { AbortError, codes, genericNodeError };
+let maxStackErrorName;
+let maxStackErrorMessage;
+function isStackOverflowError(err) {
+  if (!err || err.name !== 'RangeError') return false;
+  if (maxStackErrorMessage === undefined) {
+    try {
+      function overflowStack() { overflowStack(); }
+      overflowStack();
+    } catch (e) {
+      maxStackErrorMessage = e.message;
+      maxStackErrorName = e.name;
+    }
+  }
+  return err.name === maxStackErrorName && err.message === maxStackErrorMessage;
+}
+
+module.exports = { AbortError, codes, genericNodeError, isStackOverflowError };

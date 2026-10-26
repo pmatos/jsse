@@ -93,7 +93,8 @@ fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&s
     let dir = scratch(tag);
     let process_events =
         probe(r#"process.on("x", function () {}); print(process.emit("x"))"#) == "true";
-    let inspect = probe("print(util.inspect(new (class Foo {})(), { depth: -1 }))") == "[Foo]";
+    let inspect =
+        probe(r#"print(require("util").inspect(new (class Foo {})(), { depth: -1 }))"#) == "[Foo]";
     let tests = node_tests();
     for wanted in only {
         assert!(
