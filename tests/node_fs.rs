@@ -121,6 +121,7 @@ fn file_urls_buffers_and_non_utf8_names_are_accepted_as_paths() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_large_file_is_read_and_written_without_extra_copies() {
     let dir = scratch("large");
@@ -130,19 +131,21 @@ fn a_large_file_is_read_and_written_without_extra_copies() {
         &format!(
             r#"
             const mib = {mib};
-            const data = new Uint8Array(mib << 20);
+            const hwm = () => Number(/VmHWM:\s+(\d+) kB/.exec(fs.readFileSync("/proc/self/status", "utf8"))[1]) / 1024;
+            const before = hwm();
+            const data = new Uint8Array(mib << 20).fill(0x5a);
             data[0] = 1; data[data.length - 1] = 2;
             fs.writeFileSync(D + "/big.bin", data);
             const back = fs.readFileSync(D + "/big.bin");
-            const peak = Number(/VmHWM:\s+(\d+) kB/.exec(fs.readFileSync("/proc/self/status", "utf8"))[1]) / 1024;
-            console.log(back.length === data.length, back[0], back[back.length - 1], Math.round(peak));
+            const grew = hwm() - before;
+            console.log(back.length === data.length, back[0], back[back.length - 1], back[mib << 19], Math.round(grew));
             "#
         ),
     );
     let fields: Vec<&str> = out.split(' ').collect();
-    assert_eq!(&fields[..3], ["true", "1", "2"], "{out}");
-    let peak: u64 = fields[3].parse().unwrap();
-    // The source array plus the one buffer the read returns, plus the engine
-    // itself; a staging copy of either would add another 128 MiB.
-    assert!(peak < 2 * mib + mib / 2, "peak RSS {peak} MiB: {out}");
+    assert_eq!(&fields[..4], ["true", "1", "2", "90"], "{out}");
+    let grew: u64 = fields[4].parse().unwrap();
+    // The resident source array plus the one buffer the read returns; a
+    // staging copy of either would add another 128 MiB.
+    assert!(grew < 2 * mib + mib / 2, "peak RSS grew {grew} MiB: {out}");
 }
