@@ -24,6 +24,10 @@ const HIDE_GLOBALS: &str = r#"(function (names) {
 /// handoff, the fs scripts need `Buffer` and `util`, and the globals are hidden last.
 const NODE_PRELUDE: &[(&str, &str)] = &[
     (
+        "node-v8-error.js",
+        include_str!("../../../scripts/node-v8-error.js"),
+    ),
+    (
         "node-shim.js",
         include_str!("../../../scripts/node-shim.js"),
     ),

@@ -604,13 +604,11 @@ pub(crate) const EVAL_DEPTH_LIMIT: usize = if cfg!(debug_assertions) {
     EVAL_DEPTH_LIMIT_RELEASE
 };
 
-// A single `if cfg!(debug_assertions)` expression only ever const-evaluates
-// the arm that gets compiled, so an assertion written against the four
-// public names above would silently check one profile's numbers only — and
-// since every CI job builds `--release` (see CLAUDE.md), the debug arm's
-// coupling would never be compile-checked anywhere. Asserting over the named
-// `_DEBUG`/`_RELEASE` pairs instead checks both arms on every build,
-// regardless of which one is actually compiled in.
+// A single `if cfg!(debug_assertions)` expression only const-evaluates the
+// arm that gets compiled, so an assertion against the four public names above
+// would check one profile's numbers only (CI builds `--release`, so the debug
+// arm's coupling would never be checked). Asserting over the named
+// `_DEBUG`/`_RELEASE` pairs checks both arms on every build.
 const _: () = assert!(
     CALL_DEPTH_REARM_LIMIT_DEBUG < CALL_DEPTH_SOFT_LIMIT_DEBUG
         && CALL_DEPTH_SOFT_LIMIT_DEBUG < CALL_DEPTH_HARD_LIMIT_DEBUG
@@ -658,9 +656,8 @@ pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 /// Invariant (the contract of `new`): the `CallFrame` holding this value is
 /// pushed after, and popped before, the end of the borrows it was built from,
 /// by the same `call_function_inner_impl` activation, and nothing else
-/// truncates `call_stack_frames`. The arguments stay rooted for the frame's
-/// lifetime because the borrowed slice is what the GC walk reads; the
-/// environment is rooted through `call_stack_envs`.
+/// truncates `call_stack_frames`. The GC walk reads the borrowed slice, which
+/// roots the arguments; the environment is rooted through `call_stack_envs`.
 pub(crate) struct DeferredCallArguments {
     values: NonNull<[JsValue]>,
     func_env: NonNull<RefCell<Environment>>,
@@ -707,6 +704,8 @@ pub(crate) struct CallFrame {
     pub func_obj_id: u64,
     pub arguments: CallFrameArguments,
     pub is_eval: bool,
+    pub caller_pos: u32,
+    pub env_index: usize,
 }
 
 #[derive(Clone, Debug)]

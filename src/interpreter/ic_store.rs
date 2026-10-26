@@ -1,7 +1,6 @@
 //! Interpreter-side inline-cache store.
 //!
-//! Inline-cache slots used to live on the AST nodes in `Cell`s. The ADR in
-//! `docs/adr/0001-inline-cache-ast-seam.md` moved them into the interpreter.
+//! Slots moved off the AST nodes (`docs/adr/0001-inline-cache-ast-seam.md`).
 //! Each `Body` gets a dense namespace of `CallSiteId` / `PropSiteId` values
 //! assigned by `ast::assign_ic_sites`, and a `BodyIcStore` holds the slots.
 //! A function body's store belongs to its literal's `LiteralFrame` and is
@@ -400,6 +399,10 @@ impl Interpreter {
 
 #[cfg(test)]
 mod tests {
+    fn site(id: u32) -> CallSiteId {
+        CallSiteId(id, 0)
+    }
+
     use std::rc::Rc;
 
     use super::*;
@@ -423,14 +426,14 @@ mod tests {
         let h = store.enter_body(&body);
         assert_eq!(h.slot, 0);
         assert!(matches!(
-            store.store_mut(h).call_slot(CallSiteId(0)),
+            store.store_mut(h).call_slot(site(0)),
             CallIcSlot::Empty
         ));
         store
             .store_mut(h)
-            .set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
+            .set_call_slot(site(0), CallIcSlot::Megamorphic);
         assert!(matches!(
-            store.store_mut(h).call_slot(CallSiteId(0)),
+            store.store_mut(h).call_slot(site(0)),
             CallIcSlot::Megamorphic
         ));
         store.exit_body(h);
@@ -442,18 +445,12 @@ mod tests {
         let body = body_with_calls_props(2, 0);
         let frame = LiteralFrame::default();
         interp.with_ic_body_in_frame(&body, &frame, |interp| {
-            interp.set_call_slot(CallSiteId(1), CallIcSlot::Megamorphic);
+            interp.set_call_slot(site(1), CallIcSlot::Megamorphic);
             interp.with_ic_body_in_frame(&body, &frame, |interp| {
-                assert!(matches!(
-                    interp.call_slot(CallSiteId(1)),
-                    CallIcSlot::Megamorphic
-                ));
-                assert!(matches!(interp.call_slot(CallSiteId(0)), CallIcSlot::Empty));
+                assert!(matches!(interp.call_slot(site(1)), CallIcSlot::Megamorphic));
+                assert!(matches!(interp.call_slot(site(0)), CallIcSlot::Empty));
             });
-            assert!(matches!(
-                interp.call_slot(CallSiteId(1)),
-                CallIcSlot::Megamorphic
-            ));
+            assert!(matches!(interp.call_slot(site(1)), CallIcSlot::Megamorphic));
         });
         assert!(matches!(interp.current_ic, CurrentIc::None));
         assert_eq!(
@@ -494,20 +491,17 @@ mod tests {
         let child = body_with_calls_props(1, 0);
 
         interp.with_ic_body(&parent, |interp| {
-            interp.set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
+            interp.set_call_slot(site(0), CallIcSlot::Megamorphic);
 
             interp.with_ic_body(&child, |interp| {
-                assert!(matches!(interp.call_slot(CallSiteId(0)), CallIcSlot::Empty));
+                assert!(matches!(interp.call_slot(site(0)), CallIcSlot::Empty));
             });
 
-            assert!(matches!(
-                interp.call_slot(CallSiteId(0)),
-                CallIcSlot::Megamorphic
-            ));
+            assert!(matches!(interp.call_slot(site(0)), CallIcSlot::Megamorphic));
         });
 
         interp.with_ic_body(&child, |interp| {
-            assert!(matches!(interp.call_slot(CallSiteId(0)), CallIcSlot::Empty));
+            assert!(matches!(interp.call_slot(site(0)), CallIcSlot::Empty));
         });
     }
 
@@ -624,9 +618,9 @@ mod tests {
         assert_eq!(store.slot_count(), 3);
         store
             .store_mut(ha)
-            .set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
+            .set_call_slot(site(0), CallIcSlot::Megamorphic);
         assert!(matches!(
-            store.store_mut(ha).call_slot(CallSiteId(0)),
+            store.store_mut(ha).call_slot(site(0)),
             CallIcSlot::Megamorphic
         ));
 
@@ -646,7 +640,7 @@ mod tests {
         store.exit_body(inner);
         store
             .store_mut(outer)
-            .set_call_slot(CallSiteId(0), CallIcSlot::Megamorphic);
+            .set_call_slot(site(0), CallIcSlot::Megamorphic);
         store.exit_body(outer);
     }
 }

@@ -15,6 +15,7 @@
 
 use super::{CompileError, Compiler};
 use crate::ast::{CallSiteId, Expression};
+use crate::interpreter::builtins::node_host_stack::call_positions_enabled;
 use crate::interpreter::bytecode::op::Op;
 
 pub(super) fn has_spread(args: &[Expression]) -> bool {
@@ -31,18 +32,29 @@ pub(super) fn is_unsupported_call(callee: &Expression, args: &[Expression], op: 
 }
 
 impl Compiler {
+    /// Records the call's source position for `--node` stack traces; a no-op
+    /// (no bytes emitted) unless the Node prelude installed its hooks.
+    pub(super) fn emit_call_pos(&mut self, site_id: CallSiteId) {
+        if site_id.1 != 0 && call_positions_enabled() {
+            self.emit(Op::SetCallPos);
+            self.emit_u32(site_id.1);
+        }
+    }
+
     /// `[..., callee, this]` → `[..., result]` (`below` is 2), or `[...,
     /// callee]` → `[..., result]` for `new` (`below` is 1).
     pub(super) fn compile_spread_arguments(
         &mut self,
         args: &[Expression],
         below: u16,
+        site_id: CallSiteId,
     ) -> Result<(), CompileError> {
         if usize::from(self.current_stack) + args.len() + 1 > usize::from(u16::MAX) {
             return Err(CompileError::Ineligible("operand stack overflow"));
         }
         if let [Expression::Spread(iterable)] = args {
             self.compile_expr(iterable)?;
+            self.emit_call_pos(site_id);
             self.emit(if below == 2 {
                 Op::CallSpreadSole
             } else {
@@ -79,6 +91,7 @@ impl Compiler {
                 }
             }
         }
+        self.emit_call_pos(site_id);
         self.emit(if below == 2 {
             Op::CallSpread
         } else {
@@ -105,11 +118,12 @@ impl Compiler {
         // needed — any expression compiles as the callee directly.
         self.compile_expr(callee)?;
         if has_spread(args) {
-            return self.compile_spread_arguments(args, 1);
+            return self.compile_spread_arguments(args, 1, site_id);
         }
         for arg in args {
             self.compile_expr(arg)?;
         }
+        self.emit_call_pos(site_id);
         self.emit(Op::Construct);
         self.emit_u16(argc);
         self.emit_u32(site_id.0);

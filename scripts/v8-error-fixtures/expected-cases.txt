@@ -1,0 +1,126 @@
+## plain chain
+Error: boom
+    at inner (<dir>/cases.js:11:10)
+    at middle (<dir>/cases.js:14:10)
+    at outer (<dir>/cases.js:17:10)
+    at caseFrames (<dir>/cases.js:55:23)
+## object method
+Error: method
+    at Object.method (<dir>/cases.js:22:12)
+    at caseFrames (<dir>/cases.js:56:33)
+## getter
+Error: getter
+    at get accessor (<dir>/cases.js:25:12)
+## constructor
+Error: ctor
+    at new Widget (<dir>/cases.js:31:18)
+    at caseFrames (<dir>/cases.js:58:23)
+## static method
+Error: ctor
+    at new Widget (<dir>/cases.js:31:18)
+    at Widget.make (<dir>/cases.js:34:12)
+    at caseFrames (<dir>/cases.js:59:32)
+## instance method
+Error: instance
+    at Widget.run (<dir>/cases.js:37:12)
+    at caseFrames (<dir>/cases.js:60:40)
+## callback
+Error: cb
+    at cb (<dir>/cases.js:61:51)
+    at caseFrames (<dir>/cases.js:61:24)
+## call without new
+Error: nonew
+    at viaCall (<dir>/cases.js:62:57)
+    at caseFrames (<dir>/cases.js:62:75)
+## native error types
+TypeError: t|RangeError: r
+## subclass chain
+CustomError: deep
+    at throwsCustom (<dir>/cases.js:51:9)
+    at caseFrames (<dir>/cases.js:65:5)
+## subclass name
+CustomError
+## capture plain object
+Error
+    at target (<dir>/cases.js:74:11)
+    at caseCapture (<dir>/cases.js:85:32)
+## capture named object
+N: M
+    at target (<dir>/cases.js:74:11)
+    at caseCapture (<dir>/cases.js:86:32)
+## capture with constructorOpt
+Error
+    at viaHelper (<dir>/cases.js:82:5)
+    at caseCapture (<dir>/cases.js:87:39)
+## capture descriptor
+["configurable","enumerable","get","set"]
+## constructorOpt not on stack
+Error
+## capture on a primitive
+true
+## limit 0
+0
+## limit 1
+1
+## limit 2
+2
+## limit 100
+4
+## limit non-number
+undefined
+## limit default
+10
+## limit descriptor
+{"value":10,"writable":true,"enumerable":true,"configurable":true}
+## header read after rename
+Renamed: changed
+## header fixed once read
+Error: early
+## empty message
+Error
+## multi-line message
+Error: a|b
+## assigned stack
+custom stack
+## own stack keys
+["message","stack"]
+## stack enumerable
+false
+## prepareStackTrace sites
+Widget,,string,31,18,true,false,false
+make,Widget,string,34,12,false,false,false
+caseCallSites,,string,150,42,false,false,false
+## prepareStackTrace object result
+{"sites":true,"same":true,"count":true}
+## prepareStackTrace runs once, on first read
+0,1,prepared
+## site toString joined
+string
+## restored
+Error: boom
+## site toString
+new Widget (<dir>/cases.js:31:18)
+Widget.make (<dir>/cases.js:34:12)
+## cause
+Error: outer
+  [cause]: TypeError: inner
+}
+## extra property
+Error: plain
+  code: 'E_PLAIN'
+}
+## scalar cause
+Error: scalar
+  [cause]: 'text'
+}
+## no frames
+[Error: bare]
+## no frames with cause
+[Error: gone] { [cause]: 1 }
+## async before await
+Error: before await
+    at beforeAwait (<dir>/cases.js:201:10)
+    at caseAsync (<dir>/cases.js:209:3)
+## async after await
+Error: after await
+    at afterAwait (<dir>/cases.js:205:10)

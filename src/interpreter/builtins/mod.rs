@@ -30,6 +30,8 @@ mod node_host_fs_error;
 mod node_host_fs_meta;
 mod node_host_loop;
 mod node_host_process;
+pub(crate) mod node_host_stack;
+mod node_host_stack_sources;
 mod node_prelude;
 mod number;
 mod object;
