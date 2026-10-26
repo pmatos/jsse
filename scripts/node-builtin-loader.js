@@ -62,7 +62,7 @@
     table[name] = [ctor, false];
     snapshot(ctor, name, false);
     if (typeof ctor === "function" && ctor.prototype) {
-      table["" + name + "Prototype"] = [ctor.prototype, false];
+      table[name + "Prototype"] = [ctor.prototype, false];
       snapshot(ctor.prototype, name + "Prototype", true);
     }
   });
