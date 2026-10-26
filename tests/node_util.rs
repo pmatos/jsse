@@ -13,6 +13,10 @@ fn fixtures() -> PathBuf {
 
 fn run(args: &[&str], gc_stress: Option<&str>) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_jsse"));
+    cmd.env_remove("FORCE_COLOR")
+        .env_remove("NO_COLOR")
+        .env_remove("NODE_DISABLE_COLORS")
+        .env_remove("NODE_DEBUG");
     if let Some(period) = gc_stress {
         cmd.env("JSSE_GC_STRESS", period);
     }
@@ -253,7 +257,10 @@ fn debuglog_and_colors_honour_the_environment() {
       print(JSON.stringify(util.styleText("red", "x")), JSON.stringify(util.styleText("red", "x", { stream: process.stderr })));
     "#;
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_jsse"));
-    cmd.env("NODE_DEBUG", "foo").env("FORCE_COLOR", "1");
+    cmd.env_remove("NO_COLOR")
+        .env_remove("NODE_DISABLE_COLORS")
+        .env("NODE_DEBUG", "foo")
+        .env("FORCE_COLOR", "1");
     let out = cmd.args(["--node", "-e", source]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
@@ -316,4 +323,31 @@ fn corpus_survives_gc_stress() {
     let out = run(&["--node", script.to_str().unwrap()], Some("997"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out).lines().last().unwrap(), want.trim_end());
+}
+
+#[test]
+fn console_assert_indents_and_warns_like_node() {
+    let source = r#"
+      console.group('g');
+      console.assert(false, 'ind');
+      console.assert(false, { a: 1 });
+      console.groupEnd();
+      console.timeEnd('zz');
+      console.countReset('q');
+      console.time('d'); console.time('d');
+    "#;
+    let out = run(&["--node", "-e", source], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.starts_with("  Assertion failed: ind\n  Assertion failed { a: 1 }\n"),
+        "{err}"
+    );
+    for want in [
+        "Warning: No such label 'zz' for console.timeEnd()",
+        "Warning: Count for 'q' does not exist",
+        "Warning: Label 'd' already exists for console.time()",
+    ] {
+        assert!(err.contains(want), "{err}");
+    }
 }

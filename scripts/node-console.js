@@ -62,12 +62,41 @@
     return hrtime.bigint();
   }
 
-  function elapsed(name) {
+  function pad(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+
+  function formatTime(ms) {
+    var hours = 0;
+    var minutes = 0;
+    var seconds = 0;
+    if (ms >= 1000) {
+      if (ms >= 60000) {
+        if (ms >= 3600000) {
+          hours = Math.floor(ms / 3600000);
+          ms = ms % 3600000;
+        }
+        minutes = Math.floor(ms / 60000);
+        ms = ms % 60000;
+      }
+      seconds = ms / 1000;
+    }
+    if (hours !== 0 || minutes !== 0) {
+      var parts = seconds.toFixed(3).split(".");
+      var head = hours !== 0 ? hours + ":" + pad(minutes) : minutes;
+      return head + ":" + pad(+parts[0]) + "." + parts[1] +
+        " (" + (hours !== 0 ? "h:m" : "") + "m:ss.mmm)";
+    }
+    if (seconds !== 0) return seconds.toFixed(3) + "s";
+    return Number(ms.toFixed(3)) + "ms";
+  }
+
+  function elapsed(name, method) {
     if (!(name in timers)) {
-      c.warn("Warning: No such label '" + name + "'");
+      process.emitWarning("No such label '" + name + "' for console." + method + "()");
       return undefined;
     }
-    return Number(now() - timers[name]) / 1e6;
+    return formatTime(Number(now() - timers[name]) / 1e6);
   }
 
   var c = {
@@ -84,13 +113,14 @@
     trace: function () {
       var msg = format(arguments);
       var stack = new Error().stack || "";
-      process.stderr.write("Trace" + (msg ? ": " + msg : "") + "\n" + stack + "\n");
+      write(process.stderr, "Trace" + (msg ? ": " + msg : "") + "\n" + stack);
     },
     assert: function (cond) {
       if (cond) return;
       var rest = Array.prototype.slice.call(arguments, 1);
-      var msg = rest.length ? ": " + format(rest) : "";
-      process.stderr.write("Assertion failed" + msg + "\n");
+      if (typeof rest[0] === "string") rest[0] = "Assertion failed: " + rest[0];
+      else rest.unshift("Assertion failed");
+      write(process.stderr, format(rest));
     },
     group: function () {
       if (arguments.length) c.log.apply(c, arguments);
@@ -105,24 +135,34 @@
       c.log(name + ": " + counts[name]);
     },
     countReset: function (name) {
-      counts[label(name)] = 0;
+      name = label(name);
+      if (!(name in counts)) {
+        process.emitWarning("Count for '" + name + "' does not exist");
+        return;
+      }
+      counts[name] = 0;
     },
     time: function (name) {
-      timers[label(name)] = now();
+      name = label(name);
+      if (name in timers) {
+        process.emitWarning("Label '" + name + "' already exists for console.time()");
+        return;
+      }
+      timers[name] = now();
     },
     timeEnd: function (name) {
       name = label(name);
-      var ms = elapsed(name);
+      var ms = elapsed(name, "timeEnd");
       if (ms === undefined) return;
       delete timers[name];
-      c.log(name + ": " + ms + "ms");
+      c.log(name + ": " + ms);
     },
     timeLog: function (name) {
       name = label(name);
-      var ms = elapsed(name);
+      var ms = elapsed(name, "timeLog");
       if (ms === undefined) return;
       var rest = Array.prototype.slice.call(arguments, 1);
-      c.log(name + ": " + ms + "ms" + (rest.length ? " " + format(rest) : ""));
+      c.log(name + ": " + ms + (rest.length ? " " + format(rest) : ""));
     },
     // Node renders an ASCII table; an inspect dump is close enough here.
     table: function (data) {

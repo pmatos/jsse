@@ -8,8 +8,15 @@ const {
   StringPrototypeReplaceAll,
   StringPrototypeSlice,
   StringPrototypeStartsWith,
-  StringPrototypeTrim,
 } = primordials;
+
+function trim(str) {
+  let start = 0;
+  let end = str.length;
+  while (start < end && (str[start] === ' ' || str[start] === '\t')) start++;
+  while (end > start && (str[end - 1] === ' ' || str[end - 1] === '\t')) end--;
+  return StringPrototypeSlice(str, start, end);
+}
 
 function parse(input) {
   const result = { __proto__: null };
@@ -21,7 +28,7 @@ function parse(input) {
   while (pos < end) {
     let lineEnd = StringPrototypeIndexOf(content, '\n', pos);
     if (lineEnd === -1) lineEnd = end;
-    let line = StringPrototypeTrim(StringPrototypeSlice(content, pos, lineEnd));
+    let line = trim(StringPrototypeSlice(content, pos, lineEnd));
     if (line === '' || line[0] === '#') {
       pos = lineEnd + 1;
       continue;
@@ -31,9 +38,9 @@ function parse(input) {
       pos = lineEnd + 1;
       continue;
     }
-    let key = StringPrototypeTrim(StringPrototypeSlice(line, 0, eq));
+    let key = trim(StringPrototypeSlice(line, 0, eq));
     if (StringPrototypeStartsWith(key, 'export ')) {
-      key = StringPrototypeTrim(StringPrototypeSlice(key, 7));
+      key = trim(StringPrototypeSlice(key, 7));
     }
     if (key === '') {
       pos = lineEnd + 1;
@@ -64,7 +71,7 @@ function parse(input) {
     value = StringPrototypeSlice(rest, 0, nl);
     const hash = StringPrototypeIndexOf(value, '#');
     if (hash !== -1) value = StringPrototypeSlice(value, 0, hash);
-    result[key] = StringPrototypeTrim(value);
+    result[key] = trim(value);
     pos = valueStart + lead + nl + 1;
   }
   return result;

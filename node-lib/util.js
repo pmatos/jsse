@@ -269,7 +269,7 @@ function getCallSites(frameCount = 10, options) {
   validateInteger(frameCount, 'frameCount', 1, 200);
   const lines = StringPrototypeSplit(new Error().stack ?? '', '\n');
   const sites = [];
-  for (let i = 1; i < lines.length && sites.length < frameCount; i++) {
+  for (let i = 1; i < lines.length && sites.length <= frameCount; i++) {
     const m = RegExpPrototypeExec(stackFrameRegExp, lines[i]);
     if (m === null) continue;
     ArrayPrototypePush(sites, {
