@@ -1,0 +1,597 @@
+
+    [
+      {
+        description: 'compares two identical simple objects',
+        actual: { a: 1, b: 'string' },
+        expected: { a: 1, b: 'string' },
+      },
+      {
+        description: 'compares two objects with different property order',
+        actual: { a: 1, b: 'string' },
+        expected: { b: 'string', a: 1 },
+      },
+      {
+        description: 'compares two deeply nested objects with partial equality',
+        actual: { a: { nested: { property: true, some: 'other' } } },
+        expected: { a: { nested: { property: true } } },
+      },
+      {
+        description:
+          'compares plain objects from different realms',
+        actual: vm.runInNewContext(`({
+          a: 1,
+          b: 2n,
+          c: "3",
+          d: /4/,
+          e: new Set([5]),
+          f: [6],
+          g: new Uint8Array()
+        })`),
+        expected: { b: 2n, e: new Set([5]), f: [6], g: new Uint8Array() },
+      },
+      {
+        description: 'compares two integers',
+        actual: 1,
+        expected: 1,
+      },
+      {
+        description: 'compares two strings',
+        actual: '1',
+        expected: '1',
+      },
+      {
+        description: 'compares two objects with nested objects',
+        actual: createDeepNestedObject(),
+        expected: createDeepNestedObject(),
+      },
+      {
+        description: 'compares two objects with circular references',
+        actual: createCircularObject(),
+        expected: createCircularObject(),
+      },
+      {
+        description: 'compares two arrays with identical elements',
+        actual: [1, 'two', true],
+        expected: [1, 'two', true],
+      },
+      {
+        description: 'compares [0] with [0]',
+        actual: [0],
+        expected: [0],
+      },
+      {
+        description: 'compares [-0] with [-0]',
+        actual: [-0],
+        expected: [-0],
+      },
+      {
+        description: 'compares [0, -0, 0] with [0, 0]',
+        actual: [0, -0, 0],
+        expected: [0, 0],
+      },
+      {
+        description: 'comparing an array with symbol properties matching',
+        actual: (() => {
+          const array = [1, 2, 3];
+          array[Symbol.for('abc')] = 'test';
+          array[Symbol.for('test')] = 'test';
+          Object.defineProperty(array, Symbol.for('hidden'), {
+            value: 'hidden',
+            enumerable: false,
+          });
+          return array;
+        })(),
+        expected: (() => {
+          const array = [1, 2, 3];
+          array[Symbol.for('test')] = 'test';
+          return array;
+        })(),
+      },
+      {
+        description: 'comparing an array with extra properties matching',
+        actual: (() => {
+          const array = [1, 2, 3];
+          array.alsoIgnored = [{ nested: { property: true } }];
+          array.extra = 'test';
+          array.ignored = 'test';
+          return array;
+        })(),
+        expected: (() => {
+          const array = [1, 2, 3];
+          array.extra = 'test';
+          Object.defineProperty(array, 'ignored', { enumerable: false });
+          Object.defineProperty(array, Symbol.for('hidden'), {
+            value: 'hidden',
+            enumerable: false,
+          });
+          return array;
+        })(),
+      },
+      {
+        description: 'compares two Date objects with the same time',
+        actual: new Date(0),
+        expected: new Date(0),
+      },
+      {
+        description: 'compares two objects with large number of properties',
+        actual: Object.fromEntries(
+          Array.from({ length: 100 }, (_, i) => [`key${i}`, i])
+        ),
+        expected: Object.fromEntries(
+          Array.from({ length: 100 }, (_, i) => [`key${i}`, i])
+        ),
+      },
+      {
+        description: 'compares two objects with Symbol properties',
+        actual: { [sym]: 'symbol' },
+        expected: { [sym]: 'symbol' },
+      },
+      {
+        description: 'compares two objects with RegExp properties',
+        actual: { pattern: /abc/ },
+        expected: { pattern: /abc/ },
+      },
+      {
+        description: 'compares two objects with identical function properties',
+        actual: { fn: func },
+        expected: { fn: func },
+      },
+      {
+        description: 'compares two objects with mixed types of properties',
+        actual: { num: 1, str: 'test', bool: true, sym },
+        expected: { num: 1, str: 'test', bool: true, sym },
+      },
+      {
+        description: 'compares two objects with Buffers',
+        actual: { buf: Buffer.from('Node.js') },
+        expected: { buf: Buffer.from('Node.js') },
+      },
+      {
+        description: 'compares two objects with identical Error properties',
+        actual: { error: new Error('Test error') },
+        expected: { error: new Error('Test error') },
+      },
+      {
+        description: 'compares two Uint8Array objects',
+        actual: { typedArray: new Uint8Array([1, 2, 3, 4, 5]) },
+        expected: { typedArray: new Uint8Array([1, 2, 3, 5]) },
+      },
+      {
+        description: 'compares two Int16Array objects',
+        actual: { typedArray: new Int16Array([1, 2, 3, 4, 5]) },
+        expected: { typedArray: new Int16Array([1, 2, 3]) },
+      },
+      {
+        description: 'compares two DataView objects with the same buffer and different views',
+        actual: { dataView: new DataView(new ArrayBuffer(8), 0, 4) },
+        expected: { dataView: new DataView(new ArrayBuffer(8), 4, 4) },
+      },
+      {
+        description: 'compares two DataView objects with different buffers',
+        actual: { dataView: new DataView(new ArrayBuffer(8)) },
+        expected: { dataView: new DataView(new ArrayBuffer(8)) },
+      },
+      {
+        description: 'compares two DataView objects with the same buffer and same views',
+        actual: { dataView: new DataView(new ArrayBuffer(8), 0, 8) },
+        expected: { dataView: new DataView(new ArrayBuffer(8), 0, 8) },
+      },
+      {
+        description: 'compares two SharedArrayBuffers with the same length',
+        actual: new SharedArrayBuffer(3),
+        expected: new SharedArrayBuffer(3),
+      },
+      {
+        description: 'compares two Uint8Array objects from SharedArrayBuffer',
+        actual: { typedArray: new Uint8Array(new SharedArrayBuffer(5)) },
+        expected: { typedArray: new Uint8Array(new SharedArrayBuffer(3)) },
+      },
+      {
+        description: 'compares two Int16Array objects from SharedArrayBuffer',
+        actual: { typedArray: new Int16Array(new SharedArrayBuffer(10)) },
+        expected: { typedArray: new Int16Array(new SharedArrayBuffer(6)) },
+      },
+      {
+        description: 'compares two DataView objects with the same SharedArrayBuffer and different views',
+        actual: { dataView: new DataView(new SharedArrayBuffer(8), 0, 4) },
+        expected: { dataView: new DataView(new SharedArrayBuffer(8), 4, 4) },
+      },
+      {
+        description: 'compares two DataView objects with different SharedArrayBuffers',
+        actual: { dataView: new DataView(new SharedArrayBuffer(8)) },
+        expected: { dataView: new DataView(new SharedArrayBuffer(8)) },
+      },
+      {
+        description: 'compares two DataView objects with the same SharedArrayBuffer and same views',
+        actual: { dataView: new DataView(new SharedArrayBuffer(8), 0, 8) },
+        expected: { dataView: new DataView(new SharedArrayBuffer(8), 0, 8) },
+      },
+      {
+        description: 'compares two SharedArrayBuffers',
+        actual: { typedArray: new SharedArrayBuffer(5) },
+        expected: { typedArray: new SharedArrayBuffer(3) },
+      },
+      {
+        description: 'compares two SharedArrayBuffers with data inside',
+        actual: (() => {
+          const sharedBuffer = new SharedArrayBuffer(4 * Int32Array.BYTES_PER_ELEMENT);
+          const sharedArray = new Int32Array(sharedBuffer);
+
+          sharedArray[0] = 1;
+          sharedArray[1] = 2;
+          sharedArray[2] = 3;
+          sharedArray[3] = 4;
+
+          return sharedBuffer;
+        })(),
+        expected: (() => {
+          const sharedBuffer = new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT);
+          const sharedArray = new Int32Array(sharedBuffer);
+
+          sharedArray[0] = 1;
+          sharedArray[1] = 2;
+          sharedArray[2] = 3;
+
+          return sharedBuffer;
+        })(),
+      },
+      {
+        description: 'compares two Map objects with identical entries',
+        actual: new Map([
+          ['key1', 'value1'],
+          ['key2', 'value2'],
+        ]),
+        expected: new Map([
+          ['key1', 'value1'],
+          ['key2', 'value2'],
+        ]),
+      },
+      {
+        description: 'compares two Map where one is a subset of the other',
+        actual: new Map([
+          ['key1', { nested: { property: true } }],
+          ['key2', new Set([1, 2, 3])],
+          ['key3', new Uint8Array([1, 2, 3])],
+        ]),
+        expected: new Map([
+          ['key1', { nested: { property: true } }],
+          ['key2', new Set([1, 2, 3])],
+          ['key3', new Uint8Array([1, 2, 3])],
+        ])
+      },
+      {
+        description: 'compares maps with object keys',
+        actual: new Map([
+          [{ a: 1 }, 'value1'],
+          [{ a: 2 }, 'value2'],
+          [{ a: 2 }, 'value3'],
+          [{ a: 2 }, 'value3'],
+          [{ a: 2 }, 'value4'],
+          [{ a: 1 }, 'value2'],
+        ]),
+        expected: new Map([
+          [{ a: 2 }, 'value3'],
+          [{ a: 1 }, 'value1'],
+          [{ a: 2 }, 'value3'],
+          [{ a: 1 }, 'value2'],
+        ]),
+      },
+      {
+        describe: 'compares two simple sparse arrays',
+        actual: new Array(1_000),
+        expected: new Array(100),
+      },
+      {
+        describe: 'compares two identical sparse arrays',
+        actual: (() => {
+          const array = new Array(100);
+          array[1] = 2;
+          return array;
+        })(),
+        expected: (() => {
+          const array = new Array(100);
+          array[1] = 2;
+          return array;
+        })(),
+      },
+      {
+        describe: 'compares two big sparse arrays',
+        actual: (() => {
+          const array = new Array(150_000_000);
+          array[0] = 1;
+          array[1] = 2;
+          array[100] = 100n;
+          array[200_000] = 3;
+          array[1_200_000] = 4;
+          array[120_200_000] = [];
+          return array;
+        })(),
+        expected: (() => {
+          const array = new Array(100_000_000);
+          array[0] = 1;
+          array[1] = 2;
+          array[200_000] = 3;
+          array[1_200_000] = 4;
+          return array;
+        })(),
+      },
+      {
+        describe: 'compares two array of objects',
+        actual: [{ a: 5 }],
+        expected: [{ a: 5 }],
+      },
+      {
+        describe: 'compares two array of objects where expected is a subset of actual',
+        actual: [{ a: 5 }, { b: 5 }],
+        expected: [{ a: 5 }],
+      },
+      {
+        description: 'compares two Set objects with identical objects',
+        actual: new Set([{ a: 1 }]),
+        expected: new Set([{ a: 1 }]),
+      },
+      {
+        description: 'compares two Set objects where expected is a subset of actual',
+        actual: new Set([{ a: 1 }, { b: 1 }]),
+        expected: new Set([{ a: 1 }]),
+      },
+      {
+        description: 'compares two Sets with mixed entries',
+        actual: new Set([{ b: 1 }, [], 1, { a: 1 }, 2, []]),
+        expected: new Set([{ a: 1 }, 2, []]),
+      },
+      {
+        description: 'compares two Sets with mixed entries different order',
+        actual: new Set([{ a: 1 }, 1, { b: 1 }, [], 2, { a: 1 }]),
+        expected: new Set([{ a: 1 }, [], 2, { a: 1 }]),
+      },
+      {
+        description: 'compares two Sets with mixed entries different order 2',
+        actual: new Set([{ a: 1 }, { a: 1 }, 1, { b: 1 }, [], 2, { a: 1 }]),
+        expected: new Set([{ a: 1 }, [], 2, { a: 1 }]),
+      },
+      {
+        description: 'compares two Set objects with identical arrays',
+        actual: new Set(['value1', 'value2']),
+        expected: new Set(['value1', 'value2']),
+      },
+      {
+        description: 'compares two Set objects',
+        actual: new Set(['value1', 'value2', 'value3']),
+        expected: new Set(['value1', 'value2']),
+      },
+      {
+        description:
+          'compares two Map objects from different realms with identical entries',
+        actual: new vm.runInNewContext(
+          'new Map([["key1", "value1"], ["key2", "value2"]])'
+        ),
+        expected: new Map([
+          ['key1', 'value1'],
+          ['key2', 'value2'],
+        ]),
+      },
+      {
+        description:
+          'compares two Map objects where expected is a subset of actual',
+        actual: new Map([
+          ['key1', 'value1'],
+          ['key2', 'value2'],
+        ]),
+        expected: new Map([['key1', 'value1']]),
+      },
+      {
+        description:
+          'compares two deeply nested Maps',
+        actual: {
+          a: {
+            b: {
+              c: new Map([
+                ['key1', 'value1'],
+                ['key2', 'value2'],
+              ])
+            },
+            z: [1, 2, 3]
+          }
+        },
+        expected: {
+          a: {
+            z: [1, 2, 3],
+            b: {
+              c: new Map([['key1', 'value1']])
+            }
+          }
+        },
+      },
+      {
+        description: 'compares Maps nested into Maps',
+        actual: new Map([
+          ['key1', new Map([
+            ['nestedKey1', 'nestedValue1'],
+            ['nestedKey2', 'nestedValue2'],
+          ])],
+          ['key2', 'value2'],
+        ]),
+        expected: new Map([
+          ['key1', new Map([
+            ['nestedKey1', 'nestedValue1'],
+          ])],
+        ])
+      },
+      {
+        description: 'compares Maps with nested arrays inside',
+        actual: new Map([
+          ['key1', ['value1', 'value2']],
+          ['key2', 'value2'],
+        ]),
+        expected: new Map([
+          ['key1', ['value1', 'value2']],
+        ]),
+      },
+      {
+        description:
+          'compares two objects with identical getter/setter properties',
+        actual: (() => {
+          let value = 'test';
+          return Object.defineProperty({}, 'prop', {
+            get: () => value,
+            set: (newValue) => {
+              value = newValue;
+            },
+            enumerable: true,
+            configurable: true,
+          });
+        })(),
+        expected: (() => {
+          let value = 'test';
+          return Object.defineProperty({}, 'prop', {
+            get: () => value,
+            set: (newValue) => {
+              value = newValue;
+            },
+            enumerable: true,
+            configurable: true,
+          });
+        })(),
+      },
+      {
+        description: 'compares two objects with no prototype',
+        actual: { __proto__: null, prop: 'value' },
+        expected: { __proto__: null, prop: 'value' },
+      },
+      {
+        description:
+          'compares two objects with identical non-enumerable properties',
+        actual: (() => {
+          const obj = {};
+          Object.defineProperty(obj, 'hidden', {
+            value: 'secret',
+            enumerable: false,
+          });
+          return obj;
+        })(),
+        expected: (() => {
+          const obj = {};
+          Object.defineProperty(obj, 'hidden', {
+            value: 'secret',
+            enumerable: false,
+          });
+          return obj;
+        })(),
+      },
+      {
+        description: 'compares two identical primitives, string',
+        actual: 'foo',
+        expected: 'foo',
+      },
+      {
+        description: 'compares two identical primitives, number',
+        actual: 1,
+        expected: 1,
+      },
+      {
+        description: 'compares two identical primitives, boolean',
+        actual: false,
+        expected: false,
+      },
+      {
+        description: 'compares two identical primitives, null',
+        actual: null,
+        expected: null,
+      },
+      {
+        description: 'compares two identical primitives, undefined',
+        actual: undefined,
+        expected: undefined,
+      },
+      {
+        description: 'compares two identical primitives, Symbol',
+        actual: sym,
+        expected: sym,
+      },
+      {
+        description:
+          'compares one subset object with another',
+        actual: { a: 1, b: 2, c: 3 },
+        expected: { b: 2 },
+      },
+      {
+        description:
+          'compares one subset array with another',
+        actual: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        expected: [2, 5, 6, 7, 8],
+      },
+      {
+        description: 'ensures that File extends Blob',
+        actual: Object.getPrototypeOf(File.prototype),
+        expected: Blob.prototype
+      },
+      {
+        description: 'compares NaN with NaN',
+        actual: NaN,
+        expected: NaN,
+      },
+      {
+        description: 'compares two identical urls',
+        actual: new URL('http://foo'),
+        expected: new URL('http://foo'),
+      },
+      {
+        description: 'compares a more complex object with additional parts on the actual',
+        actual: [{
+          foo: 'yarp',
+          nope: {
+            bar: '123',
+            a: [ 1, 2, 0 ],
+            c: {},
+            b: [
+              {
+                foo: 'yarp',
+                nope: { bar: '123', a: [ 1, 2, 0 ], c: {}, b: [] }
+              },
+              {
+                foo: 'yarp',
+                nope: { bar: '123', a: [ 1, 2, 1 ], c: {}, b: [] }
+              },
+            ],
+          }
+        }],
+        expected: [{
+          foo: 'yarp',
+          nope: {
+            bar: '123',
+            c: {},
+            b: [
+              { foo: 'yarp', nope: { bar: '123', c: {}, b: [] } },
+              { foo: 'yarp', nope: { bar: '123', c: {}, b: [] } },
+            ],
+          }
+        }]
+      },
+      {
+        description: 'comparing two Errors with missing cause on the expected Error',
+        actual: { error: new Error('Test error 1', { cause: 42 }) },
+        expected: { error: new Error('Test error 1') },
+      },
+      {
+        description: 'comparing two Errors with cause set to undefined on the actual Error',
+        actual: { error: new Error('Test error 1', { cause: undefined }) },
+        expected: { error: new Error('Test error 1') },
+      },
+      {
+        description: 'comparing two Errors with missing message on the expected Error',
+        actual: { error: new Error('Test error 1') },
+        expected: { error: new Error() },
+      },
+      {
+        description: 'comparing two AggregateErrors with no message or errors on the expected Error',
+        actual: { error: new AggregateError([new Error(), 123]) },
+        expected: { error: new AggregateError([]) },
+      },
+    ].forEach(({ description, actual, expected }) => {
+      it(description, () => {
+        assert.partialDeepStrictEqual(actual, expected);
+      });
+    });
+  });
+});
