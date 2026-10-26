@@ -1,0 +1,7 @@
+exit=0
+--- stdout
+line one
+line two
+line three
+done 3
+--- stderr

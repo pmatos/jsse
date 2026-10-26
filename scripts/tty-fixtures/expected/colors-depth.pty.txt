@@ -1,0 +1,4 @@
+exit=0
+--- tty
+\e[33m24\e[39m \e[33mtrue\e[39m \e[33mtrue\e[39m \e[33m1\e[39m \e[33m4\e[39m \e[33mfalse\e[39m\r
+{ k: \e[33m1\e[39m }\r

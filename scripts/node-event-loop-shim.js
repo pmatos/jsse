@@ -208,6 +208,14 @@
     );
   }
 
+  function stderrWrite(text) {
+    try {
+      proc.stderr.write(text);
+    } catch (e) {
+      __host_write(2, text);
+    }
+  }
+
   function printUncaught(error) {
     var text;
     if (isErrorLike(error)) {
@@ -219,9 +227,7 @@
       var inspect = globalThis.util && globalThis.util.inspect;
       text = "Uncaught " + (inspect ? inspect(error) : String(error));
     }
-    proc.stderr.write(
-      "\n" + text + "\n\nNode.js " + proc.version + "\n"
-    );
+    stderrWrite("\n" + text + "\n\nNode.js " + proc.version + "\n");
   }
 
   function emitExit(code) {

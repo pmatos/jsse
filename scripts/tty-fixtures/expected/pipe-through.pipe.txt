@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+through the pipe
+second line
+--- stderr
+[end]

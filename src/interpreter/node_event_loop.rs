@@ -23,6 +23,8 @@ pub(crate) struct NodeLoopState {
     pending_rejections: Vec<JsValue>,
     running: bool,
     pub(crate) main_throw_handled: bool,
+    #[cfg(unix)]
+    pub(crate) stdin: super::builtins::node_host_tty::StdinState,
 }
 
 impl NodeLoopState {
@@ -58,6 +60,8 @@ impl NodeLoopState {
         for promise in &self.pending_rejections {
             visit(promise);
         }
+        #[cfg(unix)]
+        self.stdin.for_each_root(&mut visit);
     }
 }
 
@@ -86,7 +90,7 @@ impl Interpreter {
         self.scheduler.node_loop.main_throw_handled
     }
 
-    fn node_call(&mut self, callback: &JsValue, args: &[JsValue]) -> Completion {
+    pub(crate) fn node_call(&mut self, callback: &JsValue, args: &[JsValue]) -> Completion {
         let frame = self.gc_root_frame();
         self.gc_root_value(callback);
         for arg in args {
@@ -101,7 +105,7 @@ impl Interpreter {
 
     /// An exit unwinds the loop; a throw that got past the prelude's own
     /// handlers is routed to the uncaught-exception path.
-    fn node_settle(&mut self, result: Completion) {
+    pub(crate) fn node_settle(&mut self, result: Completion) {
         match result {
             Completion::Exit(code) => self.pending_exit = Some(code),
             Completion::Throw(error) => self.node_uncaught(error),
@@ -190,6 +194,17 @@ impl Interpreter {
         self.scheduler.has_refed_timers()
             || self.scheduler.node_loop.immediate_refed > 0
             || self.has_awaited_pending_async()
+            || self.node_stdin_alive()
+    }
+
+    #[cfg(unix)]
+    fn node_stdin_alive(&self) -> bool {
+        self.scheduler.node_loop.stdin.keeps_alive()
+    }
+
+    #[cfg(not(unix))]
+    fn node_stdin_alive(&self) -> bool {
+        false
     }
 
     fn node_run_immediates(&mut self) {
@@ -208,6 +223,10 @@ impl Interpreter {
     /// completion, but not at all while a ref'd immediate is waiting.
     fn node_poll(&mut self) {
         if self.scheduler.node_loop.immediate_refed > 0 {
+            return;
+        }
+        #[cfg(unix)]
+        if self.scheduler.node_loop.stdin.has_deliverable() {
             return;
         }
         let wait = self.completion_wait(std::time::Duration::from_millis(100));
@@ -238,6 +257,8 @@ impl Interpreter {
                 break;
             }
             self.node_poll();
+            #[cfg(unix)]
+            self.node_stdin_deliver();
             self.node_run_immediates();
         }
         self.scheduler.node_loop.running = false;

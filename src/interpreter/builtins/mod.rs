@@ -42,6 +42,8 @@ mod node_host_process;
 mod node_host_process_metrics;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+#[cfg(unix)]
+pub(crate) mod node_host_tty;
 mod node_host_util;
 mod node_prelude;
 mod number;

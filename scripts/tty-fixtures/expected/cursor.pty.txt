@@ -1,0 +1,7 @@
+exit=0
+--- tty
+start\r
+\e[6G\e[3;6H\e[2D\e[3B\e[2K\e[1K\e[0K\e[0J\e[2G\e[2;1H\e[1C\e[1B\e[2K\e[0J[cb]\r
+[true,true,true,true,true,true,true,true,true,"ERR_INVALID_CURSOR_POS"]\r
+function,function,function,function\r
+\e[4G\e[1C\e[0K\e[0J|\r

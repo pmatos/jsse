@@ -1,0 +1,7 @@
+exit=0
+--- tty
+first\r
+second\r
+got \e[33mtrue\e[39m\r
+paused \e[33mtrue\e[39m\r
+exit \e[33m0\e[39m\r

@@ -1,0 +1,11 @@
+exit=0
+--- tty
+\e[33mtrue\e[39m \e[33m132\e[39m \e[33m40\e[39m [ \e[33m132\e[39m, \e[33m40\e[39m ] \e[33mtrue\e[39m \e[33mfalse\e[39m \e[33mfalse\e[39m\r
+function \e[33mtrue\e[39m\r
+RangeError ERR_INVALID_FD "fd" must be a positive integer: -1\r
+RangeError ERR_INVALID_FD "fd" must be a positive integer: 1.5\r
+RangeError ERR_INVALID_FD "fd" must be a positive integer: 1\r
+TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be true, false, 'raw', or 'io'. Received 'bogus'\r
+\e[33mtrue\e[39m \e[33mtrue\e[39m raw\r
+\e[33mtrue\e[39m \e[33mfalse\e[39m \e[33mfalse\e[39m\r
+io \e[33mfalse\e[39m\r
