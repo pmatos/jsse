@@ -2,7 +2,6 @@
 # test-pipeline-*.js, test-finished-*.js and test-compose-*.js files in this directory,
 # verbatim. One name per line; further words mark what a test needs from --node
 # beyond the stream module, probed by scripts/run-node-stream-oracle.sh and tests/node_stream.rs:
-#   needs-string-decoder  require("string_decoder") works (#1231)
 #   needs-webstreams      ReadableStream and friends exist (web streams)
 # A line starting with "!" names a Node test that is not vendored, with the reason.
 
@@ -15,11 +14,11 @@ test-stream-auto-destroy
 test-stream-await-drain-writers-in-synchronously-recursion-write
 test-stream-backpressure
 test-stream-big-packet
-test-stream-big-push needs-string-decoder
+test-stream-big-push
 test-stream-catch-rejections
 test-stream-compose needs-webstreams
 test-stream-construct
-test-stream-decoder-objectmode needs-string-decoder
+test-stream-decoder-objectmode
 test-stream-destroy-event-order
 test-stream-drop-take
 test-stream-duplex-destroy
@@ -62,20 +61,20 @@ test-stream-pipe-objectmode-to-non-objectmode
 test-stream-pipe-same-destination-twice
 test-stream-pipe-unpipe-streams
 test-stream-pipe-without-listenerCount
-test-stream-pipeline-async-iterator needs-string-decoder
+test-stream-pipeline-async-iterator
 test-stream-pipeline-duplex
 test-stream-pipeline-listeners
 test-stream-pipeline-queued-end-in-destroy
 test-stream-pipeline-uncaught
 test-stream-pipeline-with-empty-string
-test-stream-push-order needs-string-decoder
+test-stream-push-order
 test-stream-push-strings
 test-stream-readable-aborted
 test-stream-readable-add-chunk-during-data
 test-stream-readable-async-iter-half-open-duplex
 test-stream-readable-compose
 test-stream-readable-constructor-set-methods
-test-stream-readable-data needs-string-decoder
+test-stream-readable-data
 test-stream-readable-default-encoding
 test-stream-readable-destroy
 test-stream-readable-didRead
@@ -85,7 +84,7 @@ test-stream-readable-emittedReadable
 test-stream-readable-end-destroyed
 test-stream-readable-ended
 test-stream-readable-error-end
-test-stream-readable-event needs-string-decoder
+test-stream-readable-event
 test-stream-readable-flow-recursion
 test-stream-readable-from-web-termination needs-webstreams
 test-stream-readable-hwm-0
@@ -97,20 +96,20 @@ test-stream-readable-needReadable
 test-stream-readable-next-no-null
 test-stream-readable-no-unneeded-readable
 test-stream-readable-object-multi-push-async
-test-stream-readable-pause-and-resume needs-string-decoder
+test-stream-readable-pause-and-resume
 test-stream-readable-readable
 test-stream-readable-readable-one
 test-stream-readable-readable-then-resume
 test-stream-readable-reading-readingMore
 test-stream-readable-resume-hwm
 test-stream-readable-resumeScheduled
-test-stream-readable-setEncoding-existing-buffers needs-string-decoder
-test-stream-readable-setEncoding-null needs-string-decoder
+test-stream-readable-setEncoding-existing-buffers
+test-stream-readable-setEncoding-null
 test-stream-readable-strategy-option needs-webstreams
 test-stream-readable-to-web-byob needs-webstreams
 test-stream-readable-to-web-termination needs-webstreams
 test-stream-readable-to-web-termination-byob needs-webstreams
-test-stream-readable-unshift needs-string-decoder
+test-stream-readable-unshift
 test-stream-readable-with-unimplemented-_read
 test-stream-readableListening-state
 test-stream-reduce
@@ -126,8 +125,8 @@ test-stream-transform-hwm0
 test-stream-transform-objectmode-falsey-value
 test-stream-transform-split-highwatermark
 test-stream-transform-split-objectmode
-test-stream-typedarray needs-string-decoder
-test-stream-uint8array needs-string-decoder
+test-stream-typedarray
+test-stream-uint8array
 test-stream-unpipe-event
 test-stream-unshift-empty-chunk
 test-stream-unshift-read-race
@@ -162,20 +161,20 @@ test-stream-write-destroy
 test-stream-write-drain
 test-stream-write-final
 test-stream-writev
-test-stream2-base64-single-char-read-end needs-string-decoder
-test-stream2-basic needs-string-decoder
+test-stream2-base64-single-char-read-end
+test-stream2-basic
 test-stream2-compatibility
-test-stream2-decode-partial needs-string-decoder
+test-stream2-decode-partial
 test-stream2-finish-pipe
 test-stream2-finish-pipe-error
 test-stream2-large-read-stall
 test-stream2-objects
 test-stream2-pipe-error-handling
 test-stream2-pipe-error-once-listener
-test-stream2-push needs-string-decoder
-test-stream2-read-correct-num-bytes-in-utf8 needs-string-decoder
+test-stream2-push
+test-stream2-read-correct-num-bytes-in-utf8
 test-stream2-read-sync-stack
-test-stream2-readable-empty-buffer-no-eof needs-string-decoder
+test-stream2-readable-empty-buffer-no-eof
 test-stream2-readable-legacy-drain
 test-stream2-readable-non-empty-end
 test-stream2-readable-wrap
@@ -183,7 +182,7 @@ test-stream2-readable-wrap-destroy
 test-stream2-readable-wrap-empty
 test-stream2-readable-wrap-error
 test-stream2-readable-wrap-proxy-methods
-test-stream2-set-encoding needs-string-decoder
+test-stream2-set-encoding
 test-stream2-unpipe-drain
 test-stream2-unpipe-leak
 test-stream3-cork-end

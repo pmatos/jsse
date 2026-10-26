@@ -45,6 +45,7 @@ mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
+mod node_host_process_metrics;
 #[cfg(unix)]
 mod node_host_signal;
 pub(crate) mod node_host_stack;

@@ -44,8 +44,7 @@ CommonJS loader (#1219), `events` (#1223) and `util` (#1224).
    `internal/host/buffer` (the global `Buffer`) and `FastBuffer` in
    `stream.js` is `Buffer.from(arrayBuffer, offset, length)`.
 4. **Lazy edges.** `string_decoder` is required when a decoder is created
-   (`encoding` option, `setEncoding`): it arrives with #1231, so until then those
-   calls throw `ERR_UNKNOWN_BUILTIN_MODULE`. `internal/webstreams/adapters` is a
+   (`encoding` option, `setEncoding`) and exists since #1231. `internal/webstreams/adapters` is a
    stub whose six entry points throw `ERR_METHOD_NOT_IMPLEMENTED` (`Readable.toWeb`,
    `fromWeb`, the Writable and Duplex pairs) because jsse has no `ReadableStream`.
    `process.stdout`/`stdin` are #1232 and untouched.
@@ -64,9 +63,8 @@ CommonJS loader (#1219), `events` (#1223) and `util` (#1224).
   `test-stream*`, `test-readable-*`, ...; verbatim) on jsse `--node` and Node. The
   fixtures use a small `assert`/`common` prelude (`harness-assert.js`,
   `harness.js`) that runs on both engines, with `mustCall` verified on
-  `process.on("exit")`. `manifest.txt` lists every test, the `needs-string-decoder`
-  / `needs-webstreams` flags (run when the probe passes, skipped
-  and reported before), and `!` lines with the reason for every Node test that is
+  `process.on("exit")`. `manifest.txt` lists every test and the `needs-webstreams`
+  flag (run when the probe passes, skipped and reported before), and `!` lines with the reason for every Node test that is
   not vendored: `stream/iter` (experimental) and tests that need `fs`, `http`,
   `async_hooks`, `child_process`, `stream/web` or Node internals. The two largest
   (`test-stream-pipeline`, `test-stream-readable-async-iterators`, over the
@@ -84,6 +82,6 @@ CommonJS loader (#1219), `events` (#1223) and `util` (#1224).
 ## Known gaps
 
 `stream/consumers`, `stream/web`, `stream.Readable.toWeb` and friends, `fs`
-streams (#1234), `process.stdout` (#1232), `string_decoder` (#1231). Revisit the
+streams (#1234), `process.stdout` (#1232). Revisit the
 `!` lines in the manifest as those land; the tests that need `fs` or `http` are
 the first candidates once #1234 exists.

@@ -52,6 +52,7 @@ const {
 } = require('internal/errors');
 const { validateString } = require('internal/validators');
 const { nameSource } = require('internal/host/stack');
+const statics = require('internal/modules/cjs/statics');
 
 // Node 26 also matches `module-sync`; it is left out while require() of an
 // ES module is unsupported, so such packages fall back to their CJS entry.
@@ -94,7 +95,7 @@ function updateChildren(parent, child, scan) {
   }
 }
 
-function initPaths() {
+Module._initPaths = function() {
   const homeDir = process.env.HOME;
   const nodePath = process.env.NODE_PATH;
   const prefixDir = path.resolve(process.execPath, '..', '..');
@@ -110,8 +111,7 @@ function initPaths() {
   }
   modulePaths = paths;
   Module.globalPaths = ArrayPrototypeSlice(modulePaths);
-}
-Module._initPaths = initPaths;
+};
 
 Module._nodeModulePaths = function(from) {
   from = path.resolve(from);
@@ -255,7 +255,7 @@ function isRelativeRequest(request) {
       (request[1] === '.' && (request.length === 2 || request[2] === '/')));
 }
 
-Module._findPath = function(request, paths) {
+Module._findPath = function(request, paths, isMain) {
   const absoluteRequest = path.isAbsolute(request);
   if (absoluteRequest) {
     paths = [''];
@@ -500,11 +500,14 @@ function wrapSafe(content, filename) {
   if (StringPrototypeStartsWith(content, '#!')) {
     content = `//${StringPrototypeSlice(content, 2)}`;
   }
-  const wrapper = new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
+  // Patching Module.wrap or Module.wrapper switches to compiling its output.
+  const patched = statics.isPatched();
+  const wrapper = patched ? (0, eval)(Module.wrap(content)) :
+    new FunctionCtor('exports', 'require', 'module', '__filename', '__dirname', content);
   tagFunction(wrapper, filename);
   // -2 undoes Function()'s two header lines; anonymous like Node's wrapper.
   ObjectDefineProperty(wrapper, 'name', { value: '', configurable: true });
-  if (nameSource !== undefined) nameSource(wrapper, filename, -2);
+  if (nameSource !== undefined) nameSource(wrapper, filename, patched ? 0 : -2);
   return wrapper;
 }
 
@@ -566,31 +569,6 @@ Module._extensions['.node'] = function(module, filename) {
   throw err;
 };
 
-function fileUrlToPath(url) {
-  const match = RegExpPrototypeExec(/^file:\/\/(?:localhost)?(\/.*)$/, url);
-  return match === null ? url : decodeURIComponent(match[1]);
-}
-
-Module.createRequire = function(filename) {
-  if (typeof filename === 'object' && filename !== null &&
-      typeof filename.href === 'string') {
-    filename = filename.href;
-  }
-  if (typeof filename === 'string' && StringPrototypeStartsWith(filename, 'file:')) {
-    filename = fileUrlToPath(filename);
-  }
-  if (typeof filename !== 'string' || !path.isAbsolute(filename)) {
-    throw new ERR_INVALID_ARG_VALUE('filename', filename,
-                                    'must be a file URL object, file URL string, or absolute path string');
-  }
-  const proxyPath = StringPrototypeEndsWith(filename, '/') ?
-    path.join(filename, 'noop.js') : filename;
-  const m = new Module(proxyPath);
-  m.filename = proxyPath;
-  m.paths = Module._nodeModulePaths(m.path);
-  return makeRequireFunction(m);
-};
-
 function runMain() {
   Module._load(path.resolve(process.argv[1]), null, true);
 }
@@ -620,6 +598,7 @@ function setupEval() {
   }
 }
 
-initPaths();
+Module._initPaths();
+statics.install(Module, makeRequireFunction);
 
 module.exports = { Module, makeRequireFunction, runMain, setupEval };
