@@ -31,7 +31,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIBS_DIR="$SCRIPT_DIR/libs"
-CACHE_ROOT="/tmp/jsse-libtests"
+CACHE_ROOT="${JSSE_LIBTESTS_CACHE:-/tmp/jsse-libtests}"
 JSSE="${JSSE:-$PROJECT_DIR/target/release/jsse}"
 
 # Pinned esbuild so every library bundles identically and reproducibly (the
