@@ -35,7 +35,7 @@ if [ "$NO_BUILD" -eq 0 ]; then
     (cd "$PROJECT_DIR" && cargo build --release)
 fi
 
-SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js" "$SCRIPT_DIR/node-test-harness.js")
+SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$SCRIPT_DIR/node-buffer-shim.js" "$SCRIPT_DIR/node-test-harness.js")
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

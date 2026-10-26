@@ -95,7 +95,7 @@ and (optionally) overrides hook functions:
 | `LIB_SHIMS` | ordered array of additional shim files; use when a library needs more than `LIB_SHIM` |
 | `LIB_BUNDLE_PREFIXES` | ordered prefix files; when set, build one isolated copy of the bundle after each prefix (for the same corpus in multiple modes) |
 | `LIB_SEPARATE_BUNDLES` | with bundle prefixes, run each prefixed copy in a separate engine process and concatenate their output before verdict evaluation (default `0`) |
-| `LIB_ENV` | host-process environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`). Reaches each engine's **native** layer only — jsse's Rust `Date`/`Intl` and Node's ICU read the OS `TZ`/`LANG`; **not** reflected in jsse's JS-visible `process.env`, which the `--node` shim leaves `{}`. Don't use it for values a library reads from `process.env` in JS. |
+| `LIB_ENV` | host-process environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`). Sets the OS environment of each engine; under `--node` jsse's `process.env` is seeded from it (`node-process-shim.js`). jsse's native `Date`/`Intl` read only the startup `TZ`. |
 | `LIB_EXPECT_COUNT` | if set, both engines must report exactly this count (belt-and-suspenders against silent bundling drift) |
 | `LIB_TIMEOUT` | seconds; wrap each engine run so a hang/slow suite reports cleanly |
 

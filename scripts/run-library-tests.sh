@@ -85,11 +85,8 @@ LIB_BUNDLE_PREFIXES=()
 # outputs are concatenated before the library verdict runs.
 LIB_SEPARATE_BUNDLES=0
 # Host-process environment assignments (e.g. TZ, LANG) applied to BOTH engine
-# runs. These reach each engine's NATIVE layer only: jsse's Rust Date/Intl and
-# Node's ICU read the OS TZ/LANG directly. They are NOT reflected in jsse's
-# JS-visible `process.env` — the `--node` shim leaves it `{}` (there is no host
-# getenv). Do not use LIB_ENV for values a library reads from `process.env` in
-# JS: those would be set on Node but `undefined` under jsse.
+# runs. Native Date/Intl read the OS TZ/LANG at startup; under `--node` jsse's
+# JS-visible `process.env` is seeded from the same environment.
 LIB_ENV=()
 LIB_EXPECT_COUNT=""   # if set, both engines must report exactly this count
 LIB_TIMEOUT=""        # if set (seconds), wrap each engine run so a hang/slow
@@ -202,7 +199,7 @@ fi
 # node-buffer-shim.js (Buffer + TextEncoder/TextDecoder) is a shared shim
 # alongside node-shim.js: Buffer is the highest-value host object (many
 # libraries reference it at import time), so every bundle gets it.
-SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
+SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-process-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
 if [ -n "$LIB_SHIM" ]; then
     SHIMS+=("$SCRIPT_DIR/$LIB_SHIM")
 fi
@@ -251,9 +248,7 @@ evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     echo "========================================"
     echo "  Running $LIB test suite on $label"
     echo "========================================"
-    # `env "${LIB_ENV[@]}"` sets the host OS environment for the engine child
-    # (native Date/Intl reads TZ/LANG here); it does not populate jsse's
-    # JS-visible process.env — see the LIB_ENV note above.
+    # `env "${LIB_ENV[@]}"` sets the host OS environment for the engine child.
     : > "$out"
     run_index=0
     for run_file in "${FINAL_FILES[@]}"; do

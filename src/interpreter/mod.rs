@@ -465,9 +465,8 @@ pub(crate) struct Interpreter {
     /// must not re-enter one another, so a nested interpreter run started from
     /// inside one neither fires timers nor stays alive waiting for them.
     dispatching_timers: bool,
-    /// Monotonic clock anchor for `__host_hrtime`. Set when the host floor is
-    /// enabled so elapsed nanoseconds are measured from a stable origin.
-    pub(crate) host_clock_start: Option<std::time::Instant>,
+    /// Node host floor state: clock anchor, argv snapshot, exit-code sink.
+    pub(crate) node_host: builtins::node_host::NodeHostState,
     /// Per-function-body hoisting-analysis cache keyed by body `Rc` identity
     /// (#72), bounded so body-churning workloads cannot retain every body they
     /// ever ran (#165). See `hoist_cache`.
@@ -890,7 +889,7 @@ impl Interpreter {
             pending_exit: None,
             step_budget: Default::default(),
             dispatching_timers: false,
-            host_clock_start: None,
+            node_host: Default::default(),
             hoist_cache: HoistCache::new(),
             bytecode_memo: body_memo::BodyMemo::new(),
             state_machine_memo: body_memo::BodyMemo::new(),
