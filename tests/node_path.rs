@@ -1,6 +1,5 @@
-//! The embedded `path` module under `--node` (#1221), reached through the
-//! hidden `__node_builtin` accessor until the CommonJS loader (#1219) adds
-//! `require`. Runs Node's own path tests (scripts/path-fixtures, verbatim from
+//! The embedded `path` module under `--node` (#1221), reached through
+//! `require` (#1219). Runs Node's own path tests (scripts/path-fixtures, verbatim from
 //! nodejs/node v26.8.2) and pins the digest of the differential corpus that
 //! `scripts/run-node-path-oracle.sh` diffs against Node.
 
@@ -123,33 +122,31 @@ fn corpus_digest_matches_node() {
 }
 
 #[test]
-fn builtin_accessor_is_hidden_and_loads_path() {
+fn require_loads_path_and_the_hidden_accessor_is_gone() {
     let source = r#"
-      const d = Object.getOwnPropertyDescriptor(globalThis, "__node_builtin");
-      const path = __node_builtin("path");
+      const path = require("path");
       print([
-        typeof d.value, d.enumerable, d.configurable,
-        Object.keys(globalThis).includes("__node_builtin"),
-        typeof __host_builtin_source,
-        __node_builtin("node:path") === path,
-        __node_builtin("path/posix") === path.posix,
-        __node_builtin("node:path/win32") === path.win32,
+        typeof __node_builtin, typeof __host_builtin_source,
+        require("node:path") === path,
+        require("path/posix") === path.posix,
+        require("node:path/win32") === path.win32,
         path.posix.posix === path.posix && path.win32.win32 === path.win32,
       ].join());
-      for (const id of ["internal/errors", "node:internal/util", "nope"]) {
-        try { __node_builtin(id); print("no throw " + id); }
+      for (const id of ["node:internal/errors", "node:nope"]) {
+        try { require(id); print("no throw " + id); }
         catch (e) { print(id, e.code, e.message); }
       }
+      try { require("internal/errors"); } catch (e) { print(e.code); }
       try { path.join(1); } catch (e) { print(e.name, e.code, e instanceof TypeError, e.message); }
     "#;
     let out = run(&["--node", "-e", source], None);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "function,false,true,false,undefined,true,true,true,true\n\
-         internal/errors ERR_UNKNOWN_BUILTIN_MODULE No such built-in module: internal/errors\n\
-         node:internal/util ERR_UNKNOWN_BUILTIN_MODULE No such built-in module: node:internal/util\n\
-         nope ERR_UNKNOWN_BUILTIN_MODULE No such built-in module: nope\n\
+        "undefined,undefined,true,true,true,true\n\
+         node:internal/errors ERR_UNKNOWN_BUILTIN_MODULE No such built-in module: node:internal/errors\n\
+         node:nope ERR_UNKNOWN_BUILTIN_MODULE No such built-in module: node:nope\n\
+         MODULE_NOT_FOUND\n\
          TypeError ERR_INVALID_ARG_TYPE true The \"path\" argument must be of type string. Received type number (1)"
     );
 }
@@ -169,7 +166,7 @@ fn builtin_modules_are_absent_without_node() {
 #[test]
 fn builtin_loader_validates_ids_and_survives_intrinsic_tampering() {
     let source = r#"
-      const load = __node_builtin;
+      const load = require;
       Array.prototype.join = function () { return "tampered"; };
       String.prototype.slice = function () { return "tampered"; };
       Array.prototype[Symbol()] = 1;
@@ -178,8 +175,8 @@ fn builtin_loader_validates_ids_and_survives_intrinsic_tampering() {
         try { load(id); print("no throw"); }
         catch (e) { print(e.code, e instanceof TypeError); }
       }
-      try { load("nope"); } catch (e) { print(e.code); }
-      try { load("nope"); } catch (e) { print(e.code); }
+      try { load("node:nope"); } catch (e) { print(e.code); }
+      try { load("node:nope"); } catch (e) { print(e.code); }
       const path = load("path");
       print(path.join("a", "b"), path.resolve("/a", "b"), path.win32.join("a", "b"));
     "#;

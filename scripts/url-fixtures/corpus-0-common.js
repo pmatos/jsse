@@ -2,12 +2,9 @@
 // punycode modules (#1230). The runner concatenates corpus-*.js in name order
 // and runs the result on Node and on `jsse --node`: stdout must be
 // byte-identical and its last line is pinned in corpus.digest.
-var load = function (id) {
-  return typeof __node_builtin === "function" ? __node_builtin(id) : require(id);
-};
-var url = load("url");
-var querystring = load("querystring");
-var punycode = load("punycode");
+var url = require("url");
+var querystring = require("querystring");
+var punycode = require("punycode");
 process.noDeprecation = true;
 process.chdir("/");
 

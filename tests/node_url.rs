@@ -109,7 +109,7 @@ fn globals_are_non_enumerable_and_settle_into_data_properties() {
       print(typeof __host_idna_to_ascii, typeof __host_idna_to_unicode, Object.keys(globalThis).filter((k) => /^URL/.test(k)).length);
       const u = new URL("http://a/b?c");
       const d = Object.getOwnPropertyDescriptor(globalThis, "URL");
-      print(typeof d.value, d.writable, d.enumerable, d.configurable, URL === __node_builtin("url").URL, u instanceof URL);
+      print(typeof d.value, d.writable, d.enumerable, d.configurable, URL === require("url").URL, u instanceof URL);
       URLSearchParams = 5;
       const e = Object.getOwnPropertyDescriptor(globalThis, "URLSearchParams");
       print(e.value, e.writable, e.enumerable, e.configurable);
@@ -131,12 +131,12 @@ fn lazy_globals_keep_receiver_semantics_and_the_buffer_stand_in_stays_private() 
       print(Object.keys(child).join(), typeof Object.getOwnPropertyDescriptor(globalThis, "URL").get);
       Array.prototype.fill = () => { throw new Error("fill"); };
       print(new URL("http://a.com/b?c#d").href);
-      try { __node_builtin("buffer"); } catch (e) { print(e.code); }
-      print(__node_builtin("querystring").unescapeBuffer("a%20b").toString());
+      for (const id of ["buffer", "internal/host/buffer"]) try { require(id); } catch (e) { print(e.code); }
+      print(require("querystring").unescapeBuffer("a%20b").toString());
     "#;
     assert_eq!(
         eval(source, &[], None),
-        "URL function\nhttp://a.com/b?c#d\nERR_UNKNOWN_BUILTIN_MODULE\na b"
+        "URL function\nhttp://a.com/b?c#d\nMODULE_NOT_FOUND\nMODULE_NOT_FOUND\na b"
     );
 }
 
@@ -192,7 +192,7 @@ fn invalid_urls_throw_node_shaped_errors() {
 #[test]
 fn file_urls_round_trip_in_posix_and_win32_forms() {
     let source = r#"
-      const url = __node_builtin("url");
+      const url = require("url");
       const rows = [
         ["/a b/\u00fc#?%", false], ["C:\\dir\\f g.txt", true], ["\\\\srv\\share\\x", true], ["/a\\b", false],
       ];
@@ -220,9 +220,9 @@ fn file_urls_round_trip_in_posix_and_win32_forms() {
 #[test]
 fn legacy_url_querystring_and_punycode() {
     let source = r#"
-      const url = __node_builtin("node:url");
-      const qs = __node_builtin("querystring");
-      const p = __node_builtin("punycode");
+      const url = require("node:url");
+      const qs = require("querystring");
+      const p = require("punycode");
       const parsed = url.parse("http://u:p@Host.com:81/a/b?x=1&y=2#h", true);
       print(parsed.host, parsed.auth, parsed.pathname, JSON.stringify(parsed.query), parsed.hash, url.format(parsed));
       print(url.resolve("http://a/b/c/d", "../e"), url.resolve("/one/two", "three"), url.format({ protocol: "https", hostname: "x.y", pathname: "/p", query: { a: [1, 2] } }));
@@ -248,7 +248,7 @@ fn url_works_under_the_tree_walker_and_gc_stress() {
       const u = new URL("http://user:pw@exa\u00dfmple.com:81/a/b?x=1#f");
       u.searchParams.append("y", "\u{1f600}"); u.hostname = "\u4f60\u597d.com"; u.pathname = "/\u00fc";
       const q = new URLSearchParams("b=2&a=1&b=1"); q.sort();
-      print(u.href, q.toString(), __node_builtin("url").parse("//h/x?y").query);
+      print(u.href, q.toString(), require("url").parse("//h/x?y").query);
     "#;
     let want = "http://user:pw@xn--6qq79v.com:81/%C3%BC?x=1&y=%F0%9F%98%80#f a=1&b=2&b=1 y";
     assert_eq!(eval(source, &["--no-bytecode"], None), want);

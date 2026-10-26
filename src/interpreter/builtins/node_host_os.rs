@@ -293,7 +293,7 @@ mod tests {
             for (const k of ["TEMP", "TMP", "SystemRoot", "windir"]) delete process.env[k];
             process.env.USERPROFILE = "C:\\Users\\me";
             process.env.SystemRoot = "C:\\Windows";
-            const os = __node_builtin("os");
+            const os = require("os");
             check([os.platform(), os.EOL, os.devNull], ["win32", "\r\n", "\\\\.\\nul"]);
             check(os.homedir(), "C:\\Users\\me");
             check(os.tmpdir(), "C:\\Windows\\temp");
@@ -315,12 +315,12 @@ mod tests {
             r#"{CHECK}
             process.env.HOME = "/Users/me";
             process.env.TMPDIR = "/var/folders/xy/T/";
-            const os = __node_builtin("os");
+            const os = require("os");
             check([os.EOL, os.devNull, os.homedir(), os.tmpdir()], ["\n", "/dev/null", "/Users/me", "/var/folders/xy/T"]);
             "#
         );
         for platform in ["darwin", "linux", "freebsd"] {
-            let source = format!("{source}\ncheck(__node_builtin('os').platform(), {platform:?});");
+            let source = format!("{source}\ncheck(require('os').platform(), {platform:?});");
             run_as(platform, &source);
         }
     }
@@ -331,7 +331,7 @@ mod tests {
             "linux",
             &format!(
                 r#"{CHECK}
-                const os = __node_builtin("os");
+                const os = require("os");
                 process.env.HOME = "/edited";
                 check(os.homedir(), "/edited");
                 delete process.env.HOME;
@@ -349,7 +349,7 @@ mod tests {
             "linux",
             &format!(
                 r#"{CHECK}
-                const os = __node_builtin("os");
+                const os = require("os");
                 try {{ os.getPriority(99999999); throw new Error("no throw"); }}
                 catch (e) {{
                   check([e.code, e.name, e.errno, e.syscall, e.info.code],
@@ -367,8 +367,8 @@ mod tests {
             "linux",
             r#"
             if (typeof __host_os !== "undefined") throw new Error("global left behind");
-            try { __node_builtin("internal/host/os"); throw new Error("reachable"); }
-            catch (e) { if (e.code !== "ERR_UNKNOWN_BUILTIN_MODULE") throw e; }
+            try { require("internal/host/os"); throw new Error("reachable"); }
+            catch (e) { if (e.code !== "MODULE_NOT_FOUND") throw e; }
             "#,
         );
     }

@@ -7,7 +7,7 @@
 #
 # 1. Every test in scripts/events-fixtures/manifest.txt (Node's own
 #    test/parallel files, verbatim) is wrapped by scripts/events-fixtures/harness.js
-#    and must print "events-fixture: ok" and exit 0 on jsse (`--node`, via __node_builtin("events"))
+#    and must print "events-fixture: ok" and exit 0 on jsse (`--node`, via require("events"))
 #    and on Node. Tests marked needs-process-events / needs-inspect are skipped on
 #    jsse until process.on/emit work (#1229) / util.inspect names classes (#1224).
 # 2. scripts/events-fixtures/corpus-emitter.js followed by corpus-web.js (events,

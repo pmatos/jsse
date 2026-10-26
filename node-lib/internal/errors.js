@@ -25,6 +25,7 @@ const {
   StringPrototypeIncludes,
   StringPrototypeIndexOf,
   StringPrototypeSlice,
+  StringPrototypeStartsWith,
   StringPrototypeToLowerCase,
 } = primordials;
 
@@ -58,32 +59,6 @@ function E(code, Base, message) {
   NodeError.prototype = proto;
   codes[code] = NodeError;
 }
-
-function addNumericalSeparator(val) {
-  let res = '';
-  let i = val.length;
-  const start = val[0] === '-' ? 1 : 0;
-  for (; i >= start + 4; i -= 3) {
-    res = `_${primordials.StringPrototypeSlice(val, i - 3, i)}${res}`;
-  }
-  return `${primordials.StringPrototypeSlice(val, 0, i)}${res}`;
-}
-
-E('ERR_OUT_OF_RANGE', RangeError, (str, range, input) => {
-  let received;
-  if (primordials.NumberIsInteger(input) && primordials.MathAbs(input) > 2 ** 32) {
-    received = addNumericalSeparator(`${input}`);
-  } else if (typeof input === 'bigint') {
-    received = `${input}`;
-    if (input > 2n ** 32n || input < -(2n ** 32n)) {
-      received = addNumericalSeparator(received);
-    }
-    received += 'n';
-  } else {
-    received = inspect(input);
-  }
-  return `The value of "${str}" is out of range. It must be ${range}. Received ${received}`;
-});
 
 class SystemError extends Error {
   constructor(context) {
@@ -315,7 +290,41 @@ E('ERR_UNHANDLED_ERROR', Error, (err = undefined) => {
 });
 E('ERR_UNKNOWN_BUILTIN_MODULE', Error, (id) => `No such built-in module: ${id}`);
 
-// Node's AbortError is a plain Error with .code and .name, not a DOMException.
+E('ERR_INVALID_MODULE_SPECIFIER', TypeError, (request, reason, base = undefined) => {
+  return `Invalid module "${request}" ${reason}${base ? ` imported from ${base}` : ''}`;
+});
+
+E('ERR_INVALID_PACKAGE_CONFIG', Error, (path, base, message) => {
+  return `Invalid package config ${path}${base ? ` while importing ${base}` : ''}${message ? `. ${message}` : ''}`;
+});
+
+E('ERR_INVALID_PACKAGE_TARGET', Error, (pkgPath, key, target, isImport = false, base = undefined) => {
+  const relatedError = typeof target === 'string' && !isImport &&
+    target.length && !StringPrototypeStartsWith(target, './');
+  target = JSONStringify(target);
+  if (key === '.') {
+    return `Invalid "exports" main target ${target} defined ` +
+      `in the package config ${pkgPath}package.json${base ? ` imported from ${base}` : ''}` +
+      `${relatedError ? '; targets must start with "./"' : ''}`;
+  }
+  return `Invalid "${isImport ? 'imports' : 'exports'}" target ${target} defined for '${key}' in the package config ${pkgPath}package.json${base ? ` imported from ${base}` : ''}${relatedError ? '; targets must start with "./"' : ''}`;
+});
+
+E('ERR_PACKAGE_IMPORT_NOT_DEFINED', TypeError, (specifier, packagePath, base) => {
+  return `Package import specifier "${specifier}" is not defined${packagePath ? ` in package ${packagePath}package.json` : ''} imported from ${base}`;
+});
+
+E('ERR_PACKAGE_PATH_NOT_EXPORTED', Error, (pkgPath, subpath, base = undefined) => {
+  if (subpath === '.') {
+    return `No "exports" main defined in ${pkgPath}package.json${base ? ` imported from ${base}` : ''}`;
+  }
+  return `Package subpath '${subpath}' is not defined by "exports" in ${pkgPath}package.json${base ? ` imported from ${base}` : ''}`;
+});
+
+E('ERR_REQUIRE_ESM', Error, (filename) => {
+  return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
+});
+
 E('ERR_ARG_NOT_ITERABLE', TypeError, (x) => `${x} must be iterable`);
 E('ERR_INVALID_FILE_URL_HOST', TypeError,
   (platform) => `File URL host must be "localhost" or empty on ${platform}`);
@@ -341,6 +350,7 @@ E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
   return `The URL must be ${res}`;
 });
 
+// Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = undefined) {
     if (options !== undefined && typeof options !== 'object') {

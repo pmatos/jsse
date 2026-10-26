@@ -10,8 +10,9 @@
 // scope when the bundle IIFE executes. On real Node that identifier is the
 // module's own CJS-wrapper `require` (visible from a nested IIFE via
 // closure), which resolves both specifiers natively — this shim must stay out
-// of its way there. On jsse there is no such ambient `require`, so this shim
-// installs one as a global, keyed to exactly these two specifiers.
+// of its way there. On jsse the bundle is also a CommonJS main module, but its
+// `require` knows neither specifier, so this shim wraps it (or installs a
+// global where there is none), keyed to exactly these two specifiers.
 //
 // Must load after node-test-harness.js (this file reads its describe/test/
 // before/after/beforeEach/afterEach globals) and requires
@@ -103,11 +104,21 @@
     afterEach: harnessAfterEach,
   };
 
-  globalThis.require = function (specifier) {
+  // The bundle runs as the CommonJS main module under --node (#1219), so its
+  // `require` is the module wrapper's own parameter; wrap it in place.
+  // Without one, install a global.
+  var hostRequire = typeof require === "function" ? require : null;
+  var shimRequire = function (specifier) {
     if (specifier === "node:test") return nodeTestModule;
     if (specifier === "node:assert/strict") {
       return globalThis.__jsseAssertStrict;
     }
+    if (hostRequire) return hostRequire(specifier);
     throw new Error("jsse require shim: unsupported specifier " + specifier);
   };
+  if (hostRequire) {
+    require = shimRequire;
+  } else {
+    globalThis.require = shimRequire;
+  }
 })();

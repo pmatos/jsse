@@ -1,5 +1,4 @@
-//! The embedded `os` module under `--node` (#1222), reached through the hidden
-//! `__node_builtin` accessor until the CommonJS loader (#1219) adds `require`.
+//! The embedded `os` module under `--node` (#1222), reached through `require`.
 //! Values are checked against what the process can see itself (`/proc`, the
 //! environment it was started with); `scripts/run-node-os-oracle.sh` diffs the
 //! same module against Node.
@@ -35,9 +34,9 @@ fn node(source: &str, envs: &[(&str, &str)], flags: &[&str], gc_stress: Option<&
 #[test]
 fn module_surface_and_aliases() {
     let source = r#"
-      const os = __node_builtin("os");
+      const os = require("os");
       print([
-        os === __node_builtin("node:os"),
+        os === require("node:os"),
         Object.keys(os).join(),
         typeof os.constants.signals.SIGINT,
         Object.isFrozen(os.constants.signals),
@@ -59,7 +58,7 @@ fn module_surface_and_aliases() {
 #[test]
 fn values_agree_with_what_the_process_can_see() {
     let source = r#"
-      const os = __node_builtin("os");
+      const os = require("os");
       print(JSON.stringify([
         os.platform(), os.arch(), os.type(), os.endianness(), os.EOL, os.devNull,
         os.homedir(), os.tmpdir(), os.hostname(), os.userInfo().username.length > 0,
@@ -98,7 +97,7 @@ fn memory_and_release_come_from_proc() {
         .expect("MemTotal");
     let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap();
     let source = r#"
-      const os = __node_builtin("os");
+      const os = require("os");
       print(os.totalmem(), os.release(), os.cpus().length >= 1);
     "#;
     assert_eq!(
@@ -111,7 +110,7 @@ fn memory_and_release_come_from_proc() {
 #[test]
 fn environment_edits_are_seen_at_call_time() {
     let source = r#"
-      const os = __node_builtin("os");
+      const os = require("os");
       const out = [os.homedir(), os.tmpdir()];
       process.env.HOME = "/edited";
       process.env.TMPDIR = "";
@@ -131,7 +130,7 @@ fn environment_edits_are_seen_at_call_time() {
 #[test]
 fn errors_and_validation_match_node_messages() {
     let source = r#"
-      const os = __node_builtin("os");
+      const os = require("os");
       const probe = (fn) => { try { fn(); } catch (e) { print(e.name, e.code, e.message); } };
       probe(() => os.getPriority("a"));
       probe(() => os.setPriority(0, 100));
@@ -153,7 +152,7 @@ fn errors_and_validation_match_node_messages() {
 #[test]
 fn works_under_gc_stress() {
     let source = r#"
-      const os = __node_builtin("os");
+      const os = require("os");
       print(Object.keys(os.networkInterfaces()).length > 0, os.cpus().length > 0, os.userInfo({ encoding: "buffer" }).username.length > 0, Object.keys(os.constants.errno).length > 0);
     "#;
     assert_eq!(node(source, &[], &[], Some("10")), "true true true true");
@@ -161,18 +160,18 @@ fn works_under_gc_stress() {
 
 #[test]
 fn binding_is_private_and_absent_without_node() {
-    let probe = r#"print(typeof __host_os, typeof __node_builtin)"#;
+    let probe = r#"print(typeof __host_os, typeof require)"#;
     assert_eq!(
         stdout(&run(&["-e", probe], &[], None)),
         "undefined undefined"
     );
     let source = r#"
       print(typeof __host_os);
-      try { __node_builtin("internal/host/os"); } catch (e) { print(e.code); }
-      try { __node_builtin("os/nope"); } catch (e) { print(e.code); }
+      try { require("internal/host/os"); } catch (e) { print(e.code); }
+      try { require("os/nope"); } catch (e) { print(e.code); }
     "#;
     assert_eq!(
         node(source, &[], &[], None),
-        "undefined\nERR_UNKNOWN_BUILTIN_MODULE\nERR_UNKNOWN_BUILTIN_MODULE"
+        "undefined\nMODULE_NOT_FOUND\nMODULE_NOT_FOUND"
     );
 }

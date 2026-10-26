@@ -1,7 +1,7 @@
 "use strict";
 // Deterministic probe of the `os` module, run unchanged by Node and by
 // `jsse --node` (scripts/run-node-os-oracle.sh diffs the two outputs).
-const os = typeof require === "function" ? require("os") : __node_builtin("os");
+const os = require("os");
 const scenario = process.argv[2] || "default";
 
 function emit(label, value) {

@@ -34,6 +34,8 @@ pub(crate) struct NodeHostState {
     /// `process.exitCode` sink (`__host_set_exit_code`), read by the CLI when
     /// the run ends without an explicit `__host_exit`.
     pub(crate) exit_code: Option<i32>,
+    /// What the launch runs as its main program; read by `__host_main_kind`.
+    pub(crate) main_kind: crate::cli_node::NodeMainKind,
     /// Test-only: the platform name the `os` binding reports.
     #[cfg(test)]
     pub(crate) platform_override: Option<&'static str>,
@@ -53,6 +55,10 @@ impl Interpreter {
             script,
             args,
         });
+    }
+
+    pub(crate) fn set_node_host_main_kind(&mut self, kind: crate::cli_node::NodeMainKind) {
+        self.node_host.main_kind = kind;
     }
 
     /// Exit status requested through `process.exitCode`, if any.

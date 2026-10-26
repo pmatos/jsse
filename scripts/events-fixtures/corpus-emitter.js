@@ -4,7 +4,7 @@
 // (scripts/run-node-events-oracle.sh), and the digest is pinned in
 // corpus.digest (tests/node_events.rs). Values are printed through String and
 // JSON rather than util.inspect, whose formatting is not part of this module.
-var EventEmitter = typeof __node_builtin === "function" ? __node_builtin("events") : require("events");
+var EventEmitter = require("events");
 
 var lines = [];
 function out() {
