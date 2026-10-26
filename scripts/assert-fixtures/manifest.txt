@@ -1,0 +1,28 @@
+# Node v26.8.2 test/parallel/test-assert*.js files in this directory, verbatim,
+# run by scripts/run-node-assert-oracle.sh through harness.js on jsse --node and
+# on Node. On jsse only: "@<test>|<name substring>|<reason>" skips individual
+# node:test cases and "~<test>|s#from#to#|<reason>" (literal text) patches the wrapped
+# test text. A test is one file, or consecutive <name>.js.partN slices (the
+# 20,000-byte file budget) whose concatenation has the sha256 on its line.
+# Lines starting with "!" name a Node test that is not vendored.
+
+test-assert 0d9a0b998414492f514e4b2afc6faf19851b6db4791057bfdc5c6c0db1524bc6
+test-assert-async aaa2717476e3e33a55cf30615d4aed0927ee7be648430cb4b387d77dfa6daf6f
+test-assert-checktag 8d83d234f4dcbd602bc4d197d8a33581bb2b7d07cb8527ef6f12ef254e59fd9c
+test-assert-class aac5a2d25109bf85237ff4398cc52110df827a9870780323b05ed2f2b94678ac
+test-assert-class-destructuring c61eeb4671f3d23e082399a1cf4cff0b5b7cf1d0fdda06d5eaebafbc2d7ad3c1
+test-assert-deep 014faa09f6a322a6b10e150fc151f0fc7ed266d855907afe8321e2e9bd237cd9
+test-assert-deep-with-error 0afb5b01c3a834ae2854168e964eed8defc1df86433b60e69c4f1a3e4d797110
+test-assert-fail 939b232765da3e56568b2279df53d72ea02a1a1937a2bcad67935a88434dd41d
+test-assert-first-line 2a9aa4e562c293c5173c6acd239b6c38a803ab54208ae17ae83bc76ed9574bfc
+test-assert-if-error 0917a49c9649d49206f832435953ca0632cde55a3a01c9899ce1d644e96986ef
+test-assert-partial-deep-equal 3ccc75c936ea7a7019f0260cc1fb351d488ccebde1c4d0a6bce1dde7eba570d6
+test-assert-typedarray-deepequal a892946890680ce41ba278f19eb52532f1cb9355c7221c73ba00802339d0b95c
+!test-assert-esm-cjs-message-verify: spawns child processes and ESM entry points (child_process and ESM are not in the host)
+!test-assert-myers-diff: needs --expose-internals to reach internal/assert/myers_diff
+@test-assert|Errors created in different contexts|no vm module
+@test-assert|Additional assert|no vm module (new vm.Script)
+@test-assert-deep|Check proxies|#1334: ownKeys traps of Proxy arrays are not run; V8 error text
+@test-assert-deep|Check for AggregateError|#1323: Object.prototype.toString gives [object Object] for AggregateError
+@test-assert-partial-deep-equal|two AggregateErrors with missing message|#1323: Object.prototype.toString gives [object Object] for AggregateError
+~test-assert-async|s#assert.match(err.stack, /rejects/);##|#1333: no "at async" stack frames
