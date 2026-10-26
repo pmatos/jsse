@@ -35,7 +35,6 @@ fn probe(source: &str) -> String {
 #[derive(Debug)]
 struct Needs {
     process_events: bool,
-    inspect: bool,
 }
 
 fn node_tests() -> Vec<(String, Needs)> {
@@ -49,7 +48,6 @@ fn node_tests() -> Vec<(String, Needs)> {
             let flags: Vec<&str> = words.collect();
             let needs = Needs {
                 process_events: flags.contains(&"needs-process-events"),
-                inspect: flags.contains(&"needs-inspect"),
             };
             (name, needs)
         })
@@ -94,7 +92,6 @@ fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&s
     let dir = scratch(tag);
     let process_events =
         probe(r#"process.on("x", function () {}); print(process.emit("x"))"#) == "true";
-    let inspect = probe("print(util.inspect(new (class Foo {})(), { depth: -1 }))") == "[Foo]";
     let tests = node_tests();
     for wanted in only {
         assert!(
@@ -106,7 +103,7 @@ fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&s
         if !only.is_empty() && !only.contains(&name.as_str()) {
             continue;
         }
-        if (needs.process_events && !process_events) || (needs.inspect && !inspect) {
+        if needs.process_events && !process_events {
             continue;
         }
         let script = compose(&name, &dir.0);

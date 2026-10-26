@@ -22,7 +22,8 @@
     "Float64Array", "Function", "Int16Array", "Int32Array", "Int8Array",
     "Map", "Number", "Object", "Promise", "RangeError", "ReferenceError",
     "RegExp", "Set", "String", "Symbol", "SyntaxError", "TypeError",
-    "URIError", "Uint16Array", "Uint32Array", "Uint8Array",
+    "URIError", "Uint16Array", "Uint32Array", "Uint8Array", "AggregateError",
+    "TypedArray",
     "Uint8ClampedArray", "WeakMap", "WeakRef", "WeakSet",
     "JSON", "Math", "Reflect", "Proxy",
   ];
@@ -63,7 +64,9 @@
     });
   }
   INTRINSICS.forEach(function (name) {
-    var ctor = globalThis[name];
+    var ctor = name === "TypedArray"
+      ? Object.getPrototypeOf(Uint8Array)
+      : globalThis[name];
     table[name] = [ctor, false];
     snapshot(ctor, name, false, name === "Promise" ? ctor : undefined);
     if (typeof ctor === "function" && ctor.prototype) {
@@ -75,6 +78,60 @@
     "parseFloat", "parseInt", "isNaN", "isFinite"].forEach(function (name) {
     table[name] = [globalThis[name], false];
   });
+
+  table.uncurryThis = [uncurryThis, false];
+  table.globalThis = [globalThis, false];
+  var stringIterator = uncurryThis(String.prototype[Symbol.iterator]);
+  var arrayIterator = uncurryThis(Array.prototype[Symbol.iterator]);
+  var stringNext = uncurryThis(
+    Object.getPrototypeOf(""[Symbol.iterator]()).next
+  );
+  var arrayNext = uncurryThis(
+    Object.getPrototypeOf([][Symbol.iterator]()).next
+  );
+  function SafeIterator(createIterator, iteratorNext) {
+    return class {
+      constructor(iterable) {
+        this._iterator = createIterator(iterable);
+      }
+      next() {
+        return iteratorNext(this._iterator);
+      }
+      [Symbol.iterator]() {
+        return this;
+      }
+    };
+  }
+  table.SafeStringIterator = [SafeIterator(stringIterator, stringNext), false];
+  table.SafeArrayIterator = [SafeIterator(arrayIterator, arrayNext), false];
+  ["Map", "Set", "WeakMap", "WeakSet", "WeakRef"].forEach(function (name) {
+    var Base = globalThis[name];
+    table["Safe" + name] = [class extends Base {}, false];
+  });
+
+  var reflectApply = Reflect.apply;
+  var arrayPush = Array.prototype.push;
+  var arrayUnshift = Array.prototype.unshift;
+  var regExpExec = uncurryThis(RegExp.prototype.exec);
+  table.ArrayPrototypePushApply = [
+    function (array, items) { return reflectApply(arrayPush, array, items); },
+    false,
+  ];
+  table.ArrayPrototypeUnshiftApply = [
+    function (array, items) { return reflectApply(arrayUnshift, array, items); },
+    false,
+  ];
+  table.SafeStringPrototypeSearch = [
+    function (string, regexp) {
+      regexp.lastIndex = 0;
+      var match = regExpExec(regexp, string);
+      return match ? match.index : -1;
+    },
+    false,
+  ];
+  if (table.ErrorCaptureStackTrace === undefined) {
+    table.ErrorCaptureStackTrace = [function captureStackTrace() {}, false];
+  }
 
   var primordials = new Proxy(Object.create(null), {
     get: function (_, name) {
@@ -89,8 +146,28 @@
   });
 
   var cache = Object.create(null);
-  cache["internal/util/inspect"] = {
-    exports: { inspect: globalThis.util.inspect },
+  function takeUtilHost(name) {
+    var fn = globalThis[name];
+    delete globalThis[name];
+    return fn;
+  }
+  cache["internal/host/util"] = {
+    exports: {
+      kind: takeUtilHost("__host_util_kind"),
+      promiseDetails: takeUtilHost("__host_util_promise_details"),
+      proxyDetails: takeUtilHost("__host_util_proxy_details"),
+      previewEntries: takeUtilHost("__host_util_preview_entries"),
+      ownNonIndex: takeUtilHost("__host_util_own_non_index"),
+      className: takeUtilHost("__host_util_class_name"),
+      builtinSource: hostSource,
+    },
+  };
+  cache["internal/host/buffer"] = { exports: { Buffer: globalThis.Buffer } };
+  cache["internal/host/encoding"] = {
+    exports: {
+      TextEncoder: globalThis.TextEncoder,
+      TextDecoder: globalThis.TextDecoder,
+    },
   };
 
   function requireBuiltin(id) {
@@ -168,6 +245,17 @@
   LAZY_GLOBALS.forEach(function (entry) {
     defineLazyGlobal(entry[0], entry[1]);
   });
+
+  // Buffer's inspect output, the part of util.inspect Buffer owns in Node.
+  if (typeof Buffer === "function") {
+    Buffer.prototype.inspect = Buffer.prototype[
+      Symbol.for("nodejs.util.inspect.custom")
+    ] = function inspect(depth, ctx, utilInspect) {
+      return requireBuiltin("internal/buffer_inspect").inspect.call(
+        this, depth, ctx, utilInspect
+      );
+    };
+  }
 
   Object.defineProperty(globalThis, "__node_builtin", {
     value: loadPublic,

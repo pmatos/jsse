@@ -63,6 +63,10 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         "node-builtin-loader.js",
         include_str!("../../../scripts/node-builtin-loader.js"),
     ),
+    (
+        "node-console.js",
+        include_str!("../../../scripts/node-console.js"),
+    ),
     ("hide-globals", HIDE_GLOBALS),
 ];
 

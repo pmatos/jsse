@@ -30,6 +30,7 @@ mod node_host_fs_error;
 mod node_host_fs_meta;
 mod node_host_loop;
 mod node_host_process;
+mod node_host_util;
 mod node_prelude;
 mod number;
 mod object;

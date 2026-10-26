@@ -257,6 +257,7 @@ impl Interpreter {
             self.setup_node_host_fs_meta();
         }
         self.setup_node_host_loop();
+        self.setup_node_host_util();
     }
 }
 

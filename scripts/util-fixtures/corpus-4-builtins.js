@@ -1,0 +1,96 @@
+// errors, dates, regexps
+var e1 = fakeError(Error, "plain");
+var e2 = fakeError(TypeError, "bad type", { code: "E_X", extra: { deep: [1, 2] } });
+var e3 = fakeError(RangeError, "multi\nline message");
+var e4 = fakeError(Error, undefined);
+var e5 = fakeError(Error, "with cause");
+e5.cause = fakeError(TypeError, "the cause");
+var e6 = fakeError(AggregateError, "agg");
+e6.errors = [fakeError(Error, "inner1"), fakeError(RangeError, "inner2")];
+class CustomError extends Error { constructor(m) { super(m); this.name = "CustomError"; } }
+var e7 = fakeError(CustomError, "custom");
+class NoNameError extends Error {}
+var e8 = fakeError(NoNameError, "no name set");
+var e9 = fakeError(Error, "name changed");
+e9.name = "Renamed";
+var e10 = fakeError(Error, "stack lacks name");
+e10.stack = "    at only (/app/f.js:1:1)";
+var e11 = new Error("no frames");
+e11.stack = "Error: no frames";
+var e12 = new Error("empty stack");
+e12.stack = "";
+var e13 = fakeError(Error, "msg changed");
+e13.message = "changed after";
+var e14 = fakeError(SyntaxError, "syntax", { line: 3 });
+var e15 = fakeError(EvalError, "eval");
+var e16 = fakeError(URIError, "uri");
+var e17 = fakeError(ReferenceError, "ref");
+var e18 = Object.create(Error.prototype);
+var e19 = fakeError(Error, "has symbol");
+e19[Symbol("s")] = "sym";
+var e20 = fakeError(Error, "circular");
+e20.self = e20;
+var e21 = fakeError(Error, "nested object");
+e21.obj = { err: fakeError(TypeError, "inner err") };
+var e22 = fakeError(Error, "stack is number");
+e22.stack = 42;
+var e23 = new Error("null proto");
+e23.stack = "Error: null proto\n    at x (/app/f.js:1:1)";
+Object.setPrototypeOf(e23, null);
+var e24 = fakeError(Error, "own name prop");
+Object.defineProperty(e24, "name", { value: "Own", enumerable: true });
+var e25 = fakeError(Error, "own message enumerable");
+Object.defineProperty(e25, "message", { value: "own message enumerable", enumerable: true });
+var e26 = fakeError(CustomError, "cause chain");
+e26.cause = e5;
+showAll("err", [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15, e16, e17, e18, e19, e20, e21, e22, e23, e24, e25, e26]);
+showAll("err-depth0", [e2, e21, e6], { depth: 0 });
+show("err-colors", [e1, e2], { colors: true });
+show("err-in-obj", { err: e1, list: [e2] });
+show("err-in-map", new Map([["e", e1]]));
+show("err-compact", [e1, e2], { compact: false });
+show("err-break", e2, { breakLength: 20 });
+var stackWithAnon = fakeError(Error, "anon frames");
+stackWithAnon.stack = "Error: anon frames\n    at /app/a.js:1:1\n    at new Foo (/app/a.js:2:2)\n    at async bar (/app/a.js:3:3)";
+show("err-frames", stackWithAnon);
+var dup = fakeError(Error, "dup frames");
+dup.stack = "Error: dup frames\n" + Array.from({ length: 12 }, function () { return "    at same (/app/s.js:1:1)\n    at other (/app/s.js:2:2)"; }).join("\n");
+show("err-dup-frames", dup);
+var longstack = fakeError(Error, "long");
+longstack.stack = "Error: long\n" + Array.from({ length: 30 }, function (_, i) { return "    at fn" + i + " (/app/f" + i + ".js:" + i + ":1)"; }).join("\n");
+show("err-longstack", longstack);
+var nm = fakeError(Error, "in node_modules");
+nm.stack = "Error: in node_modules\n    at x (/app/node_modules/pkg/index.js:1:1)\n    at y (/app/src/a.js:1:1)";
+show("err-nodemodules", nm);
+show("err-nodemodules-colors", nm, { colors: true });
+var ctorMismatch = fakeError(Error, "ctor mismatch");
+Object.setPrototypeOf(ctorMismatch, TypeError.prototype);
+show("err-proto-mismatch", ctorMismatch);
+var toStr = fakeError(Error, "x");
+toStr.stack = "Error: x\n    at y (/a.js:1:1)";
+toStr.name = "TypeError";
+show("err-name-vs-stack", toStr);
+// dates
+showAll("date", [new Date(0), new Date(1e12), new Date(NaN), new Date(-1), new Date(8.64e15), new Date(Date.UTC(2020, 1, 29, 12, 30, 45, 123)),
+  Object.assign(new Date(0), { extra: 1 }), new Date(2e12)]);
+show("date-nested", { when: new Date(0), list: [new Date(1)] });
+show("date-hidden", new Date(0), { showHidden: true });
+show("date-colors", new Date(0), { colors: true });
+show("date-invalid-colors", new Date(NaN), { colors: true });
+class MyDate extends Date {}
+show("date-sub", new MyDate(0));
+// regexps
+showAll("re", [/a/, /a/gimsuy, /\//, new RegExp("a/b"), new RegExp(""), /[\]]/, /(?<name>x)\k<name>/, /\u{1F600}/u, /^\d+$/m, /a|b/dv]);
+var reExtra = /x/g;
+reExtra.prop = 1;
+reExtra.lastIndex = 3;
+show("re-extra", reExtra);
+show("re-hidden", /x/g, { showHidden: true });
+show("re-nested", { r: /nested/, l: [/a/, /b/g] });
+class MyRe extends RegExp {}
+show("re-sub", new MyRe("x", "g"));
+show("re-tag", Object.assign(/x/, { [Symbol.toStringTag]: "Z" }));
+show("symbol-obj", Object(Symbol.iterator));
+show("weakref", typeof WeakRef === "function" ? new WeakRef({}) : 0);
+show("finreg", typeof FinalizationRegistry === "function" ? new FinalizationRegistry(function () {}) : 0);
+show("boxed-nested", { n: new Number(1), s: new String("s"), b: new Boolean(true) });
