@@ -251,6 +251,11 @@ impl Interpreter {
 
         self.setup_node_host_process();
         self.setup_node_host_builtins();
+        #[cfg(unix)]
+        {
+            self.setup_node_host_fs();
+            self.setup_node_host_fs_meta();
+        }
     }
 }
 
