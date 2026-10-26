@@ -4,11 +4,10 @@
 // pieces of `test/common`, `test/common/fixtures` and `node:test` the assert
 // tests use. A test passes when the process exits 0 and prints
 // "assert-fixture: ok". ASSERT_FIXTURE_SKIP lists test names (one per line)
-// that are reported as skipped when the host has no `vm` module (jsse).
+// that are reported as skipped (the runner sets it for jsse only).
 var __aUtil = require("util");
 var __aSkip = (process.env.ASSERT_FIXTURE_SKIP || "").split("\n").filter(Boolean);
 var __aPending = [];
-var __aSkipActive = false;
 
 function __aMustCall(fn, exact, atLeast) {
   if (typeof fn === "number") { exact = fn; fn = undefined; }
@@ -93,7 +92,7 @@ var __aCounts = { pass: 0, fail: 0, skip: 0 };
 async function __aRun(nodes) {
   for (var i = 0; i < nodes.length; i++) {
     var n = nodes[i];
-    var skipped = n.opts.skip || __aSkipActive && __aSkip.some(function (s) { return n.name.indexOf(s) !== -1; });
+    var skipped = n.opts.skip || __aSkip.some(function (s) { return n.name.indexOf(s) !== -1; });
     if (skipped) { __aCounts.skip++; console.log("skip " + n.name); continue; }
     if (n.kind === "suite") { await __aRun(n.children); continue; }
     try {
@@ -116,7 +115,6 @@ try {
   ["runInContext", "createContext", "Script"].forEach(function (k) {
     __aVm[k] = function () { throw new Error("vm." + k + " is not available"); };
   });
-  __aSkipActive = true;
 }
 
 // Stand-ins for the web globals jsse does not have yet; the tests that name them

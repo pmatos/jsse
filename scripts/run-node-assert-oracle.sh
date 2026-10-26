@@ -54,8 +54,7 @@ export ASSERT_FIXTURE_DIR="$DIR"
 FAIL=0
 while read -r name sum; do
     case "$name" in ""|"#"*|"!"*|"@"*|"~"*) continue ;; esac
-    ASSERT_FIXTURE_SKIP="$(grep "^@$name|" "$DIR/manifest.txt" | cut -d'|' -f2 || true)"
-    export ASSERT_FIXTURE_SKIP
+    JSSE_SKIP="$(grep "^@$name|" "$DIR/manifest.txt" | cut -d'|' -f2 || true)"
     if [ -f "$DIR/$name.js" ]; then
         cp "$DIR/$name.js" "$WORK/$name.src"
     else
@@ -79,7 +78,7 @@ while read -r name sum; do
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
         rc=0
-        "$JSSE" --node "$WORK/$name.jsse.js" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
+        ASSERT_FIXTURE_SKIP="$JSSE_SKIP" "$JSSE" --node "$WORK/$name.jsse.js" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -q "^assert-fixture: ok" "$WORK/jsse.out"; then
             echo "FAIL $name: jsse --node exit $rc"
             head -20 "$WORK/jsse.out" | sed 's/^/  stdout: /'
@@ -89,7 +88,7 @@ while read -r name sum; do
     fi
     if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
         rc=0
-        "$NODE_BIN" --expose-gc --no-warnings "$WORK/$name.js" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
+        ASSERT_FIXTURE_SKIP= "$NODE_BIN" --expose-gc --no-warnings "$WORK/$name.js" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -q "^assert-fixture: ok" "$WORK/node.out"; then
             echo "FAIL $name: node exit $rc"
             head -20 "$WORK/node.out" | sed 's/^/  stdout: /'

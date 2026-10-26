@@ -60,9 +60,8 @@ recorded in `manifest.txt`. Guards: `tests/node_assert.rs`.
 
 jsse-only skips and patches are listed in `manifest.txt` with reasons: no `vm`
 module (two `test-assert.js` cases; `vm.runInNewContext` is `eval` in the
-harness), the V8 text of an `ownKeys` invariant error and trap-free proxy
-inspection (`Check proxies`), #1323 (`Object.prototype.toString` of an
-`AggregateError`, two cases), and the missing `at async` frames
-(`assert.match(err.stack, /rejects/)` in `test-assert-async.js` is removed).
+harness), #1334 (proxy `ownKeys` traps; `Check proxies`), #1323 (`Object.prototype.toString` of an
+`AggregateError`, two cases) and #1333 (missing `at async` frames;
+`assert.match(err.stack, /rejects/)` in `test-assert-async.js` is removed).
 `test-assert-esm-cjs-message-verify` (child processes, ESM) and
 `test-assert-myers-diff` (`--expose-internals`) are not vendored.
