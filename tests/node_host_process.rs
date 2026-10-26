@@ -235,9 +235,9 @@ fn floor_primitives_are_non_enumerable_configurable_functions() {
 }
 
 #[test]
-fn short_option_clusters_and_attached_values_are_parsed() {
+fn long_eval_with_equals_takes_leftover_tokens_as_script_args() {
     assert_eq!(
-        argv_tail(&["--node", "-me", PRINT_EVAL_ARGV, "a", "-e"]),
+        argv_tail(&["--node", &format!("--eval={PRINT_EVAL_ARGV}"), "a", "-e"]),
         r#"["a","-e"]"#
     );
 }
