@@ -28,8 +28,8 @@ mod node_host_fs_args;
 mod node_host_fs_error;
 #[cfg(unix)]
 mod node_host_fs_meta;
-mod node_host_loop;
 mod node_host_idna;
+mod node_host_loop;
 mod node_host_process;
 mod node_prelude;
 mod number;
