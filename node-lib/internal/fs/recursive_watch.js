@@ -5,11 +5,11 @@
 // names are relative to the root. A directory that appears is watched and its
 // entries announced as renames; one that disappears loses its watches. Events
 // on a sub-directory itself are dropped, because its parent reports them,
-// unless it was deleted or moved: its watch is then dead and is redone.
+// unless the kernel dropped its watch (it was deleted): that is then redone.
 
 const { sync } = require('internal/host/fs');
 const { Buffer } = require('buffer');
-const { startWatch, kRename, kSelf } = require('internal/fs/watch_native');
+const { startWatch, kRename, kSelf, kGone } = require('internal/fs/watch_native');
 
 const kBoth = 3;
 
@@ -90,12 +90,14 @@ class RecursiveWatch {
     }
   }
 
-  // A sub-directory whose own watch reported a rename was deleted or moved
-  // (the kernel then drops the watch). The directory at the same path may be a
-  // new one that the parent's event found with the dead one's inode number,
-  // which file systems reuse at once; watch whatever is there now.
-  restartDirectory(path, relative) {
-    this.unwatchSubtree(path);
+  // The kernel dropped a sub-directory's watch because the directory was
+  // deleted. Its path may hold a new directory that the parent's event found
+  // with the dead one's inode number, which file systems reuse at once, so
+  // watch whatever is there now.
+  restartDirectory(path, relative, dead) {
+    dead.close();
+    this.dirs.delete(path);
+    this.inodes.delete(path);
     let stats;
     try {
       stats = sync.lstatSync(path);
@@ -109,7 +111,7 @@ class RecursiveWatch {
     if (this.closed) return;
     if (bits & kSelf) {
       if (dir !== this.root) {
-        if ((bits & kRename) && this.dirs.get(dir) === source) this.restartDirectory(dir, relative);
+        if ((bits & kGone) && this.dirs.get(dir) === source) this.restartDirectory(dir, relative, source);
         return;
       }
       const own = Buffer.from(name).toString();

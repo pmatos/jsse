@@ -13,12 +13,42 @@ use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(180);
 
-fn scratch(name: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("jsse-node-fs-watch-{name}-{}", std::process::id()));
+fn scratch_in(base: &Path, name: &str) -> PathBuf {
+    let dir = base.join(format!("jsse-node-fs-watch-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.canonicalize().unwrap()
+}
+
+fn scratch(name: &str) -> PathBuf {
+    scratch_in(&std::env::temp_dir(), name)
+}
+
+/// A scratch directory on a file system that gives a removed directory's inode
+/// number to the next directory created (ext4 does, btrfs and tmpfs do not),
+/// when the temp dir or the build tree is on one. A directory replaced there
+/// looks like the old one to anything comparing inodes (#1377).
+fn scratch_reusing_inodes(name: &str) -> PathBuf {
+    let candidates = [
+        std::env::temp_dir(),
+        PathBuf::from("/var/tmp"),
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+    ];
+    for base in &candidates {
+        let probe = scratch_in(base, &format!("{name}-probe"));
+        let ino = |path: &Path| {
+            std::fs::create_dir(path).unwrap();
+            let ino = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap());
+            std::fs::remove_dir(path).unwrap();
+            ino
+        };
+        let reuses = ino(&probe.join("d")) == ino(&probe.join("d"));
+        let _ = std::fs::remove_dir_all(&probe);
+        if reuses {
+            return scratch_in(base, name);
+        }
+    }
+    scratch(name)
 }
 
 struct Session {
@@ -349,7 +379,7 @@ fn recursive_watchers_follow_new_directories_and_drop_removed_ones() {
 #[test]
 #[cfg(target_os = "linux")]
 fn a_directory_replaced_before_its_events_are_handled_is_watched_again() {
-    let dir = scratch("replaced");
+    let dir = scratch_reusing_inodes("replaced");
     std::fs::create_dir_all(dir.join("a")).unwrap();
     let script = "const fs = require('fs'); const d = process.env.DIR;
         const w = fs.watch(d, { recursive: true }, (type, name) => console.log('ev', type, name));
@@ -363,14 +393,10 @@ fn a_directory_replaced_before_its_events_are_handled_is_watched_again() {
     session.child.kill().unwrap();
 }
 
-/// File systems such as ext4 hand a removed directory's inode number to the
-/// next directory created, so the replacement can look like the directory
-/// whose watch the kernel just dropped (#1377). Set `TMPDIR` to such a file
-/// system to exercise that case; elsewhere the replacement has a new inode.
 #[test]
 #[cfg(target_os = "linux")]
 fn a_replaced_directory_tree_is_watched_down_to_its_nested_directories() {
-    let dir = scratch("replaced-tree");
+    let dir = scratch_reusing_inodes("replaced-tree");
     std::fs::create_dir_all(dir.join("a/sub")).unwrap();
     let script = "const fs = require('fs'); const d = process.env.DIR;
         const w = fs.watch(d, { recursive: true }, (type, name) => console.log('ev', type, name));
@@ -382,4 +408,23 @@ fn a_replaced_directory_tree_is_watched_down_to_its_nested_directories() {
     std::fs::write(dir.join("a/sub/probe"), "x").unwrap();
     session.wait_for("ev rename a/sub/probe");
     session.child.kill().unwrap();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_moved_directory_announces_its_entries_once() {
+    let dir = scratch("moved");
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    std::fs::write(dir.join("a/x"), "x").unwrap();
+    let script = "const fs = require('fs'); const d = process.env.DIR;
+        const w = fs.watch(d, { recursive: true }, (type, name) => console.log('ev', type, name));
+        fs.renameSync(d + '/a', d + '/b');
+        setTimeout(() => w.close(), 1000);";
+    let (out, rc) = run_script(script, &dir);
+    assert_eq!(rc, 0);
+    assert_eq!(
+        out.iter().filter(|line| *line == "ev rename b/x").count(),
+        1,
+        "{out:?}"
+    );
 }
