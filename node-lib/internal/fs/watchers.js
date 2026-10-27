@@ -127,4 +127,4 @@ function watch(filename, options, listener) {
   return watcher;
 }
 
-module.exports = { FSWatcher, watch, kStart, createIgnoreMatcher };
+module.exports = { FSWatcher, watch };

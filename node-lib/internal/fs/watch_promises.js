@@ -16,7 +16,7 @@ async function* watchIterator(filename, options = {}) {
   validateObject(options, 'options');
   const {
     persistent = true, recursive = false, encoding = 'utf8', signal,
-    overflow = 'ignore', maxQueue = 2048,
+    overflow = 'ignore', maxQueue = 2048, ignore,
   } = options;
   validateBoolean(persistent, 'options.persistent');
   validateBoolean(recursive, 'options.recursive');
@@ -26,7 +26,7 @@ async function* watchIterator(filename, options = {}) {
   validateOneOf(overflow, 'options.overflow', ['ignore', 'error']);
   validateInteger(maxQueue, 'options.maxQueue', 1);
 
-  const watcher = watch(filename, { persistent, recursive, encoding });
+  const watcher = watch(filename, { persistent, recursive, encoding, ignore });
   const queue = [];
   let wake = null;
   let failure = null;

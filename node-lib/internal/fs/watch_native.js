@@ -144,4 +144,4 @@ function startWatch(path, onevent, persistent) {
   return new PollWatch(path, onevent, persistent);
 }
 
-module.exports = { startWatch, kChange, kRename, kSelf };
+module.exports = { startWatch, kRename, kSelf };
