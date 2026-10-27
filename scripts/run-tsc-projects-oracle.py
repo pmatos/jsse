@@ -7,9 +7,10 @@ TSC_DIR is an installed typescript package; without it (or with another version)
 prints SKIP and exits 0 unless --require is given. Each case in scripts/tsc-fixtures/cases.txt
 and in every cases-<topic>.txt (pinned in expected-<topic>.txt; a leading NAME=value sets an
 environment variable, @pty:ROWSxCOLS runs on a pseudo-terminal, @stats normalises the numbers of
---diagnostics output) runs lib/_tsc.js on a fresh
-copy of a project tree on both engines. Stdout, stderr, the exit code and every file the compiler created, changed or deleted must be identical after
-normalising only the work-tree path, the TypeScript package path and h:mm:ss AM clock stamps.
+--diagnostics output) runs lib/_tsc.js on a fresh copy of a project tree on both engines. Stdout,
+stderr, the exit code and every file the compiler created, changed or deleted must be identical after
+normalising only the work-tree path, the TypeScript package path and h:mm:ss AM clock stamps (plus
+the moving numbers of @stats output, traces and CPU profiles: scripts/tsc_oracle_norm.py).
 Prints a pass/fail table; exits 1 on any difference.
 
 Options: --jobs N (default 4), --timeout SECONDS (default 900), --ci (plain output, GitHub

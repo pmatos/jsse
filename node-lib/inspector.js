@@ -25,6 +25,10 @@ function commandError(code, message) {
   return inspectorError('ERR_INSPECTOR_COMMAND', `Inspector error ${code}: ${message}`);
 }
 
+function newProfilerState() {
+  return { enabled: false, startTime: undefined };
+}
+
 function nowMicros() {
   return Number(process.hrtime.bigint() / 1000n);
 }
@@ -81,7 +85,7 @@ class Session extends EventEmitter {
   constructor() {
     super();
     this[kConnected] = false;
-    this[kProfiler] = { enabled: false, startTime: undefined };
+    this[kProfiler] = newProfilerState();
   }
 
   connect() {
@@ -123,7 +127,7 @@ class Session extends EventEmitter {
   disconnect() {
     if (!this[kConnected]) return;
     this[kConnected] = false;
-    this[kProfiler] = { enabled: false, startTime: undefined };
+    this[kProfiler] = newProfilerState();
   }
 }
 
