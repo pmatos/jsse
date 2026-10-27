@@ -2908,6 +2908,7 @@ fn operand_layout(op: Op) -> &'static [usize] {
         Op::LoadLocal | Op::StoreLocal | Op::StoreLocalPop => &[2, 2],
         Op::UpdateLocal => &[2, 2, 1],
         Op::Call | Op::ReturnCall | Op::Construct => &[2, 4],
+        Op::SetCallPos => &[4],
         Op::DupN => &[1],
         Op::BinConst | Op::CmpJumpIfFalse => &[1, 2],
         Op::LocalBinConst => &[2, 2, 1, 2],
@@ -2934,8 +2935,7 @@ fn operand_layout(op: Op) -> &'static [usize] {
     }
 }
 
-/// Decodes a whole chunk into `(op, operands)` through the operand-width
-/// table; operand values are widened to u16 (a u32 keeps its low half).
+/// Decode `(op, operands)`; widen to u16, keeping a u32's low half.
 pub(super) fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
     let mut out = Vec::new();
     let mut pc = 0;
@@ -3002,12 +3002,12 @@ fn try_compile_function_source(
     )
 }
 
-/// The chunk's ops without statement-boundary safepoints.
+/// Ops without safepoints or optional call-position metadata.
 pub(super) fn work_ops(chunk: &Chunk) -> Vec<Op> {
     decode_ops(chunk)
         .into_iter()
         .map(|(op, _)| op)
-        .filter(|op| *op != Op::Safepoint)
+        .filter(|op| !matches!(op, Op::Safepoint | Op::SetCallPos))
         .collect()
 }
 
