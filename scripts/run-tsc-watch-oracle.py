@@ -18,7 +18,7 @@ first "Watching for file changes." line, then runs the steps:
 Edits between two @wait steps land together, so a burst is a debounce test. The session ends with SIGINT; the exit
 status joins the record. Stdout, stderr, emitted files and the status must be identical on both
 engines after the normalisation of the project oracle (work-tree path, TypeScript path, clock stamps).
-Options: --jobs N (default 4), --timeout SECONDS per wait (default 300), --settle SECONDS (default 1.0), --ci,
+Options: --jobs N (default 4), --timeout SECONDS per wait (default 300), --settle SECONDS of quiet output after a cycle (default 1.0), --ci,
 --list, --require, --pin / --no-node (digests in scripts/tsc-fixtures/watch-expected.txt), --fixtures DIR.
 """
 
@@ -53,6 +53,35 @@ START = re.compile(
 )
 ELAPSED = re.compile(r"Elapsed:: [0-9.e+-]+ms")
 EDITS = ("@replace", "@write", "@append", "@remove", "@mkdir", "@rename", "@touch")
+STEPS = EDITS + ("@wait", "@idle")
+LEAKING_ENV = ("TSC_WATCHFILE", "TSC_WATCHDIRECTORY", "TSC_NONPOLLING_WATCHER")
+LOCALE = {
+    "LC_ALL": "en_US.UTF-8",
+    "LANG": "en_US.UTF-8",
+    "LANGUAGE": "en_US",
+    "TZ": "UTC",
+}
+
+
+class Log:
+    """Incremental view of the growing stdout file: counts of started and finished cycles."""
+
+    def __init__(self, path):
+        self.path, self.pos, self.rest = path, 0, b""
+        self.ready = self.started = 0
+
+    def poll(self):
+        """Read what was appended since the last call; returns the number of new bytes."""
+        with open(self.path, "rb") as f:
+            f.seek(self.pos)
+            new = f.read()
+        self.pos += len(new)
+        data = self.rest + new
+        cut = data.rfind(b"\n") + 1
+        self.rest, whole = data[cut:], data[:cut]
+        self.ready += len(READY.findall(whole))
+        self.started += len(START.findall(whole))
+        return len(new)
 
 
 def edit(tree, step):
@@ -61,13 +90,13 @@ def edit(tree, step):
     def path(p):
         return os.path.join(tree, p)
 
-    if op == "@replace":
+    if op in ("@replace", "@remove"):
         proj.scenario_step(tree, step)
     elif op in ("@write", "@append"):
-        with open(path(args[0]), "w" if op == "@write" else "a", newline="") as f:
+        with open(
+            path(args[0]), "w" if op == "@write" else "a", encoding="utf-8", newline=""
+        ) as f:
             f.write(proj.decode_escapes(args[1]))
-    elif op == "@remove":
-        proj.scenario_step(tree, step)
     elif op == "@mkdir":
         for p in args:
             os.makedirs(path(p))
@@ -114,9 +143,18 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
     os.makedirs(logs, exist_ok=True)
     out_path, err_path = (os.path.join(logs, f"{name}.{s}") for s in ("out", "err"))
     extra, _, _, args = proj.split_invocation(list(args))
-    env = {k: v for k, v in os.environ.items() if k not in proj.DROP_ENV}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in proj.DROP_ENV and k not in LEAKING_ENV
+    }
+    env.update(LOCALE)
+    env.update(extra)
     cmd = [exe] + (["--node"] if engine == "jsse" else [])
     cmd += [os.path.join(tsc_dir, "lib", "_tsc.js")] + args
+    for step in steps:
+        if step[0] not in STEPS:
+            raise SystemExit(f"{name}: unknown watch step {step[0]}")
 
     moving = any(a in ("--diagnostics", "--extendedDiagnostics") for a in args)
 
@@ -128,7 +166,8 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
         t = ELAPSED.sub("Elapsed:: <MS>", t)
         return proj.normalise_stats(t) if moving else t
 
-    record, seen = [], {"out": 0, "err": 0, "files": proj.snapshot(tree)}
+    log = Log(out_path)
+    record, seen = [], {"out": 0, "err": 0, "ready": 0, "files": proj.snapshot(tree)}
     pending = []
 
     def snapshot_record(header):
@@ -144,13 +183,15 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
         for p in sorted(set(old) - set(files)):
             text += f"--- file {p}\n<deleted>\n"
         record.append(text)
-        seen.update(out=len(out), err=len(err), files=files)
+        seen.update(
+            out=len(out), err=len(err), files=files, ready=len(READY.findall(out))
+        )
 
     with open(out_path, "wb") as fo, open(err_path, "wb") as fe:
         p = subprocess.Popen(
             cmd,
             cwd=tree,
-            env={**env, **extra},
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=fo,
             stderr=fe,
@@ -161,18 +202,12 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
         """Block until a cycle beyond the `base` finished, no cycle is running and the output was quiet for
         `settle` seconds (a change can start a second cycle after the first)."""
         deadline = time.monotonic() + timeout
-        size, moved = -1, time.monotonic()
+        moved = time.monotonic()
         while True:
-            out = read(out_path)
             now = time.monotonic()
-            if len(out) != size:
-                size, moved = len(out), now
-            done = len(READY.findall(out))
-            if (
-                done > base
-                and len(START.findall(out)) <= done
-                and now - moved >= settle
-            ):
+            if log.poll():
+                moved = now
+            if log.ready > base and log.started <= log.ready and now - moved >= settle:
                 return None
             if p.poll() is not None:
                 return f"exited {p.returncode} early"
@@ -180,48 +215,52 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
                 return "timeout"
             time.sleep(0.05)
 
-    start, cycles = time.monotonic(), 0
-    problem = wait_cycles(cycles)
-    if problem is None:
-        snapshot_record("initial compile")
-        for step in steps:
-            if step[0] in EDITS:
-                edit(tree, step)
-                pending.append(" ".join(step))
-            elif step[0] == "@wait":
-                cycles = len(READY.findall(read(out_path)))
-                problem = wait_cycles(cycles)
-                if problem:
-                    break
-                snapshot_record(f"after {'; '.join(pending) or 'nothing'}")
-                pending.clear()
-            elif step[0] == "@idle":
-                time.sleep(float(step[1]))
-                snapshot_record(f"idle after {'; '.join(pending) or 'nothing'}")
-                pending.clear()
-            else:
-                raise SystemExit(f"{name}: unknown watch step {step[0]}")
-    if p.poll() is None:
-        os.killpg(p.pid, signal.SIGINT)
-        try:
-            p.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)
-            p.wait()
-            problem = problem or "ignored SIGINT"
+    start, problem = time.monotonic(), None
+    try:
+        problem = wait_cycles(0)
+        if problem is None:
+            snapshot_record("initial compile")
+            for step in steps:
+                if step[0] in EDITS:
+                    edit(tree, step)
+                    pending.append(" ".join(step))
+                elif step[0] == "@wait":
+                    problem = wait_cycles(seen["ready"])
+                    if problem:
+                        break
+                    snapshot_record(f"after {'; '.join(pending) or 'nothing'}")
+                    pending.clear()
+                else:
+                    time.sleep(float(step[1]))
+                    snapshot_record(f"idle after {'; '.join(pending) or 'nothing'}")
+                    pending.clear()
+    finally:
+        if p.poll() is None:
+            os.killpg(p.pid, signal.SIGINT)
+            try:
+                p.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+                p.wait()
+                problem = problem or "ignored SIGINT"
     status = problem or str(p.returncode)
     elapsed = time.monotonic() - start
     snapshot_record(f"end (exit {status})")
-    if expect_exit and problem and problem.startswith("exited"):
-        problem = None
+    if expect_exit:
+        stopped = (problem or "").startswith("exited")
+        problem = None if stopped else problem or "did not stop by itself"
     return {
         "exit": status,
         "stdout": "".join(record),
-        "stderr": "",
-        "files": {},
         "secs": elapsed,
         "problem": problem,
     }
+
+
+def digest(res):
+    return hashlib.sha256(
+        (res["exit"] + "\0" + res["stdout"]).encode("utf-8", "surrogateescape")
+    ).hexdigest()
 
 
 def pins(path):
@@ -323,22 +362,17 @@ def main():
     with ThreadPoolExecutor(max_workers=o.jobs) as pool:
         for name, res in pool.map(one, cases):
             j = res["jsse"]
-            digest = hashlib.sha256(
-                (j["exit"] + "\0" + j["stdout"]).encode("utf-8", "surrogateescape")
-            ).hexdigest()
             secs = f"jsse {j['secs']:.1f}s" + (
                 f", node {res['node']['secs']:.1f}s" if "node" in res else ""
             )
             if "node" in res:
                 n = res["node"]
-                ndigest = hashlib.sha256(
-                    (n["exit"] + "\0" + n["stdout"]).encode("utf-8", "surrogateescape")
-                ).hexdigest()
-                fresh[name] = ndigest
+                if not n["problem"]:
+                    fresh[name] = digest(n)
                 same = n["exit"] == j["exit"] and n["stdout"] == j["stdout"]
                 ok = same and not n["problem"]
             else:
-                ok = pinned.get(name) == digest and not j["problem"]
+                ok = pinned.get(name) == digest(j) and not j["problem"]
             print(f"{'PASS' if ok else 'FAIL'} {name} ({secs})", flush=True)
             if ok:
                 passed += 1
@@ -361,10 +395,12 @@ def main():
                     print(f"    exit: node {n['exit']} jsse {j['exit']}")
             else:
                 print(
-                    f"    digest {digest} is not the pinned {pinned.get(name)}\n{j['stdout']}"
+                    f"    digest {digest(j)} is not the pinned {pinned.get(name)}\n{j['stdout']}"
                 )
     shutil.rmtree(work, ignore_errors=True)
-    if o.pin:
+    if o.pin and failed:
+        print("not pinning: a selected session failed or Node did not run it cleanly")
+    elif o.pin:
         merged = pins(pinfile)
         merged.update(fresh)
         with open(pinfile, "w", encoding="utf-8") as f:

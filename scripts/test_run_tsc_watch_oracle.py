@@ -32,6 +32,12 @@ while True:
     time.sleep(0.05)
     now = tree()
     if now != seen:
+        stable = 0
+        while stable < 4:
+            time.sleep(0.05)
+            again = tree()
+            stable = stable + 1 if again == now else 0
+            now = again
         seen = now
         print("12:01:03 PM - File change detected. Starting incremental compilation...", flush=True)
         {extra}
@@ -130,6 +136,11 @@ class WatchOracleTest(unittest.TestCase):
         self.cases("early | p | -w -p . | @exits ;; @remove a.ts ;; @wait\n")
         r = self.run_oracle("--ci")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_exits_marker_fails_a_session_that_keeps_running(self):
+        self.cases("alive | p | -w -p . | @exits ;; @append a.ts x ;; @wait\n")
+        r = self.run_oracle("--ci")
+        self.assertEqual(r.returncode, 1, r.stdout)
 
     def test_pin_and_no_node_round_trip(self):
         self.cases("pinned | p | -w -p . | @append a.ts x ;; @wait\n")
