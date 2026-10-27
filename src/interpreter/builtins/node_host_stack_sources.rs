@@ -34,6 +34,8 @@ pub(crate) struct NodeStackState {
     prune_at: usize,
     /// Native functions standing in for a running `vm` script's top level.
     pub(super) script_frames: Vec<(u64, Rc<str>)>,
+    /// Source id and offset plus one of the last `throw` statement run.
+    pub(super) throw_site: (usize, u32),
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a

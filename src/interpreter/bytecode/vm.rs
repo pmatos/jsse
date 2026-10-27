@@ -1097,9 +1097,8 @@ fn run_chunk_with_var_prologue(
     } else if refs.capacity() == 0 {
         std::mem::forget(refs);
     }
-    // `Throw`/`Exit` can leave operands of an outer in-progress expression on
-    // the stack (issue #331); every other completion follows the chunk's own
-    // handlers popping/unrooting their one live value.
+    // `Throw`/`Exit` can leave outer in-progress operands on the stack (#331);
+    // every other completion pops/unroots its one live value itself.
     if !matches!(result, Completion::Throw(_) | Completion::Exit(_)) {
         interp
             .gc_bytecode_roots
@@ -1142,9 +1141,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
     let mut pc: usize = 0;
     let frame_plain = is_plain_declarative(frame_env);
     // Block environments `PushEnv` opened, innermost last, mirrored in
-    // `call_stack_envs` from `envs_base` so the GC sees their bindings. The
-    // frame environment stays the caller-rooted one. Local-op slot hints
-    // address `frame_env` or these directly; other uses go through `cur_env!()`.
+    // `call_stack_envs` from `envs_base` for the GC. The frame environment
+    // stays caller-rooted. Local-op slot hints address `frame_env` or these.
     let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
     let envs_base = interp.call_stack_envs.len();
     let roots_base = interp.gc_bytecode_roots.len();
@@ -2302,6 +2300,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 }
                 Op::Throw => {
                     let value = pop_value(interp, stack, "stack underflow on Throw");
+                    interp.node_note_vm_throw(&value);
                     throw!('dispatch, value);
                 }
                 Op::Typeof => {

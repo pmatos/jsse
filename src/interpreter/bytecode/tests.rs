@@ -140,13 +140,10 @@ fn end_to_end_constructor_with_empty_body_returns_this() {
 
 #[test]
 fn end_to_end_new_expression_compiles_inside_wrapping_function() {
-    // Unlike `end_to_end_constructor_with_empty_body_returns_this` above (whose
-    // top-level `new f()` falls back to the tree-walker regardless of `new`
-    // support, since `function f(){}` is an uncompiled top-level
-    // FunctionDeclaration), this pins the `new` expression itself compiling:
-    // `g`'s own body contains the `new` expression, and `f`'s body carries a
-    // lexical declaration so it can never independently compile — any chunk
-    // execution observed here must come from `g`.
+    // Unlike the empty-body constructor test above (its top-level `new f()`
+    // falls back to the tree-walker), this pins the `new` expression itself
+    // compiling: `g` contains the `new`, and `f` carries a lexical declaration
+    // so it never compiles on its own; any chunk run seen here comes from `g`.
     let source = "\
         function f(){ let unused = 0; } \
         function g(){ return new f(); } \
@@ -1249,7 +1246,10 @@ fn if_with_throw_branch_compiles_and_throws() {
     use crate::ast::IfStatement;
     let body = vec![Statement::If(IfStatement {
         test: Expression::Literal(Literal::Boolean(true)),
-        consequent: Box::new(Statement::Throw(Expression::Literal(Literal::Number(1.0)))),
+        consequent: Box::new(Statement::Throw(
+            Expression::Literal(Literal::Number(1.0)),
+            0,
+        )),
         alternate: None,
     })];
     let chunk = compile_body(&body).expect("compile if with throw");
@@ -1267,9 +1267,10 @@ fn if_with_throw_alternate_compiles_and_throws() {
         consequent: Box::new(Statement::Return(Some(Expression::Literal(
             Literal::Number(1.0),
         )))),
-        alternate: Some(Box::new(Statement::Throw(Expression::Literal(
-            Literal::Number(2.0),
-        )))),
+        alternate: Some(Box::new(Statement::Throw(
+            Expression::Literal(Literal::Number(2.0)),
+            0,
+        ))),
     })];
     let chunk = compile_body(&body).expect("compile if/else with throw");
     match run(chunk) {

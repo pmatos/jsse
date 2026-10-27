@@ -335,7 +335,7 @@ fn analyze_statement(
 
         Statement::Break(_) | Statement::Continue(_) => {}
 
-        Statement::Throw(expr) => {
+        Statement::Throw(expr, _) => {
             analyze_expression(expr, analysis, ctx, true);
         }
 
@@ -367,11 +367,10 @@ fn analyze_statement(
                     );
                     // A yield in the catch parameter's own default/computed
                     // key (e.g. `catch ({ a = yield 1 })`) must register as a
-                    // real yield point too -- `collect_pattern_vars` alone
-                    // only gathers bound names, so without this the whole
-                    // function never leaves the single-state fast path and
-                    // the yield silently falls back to the tree-walker's
-                    // InlineYield replay (issue #771).
+                    // real yield point too: `collect_pattern_vars` only gathers
+                    // names, so otherwise the function stays single-state and
+                    // the yield falls back to the tree-walker's InlineYield
+                    // replay (issue #771).
                     analyze_pattern_expressions(param, analysis, ctx);
                 }
                 analyze_statements(&handler.body, analysis, ctx);
@@ -768,7 +767,7 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
                 || contains_yield(&f.body)
         }
         Statement::Return(e) => e.as_ref().is_some_and(expr_contains_yield),
-        Statement::Throw(e) => expr_contains_yield(e),
+        Statement::Throw(e, _) => expr_contains_yield(e),
         Statement::Try(t) => {
             t.block.iter().any(contains_yield)
                 || t.handler.as_ref().is_some_and(|h| {
@@ -1224,7 +1223,7 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
         | Statement::Return(_)
         | Statement::Break(_)
         | Statement::Continue(_)
-        | Statement::Throw(_)
+        | Statement::Throw(..)
         | Statement::Debugger
         | Statement::ClassDeclaration(_) => false,
     }
@@ -1390,7 +1389,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         | Statement::Return(_)
         | Statement::Break(_)
         | Statement::Continue(_)
-        | Statement::Throw(_)
+        | Statement::Throw(..)
         | Statement::Debugger
         | Statement::FunctionDeclaration(_)
         | Statement::ClassDeclaration(_) => AwaitUsingScan::None,
@@ -1470,7 +1469,7 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
                 || contains_suspension(&f.body)
         }
         Statement::Return(e) => e.as_ref().is_some_and(expr_contains_suspension),
-        Statement::Throw(e) => expr_contains_suspension(e),
+        Statement::Throw(e, _) => expr_contains_suspension(e),
         Statement::Try(t) => {
             t.block.iter().any(contains_suspension)
                 || t.handler.as_ref().is_some_and(|h| {

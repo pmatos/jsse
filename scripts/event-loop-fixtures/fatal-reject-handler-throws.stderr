@@ -1,0 +1,8 @@
+<dir>/fatal-reject-handler-throws.fixture.js:4
+  throw new Error("handler failed");
+  ^
+
+Error: handler failed
+    at process.<anonymous> (<dir>/fatal-reject-handler-throws.fixture.js:4:9)
+
+Node.js <version>

@@ -203,6 +203,12 @@ impl Interpreter {
             (Some(receiver), false) => self.receiver_type_name(receiver),
             _ => None,
         };
+        if !arrow
+            && name.as_deref().is_none_or(str::is_empty)
+            && let Some(receiver) = &raw.receiver
+        {
+            name = self.method_name_of(receiver, raw.func);
+        }
         let (source_id, pos) = match origin {
             Some((source, start)) => {
                 let id = self.node_host.stack.source_id(&source);

@@ -1,0 +1,10 @@
+<dir>/fatal-throw-main.fixture.js:4
+  throw new Error("boom");
+  ^
+
+Error: boom
+    at inner (<dir>/fatal-throw-main.fixture.js:4:9)
+    at outer (<dir>/fatal-throw-main.fixture.js:6:20)
+    at Object.<anonymous> (<dir>/fatal-throw-main.fixture.js:7:1)
+
+Node.js <version>

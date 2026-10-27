@@ -1,0 +1,9 @@
+monitor monitored uncaughtException
+<dir>/fatal-monitor.fixture.js:6
+throw new Error("monitored");
+^
+
+Error: monitored
+    at Object.<anonymous> (<dir>/fatal-monitor.fixture.js:6:7)
+
+Node.js <version>

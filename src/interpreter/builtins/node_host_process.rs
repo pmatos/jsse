@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 /// The program a `--node` launch runs in place of the script file: the
 /// prelude's CommonJS loader reads `process.argv[1]` and runs it as the main
 /// module. The entry point is a hidden global that is taken private here.
-const NODE_MAIN_BOOTSTRAP: &str = "(function () {\n  var run = globalThis.__node_run_main;\n  delete globalThis.__node_run_main;\n  run();\n})();";
+const NODE_MAIN_BOOTSTRAP: &str = "(function () {\n  var run = globalThis.__node_run_main;\n  delete globalThis.__node_run_main;\n  run();\n})();\n//# sourceURL=node:internal/main/run_main_module";
 
 impl Interpreter {
     pub(crate) fn node_main_bootstrap() -> &'static str {

@@ -56,6 +56,7 @@ mod node_host_process_metrics;
 mod node_host_signal;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+mod node_host_throw;
 #[cfg(unix)]
 pub(crate) mod node_host_tty;
 mod node_host_util;

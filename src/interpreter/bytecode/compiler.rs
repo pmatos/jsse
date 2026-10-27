@@ -791,10 +791,9 @@ impl Compiler {
                 }
                 Ok(())
             }
-            // NamedEvaluation (sec-runtime-semantics-namedevaluation) is applied
-            // by the assignment, not by the function expression. A function
-            // or arrow literal is named as its closure is created; an
-            // anonymous class needs the tree-walker's logic.
+            // NamedEvaluation is applied by the assignment: a function or arrow
+            // literal is named as its closure is created; an anonymous class
+            // needs the tree-walker's logic.
             Expression::Assign(_, target, value)
                 if matches!(target.as_ref(), Expression::Identifier(_))
                     && is_anonymous_class(value) =>
@@ -816,9 +815,9 @@ impl Compiler {
                             self.pop_n(2);
                             self.push_n(1);
                         } else {
-                            // lVal ← base.name; rVal ← value; SetProp(base, name, op(lVal, rVal)).
-                            // The base is duplicated so GetProp's pop/SetProp's pop each
-                            // consume their own copy — the base is evaluated exactly once.
+                            // lVal ← base.name; SetProp(base, name, op(lVal, value)).
+                            // The base is duplicated so GetProp and SetProp each
+                            // pop their own copy; it is evaluated once.
                             self.compile_expr(obj)?;
                             self.emit_dup_n(1);
                             self.emit(Op::GetProp);
@@ -1929,8 +1928,9 @@ impl Compiler {
                     _ => Err(CompileError::Unsupported("statement:Labeled")),
                 }
             }
-            Statement::Throw(expr) => {
+            Statement::Throw(expr, at) => {
                 self.compile_expr(expr)?;
+                self.emit_call_pos(CallSiteId(0, *at));
                 self.emit(Op::Throw);
                 self.pop_n(1);
                 Ok(())

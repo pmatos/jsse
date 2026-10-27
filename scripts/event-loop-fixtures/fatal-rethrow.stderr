@@ -1,0 +1,8 @@
+<dir>/fatal-rethrow.fixture.js:6
+  throw e;
+  ^
+
+Error: first
+    at Object.<anonymous> (<dir>/fatal-rethrow.fixture.js:4:9)
+
+Node.js <version>

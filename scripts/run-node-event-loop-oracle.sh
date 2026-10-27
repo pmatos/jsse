@@ -10,8 +10,13 @@
 #   // RUN: <expected-exit-status>
 #   // ERR: <text>      (optional; stderr must contain it on both engines)
 # A fixture passes iff stdout and the exit status match Node's and the status
-# equals the RUN line. Stderr is only checked for the ERR text: Node's fatal
-# report carries a source excerpt and a version line jsse does not reproduce.
+# equals the RUN line. Stderr is checked for the ERR text and, when a
+# <name>.stderr file sits beside the fixture, against it in full after
+# normalising: the fixture directory becomes <dir>, the version line
+# "Node.js <version>", every "    at ... node:..." frame (Node's internals,
+# jsse's embedded modules) is dropped and the N of "... N lines matching cause
+# stack trace ..." is blanked. Node's own stderr must normalise to the same
+# file, so the expectations cannot drift from Node.
 # Then the opt-in gate is checked: without --node (and with --prelude, which
 # test262 uses) the event-loop globals and process events must not exist, and
 # timers keep returning numbers.
@@ -19,22 +24,25 @@
 # Options:
 #   --node             run on Node only (reference / debugging)
 #   --no-cross-check   run on jsse only, compare against the RUN line alone
+#   --update-stderr    rewrite the <name>.stderr files from Node's stderr
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-FIXTURE_DIR="$SCRIPT_DIR/event-loop-fixtures"
+FIXTURE_DIR="$(cd "$SCRIPT_DIR/event-loop-fixtures" && pwd -P)"
 JSSE="${JSSE:-$PROJECT_DIR/target/release/jsse}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 NODE_ONLY=0
 CROSS_CHECK=1
+UPDATE_STDERR=0
 for arg in "$@"; do
     case "$arg" in
         --node) NODE_ONLY=1 ;;
         --no-cross-check) CROSS_CHECK=0 ;;
+        --update-stderr) UPDATE_STDERR=1; NODE_ONLY=1 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -56,6 +64,16 @@ if [ "${#FIXTURES[@]}" -eq 0 ]; then
     echo "No fixtures found in $FIXTURE_DIR" >&2
     exit 2
 fi
+
+# stderr with the machine-specific parts replaced (see the header comment)
+normalise_stderr() {
+    local text
+    text="$(cat "$1")"
+    printf '%s\n' "${text//"$FIXTURE_DIR"/<dir>}" \
+        | sed -E -e '/^[[:space:]]+at .*node:/d' \
+            -e 's/^Node\.js v[0-9][0-9.]*$/Node.js <version>/' \
+            -e 's/\.\.\. [0-9]+ lines matching cause/... N lines matching cause/'
+}
 
 # <out-prefix> <engine...>; writes .out/.err, sets RC (a timeout is a failure)
 run_engine() {
@@ -87,6 +105,17 @@ for fixture in "${FIXTURES[@]}"; do
             echo "FAIL $name: $engine stderr lacks '$err_text'"
             sed 's/^/  stderr: /' "$WORK/$engine.err" | head -5
             ok=0
+        elif [ "$UPDATE_STDERR" -eq 1 ]; then
+            if grep -q '^Node\.js v' "$WORK/$engine.err"; then
+                normalise_stderr "$WORK/$engine.err" > "${fixture%.fixture.js}.stderr"
+            fi
+        elif [ -f "${fixture%.fixture.js}.stderr" ]; then
+            normalise_stderr "$WORK/$engine.err" > "$WORK/$engine.norm"
+            if ! diff -u "${fixture%.fixture.js}.stderr" "$WORK/$engine.norm" > "$WORK/diff.txt"; then
+                echo "FAIL $name: $engine stderr differs (--- expected, +++ $engine)"
+                cat "$WORK/diff.txt"
+                ok=0
+            fi
         fi
     done
     if [ "$ok" -eq 1 ] && [ "${#engines[@]}" -eq 2 ] \

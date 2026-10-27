@@ -101,6 +101,7 @@ impl Interpreter {
 
     fn setup_node_host(&mut self) {
         self.setup_node_host_stack();
+        self.setup_node_host_throw();
         // __host_write(fd, str) -> bytesWritten
         //
         // Byte-accurate write of the UTF-8 encoding of `str` (from jsse's

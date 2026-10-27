@@ -1,0 +1,9 @@
+<dir>/fatal-tab-indent.fixture.js:4
+	if (true) { throw new Error("tabbed"); }
+	            ^
+
+Error: tabbed
+    at f (<dir>/fatal-tab-indent.fixture.js:4:20)
+    at Object.<anonymous> (<dir>/fatal-tab-indent.fixture.js:6:1)
+
+Node.js <version>

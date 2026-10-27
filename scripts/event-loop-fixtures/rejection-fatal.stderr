@@ -1,0 +1,8 @@
+<dir>/rejection-fatal.fixture.js:6
+Promise.reject(new Error("rejected-boom"));
+               ^
+
+Error: rejected-boom
+    at Object.<anonymous> (<dir>/rejection-fatal.fixture.js:6:16)
+
+Node.js <version>
