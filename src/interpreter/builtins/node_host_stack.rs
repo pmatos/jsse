@@ -123,8 +123,9 @@ impl Interpreter {
                 None => self.node_host.call_pos,
             };
             let arrow_this = self.node_arrow_receiver(i);
+            let called_with = arrow_this.is_some();
             let (receiver, constructor) = match self.call_stack_envs.get(frame.env_index) {
-                Some(_) if arrow_this.is_some() => (arrow_this.clone(), false),
+                Some(_) if called_with => (arrow_this, false),
                 Some(env) if !frame.is_eval => {
                     let env = env.borrow();
                     (env.get_this(), env.get_new_target().is_object())
@@ -136,7 +137,7 @@ impl Interpreter {
                 pos,
                 receiver,
                 constructor,
-                called_with: arrow_this.is_some(),
+                called_with,
             });
         }
         out
