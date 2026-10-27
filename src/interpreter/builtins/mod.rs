@@ -24,6 +24,8 @@ mod node_host_builtins;
 #[cfg(unix)]
 mod node_host_child;
 #[cfg(unix)]
+mod node_host_child_ipc;
+#[cfg(unix)]
 mod node_host_child_spawn;
 #[cfg(unix)]
 mod node_host_child_sync;

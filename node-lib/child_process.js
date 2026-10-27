@@ -1,6 +1,8 @@
 'use strict';
 
 const {
+  ArrayIsArray,
+  ArrayPrototypeIncludes,
   ArrayPrototypeJoin,
   ArrayPrototypePush,
   ArrayPrototypePushApply,
@@ -28,16 +30,22 @@ const { Buffer } = require('internal/host/buffer');
 const {
   AbortError,
   codes: {
+    ERR_CHILD_PROCESS_IPC_REQUIRED,
     ERR_CHILD_PROCESS_STDIO_MAXBUFFER,
     ERR_INVALID_ARG_TYPE,
   },
   genericNodeError,
 } = require('internal/errors');
 const { clearTimeout, setTimeout } = require('timers');
-const { validateAbortSignal } = require('internal/validators');
+const {
+  validateAbortSignal,
+  validateArray,
+  validateObject,
+} = require('internal/validators');
 const child_process = require('internal/child_process');
 const {
   getValidStdio,
+  stdioStringToArray,
   ChildProcess,
 } = child_process;
 const {
@@ -45,9 +53,16 @@ const {
   normalizeExecFileArgs,
   normalizeSpawnArguments,
   sanitizeKillSignal,
+  validateArgumentNullCheck,
+  validateArgumentsNullCheck,
   validateMaxBuffer,
   validateTimeout,
 } = require('internal/child_process/normalize');
+
+const { getValidatedPath } = require('internal/child_process/support');
+const { adopt } = require('internal/child_process/handle');
+const { IpcPipe } = require('internal/child_process/ipc_pipe');
+const { setupChannel, watchProcessListeners } = require('internal/child_process/channel');
 
 const MAX_BUFFER = 1024 * 1024;
 
@@ -303,6 +318,55 @@ function abortChildProcess(child, killSignal, reason) {
   }
 }
 
+function fork(modulePath, args = [], options) {
+  modulePath = getValidatedPath(modulePath, 'modulePath');
+
+  if (args == null) {
+    args = [];
+  } else if (typeof args === 'object' && !ArrayIsArray(args)) {
+    options = args;
+    args = [];
+  } else {
+    validateArray(args, 'args');
+  }
+
+  if (options != null) {
+    validateObject(options, 'options');
+  }
+  options = { __proto__: null, ...options, shell: false };
+  options.execPath ||= process.execPath;
+  validateArgumentNullCheck(options.execPath, 'options.execPath');
+
+  let execArgv = options.execArgv || process.execArgv;
+  validateArgumentsNullCheck(execArgv, 'options.execArgv');
+
+  // jsse runs Node-compatible programs only under --node.
+  if (options.execPath === process.execPath && !ArrayPrototypeIncludes(execArgv, '--node')) {
+    execArgv = ['--node', ...execArgv];
+  }
+
+  args = [...execArgv, modulePath, ...args];
+
+  if (typeof options.stdio === 'string') {
+    options.stdio = stdioStringToArray(options.stdio, 'ipc');
+  } else if (!ArrayIsArray(options.stdio)) {
+    options.stdio = stdioStringToArray(options.silent ? 'pipe' : 'inherit', 'ipc');
+  } else if (!ArrayPrototypeIncludes(options.stdio, 'ipc')) {
+    throw new ERR_CHILD_PROCESS_IPC_REQUIRED('options.stdio');
+  }
+
+  return spawn(options.execPath, args, options);
+}
+
+function _forkChild(fd, serializationMode) {
+  const handle = adopt(fd);
+  if (typeof handle === 'number') return;
+  const pipe = new IpcPipe(handle, 0, serializationMode);
+  pipe.fd = fd;
+  pipe.unref();
+  watchProcessListeners(process, setupChannel(process, pipe, serializationMode));
+}
+
 function spawn(file, args, options) {
   options = normalizeSpawnArguments(file, args, options);
   validateTimeout(options.timeout);
@@ -453,11 +517,13 @@ function execSync(command, options) {
 
 
 module.exports = {
+  _forkChild,
   ChildProcess,
   exec,
   execFile,
   execFileSync,
   execSync,
+  fork,
   spawn,
   spawnSync,
 };
