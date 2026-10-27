@@ -147,6 +147,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/util/signals"),
     builtin!("internal/util/trace_sigint"),
     builtin!("perf_hooks"),
+    builtin!("inspector"),
     builtin!("internal/histogram"),
     builtin!("internal/process/per_thread"),
     builtin!("internal/perf/binding"),
