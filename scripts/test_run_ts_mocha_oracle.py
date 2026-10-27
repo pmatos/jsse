@@ -43,7 +43,7 @@ class NormaliseTest(unittest.TestCase):
                 "    at node:internal/timers:40:7 {",
             ]
         )
-        self.assertEqual(self.norm(text), "Error: boom\n    at k (a.js:2:15)\n")
+        self.assertEqual(self.norm(text), "Error: boom\n    at k (a.js:2:15)\n{\n")
 
     def test_arrow_receivers_and_relative_frames_read_alike(self):
         node = "    at Context.<anonymous> (a.spec.js:5:36)\n    at Timeout._onTimeout (a.spec.js:2:9)\n"

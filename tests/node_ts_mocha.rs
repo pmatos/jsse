@@ -79,6 +79,14 @@ fn mocha_matches_node_when_a_typescript_checkout_is_given() {
     let out = Command::new("python3")
         .arg(root.join("scripts/run-ts-mocha-oracle.py"))
         .args(["--ci", "--require", "--jsse", env!("CARGO_BIN_EXE_jsse")])
+        .args([
+            "pass-*",
+            "fail-*",
+            "async-*",
+            "late-*",
+            "exit-*",
+            "ts-semver-and-failures",
+        ])
         .output()
         .expect("run python3");
     let text = String::from_utf8_lossy(&out.stdout);

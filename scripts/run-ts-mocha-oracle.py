@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -182,9 +183,9 @@ def normalise(text, work, ts_dir):
         if FRAME.match(line) and (
             BUILTIN_FRAME.search(line) or ASYNC_FRAME.match(line)
         ):
-            tail = BUILTIN_FRAME.search(line)
-            if tail and tail.group(1) == "</failure></testcase>":
-                kept.append(tail.group(1))
+            builtin = BUILTIN_FRAME.search(line)
+            if builtin and builtin.group(1):
+                kept.append(builtin.group(1).strip())
             continue
         if FRAME.match(line):
             line = RECEIVER_FRAME.sub(r"\1\2", line).replace("<WORK>/", "")
@@ -259,11 +260,21 @@ def execute(engine, exe, cwd, args, specs, config, env_extra, timeout, ts_dir, w
         + files
     )
     start = time.monotonic()
+    child = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
-        code, out, err = str(r.returncode), r.stdout, r.stderr
-    except subprocess.TimeoutExpired as e:
-        code, out, err = "timeout", e.stdout or b"", e.stderr or b""
+        out, err = child.communicate(timeout=timeout)
+        code = str(child.returncode)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)
+        out, err = child.communicate()
+        code = "timeout"
     wd = os.path.join(work, engine)
 
     def norm(raw):
@@ -323,9 +334,11 @@ def check_checkout(ts_dir):
         return f"{ts_dir} has no node_modules/mocha (run npm ci in the TypeScript checkout)"
     if not os.path.isfile(run_js):
         return f"{ts_dir} has no built/local/run.js (run hereby tests in the TypeScript checkout)"
-    with open(manifest, encoding="utf-8") as f:
-        version = re.search(r'"version"\s*:\s*"([^"]+)"', f.read())
-    version = version.group(1) if version else "unknown"
+    try:
+        with open(manifest, encoding="utf-8") as f:
+            version = json.load(f).get("version", "unknown")
+    except (OSError, ValueError, AttributeError):
+        version = "unknown"
     if version != "6.0.3":
         return f"the mocha oracle targets TypeScript 6.0.3, found {version}"
     return None
