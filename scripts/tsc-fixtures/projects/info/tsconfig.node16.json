@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "noLib": true,
+    "module": "node16",
+    "target": "es2022",
+    "strict": true,
+    "noEmit": true,
+    "types": []
+  },
+  "files": ["globals.d.ts"],
+  "include": ["node16"]
+}

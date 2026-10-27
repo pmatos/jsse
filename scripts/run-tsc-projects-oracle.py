@@ -6,9 +6,11 @@
 TSC_DIR is an installed typescript package; without it (or with another version) the script
 prints SKIP and exits 0 unless --require is given. Each case in scripts/tsc-fixtures/cases.txt
 and in every cases-<topic>.txt (pinned in expected-<topic>.txt; a leading NAME=value sets an
-environment variable, @pty:ROWSxCOLS runs on a pseudo-terminal) runs lib/_tsc.js on a fresh
-copy of a project tree on both engines. Stdout, stderr, the exit code and every file the compiler created, changed or deleted must be identical after
-normalising only the work-tree path, the TypeScript package path and h:mm:ss AM clock stamps.
+environment variable, @pty:ROWSxCOLS runs on a pseudo-terminal, @stats normalises the numbers of
+--diagnostics output) runs lib/_tsc.js on a fresh copy of a project tree on both engines. Stdout,
+stderr, the exit code and every file the compiler created, changed or deleted must be identical after
+normalising only the work-tree path, the TypeScript package path and h:mm:ss AM clock stamps (plus
+the moving numbers of @stats output, traces and CPU profiles: scripts/tsc_oracle_norm.py).
 Prints a pass/fail table; exits 1 on any difference.
 
 Options: --jobs N (default 4), --timeout SECONDS (default 900), --ci (plain output, GitHub
@@ -33,6 +35,9 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tsc_oracle_norm import normalise_file, normalise_stats
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIX = os.path.join(ROOT, "scripts", "tsc-fixtures")
@@ -96,6 +101,9 @@ def utimes(path, when):
             for n in dirs + names:
                 os.utime(os.path.join(dirpath, n), (when, when), follow_symlinks=False)
     os.utime(path, (when, when), follow_symlinks=False)
+
+
+SCENARIO_STEPS = ("@utimes", "@replace", "@remove", "@mtimes-after")
 
 
 def scenario_step(tree, step):
@@ -175,16 +183,23 @@ def expand_escaped(tree):
 
 
 def split_invocation(tokens):
-    """Leading NAME=value tokens set the environment, @pty:ROWSxCOLS runs on a pseudo-terminal."""
-    env, pty = {}, None
-    while tokens and (ENV_TOKEN.match(tokens[0]) or PTY_TOKEN.match(tokens[0])):
+    """Leading NAME=value tokens set the environment, @pty:ROWSxCOLS runs on a pseudo-terminal, @stats
+    normalises the moving numbers of --diagnostics output."""
+    env, pty, stats = {}, None, False
+    while tokens and (
+        ENV_TOKEN.match(tokens[0])
+        or PTY_TOKEN.match(tokens[0])
+        or tokens[0] == "@stats"
+    ):
         tok = tokens.pop(0)
-        if m := PTY_TOKEN.match(tok):
+        if tok == "@stats":
+            stats = True
+        elif m := PTY_TOKEN.match(tok):
             pty = (m.group(1), m.group(2))
         else:
             k, _, v = tok.partition("=")
             env[k] = v
-    return env, pty, tokens
+    return env, pty, stats, tokens
 
 
 def snapshot(tree):
@@ -215,10 +230,10 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
         + (["--node"] if engine == "jsse" else [])
         + [os.path.join(tsc_dir, "lib", "_tsc.js")]
     )
-    out, err, codes = [], [], []
+    out, err, codes, stats = [], [], [], []
     start = time.monotonic()
     for i, tokens in enumerate(invocations):
-        if tokens[0].startswith("@") and not PTY_TOKEN.match(tokens[0]):
+        if tokens[0] in SCENARIO_STEPS:
             try:
                 note = scenario_step(tree, tokens)
             except OSError as e:
@@ -227,7 +242,8 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
                 out.append(note.encode())
                 err.append(b"")
             continue
-        extra, pty, args = split_invocation(list(tokens))
+        extra, pty, stat, args = split_invocation(list(tokens))
+        stats.append(stat)
         run = cmd + args
         if pty:
             run = [sys.executable, "-I", PTY_RUN, "--rows", pty[0], "--cols", pty[1]]
@@ -254,19 +270,24 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     def norm(b):
         t = b.decode("utf-8", "surrogateescape")
         t = t.replace(tree, "<DIR>").replace(tsc_dir, "<TSC>")
+        t = re.sub(re.escape(os.path.join(work, engine)) + r"(?!\w)", "<WORK>", t)
+        t = t.replace(work, "<ROOT>")
         return CLOCK.sub("<TIME>", t)
 
-    files = {p: norm(c) for p, c in after.items() if before.get(p) != c}
+    files = {
+        p: normalise_file(p, norm(c)) for p, c in after.items() if before.get(p) != c
+    }
     files.update({p: "<deleted>" for p in before if p not in after})
 
-    def joined(parts):
+    def joined(parts, moving=()):
         return "".join(
-            f"--- invocation {i + 1}\n{norm(p)}" for i, p in enumerate(parts)
+            f"--- invocation {i + 1}\n{normalise_stats(norm(p)) if i < len(moving) and moving[i] else norm(p)}"
+            for i, p in enumerate(parts)
         )
 
     return {
         "exit": " ".join(codes),
-        "stdout": joined(out),
+        "stdout": joined(out, stats),
         "stderr": joined(err),
         "files": files,
         "secs": elapsed,
@@ -386,7 +407,13 @@ def main():
         flush=True,
     )
 
-    work = os.path.realpath(tempfile.mkdtemp(prefix="tsc-oracle-"))
+    # --traceResolution lists every ancestor directory, so the pins depend on the depth of the work dir
+    base = (
+        "/tmp"
+        if os.path.realpath("/tmp") == "/tmp" and os.access("/tmp", os.W_OK)
+        else None
+    )
+    work = os.path.realpath(tempfile.mkdtemp(prefix="tsc-oracle-", dir=base))
 
     def one(case):
         name = case[0]

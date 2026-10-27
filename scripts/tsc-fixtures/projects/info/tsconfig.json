@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "noLib": true,
+    "strict": true,
+    "target": "es2020",
+    "module": "commonjs",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "rootDir": ".",
+    "outDir": "out"
+  },
+  "files": ["globals.d.ts"],
+  "include": ["src"]
+}
