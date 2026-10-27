@@ -209,6 +209,12 @@ function normalizeSpawnArguments(file, args, options) {
     }
   }
 
+  // process.execPath is jsse, which runs Node programs only under --node
+  // (fork() does the same); build tools spawn it as `node`.
+  if (!options.shell && file === process.execPath && args[0] !== '--node') {
+    ArrayPrototypeUnshift(args, '--node');
+  }
+
   if (typeof options.argv0 === 'string') {
     ArrayPrototypeUnshift(args, options.argv0);
   } else {
