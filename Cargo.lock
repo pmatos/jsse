@@ -469,9 +469,9 @@ dependencies = [
 
 [[package]]
 name = "fixed_decimal"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79c3c892f121fff406e5dd6b28c1b30096b95111c30701a899d4f2b18da6d1bd"
+checksum = "2214fb00f669ee96bee5bb29dfb1ddabe058b2bc426817efc79afa03c9bc55ae"
 dependencies = [
  "displaydoc",
  "ryu",
@@ -711,7 +711,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9d49f41ded8e63761b6b4c3120dfdc289415a1ed10107db6198eb311057ca5"
 dependencies = [
  "displaydoc",
- "fixed_decimal 0.7.2",
+ "fixed_decimal 0.7.3",
  "icu_calendar 2.1.1",
  "icu_datetime_data 2.1.2",
  "icu_decimal 2.1.1",
@@ -759,7 +759,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a38c52231bc348f9b982c1868a2af3195199623007ba2c7650f432038f5b3e8e"
 dependencies = [
- "fixed_decimal 0.7.2",
+ "fixed_decimal 0.7.3",
  "icu_decimal_data 2.1.1",
  "icu_locale",
  "icu_locale_core",
@@ -789,7 +789,7 @@ checksum = "f4ffa4d60b9cb8b024082afaf9e94d853184e483ec69322c74dc437bf8a882a5"
 dependencies = [
  "displaydoc",
  "either",
- "fixed_decimal 0.7.2",
+ "fixed_decimal 0.7.3",
  "icu_casemap",
  "icu_collections",
  "icu_decimal 2.1.1",
@@ -966,7 +966,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f9cfe49f5b1d1163cc58db451562339916a9ca5cbcaae83924d41a0bf839474"
 dependencies = [
- "fixed_decimal 0.7.2",
+ "fixed_decimal 0.7.3",
  "icu_locale",
  "icu_plurals_data 2.1.1",
  "icu_provider 2.1.1",
@@ -1239,7 +1239,7 @@ dependencies = [
  "clap",
  "codspeed-divan-compat",
  "fancy-regex",
- "fixed_decimal 0.7.2",
+ "fixed_decimal 0.7.3",
  "foldhash",
  "getrandom",
  "iana-time-zone",
