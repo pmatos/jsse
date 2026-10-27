@@ -47,9 +47,9 @@ as on Node; the oracle pins that.
 - `null`/`true`/`false` as module export names (#1367): `zod/mini` (via `knip`) does not parse. Lint only.
 - `eslint`, `typescript-eslint`, `playwright`, `monocart-coverage-reports`, `azure-devops-node-api` need
   `worker_threads`, `http`, `net` (lint and coverage tickets, not the build chain).
-- A task that spawns `process.execPath` starts a bare jsse without `--node`
-  (`2026-10-26-2300-node-host-child-process.md`, "Not done"): `hereby build-src`'s first step,
-  `processDiagnosticMessages.mjs`, fails that way. This belongs to the build ticket (#1253).
+- A task that spawned `process.execPath` started a bare jsse without `--node`
+  (`hereby build-src`'s first step, `processDiagnosticMessages.mjs`, failed that way).
+  Fixed in #1253 (`2026-10-27-1600-node-host-hereby-local.md`).
 
 ## Verification
 

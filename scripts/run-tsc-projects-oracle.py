@@ -233,7 +233,7 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     out, err, codes, stats = [], [], [], []
     start = time.monotonic()
     for i, tokens in enumerate(invocations):
-        if tokens[0] in SCENARIO_STEPS:
+        if tokens and tokens[0] in SCENARIO_STEPS:
             try:
                 note = scenario_step(tree, tokens)
             except OSError as e:
