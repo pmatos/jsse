@@ -1,0 +1,4 @@
+{
+    "extends": "./tsconfig.helpers.json",
+    "files": ["src/esdeco.ts"]
+}
