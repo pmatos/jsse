@@ -17,23 +17,29 @@ impl Interpreter {
         if !self.node_host.stack.installed || at == 0 {
             return;
         }
-        let Some(func) = self
+        let Some((func, script)) = self
             .call_stack_frames
             .last()
-            .filter(|f| f.func_obj_id != 0 && !f.is_eval)
-            .map(|f| f.func_obj_id)
+            .filter(|f| f.func_obj_id != 0)
+            .map(|f| (f.func_obj_id, f.is_eval))
         else {
             return;
         };
-        let source = self
-            .get_object(func)
-            .and_then(|obj| match obj.borrow().callable.as_deref() {
-                Some(JsFunction::User {
-                    source_text: Some(text),
-                    ..
-                }) => Some(text.origin().0.clone()),
-                _ => None,
-            });
+        let source = if script {
+            let stack = &self.node_host.stack;
+            stack
+                .script_frame_source(func)
+                .filter(|_| !stack.module_frames.contains(&func))
+        } else {
+            self.get_object(func)
+                .and_then(|obj| match obj.borrow().callable.as_deref() {
+                    Some(JsFunction::User {
+                        source_text: Some(text),
+                        ..
+                    }) => Some(text.origin().0.clone()),
+                    _ => None,
+                })
+        };
         let Some(source) = source else {
             return;
         };
@@ -64,6 +70,7 @@ impl Interpreter {
         for (value, _, _) in &self.node_host.stack.throws {
             roots.extend(value.as_object_id());
         }
+        self.collect_node_receiver_roots(roots);
     }
 
     pub(crate) fn node_note_vm_throw(&mut self, value: &JsValue) {
@@ -124,5 +131,17 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_stack_throw_site", site);
+
+        let eval_source = self.create_function(JsFunction::native(
+            "__host_stack_eval_source".to_string(),
+            0,
+            |interp, _this, _args| {
+                let text = interp.node_host.stack.eval_origin.as_deref();
+                Completion::Normal(text.map_or(JsValue::UNDEFINED, |t| {
+                    JsValue::string(JsString::from_str(t))
+                }))
+            },
+        ));
+        self.install_host_global("__host_stack_eval_source", eval_source);
     }
 }

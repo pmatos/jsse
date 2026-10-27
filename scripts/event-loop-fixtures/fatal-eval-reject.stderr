@@ -1,0 +1,9 @@
+[eval]:3
+Promise.reject(new Error('rejected'));
+               ^
+
+Error: rejected
+    at [eval]:3:16
+    at [eval]-wrapper:6:24
+
+Node.js <version>

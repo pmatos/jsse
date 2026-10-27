@@ -22,9 +22,11 @@ const {
 
 const { inspect } = require('internal/util/inspect');
 const { isNativeError, isProxy } = require('internal/util/types');
-const { throwSite } = require('internal/host/stack');
+const { evalSource, throwSite } = require('internal/host/stack');
+const { shouldColorize } = require('internal/util/colors');
 
 const rejectionErrors = new SafeWeakSet();
+const decorated = new SafeWeakSet();
 
 const INTERNAL_HEADER = 'node:internal/process/promises:322\n' +
   '      new UnhandledPromiseRejection(reason);\n' +
@@ -123,12 +125,25 @@ function topFrame(error) {
 
 // The unpatched synchronous fs, so user code cannot run during the report.
 function sourceOf(file) {
+  if (file === '[eval]') return evalSource();
   require('fs');
   const { readFileSync } = require('internal/host/fs').sync;
   if (file.startsWith('file://')) {
     return readFileSync(require('url').fileURLToPath(file), 'utf8');
   }
   return readFileSync(file, 'utf8');
+}
+
+// util.inspect as the report shows it: coloured when stderr is, as for a
+// console, which a TTY or FORCE_COLOR decides.
+function show(value) {
+  let colors = false;
+  try {
+    colors = !!shouldColorize(process.stderr);
+  } catch {
+    // plain text
+  }
+  return inspect(value, { colors, customInspect: false, depth: 5 });
 }
 
 // file:line, the source line and a caret under the column, ending in a newline.
@@ -158,9 +173,28 @@ function sourceExcerpt(error, native, rejected) {
   return `${file}:${site[1]}\n${line}\n${underline}^\n`;
 }
 
+// Node prefixes the stack of an object thrown by the `-e` program itself with
+// the excerpt, so a handler of `uncaughtException` sees it there.
+function decorate(error) {
+  if ((typeof error !== 'object' || error === null) &&
+      typeof error !== 'function') {
+    return;
+  }
+  const excerpt = sourceExcerpt(error, isNativeError(error), false);
+  if (excerpt === '') return;
+  try {
+    const stack = error.stack;
+    if (typeof stack !== 'string') return;
+    error.stack = `${excerpt}\n${stack}`;
+    if (error.stack === `${excerpt}\n${stack}`) decorated.add(error);
+  } catch {
+    // the stack stays as it was
+  }
+}
+
 // `mode`: true for a rejection, 'entry' for an error that ended the ES module
 // entry point (a rejection too, but a non-error is reported raw under the
-// loader's header).
+// loader's header), 'eval' for a throw of the `-e` program.
 function report(error, mode) {
   const isObject = (typeof error === 'object' && error !== null) ||
     typeof error === 'function';
@@ -170,18 +204,23 @@ function report(error, mode) {
     header = INTERNAL_HEADER;
   } else if (mode === 'entry' && !native) {
     header = ENTRY_HEADER;
+  } else if (decorated.has(error)) {
+    header = '';
   } else {
     header = sourceExcerpt(error, native, mode === true || mode === 'entry');
   }
   if (native) {
     return `${header}${header === '' ? '' : '\n'}` +
-      inspect(error, { customInspect: false, depth: 5 });
+      show(error);
   }
   if (isObject) {
-    return `\n${header}` + inspect(error, { customInspect: false, depth: 5 });
+    // Node lays out an object thrown by the `-e` program itself differently.
+    const text = show(error);
+    if (decorated.has(error)) return text;
+    return mode === 'eval' && header !== '' ? `${header}\n${text}` : `\n${header}${text}`;
   }
   const shown = typeof error === 'symbol' ? '' : String(error);
   return `\n${header}${shown}\n${TRACE_HINT}`;
 }
 
-module.exports = { report, unhandledRejectionError };
+module.exports = { decorate, report, unhandledRejectionError };

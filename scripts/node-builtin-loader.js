@@ -215,6 +215,7 @@
     exports: {
       nameSource: takeHost("__host_stack_name_source"),
       throwSite: takeHost("__host_stack_throw_site"),
+      evalSource: takeHost("__host_stack_eval_source"),
     },
   };
   cache["internal/host/vm"] = { exports: takeHost("__host_vm") };
@@ -385,6 +386,9 @@
   if (handoff !== undefined) {
     handoff.report = function (error, rejected) {
       return requireBuiltin("internal/process/fatal").report(error, rejected);
+    };
+    handoff.decorate = function (error) {
+      return requireBuiltin("internal/process/fatal").decorate(error);
     };
     handoff.rejectionError = function (reason) {
       return requireBuiltin("internal/process/fatal").unhandledRejectionError(reason);
