@@ -1,0 +1,10 @@
+exit=0
+--- stdout
+stdin ReadStream  0  true    undefined undefined undefined false true false true true
+stdout SyncWriteStream fs 1  false true   undefined undefined undefined true false false true true
+stderr SyncWriteStream fs 2  false true   undefined undefined undefined true false false true true
+false false false false false false false
+true
+true
+ReadStream,WriteStream,isatty
+--- stderr

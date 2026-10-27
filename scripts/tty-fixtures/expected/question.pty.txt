@@ -1,0 +1,4 @@
+exit=0
+--- tty
+\e[1G\e[0Jname? \e[7Gbob\r\r
+hello bob\r

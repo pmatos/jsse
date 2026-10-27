@@ -1,0 +1,7 @@
+exit=0
+--- tty
+\e[1G\e[0J> \e[3Gab\e[1G\e[0J> a\e[4Gc\r\r
+got "ac" \e[33m0\e[39m \e[33m0\e[39m\r
+\e[1G\e[0J> \e[3Gxyz\e[3D\e[1G\e[0J> \e[3Gq\r\r
+got "q" \e[33m0\e[39m \e[33m0\e[39m\r
+\e[1G\e[0J> \e[3Gbye\r

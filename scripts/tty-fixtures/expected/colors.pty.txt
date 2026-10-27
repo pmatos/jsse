@@ -1,0 +1,19 @@
+exit=0
+--- tty
+{\r
+  a: \e[33m1\e[39m,\r
+  s: \e[32m'str'\e[39m,\r
+  n: \e[1mnull\e[22m,\r
+  u: \e[90mundefined\e[39m,\r
+  arr: [ \e[33m1\e[39m, \e[33m2\e[39m, \e[33m3\e[39m ],\r
+  f: \e[36m[Function: f]\e[39m,\r
+  d: \e[35m1970-01-01T00:00:00.000Z\e[39m,\r
+  sym: \e[32mSymbol(x)\e[39m\r
+}\r
+{ x: \e[33m1\e[39m }\r
+plain string \e[33m5\e[39m \e[33mtrue\e[39m\r
+{ err: [ \e[33m1\e[39m, { deep: \e[36m[Object]\e[39m } ] }\r
+{ dir: \e[33m1\e[39m, nested: \e[36m[Object]\e[39m }\r
+{ explicit: 1 }\r
+{ explicit: \e[33m1\e[39m }\r
+\e[33mtrue\e[39m \e[33m8\e[39m \e[33mtrue\e[39m\r
