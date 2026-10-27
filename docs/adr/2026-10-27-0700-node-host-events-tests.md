@@ -10,7 +10,7 @@ probe could never pass.
 ## Decision
 
 1. **Vendored set.** `scripts/events-fixtures/manifest.txt` lists Node v26.8.2
-   `test/parallel` files, verbatim: 37 CommonJS tests (wrapped by `harness.js`)
+   `test/parallel` files, verbatim: 43 CommonJS tests (wrapped by `harness.js`; 37 before item 6)
    and 2 ES module tests (`.mjs`). Every one must print `events-fixture: ok` on
    jsse `--node` and on Node, by `scripts/run-node-events-oracle.sh` and
    `tests/node_events.rs`. Added in this step: `test-event-emitter-errors`,
@@ -45,11 +45,44 @@ probe could never pass.
    needs `MessageChannel`; `test-eventemitter-asyncresource` needs
    `async_hooks`; `test-event-emitter-no-error-provided-to-error-event` needs
    `domain`; `test-abortsignal-drop-settled-signals.mjs` needs
-   `test/common/gc.js` and collectable `WeakRef`s; seven tests
-   (`test-abortcontroller-internal`, `test-events-customevent`,
+   `test/common/gc.js` and collectable `WeakRef`s;
+   `test-eventtarget-memoryleakwarning` needs `MessageChannel` (its expected
+   warning text names `[MessagePort [EventTarget]]`) and collectable `WeakRef`s.
+   None of those modules exists in the host.
+6. **`--expose-internals` (second step, #1223).** `jsse --node
+   --expose-internals` lets user `require` (and `node:` ids) name the embedded
+   `internal/...` builtins, as Node's switch does; `process`, `module` and the
+   default of keeping `internal/*` private are unchanged without it. The CLI flag
+   is accepted without `--node` and ignored (the host floor, including
+   `__host_expose_internals`, is not installed, so the default global
+   environment stays identical); `node-builtin-loader.js` reads the boolean once
+   and removes the hook, and only `canBeRequiredByUsers` consults it.
+   `module.builtinModules`, `Module.isBuiltin` and `process.execArgv` do not
+   mirror the switch. The oracle runs a test with the switch on jsse and Node
+   when its `// Flags:` line names `--expose-internals`. Six tests moved in:
+   `test-abortcontroller-internal`, `test-events-customevent`,
    `test-events-on-async-iterator`, `test-events-static-geteventlisteners`,
-   `test-eventtarget`, `test-eventtarget-brandcheck`,
-   `test-eventtarget-memoryleakwarning`) run under `--expose-internals` and `require('internal/event_target')`; the
-   host keeps `internal/*` private (`2026-10-26-1400-node-cjs-loader.md`), as
-   the assert oracle does for `test-assert-myers-diff`. An `--expose-internals`
-   switch would unlock them.
+   `test-eventtarget` (two `.partN` slices with a sha256, like the assert
+   fixtures, to stay under the 20,000-byte budget) and
+   `test-eventtarget-brandcheck`.
+7. **`NodeEventTarget`.** The tests reach `NodeEventTarget` and
+   `initNodeEventTarget` from `internal/event_target`. They live in
+   `internal/event_target_node.js` (the 20,000-byte budget) and
+   `internal/event_target` exports them through getters, so key order and
+   `destructuring` match Node. The symbols both modules share
+   (`kHybridDispatch`, `kIsNodeStyleListener`, `kIsNodeEventTarget`) moved to
+   `internal/events/symbols`.
+8. **A handled throw from a tick.** `process.on('uncaughtException')` that
+   handles an error thrown inside a `nextTick` callback abandons that tick
+   checkpoint, as in Node. Node then keeps the next check phase non-empty
+   (`setImmediate(noop)` in `createOnGlobalUncaughtException`) so the rest of
+   the queue and the promise jobs it feeds run promptly; the prelude now does
+   the same (`afterHandledUncaught` in `node-timers-shim.js`). Before, the queue
+   waited for an unrelated later callback: with four failing listeners
+   `test-eventtarget` lost the fourth `uncaughtException`.
+9. **Patched block, jsse only.** `test-eventtarget` has a block-level check that
+   a weakly held listener is gone after `gc()` (#1317). A manifest line
+   `~test-eventtarget|s#from#to#|reason` (literal text, the assert fixtures'
+   format) swaps the `common.mustNotCall()` listener for a no-op on jsse only;
+   Node runs the text verbatim. One more subtest is skipped by name
+   (`A weak event listener should not prevent gc`).

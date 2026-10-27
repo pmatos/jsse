@@ -4,6 +4,7 @@
 //! digest of the differential corpus that `scripts/run-node-events-oracle.sh`
 //! diffs against Node.
 
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -27,15 +28,67 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).trim_end().to_string()
 }
 
+fn manifest() -> String {
+    std::fs::read_to_string(fixtures().join("manifest.txt")).unwrap()
+}
+
 fn node_tests() -> Vec<String> {
-    let manifest = std::fs::read_to_string(fixtures().join("manifest.txt")).unwrap();
-    let tests: Vec<String> = manifest
+    let tests: Vec<String> = manifest()
         .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))
-        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with(['#', '!', '~']))
+        .map(|l| l.split_whitespace().next().unwrap().to_string())
         .collect();
-    assert!(tests.len() >= 35, "manifest too short: {tests:?}");
+    assert!(tests.len() >= 40, "manifest too short: {tests:?}");
     tests
+}
+
+fn source(name: &str) -> String {
+    let whole = fixtures().join(format!("{name}.js"));
+    let mut text = String::new();
+    if whole.exists() {
+        text = std::fs::read_to_string(whole).unwrap();
+    } else {
+        for part in 1.. {
+            let path = fixtures().join(format!("{name}.js.part{part}"));
+            if !path.exists() {
+                break;
+            }
+            text += &std::fs::read_to_string(path).unwrap();
+        }
+        let want = manifest()
+            .lines()
+            .find_map(|l| l.strip_prefix(name)?.strip_prefix(' '))
+            .unwrap_or_else(|| panic!("{name} has no sha256 in the manifest"))
+            .trim()
+            .to_string();
+        let got: String = Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(got, want, "{name}: vendored slices do not match the sha256");
+    }
+    assert!(!text.is_empty(), "no fixture named {name}");
+    text
+}
+
+fn patched(name: &str) -> String {
+    let mut text = source(name);
+    let prefix = format!("~{name}|");
+    for line in manifest().lines().filter_map(|l| l.strip_prefix(&prefix)) {
+        let expr = line.split('|').next().unwrap();
+        let body = expr.strip_prefix("s#").and_then(|e| e.strip_suffix('#'));
+        let (from, to) = body.and_then(|b| b.split_once('#')).expect("s#from#to#");
+        assert!(text.contains(from), "{name}: patch does not apply: {from}");
+        text = text.replace(from, to);
+    }
+    text
+}
+
+fn exposes_internals(name: &str) -> bool {
+    !name.ends_with(".mjs")
+        && source(name)
+            .lines()
+            .any(|l| l.starts_with("// Flags:") && l.contains("--expose-internals"))
 }
 
 fn compose_corpus(dir: &Path) -> PathBuf {
@@ -63,7 +116,7 @@ fn compose(name: &str, dir: &Path) -> PathBuf {
         return path;
     }
     let harness = read("harness.js");
-    let test = read(&format!("{name}.js"));
+    let test = patched(name);
     let script = format!(
         "{harness}try {{ (function (require, __filename, __dirname) {{\n{test}\n}})(__eventsRequire, \"/node/test/parallel/{name}.js\", \"/node/test/parallel\"); }} finally {{ __eventsFinish(); }}\n"
     );
@@ -102,6 +155,9 @@ fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&s
         let script = compose(&name, &dir.0);
         let mut args = vec!["--node"];
         args.extend_from_slice(flags);
+        if exposes_internals(&name) {
+            args.push("--expose-internals");
+        }
         args.push(script.to_str().unwrap());
         let out = run(&args, gc_stress);
         assert!(out.status.success(), "{name}: {}", stderr(&out));
@@ -136,6 +192,8 @@ fn events_tests_pass_under_gc_stress() {
             "test-events-once",
             "test-event-target",
             "test-abortcontroller",
+            "test-eventtarget",
+            "test-events-on-async-iterator",
         ],
     );
 }
@@ -231,6 +289,70 @@ fn events_module_ids_resolve_and_internals_stay_private() {
     assert_eq!(
         stdout(&out),
         "true true\nMODULE_NOT_FOUND\nERR_UNKNOWN_BUILTIN_MODULE\nMODULE_NOT_FOUND"
+    );
+}
+
+#[test]
+fn expose_internals_opens_internal_ids_under_node_only() {
+    let source = r#"
+      const t = require("internal/event_target");
+      print(require("node:internal/event_target") === t, typeof t.NodeEventTarget, typeof t.initNodeEventTarget);
+      print(Object.keys(t).join());
+      try { require("internal/no_such_module"); } catch (e) { print(e.code); }
+      print(typeof __host_expose_internals, typeof __host_builtin_source);
+    "#;
+    let out = run(&["--node", "--expose-internals", "-e", source], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "true function function\n\
+         Event,CustomEvent,EventTarget,NodeEventTarget,defineEventHandler,initEventTarget,\
+         initNodeEventTarget,kCreateEvent,kNewListener,kTrustEvent,kRemoveListener,kEvents,\
+         kWeakHandler,kResistStopPropagation,isEventTarget\n\
+         MODULE_NOT_FOUND\n\
+         undefined undefined"
+    );
+}
+
+#[test]
+fn expose_internals_has_no_effect_without_node() {
+    let probe = r#"print(Object.getOwnPropertyNames(globalThis).sort().join())"#;
+    let plain = run(&["-e", probe], None);
+    let flagged = run(&["--expose-internals", "-e", probe], None);
+    assert!(flagged.status.success(), "{}", stderr(&flagged));
+    assert_eq!(stdout(&plain), stdout(&flagged));
+    assert!(!stdout(&flagged).contains("__host"));
+    let dir = scratch("expose-gate");
+    let empty = dir.0.join("empty.js");
+    std::fs::write(&empty, "void 0;").unwrap();
+    let with_prelude = run(
+        &[
+            "--expose-internals",
+            "--prelude",
+            empty.to_str().unwrap(),
+            "-e",
+            probe,
+        ],
+        None,
+    );
+    assert_eq!(stdout(&plain), stdout(&with_prelude));
+}
+
+#[test]
+fn a_handled_throwing_tick_does_not_strand_the_rest_of_the_queue() {
+    let source = r#"
+      process.on("uncaughtException", (e) => print("uncaught " + e.message));
+      for (let i = 0; i < 3; i++) process.nextTick(() => { throw new Error("t" + i); });
+      Promise.resolve().then(() => {
+        for (let i = 0; i < 2; i++) process.nextTick(() => { throw new Error("p" + i); });
+      });
+      setTimeout(() => print("timer"), 50);
+    "#;
+    let out = run(&["--node", "-e", source], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "uncaught t0\nuncaught t1\nuncaught t2\nuncaught p0\nuncaught p1\ntimer"
     );
 }
 
