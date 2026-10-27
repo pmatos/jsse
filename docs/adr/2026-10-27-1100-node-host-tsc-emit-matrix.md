@@ -16,8 +16,8 @@ Status: accepted, epic #1214, issue #1245 (builds on the project oracle of
    property, `@internal`, a default export), `main.ts` (re-exports, `import type`,
    dynamic `import()`, `for await`, async generator, spread of a generator, object rest,
    `?.`/`??`/`**`), `priv.ts` (`#private` fields, methods and `#x in o`), `deco.ts` and
-   `esdeco.ts` (ES decorators, `accessor`, a decorated class expression), `pdeco.ts` (legacy
-   parameter decorators and metadata), `view.tsx`, `esm.mts`, `cjs.cts`, `pure.mts`,
+   `esdeco.ts` (ES decorators, `accessor`, a decorated class expression), `cexpr.ts` (decorated class expressions only), `pdeco.ts` (legacy
+   parameter decorators and metadata), `ext.ts` (`.ts` import specifiers and a dynamic `import()` of one), `synth.ts` with `cjsdep.d.ts` (a default import of an `export =` module), `view.tsx`, `esm.mts`, `cjs.cts`, `pure.mts`,
    `esm/` (a nested `package.json` with `"type": "module"`, top-level `await`) and
    `js/` (CommonJS and ESM sources with JSDoc, one with a `checkJs` error).
    `globals.d.ts` declares `JSX`, `React`, the `react`/`preact` runtime modules and
@@ -34,22 +34,22 @@ Status: accepted, epic #1214, issue #1245 (builds on the project oracle of
      `--stripInternal`, `--removeComments`, `--newLine`, `--emitBOM`, `--noEmitHelpers`,
      `--importHelpers` (also with legacy and ES decorators), `--preserveConstEnums`,
      `--isolatedModules`, `--verbatimModuleSyntax` (clean and with the diagnostics),
-     `--esModuleInterop`, `--allowSyntheticDefaultImports`, `--useDefineForClassFields`,
+     `--esModuleInterop`, `--allowSyntheticDefaultImports` (on, off with its diagnostic, and via `--esModuleInterop`), `--useDefineForClassFields`,
      `--noCheck`, `--erasableSyntaxOnly`, `--composite`, `--incremental`, `--rootDir`,
-     `--listEmittedFiles`, `--rewriteRelativeImportExtensions` and `--outFile` with
+     `--listEmittedFiles`, `--rewriteRelativeImportExtensions` (over `.ts` specifiers, under esnext, commonjs, amd and nodenext), and `--outFile` with
      amd and system at es5 and es2020 (with declarations, maps, comments removed).
    - `lang`: the five `--jsx` modes under commonjs and esnext, `jsxFactory`,
      `jsxFragmentFactory`, `jsxImportSource`; legacy decorators (es5 to esnext, with
      `useDefineForClassFields`, with `emitDecoratorMetadata`), ES decorators; `.mts`,
      `.cts`, mixed projects and a `"type": "module"` package under node16, nodenext,
      preserve and esnext; `allowJs` and `checkJs` over targets and modules, with
-     declarations, maps, comments removed, mixed with TypeScript, with `--outFile`, and two
+     declarations, maps, comments removed, mixed with TypeScript, with `--outFile` (JS only and mixed with TypeScript), and two
      failing `checkJs` runs (exit 2, and exit 1 with `--noEmitOnError`).
-4. **Result.** All 184 cases (57 + 60 + 67) emit byte-identical `.js`, `.d.ts`, `.map`,
+4. **Result.** All 193 cases (57 + 65 + 71) emit byte-identical `.js`, `.d.ts`, `.map`,
    `.mjs`/`.cjs`/`.jsx` and `.tsbuildinfo` files, stdout and exit codes on Node v26.8.2 and jsse
-   with TypeScript 6.0.3: no engine divergence surfaced, so there is no engine change. Six
+   with TypeScript 6.0.3: no engine divergence surfaced, so there is no engine change. Seven
    cases deliberately end in diagnostics (`verbatimModuleSyntax` in a CommonJS file, `checkJs`
-   errors, `--erasableSyntaxOnly`; exit 2, or 1 with `--noEmitOnError`), so the emit-despite-errors path is covered too. Wall time
+   errors, `--erasableSyntaxOnly`, a default import without `allowSyntheticDefaultImports`; exit 2, or 1 with `--noEmitOnError`), so the emit-despite-errors path is covered too. Wall time
    on a host at load 70 with a non-LTO release build: Node 0.3 to 0.7 s per case, jsse 3 to 10 s;
    the full matrix takes about ten minutes with `--jobs 8` (the Rust guard runs it with 4 jobs).
    The pins were taken from Node, so `--no-node` compares jsse alone.

@@ -42,11 +42,11 @@ class EmitMatrixTest(unittest.TestCase):
     def test_every_case_is_pinned(self):
         for path in sorted(FIXTURES.glob("cases-emit-*.txt")):
             pin = FIXTURES / path.name.replace("cases-", "expected-")
-            if not pin.is_file():
-                continue
+            self.assertTrue(pin.is_file(), f"missing {pin.name}")
             names = {c[0] for p, c in emit_cases() if p == path}
             self.assertEqual(
-                {r.split()[0] for r in pin.read_text().splitlines()}, names
+                {r.split()[0] for r in pin.read_text().splitlines() if r.strip()},
+                names,
             )
 
 

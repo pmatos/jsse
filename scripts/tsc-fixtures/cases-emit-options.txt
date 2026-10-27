@@ -31,7 +31,9 @@ emit-verbatim-nodenext-errors | emit | 2 | --pretty false --lib es2020 --ignoreD
 emit-verbatim-cjs | emit | 2 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --verbatimModuleSyntax src/main.ts
 emit-es-module-interop | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --esModuleInterop src/main.ts
 emit-es-module-interop-es5 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es5 --module commonjs --esModuleInterop --downlevelIteration src/main.ts
-emit-synthetic-default | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --allowSyntheticDefaultImports --module esnext --moduleResolution bundler src/main.ts
+emit-synthetic-default | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --allowSyntheticDefaultImports --module commonjs --moduleResolution node10 src/synth.ts src/cjsdep.d.ts
+emit-synthetic-default-off | emit | 2 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --allowSyntheticDefaultImports false --module commonjs --moduleResolution node10 src/synth.ts src/cjsdep.d.ts
+emit-synthetic-default-interop | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --esModuleInterop src/synth.ts src/cjsdep.d.ts
 emit-define-fields-true | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --useDefineForClassFields true src/main.ts
 emit-define-fields-false | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module commonjs --useDefineForClassFields false src/main.ts
 emit-no-check | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --noCheck --sourceMap src/main.ts
@@ -40,7 +42,10 @@ emit-composite | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0
 emit-incremental | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --incremental --tsBuildInfoFile out/info.tsbuildinfo src/main.ts
 emit-root-dir | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module esnext --rootDir . --declaration --sourceMap src/main.ts src/esm/entry.ts
 emit-list-emitted | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module commonjs --listEmittedFiles --declaration --sourceMap src/main.ts
-emit-rewrite-ext | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --rewriteRelativeImportExtensions --module esnext --moduleResolution bundler src/main.ts
+emit-rewrite-ext-esnext | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --rewriteRelativeImportExtensions --module esnext --moduleResolution bundler --declaration src/ext.ts
+emit-rewrite-ext-commonjs | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --rewriteRelativeImportExtensions --module commonjs --moduleResolution node10 --declaration src/ext.ts
+emit-rewrite-ext-amd | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --rewriteRelativeImportExtensions --module amd --moduleResolution node10 --declaration src/ext.ts
+emit-rewrite-ext-nodenext | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --rewriteRelativeImportExtensions --module nodenext src/ext.ts
 emit-outfile-amd-es5 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outFile out/bundle.js --module amd --target es5 --downlevelIteration src/main.ts
 emit-outfile-amd-es2020 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outFile out/bundle.js --module amd --target es2020 src/main.ts
 emit-outfile-system-es5 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outFile out/bundle.js --module system --target es5 --downlevelIteration src/main.ts

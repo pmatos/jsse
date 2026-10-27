@@ -32,7 +32,10 @@ emit-deco-es-es2022 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecation
 emit-deco-es-esnext | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target esnext --module commonjs src/esdeco.ts
 emit-deco-es-map | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2020 --module esnext --sourceMap --declaration src/esdeco.ts
 emit-deco-es-deco-es5 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es5 --module commonjs --downlevelIteration src/deco.ts
-emit-deco-es-class-expr | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module commonjs --declaration src/esdeco.ts
+emit-deco-es-class-expr-es2015 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2015 --module commonjs src/cexpr.ts
+emit-deco-es-class-expr-es2022 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module commonjs src/cexpr.ts
+emit-deco-es-class-expr-esnext | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target esnext --module commonjs src/cexpr.ts
+emit-deco-es-class-expr-decl | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module esnext --declaration --sourceMap src/cexpr.ts
 emit-mts-node16 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module node16 --declaration --sourceMap src/esm.mts globals.d.ts
 emit-cts-node16 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module node16 --declaration --sourceMap src/cjs.cts
 emit-mixed-node16 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --target es2022 --module node16 --declaration src/main.ts src/esm.mts src/cjs.cts globals.d.ts
@@ -65,4 +68,5 @@ emit-js-mixed | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 
 emit-js-mixed-es5 | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --allowJs --target es5 --module amd --downlevelIteration --sourceMap src/main.ts js/plain.js
 emit-js-remove-comments | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --allowJs --removeComments --target es2020 --module commonjs js/plain.js js/esm.js
 emit-js-inline-map | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --allowJs --inlineSourceMap --target es2020 --module esnext js/esm.js
-emit-js-outfile | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outDir out --allowJs --module amd --target es2020 --declaration js/plain.js js/esm.js
+emit-js-outfile | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outFile out/bundle.js --allowJs --module amd --target es2020 --declaration js/plain.js js/esm.js
+emit-js-outfile-mixed | emit | 0 | --pretty false --lib es2020 --ignoreDeprecations 6.0 --outFile out/bundle.js --allowJs --module system --target es2020 --declaration --sourceMap src/main.ts js/plain.js
