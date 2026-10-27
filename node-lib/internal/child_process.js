@@ -21,7 +21,6 @@ const {
 } = require('internal/child_process/support');
 const {
   codes: {
-    ERR_FEATURE_UNAVAILABLE_ON_PLATFORM,
     ERR_INVALID_ARG_VALUE,
     ERR_INVALID_SYNC_FORK_INPUT,
     ERR_IPC_ONE_PIPE,
@@ -31,6 +30,7 @@ const {
 const {
   validateArray,
   validateObject,
+  validateOneOf,
   validateString,
 } = require('internal/validators');
 const EventEmitter = require('events');
@@ -40,6 +40,8 @@ const { Buffer } = require('internal/host/buffer');
 const binding = require('internal/host/child_process');
 const { Process, UV_ESRCH } = require('internal/child_process/handle');
 const { StdioPipe } = require('internal/child_process/pipe');
+const { IpcPipe } = require('internal/child_process/ipc_pipe');
+const { setupChannel } = require('internal/child_process/channel');
 
 const UV_EACCES = -13;
 const UV_EAGAIN = -11;
@@ -139,8 +141,28 @@ ChildProcess.prototype.spawn = function spawn(options) {
   let stdio = options.stdio || 'pipe';
 
   stdio = getValidStdio(stdio, false);
+  let ipc = stdio.ipc;
+  const ipcFd = stdio.ipcFd;
 
   stdio = options.stdio = stdio.stdio;
+
+  if (options.serialization !== undefined) {
+    validateOneOf(options.serialization, 'options.serialization',
+                  [undefined, 'json', 'advanced']);
+  }
+  const serialization = options.serialization || 'json';
+
+  if (ipc !== undefined) {
+    if (options.envPairs === undefined) {
+      options.envPairs = [];
+    } else {
+      validateArray(options.envPairs, 'options.envPairs');
+    }
+
+    ArrayPrototypePush(options.envPairs, `NODE_CHANNEL_FD=${ipcFd}`);
+    ArrayPrototypePush(options.envPairs,
+                       `NODE_CHANNEL_SERIALIZATION_MODE=${serialization}`);
+  }
 
   validateString(options.file, 'options.file');
   this.spawnfile = options.file;
@@ -192,6 +214,12 @@ ChildProcess.prototype.spawn = function spawn(options) {
     const stream = stdio[i];
     if (stream.type === 'ignore') continue;
 
+    if (stream.ipc) {
+      this._closesNeeded++;
+      ipc = new IpcPipe(this._handle, i, serialization);
+      continue;
+    }
+
     if (stream.type === 'pipe' || stream.type === 'overlapped') {
       stream.socket = new StdioPipe(this._handle, i, i > 0, i === 0 || i >= 3);
 
@@ -216,6 +244,8 @@ ChildProcess.prototype.spawn = function spawn(options) {
   for (i = 0; i < stdio.length; i++)
     ArrayPrototypePush(this.stdio,
                        stdio[i].socket === undefined ? null : stdio[i].socket);
+
+  if (ipc !== undefined) setupChannel(this, ipc, serialization);
 
   return err;
 };
@@ -280,6 +310,7 @@ function getValidStdio(stdio, sync) {
   while (stdio.length < 3) ArrayPrototypePush(stdio, undefined);
 
   let ipc;
+  let ipcFd;
   stdio = ArrayPrototypeReduce(stdio, (acc, stdio, i) => {
     stdio ??= i < 3 ? 'pipe' : 'ignore';
 
@@ -299,7 +330,14 @@ function getValidStdio(stdio, sync) {
         else
           throw new ERR_IPC_SYNC_FORK();
       }
-      throw new ERR_FEATURE_UNAVAILABLE_ON_PLATFORM("stdio 'ipc'");
+      ipc = true;
+      ipcFd = i;
+      ArrayPrototypePush(acc, {
+        type: 'pipe',
+        ipc: true,
+        readable: true,
+        writable: true,
+      });
     } else if (stdio === 'inherit') {
       ArrayPrototypePush(acc, {
         type: 'inherit',
@@ -321,7 +359,7 @@ function getValidStdio(stdio, sync) {
     return acc;
   }, []);
 
-  return { stdio, ipc };
+  return { stdio, ipc, ipcFd };
 }
 
 function maybeClose(subprocess) {

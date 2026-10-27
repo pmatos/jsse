@@ -279,6 +279,7 @@ impl Interpreter {
             self.setup_node_host_fs_ops();
             self.setup_node_host_child();
             self.setup_node_host_child_sync();
+            self.setup_node_host_child_ipc();
             self.setup_node_host_signal();
             self.setup_node_host_fs_async();
             self.setup_node_host_fs_watch();
