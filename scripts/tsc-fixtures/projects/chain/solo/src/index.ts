@@ -1,0 +1,1 @@
+export const solo: number[] = [1, 2, 3].map((x) => x * 2);

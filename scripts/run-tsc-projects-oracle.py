@@ -13,6 +13,10 @@ Prints a pass/fail table; exits 1 on any difference.
 Options: --jobs N (default 4), --timeout SECONDS (default 900), --ci (plain output, GitHub
 annotations, full diffs), --list, --require, --pin (rewrite expected-projects.txt from Node's
 digests; merges into the existing pins, so single cases can be re-pinned), --no-node (compare jsse with the pinned digests instead of running Node), --fixtures DIR.
+
+Every cases-<topic>.txt next to cases.txt adds cases pinned in expected-<topic>.txt. A step of a
+case that starts with @ is run by the harness itself between tsc invocations (@utimes, @replace,
+@remove, @mtimes-after; see scenario_step), so multi-step scenarios do not depend on the clock.
 """
 
 import argparse
@@ -35,32 +39,93 @@ CLOCK = re.compile(r"\b\d{1,2}:\d{2}:\d{2}\s?[AP]M\b")
 DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS")
 
 
+def case_files():
+    """(cases file, pin file) pairs: cases.txt pins to expected-projects.txt, cases-<topic>.txt to expected-<topic>.txt."""
+    pairs = [("cases.txt", os.path.basename(PINNED))]
+    for n in sorted(os.listdir(FIX)):
+        m = re.fullmatch(r"cases-([\w-]+)\.txt", n)
+        if m:
+            pairs.append((n, f"expected-{m.group(1)}.txt"))
+    return [
+        (os.path.join(FIX, c), os.path.join(FIX, p))
+        for c, p in pairs
+        if os.path.isfile(os.path.join(FIX, c))
+    ]
+
+
 def load_cases():
     cases = []
-    with open(os.path.join(FIX, "cases.txt"), encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                name, project, exit_codes, args = (
-                    p.strip() for p in line.split("|", 3)
-                )
-                cases.append(
-                    (
-                        name,
-                        project,
-                        exit_codes,
-                        [shlex.split(a) for a in args.split(" ;; ")],
+    for path, pin_file in case_files():
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    name, project, exit_codes, args = (
+                        p.strip() for p in line.split("|", 3)
                     )
-                )
+                    cases.append(
+                        (
+                            name,
+                            project,
+                            exit_codes,
+                            [shlex.split(a) for a in args.split(" ;; ")],
+                            pin_file,
+                        )
+                    )
     return cases
 
 
 def load_pins():
-    try:
-        with open(PINNED, encoding="utf-8") as f:
-            return dict(row.split() for row in f if row.strip())
-    except FileNotFoundError:
-        return {}
+    pins = {}
+    for _, pin_file in case_files():
+        try:
+            with open(pin_file, encoding="utf-8") as f:
+                pins.update(row.split() for row in f if row.strip())
+        except FileNotFoundError:
+            pass
+    return pins
+
+
+def utimes(path, when):
+    if os.path.isdir(path) and not os.path.islink(path):
+        for dirpath, dirs, names in os.walk(path):
+            for n in dirs + names:
+                os.utime(os.path.join(dirpath, n), (when, when), follow_symlinks=False)
+    os.utime(path, (when, when), follow_symlinks=False)
+
+
+def scenario_step(tree, step):
+    """Run a harness step of a case (` ;; @name args`); returns text for the case's output or None.
+
+    @utimes EPOCH PATH...  set atime and mtime of the paths (a directory: everything below it)
+    @replace PATH OLD NEW  replace the text in a file
+    @remove PATH...        delete files or trees
+    @mtimes-after EPOCH PATH...  print whether each path's mtime is after EPOCH
+    """
+    op, args = step[0], step[1:]
+    if op == "@utimes":
+        for p in args[1:]:
+            utimes(os.path.join(tree, p), int(args[0]))
+    elif op == "@replace":
+        path = os.path.join(tree, args[0])
+        with open(path, encoding="utf-8", newline="") as f:
+            text = f.read()
+        if args[1] not in text:
+            raise SystemExit(f"@replace: {args[1]!r} not found in {args[0]}")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text.replace(args[1], args[2], 1))
+    elif op == "@remove":
+        for p in args:
+            full = os.path.join(tree, p)
+            shutil.rmtree(full) if os.path.isdir(full) else os.remove(full)
+    elif op == "@mtimes-after":
+        return "".join(
+            f"{p}: {'after' if os.stat(os.path.join(tree, p)).st_mtime > int(args[0]) else 'not after'}\n"
+            for p in args[1:]
+        )
+    else:
+        raise SystemExit(f"unknown scenario step {op}")
+    return None
 
 
 def snapshot(tree):
@@ -80,7 +145,7 @@ def snapshot(tree):
 
 
 def run_case(engine, exe, tsc_dir, work, case, timeout):
-    name, project, _, invocations = case
+    name, project, _, invocations, _ = case
     tree = os.path.join(work, engine, name)
     shutil.copytree(os.path.join(FIX, "projects", project), tree)
     before = snapshot(tree)
@@ -92,7 +157,13 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     )
     out, err, codes = [], [], []
     start = time.monotonic()
-    for i, args in enumerate(invocations):
+    for args in invocations:
+        if args[0].startswith("@"):
+            note = scenario_step(tree, args)
+            if note is not None:
+                out.append(note.encode())
+                err.append(b"")
+            continue
         try:
             r = subprocess.run(
                 cmd + args, cwd=tree, env=env, capture_output=True, timeout=timeout
@@ -289,12 +360,15 @@ def main():
             for case, ref, _, bad in results:
                 if "node exit status" not in bad:
                     pins[case[0]] = digest(ref)
-            order = [c[0] for c in load_cases()]
-            with open(PINNED, "w", encoding="utf-8") as f:
-                for name in order:
-                    if name in pins:
-                        f.write(f"{name} {pins[name]}\n")
-            print(f"wrote {PINNED}")
+            for _, pin_file in case_files():
+                names = [
+                    c[0] for c in load_cases() if c[4] == pin_file and c[0] in pins
+                ]
+                if names:
+                    with open(pin_file, "w", encoding="utf-8") as f:
+                        for name in names:
+                            f.write(f"{name} {pins[name]}\n")
+                    print(f"wrote {pin_file}")
         print(f"\n{'case':<26}{'node s':>9}{'jsse s':>9}  result")
         failed = 0
         for case, ref, got, bad in results:
