@@ -137,6 +137,7 @@ t("Script: importModuleDynamically bad", () => new vm.Script("1", { importModule
 t("Script: USE_MAIN_CONTEXT_DEFAULT_LOADER", () => new vm.Script("1", { importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER }).runInThisContext());
 t("Script: sourceURL", () => { const s = new vm.Script("1\n//# sourceURL=a.js\n//# sourceMappingURL=a.map"); return json([s.sourceURL, s.sourceMapURL]); });
 t("Script: no directives", () => { const s = new vm.Script("1"); return json([s.sourceURL, s.sourceMapURL, "sourceURL" in s]); });
+t("Script: directive in a string", () => { const s = new vm.Script("'//# sourceURL=x.js'"); return json([s.sourceURL]); });
 t("Script: hashbang", () => new vm.Script("#!/usr/bin/env node\n3").runInThisContext());
 t("Script: unpaired surrogate", () => new vm.Script("'\\ud800'.length + '\ud800'.length").runInThisContext());
 t("Script: lone surrogate source", () => json(new vm.Script("'\ud83d'").runInThisContext().charCodeAt(0)));

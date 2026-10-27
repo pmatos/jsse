@@ -111,7 +111,8 @@ function throwSyntaxError(failure, filename, parsingContext) {
 
 function lastDirective(code, name) {
   if (!StringPrototypeIncludes(code, `${name}=`)) return undefined;
-  const re = new RegExp(`//[#@][ \\t]*${name}=[ \\t]*(\\S+)`, 'g');
+  const re = new RegExp(
+    `(?:^|[\\n\\r\\u2028\\u2029])[ \\t]*//[#@][ \\t]*${name}=[ \\t]*(\\S+)`, 'g');
   let found;
   for (let m = RegExpPrototypeExec(re, code); m !== null;
        m = RegExpPrototypeExec(re, code)) {
