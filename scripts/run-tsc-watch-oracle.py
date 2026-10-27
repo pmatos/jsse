@@ -102,11 +102,9 @@ def edit(tree, step):
             os.makedirs(path(p))
     elif op == "@rename":
         os.rename(path(args[0]), path(args[1]))
-    elif op == "@touch":
+    else:
         for p in args:
             os.utime(path(p), None)
-    else:
-        raise SystemExit(f"unknown watch step {op}")
 
 
 def load_cases(fix):
