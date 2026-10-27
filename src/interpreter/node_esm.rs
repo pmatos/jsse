@@ -9,6 +9,10 @@
 
 use super::*;
 
+mod meta;
+mod require;
+pub(super) use require::virtual_source;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum EsmFormat {
     Module,
@@ -208,6 +212,29 @@ impl Interpreter {
         Ok(())
     }
 
+    /// The names a CommonJS module exports to `import`: those its source
+    /// assigns to `exports` (the host follows re-exports), then `default` and
+    /// `module.exports`.
+    fn node_esm_cjs_names(&mut self, target: &str) -> Result<Vec<(String, JsValue)>, JsValue> {
+        let list = self.node_esm_call(&[js_str("names"), js_str(target)])?;
+        let mut names = Vec::new();
+        if let Some(id) = list.as_object_id() {
+            let length = self.get_property_on_id(id, "length");
+            for index in 0..length.as_number().unwrap_or(0.0) as usize {
+                let item = self.get_property_on_id(id, &index.to_string());
+                if item.is_string() {
+                    names.push(self.to_string_lossy(&item)?);
+                }
+            }
+        }
+        for fixed in ["default", "module.exports"] {
+            if !names.iter().any(|n| n == fixed) {
+                names.push(fixed.to_string());
+            }
+        }
+        Ok(names.into_iter().map(|n| (n, JsValue::UNDEFINED)).collect())
+    }
+
     fn node_esm_synthetic(
         &mut self,
         key: &ModuleKey,
@@ -221,10 +248,7 @@ impl Interpreter {
         let names = if evaluated {
             self.node_esm_builtin_names(target)?
         } else {
-            vec![
-                ("default".to_string(), JsValue::UNDEFINED),
-                ("module.exports".to_string(), JsValue::UNDEFINED),
-            ]
+            self.node_esm_cjs_names(target)?
         };
 
         let env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
@@ -290,15 +314,38 @@ impl Interpreter {
             }
         };
         let env = module.borrow().env.clone();
-        for name in ["default", "module.exports"] {
+        let named: Vec<String> = module.borrow().exports.keys().cloned().collect();
+        let frame = self.gc_root_frame();
+        self.gc_root_value(&value);
+        for name in named {
+            let item = match name.as_str() {
+                "default" | "module.exports" => value.clone(),
+                _ => self.node_esm_cjs_named(&value, &name),
+            };
+            self.gc_root_value(&item);
             env.borrow_mut()
-                .initialize_binding(&format!("*esm:{name}*"), value.clone());
-            module
-                .borrow_mut()
-                .exports
-                .insert(name.to_string(), value.clone());
+                .initialize_binding(&format!("*esm:{name}*"), item.clone());
+            module.borrow_mut().exports.insert(name, item);
         }
+        self.gc_unroot_frame(frame);
         Some(Ok(()))
+    }
+
+    /// `exports[name]` when it is an own property, swallowing a throwing
+    /// getter, else `undefined`.
+    fn node_esm_cjs_named(&mut self, exports: &JsValue, name: &str) -> JsValue {
+        let Some(id) = exports.as_object_id() else {
+            return JsValue::UNDEFINED;
+        };
+        match self.proxy_get_own_property_descriptor(id, name) {
+            Ok(descriptor) if !descriptor.is_undefined() => {
+                match self.get_object_property(id, name, exports) {
+                    Completion::Normal(value) => value,
+                    _ => JsValue::UNDEFINED,
+                }
+            }
+            _ => JsValue::UNDEFINED,
+        }
     }
 
     pub(super) fn import_referrer(&self, env: &EnvRef) -> Option<ModuleKey> {
@@ -329,6 +376,19 @@ impl Interpreter {
         });
         self.static_module_load_depth -= 1;
         result
+    }
+
+    /// `key` is the program entry: the ES main the launcher ran, or the script
+    /// file a CommonJS main detected as an ES module and handed to the loader.
+    fn node_esm_is_main(&self, key: &ModuleKey) -> bool {
+        let key = key.canonicalize();
+        let script = self
+            .node_host
+            .argv
+            .as_ref()
+            .and_then(|argv| argv.script.clone())
+            .map(ModuleKey::for_file);
+        self.node_host.esm.main.as_ref() == Some(&key) || script == Some(key)
     }
 
     pub(super) fn node_esm_enter_main(&mut self, key: &ModuleKey) {

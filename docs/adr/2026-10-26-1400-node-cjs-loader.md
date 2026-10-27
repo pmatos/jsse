@@ -67,12 +67,9 @@ every test runner.
    with `options.paths`, `require.extensions`, `NODE_PATH` and `$HOME/.node_*`
    all exist. `MODULE_NOT_FOUND` carries Node's message and `requireStack`.
 6. **Known divergences** (none is in the oracle tree):
-   - `require()` of an ES module (`.mjs`, or `.js` under `"type": "module"`)
-     throws `ERR_REQUIRE_ESM`; Node 26 loads it. Lifted by the ESM issue.
-   - The `module-sync` condition is not matched (Node 26 matches it), so a
-     package whose `module-sync` entry is an ES module falls back to its
-     `default`/`require` entry instead of failing; restore it with
-     require(esm).
+   - (Lifted by #1241, see `2026-10-26-2300-node-esm-interop.md`: `require()`
+     of an ES module returns its namespace and the `module-sync` condition is
+     matched.)
    - `.node` addons throw `ERR_DLOPEN_FAILED`; there is no `--preserve-symlinks`,
      no `module.register`, no source maps, no circular-require warning proxy
      and no deprecation warnings (for example a `main` that falls back to

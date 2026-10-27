@@ -21,6 +21,8 @@ mod math;
 mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_builtins;
+mod node_host_cjs_lexer;
+mod node_host_cjs_patterns;
 mod node_host_crypto;
 mod node_host_esm;
 #[cfg(unix)]

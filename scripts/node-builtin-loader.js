@@ -363,7 +363,12 @@
   });
 
   cache["internal/host/module"] = {
-    exports: { tagFunction: takeHost("__host_tag_function") },
+    exports: {
+      tagFunction: takeHost("__host_tag_function"),
+      esmRequire: takeHost("__host_esm_require"),
+      esmFacade: takeHost("__host_esm_facade"),
+      cjsLex: takeHost("__host_cjs_lex"),
+    },
   };
   takeHost("__host_esm_install")(function (op, a, b, c) {
     return requireBuiltin("internal/modules/esm/host").host(op, a, b, c);

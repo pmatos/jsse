@@ -48,5 +48,37 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_tag_function", tag);
+
+        let require = self.create_function(JsFunction::native(
+            "__host_esm_require".to_string(),
+            1,
+            |interp, _this, args| {
+                let filename = match interp
+                    .to_string_lossy(args.first().unwrap_or(JsValue::undefined_ref()))
+                {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+                match interp.node_esm_require(&filename) {
+                    Ok(value) => Completion::Normal(value),
+                    Err(error) => Completion::Throw(error),
+                }
+            },
+        ));
+        self.install_host_global("__host_esm_require", require);
+
+        let facade = self.create_function(JsFunction::native(
+            "__host_esm_facade".to_string(),
+            1,
+            |interp, _this, args| {
+                let namespace = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                match interp.node_esm_facade(&namespace) {
+                    Ok(value) => Completion::Normal(value),
+                    Err(error) => Completion::Throw(error),
+                }
+            },
+        ));
+        self.install_host_global("__host_esm_facade", facade);
+        self.setup_node_host_cjs_lexer();
     }
 }

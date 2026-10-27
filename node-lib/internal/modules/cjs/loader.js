@@ -5,7 +5,7 @@
 // package.json main/exports/imports, extensions, directory index), the module
 // wrapper, circular requires and the main-module and `-e` entry points. ESM,
 // `.node` addons, source maps, policies and `--preserve-symlinks` are out of
-// scope; `require()` of an ES module throws ERR_REQUIRE_ESM.
+// scope; `require()` of an ES module goes through cjs/esm_interop (#1241).
 
 const {
   ArrayIsArray,
@@ -27,7 +27,6 @@ const {
   ReflectApply,
   RegExpPrototypeExec,
   StringPrototypeCharCodeAt,
-  StringPrototypeEndsWith,
   StringPrototypeIndexOf,
   StringPrototypeSlice,
   StringPrototypeSplit,
@@ -46,17 +45,15 @@ const { packageExportsResolve, packageImportsResolve } = require('internal/modul
 const {
   codes: {
     ERR_INVALID_ARG_VALUE,
-    ERR_REQUIRE_ESM,
     ERR_UNKNOWN_BUILTIN_MODULE,
   },
 } = require('internal/errors');
 const { validateString } = require('internal/validators');
 const { nameSource } = require('internal/host/stack');
 const statics = require('internal/modules/cjs/statics');
+const esmInterop = require('internal/modules/cjs/esm_interop');
 
-// Node 26 also matches `module-sync`; it is left out while require() of an
-// ES module is unsupported, so such packages fall back to their CJS entry.
-const cjsConditions = ['require', 'node'];
+const cjsConditions = ['require', 'node', 'module-sync'];
 const EXPORTS_PATTERN = /^((?:@[^/\\%]+\/)?[^./\\%][^/\\%]*)(\/.*)?$/;
 const kNodeModules = 'node_modules';
 
@@ -476,9 +473,6 @@ Module.prototype.load = function(filename) {
   this.filename = filename;
   this.paths = Module._nodeModulePaths(path.dirname(filename));
   const extension = findLongestRegisteredExtension(filename);
-  if (StringPrototypeEndsWith(filename, '.mjs') && !Module._extensions['.mjs']) {
-    throw new ERR_REQUIRE_ESM(filename);
-  }
   Module._extensions[extension](this, filename);
   this.loaded = true;
 };
@@ -544,13 +538,16 @@ function makeRequireFunction(mod) {
 
 Module._extensions['.js'] = function(module, filename) {
   const content = fs.readFileSync(filename, 'utf8');
-  if (StringPrototypeEndsWith(filename, '.js')) {
-    const pkg = getNearestParentPackageJSON(filename);
-    if (pkg !== undefined && pkg.type === 'module') {
-      throw new ERR_REQUIRE_ESM(filename);
+  const format = esmInterop.getFormat(filename);
+  if (format === 'module') return esmInterop.load(module, filename);
+  try {
+    module._compile(content, filename);
+  } catch (error) {
+    if (format === 'detect' && esmInterop.canRetryAsEsm(error, filename)) {
+      return esmInterop.load(module, filename);
     }
+    throw error;
   }
-  module._compile(content, filename);
 };
 
 Module._extensions['.json'] = function(module, filename) {
