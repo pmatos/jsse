@@ -30,7 +30,7 @@ impl Scratch {
             std::env::temp_dir().join(format!("jsse-hereby-deps-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create scratch dir");
-        Scratch(dir)
+        Scratch(dir.canonicalize().expect("canonicalize scratch dir"))
     }
 
     fn write(&self, name: &str, text: &str) -> PathBuf {

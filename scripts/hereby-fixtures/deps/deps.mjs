@@ -53,28 +53,29 @@ const watchDir = sub("watched");
 fs.mkdirSync(watchDir);
 const watcher = chokidar.watch(watchDir, { ignoreInitial: true });
 const events = [];
+let waiters = [];
+watcher.on("all", (name, p) => {
+  const event = `${name}:${path.relative(watchDir, p)}`;
+  events.push(event);
+  waiters = waiters.filter((w) => !w(event));
+});
 const waitFor = (wanted) =>
   new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timed out waiting for " + wanted)), 20000);
-    const check = () => {
-      if (events.includes(wanted)) {
-        clearTimeout(timer);
-        resolve();
-      }
-    };
-    watcher.on("all", (name, p) => {
-      events.push(`${name}:${path.relative(watchDir, p)}`);
-      check();
+    waiters.push((event) => {
+      if (event !== wanted) return false;
+      clearTimeout(timer);
+      resolve();
+      return true;
     });
-    check();
   });
 await new Promise((resolve) => watcher.once("ready", resolve));
 log("watched", JSON.stringify(Object.keys(watcher.getWatched()).map((p) => path.relative(root, p))));
 const added = waitFor("add:one.txt");
 fs.writeFileSync(path.join(watchDir, "one.txt"), "1");
 await added;
-const changed = waitFor("change:one.txt");
 await new Promise((r) => setTimeout(r, 100));
+const changed = waitFor("change:one.txt");
 fs.writeFileSync(path.join(watchDir, "one.txt"), "22");
 await changed;
 const removed = waitFor("unlink:one.txt");

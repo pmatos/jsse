@@ -239,11 +239,12 @@ def main():
     node = shutil.which("node")
     if not node:
         return skip("node not found; the oracle needs it")
-    jsse = os.path.abspath(
-        o.jsse
-        or os.environ.get("JSSE", os.path.join(ROOT, "target", "release", "jsse"))
-    )
+    given = o.jsse or os.environ.get("JSSE")
+    jsse = os.path.abspath(given or os.path.join(ROOT, "target", "release", "jsse"))
     if not os.access(jsse, os.X_OK):
+        if given:
+            print(f"jsse binary not found or not executable: {jsse}", file=sys.stderr)
+            return 1
         print("Building jsse (release)...", flush=True)
         subprocess.run(["cargo", "build", "--release"], cwd=ROOT, check=True)
     print(
