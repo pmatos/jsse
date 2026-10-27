@@ -47,7 +47,7 @@ CommonJS loader (#1219), `events` (#1223) and `util` (#1224).
    (`encoding` option, `setEncoding`) and exists since #1231. `internal/webstreams/adapters` is a
    stub whose six entry points throw `ERR_METHOD_NOT_IMPLEMENTED` (`Readable.toWeb`,
    `fromWeb`, the Writable and Duplex pairs) because jsse has no `ReadableStream`.
-   `process.stdout`/`stdin` are #1232 and untouched.
+   `process.stdout`/`stdin` are #1232, a separate module.
 5. **Support in shared files.** `internal/errors.js` gains the stream codes
    (`ERR_STREAM_*`, `ERR_MULTIPLE_CALLBACK`, `ERR_METHOD_NOT_IMPLEMENTED`,
    `ERR_INVALID_RETURN_VALUE`, `ERR_INVALID_STATE`, `ERR_UNKNOWN_ENCODING`,
