@@ -1,5 +1,7 @@
 use super::*;
 
+mod arguments;
+
 fn validate_regexp_literal(pattern: &[u16], flags: &str) -> Result<(), ParseError> {
     let valid_flags = "dgimsuyv";
     for c in flags.chars() {
@@ -919,25 +921,6 @@ impl<'a> Parser<'a> {
             args,
             CallSiteId::at(new_pos),
         ))
-    }
-
-    fn parse_arguments(&mut self) -> Result<Vec<Expression>, ParseError> {
-        self.eat(&Token::LeftParen)?;
-        let mut args = Vec::new();
-        while self.current != Token::RightParen {
-            if self.current == Token::Ellipsis {
-                self.advance()?;
-                let expr = self.parse_assignment_expression()?;
-                args.push(Expression::Spread(ExprBox::new(expr)));
-            } else {
-                args.push(self.parse_assignment_expression()?);
-            }
-            if self.current == Token::Comma {
-                self.advance()?;
-            }
-        }
-        self.eat(&Token::RightParen)?;
-        Ok(args)
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
@@ -2400,6 +2383,9 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 loop {
                     expressions.push(self.parse_expression()?);
+                    if self.current != Token::RightBrace {
+                        return Err(self.error("Expected '}' after template substitution"));
+                    }
                     let tok = self.lexer.read_template_continuation()?;
                     match tok {
                         Token::TemplateTail(cooked, raw) => {

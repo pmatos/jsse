@@ -1,0 +1,8 @@
+{
+    "compilerOptions": {
+        "importHelpers": true,
+        "rootDir": ".",
+        "paths": { "tslib": ["./tslib.d.ts"] }
+    },
+    "files": ["src/main.ts", "src/lib.ts", "src/types.ts"]
+}
