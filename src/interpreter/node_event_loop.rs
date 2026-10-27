@@ -8,6 +8,7 @@
 //! the unhandled-rejection list. See `docs/adr/2026-10-26-0854-node-host-mode.md`.
 
 use super::super::*;
+use std::collections::VecDeque;
 
 #[derive(Default)]
 pub(crate) struct NodeLoopState {
@@ -28,6 +29,9 @@ pub(crate) struct NodeLoopState {
     /// Ref'd host handles JS reports through `__host_loop_ref`; each keeps the
     /// loop alive.
     pub(crate) external_refs: u32,
+    requests: FxHashMap<u64, Vec<JsValue>>,
+    next_request: u64,
+    completed: VecDeque<Box<dyn FnOnce(&mut Interpreter)>>,
     #[cfg(unix)]
     pub(crate) stdin: super::builtins::node_host_tty::StdinState,
 }
@@ -51,7 +55,28 @@ impl NodeLoopState {
         self.immediate_cb = Some(callback);
     }
 
+    /// Register an in-flight host request (async `fs`, later child processes):
+    /// the values it needs on completion stay rooted and the loop stays alive
+    /// until `end_request`.
+    pub(crate) fn begin_request(&mut self, roots: Vec<JsValue>) -> u64 {
+        self.next_request += 1;
+        self.requests.insert(self.next_request, roots);
+        self.next_request
+    }
+
+    pub(crate) fn end_request(&mut self, id: u64) -> Vec<JsValue> {
+        self.requests.remove(&id).unwrap_or_default()
+    }
+
+    /// Queue a main-thread continuation for the poll phase.
+    pub(crate) fn push_completed(&mut self, done: Box<dyn FnOnce(&mut Interpreter)>) {
+        self.completed.push_back(done);
+    }
+
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
+        for roots in self.requests.values() {
+            roots.iter().for_each(&mut visit);
+        }
         let callbacks = [
             &self.tick_cb,
             &self.immediate_cb,
@@ -198,8 +223,46 @@ impl Interpreter {
         }
     }
 
+    /// Call a host-request callback from the poll phase; an exit or an
+    /// uncaught throw takes the same paths as for any loop callback.
+    pub(crate) fn node_dispatch(&mut self, callback: &JsValue, args: &[JsValue]) {
+        let result = self.node_call(callback, args);
+        self.node_settle(result);
+    }
+
+    /// Move arrived host completions out of the shared queue, then run the
+    /// queued continuations one at a time, each followed by its own
+    /// tick/microtask checkpoint. True when any ran.
+    fn node_run_host_completions(&mut self) -> bool {
+        let arrived: Vec<_> = self
+            .agent_async_completions
+            .0
+            .lock()
+            .unwrap()
+            .drain(..)
+            .collect();
+        let moved = !arrived.is_empty();
+        for f in arrived {
+            f(self);
+        }
+        let mut ran = false;
+        while self.pending_exit.is_none()
+            && let Some(done) = self.scheduler.node_loop.completed.pop_front()
+        {
+            ran = true;
+            done(self);
+            self.node_checkpoint();
+        }
+        if moved && !ran {
+            self.node_checkpoint();
+        }
+        ran
+    }
+
     fn node_loop_alive(&self) -> bool {
-        self.scheduler.has_refed_timers()
+        !self.scheduler.node_loop.requests.is_empty()
+            || !self.scheduler.node_loop.completed.is_empty()
+            || self.scheduler.has_refed_timers()
             || self.scheduler.node_loop.immediate_refed > 0
             || self.scheduler.node_loop.external_refs > 0
             || self.has_awaited_pending_async()
@@ -232,6 +295,10 @@ impl Interpreter {
     /// completion, but not at all while a ref'd immediate is waiting or once
     /// nothing ref'd is left alive (libuv's zero poll timeout).
     fn node_poll(&mut self) {
+        if self.node_run_host_completions() || self.scheduler.node_loop.immediate_refed > 0 {
+            self.pump_host_events();
+            return;
+        }
         #[cfg(unix)]
         let stdin_ready = self.scheduler.node_loop.stdin.has_deliverable();
         #[cfg(not(unix))]
@@ -250,7 +317,7 @@ impl Interpreter {
             !lock.is_empty()
         };
         if arrived {
-            self.node_checkpoint();
+            self.node_run_host_completions();
         }
         self.pump_host_events();
     }

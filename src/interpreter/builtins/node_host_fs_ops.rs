@@ -11,7 +11,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 
-fn uv_dirent_type(t: &std::fs::FileType) -> f64 {
+pub(super) fn uv_dirent_type(t: &std::fs::FileType) -> f64 {
     if t.is_file() {
         1.0
     } else if t.is_dir() {
@@ -57,12 +57,12 @@ fn timespec_of(time: f64) -> libc::timespec {
 }
 
 #[cfg(not(target_vendor = "apple"))]
-fn sync_data(fd: i32) -> i32 {
+pub(super) fn sync_data(fd: i32) -> i32 {
     unsafe { libc::fdatasync(fd) }
 }
 
 #[cfg(target_vendor = "apple")]
-fn sync_data(fd: i32) -> i32 {
+pub(super) fn sync_data(fd: i32) -> i32 {
     unsafe { libc::fsync(fd) }
 }
 
@@ -78,7 +78,7 @@ fn file_stat(fd: i32) -> Result<libc::stat, i32> {
 /// libuv's `uv_fs_copyfile`: the destination is created with the source's
 /// mode, a self-copy is a no-op, and `excl` makes an existing target EEXIST.
 #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS
-fn copy_file(src: &CString, dst: &CString, excl: bool) -> Result<(), i32> {
+pub(super) fn copy_file(src: &CString, dst: &CString, excl: bool) -> Result<(), i32> {
     let src_fd = open_fd(src, libc::O_RDONLY, 0)?;
     let result = (|| {
         let st = file_stat(src_fd)?;
@@ -166,7 +166,7 @@ fn mkdir_errno(path: &[u8], mode: u32) -> i32 {
 /// libuv/Node's `MKDirpSync`: the first directory created, or the errno that
 /// stopped the walk. Parents are created by stacking the failed path and its
 /// dirname, so a path component that is a file surfaces as ENOTDIR/EEXIST.
-fn mkdir_p(path: &[u8], mode: u32) -> Result<Option<Vec<u8>>, i32> {
+pub(super) fn mkdir_p(path: &[u8], mode: u32) -> Result<Option<Vec<u8>>, i32> {
     let mut stack = vec![path.to_vec()];
     let mut first: Option<Vec<u8>> = None;
     while let Some(next) = stack.pop() {
