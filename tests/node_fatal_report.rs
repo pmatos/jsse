@@ -69,7 +69,11 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
         if skip.contains(&name) {
             continue;
         }
-        let fixture = dir.join(format!("{name}.fixture.js"));
+        let fixture = ["js", "mjs"]
+            .map(|ext| dir.join(format!("{name}.fixture.{ext}")))
+            .into_iter()
+            .find(|path| path.exists())
+            .unwrap_or_else(|| panic!("no fixture for {name}.stderr"));
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_jsse"));
         cmd.arg("--node").args(args).arg(&fixture);
         if gc_stress {
@@ -86,7 +90,7 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
         );
         checked += 1;
     }
-    assert!(checked > 30, "only {checked} fixtures with expectations");
+    assert!(checked > 40, "only {checked} fixtures with expectations");
 }
 
 #[test]

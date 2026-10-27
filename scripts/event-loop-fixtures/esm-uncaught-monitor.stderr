@@ -1,0 +1,2 @@
+monitor unhandledRejection 7
+uncaught unhandledRejection 7

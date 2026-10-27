@@ -1715,16 +1715,16 @@ fn transform_yielding_expression(
             }
         }
 
-        Expression::Call(callee, args, _) => {
-            transform_call_expression(callee, args, binding, ctx);
+        Expression::Call(callee, args, site) => {
+            transform_call_expression(callee, args, *site, binding, ctx);
         }
 
-        Expression::New(callee, args, _) => {
+        Expression::New(callee, args, site) => {
             let args_suspend = args.iter().any(|a| expr_has_suspension(a, ctx.is_async));
             let temp_callee = lower_operand(callee, args_suspend, "new_callee", ctx);
             let temp_args = lower_argument_list(args, "new_arg", ctx);
-            let combined =
-                Expression::New(ExprBox::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
+            let site = CallSiteId(u32::MAX, site.1);
+            let combined = Expression::New(ExprBox::new(temp_callee), temp_args, site);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -2107,6 +2107,7 @@ fn oc_chain_to_regular_expr(
 fn transform_call_expression(
     callee: &Expression,
     args: &[Expression],
+    site: CallSiteId,
     binding: Option<SentValueBindingKind>,
     ctx: &mut TransformContext,
 ) {
@@ -2114,7 +2115,8 @@ fn transform_call_expression(
     let temp_callee = lower_callee(callee, args_suspend, "call_callee", ctx);
     let temp_args = lower_argument_list(args, "call_arg", ctx);
 
-    let combined = Expression::Call(ExprBox::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
+    let site = CallSiteId(u32::MAX, site.1);
+    let combined = Expression::Call(ExprBox::new(temp_callee), temp_args, site);
     emit_expression_with_binding(&combined, &binding, ctx);
 }
 
@@ -2125,8 +2127,7 @@ fn emit_expression_with_binding(
 ) {
     match binding {
         Some(SentValueBindingKind::Variable(name)) => {
-            // Assigning an anonymous function/class straight to an internal temp
-            // would apply NamedEvaluation and leak the temp's name as `.name`.
+            // NamedEvaluation would leak the temp's name as `.name`.
             let value =
                 if expr.is_anonymous_function_definition() && ctx.generated_temps.contains(name) {
                     Expression::Sequence(vec![
@@ -2151,8 +2152,7 @@ fn emit_expression_with_binding(
     }
 }
 
-/// Evaluate `expr` into the temp `var`, suspending first if it contains a
-/// suspension point.
+/// Evaluate `expr` into the temp `var`, suspending first if needed.
 fn bind_expression_to_temp(expr: &Expression, var: &str, ctx: &mut TransformContext) {
     let binding = Some(SentValueBindingKind::Variable(var.to_string()));
     if expr_has_suspension(expr, ctx.is_async) {
@@ -4654,10 +4654,8 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)))
         }
         Expression::Assign(op, l, r) => {
-            // A destructuring-assignment cover-grammar LHS (`[..] = ..` / `{..} = ..`)
-            // is not itself a suspension boundary the tree-walker can split; leave any
-            // `await` inside it untouched, same as a `Pattern` already does, and let
-            // pattern lowering (or the blocking-`await_value` fallback) handle it.
+            // A destructuring-assignment LHS is not a suspension boundary the
+            // tree-walker can split: leave any `await` in it to pattern lowering.
             let new_l = if *op == AssignOp::Assign
                 && matches!(l.as_ref(), Expression::Array(..) | Expression::Object(..))
             {
@@ -4672,15 +4670,15 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             ExprBox::new(rewrite_expr(c)),
             ExprBox::new(rewrite_expr(a)),
         ),
-        Expression::Call(callee, args, _) => Expression::Call(
+        Expression::Call(callee, args, site) => Expression::Call(
             ExprBox::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
-            CallSiteId::UNASSIGNED,
+            CallSiteId(u32::MAX, site.1),
         ),
-        Expression::New(callee, args, _) => Expression::New(
+        Expression::New(callee, args, site) => Expression::New(
             ExprBox::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
-            CallSiteId::UNASSIGNED,
+            CallSiteId(u32::MAX, site.1),
         ),
         Expression::Member(obj, prop, _) => Expression::Member(
             ExprBox::new(rewrite_expr(obj)),

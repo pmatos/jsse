@@ -159,7 +159,7 @@ fn realm_of(interp: &Interpreter, global: &JsValue) -> Option<usize> {
 }
 
 impl Interpreter {
-    fn push_script_frame(&mut self, origin: &Rc<str>, env: &EnvRef) -> bool {
+    pub(super) fn push_script_frame(&mut self, origin: &Rc<str>, env: &EnvRef) -> bool {
         if !self.node_host.stack.installed {
             return false;
         }
@@ -212,7 +212,7 @@ impl Interpreter {
         }
     }
 
-    fn pop_script_frame(&mut self) {
+    pub(super) fn pop_script_frame(&mut self) {
         self.pop_call_frame();
         self.call_stack_envs.pop();
         self.node_host.stack.script_frames.pop();

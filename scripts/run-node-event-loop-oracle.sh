@@ -9,6 +9,10 @@
 # Each scripts/event-loop-fixtures/*.fixture.js has header lines:
 #   // RUN: <expected-exit-status>
 #   // ERR: <text>      (optional; stderr must contain it on both engines)
+#   // PIN: stderr      (optional; pin stderr in <name>.stderr although the run
+#                        prints no fatal report)
+# Fixtures are *.fixture.js (CommonJS) or *.fixture.mjs (ES module entry
+# point); *.helper.mjs files are only imported by them.
 # A fixture passes iff stdout and the exit status match Node's and the status
 # equals the RUN line. Stderr is checked for the ERR text and, when a
 # <name>.stderr file sits beside the fixture, against it in full after
@@ -59,7 +63,7 @@ fi
 
 FAIL=0
 shopt -s nullglob
-FIXTURES=("$FIXTURE_DIR"/*.fixture.js)
+FIXTURES=("$FIXTURE_DIR"/*.fixture.js "$FIXTURE_DIR"/*.fixture.mjs)
 if [ "${#FIXTURES[@]}" -eq 0 ]; then
     echo "No fixtures found in $FIXTURE_DIR" >&2
     exit 2
@@ -84,7 +88,8 @@ run_engine() {
 }
 
 for fixture in "${FIXTURES[@]}"; do
-    name="$(basename "$fixture" .fixture.js)"
+    base="${fixture%.fixture.*}"
+    name="$(basename "$base")"
     expect="$(sed -n 's|^// RUN: *||p' "$fixture" | head -1)"
     err_text="$(sed -n 's|^// ERR: *||p' "$fixture" | head -1)"
     engines=()
@@ -106,13 +111,13 @@ for fixture in "${FIXTURES[@]}"; do
             sed 's/^/  stderr: /' "$WORK/$engine.err" | head -5
             ok=0
         elif [ "$UPDATE_STDERR" -eq 1 ]; then
-            rm -f "${fixture%.fixture.js}.stderr"
-            if grep -q '^Node\.js v' "$WORK/$engine.err"; then
-                normalise_stderr "$WORK/$engine.err" > "${fixture%.fixture.js}.stderr"
+            rm -f "$base.stderr"
+            if grep -q '^Node\.js v' "$WORK/$engine.err" || grep -q '^// PIN: stderr' "$fixture"; then
+                normalise_stderr "$WORK/$engine.err" > "$base.stderr"
             fi
-        elif [ -f "${fixture%.fixture.js}.stderr" ]; then
+        elif [ -f "$base.stderr" ]; then
             normalise_stderr "$WORK/$engine.err" > "$WORK/$engine.norm"
-            if ! diff -u "${fixture%.fixture.js}.stderr" "$WORK/$engine.norm" > "$WORK/diff.txt"; then
+            if ! diff -u "$base.stderr" "$WORK/$engine.norm" > "$WORK/diff.txt"; then
                 echo "FAIL $name: $engine stderr differs (--- expected, +++ $engine)"
                 cat "$WORK/diff.txt"
                 ok=0

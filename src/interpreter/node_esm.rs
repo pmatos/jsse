@@ -50,7 +50,7 @@ pub(crate) struct NodeEsm {
     cjs_order: HashMap<ModuleKey, Vec<String>>,
     checked: HashSet<(ModuleKey, Option<ImportModuleType>)>,
     main: Option<ModuleKey>,
-    main_ready: bool,
+    entry_reported: bool,
 }
 
 impl NodeEsm {
@@ -60,6 +60,16 @@ impl NodeEsm {
 
     pub(crate) fn is_active(&self) -> bool {
         self.host.is_some()
+    }
+
+    pub(crate) fn has_main(&self) -> bool {
+        self.main.is_some()
+    }
+
+    /// Whether the entry point's failure was already delivered through the
+    /// module graph, so the throw `run_module` returns is not delivered again.
+    pub(crate) fn entry_reported(&self) -> bool {
+        self.entry_reported
     }
 
     pub(crate) fn lookup(&self, specifier: &str, referrer: Option<&Path>) -> Option<ModuleKey> {
@@ -408,18 +418,19 @@ impl Interpreter {
         }
     }
 
-    /// The main module has finished its first run; later failures of its
-    /// top-level await are uncaught exceptions.
-    pub(crate) fn node_esm_main_ready(&mut self) {
-        self.node_host.esm.main_ready = true;
-    }
-
-    /// A top-level await of the main module rejected after the first run.
+    /// The main module (or a dependency's top-level await) failed. Node
+    /// delivers it one microtask turn later when the main module is itself
+    /// async.
     pub(super) fn node_esm_main_rejected(&mut self, key: &ModuleKey, error: &JsValue) {
-        let esm = &self.node_host.esm;
-        if esm.main_ready && esm.main.as_ref() == Some(key) {
-            self.node_uncaught(error.clone());
+        if self.node_host.esm.main.as_ref() != Some(key) || self.node_host.esm.entry_reported {
+            return;
         }
+        let async_main = self
+            .module_registry_get(key)
+            .is_some_and(|module| module.borrow().has_tla);
+        self.node_host.esm.entry_reported = true;
+        let hops = event_loop::node_event_loop::ESM_ENTRY_HOPS + u32::from(async_main);
+        self.node_uncaught_entry(error.clone(), hops);
     }
 
     /// Node exits 13 when the event loop empties while the main module's
