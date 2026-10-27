@@ -1,6 +1,7 @@
 use super::*;
 
 mod declarator_list;
+mod patterns;
 
 fn bigint_literal_to_decimal(s: &str) -> String {
     crate::interpreter::parse_bigint_literal(s).to_string()
@@ -45,172 +46,6 @@ impl<'a> Parser<'a> {
             kind,
             declarations,
         }))
-    }
-
-    pub(super) fn parse_binding_pattern(&mut self) -> Result<Pattern, ParseError> {
-        if let Some(name) = self.current_identifier_name() {
-            self.check_strict_binding_identifier(&name)?;
-            self.advance()?;
-            return Ok(Pattern::Identifier(name));
-        }
-        match &self.current {
-            Token::LeftBracket => self.parse_array_pattern(),
-            Token::LeftBrace => self.parse_object_pattern(),
-            _ => Err(self.error(format!("Expected binding pattern, got {:?}", self.current))),
-        }
-    }
-
-    fn parse_array_pattern(&mut self) -> Result<Pattern, ParseError> {
-        self.eat(&Token::LeftBracket)?;
-        let mut elements = Vec::new();
-        while self.current != Token::RightBracket {
-            if self.current == Token::Comma {
-                elements.push(None);
-                self.advance()?;
-                continue;
-            }
-            if self.current == Token::Ellipsis {
-                self.advance()?;
-                let rest = self.parse_binding_pattern()?;
-                elements.push(Some(ArrayPatternElement::Rest(rest)));
-                break;
-            }
-            let pat = self.parse_binding_pattern()?;
-            let pat = if self.current == Token::Assign {
-                self.advance()?;
-                let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), ExprBox::new(default))
-            } else {
-                pat
-            };
-            elements.push(Some(ArrayPatternElement::Pattern(pat)));
-            if self.current == Token::Comma {
-                self.advance()?;
-            }
-        }
-        self.eat(&Token::RightBracket)?;
-        Ok(Pattern::Array(elements))
-    }
-
-    fn parse_object_pattern(&mut self) -> Result<Pattern, ParseError> {
-        self.eat(&Token::LeftBrace)?;
-        let mut props = Vec::new();
-        while self.current != Token::RightBrace {
-            if self.current == Token::Ellipsis {
-                self.advance()?;
-                let rest = self.parse_binding_pattern()?;
-                props.push(ObjectPatternProperty::Rest(rest));
-                break;
-            }
-            let key = self.parse_property_key_for_pattern()?;
-            if self.current == Token::Colon {
-                self.advance()?;
-                let mut pat = self.parse_binding_pattern()?;
-                if self.current == Token::Assign {
-                    self.advance()?;
-                    let default = self.parse_assignment_expression()?;
-                    pat = Pattern::Assign(Box::new(pat), ExprBox::new(default));
-                }
-                props.push(ObjectPatternProperty::KeyValue(key, pat));
-            } else {
-                // Shorthand: { x } or { x = default }
-                let name = match &key {
-                    PropertyKey::Identifier(n) => n.clone(),
-                    _ => return Err(self.error("Expected identifier for shorthand pattern")),
-                };
-                // `async` followed by something that looks like a method name/modifier
-                if name == "async"
-                    && !matches!(
-                        self.current,
-                        Token::Colon | Token::Assign | Token::Comma | Token::RightBrace
-                    )
-                {
-                    return Err(self.error("Invalid destructuring assignment target"));
-                }
-                if Self::is_reserved_identifier(&name, false) {
-                    return Err(self.error(format!("Unexpected token '{name}'")));
-                }
-                if self.in_static_block && name == "await" {
-                    return Err(self.error(
-                        "'await' is not allowed as a binding identifier in class static blocks",
-                    ));
-                }
-                if (self.in_generator || self.strict) && name == "yield" {
-                    return Err(self
-                        .error("'yield' is not allowed as a binding identifier in this context"));
-                }
-                self.check_strict_binding_identifier(&name)?;
-                if self.current == Token::Assign {
-                    self.advance()?;
-                    let default = self.parse_assignment_expression()?;
-                    let pat =
-                        Pattern::Assign(Box::new(Pattern::Identifier(name)), ExprBox::new(default));
-                    props.push(ObjectPatternProperty::KeyValue(key, pat));
-                } else {
-                    props.push(ObjectPatternProperty::Shorthand(name));
-                }
-            }
-            if self.current == Token::Comma {
-                self.advance()?;
-            }
-        }
-        self.eat(&Token::RightBrace)?;
-        Ok(Pattern::Object(props))
-    }
-
-    fn parse_property_key_for_pattern(&mut self) -> Result<PropertyKey, ParseError> {
-        match &self.current {
-            Token::Identifier(name) | Token::IdentifierWithEscape(name) => {
-                let name = name.clone();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::StringLiteral(s) => {
-                let s = s.clone();
-                self.advance()?;
-                Ok(PropertyKey::String(s))
-            }
-            Token::NumericLiteral(n)
-            | Token::LegacyOctalLiteral(n)
-            | Token::NonOctalDecimalLiteral(n) => {
-                if matches!(
-                    &self.current,
-                    Token::LegacyOctalLiteral(_) | Token::NonOctalDecimalLiteral(_)
-                ) && self.strict
-                {
-                    return Err(self.error("Octal literals are not allowed in strict mode"));
-                }
-                let n = *n;
-                self.advance()?;
-                Ok(PropertyKey::Number(n))
-            }
-            Token::LeftBracket => {
-                self.advance()?;
-                let expr = self.parse_assignment_expression()?;
-                self.eat(&Token::RightBracket)?;
-                Ok(PropertyKey::Computed(ExprBox::new(expr)))
-            }
-            Token::Keyword(kw) => {
-                let name = kw.to_string();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::BooleanLiteral(b) => {
-                let name = if *b { "true" } else { "false" }.to_string();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::NullLiteral => {
-                self.advance()?;
-                Ok(PropertyKey::Identifier("null".to_string()))
-            }
-            Token::BigIntLiteral(s) => {
-                let name = bigint_literal_to_decimal(s);
-                self.advance()?;
-                Ok(PropertyKey::String(name.encode_utf16().collect()))
-            }
-            _ => Err(self.error("Expected property name in object pattern")),
-        }
     }
 
     pub(super) fn parse_function_declaration(&mut self) -> Result<Statement, ParseError> {
@@ -327,9 +162,10 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                     }
                     self.parse_assignment_expression()?;
-                    if self.current == Token::Comma {
-                        self.advance()?;
+                    if self.current != Token::Comma {
+                        break;
                     }
+                    self.advance()?;
                 }
                 self.eat(&Token::RightParen)?;
                 break;
@@ -1167,9 +1003,10 @@ impl<'a> Parser<'a> {
                 pat
             };
             params.push(pat);
-            if self.current == Token::Comma {
-                self.advance()?;
+            if self.current != Token::Comma {
+                break;
             }
+            self.advance()?;
         }
         self.eat(&Token::RightParen)?;
         self.in_formal_parameters = prev_formal;
