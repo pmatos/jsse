@@ -39,6 +39,8 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    /// `--expose-internals`: user `require` may name `internal/...` builtins.
+    pub(crate) expose_internals: bool,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
     pub(crate) vm: super::node_host_vm::VmState,
@@ -69,6 +71,10 @@ impl Interpreter {
 
     pub(crate) fn set_node_host_main_kind(&mut self, kind: crate::cli_node::NodeMainKind) {
         self.node_host.main_kind = kind;
+    }
+
+    pub(crate) fn set_node_host_expose_internals(&mut self, expose: bool) {
+        self.node_host.expose_internals = expose;
     }
 
     /// Exit status requested through `process.exitCode`, if any.

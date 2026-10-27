@@ -261,6 +261,9 @@
     }
   }
   hostSetImmediate(processImmediate);
+  handoff.afterHandledUncaught = function () {
+    setImmediate(function () {});
+  };
 
   // ---- timers/promises --------------------------------------------------------
   function AbortError(message, options) {

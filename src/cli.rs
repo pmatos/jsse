@@ -42,6 +42,12 @@ struct Cli {
     #[arg(long = "node")]
     node: bool,
 
+    /// With `--node`, let user code `require('internal/...')` the embedded
+    /// builtin modules (Node's `--expose-internals`). Accepted and ignored
+    /// without `--node`.
+    #[arg(long = "expose-internals")]
+    expose_internals: bool,
+
     /// Stop the run, uncatchably, after N counted steps (statement boundaries,
     /// loop back-edges, microtask jobs, timer callbacks); exits with status 124.
     #[arg(long = "step-budget", value_name = "N")]
@@ -134,6 +140,7 @@ struct NodeLaunch {
     script: Option<PathBuf>,
     args: Vec<String>,
     main_kind: NodeMainKind,
+    expose_internals: bool,
 }
 
 /// The program to run for the script `path`. Under `--node` a script file is
@@ -173,8 +180,12 @@ fn run_source_with_interp(
         p.parse_program()
             .map_err(|e| EngineError::Parse(format!("{e:?}")))?
     };
+    let origin = p.source_origin();
     let result = if let Some(p) = path {
         interp.note_script_source(p, source, is_module);
+        if is_module {
+            interp.node_note_main_module_origin(p, origin);
+        }
         interp.run_with_path(&program, p)
     } else {
         interp.run(&program)
@@ -270,6 +281,7 @@ fn new_interp(
             .map_or_else(|_| argv0.clone(), |p| p.to_string_lossy().into_owned());
         interp.set_node_host_argv(argv0, exec_path, launch.script.clone(), launch.args.clone());
         interp.set_node_host_main_kind(launch.main_kind);
+        interp.set_node_host_expose_internals(launch.expose_internals);
         if let Err(msg) = interp.load_node_prelude() {
             eprintln!("jsse: internal error: {msg}");
             std::process::exit(70);
@@ -388,6 +400,7 @@ pub(crate) fn run_main() -> ExitCode {
     let launch = cli.node.then(|| NodeLaunch {
         main_kind: NodeMainKind::for_launch(cli.file.as_deref(), cli.eval.is_some(), cli.module),
         script: cli.file.clone(),
+        expose_internals: cli.expose_internals,
         args: cli
             .script_args
             .iter()

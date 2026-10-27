@@ -51,6 +51,7 @@ mod node_host_fs_ops;
 mod node_host_fs_watch;
 mod node_host_idna;
 mod node_host_loop;
+mod node_host_module_frame;
 mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;

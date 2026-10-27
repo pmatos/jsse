@@ -30,6 +30,10 @@ const INTERNAL_HEADER = 'node:internal/process/promises:322\n' +
   '      new UnhandledPromiseRejection(reason);\n' +
   '      ^\n';
 
+const ENTRY_HEADER = 'node:internal/modules/run_main:107\n' +
+  '    triggerUncaughtException(\n' +
+  '    ^\n';
+
 const TRACE_HINT = '(Use `node --trace-uncaught ...` to show where the ' +
   'exception was thrown)';
 
@@ -154,12 +158,21 @@ function sourceExcerpt(error, native, rejected) {
   return `${file}:${site[1]}\n${line}\n${underline}^\n`;
 }
 
-function report(error, rejected) {
+// `mode`: true for a rejection, 'entry' for an error that ended the ES module
+// entry point (a rejection too, but a non-error is reported raw under the
+// loader's header).
+function report(error, mode) {
   const isObject = (typeof error === 'object' && error !== null) ||
     typeof error === 'function';
   const native = isObject && isNativeError(error);
-  const header = rejectionErrors.has(error) ? INTERNAL_HEADER :
-    sourceExcerpt(error, native, rejected === true);
+  let header;
+  if (rejectionErrors.has(error)) {
+    header = INTERNAL_HEADER;
+  } else if (mode === 'entry' && !native) {
+    header = ENTRY_HEADER;
+  } else {
+    header = sourceExcerpt(error, native, mode === true || mode === 'entry');
+  }
   if (native) {
     return `${header}${header === '' ? '' : '\n'}` +
       inspect(error, { customInspect: false, depth: 5 });

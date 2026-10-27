@@ -38,6 +38,7 @@
   var slice = Array.prototype.slice;
   var promiseThen = Promise.prototype.then;
   var resolved = Promise.resolve();
+  var noop = function () {};
 
   function describeReceived(v) {
     if (v === undefined || v === null) return " Received " + v;
@@ -258,20 +259,35 @@
     hostExit(code === 1 && proc.exitCode !== undefined ? proc.exitCode : code);
   }
 
-  function triggerUncaught(error, origin) {
+  // `entry` is set for an error that ended the ES module entry point: Node
+  // delivers it as a rejection after that many microtask turns (and reports a
+  // non-error value with the loader's own header).
+  function triggerUncaught(error, origin, entry) {
+    if (entry > 0) {
+      var turns = resolved;
+      for (var i = 1; i < entry; i++) turns = promiseThen.call(turns, noop);
+      promiseThen.call(turns, function () {
+        triggerUncaught(error, origin, 0);
+      });
+      return;
+    }
     var type = origin || "uncaughtException";
     try {
       proc.emit("uncaughtExceptionMonitor", error, type);
     } catch (ignored) {}
     if (proc.listenerCount("uncaughtException") === 0) {
-      fatal(error, 1, type === "unhandledRejection");
+      fatal(error, 1, entry === 0 ? "entry" : type === "unhandledRejection");
       return;
     }
     try {
       proc.emit("uncaughtException", error, type);
     } catch (inHandler) {
       fatal(inHandler, 7);
+      return;
     }
+    // A handled throw abandons the tick checkpoint; Node makes sure the
+    // remaining ticks run by keeping the next check phase non-empty.
+    if (handoff.afterHandledUncaught !== undefined) handoff.afterHandledUncaught();
   }
 
   // ---- nextTick -------------------------------------------------------------
