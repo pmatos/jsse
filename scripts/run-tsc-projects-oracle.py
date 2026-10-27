@@ -208,7 +208,7 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     def norm(b):
         t = b.decode("utf-8", "surrogateescape")
         t = t.replace(tree, "<DIR>").replace(tsc_dir, "<TSC>")
-        t = re.sub(re.escape(os.path.join(work, engine)) + r"(?![\w.-])", "<WORK>", t)
+        t = re.sub(re.escape(os.path.join(work, engine)) + r"(?!\w)", "<WORK>", t)
         t = t.replace(work, "<ROOT>")
         return CLOCK.sub("<TIME>", t)
 
@@ -346,7 +346,11 @@ def main():
     )
 
     # --traceResolution lists every ancestor directory, so the pins depend on the depth of the work dir
-    base = "/tmp" if os.path.realpath("/tmp") == "/tmp" else None
+    base = (
+        "/tmp"
+        if os.path.realpath("/tmp") == "/tmp" and os.access("/tmp", os.W_OK)
+        else None
+    )
     work = os.path.realpath(tempfile.mkdtemp(prefix="tsc-oracle-", dir=base))
 
     def one(case):

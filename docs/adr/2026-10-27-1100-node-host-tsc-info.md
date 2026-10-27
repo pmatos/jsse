@@ -37,7 +37,7 @@ criterion of #1227).
    - `*.cpuprofile` is compared by shape (below).
    - The part of the work path above the tree is `<WORK>` and `<ROOT>`, because
      `--traceResolution` prints the ancestors of the project. The work directory is
-     created under `/tmp` (when that is a real directory) so the number of ancestors does
+     created under `/tmp` (when that is a real, writable directory) so the number of ancestors does
      not depend on `TMPDIR`; the pins also pass with `TSC_DIR` at another depth.
 4. **Engine divergences found.**
    - `global` was not defined under `--node` (#1372): tsc's `getMemoryUsage` reads
@@ -62,14 +62,16 @@ criterion of #1227).
      `endTime`. tsc writes it (and creates the directory) exactly as it would a sampled
      one; DevTools opens it empty. `inspector.open()` throws
      `ERR_INSPECTOR_NOT_AVAILABLE`, `waitForDebugger()` `ERR_INSPECTOR_NOT_ACTIVE`,
-     `url()` is `undefined`, `close()` does nothing. `console`, `Network`,
-     `NetworkResources`, `DOMStorage` and `inspector/promises` are not provided.
+     `connectToMainThread()` `ERR_INSPECTOR_NOT_WORKER`, `url()` is `undefined`, `close()` does
+     nothing. `inspector/promises` has the promise-returning `Session`. `console`, `Network`,
+     `NetworkResources` and `DOMStorage` are not provided.
    - Once a session is active tsc turns on `perf_hooks.performance` marks and measures
      (`cpuProfilingEnabled`); the `info-cpuprofile-stats` case runs that path with
      `--extendedDiagnostics`.
    - The oracle compares a profile by shape: the top-level keys, the keys every node has,
-     the keys of every call frame, the root name, unique ids, equal `samples` and
-     `timeDeltas` lengths and ordered times. Sample counts and node counts are not compared;
+     the keys of every call frame, the root name, unique ids that `children` and `samples`
+     resolve to, numeric hit counts, equal `samples` and `timeDeltas` lengths with
+     non-negative deltas, and ordered times. Sample counts and node counts are not compared;
      that is the one place the comparison is weaker than byte for byte, and it exists
      because jsse records none.
 6. **Result.** All 24 cases are identical on Node v26.8.2 and jsse with TypeScript 6.0.3

@@ -25,6 +25,10 @@ function commandError(code, message) {
   return inspectorError('ERR_INSPECTOR_COMMAND', `Inspector error ${code}: ${message}`);
 }
 
+function nowMicros() {
+  return Number(process.hrtime.bigint() / 1000n);
+}
+
 function emptyProfile(startTime) {
   const callFrame = (functionName) => ({
     functionName,
@@ -39,7 +43,7 @@ function emptyProfile(startTime) {
       { id: 2, callFrame: callFrame('(program)'), hitCount: 0 },
     ],
     startTime,
-    endTime: Number(process.hrtime.bigint() / 1000n),
+    endTime: nowMicros(),
     samples: [],
     timeDeltas: [],
   };
@@ -58,7 +62,7 @@ function profilerCommand(state, method) {
       return {};
     case 'Profiler.start':
       if (!state.enabled) throw commandError(-32000, 'Profiler is not enabled');
-      state.startTime ??= Number(process.hrtime.bigint() / 1000n);
+      state.startTime ??= nowMicros();
       return {};
     case 'Profiler.stop': {
       if (state.startTime === undefined) {
@@ -89,7 +93,7 @@ class Session extends EventEmitter {
   }
 
   connectToMainThread() {
-    this.connect();
+    throw inspectorError('ERR_INSPECTOR_NOT_WORKER', 'Current thread is not a worker');
   }
 
   post(method, params, callback) {

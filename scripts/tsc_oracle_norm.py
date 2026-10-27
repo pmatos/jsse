@@ -27,6 +27,8 @@ def normalise_trace(text):
     sampling interval, so how many there are depends on speed. The metadata and begin/end events
     stay, without their timestamps."""
     events = json.loads(text)
+    if not isinstance(events, list):
+        raise ValueError("a trace is a list of events")
     kept = [
         {k: v for k, v in e.items() if k not in ("ts", "dur")}
         for e in events
@@ -36,10 +38,12 @@ def normalise_trace(text):
 
 
 def normalise_profile(text):
-    """--generateCpuProfile: Node samples the run, jsse has no profiler and records none, so only
-    the shape is compared."""
+    """--generateCpuProfile: Node samples the run, jsse has no profiler and records none, so the
+    shape is compared: keys, the root, ids that resolve, non-negative deltas and ordered times."""
     p = json.loads(text)
     nodes = p["nodes"]
+    ids = {n["id"] for n in nodes}
+    numbers = (int, float)
     shape = {
         "keys": sorted(p),
         "keys of every node": sorted(set.intersection(*(set(n) for n in nodes))),
@@ -47,8 +51,16 @@ def normalise_profile(text):
             set.intersection(*(set(n["callFrame"]) for n in nodes))
         ),
         "root": nodes[0]["callFrame"]["functionName"],
-        "ids unique": len({n["id"] for n in nodes}) == len(nodes),
+        "ids unique": len(ids) == len(nodes),
+        "children resolve": all(c in ids for n in nodes for c in n.get("children", [])),
+        "hit counts are numbers": all(
+            isinstance(n["hitCount"], numbers) for n in nodes
+        ),
+        "samples resolve": all(s in ids for s in p["samples"]),
         "samples and deltas match": len(p["samples"]) == len(p["timeDeltas"]),
+        "deltas are non-negative numbers": all(
+            isinstance(d, numbers) and d >= 0 for d in p["timeDeltas"]
+        ),
         "times ordered": 0 <= p["startTime"] <= p["endTime"],
     }
     return json.dumps(shape, indent=1) + "\n"
@@ -62,6 +74,6 @@ def normalise_file(path, text):
         if pattern.search(path):
             try:
                 return normalise(text)
-            except (ValueError, KeyError, TypeError, IndexError):
+            except (ValueError, KeyError, TypeError, IndexError, AttributeError):
                 return "<unparsable>\n" + text
     return text

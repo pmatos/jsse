@@ -78,6 +78,17 @@ class TraceTest(unittest.TestCase):
             first, norm.normalise_file("trace.json", self.render(other))
         )
 
+    def test_oddly_shaped_json_is_reported_not_raised(self):
+        for text in ("{}", "[1, 2]", "[[]]"):
+            self.assertTrue(
+                norm.normalise_file("trace.json", text).startswith("<unparsable>")
+            )
+        self.assertTrue(
+            norm.normalise_file("p.cpuprofile", '{"nodes": [1]}').startswith(
+                "<unparsable>"
+            )
+        )
+
     def test_only_trace_files_and_a_broken_file_is_reported(self):
         self.assertEqual(norm.normalise_file("types.json", "[1]"), "[1]")
         self.assertTrue(
@@ -125,6 +136,13 @@ class ProfileTest(unittest.TestCase):
         self.assertNotEqual(
             good, norm.normalise_file("p.cpuprofile", self.profile(samples=[2]))
         )
+        for bad in (
+            self.profile(samples=[9], deltas=[1]),
+            self.profile(samples=[2], deltas=[-1]),
+            self.profile({"children": [7]}),
+            self.profile({"hitCount": "3"}),
+        ):
+            self.assertNotEqual(good, norm.normalise_file("p.cpuprofile", bad))
         broken = json.loads(self.profile())
         del broken["endTime"]
         self.assertNotEqual(

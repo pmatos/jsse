@@ -89,3 +89,43 @@ fn open_and_wait_for_debugger_report_that_no_inspector_exists() {
         "ERR_INSPECTOR_NOT_AVAILABLE Inspector is not available\nERR_INSPECTOR_NOT_ACTIVE Inspector is not active\nclosed"
     );
 }
+
+#[test]
+fn disable_and_reconnect_reset_the_recording() {
+    let script = format!(
+        "{PRELUDE}\
+         s.connect();\
+         s.post('Profiler.setSamplingInterval', {{ interval: 100 }}, (e, r) => log(e, r));\
+         s.post('Profiler.enable'); s.post('Profiler.start'); s.post('Profiler.disable');\
+         s.post('Profiler.stop', (e) => log(e.message));\
+         s.post('Profiler.enable'); s.post('Profiler.start'); s.disconnect(); s.connect();\
+         s.post('Profiler.start', (e) => log(e.message));\
+         s.post('Profiler.enable');\
+         s.post('Profiler.stop', (e) => log(e.message));\
+         s.post('Profiler.disable', (e, r) => log(e, r));\
+         err(() => s.connectToMainThread());"
+    );
+    let expected = [
+        "null {}",
+        "Inspector error -32000: No recording profiles found",
+        "Inspector error -32000: Profiler is not enabled",
+        "Inspector error -32000: No recording profiles found",
+        "null {}",
+        "ERR_INSPECTOR_NOT_WORKER Current thread is not a worker",
+    ]
+    .join("\n");
+    assert_eq!(run(&script), expected);
+}
+
+#[test]
+fn promises_session_resolves_and_rejects_like_node() {
+    let script = "const p = require('node:inspector/promises'); const s = new p.Session();\
+         s.connect();\
+         s.post('Profiler.enable').then((r) => console.log('resolved', r))\
+           .then(() => s.post('Foo.bar'))\
+           .catch((e) => console.log('rejected', e.code, e.message));";
+    assert_eq!(
+        run(script),
+        "resolved {}\nrejected ERR_INSPECTOR_COMMAND Inspector error -32601: 'Foo.bar' wasn't found"
+    );
+}
