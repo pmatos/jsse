@@ -59,7 +59,7 @@ CommonJS loader (#1219), `events` (#1223) and `util` (#1224).
 ## Verification
 
 - `./scripts/run-node-stream-oracle.sh` runs Node's own tests from
-  `scripts/stream-fixtures/` (185 of the 255 `test/parallel` files matching
+  `scripts/stream-fixtures/` (188 of the 255 `test/parallel` files matching
   `test-stream*`, `test-readable-*`, ...; verbatim) on jsse `--node` and Node. The
   fixtures use a small `assert`/`common` prelude (`harness-assert.js`,
   `harness.js`) that runs on both engines, with `mustCall` verified on
@@ -81,7 +81,10 @@ CommonJS loader (#1219), `events` (#1223) and `util` (#1224).
 
 ## Known gaps
 
-`stream/consumers`, `stream/web`, `stream.Readable.toWeb` and friends, `fs`
-streams (#1234), `process.stdout` (#1232). Revisit the
+`stream/consumers`, `stream/web`, `stream.Readable.toWeb` and friends (web
+streams, #1360: the seven `needs-webstreams` tests stay skipped until then, so
+the "ported tests pass" criterion of #1233 is scoped to core semantics), `fs`
+streams (#1234). `process.stdout` exists (#1232), which unlocked
+`test-stream2-writable`. Revisit the
 `!` lines in the manifest as those land; the tests that need `fs` or `http` are
 the first candidates once #1234 exists.
