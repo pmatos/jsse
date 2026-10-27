@@ -1,0 +1,3 @@
+exit=0
+--- tty
+a("a") up down backspace("") return("\r") ctrl+c\r

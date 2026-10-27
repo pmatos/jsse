@@ -69,6 +69,14 @@ impl Interpreter {
             Completion::Normal(JsValue::UNDEFINED)
         });
 
+        // __host_loop_ref(delta): ref (+1) or unref (-1) a host handle
+        self.install_loop_fn("__host_loop_ref", 1, |interp, args| {
+            let delta = arg(args, 0).as_number().unwrap_or(0.0) as i64;
+            let loop_state = &mut interp.scheduler.node_loop;
+            loop_state.external_refs = (i64::from(loop_state.external_refs) + delta).max(0) as u32;
+            Completion::Normal(JsValue::UNDEFINED)
+        });
+
         // __host_timer_ref(id, bool): an unref'd timer does not keep the loop alive
         self.install_loop_fn("__host_timer_ref", 2, |interp, args| {
             if let Some(id) = arg(args, 0).as_number() {

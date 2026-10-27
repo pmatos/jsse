@@ -1,0 +1,4 @@
+exit=0
+--- stdout
+setRawMode ENOTTY ENOTTY -25 setRawMode
+--- stderr

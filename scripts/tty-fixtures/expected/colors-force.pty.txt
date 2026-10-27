@@ -1,0 +1,5 @@
+exit=0
+--- tty
+{ a: \e[33m1\e[39m, s: \e[32m'str'\e[39m }\r
+[ \e[33mtrue\e[39m, \e[1mnull\e[22m ]\r
+\e[33mtrue\e[39m \e[33m4\e[39m\r

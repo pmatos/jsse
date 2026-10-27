@@ -21,6 +21,12 @@ mod math;
 mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_builtins;
+#[cfg(unix)]
+mod node_host_child;
+#[cfg(unix)]
+mod node_host_child_spawn;
+#[cfg(unix)]
+mod node_host_child_sync;
 mod node_host_cjs_lexer;
 mod node_host_cjs_patterns;
 mod node_host_crypto;
@@ -30,7 +36,11 @@ mod node_host_fs;
 #[cfg(unix)]
 mod node_host_fs_args;
 #[cfg(unix)]
+mod node_host_fs_async;
+#[cfg(unix)]
 mod node_host_fs_error;
+#[cfg(unix)]
+mod node_host_fs_jobs;
 #[cfg(unix)]
 mod node_host_fs_meta;
 #[cfg(unix)]
@@ -42,8 +52,12 @@ mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
 mod node_host_process_metrics;
+#[cfg(unix)]
+mod node_host_signal;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+#[cfg(unix)]
+pub(crate) mod node_host_tty;
 mod node_host_util;
 mod node_prelude;
 mod number;

@@ -217,6 +217,28 @@
   delete globalThis.__host_os;
   hostOs.Buffer = globalThis.Buffer;
   cache["internal/host/os"] = { exports: hostOs };
+  // The terminal and standard-stream floor (#1232), private to the stdio and
+  // tty modules; without the unix floor, stdout and stderr go through
+  // __host_write and stdin is empty.
+  var hostTty = takeHost("__host_tty");
+  if (hostTty === undefined) {
+    var hostWrite = globalThis.__host_write;
+    var utf8 = new TextDecoder();
+    hostTty = {
+      guessHandleType: function (fd) { return fd >= 0 && fd <= 2 ? "PIPE" : "INVALID"; },
+      isTTY: function () { return false; },
+      getWindowSize: function () {},
+      setRawMode: function () { return { code: "ENOTTY", errno: -25 }; },
+      write: function (fd, data) {
+        return hostWrite(fd, typeof data === "string" ? data : utf8.decode(data));
+      },
+      stdinStart: function (cb) { Promise.resolve().then(function () { cb(null); }); },
+      stdinStop: function () {},
+      stdinRef: function () {},
+    };
+  }
+  cache["internal/host/tty"] = { exports: hostTty };
+
   // The native process-metrics binding (#1227): the prelude's `process` already
   // holds it; `load` lets those methods reach per_thread.js on first use.
   var hostProcess = globalThis.__host_process;
@@ -231,6 +253,17 @@
   hostCrypto.randomBytes = globalThis.__host_random_bytes;
   hostCrypto.webcrypto = globalThis.crypto;
   cache["internal/host/crypto"] = { exports: hostCrypto };
+
+  // The child process and signal floor (#1236), assembled by node-process-signals.js.
+  var childKey = Symbol.for("jsse.node.child");
+  var childBinding = globalThis[childKey];
+  delete globalThis[childKey];
+  if (childBinding !== undefined) {
+    childBinding.load = function () {
+      return requireBuiltin("internal/process/signals");
+    };
+    cache["internal/host/child_process"] = { exports: childBinding };
+  }
 
   function requireBuiltin(id) {
     var cached = cache[id];
@@ -339,6 +372,7 @@
 
   // `console` writes through the embedded util module (Node's inspect/format).
   requireBuiltin("internal/console/node");
+  requireBuiltin("internal/process/stdio");
 
   cache["internal/modules/builtins"] = {
     exports: { canBeRequiredByUsers: canBeRequiredByUsers, loadBuiltin: requireBuiltin },

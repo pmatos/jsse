@@ -1,0 +1,5 @@
+exit=3
+--- stdout
+[2097152 bytes crc32 4136363447]
+--- stderr
+sent 2048

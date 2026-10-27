@@ -1,0 +1,11 @@
+exit=0
+--- stdout
+a
+b
+write returned true
+write cb null
+tick
+write cb2
+microtask
+immediate
+--- stderr

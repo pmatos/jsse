@@ -384,25 +384,7 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
   return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
 });
 
-E('ERR_REQUIRE_ASYNC_MODULE', Error, function(filename, parent) {
-  let message = 'require() cannot be used on an ESM graph with top-level await. Use import() instead. ' +
-    'To see where the top-level await comes from, use --experimental-print-required-tla.';
-  if (filename) message += `\nRequired module: ${filename}`;
-  const stack = [];
-  for (let cursor = parent; cursor; cursor = cursor.parent) {
-    ArrayPrototypePush(stack, cursor.filename || cursor.id);
-  }
-  if (stack.length > 0) message += `\nRequire stack:\n- ${ArrayPrototypeJoin(stack, '\n- ')}`;
-  ObjectDefineProperty(this, 'requireStack', {
-    value: stack, writable: true, enumerable: false, configurable: true,
-  });
-  return message;
-});
-E('ERR_REQUIRE_CYCLE_MODULE', Error, (id, parent) => {
-  return `Cannot require() ES Module ${id} in a cycle.${parent ? ` (from ${parent.filename})` : ''} ` +
-    'A cycle involving require(esm) is not allowed to maintain invariants mandated by the ' +
-    'ECMAScript specification. Try making at least part of the dependency in the graph lazily loaded.';
-});
+require('internal/errors/require_esm')(E);
 
 E('ERR_MODULE_NOT_FOUND', Error, function(path, base, exactUrl) {
   if (exactUrl) this.url = `${exactUrl}`;
@@ -454,6 +436,18 @@ E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
     `of scheme ${expected[0]}`;
   return `The URL must be ${res}`;
 });
+
+E('ERR_CHILD_PROCESS_STDIO_MAXBUFFER', RangeError, (stream) => `${stream} maxBuffer length exceeded`);
+E('ERR_UNKNOWN_SIGNAL', TypeError, (signal) => `Unknown signal: ${signal}`);
+E('ERR_INVALID_SYNC_FORK_INPUT', TypeError,
+  (value) => `Asynchronous forks do not support Buffer, TypedArray, DataView or string input: ${value}`);
+E('ERR_IPC_ONE_PIPE', Error, 'Child process can have only one IPC pipe');
+E('ERR_IPC_SYNC_FORK', Error, 'IPC cannot be used with synchronous forks');
+E('ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', TypeError,
+  (x) => `The feature ${x} is unavailable on the current platform, which is being used to run Node.js`);
+E('ERR_INVALID_FD', RangeError, (value) => format('"fd" must be a positive integer: %s', value));
+E('ERR_INVALID_CURSOR_POS', TypeError, 'Cannot set cursor row without setting its column');
+E('ERR_USE_AFTER_CLOSE', Error, (name) => `${name} was closed`);
 
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {
