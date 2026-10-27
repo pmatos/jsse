@@ -17,8 +17,8 @@ Walking the import graph of hereby and of every `devDependency` found four gaps,
 1. **Parser: class fields named `get` or `set`** (#1313). `class A { set; }` was read as an accessor
    without a name, so `minimatch` (and therefore `glob`) did not parse. After `get`/`set`, a `=`, `;`, `}` or
    `*` now makes it a field (the `*` case is the existing ASI rule); a name or `(` still starts an accessor
-   or method. The two near-identical branches were merged, so `declarations.rs` shrinks. The
-   `arguments`-in-initializer early error applies to these fields as to every other. Test:
+   or method. The two near-identical branches were merged and the field tail (initializer, `arguments` early error,
+   terminator) is one helper, `finish_class_field`, so `declarations.rs` shrinks. Test:
    `test262-extra/class-fields-named-get-and-set.js`. The vendored `node-lib/internal/deps/minimatch`
    copy is restored to upstream's `set;` (the quoted workaround recorded in the node-host ADR list of vendored
    edits is gone; that list is not edited here).
@@ -27,13 +27,14 @@ Walking the import graph of hereby and of every `devDependency` found four gaps,
    `ReferenceError: global is not defined`. It is defined by `scripts/node-process-shim.js` (the `--node`
    prelude only; the default environment is unchanged).
 3. **`node:constants`.** `foreground-child` imports it for the `SIG*` names. `node-lib/constants.js` is
-   `Object.assign({}, os dlopen, errno, priority, signals, fs, crypto)` frozen, in Node's order; zlib constants
-   are not part of it in Node either. jsse's `crypto` has no `constants` yet and its `fs.constants` has 54 keys
+   `Object.assign({}, os dlopen, errno, priority, signals, fs)` frozen, in Node's order; Node appends the
+   crypto constants (not zlib's). jsse's `crypto` has no `constants` yet and its `fs.constants` has 54 keys
    to Node 26's 60, so `Object.keys(require("constants")).length` differs from Node until those land.
 4. **ES module frames.** Frames of functions defined in an ES module were `<anonymous>` or a bare path.
-   They now read `file:///abs/path.mjs:line:col` like Node: `NodeStackState::note_module` registers the module
-   source under its `file:` URL when the host loads it (`node_esm_load`), and the main module is registered
-   with its URL (`note_script_source(.., module)`). Percent-encoding follows the URL path set.
+   They now read `file:///abs/path.mjs:line:col` like Node: when a frame is recorded for a function whose
+   closure sits in a module environment (`Environment::find_module_path`), its source is named by the
+   module's `file:` URL (`NodeStackState::name_module_source`, by source identity, so identical files do not
+   share a name; nothing is read or copied). Percent-encoding follows the URL path set.
 
 Not needed and not done: `chokidar` (uses `fs.watch`, #1235), `glob`, `picocolors` (`isColorSupported`,
 `FORCE_COLOR`, `NO_COLOR`, `TERM=dumb`), `@esfx/canceltoken`, `which`, `minimist`, `pretty-ms` already behave

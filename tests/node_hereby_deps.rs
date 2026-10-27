@@ -122,7 +122,7 @@ fn hereby_matches_node_when_a_typescript_checkout_is_given() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let out = Command::new("python3")
         .arg(root.join("scripts/run-hereby-oracle.py"))
-        .args(["--ci", "--jsse", env!("CARGO_BIN_EXE_jsse")])
+        .args(["--ci", "--require", "--jsse", env!("CARGO_BIN_EXE_jsse")])
         .output()
         .expect("run python3");
     let text = String::from_utf8_lossy(&out.stdout);
@@ -131,5 +131,5 @@ fn hereby_matches_node_when_a_typescript_checkout_is_given() {
         "{text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.contains("passed") || text.contains("SKIP:"), "{text}");
+    assert!(text.contains("passed"), "{text}");
 }

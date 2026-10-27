@@ -34,6 +34,7 @@ DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS", "NODE_DISABLE_
 DURATION = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m|h|d)(?: \d[\d.]*(?:ms|s|m|h|d))*")
 PID = re.compile(r"\(node:\d+\)")
 FRAME = re.compile(r"^\s+at ")
+ASYNC_FRAME = re.compile(r"^\s+at async ")
 TOP_LEVEL = re.compile(r"^\s+at (?:file://|/)\S+:\d+:\d+$")
 
 # name, directory under hereby-fixtures ("" = the TypeScript checkout), argv, env, pty columns
@@ -90,18 +91,23 @@ DEPS_CASES = [
 def normalise(text, work, ts_dir):
     """Make two runs comparable: paths, durations, pids, and stack frames Node has and jsse lacks.
 
-    Dropped on both sides: frames inside node:internal, `at async` frames (jsse has no async
-    stack frames) and the anonymous top-level frame of a module (jsse has none yet).
+    Dropped on both sides (issue #1368): frames inside node:internal, `at async` frames, and
+    the anonymous module top-level frame that precedes Node's ModuleJob.run frame.
     """
     text = text.replace(work, "<WORK>").replace(ts_dir, "<TS>")
     text = DURATION.sub("<T>", text)
     text = PID.sub("(node:<PID>)", text)
+    lines = text.splitlines()
     kept = []
-    for line in text.splitlines():
-        if FRAME.match(line) and (
-            "node:internal" in line or " async " in line or TOP_LEVEL.match(line)
-        ):
-            continue
+    for i, line in enumerate(lines):
+        if FRAME.match(line):
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if (
+                "node:internal" in line
+                or ASYNC_FRAME.match(line)
+                or (TOP_LEVEL.match(line) and "ModuleJob.run" in nxt)
+            ):
+                continue
         kept.append(line)
     return "\n".join(kept) + "\n"
 

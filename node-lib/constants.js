@@ -1,8 +1,8 @@
 'use strict';
 
 // The deprecated `constants` module: the os dlopen/errno/priority/signals
-// tables, then fs and crypto constants, in the order Node merges them. A
-// table an embedded module does not define yet (crypto.constants) is skipped.
+// tables, then fs constants, in the order Node merges them. Node appends the
+// crypto constants; the embedded crypto module defines none yet.
 
 const {
   ObjectAssign,
@@ -11,7 +11,6 @@ const {
 
 const { constants: osConstants } = require('os');
 const { constants: fsConstants } = require('fs');
-const { constants: cryptoConstants } = require('crypto');
 
 module.exports = ObjectFreeze(ObjectAssign(
   {},
@@ -20,5 +19,4 @@ module.exports = ObjectFreeze(ObjectAssign(
   osConstants.priority,
   osConstants.signals,
   fsConstants,
-  cryptoConstants,
 ));

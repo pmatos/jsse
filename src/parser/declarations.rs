@@ -875,23 +875,11 @@ impl<'a> Parser<'a> {
                 }));
             }
             // field named "accessor" (followed by =, ;, or })
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                let expr = self.parse_field_initializer_value()?;
-                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
-                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
-                }
-                Some(expr)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            return Ok(ClassElement::Property(ClassProperty {
-                key: PropertyKey::Identifier("accessor".to_string()),
-                value,
+            return self.finish_class_field(
+                PropertyKey::Identifier("accessor".to_string()),
                 is_static,
-                computed: false,
-            }));
+                false,
+            );
         }
 
         let kind = match &self.current {
@@ -916,28 +904,11 @@ impl<'a> Parser<'a> {
                     self.current,
                     Token::Assign | Token::Semicolon | Token::RightBrace | Token::Star
                 ) {
-                    let value = if self.current == Token::Assign {
-                        self.advance()?;
-                        let expr = self.parse_field_initializer_value()?;
-                        if crate::ast::expr_contains_matching(
-                            &expr,
-                            &crate::ast::is_arguments_reference,
-                        ) {
-                            return Err(
-                                self.error("Class field initializer cannot reference 'arguments'")
-                            );
-                        }
-                        Some(expr)
-                    } else {
-                        None
-                    };
-                    self.eat_semicolon()?;
-                    return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier(name.to_string()),
-                        value,
+                    return self.finish_class_field(
+                        PropertyKey::Identifier(name.to_string()),
                         is_static,
-                        computed: false,
-                    }));
+                        false,
+                    );
                 }
                 if is_get {
                     ClassMethodKind::Get
@@ -995,25 +966,37 @@ impl<'a> Parser<'a> {
                 computed,
             }))
         } else {
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                let expr = self.parse_field_initializer_value()?;
-                // Class field initializers cannot contain 'arguments'
-                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
-                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
-                }
-                Some(expr)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            Ok(ClassElement::Property(ClassProperty {
-                key,
-                value,
-                is_static,
-                computed,
-            }))
+            if kind != ClassMethodKind::Method {
+                return Err(self.error("Expected '(' after the accessor name"));
+            }
+            self.finish_class_field(key, is_static, computed)
         }
+    }
+
+    /// The initializer and terminator of a public class field whose name is parsed.
+    fn finish_class_field(
+        &mut self,
+        key: PropertyKey,
+        is_static: bool,
+        computed: bool,
+    ) -> Result<ClassElement, ParseError> {
+        let value = if self.current == Token::Assign {
+            self.advance()?;
+            let expr = self.parse_field_initializer_value()?;
+            if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
+                return Err(self.error("Class field initializer cannot reference 'arguments'"));
+            }
+            Some(expr)
+        } else {
+            None
+        };
+        self.eat_semicolon()?;
+        Ok(ClassElement::Property(ClassProperty {
+            key,
+            value,
+            is_static,
+            computed,
+        }))
     }
 
     /// Parse field initializer value with ~Await, ~Yield parameters per spec §15.7.

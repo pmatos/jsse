@@ -183,19 +183,21 @@ impl NodeStackState {
             .map(|(_, source)| source.clone())
     }
 
-    /// Name the source of an ES module file, as Node's frames do, by its
-    /// `file:` URL. A module already named is not read again.
-    pub(crate) fn note_module(&mut self, path: &str) {
-        if !self.installed {
+    /// Name the source of a function defined in the ES module file `path` by
+    /// its `file:` URL, as Node's frames do, unless it is named already.
+    pub(super) fn name_module_source(&mut self, source: &Rc<str>, path: &str) {
+        let key = Rc::as_ptr(source) as *const u8 as usize;
+        if self.sources.iter().any(|e| Rc::ptr_eq(&e.source, source)) {
             return;
         }
-        let name = file_url(path);
-        if self.scripts.iter().any(|(known, _)| **known == *name) {
+        if self
+            .pending
+            .get(&key)
+            .is_some_and(|p| p.source.strong_count() > 0)
+        {
             return;
         }
-        if let Ok(text) = std::fs::read_to_string(path) {
-            self.scripts.push((Rc::from(name), text));
-        }
+        self.name_pending(source, &file_url(path), 0, 0, 0);
     }
 }
 

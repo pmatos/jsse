@@ -44,6 +44,13 @@ class NormaliseTest(unittest.TestCase):
             "RangeError: boom\n    at explode (file://<WORK>/a.mjs:4:9)\n",
         )
 
+    def test_keeps_anonymous_frames_that_are_not_the_module_top_level(self):
+        text = "    at file:///w/node/a.mjs:3:5\n    at k (file:///w/node/a.mjs:2:15)\n"
+        self.assertEqual(
+            self.norm(text),
+            "    at file://<WORK>/a.mjs:3:5\n    at k (file://<WORK>/a.mjs:2:15)\n",
+        )
+
     def test_keeps_named_frames_and_plain_lines(self):
         text = "    at k (/w/node/a.js:2:15)\nat async not a frame\n"
         self.assertEqual(

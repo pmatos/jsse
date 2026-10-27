@@ -1,6 +1,6 @@
 // Copyright (C) 2026 the JSSE authors. All rights reserved.
 /*---
-esid: sec-class-definitions-static-semantics-early-errors
+esid: prod-FieldDefinition
 description: >
   `get` and `set` start an accessor only when a property name follows; before
   `;`, `=`, `}` or a line break and `*` they are the names of fields.
@@ -56,3 +56,26 @@ assert.throws(SyntaxError, function() {
 assert.throws(SyntaxError, function() {
   eval("class F { static set = arguments; }");
 }, "arguments in a set field initializer");
+
+assert.throws(SyntaxError, function() {
+  eval("class G { get x = 1; }");
+}, "a getter has no initializer");
+assert.throws(SyntaxError, function() {
+  eval("class H { set x = 1; }");
+}, "a setter has no initializer");
+assert.throws(SyntaxError, function() {
+  eval("class I { get *g() {} }");
+}, "get and a generator method on one line");
+
+class J {
+  get
+  x() { return 8; }
+  static set
+  y(v) { J.stored = v; }
+}
+var desc = Object.getOwnPropertyDescriptor(J.prototype, "x");
+assert.sameValue(typeof desc.get, "function", "get on its own line before a name is a getter");
+assert.sameValue(new J().x, 8, "the getter returns its value");
+assert(!Object.prototype.hasOwnProperty.call(new J(), "get"), "no get field was made");
+J.y = 9;
+assert.sameValue(J.stored, 9, "static set on its own line before a name is a setter");
