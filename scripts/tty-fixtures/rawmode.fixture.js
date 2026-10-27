@@ -1,5 +1,6 @@
 // MODES: pty
 // INPUT: ab\x1b[A\x03
+// READY: raw
 'use strict';
 const stdin = process.stdin;
 stdin.setRawMode(true);
