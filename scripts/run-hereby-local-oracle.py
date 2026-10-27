@@ -100,17 +100,14 @@ def file_digest(path, tree):
 def snapshot(tree):
     """{relative path: (sha256, size)} for built/ and the generated sources."""
     files = {}
-    for base in ("built",):
-        for dirpath, _, names in os.walk(os.path.join(tree, base)):
-            for name in names:
-                full = os.path.join(dirpath, name)
-                if os.path.islink(full):
-                    files[os.path.relpath(full, tree)] = (
-                        "link:" + os.readlink(full),
-                        0,
-                    )
-                else:
-                    files[os.path.relpath(full, tree)] = file_digest(full, tree)
+    for dirpath, _, names in os.walk(os.path.join(tree, "built")):
+        for name in names:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, tree)
+            if os.path.islink(full):
+                files[rel] = ("link:" + os.readlink(full), 0)
+            else:
+                files[rel] = file_digest(full, tree)
     for rel in GENERATED:
         full = os.path.join(tree, rel)
         if os.path.exists(full):
@@ -166,7 +163,7 @@ def check_checkout(ts_dir):
 
 def clone_clean(src, dst):
     """Copy a checkout to dst without its build output or other ignored files (node_modules is kept)."""
-    subprocess.run(["cp", "-a", "--reflink=auto", src, dst], check=True)
+    copy_tree(src, dst)
     ignored = subprocess.run(
         ["git", "-C", src, "status", "--ignored", "--porcelain"],
         capture_output=True,
@@ -227,31 +224,17 @@ def hereby_local(engine, exe, tree, timeout):
     return proc.returncode, out, err, time.monotonic() - start
 
 
+def copy_tree(src, dst):
+    subprocess.run(["cp", "-a", "--reflink=auto", src, dst], check=True)
+
+
 def package_compiler(tree, pkg):
     """Lay the built compiler out as a typescript package (lib/ is built/local) for the tsc oracles."""
     shutil.rmtree(pkg, ignore_errors=True)
     os.makedirs(pkg)
-    subprocess.run(
-        [
-            "cp",
-            "-a",
-            "--reflink=auto",
-            os.path.join(tree, "built", "local"),
-            os.path.join(pkg, "lib"),
-        ],
-        check=True,
-    )
+    copy_tree(os.path.join(tree, "built", "local"), os.path.join(pkg, "lib"))
     for rel in ("bin", "package.json"):
-        subprocess.run(
-            [
-                "cp",
-                "-a",
-                "--reflink=auto",
-                os.path.join(tree, rel),
-                os.path.join(pkg, rel),
-            ],
-            check=True,
-        )
+        copy_tree(os.path.join(tree, rel), os.path.join(pkg, rel))
 
 
 def run_harness(pkg, jsse, jobs, ci):
