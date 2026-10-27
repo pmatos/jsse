@@ -8,6 +8,7 @@ const failures = [];
 let activity = 0;
 
 export function mustCall(fn, exact = 1) {
+  if (typeof fn === 'number') { exact = fn; fn = undefined; }
   const expectation = { name: (fn && fn.name) || '<anonymous>', exact, actual: 0 };
   expectations.push(expectation);
   return function(...args) {
@@ -31,11 +32,13 @@ export function describe(name, options, fn) {
 }
 
 export function it(name, options, fn) {
-  tests.push({ name, fn: typeof options === 'function' ? options : fn });
+  const skip = typeof options === 'object' && options !== null && (options.skip || options.todo);
+  tests.push({ name, skip, fn: typeof options === 'function' ? options : fn });
 }
 
 async function run() {
-  for (const { fn } of tests) {
+  for (const { fn, skip } of tests) {
+    if (skip) continue;
     activity++;
     try {
       await fn();

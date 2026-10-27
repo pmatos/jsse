@@ -6,6 +6,7 @@
 # Subtests that cannot run on jsse yet are skipped by name in harness.js
 # (__eventsJsseSkips) with their reason. Lines starting with "!" name a Node
 # events/AbortSignal test that is not vendored, with the reason.
+# test-abort-controller-any-timeout waits on a real 9 s timer in every pass.
 test-abort-controller-any-timeout
 test-abortcontroller
 test-aborted-util

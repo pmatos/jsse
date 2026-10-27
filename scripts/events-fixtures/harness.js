@@ -259,6 +259,7 @@ var __eventsRequire = function (id) {
     case "events": return __eventsLoad("events");
     case "test": return __eventsNodeTest;
   }
+  if (id.charAt(0) === ".") throw new Error("test requires unsupported module " + id);
   return require(id);
 };
 

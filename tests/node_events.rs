@@ -50,9 +50,15 @@ fn compose(name: &str, dir: &Path) -> PathBuf {
     if name.ends_with(".mjs") {
         std::fs::write(dir.join("esm-shim.mjs"), read("esm-shim.mjs")).unwrap();
         let path = dir.join(name);
-        let test = read(name)
-            .replace("'../common/index.mjs'", "'./esm-shim.mjs'")
-            .replace("'node:test'", "'./esm-shim.mjs'");
+        let mut test = read(name);
+        for quote in ["'", "\""] {
+            for specifier in ["../common/index.mjs", "node:test"] {
+                test = test.replace(
+                    &format!("{quote}{specifier}{quote}"),
+                    &format!("{quote}./esm-shim.mjs{quote}"),
+                );
+            }
+        }
         std::fs::write(&path, test).unwrap();
         return path;
     }

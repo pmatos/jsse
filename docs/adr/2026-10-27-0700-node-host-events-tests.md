@@ -1,7 +1,11 @@
 # Node host mode: the ported events test set (#1223)
 
-Status: accepted, epic #1214. Completes the test criterion of the `events`
-addendum in `2026-10-26-0854-node-host-mode.md`.
+Status: accepted, epic #1214. Extends the test set of the `events` addendum in
+`2026-10-26-0854-node-host-mode.md`; the tests listed under "Not vendored"
+remain open. This supersedes that addendum's "30 tests" count and its
+`needs-process-events` / `needs-inspect` markers, and the claim in
+`2026-10-26-1900-node-host-util.md` that the `needs-inspect` tests ran: their
+probe could never pass.
 
 ## Decision
 

@@ -55,7 +55,7 @@ while read -r name; do
     if [[ "$name" == *.mjs ]]; then
         file="$WORK/$name"
         cp "$DIR/esm-shim.mjs" "$WORK/esm-shim.mjs"
-        sed -e "s#'../common/index.mjs'#'./esm-shim.mjs'#" -e "s#'node:test'#'./esm-shim.mjs'#" \
+        sed -E -e "s#(['\"])../common/index.mjs\1#\1./esm-shim.mjs\1#" -e "s#(['\"])node:test\1#\1./esm-shim.mjs\1#" \
             "$DIR/$name" > "$file"
     else
         file="$WORK/$name.js"
