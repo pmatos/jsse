@@ -1,35 +1,58 @@
-# Node v26.8.2 test/parallel files in this directory, verbatim. One name per
-# line; further words mark what a test needs from the --node prelude. They run
-# when the probe below passes and are skipped (and reported) before:
-#   needs-process-events  process.on/emit work (Node event loop, #1229)
-#   needs-inspect         util.inspect(x, {depth: -1}) names the class, e.g. [Foo] (#1224)
+# Node v26.8.2 test/parallel files in this directory, verbatim, run by
+# scripts/run-node-events-oracle.sh (and tests/node_events.rs) through harness.js on
+# jsse --node and on Node. One name per line: <name> is <name>.js (a CommonJS
+# test wrapped by harness.js); <name>.mjs is an ES module test whose
+# '../common/index.mjs' and 'node:test' imports are rewritten to esm-shim.mjs.
+# Subtests that cannot run on jsse yet are skipped by name in harness.js
+# (__eventsJsseSkips) with their reason. Lines starting with "!" name a Node
+# events/AbortSignal test that is not vendored, with the reason.
+test-abort-controller-any-timeout
 test-abortcontroller
+test-aborted-util
+test-event-capture-rejections
 test-event-emitter-add-listeners
 test-event-emitter-check-listener-leaks
 test-event-emitter-emit-context
 test-event-emitter-error-monitor
+test-event-emitter-errors
 test-event-emitter-get-max-listeners
 test-event-emitter-invalid-listener
 test-event-emitter-listener-count
 test-event-emitter-listeners
 test-event-emitter-listeners-side-effects
 test-event-emitter-max-listeners
-test-event-emitter-max-listeners-warning needs-process-events needs-inspect
-test-event-emitter-max-listeners-warning-for-null needs-process-events needs-inspect
-test-event-emitter-max-listeners-warning-for-symbol needs-process-events needs-inspect
+test-event-emitter-max-listeners-warning
+test-event-emitter-max-listeners-warning-for-null
+test-event-emitter-max-listeners-warning-for-symbol
 test-event-emitter-method-names
 test-event-emitter-modify-in-emit
 test-event-emitter-num-args
 test-event-emitter-once
+test-event-emitter-prepend
 test-event-emitter-remove-all-listeners
+test-event-emitter-remove-listeners
 test-event-emitter-set-max-listeners-side-effects
-test-event-emitter-special-event-names needs-process-events
+test-event-emitter-special-event-names
 test-event-emitter-subclass
 test-event-emitter-symbols
 test-event-target
-test-eventtarget-custom-inspect-does-not-throw
-test-eventtarget-once-twice
 test-events-getmaxlisteners
 test-events-list
 test-events-listener-count-with-listener
 test-events-once
+test-events-uncaught-exception-stack
+test-eventtarget-custom-inspect-does-not-throw
+test-eventtarget-once-twice
+test-abortsignal-any.mjs
+test-events-add-abort-listener.mjs
+!test-abortsignal-cloneable: needs MessageChannel (worker message ports are not in the host)
+!test-eventemitter-asyncresource: needs the async_hooks module (not in the host)
+!test-event-emitter-no-error-provided-to-error-event: needs the domain module (deprecated, not in the host)
+!test-abortsignal-drop-settled-signals.mjs: needs test/common/gc.js (gcUntil) and WeakRef collection ($262.gc, #1317)
+!test-abortcontroller-internal: needs --expose-internals to reach internal/event_target
+!test-events-customevent: needs --expose-internals to reach internal/event_target
+!test-events-on-async-iterator: needs --expose-internals to reach internal/event_target
+!test-events-static-geteventlisteners: needs --expose-internals to reach internal/event_target
+!test-eventtarget: needs --expose-internals to reach internal/event_target
+!test-eventtarget-brandcheck: needs --expose-internals to reach internal/event_target
+!test-eventtarget-memoryleakwarning: needs --expose-internals to reach internal/event_target

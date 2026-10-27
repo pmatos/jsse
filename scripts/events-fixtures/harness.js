@@ -1,16 +1,14 @@
 // Runs a verbatim Node test file (test/parallel/test-event*.js, Node v26.8.2)
 // unchanged on jsse --node and on Node: the runner prepends this file, wraps the
-// test in `(function (require, __filename, __dirname) { ... })(...)` and appends
-// `__eventsFinish()`. It provides the pieces of `assert`, `test/common` and
-// `node:test` the tests use. Process exit events are not relied on (jsse emits
-// them only once the Node event loop lands, #1229): expectations are verified
-// after the test body and a quiet period.
+// test in `try { (function (require, __filename, __dirname) { ... })(...); }
+// finally { __eventsFinish(); }` (a test may throw to an uncaughtException
+// handler). It provides the pieces of `assert`, `test/common` and
+// `node:test` the tests use. Process exit events are not relied on: expectations
+// are verified after the test body and a quiet period.
 var __eventsLoad = function (id) {
   return require(id);
 };
-var __eventsInspect = typeof util === "object" && util !== null
-  ? util.inspect
-  : require("util").inspect;
+var __eventsInspect = require("util").inspect;
 if (typeof setImmediate === "undefined") {
   globalThis.setImmediate = function (fn) {
     return setTimeout.apply(null, [fn, 0].concat(Array.prototype.slice.call(arguments, 1)));
@@ -225,7 +223,8 @@ var __eventsFailures = [];
 
 // Subtests jsse cannot run yet, skipped on jsse only (they pass on Node).
 var __eventsJsseSkips = {
-  "AbortController inspection depth 1 or null works": "util.inspect.custom is not implemented (#1224)",
+  "Does not hang forever": "jsse has no --input-type flag, so the spawned child cannot read an ES module from stdin",
+  "Aborted with gc cleanup": "$262.gc() does not collect WeakRef targets (#1317)",
   "AbortSignal.timeout() does not prevent the signal from being collected": "$262.gc() does not collect WeakRef targets (#1317)",
   "AbortSignal with a timeout is not collected while there is an active listener": "$262.gc() does not collect WeakRef targets (#1317)",
 };
@@ -258,11 +257,9 @@ var __eventsRequire = function (id) {
     case "../common": return __eventsCommon;
     case "assert": return __eventsAssert;
     case "events": return __eventsLoad("events");
-    case "util": return typeof util === "object" && util !== null ? util : require("util");
-    case "timers/promises": return require("timers/promises");
     case "test": return __eventsNodeTest;
   }
-  throw new Error("test requires unsupported module " + id);
+  return require(id);
 };
 
 function __eventsFail(message) {

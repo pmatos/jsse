@@ -7,9 +7,10 @@
 #
 # 1. Every test in scripts/events-fixtures/manifest.txt (Node's own
 #    test/parallel files, verbatim) is wrapped by scripts/events-fixtures/harness.js
-#    and must print "events-fixture: ok" and exit 0 on jsse (`--node`, via require("events"))
-#    and on Node. Tests marked needs-process-events / needs-inspect are skipped on
-#    jsse until process.on/emit work (#1229) / util.inspect names classes (#1224).
+#    (.mjs tests: their common and node:test imports point at esm-shim.mjs) and
+#    must print "events-fixture: ok" and exit 0 on jsse (`--node`) and on Node.
+#    Subtests jsse cannot run are skipped by name in harness.js; manifest lines
+#    starting with "!" record the Node tests that are not vendored, and why.
 # 2. scripts/events-fixtures/corpus-emitter.js followed by corpus-web.js (events,
 #    EventTarget, AbortSignal.any/timeout, errors) must print byte-identical
 #    stdout on both, and its digest must equal scripts/events-fixtures/corpus.digest.
@@ -48,42 +49,36 @@ if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
     (cd "$PROJECT_DIR" && cargo build --release)
 fi
 
-HAVE_PROCESS_EVENTS=0
-HAVE_INSPECT=0
-if [ "$NODE_ONLY" -eq 0 ]; then
-    probe="$("$JSSE" --node -e 'process.on("x", function () {}); print(process.emit("x"))' 2>/dev/null || true)"
-    [ "$probe" = "true" ] && HAVE_PROCESS_EVENTS=1
-    probe="$("$JSSE" --node -e 'print(require("util").inspect(new (class Foo {})(), { depth: -1 }))' 2>/dev/null || true)"
-    [ "$probe" = "[Foo]" ] && HAVE_INSPECT=1
-fi
-
 FAIL=0
-while read -r name flags; do
-    case "$name" in ""|"#"*) continue ;; esac
-    {
-        cat "$DIR/harness.js"
-        echo "(function (require, __filename, __dirname) {"
-        cat "$DIR/$name.js"
-        printf '\n})(__eventsRequire, "/node/test/parallel/%s.js", "/node/test/parallel");\n__eventsFinish();\n' "$name"
-    } > "$WORK/$name.js"
+while read -r name; do
+    case "$name" in ""|"#"*|"!"*) continue ;; esac
+    if [[ "$name" == *.mjs ]]; then
+        file="$WORK/$name"
+        cp "$DIR/esm-shim.mjs" "$WORK/esm-shim.mjs"
+        sed -e "s#'../common/index.mjs'#'./esm-shim.mjs'#" -e "s#'node:test'#'./esm-shim.mjs'#" \
+            "$DIR/$name" > "$file"
+    else
+        file="$WORK/$name.js"
+        {
+            cat "$DIR/harness.js"
+            echo "try { (function (require, __filename, __dirname) {"
+            cat "$DIR/$name.js"
+            printf '\n})(__eventsRequire, "/node/test/parallel/%s.js", "/node/test/parallel"); } finally { __eventsFinish(); }\n' "$name"
+        } > "$file"
+    fi
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
-        if { [[ " $flags " == *" needs-process-events "* ]] && [ "$HAVE_PROCESS_EVENTS" -eq 0 ]; } ||
-            { [[ " $flags " == *" needs-inspect "* ]] && [ "$HAVE_INSPECT" -eq 0 ]; }; then
-            status="skip"
-        else
-            rc=0
-            "$JSSE" --node "$WORK/$name.js" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
-            if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/jsse.out"; then
-                echo "FAIL $name: jsse --node exit $rc"
-                head -5 "$WORK/jsse.err" | sed 's/^/  stderr: /'
-                status="FAIL"; FAIL=1
-            fi
+        rc=0
+        "$JSSE" --node "$file" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
+        if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/jsse.out"; then
+            echo "FAIL $name: jsse --node exit $rc"
+            head -5 "$WORK/jsse.err" | sed 's/^/  stderr: /'
+            status="FAIL"; FAIL=1
         fi
     fi
     if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
         rc=0
-        "$NODE_BIN" --expose-gc --no-warnings "$WORK/$name.js" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
+        "$NODE_BIN" --expose-gc --no-warnings "$file" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/node.out"; then
             echo "FAIL $name: node exit $rc"
             head -5 "$WORK/node.err" | sed 's/^/  stderr: /'
