@@ -10,8 +10,8 @@
 use super::super::*;
 use std::collections::VecDeque;
 
-/// Microtask turns between an ES module entry point throwing and Node's
-/// report of it (measured; a throw after a top-level `await` takes one more).
+/// Microtask turns between a synchronous ES module entry point failing and
+/// Node's report of it (measured); one more when the main module is async.
 pub(crate) const ESM_ENTRY_HOPS: u32 = 4;
 
 #[derive(Default)]

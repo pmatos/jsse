@@ -66,8 +66,8 @@ impl NodeEsm {
         self.main.is_some()
     }
 
-    /// Whether a rejection of the entry point's top-level await was already
-    /// delivered, so the throw the first run surfaces is not delivered again.
+    /// Whether the entry point's failure was already delivered through the
+    /// module graph, so the throw `run_module` returns is not delivered again.
     pub(crate) fn entry_reported(&self) -> bool {
         self.entry_reported
     }
