@@ -43,6 +43,7 @@ mod node_host_process_metrics;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
 mod node_host_util;
+mod node_host_vm;
 mod node_prelude;
 mod number;
 mod object;

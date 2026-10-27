@@ -1,0 +1,118 @@
+exports: Script,createContext,createScript,runInContext,runInNewContext,runInThisContext,isContext,compileFunction,measureMemory,constants
+constants: ["USE_MAIN_CONTEXT_DEFAULT_LOADER","DONT_CONTEXTIFY"]symbol
+constants frozen: truenull
+alias: true
+Script.length: 1 Script 2 3
+Script.prototype: constructor,runInThisContext,runInContext,runInNewContext
+this: value: 2
+this: no locals: undefinedundefinedundefined
+this: is global: true true
+this: var: [7,true,true,false]
+this: let persists: 2 number false
+this: let redeclare: THROW SyntaxError undefined
+this: function: 5
+this: sloppy this: true
+this: strict this: undefined
+this: strict does not stick: true
+this: completion: [null,null,3,{"a":1}]
+this: same realm: true
+this: throw: THROW undefined undefined
+this: throw object: true r
+this: string options: at named.js:1:1
+isContext: [true,false,false,false]
+createContext identity: true
+createContext default: object true
+createContext bad: THROW TypeError ERR_INVALID_ARG_TYPE
+isContext bad: THROW TypeError ERR_INVALID_ARG_TYPE
+runInContext bad: THROW TypeError ERR_INVALID_ARG_TYPE
+ctx: read: 2
+ctx: write back: [10,3]
+ctx: host edits visible: 3
+ctx: host edits seen by live functions: 41
+ctx: var: [4,"function",6,true]
+ctx: var descriptor: {"value":4,"writable":true,"enumerable":true,"configurable":true}
+ctx: bare var: false
+ctx: let/const: ["7function",false,false]
+ctx: let redeclare: THROW SyntaxError undefined
+ctx: const assign: THROW TypeError undefined
+ctx: this and globalThis: [false,false,true]
+ctx: not main realm: [false,false,true]
+ctx: realms differ: false
+ctx: errors are the context's: false true TypeError
+ctx: no node globals: undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined
+ctx: has console: objectfunctionundefined
+ctx: builtins: object,object,function,function,function,object,object,object,function,function,object
+ctx: overwrite builtin: [5,"number"]
+ctx: delete: [false,"undefined"]
+ctx: host delete: undefined
+ctx: restore builtin: 1 function
+ctx: accessor: [7,7,9]
+ctx: getter this: true
+ctx: read-only: [1,1]
+ctx: read-only strict: THROW TypeError undefined
+ctx: undefined assign strict: THROW TypeError undefined
+ctx: strict undeclared: THROW ReferenceError undefined
+ctx: typeof undeclared: undefined
+ctx: not defined: THROW ReferenceError undefined
+ctx: symbols: [1,1]
+ctx: inherited: 7
+ctx: keys: ["a","b","c","z"]
+ctx: Object.keys(this): ["a","b","c","z"]
+ctx: globalThis props: [1,2]
+ctx: frozen sandbox: [1,"number"]
+ctx: indirect eval: [true,1]
+ctx: eval var: 2
+ctx: Function: true
+ctx: functions see later edits: 2
+ctx: callback writes: THROW TypeError undefined
+ctx: callback sees script write: THROW TypeError undefined
+ctx: promise job: queued
+ctx: result realm: [false,true,false]
+ctx: instance of context type: true
+ctx: Error API: numberfunction
+ctx: DONT_CONTEXTIFY: [true,1,2,true,false]
+runInNewContext: {"n":2,"m":2}
+runInNewContext no sandbox: 3
+microtaskMode: ok
+microtaskMode bad: THROW TypeError ERR_INVALID_ARG_VALUE
+name option: ok
+Script: instance: ["function",["sourceURL","sourceMapURL"],true,"[object Object]"]
+Script: createScript: 2
+Script: reuse: 2
+Script: other contexts: ["undefined","number","number"]
+Script: runInNewContext: 5
+Script: coerces code: 2
+Script: options string: 1
+Script: options bad: THROW TypeError ERR_INVALID_ARG_TYPE
+Script: filename bad: THROW TypeError ERR_INVALID_ARG_TYPE
+Script: lineOffset bad: THROW RangeError ERR_OUT_OF_RANGE
+Script: run options bad: THROW RangeError ERR_OUT_OF_RANGE
+Script: displayErrors bad: THROW TypeError ERR_INVALID_ARG_TYPE
+Script: cachedData bad: THROW TypeError ERR_INVALID_ARG_TYPE
+Script: produceCachedData: [true,true,["cachedData","cachedDataProduced","sourceURL","sourceMapURL"]]
+Script: cachedData accepted: [true,false]
+Script: importModuleDynamically: 1
+Script: importModuleDynamically bad: THROW TypeError ERR_INVALID_ARG_TYPE
+Script: USE_MAIN_CONTEXT_DEFAULT_LOADER: 1
+Script: sourceURL: ["a.js","a.map"]
+Script: no directives: [null,null,true]
+Script: hashbang: 3
+Script: unpaired surrogate: 2
+Script: lone surrogate source: 55357
+compileFunction: basic: [3,"",2,"function (a, b) {\nreturn a + b\n}"]
+compileFunction: no params: undefined
+compileFunction: this and globals: true,undefined
+compileFunction: strict: undefined
+compileFunction: contextExtensions: 3
+compileFunction: extension shadows: 2
+compileFunction: parsingContext: number,true,false
+compileFunction: parsingContext realm: true
+compileFunction: writes parsingContext: 4
+compileFunction: closes wrapper: THROW SyntaxError undefined
+compileFunction: bad params: THROW TypeError ERR_INVALID_ARG_TYPE
+compileFunction: bad code: THROW TypeError ERR_INVALID_ARG_TYPE
+compileFunction: bad parsingContext: THROW TypeError ERR_INVALID_ARG_TYPE
+compileFunction: bad extensions: THROW TypeError ERR_INVALID_ARG_TYPE
+compileFunction: cachedData: [true,true]
+measureMemory: shape: true
+measureMemory: bad: THROW TypeError ERR_INVALID_ARG_VALUE

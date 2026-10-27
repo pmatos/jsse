@@ -169,6 +169,10 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/streams/writable_end"),
     builtin!("internal/streams/writable_state"),
     builtin!("internal/streams/writable_write"),
+    builtin!("vm"),
+    builtin!("internal/vm"),
+    builtin!("internal/vm/contextify"),
+    builtin!("internal/vm/sync"),
 ];
 
 impl Interpreter {

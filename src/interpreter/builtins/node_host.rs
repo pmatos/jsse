@@ -41,6 +41,7 @@ pub(crate) struct NodeHostState {
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
+    pub(crate) vm: super::node_host_vm::VmState,
     /// Test-only: the platform name the `os` binding reports.
     #[cfg(test)]
     pub(crate) platform_override: Option<&'static str>,
@@ -279,6 +280,7 @@ impl Interpreter {
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();
+        self.setup_node_host_vm();
     }
 }
 
