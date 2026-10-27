@@ -6,13 +6,13 @@
 TSC_DIR is an installed typescript package; without it (or with another version) the script
 prints SKIP and exits 0 unless --require is given. Each case in scripts/tsc-fixtures/cases.txt
 and in every cases-<topic>.txt (pinned in expected-<topic>.txt; a leading NAME=value sets an
-environment variable, @pty:ROWSxCOLS runs on a pseudo-terminal) runs lib/_tsc.js on a fresh copy of a project tree on both engines. Stdout, stderr, the exit
-code and every file the compiler created, changed or deleted must be identical after
+environment variable, @pty:ROWSxCOLS runs on a pseudo-terminal) runs lib/_tsc.js on a fresh
+copy of a project tree on both engines. Stdout, stderr, the exit code and every file the compiler created, changed or deleted must be identical after
 normalising only the work-tree path, the TypeScript package path and h:mm:ss AM clock stamps.
 Prints a pass/fail table; exits 1 on any difference.
 
 Options: --jobs N (default 4), --timeout SECONDS (default 900), --ci (plain output, GitHub
-annotations, full diffs), --list, --require, --pin (rewrite expected-projects.txt from Node's
+annotations, full diffs), --list, --require, --pin (rewrite the expected-*.txt pins from Node's
 digests; merges into the existing pins, so single cases can be re-pinned), --no-node (compare jsse with the pinned digests instead of running Node), --fixtures DIR.
 """
 
@@ -51,6 +51,7 @@ def case_files():
 
 def load_cases():
     cases = []
+    seen = set()
     for path, pinfile in case_files():
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -59,6 +60,9 @@ def load_cases():
                     name, project, exit_codes, args = (
                         p.strip() for p in line.split("|", 3)
                     )
+                    if name in seen:
+                        raise SystemExit(f"duplicate case name {name} in {path}")
+                    seen.add(name)
                     cases.append(
                         (
                             name,
@@ -82,11 +86,27 @@ def load_pins():
     return pins
 
 
+ESCAPE = re.compile(r"\\(?:([rn])|u([0-9a-fA-F]{4}))")
 ESCAPED = (
     (".utf16le.esc", "utf-16-le"),
     (".utf16be.esc", "utf-16-be"),
     (".esc", "utf-8"),
 )
+
+
+def decode_escapes(text):
+    """Decode \\r, \\n and \\uXXXX only (a surrogate pair gives one astral character); anything else is an error."""
+    out = ESCAPE.sub(
+        lambda m: (
+            {"r": "\r", "n": "\n"}[m.group(1)]
+            if m.group(1)
+            else chr(int(m.group(2), 16))
+        ),
+        text,
+    )
+    if "\\" in out:
+        raise ValueError(f"unsupported escape in {text!r}")
+    return out.encode("utf-16", "surrogatepass").decode("utf-16")
 
 
 def expand_escaped(tree):
@@ -100,9 +120,7 @@ def expand_escaped(tree):
                     with open(p, encoding="ascii") as f:
                         text = f.read().removesuffix("\n")
                     with open(p[: -len(suffix)], "wb") as f:
-                        f.write(
-                            text.encode("ascii").decode("unicode_escape").encode(codec)
-                        )
+                        f.write(decode_escapes(text).encode(codec))
                     os.remove(p)
                     break
 

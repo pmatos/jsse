@@ -52,7 +52,7 @@ diag-exit-0 | diag | 0 0 | --pretty false --noLib --noEmit globals.d.ts clean.ts
 diag-exit-1-no-emit-on-error | diag | 1 1 | --pretty false --noLib --noEmitOnError --outDir out globals.d.ts e01-mismatch.ts ;; --pretty --noLib --noEmitOnError --outDir out globals.d.ts e01-mismatch.ts
 diag-exit-2-emits | diag | 2 2 | --pretty false --noLib --outDir out globals.d.ts e01-mismatch.ts ;; --pretty --noLib --outDir out globals.d.ts e01-mismatch.ts
 diag-exit-1-bad-option | diag | 1 1 | --pretty false --nope --noLib --noEmit globals.d.ts clean.ts ;; --pretty --nope --noLib --noEmit globals.d.ts clean.ts
-diag-exit-1-missing-file | diag | 2 2 | --pretty false --noLib --noEmit missing.ts ;; --pretty --noLib --noEmit missing.ts
+diag-exit-2-missing-file | diag | 2 2 | --pretty false --noLib --noEmit missing.ts ;; --pretty --noLib --noEmit missing.ts
 diag-exit-1-bad-option-value | diag | 1 1 | --pretty false --target es9000 --noLib --noEmit clean.ts ;; --pretty --target es9000 --noLib --noEmit clean.ts
 diag-exit-no-input | diag | 1 | --pretty false --noLib --noEmit --outDir out
 diag-config-errors | diag | 2 2 | --pretty false -p tsconfig.bad.json ;; --pretty -p tsconfig.bad.json

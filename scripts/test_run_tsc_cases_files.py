@@ -42,7 +42,9 @@ class CasesFilesTest(unittest.TestCase):
         (self.tsc / "package.json").write_text('{"version": "6.0.3"}')
         self.fix = root / "fix"
         (self.fix / "projects" / "p").mkdir(parents=True)
-        (self.fix / "projects" / "p" / "a.ts.esc").write_text("a\\r\\n\\u2028\\xe9\\n")
+        (self.fix / "projects" / "p" / "a.ts.esc").write_text(
+            "a\\r\\n\\u2028\\ud83d\\ude00\\n"
+        )
         (self.fix / "projects" / "p" / "b.ts.utf16le.esc").write_text("\\ufeffA\n")
         (self.fix / "cases.txt").write_text("base | p | 0 | x\n")
         (self.fix / "cases-more.txt").write_text(
@@ -61,7 +63,7 @@ class CasesFilesTest(unittest.TestCase):
         lines.append('  *) echo "foo= size=pipe" ;;')
         lines.append("esac")
         lines.append(
-            "printf '   a  \\\\r  \\\\n 342 200 250 303 251  \\\\n 377 376   A  \\\\0\\n'"
+            "printf '   a  \\\\r  \\\\n 342 200 250 360 237 230 200  \\\\n 377 376   A  \\\\0\\n'"
         )
         return "\n".join(lines) + "\n"
 
@@ -132,7 +134,7 @@ class DiagnosticsFixtureTest(unittest.TestCase):
         self.assertEqual(set(pinned[0::2]), names)
 
     def test_thirty_error_fixtures_are_compiled_plain_and_pretty(self):
-        fixtures = [c for c in self.cases() if re.match(r"diag-e\d\d-", c[0])]
+        fixtures = [c for c in self.cases() if re.match(r"diag-e\d\d(-|$)", c[0])]
         self.assertGreaterEqual(len(fixtures), 30)
         for name, _, _, args in fixtures:
             plain, pretty = args.split(" ;; ")

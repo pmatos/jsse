@@ -41,7 +41,7 @@ Status: accepted, epic #1214, issue #1244 (builds on the project oracle of
    - Auto mode: pipe, terminal, terminal 200 wide, `NO_COLOR`, `FORCE_COLOR`,
      both, `NO_COLOR=` (empty), `FORCE_COLOR=0`, and `--pretty` against each.
    - Summary lines (one error, several in a file, a file table, none), exit codes 0, 1
-     (`--noEmitOnError`, bad option, missing input, bad option value, no input) and 2.
+     (`--noEmitOnError`, bad option, bad option value, no input) and 2 (also a missing input file).
    - `--help`, `--help --all`, no arguments, `--version`, `--build --help` on terminals
      of 0 to 1000 columns (including 48/49, 79/80, 120/121) and on a pipe.
    - `--noErrorTruncation` with plain and pretty output.
@@ -50,7 +50,7 @@ Status: accepted, epic #1214, issue #1244 (builds on the project oracle of
      `--help`; mixed-case spellings, `en`, unsupported but well-formed locales (`xx`,
      `de-DE`, `pt`), malformed ones (`fr-`, empty) and a missing value.
    - tsconfig diagnostics with code frames in a JSON file, and `many.ts`, 70 errors on
-     one 1.8 KB line (245 KB pretty), plain and pretty on a pipe and pretty on a terminal.
+     one 2.7 KB line (245 KB pretty), plain and pretty on a pipe and pretty on a terminal.
 5. **Result.** All cases are byte-identical on Node v26.8.2 and jsse with TypeScript
    6.0.3: no engine divergence surfaced, so there is no engine change in this PR. Manual
    probes outside the harness agree too: stdout redirected to a file, to `/dev/null`,
