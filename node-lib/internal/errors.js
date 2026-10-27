@@ -384,6 +384,8 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
   return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
 });
 
+require('internal/errors/require_esm')(E);
+
 E('ERR_MODULE_NOT_FOUND', Error, function(path, base, exactUrl) {
   if (exactUrl) this.url = `${exactUrl}`;
   return `Cannot find ${exactUrl ? 'module' : 'package'} '${path}' imported from ${base}`;

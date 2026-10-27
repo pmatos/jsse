@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Run a command with its stdio on a pseudo-terminal and print what it wrote.
 
-usage: pty-run.py [--rows N] [--cols N] [--input TEXT] [--stdout-pipe] -- cmd args...
+usage: pty-run.py [--rows N] [--cols N] [--input TEXT] [--wait-raw] [--stdout-pipe] -- cmd args...
 
 The child gets the pty as stdin/stdout/stderr (with --stdout-pipe, stdout is a
 pipe and only stdin/stderr are the tty). --input is written to the terminal
 when the child is ready: it left canonical mode, or --delay
 seconds passed (\\n and \\r escapes allowed; a trailing \\x04 sends EOF).
+With --wait-raw the delay is no use as a fallback and input waits for raw mode
+alone: a slow start must not let the terminal's line discipline see the keys
+first (^C would kill the child, ^D end its input, and echo would differ).
 Output is the raw bytes the child produced, with the tty's output processing
 (\\n to \\r\\n) left in place.
 """
@@ -28,6 +31,7 @@ ap.add_argument("--cols", type=int, default=80)
 ap.add_argument("--input", default="")
 ap.add_argument("--delay", type=float, default=0.3)
 ap.add_argument("--timeout", type=float, default=20)
+ap.add_argument("--wait-raw", action="store_true")
 ap.add_argument("--stdout-pipe", action="store_true")
 ap.add_argument("cmd", nargs=argparse.REMAINDER)
 args = ap.parse_args()
@@ -69,7 +73,7 @@ start = time.time()
 fds = [master] + ([pipe_r] if pipe_r is not None else [])
 while True:
     elapsed = time.time() - start
-    if not sent and (elapsed >= args.delay or child_ready()):
+    if not sent and (child_ready() or (elapsed >= args.delay and not args.wait_raw)):
         if data:
             os.write(master, data)
         sent = True

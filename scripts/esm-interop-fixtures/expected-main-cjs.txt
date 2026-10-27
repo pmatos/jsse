@@ -1,0 +1,30 @@
+throws body ran
+features true
+plain ["__esModule","a","default"] true function 1 [object Module]
+plain.desc {"value":true,"writable":true,"enumerable":true,"configurable":false} false false
+plain.cache true true
+plain.import false true ["a","default"]
+nodefault ["x","y"] true undefined
+withesmodule ["__esModule","default"] false true
+modexports {"tag":"module-exports"} ["tag"]
+live.before 0 ["__esModule","count","default","inc"]
+live.after 1 1
+error tla threw Error ERR_REQUIRE_ASYNC_MODULE require() cannot be used on an ESM graph with top-level await. Use import() instead. To see where the top-level await comes from, use --experimental-print-required-tla.
+error tla-parent threw Error ERR_REQUIRE_ASYNC_MODULE require() cannot be used on an ESM graph with top-level await. Use import() instead. To see where the top-level await comes from, use --experimental-print-required-tla.
+error throws threw Error undefined esm boom
+error throws-again threw Error undefined esm boom
+error syntax threw SyntaxError undefined -
+tla.stack ["<root>/main.cjs"] ["code"] ["Required module: <root>/esm/tla-parent.mjs","Require stack:","- <root>/main.cjs"]
+meta {"main":false,"file":"meta.mjs","dir":"esm","url":"meta.mjs"}
+chain ["__esModule","a","default"]
+chain.esm ["same","viaCjsKeys"]
+pkg-sync ["__esModule","default","kind"]
+pkg-sync.require-first fallback
+pkg-sync.sync-first ["__esModule","default","kind"]
+esm-pkg ["__esModule","default","name"]
+esm-pkg.cjs-user ["name","helper"]
+detect.esm ["__esModule","default","detected"]
+detect.plain {"plain":true}
+detect.syntax-error threw SyntaxError undefined -
+detect.runtime-syntax threw SyntaxError undefined -
+cycle Error ERR_REQUIRE_CYCLE_MODULE Cannot require() ES Module <root>/esm/cycle.mjs in a cycle. (from <root>/cjs/req-cycle.cjs) A cycle involving require(esm) is not allowed to maintain invariants mandated by the ECMAScript specification. Try making at least part of the dependency in the graph lazily loaded. true

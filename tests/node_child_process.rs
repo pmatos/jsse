@@ -208,6 +208,25 @@ fn write_in_flight_when_the_child_exits_fails_with_epipe() {
     );
 }
 
+/// A write the pipe accepted completes before the exit of a child that read it
+/// (`uv_write` tries the write at once), so `stdin.destroy()` in the exit
+/// handler has nothing in flight to fail with EPIPE. Without that ordering a
+/// loaded host saw the exit event first and `write EPIPE` went unhandled.
+#[test]
+fn accepted_stdin_write_completes_before_the_reading_child_exits() {
+    let source = r#"
+      const cp = require("child_process");
+      let left = 40;
+      const next = () => {
+        const c = cp.spawn("sh", ["-c", "read line; exit 0"]);
+        c.on("close", () => (--left > 0 ? next() : print("done")));
+        c.stdin.end("hello\n");
+      };
+      next();
+    "#;
+    assert_eq!(node(source), "done");
+}
+
 #[test]
 fn child_keeps_the_loop_alive_only_while_ref() {
     let source = r#"

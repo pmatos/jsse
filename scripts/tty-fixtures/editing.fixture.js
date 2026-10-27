@@ -1,5 +1,6 @@
 // MODES: pty
 // INPUT: ab\x7fc\rxyz\x01\x0bq\r\x04
+// READY: raw
 // SIZE: 24x80
 'use strict';
 const readline = require('readline');

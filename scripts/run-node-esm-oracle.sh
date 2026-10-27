@@ -10,8 +10,8 @@
 # dynamic import() from ES modules and CommonJS. Its main.mjs prints one
 # normalised line per scenario (errors as name/code/first message line, paths
 # relative to the tree) and must produce byte-identical output on jsse (--node)
-# and on Node. Cases where jsse knowingly differs (named exports of CommonJS
-# modules, data: URLs, import.meta) are not part of the tree.
+# and on Node. Cases where jsse knowingly differs (data: URLs) are not part of the
+# tree; import.meta and CommonJS interop are in run-node-esm-interop-oracle.sh.
 #
 # The Node output is pinned in scripts/esm-fixtures/expected-main.txt, which
 # tests/node_esm.rs compares jsse against without needing Node.

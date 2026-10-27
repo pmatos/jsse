@@ -84,13 +84,10 @@ and `require(esm)` (#1241) and the tsc/test-runner work that imports packages.
    `resolve_module_specifier_pure` and the synthetic default/JSON/text/bytes
    module code moved out of `mod.rs` unchanged (apart from the hook branch).
 8. **Known divergences** (none is in the oracle tree):
-   - Importing a CommonJS module gives `default` and `module.exports` only;
-     Node adds named exports found by cjs-module-lexer. Live `__esModule`
-     handling, `require(esm)`, `createRequire` and `import.meta.dirname` etc.
-     are #1241.
-   - A `.js` main with no `type` and ESM syntax still runs as CommonJS (Node
-     detects it); imported files do get the detection above, without Node's
-     `MODULE_TYPELESS_PACKAGE_JSON` warning.
+   - (Lifted by #1241, see `2026-10-26-2300-node-esm-interop.md`: named
+     exports of CommonJS modules, `import.meta`, `require(esm)`, and a typeless
+     `.js` main with ES syntax, which runs through the ES loader.) Detected
+     files get no `MODULE_TYPELESS_PACKAGE_JSON` warning.
    - `data:` URLs throw `ERR_UNSUPPORTED_ESM_URL_SCHEME`; a query or fragment on
      a specifier is dropped, so `./a.mjs?x=1` is the same instance as `./a.mjs`.
    - Import attributes other than `type` (and a `type` other than `json`, `text`
@@ -100,8 +97,7 @@ and `require(esm)` (#1241) and the tsc/test-runner work that imports packages.
    - `ERR_MODULE_NOT_FOUND` carries no "Did you mean to import" hint.
    - Loading is deferred by a microtask, not by file I/O: `import(x)` and a
      `Promise.then` queued right after it order differently from Node.
-   - The `module-sync` condition is matched for `import` only; `require()` still
-     skips it (CommonJS ADR).
+   - (Lifted by #1241: `require()` matches `module-sync` too.)
    - Module namespaces are not GC roots (jsse#1327, pre-existing): the fixture
      under `JSSE_GC_STRESS` is limited to graphs that do not re-import an
      evaluated module.

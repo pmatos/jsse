@@ -977,46 +977,7 @@ impl Interpreter {
                 };
                 self.await_value(&val)
             }
-            Expression::ImportMeta => {
-                // §16.2.1.5.2 GetActiveScriptOrModule: walk env chain to find module path
-                let module_path =
-                    Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
-                if let Some(ref path) = module_path {
-                    let canon = path.canonicalize();
-                    if let Some(module) = self.module_registry_get(&canon)
-                        && let Some(ref cached) = module.borrow().cached_import_meta
-                    {
-                        return Completion::Normal(cached.clone());
-                    }
-                }
-                let meta_id = self.create_object_id();
-                self.get_object_cell_expect(meta_id)
-                    .borrow_mut()
-                    .prototype_id = None;
-                if let Some(path) = module_path.as_ref().and_then(ModuleKey::file_path) {
-                    let url = format!("file://{}", path.display());
-                    self.get_object_cell_expect(meta_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "url".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::string(JsString::from_str(&url)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                }
-                let id = meta_id;
-                let meta_val = JsValue::object(id);
-                if let Some(ref path) = module_path {
-                    let canon = path.canonicalize();
-                    if let Some(module) = self.module_registry_get(&canon) {
-                        module.borrow_mut().cached_import_meta = Some(meta_val.clone());
-                    }
-                }
-                Completion::Normal(meta_val)
-            }
+            Expression::ImportMeta => self.eval_import_meta(env),
             Expression::Import(source_expr, options_expr) => {
                 // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
                 let source_val = match self.eval_expr(source_expr, env) {

@@ -1,0 +1,71 @@
+throws body ran
+meta.keys ["dirname","filename","main","resolve","url"]
+meta.proto null
+meta.same true
+meta.values <url>/main.mjs <root>/main.mjs <root> true
+meta.desc true true
+meta.resolve.fn resolve 2 function
+meta.resolve(./cjs/dot.cjs) <url>/cjs/dot.cjs
+meta.resolve(./nope.mjs) <url>/nope.mjs
+meta.resolve(./esm) <url>/esm
+meta.resolve(./esm/) <url>/esm/
+meta.resolve(./with space/m.mjs) <url>/with%20space/m.mjs
+meta.resolve(./x.txt) <url>/x.txt
+meta.resolve(cjs-pkg) <url>/node_modules/cjs-pkg/main.js
+meta.resolve(esm-pkg) <url>/node_modules/esm-pkg/index.js
+meta.resolve(pkg-sync) <url>/node_modules/pkg-sync/sync.mjs
+meta.resolve(pkg-sync/sync-first) <url>/node_modules/pkg-sync/sync.mjs
+meta.resolve(pkg-sync/only-require) <url>/node_modules/pkg-sync/sync.mjs
+meta.resolve(#int) <url>/esm/plain.mjs
+meta.resolve(node:fs) node:fs
+meta.resolve(fs) node:fs
+meta.resolve(node:nope) node:nope
+meta.resolve(data:text/javascript,1) data:text/javascript,1
+meta.resolve(https://example.org/a.js) https://example.org/a.js
+meta.resolve(file:///abs/x.js) file:///abs/x.js
+meta.resolve(/abs/y.js) file:///abs/y.js
+meta.resolve(missing-pkg) threw Error ERR_MODULE_NOT_FOUND Cannot find package 'missing-pkg' imported from <root>/main.mjs
+meta.resolve(missing-pkg/sub) threw Error ERR_MODULE_NOT_FOUND Cannot find package 'missing-pkg' imported from <root>/main.mjs
+meta.resolve(1) threw Error ERR_MODULE_NOT_FOUND Cannot find package '1' imported from <root>/main.mjs
+meta.resolve(undefined) threw Error ERR_MODULE_NOT_FOUND Cannot find package 'undefined' imported from <root>/main.mjs
+meta.resolve.parent <url>/a.mjs
+meta.space {"url":"<url>/with%20space/m.mjs","filename":"<root>/with space/m.mjs","dirname":"<root>/with space"}
+meta.dynamic {"main":false,"file":"meta.mjs","dir":"esm","url":"meta.mjs"}
+createRequire.relative ["a","b","c","d-e","f"]
+createRequire.resolve <root>/cjs/dot.cjs <root>/node_modules/cjs-pkg/main.js
+createRequire.package cjs-pkg
+createRequire.url-arg function
+createRequire.cache-shared true
+createRequire.esm ["x","y"]
+createRequire.package-sync {"__esModule":true,"default":"sync-default","kind":"module-sync"}
+createRequire.package-esm ["__esModule","default","name"]
+createRequire.sync-first module-sync
+createRequire.only-require fallback
+cjs dot ["a","b","c","d-e","default","f","g","module.exports"] {"a":1,"b":2,"c":3,"d-e":4,"f":5} default===require true module.exports===default true
+cjs define ["__esModule","default","enumVal","getFn","getIndex","getShort","module.exports","plainGet","val","viaModule"] {"__esModule":true,"enumVal":2,"getFn":"y-value","getIndex":"y-value","getShort":"z-value","plainGet":"y-value","val":1,"viaModule":3} default===require true module.exports===default true
+cjs literal ["a","b","c","d","d-e","default","f","g","module.exports"] {"a":1,"b":2,"c":3,"d":3,"d-e":4,"f":"[fn]","g":4} default===require true module.exports===default true
+cjs literal-stop ["default","module.exports"] {} default===require true module.exports===default true
+cjs reexport ["a","b","c","d-e","default","f","g","module.exports"] {"a":1,"b":2,"c":3,"d-e":4,"f":5} default===require true module.exports===default true
+cjs reexport-reset ["a","b","c","d-e","default","early","f","g","module.exports"] {"a":1,"b":2,"c":3,"d-e":4,"f":5} default===require true module.exports===default true
+cjs babel ["__esModule","a","b","c","d-e","default","f","g","module.exports","own"] {"__esModule":true,"a":1,"b":2,"c":3,"d-e":4,"f":5,"own":"own"} default===require true module.exports===default true
+cjs tsstar ["__esModule","a","b","c","d-e","default","f","g","module.exports","tsOwn"] {"__esModule":true,"a":1,"b":2,"c":3,"d-e":4,"f":5,"tsOwn":1} default===require true module.exports===default true
+cjs strings ["afterQuote","default","module.exports","real"] {"afterQuote":1,"real":1} default===require true module.exports===default true
+cjs computed ["default","inFunction","inIf","module.exports"] {"inIf":4} default===require true module.exports===default true
+cjs esmodule ["__esModule","default","module.exports","named"] {"__esModule":true,"named":"named"} default===require true module.exports===default true
+cjs throwing ["default","module.exports","ok","t"] {"ok":"ok"} default===require true module.exports===default true
+cjs nonobject ["default","module.exports","x"] {} default===require true module.exports===default true
+cjs needs-esm ["default","module.exports"] {} default===require true module.exports===default true
+cjs.esModule.default ["default","named"] true
+snapshot.before 0 0
+snapshot.after 0 1 true
+snapshot.late true 1
+live.esm 0
+live.esm.after 1
+required.facade ["__esModule","a","default"] true false true ["a","default"]
+chain true ["__esModule","a","default"]
+require(tla) threw Error ERR_REQUIRE_ASYNC_MODULE require() cannot be used on an ESM graph with top-level await. Use import() instead. To see where the top-level await comes from, use --experimental-print-required-tla.
+require(tla-parent) threw Error ERR_REQUIRE_ASYNC_MODULE require() cannot be used on an ESM graph with top-level await. Use import() instead. To see where the top-level await comes from, use --experimental-print-required-tla.
+require(throws) threw Error undefined esm boom
+require(syntax) threw SyntaxError undefined -
+require(cycle) ["c"]
+process.features.require_module true

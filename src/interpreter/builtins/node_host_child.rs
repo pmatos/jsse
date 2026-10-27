@@ -15,6 +15,7 @@ use super::node_host_child_spawn::{decode_spec, reap, signal_unless_exited, spaw
 use super::node_host_fs_args::{arg, int, last_errno, uint8array_from_vec, view_of};
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -67,6 +68,7 @@ struct Endpoint {
     flow: Arc<Flow>,
     reading: bool,
     writer: Option<Sender<WriteMsg>>,
+    queued: Arc<AtomicUsize>,
     open: bool,
 }
 
@@ -95,6 +97,21 @@ pub(super) fn post(queue: &Completions, event: ChildEvent) {
         .unwrap()
         .push(Box::new(move |interp: &mut Interpreter| {
             interp.node_host.child.inbox.push_back(event);
+        }));
+    wake.notify_one();
+}
+
+/// `queued` drops once the event is in the inbox, so a count of zero means no
+/// threaded `Written` is still on its way and a direct one cannot overtake it.
+fn post_written(queue: &Completions, id: u64, index: usize, errno: i32, queued: &Arc<AtomicUsize>) {
+    let queued = queued.clone();
+    let (lock, wake) = &**queue;
+    lock.lock()
+        .unwrap()
+        .push(Box::new(move |interp: &mut Interpreter| {
+            let event = ChildEvent::Written { id, index, errno };
+            interp.node_host.child.inbox.push_back(event);
+            queued.fetch_sub(1, Ordering::SeqCst);
         }));
     wake.notify_one();
 }
@@ -163,12 +180,44 @@ fn write_all(fd: RawFd, mut bytes: &[u8]) -> Result<(), i32> {
     Ok(())
 }
 
+/// What a non-blocking attempt at a write got done on the interpreter thread.
+enum Attempt {
+    Done,
+    Failed(i32),
+    Partial(usize),
+}
+
+/// Like `uv_write`, try the write at once. `Written` for what the pipe took
+/// goes straight into the inbox, so it is ahead of the `Exit` of a child that
+/// read the bytes: that `Exit` only reaches the inbox when a later drain of the
+/// completion queue runs on this thread. (Posting it through the queue would
+/// not do: the child can read and exit before the posting thread gets to run.)
+/// Only a full pipe sends the rest to the writer thread.
+fn write_now(fd: RawFd, bytes: &[u8]) -> Attempt {
+    let mut done = 0;
+    while done < bytes.len() {
+        let rest = &bytes[done..];
+        let n = unsafe { libc::send(fd, rest.as_ptr().cast(), rest.len(), libc::MSG_DONTWAIT) };
+        if n >= 0 {
+            done += n as usize;
+            continue;
+        }
+        match last_errno() {
+            libc::EINTR => {}
+            libc::EAGAIN => return Attempt::Partial(done),
+            errno => return Attempt::Failed(errno),
+        }
+    }
+    Attempt::Done
+}
+
 fn spawn_writer(
     queue: Completions,
     id: u64,
     index: usize,
     fd: Arc<OwnedFd>,
     messages: Receiver<WriteMsg>,
+    queued: Arc<AtomicUsize>,
 ) {
     std::thread::spawn(move || {
         let mut failed = 0;
@@ -180,14 +229,7 @@ fn spawn_writer(
                     {
                         failed = errno;
                     }
-                    post(
-                        &queue,
-                        ChildEvent::Written {
-                            id,
-                            index,
-                            errno: failed,
-                        },
-                    );
+                    post_written(&queue, id, index, failed, &queued);
                 }
                 WriteMsg::End => {
                     unsafe { libc::shutdown(fd.as_raw_fd(), libc::SHUT_WR) };
@@ -292,6 +334,7 @@ impl Interpreter {
                         flow: Arc::new(Flow::default()),
                         reading: false,
                         writer: None,
+                        queued: Arc::new(AtomicUsize::new(0)),
                         open: true,
                     })
                 })
@@ -332,7 +375,7 @@ impl Interpreter {
             Ok(JsValue::UNDEFINED)
         });
 
-        // __host_cp_write(id, index, bytes): queue a write; `Written` follows
+        // __host_cp_write(id, index, bytes): write now or queue it; `Written` follows
         self.host_fs_fn("__host_cp_write", 3, |interp, args| {
             let id = int(interp, arg(args, 0))? as u64;
             let index = int(interp, arg(args, 1))? as usize;
@@ -353,11 +396,29 @@ impl Interpreter {
             if !end.open {
                 return Ok(JsValue::FALSE);
             }
+            let mut bytes = bytes;
+            if end.queued.load(Ordering::SeqCst) == 0 {
+                let errno = match write_now(end.fd.as_raw_fd(), &bytes) {
+                    Attempt::Done => 0,
+                    Attempt::Failed(errno) => errno,
+                    Attempt::Partial(done) => {
+                        bytes.drain(..done);
+                        -1
+                    }
+                };
+                if errno >= 0 {
+                    let event = ChildEvent::Written { id, index, errno };
+                    interp.node_host.child.inbox.push_back(event);
+                    return Ok(JsValue::TRUE);
+                }
+            }
+            let queued = end.queued.clone();
             let sender = end.writer.get_or_insert_with(|| {
                 let (tx, rx) = channel();
-                spawn_writer(queue, id, index, end.fd.clone(), rx);
+                spawn_writer(queue, id, index, end.fd.clone(), rx, queued.clone());
                 tx
             });
+            queued.fetch_add(1, Ordering::SeqCst);
             Ok(JsValue::boolean(sender.send(WriteMsg::Data(bytes)).is_ok()))
         });
 
