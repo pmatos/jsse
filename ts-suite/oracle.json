@@ -1,0 +1,689 @@
+{
+ "schema": 1,
+ "typescript": {
+  "repo": "https://github.com/microsoft/TypeScript",
+  "tag": "v6.0.3",
+  "commit": "050880ce59e30b356b686bd3144efe24f875ebc8",
+  "lockfile_sha256": "e85be648176ba25eaa38f9c1b7b7ca9bab782b0c448fb15fc44c355c40ef9a4b"
+ },
+ "mocha": "10.8.2",
+ "oracle_engine": {
+  "node": "v26.8.2",
+  "npm": "11.19.1",
+  "platform": "linux-x86_64"
+ },
+ "command": "hereby runtests-parallel --light=false --no-lint; hereby run-eslint-rules-tests",
+ "pass_list": "not committed; node-pass-list.txt in the cache run directory, one escaped id per line, sorted; sha256 is totals.digest",
+ "unittest_suites_discovered": 327,
+ "test_files_discovered": 19676,
+ "totals": {
+  "passed": 106367,
+  "failed": 0,
+  "digest": "a1987f1be79bf05f508dcf16ceabd1ee16c62c3904cd841503112f6cf8770730"
+ },
+ "runners": {
+  "compiler": {
+   "passed": 43656,
+   "failed": 0,
+   "digest": "9de85b922a5140d370314dcdc80ab11759fca348ffa800bdb9101fa9b0bbf9eb",
+   "files": 6537,
+   "buckets": {
+    "2": {
+     "passed": 6,
+     "failed": 0
+    },
+    "A": {
+     "passed": 2694,
+     "failed": 0
+    },
+    "B": {
+     "passed": 648,
+     "failed": 0
+    },
+    "C": {
+     "passed": 5940,
+     "failed": 0
+    },
+    "D": {
+     "passed": 4626,
+     "failed": 0
+    },
+    "E": {
+     "passed": 4230,
+     "failed": 0
+    },
+    "F": {
+     "passed": 1302,
+     "failed": 0
+    },
+    "G": {
+     "passed": 1332,
+     "failed": 0
+    },
+    "H": {
+     "passed": 54,
+     "failed": 0
+    },
+    "I": {
+     "passed": 4290,
+     "failed": 0
+    },
+    "J": {
+     "passed": 1500,
+     "failed": 0
+    },
+    "K": {
+     "passed": 90,
+     "failed": 0
+    },
+    "L": {
+     "passed": 582,
+     "failed": 0
+    },
+    "M": {
+     "passed": 2394,
+     "failed": 0
+    },
+    "N": {
+     "passed": 2082,
+     "failed": 0
+    },
+    "O": {
+     "passed": 1116,
+     "failed": 0
+    },
+    "P": {
+     "passed": 1614,
+     "failed": 0
+    },
+    "Q": {
+     "passed": 84,
+     "failed": 0
+    },
+    "R": {
+     "passed": 1758,
+     "failed": 0
+    },
+    "S": {
+     "passed": 2934,
+     "failed": 0
+    },
+    "T": {
+     "passed": 2262,
+     "failed": 0
+    },
+    "U": {
+     "passed": 1674,
+     "failed": 0
+    },
+    "V": {
+     "passed": 288,
+     "failed": 0
+    },
+    "W": {
+     "passed": 114,
+     "failed": 0
+    },
+    "Y": {
+     "passed": 42,
+     "failed": 0
+    }
+   }
+  },
+  "conformance": {
+   "passed": 46182,
+   "failed": 0,
+   "digest": "c8a731c70fdd191035cc77bd2daaeb70317f6db273b3bfddae82c39aaa0582a8",
+   "files": 5907,
+   "buckets": {
+    "Symbols": {
+     "passed": 96,
+     "failed": 0
+    },
+    "additionalChecks": {
+     "passed": 6,
+     "failed": 0
+    },
+    "ambient": {
+     "passed": 132,
+     "failed": 0
+    },
+    "async": {
+     "passed": 1512,
+     "failed": 0
+    },
+    "asyncGenerators": {
+     "passed": 30,
+     "failed": 0
+    },
+    "classes": {
+     "passed": 3924,
+     "failed": 0
+    },
+    "constEnums": {
+     "passed": 54,
+     "failed": 0
+    },
+    "controlFlow": {
+     "passed": 348,
+     "failed": 0
+    },
+    "declarationEmit": {
+     "passed": 138,
+     "failed": 0
+    },
+    "decorators": {
+     "passed": 840,
+     "failed": 0
+    },
+    "directives": {
+     "passed": 36,
+     "failed": 0
+    },
+    "dynamicImport": {
+     "passed": 510,
+     "failed": 0
+    },
+    "emitter": {
+     "passed": 102,
+     "failed": 0
+    },
+    "enums": {
+     "passed": 84,
+     "failed": 0
+    },
+    "es2016": {
+     "passed": 6,
+     "failed": 0
+    },
+    "es2017": {
+     "passed": 114,
+     "failed": 0
+    },
+    "es2018": {
+     "passed": 42,
+     "failed": 0
+    },
+    "es2019": {
+     "passed": 132,
+     "failed": 0
+    },
+    "es2020": {
+     "passed": 210,
+     "failed": 0
+    },
+    "es2021": {
+     "passed": 234,
+     "failed": 0
+    },
+    "es2022": {
+     "passed": 120,
+     "failed": 0
+    },
+    "es2023": {
+     "passed": 18,
+     "failed": 0
+    },
+    "es2024": {
+     "passed": 18,
+     "failed": 0
+    },
+    "es2025": {
+     "passed": 24,
+     "failed": 0
+    },
+    "es5": {
+     "passed": 12,
+     "failed": 0
+    },
+    "es6": {
+     "passed": 7890,
+     "failed": 0
+    },
+    "es7": {
+     "passed": 402,
+     "failed": 0
+    },
+    "esDecorators": {
+     "passed": 1302,
+     "failed": 0
+    },
+    "esnext": {
+     "passed": 24,
+     "failed": 0
+    },
+    "expressions": {
+     "passed": 2574,
+     "failed": 0
+    },
+    "externalModules": {
+     "passed": 1818,
+     "failed": 0
+    },
+    "functions": {
+     "passed": 150,
+     "failed": 0
+    },
+    "generators": {
+     "passed": 102,
+     "failed": 0
+    },
+    "importAssertion": {
+     "passed": 60,
+     "failed": 0
+    },
+    "importAttributes": {
+     "passed": 108,
+     "failed": 0
+    },
+    "importDefer": {
+     "passed": 162,
+     "failed": 0
+    },
+    "interfaces": {
+     "passed": 396,
+     "failed": 0
+    },
+    "internalModules": {
+     "passed": 462,
+     "failed": 0
+    },
+    "jsdoc": {
+     "passed": 2382,
+     "failed": 0
+    },
+    "jsx": {
+     "passed": 1392,
+     "failed": 0
+    },
+    "moduleResolution": {
+     "passed": 534,
+     "failed": 0
+    },
+    "node": {
+     "passed": 2058,
+     "failed": 0
+    },
+    "nonjsExtensions": {
+     "passed": 84,
+     "failed": 0
+    },
+    "override": {
+     "passed": 228,
+     "failed": 0
+    },
+    "parser": {
+     "passed": 5430,
+     "failed": 0
+    },
+    "pedantic": {
+     "passed": 12,
+     "failed": 0
+    },
+    "references": {
+     "passed": 90,
+     "failed": 0
+    },
+    "salsa": {
+     "passed": 1158,
+     "failed": 0
+    },
+    "scanner": {
+     "passed": 264,
+     "failed": 0
+    },
+    "statements": {
+     "passed": 3150,
+     "failed": 0
+    },
+    "types": {
+     "passed": 5142,
+     "failed": 0
+    },
+    "typings": {
+     "passed": 54,
+     "failed": 0
+    }
+   }
+  },
+  "fourslash": {
+   "passed": 6322,
+   "failed": 0,
+   "digest": "01961f787c88e96156b118957c66fbfd46e8c056298fb26b32a614098a0c3ae2",
+   "files": 6322,
+   "buckets": {
+    "A": {
+     "passed": 161,
+     "failed": 0
+    },
+    "B": {
+     "passed": 79,
+     "failed": 0
+    },
+    "C": {
+     "passed": 2003,
+     "failed": 0
+    },
+    "D": {
+     "passed": 85,
+     "failed": 0
+    },
+    "E": {
+     "passed": 163,
+     "failed": 0
+    },
+    "F": {
+     "passed": 466,
+     "failed": 0
+    },
+    "G": {
+     "passed": 557,
+     "failed": 0
+    },
+    "H": {
+     "passed": 3,
+     "failed": 0
+    },
+    "I": {
+     "passed": 418,
+     "failed": 0
+    },
+    "J": {
+     "passed": 180,
+     "failed": 0
+    },
+    "L": {
+     "passed": 16,
+     "failed": 0
+    },
+    "M": {
+     "passed": 214,
+     "failed": 0
+    },
+    "N": {
+     "passed": 125,
+     "failed": 0
+    },
+    "O": {
+     "passed": 72,
+     "failed": 0
+    },
+    "P": {
+     "passed": 65,
+     "failed": 0
+    },
+    "Q": {
+     "passed": 329,
+     "failed": 0
+    },
+    "R": {
+     "passed": 770,
+     "failed": 0
+    },
+    "S": {
+     "passed": 328,
+     "failed": 0
+    },
+    "T": {
+     "passed": 156,
+     "failed": 0
+    },
+    "U": {
+     "passed": 124,
+     "failed": 0
+    },
+    "V": {
+     "passed": 2,
+     "failed": 0
+    },
+    "W": {
+     "passed": 5,
+     "failed": 0
+    },
+    "Y": {
+     "passed": 1,
+     "failed": 0
+    }
+   }
+  },
+  "fourslash-server": {
+   "passed": 488,
+   "failed": 0,
+   "digest": "8fb12b83b378c1fb1adccbef6cde4cdd8666c1bfd5549ba548eedb3f314e267d",
+   "files": 244,
+   "buckets": {
+    "A": {
+     "passed": 106,
+     "failed": 0
+    },
+    "B": {
+     "passed": 2,
+     "failed": 0
+    },
+    "C": {
+     "passed": 34,
+     "failed": 0
+    },
+    "D": {
+     "passed": 26,
+     "failed": 0
+    },
+    "F": {
+     "passed": 14,
+     "failed": 0
+    },
+    "G": {
+     "passed": 54,
+     "failed": 0
+    },
+    "I": {
+     "passed": 40,
+     "failed": 0
+    },
+    "J": {
+     "passed": 28,
+     "failed": 0
+    },
+    "M": {
+     "passed": 2,
+     "failed": 0
+    },
+    "N": {
+     "passed": 20,
+     "failed": 0
+    },
+    "O": {
+     "passed": 8,
+     "failed": 0
+    },
+    "P": {
+     "passed": 102,
+     "failed": 0
+    },
+    "Q": {
+     "passed": 6,
+     "failed": 0
+    },
+    "R": {
+     "passed": 30,
+     "failed": 0
+    },
+    "S": {
+     "passed": 6,
+     "failed": 0
+    },
+    "T": {
+     "passed": 10,
+     "failed": 0
+    }
+   }
+  },
+  "project": {
+   "passed": 2528,
+   "failed": 0,
+   "digest": "a041baf710531f47e170301945e39138752d23abca5baf29cc02f3d90d3ed4b4"
+  },
+  "transpile": {
+   "passed": 37,
+   "failed": 0,
+   "digest": "f144725d0533fbb53f35c613c69d201fc719728b0bedeee15b672c21d633c540",
+   "files": 22
+  },
+  "unittests": {
+   "passed": 7154,
+   "failed": 0,
+   "digest": "ff043bdd9ef736dd99bf17ed9dd8e70d20813f2db8afae1c681f9ff76f097b20",
+   "suites": {
+    "BigInt": {
+     "passed": 5,
+     "failed": 0
+    },
+    "FactoryAPI": {
+     "passed": 3,
+     "failed": 0
+    },
+    "JSDocParsing": {
+     "passed": 125,
+     "failed": 0
+    },
+    "PrinterAPI": {
+     "passed": 43,
+     "failed": 0
+    },
+    "Program.getNodeCount": {
+     "passed": 1,
+     "failed": 0
+    },
+    "Program.isSourceFileFromExternalLibrary": {
+     "passed": 2,
+     "failed": 0
+    },
+    "Public": {
+     "passed": 31,
+     "failed": 0
+    },
+    "TransformAPI": {
+     "passed": 28,
+     "failed": 0
+    },
+    "assert": {
+     "passed": 2,
+     "failed": 0
+    },
+    "base64": {
+     "passed": 1,
+     "failed": 0
+    },
+    "builder": {
+     "passed": 3,
+     "failed": 0
+    },
+    "canWatch": {
+     "passed": 92,
+     "failed": 0
+    },
+    "compilerCore": {
+     "passed": 11,
+     "failed": 0
+    },
+    "config": {
+     "passed": 519,
+     "failed": 0
+    },
+    "convertToBase64": {
+     "passed": 5,
+     "failed": 0
+    },
+    "core": {
+     "passed": 14,
+     "failed": 0
+    },
+    "customTransforms": {
+     "passed": 7,
+     "failed": 0
+    },
+    "debugDeprecation": {
+     "passed": 6,
+     "failed": 0
+    },
+    "evaluation": {
+     "passed": 350,
+     "failed": 0
+    },
+    "incrementalParser": {
+     "passed": 153,
+     "failed": 0
+    },
+    "internalApi": {
+     "passed": 6,
+     "failed": 0
+    },
+    "jsonParserRecovery": {
+     "passed": 5,
+     "failed": 0
+    },
+    "moduleResolution": {
+     "passed": 39,
+     "failed": 0
+    },
+    "other": {
+     "passed": 4,
+     "failed": 0
+    },
+    "programApi": {
+     "passed": 11,
+     "failed": 0
+    },
+    "regExpScannerRecovery": {
+     "passed": 984,
+     "failed": 0
+    },
+    "reuseProgramStructure": {
+     "passed": 38,
+     "failed": 0
+    },
+    "semver": {
+     "passed": 692,
+     "failed": 0
+    },
+    "services": {
+     "passed": 1531,
+     "failed": 0
+    },
+    "skipJSDocParsing": {
+     "passed": 24,
+     "failed": 0
+    },
+    "sys": {
+     "passed": 16,
+     "failed": 0
+    },
+    "tsbuild": {
+     "passed": 410,
+     "failed": 0
+    },
+    "tsbuildWatch": {
+     "passed": 81,
+     "failed": 0
+    },
+    "tsc": {
+     "passed": 297,
+     "failed": 0
+    },
+    "tscWatch": {
+     "passed": 375,
+     "failed": 0
+    },
+    "tsserver": {
+     "passed": 1240,
+     "failed": 0
+    }
+   }
+  }
+ },
+ "eslint_rules": {
+  "passed": 79,
+  "failed": 0,
+  "digest": "90e78794551024d2c7de5d41e3c8025ac541b157c6fdc4cbb084d6b1d3bb3f87"
+ }
+}
