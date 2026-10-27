@@ -10,6 +10,11 @@ Every tty-fixtures/*.fixture.js runs in the modes its header lists, on jsse
 
 Header lines:  // MODES: pipe file pty    // INPUT: text with \\n \\r \\xNN
                // ENV: K=V ...           // SIZE: ROWSxCOLS   // DELAY: seconds
+               // READY: raw
+READY says when INPUT is typed: after DELAY seconds or raw mode, whichever
+comes first (the default), or, for `raw`, only once the program has left
+canonical mode. A program that switches to raw mode must say `raw`: on a slow
+start the delay would otherwise type its keys into the cooked terminal.
 
 The observation is exit status plus the bytes written. It must be identical on
 both engines and equal to expected/<case>.<mode>.txt, which `--update` writes
@@ -42,6 +47,7 @@ def headers(path):
         "ENV": "",
         "SIZE": "24x80",
         "DELAY": "0.3",
+        "READY": "",
     }
     with open(path) as f:
         for line in f:
@@ -89,8 +95,9 @@ def run(engine, script, mode, hdr, work):
                 hdr["INPUT"],
                 "--delay",
                 hdr["DELAY"],
-                "--",
             ]
+            + (["--wait-raw"] if hdr["READY"] == "raw" else [])
+            + ["--"]
             + ["env", "-i"]
             + [f"{k}={v}" for k, v in env.items()]
             + cmd

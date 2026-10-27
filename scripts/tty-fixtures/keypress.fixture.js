@@ -1,5 +1,6 @@
 // MODES: pty
 // INPUT: a\x1b[A\x1b[B\x7f\r\x03
+// READY: raw
 'use strict';
 const readline = require('readline');
 readline.emitKeypressEvents(process.stdin);
