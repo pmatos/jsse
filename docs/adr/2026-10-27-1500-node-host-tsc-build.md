@@ -21,8 +21,8 @@ Status: accepted, epic #1214, issue #1246 (builds on the project oracle of
    Steps record no exit code: the exit-code field counts only tsc invocations.
 3. **Deterministic mtimes.** tsc decides up-to-dateness by comparing the mtimes
    of inputs, outputs and the `.tsbuildinfo`. Cases therefore never rely on the
-   wall clock: inputs start at epoch 1.6e9, after each build everything is reset
-   to 1.7e9, and a "touch" sets one input to 1.8e9. All three are in the past, so
+   wall clock: inputs start at epoch 1.6e9, before every touch everything is reset
+   to 1.7e9, and a "touch" sets one input to 1.75e9. All three are in the past, so
    the next build's real "now" is always newer than them, on any runner speed. A
    case never sleeps.
 4. **Project.** `chain` is `core <- util <- app` plus an independent `solo`, all
@@ -48,6 +48,10 @@ Status: accepted, epic #1214, issue #1246 (builds on the project oracle of
    buildinfo stores the TypeScript lib paths relative to the project; the node
    and jsse trees sit at the same depth so those strings match once `<TSC>` is
    normalised, and the work-tree path never appears in them.
+   That relative path still depends on where `TSC_DIR` sits relative to the work
+   tree (`$TMPDIR/tsc-oracle-*/<engine>/<case>`), so the pins, like the older
+   `incremental` pin, only match on the layout they were taken on; node-vs-jsse runs
+   are unaffected. Normalising the path would re-pin them and needs a ruling.
 7. **Result.** All 14 cases are identical on Node v26.8.2 and jsse with
    TypeScript 6.0.3; the acceptance criteria (byte-identical buildinfo, second
    run up to date, a touch rebuilds only the dependents) hold, with no engine

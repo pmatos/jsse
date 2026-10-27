@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).resolve().parent / "tsc-fixtures"
 
 ENGINE = """#!/bin/sh
 cat a.ts
-echo "mtime $(stat -c %Y a.ts)"
+python3 -c 'import os;print("mtime", int(os.stat("a.ts").st_mtime))'
 [ -e gone.ts ] && echo present || echo absent
 exit 0
 """
@@ -50,7 +50,7 @@ class ScenarioStepTest(unittest.TestCase):
     def test_steps_edit_touch_and_remove_before_the_next_invocation(self):
         (self.fix / "cases.txt").write_text(
             "steps | p | 0 0 | @utimes 1600000000 . ;; a.ts ;; "
-            "@replace a.ts one two ;; @utimes 1800000000 a.ts ;; @remove gone.ts ;; "
+            "@replace a.ts one two ;; @utimes 1750000000 a.ts ;; @remove gone.ts ;; "
             "@mtimes-after 1700000000 a.ts ;; a.ts\n"
         )
         r = self.run_oracle("--ci")

@@ -63,6 +63,8 @@ def load_cases():
                     name, project, exit_codes, args = (
                         p.strip() for p in line.split("|", 3)
                     )
+                    if any(c[0] == name for c in cases):
+                        raise SystemExit(f"duplicate case name {name} in {path}")
                     cases.append(
                         (
                             name,
@@ -117,7 +119,10 @@ def scenario_step(tree, step):
     elif op == "@remove":
         for p in args:
             full = os.path.join(tree, p)
-            shutil.rmtree(full) if os.path.isdir(full) else os.remove(full)
+            if os.path.isdir(full):
+                shutil.rmtree(full)
+            else:
+                os.remove(full)
     elif op == "@mtimes-after":
         return "".join(
             f"{p}: {'after' if os.stat(os.path.join(tree, p)).st_mtime > int(args[0]) else 'not after'}\n"
@@ -159,7 +164,10 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     start = time.monotonic()
     for args in invocations:
         if args[0].startswith("@"):
-            note = scenario_step(tree, args)
+            try:
+                note = scenario_step(tree, args)
+            except OSError as e:
+                raise SystemExit(f"{name}: step {' '.join(args)} failed: {e}")
             if note is not None:
                 out.append(note.encode())
                 err.append(b"")

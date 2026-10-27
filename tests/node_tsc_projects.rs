@@ -1,6 +1,7 @@
 //! The tsc project set (#1243) on jsse alone: `scripts/run-tsc-projects-oracle.py --no-node`
-//! compiles every case in scripts/tsc-fixtures/cases.txt and compares stdout, stderr, exit
-//! codes and emitted files with the digests pinned from Node in expected-projects.txt. Like
+//! compiles every case in scripts/tsc-fixtures/cases.txt and cases-<topic>.txt and compares
+//! stdout, stderr, exit codes and emitted files with the digests pinned from Node in
+//! expected-projects.txt and expected-<topic>.txt. Like
 //! tests/node_tsc.rs it needs TSC_DIR (an installed typescript 6.0.3) and passes with a
 //! notice without it; the Node-vs-jsse diff itself is `scripts/run-tsc-projects-oracle.py`.
 //! The slow cases need an optimised binary: run it with `--profile release-nolto`.
