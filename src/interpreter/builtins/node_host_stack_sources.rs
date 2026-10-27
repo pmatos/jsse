@@ -182,4 +182,33 @@ impl NodeStackState {
             .find(|(id, _)| *id == func)
             .map(|(_, source)| source.clone())
     }
+
+    /// Name the source of a function defined in the ES module file `path` by
+    /// its `file:` URL, as Node's frames do, unless it is named already.
+    pub(super) fn name_module_source(&mut self, source: &Rc<str>, path: &str) {
+        let key = Rc::as_ptr(source) as *const u8 as usize;
+        if self.sources.iter().any(|e| Rc::ptr_eq(&e.source, source)) {
+            return;
+        }
+        if self
+            .pending
+            .get(&key)
+            .is_some_and(|p| p.source.strong_count() > 0)
+        {
+            return;
+        }
+        self.name_pending(source, &file_url(path), 0, 0, 0);
+    }
+}
+
+pub(super) fn file_url(path: &str) -> String {
+    let mut url = String::from("file://");
+    for byte in path.bytes() {
+        if byte <= b' ' || byte >= 0x7f || b"\"#%<>?^`{}\\".contains(&byte) {
+            url.push_str(&format!("%{byte:02X}"));
+        } else {
+            url.push(char::from(byte));
+        }
+    }
+    url
 }
