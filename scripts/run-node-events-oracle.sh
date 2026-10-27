@@ -103,7 +103,7 @@ PY
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
         rc=0
-        "$JSSE" --node "${flags[@]}" "$jfile" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
+        "$JSSE" --node ${flags[@]+"${flags[@]}"} "$jfile" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/jsse.out"; then
             echo "FAIL $name: jsse --node exit $rc"
             head -5 "$WORK/jsse.err" | sed 's/^/  stderr: /'
@@ -112,7 +112,7 @@ PY
     fi
     if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
         rc=0
-        "$NODE_BIN" --expose-gc --no-warnings "${flags[@]}" "$file" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
+        "$NODE_BIN" --expose-gc --no-warnings ${flags[@]+"${flags[@]}"} "$file" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/node.out"; then
             echo "FAIL $name: node exit $rc"
             head -5 "$WORK/node.err" | sed 's/^/  stderr: /'
