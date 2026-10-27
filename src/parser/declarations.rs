@@ -711,30 +711,20 @@ impl<'a> Parser<'a> {
                 }));
             }
             // field named "accessor" (followed by =, ;, or })
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                let expr = self.parse_field_initializer_value()?;
-                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
-                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
-                }
-                Some(expr)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            return Ok(ClassElement::Property(ClassProperty {
-                key: PropertyKey::Identifier("accessor".to_string()),
-                value,
+            return self.finish_class_field(
+                PropertyKey::Identifier("accessor".to_string()),
                 is_static,
-                computed: false,
-            }));
+                false,
+            );
         }
 
         let kind = match &self.current {
-            Token::Identifier(n) if n == "get" => {
+            Token::Identifier(n) if n == "get" || n == "set" => {
+                let is_get = n == "get";
+                let name = if is_get { "get" } else { "set" };
                 self.advance()?;
                 if self.current == Token::LeftParen {
-                    let key = PropertyKey::Identifier("get".to_string());
+                    let key = PropertyKey::Identifier(name.to_string());
                     let func =
                         self.parse_class_method_function(false, false, false, method_source_start)?;
                     return Ok(ClassElement::Method(ClassMethod {
@@ -745,43 +735,22 @@ impl<'a> Parser<'a> {
                         computed: false,
                     }));
                 }
-                // ASI: if the next token is `*`, `get` is a field and `*` starts a generator method
-                if self.current == Token::Star {
-                    self.eat_semicolon()?;
-                    return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier("get".to_string()),
-                        value: None,
+                // A field named `get`/`set`; before `*` it relies on ASI
+                if matches!(
+                    self.current,
+                    Token::Assign | Token::Semicolon | Token::RightBrace | Token::Star
+                ) {
+                    return self.finish_class_field(
+                        PropertyKey::Identifier(name.to_string()),
                         is_static,
-                        computed: false,
-                    }));
+                        false,
+                    );
                 }
-                ClassMethodKind::Get
-            }
-            Token::Identifier(n) if n == "set" => {
-                self.advance()?;
-                if self.current == Token::LeftParen {
-                    let key = PropertyKey::Identifier("set".to_string());
-                    let func =
-                        self.parse_class_method_function(false, false, false, method_source_start)?;
-                    return Ok(ClassElement::Method(ClassMethod {
-                        key,
-                        kind: ClassMethodKind::Method,
-                        value: func,
-                        is_static,
-                        computed: false,
-                    }));
+                if is_get {
+                    ClassMethodKind::Get
+                } else {
+                    ClassMethodKind::Set
                 }
-                // ASI: if the next token is `*`, `set` is a field and `*` starts a generator method
-                if self.current == Token::Star {
-                    self.eat_semicolon()?;
-                    return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier("set".to_string()),
-                        value: None,
-                        is_static,
-                        computed: false,
-                    }));
-                }
-                ClassMethodKind::Set
             }
             _ => ClassMethodKind::Method,
         };
@@ -833,25 +802,37 @@ impl<'a> Parser<'a> {
                 computed,
             }))
         } else {
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                let expr = self.parse_field_initializer_value()?;
-                // Class field initializers cannot contain 'arguments'
-                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
-                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
-                }
-                Some(expr)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            Ok(ClassElement::Property(ClassProperty {
-                key,
-                value,
-                is_static,
-                computed,
-            }))
+            if kind != ClassMethodKind::Method {
+                return Err(self.error("Expected '(' after the accessor name"));
+            }
+            self.finish_class_field(key, is_static, computed)
         }
+    }
+
+    /// The initializer and terminator of a public class field whose name is parsed.
+    fn finish_class_field(
+        &mut self,
+        key: PropertyKey,
+        is_static: bool,
+        computed: bool,
+    ) -> Result<ClassElement, ParseError> {
+        let value = if self.current == Token::Assign {
+            self.advance()?;
+            let expr = self.parse_field_initializer_value()?;
+            if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
+                return Err(self.error("Class field initializer cannot reference 'arguments'"));
+            }
+            Some(expr)
+        } else {
+            None
+        };
+        self.eat_semicolon()?;
+        Ok(ClassElement::Property(ClassProperty {
+            key,
+            value,
+            is_static,
+            computed,
+        }))
     }
 
     /// Parse field initializer value with ~Await, ~Yield parameters per spec §15.7.

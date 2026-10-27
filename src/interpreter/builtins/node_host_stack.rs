@@ -54,9 +54,14 @@ fn string_value(text: &str) -> JsValue {
 impl Interpreter {
     /// Called by the CLI for the main script, so its frames carry its path.
     /// The CommonJS bootstrap stub stands in for the file and stays unnamed.
-    pub fn note_script_source(&mut self, path: &std::path::Path, source: &str) {
+    pub fn note_script_source(&mut self, path: &std::path::Path, source: &str, module: bool) {
         if self.node_host.stack.installed && source != Self::node_main_bootstrap() {
-            let name: Rc<str> = Rc::from(path.to_string_lossy().as_ref());
+            let path = path.to_string_lossy();
+            let name: Rc<str> = Rc::from(if module {
+                super::node_host_stack_sources::file_url(&path)
+            } else {
+                path.into_owned()
+            });
             self.node_host
                 .stack
                 .scripts
@@ -176,11 +181,13 @@ impl Interpreter {
         let mut name = None;
         let mut origin = None;
         let mut arrow = false;
+        let mut module_file = None;
         if let Some(obj) = self.get_object(raw.func)
             && let Some(JsFunction::User {
                 name: declared,
                 source_text,
                 is_arrow,
+                closure,
                 ..
             }) = obj.borrow().callable.as_deref()
         {
@@ -190,6 +197,13 @@ impl Interpreter {
                 let (source, start) = t.origin();
                 (source.clone(), start)
             });
+            if self.node_host.esm.is_active() {
+                module_file = Environment::find_module_path(closure)
+                    .and_then(|key| key.file_path().map(|p| p.to_string_lossy().into_owned()));
+            }
+        }
+        if let (Some(file), Some((source, _))) = (&module_file, &origin) {
+            self.node_host.stack.name_module_source(source, file);
         }
         if origin.is_none()
             && let Some(source) = self.node_host.stack.script_frame_source(raw.func)

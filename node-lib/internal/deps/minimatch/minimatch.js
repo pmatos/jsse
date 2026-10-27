@@ -2,14 +2,13 @@
 // Copyright (c) Isaac Z. Schlueter and Contributors) as bundled in Node.js v26.8.2
 // deps/minimatch. Split from the bundle at its module boundaries; the Minimatch class of dist/commonjs/index.js.
 'use strict';
-// The quoted 'set' field below is `set;` upstream: jsse's parser reads a bare `set;` class field as an accessor.
 const assert_valid_pattern_js_1 = require('internal/deps/minimatch/assert-valid-pattern');
 const ast_js_1 = require('internal/deps/minimatch/ast');
 const { MinimatchOptimizer } = require('internal/deps/minimatch/optimize');
 const { starDotExtTest, starDotExtTestDot, starDotExtTestNocase, starDotExtTestNocaseDot, starDotStarRE, starDotStarTest, starDotStarTestDot, dotStarRE, dotStarTest, starRE, starTest, starTestDot, starDotExtRE, qmarksRE, qmarksTestNocase, qmarksTestNocaseDot, qmarksTestDot, qmarksTest, qmarksTestNoExt, qmarksTestNoExtDot, defaultPlatform, path, qmark, star, twoStarDot, twoStarNoDot, globMagic, regExpEscape, GLOBSTAR, braceExpand } = require('internal/deps/minimatch/matchers');
 class Minimatch extends MinimatchOptimizer {
   options;
-  'set';
+  set;
   pattern;
   windowsPathsNoEscape;
   nonegate;
