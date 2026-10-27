@@ -17,7 +17,8 @@ Status: accepted, epic #1214, issue #1242.
    (sha256 `33cd0ee1beaa8c9e9d15a9da836c62ddea4c34a42d7c2d349dbc80d94165d22a`,
    npm integrity `sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==`).
    #1250 pins sources later; until then both the oracle and `tests/node_tsc.rs`
-   skip with a notice when `TSC_DIR` is unset or not 6.0.3.
+   skip with a notice when `TSC_DIR` is unset or not 6.0.3, so CI, which has no
+   `TSC_DIR`, never exercises either; run them locally.
 3. **The oracle** (`scripts/run-tsc-oracle.sh`) runs each scenario in a fresh copy
    of `scripts/tsc-fixtures/proj` on Node and on jsse and diffs stdout, exit code
    and every file the compiler wrote: `--version`, `-v`, `--help`, `--all`, an
@@ -32,6 +33,6 @@ Status: accepted, epic #1214, issue #1242.
    through `lib/_tsc.js` and `bin/tsc` and requires each median under
    `TSC_STARTUP_BUDGET_MS` (default 1000) on the release profile; `--no-timing`
    skips it on loaded hosts. Measured on the fat-LTO release binary (host load
-   average 14): median 437 ms for both entries (min 305 ms); a `--noLib`
+   average 14): median 369 ms through `lib/_tsc.js` and 427 ms through `bin/tsc` (min 305 ms); a `--noLib`
    diagnostics compile takes 0.49 s. The cost is parsing and evaluating the 6 MB
    `_tsc.js`; the Rust tests do not assert wall time.

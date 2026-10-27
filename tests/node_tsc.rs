@@ -38,6 +38,9 @@ fn tsc(entry: &str, args: &[&str], cwd: &Path) -> Output {
     let script = tsc_dir().unwrap().join(entry);
     Command::new(env!("CARGO_BIN_EXE_jsse"))
         .env_remove("NODE_OPTIONS")
+        .env_remove("FORCE_COLOR")
+        .env_remove("NO_COLOR")
+        .env_remove("COLUMNS")
         .current_dir(cwd)
         .arg("--node")
         .arg(script)
