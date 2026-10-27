@@ -45,6 +45,11 @@ pub(crate) enum ChildEvent {
         errno: i32,
     },
     Signal(i32),
+    Watch {
+        wd: i32,
+        events: u32,
+        name: Vec<u8>,
+    },
 }
 
 const CHUNK: usize = 64 * 1024;
@@ -288,6 +293,10 @@ impl Interpreter {
                 JsValue::number(f64::from(signum)),
                 JsValue::UNDEFINED,
             ),
+            ChildEvent::Watch { wd, events, name } => {
+                self.watch_deliver(wd, events, name);
+                return;
+            }
         };
         let args = [JsValue::number(kind), JsValue::number(id as f64), x, y];
         let result = self.node_call(&dispatch, &args);

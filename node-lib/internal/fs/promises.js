@@ -249,6 +249,7 @@ module.exports = {
     truncate: call.truncate,
     unlink: call.unlink,
     utimes: call.utimes,
+    watch: (filename, options) => require('internal/fs/watch_promises').watch(filename, options),
     writeFile,
   },
 };

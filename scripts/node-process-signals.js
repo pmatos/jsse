@@ -24,6 +24,7 @@
 
   var proc = globalThis.process;
   var childHandler;
+  var watchHandler;
   var binding = {
     kill: take("__host_kill"),
     signalWatch: take("__host_signal_watch"),
@@ -36,6 +37,11 @@
     release: take("__host_cp_release"),
     killChild: take("__host_cp_kill"),
     loopRef: take("__host_loop_ref"),
+    watchAdd: take("__host_watch_add"),
+    watchRemove: take("__host_watch_remove"),
+    onWatch: function (handler) {
+      watchHandler = handler;
+    },
     onEvent: function (handler) {
       childHandler = handler;
     },
@@ -46,6 +52,7 @@
 
   take("__host_cp_start")(function dispatch(kind, id, x, y) {
     if (kind === 5) binding.load().emitSignal(proc, x);
+    else if (kind === 6 && watchHandler !== undefined) watchHandler(id, x, y);
     else if (childHandler !== undefined) childHandler(kind, id, x, y);
   });
 

@@ -43,6 +43,8 @@ mod node_host_fs_jobs;
 mod node_host_fs_meta;
 #[cfg(unix)]
 mod node_host_fs_ops;
+#[cfg(unix)]
+mod node_host_fs_watch;
 mod node_host_idna;
 mod node_host_loop;
 mod node_host_os;
