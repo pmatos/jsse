@@ -45,6 +45,16 @@ impl Interpreter {
         ));
         self.install_host_global("__host_main_kind", main_kind_fn);
 
+        // __host_expose_internals() -> boolean: `--expose-internals` was given
+        let expose_fn = self.create_function(JsFunction::native(
+            "__host_expose_internals".to_string(),
+            0,
+            |interp, _this, _args| {
+                Completion::Normal(JsValue::boolean(interp.node_host.expose_internals))
+            },
+        ));
+        self.install_host_global("__host_expose_internals", expose_fn);
+
         // __host_argv0() -> the launcher's original argv[0]
         let argv0_fn = self.create_function(JsFunction::native(
             "__host_argv0".to_string(),

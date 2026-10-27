@@ -4,11 +4,17 @@
 # test wrapped by harness.js); <name>.mjs is an ES module test whose
 # '../common/index.mjs' and 'node:test' imports are rewritten to esm-shim.mjs.
 # Subtests that cannot run on jsse yet are skipped by name in harness.js
-# (__eventsJsseSkips) with their reason. Lines starting with "!" name a Node
-# events/AbortSignal test that is not vendored, with the reason.
+# (__eventsJsseSkips) with their reason. A test is one file, or consecutive
+# <name>.js.partN slices (the 20,000-byte file budget) whose concatenation has
+# the sha256 on its line. "~<test>|s#from#to#|<reason>" (literal text) patches
+# the wrapped test text on jsse only, for a block that cannot run there. A test
+# whose "// Flags:" line names --expose-internals runs with that switch on jsse
+# --node and on Node. Lines starting with "!" name a Node events/AbortSignal
+# test that is not vendored, with the reason.
 # test-abort-controller-any-timeout waits on a real 9 s timer in every pass.
 test-abort-controller-any-timeout
 test-abortcontroller
+test-abortcontroller-internal
 test-aborted-util
 test-event-capture-rejections
 test-event-emitter-add-listeners
@@ -37,11 +43,16 @@ test-event-emitter-special-event-names
 test-event-emitter-subclass
 test-event-emitter-symbols
 test-event-target
+test-events-customevent
 test-events-getmaxlisteners
 test-events-list
 test-events-listener-count-with-listener
+test-events-on-async-iterator
 test-events-once
+test-events-static-geteventlisteners
 test-events-uncaught-exception-stack
+test-eventtarget f4844bcd1bc1c643a2530bd2779e8cd00c28f8fe60c965d5088795de29f4e941
+test-eventtarget-brandcheck
 test-eventtarget-custom-inspect-does-not-throw
 test-eventtarget-once-twice
 test-abortsignal-any.mjs
@@ -50,10 +61,5 @@ test-events-add-abort-listener.mjs
 !test-eventemitter-asyncresource: needs the async_hooks module (not in the host)
 !test-event-emitter-no-error-provided-to-error-event: needs the domain module (deprecated, not in the host)
 !test-abortsignal-drop-settled-signals.mjs: needs test/common/gc.js (gcUntil) and WeakRef collection ($262.gc, #1317)
-!test-abortcontroller-internal: needs --expose-internals to reach internal/event_target
-!test-events-customevent: needs --expose-internals to reach internal/event_target
-!test-events-on-async-iterator: needs --expose-internals to reach internal/event_target
-!test-events-static-geteventlisteners: needs --expose-internals to reach internal/event_target
-!test-eventtarget: needs --expose-internals to reach internal/event_target
-!test-eventtarget-brandcheck: needs --expose-internals to reach internal/event_target
-!test-eventtarget-memoryleakwarning: needs --expose-internals to reach internal/event_target
+!test-eventtarget-memoryleakwarning: needs MessageChannel (the warning text names [MessagePort [EventTarget]]) and WeakRef collection ($262.gc, #1317)
+~test-eventtarget|s#et.addEventListener('foo', common.mustNotCall(), { [kWeakHandler]: {} });#et.addEventListener('foo', () => {}, { [kWeakHandler]: {} });#|$262.gc() never collects WeakRef targets (#1317): the weakly held listener is still called

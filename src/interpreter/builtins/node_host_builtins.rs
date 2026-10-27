@@ -49,6 +49,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/abort_controller"),
     builtin!("internal/event_target"),
     builtin!("internal/event_target_event"),
+    builtin!("internal/event_target_node"),
     builtin!("internal/events/abort_listener"),
     builtin!("internal/events/statics"),
     builtin!("internal/events/symbols"),

@@ -227,6 +227,7 @@ var __eventsJsseSkips = {
   "Aborted with gc cleanup": "$262.gc() does not collect WeakRef targets (#1317)",
   "AbortSignal.timeout() does not prevent the signal from being collected": "$262.gc() does not collect WeakRef targets (#1317)",
   "AbortSignal with a timeout is not collected while there is an active listener": "$262.gc() does not collect WeakRef targets (#1317)",
+  "A weak event listener should not prevent gc": "$262.gc() does not collect WeakRef targets (#1317)",
 };
 var __eventsNodeTest = (function () {
   function register(name, options, fn) {
