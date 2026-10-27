@@ -1,0 +1,115 @@
+# name | project | expected exit code per invocation | arguments; ` ;; ` starts another invocation in the same tree
+# Diagnostics formatting, colour and terminal behaviour (#1244). Leading NAME=value tokens set the environment, @pty:ROWSxCOLS runs on a pseudo-terminal.
+diag-e01-mismatch | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e01-mismatch.ts ;; --pretty --noLib --noEmit globals.d.ts e01-mismatch.ts
+diag-e02-syntax | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e02-syntax.ts ;; --pretty --noLib --noEmit globals.d.ts e02-syntax.ts
+diag-e03-unterminated | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e03-unterminated.ts ;; --pretty --noLib --noEmit globals.d.ts e03-unterminated.ts
+diag-e04-multiline | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e04-multiline.ts ;; --pretty --noLib --noEmit globals.d.ts e04-multiline.ts
+diag-e05-long-span | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e05-long-span.ts ;; --pretty --noLib --noEmit globals.d.ts e05-long-span.ts
+diag-e06-tabs | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e06-tabs.ts ;; --pretty --noLib --noEmit globals.d.ts e06-tabs.ts
+diag-e07-long-line | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e07-long-line.ts ;; --pretty --noLib --noEmit globals.d.ts e07-long-line.ts
+diag-e08-unicode | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e08-unicode.ts ;; --pretty --noLib --noEmit globals.d.ts e08-unicode.ts
+diag-e09-crlf | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e09-crlf.ts ;; --pretty --noLib --noEmit globals.d.ts e09-crlf.ts
+diag-e10-separators | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e10-separators.ts ;; --pretty --noLib --noEmit globals.d.ts e10-separators.ts
+diag-e11-bom | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e11-bom.ts ;; --pretty --noLib --noEmit globals.d.ts e11-bom.ts
+diag-e12-no-final-newline | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e12-no-final-newline.ts ;; --pretty --noLib --noEmit globals.d.ts e12-no-final-newline.ts
+diag-e13-gutter | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e13-gutter.ts ;; --pretty --noLib --noEmit globals.d.ts e13-gutter.ts
+diag-e14-redeclare | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e14-redeclare.ts ;; --pretty --noLib --noEmit globals.d.ts e14-redeclare.ts
+diag-e15-chain | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e15-chain.ts ;; --pretty --noLib --noEmit globals.d.ts e15-chain.ts
+diag-e16-ts-expect-error | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e16-ts-expect-error.ts ;; --pretty --noLib --noEmit globals.d.ts e16-ts-expect-error.ts
+diag-e17-unused | diag | 2 2 | --pretty false --noLib --noEmit --noUnusedLocals globals.d.ts e17-unused.ts ;; --pretty --noLib --noEmit --noUnusedLocals globals.d.ts e17-unused.ts
+diag-e18-missing-module | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e18-missing-module.ts ;; --pretty --noLib --noEmit globals.d.ts e18-missing-module.ts
+diag-e19-long-type | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e19-long-type.ts ;; --pretty --noLib --noEmit globals.d.ts e19-long-type.ts
+diag-e20-js | diag | 2 2 | --pretty false --noLib --noEmit --allowJs --checkJs globals.d.ts e20-js.js ;; --pretty --noLib --noEmit --allowJs --checkJs globals.d.ts e20-js.js
+diag-e21-decl | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e21-decl.d.ts ;; --pretty --noLib --noEmit globals.d.ts e21-decl.d.ts
+diag-e22-same-line | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e22-same-line.ts ;; --pretty --noLib --noEmit globals.d.ts e22-same-line.ts
+diag-e23-eof | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e23-eof.ts ;; --pretty --noLib --noEmit globals.d.ts e23-eof.ts
+diag-e24-jsx | diag | 2 2 | --pretty false --noLib --noEmit --jsx preserve globals.d.ts e24-jsx.tsx ;; --pretty --noLib --noEmit --jsx preserve globals.d.ts e24-jsx.tsx
+diag-e25-invalid-char | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e25-invalid-char.ts ;; --pretty --noLib --noEmit globals.d.ts e25-invalid-char.ts
+diag-e26-nested | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts sub/dir/e26-nested.ts ;; --pretty --noLib --noEmit globals.d.ts sub/dir/e26-nested.ts
+diag-e27 | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts 'e27 ünï cödé.ts' ;; --pretty --noLib --noEmit globals.d.ts 'e27 ünï cödé.ts'
+diag-e28-strict | diag | 2 2 | --pretty false --noLib --noEmit --strict globals.d.ts e28-strict.ts ;; --pretty --noLib --noEmit --strict globals.d.ts e28-strict.ts
+diag-e29-class | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e29-class.ts ;; --pretty --noLib --noEmit globals.d.ts e29-class.ts
+diag-e30-generics | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e30-generics.ts ;; --pretty --noLib --noEmit globals.d.ts e30-generics.ts
+diag-e31-utf16le | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e31-utf16le.ts ;; --pretty --noLib --noEmit globals.d.ts e31-utf16le.ts
+diag-e32-utf16be | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e32-utf16be.ts ;; --pretty --noLib --noEmit globals.d.ts e32-utf16be.ts
+diag-e33-invalid-utf8 | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts e33-invalid-utf8.ts ;; --pretty --noLib --noEmit globals.d.ts e33-invalid-utf8.ts
+diag-auto-pipe | diag | 2 | --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pty | diag | 2 | @pty:24x80 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pty-wide | diag | 2 | @pty:50x200 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pty-no-color | diag | 2 | @pty:24x80 NO_COLOR=1 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pty-both-env | diag | 2 | @pty:24x80 NO_COLOR=1 FORCE_COLOR=1 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pty-empty-no-color | diag | 2 | @pty:24x80 NO_COLOR= --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pipe-force-color | diag | 2 | FORCE_COLOR=1 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pipe-force-color-zero | diag | 2 | FORCE_COLOR=0 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-auto-pipe-no-color | diag | 2 | NO_COLOR=1 --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-pretty-false-pty | diag | 2 | @pty:24x80 --pretty false --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-pretty-false-force-color | diag | 2 | FORCE_COLOR=1 --pretty false --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-pretty-true-no-color | diag | 2 | NO_COLOR=1 --pretty true --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-pretty-true-pty | diag | 2 | @pty:24x80 --pretty true --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-pretty-pipe | diag | 2 | --pretty --noLib --noEmit globals.d.ts e01-mismatch.ts e14-redeclare.ts e28-strict.ts --strict
+diag-summary-forms | diag | 2 2 2 0 | --pretty --noLib --noEmit globals.d.ts e01-mismatch.ts ;; --pretty --noLib --noEmit globals.d.ts e22-same-line.ts ;; --pretty --noLib --noEmit globals.d.ts e01-mismatch.ts e22-same-line.ts sub/dir/e26-nested.ts ;; --pretty --noLib --noEmit globals.d.ts clean.ts
+diag-exit-0 | diag | 0 0 | --pretty false --noLib --noEmit globals.d.ts clean.ts ;; --pretty --noLib --noEmit globals.d.ts clean.ts
+diag-exit-1-no-emit-on-error | diag | 1 1 | --pretty false --noLib --noEmitOnError --outDir out globals.d.ts e01-mismatch.ts ;; --pretty --noLib --noEmitOnError --outDir out globals.d.ts e01-mismatch.ts
+diag-exit-2-emits | diag | 2 2 | --pretty false --noLib --outDir out globals.d.ts e01-mismatch.ts ;; --pretty --noLib --outDir out globals.d.ts e01-mismatch.ts
+diag-exit-1-bad-option | diag | 1 1 | --pretty false --nope --noLib --noEmit globals.d.ts clean.ts ;; --pretty --nope --noLib --noEmit globals.d.ts clean.ts
+diag-exit-2-missing-file | diag | 2 2 | --pretty false --noLib --noEmit missing.ts ;; --pretty --noLib --noEmit missing.ts
+diag-exit-1-bad-option-value | diag | 1 1 | --pretty false --target es9000 --noLib --noEmit clean.ts ;; --pretty --target es9000 --noLib --noEmit clean.ts
+diag-exit-no-input | diag | 1 | --pretty false --noLib --noEmit --outDir out
+diag-config-errors | diag | 2 2 | --pretty false -p tsconfig.bad.json ;; --pretty -p tsconfig.bad.json
+diag-config-syntax | diag | 2 2 | --pretty false -p tsconfig.syntax.json ;; --pretty -p tsconfig.syntax.json
+diag-truncation | diag | 2 2 2 2 | --pretty false --noLib --noEmit globals.d.ts e19-long-type.ts ;; --pretty false --noErrorTruncation --noLib --noEmit globals.d.ts e19-long-type.ts ;; --pretty --noLib --noEmit globals.d.ts e19-long-type.ts ;; --pretty --noErrorTruncation --noLib --noEmit globals.d.ts e19-long-type.ts
+diag-truncation-pty | diag | 2 | @pty:24x80 --noErrorTruncation --noLib --noEmit globals.d.ts e19-long-type.ts
+diag-flush-pipe | diag | 2 2 | --pretty false --noLib --noEmit globals.d.ts many.ts ;; --pretty --noLib --noEmit globals.d.ts many.ts
+diag-flush-pty | diag | 2 | @pty:24x80 --pretty --noLib --noEmit globals.d.ts many.ts
+diag-help-pipe | diag | 0 | --help
+diag-help-all-pipe | diag | 0 | --help --all
+diag-help-force-color | diag | 0 | FORCE_COLOR=1 --help
+diag-no-args-pipe | diag | 1 |
+diag-no-args-pty | diag | 1 | @pty:24x100
+diag-version-pty | diag | 0 | @pty:24x80 --version
+diag-build-help-pty | diag | 0 | @pty:24x100 --build --help
+diag-help-pty-0 | diag | 0 | @pty:24x0 --help
+diag-help-pty-20 | diag | 0 | @pty:24x20 --help
+diag-help-pty-40 | diag | 0 | @pty:24x40 --help
+diag-help-pty-48 | diag | 0 | @pty:24x48 --help
+diag-help-pty-49 | diag | 0 | @pty:24x49 --help
+diag-help-pty-79 | diag | 0 | @pty:24x79 --help
+diag-help-pty-80 | diag | 0 | @pty:24x80 --help
+diag-help-pty-99 | diag | 0 | @pty:24x99 --help
+diag-help-pty-100 | diag | 0 | @pty:24x100 --help
+diag-help-pty-120 | diag | 0 | @pty:24x120 --help
+diag-help-pty-121 | diag | 0 | @pty:24x121 --help
+diag-help-pty-200 | diag | 0 | @pty:24x200 --help
+diag-help-pty-1000 | diag | 0 | @pty:24x1000 --help
+diag-help-all-pty-79 | diag | 0 | @pty:24x79 --help --all
+diag-help-all-pty-80 | diag | 0 | @pty:24x80 --help --all
+diag-help-all-pty-100 | diag | 0 | @pty:24x100 --help --all
+diag-help-all-pty-200 | diag | 0 | @pty:24x200 --help --all
+diag-locale-cs | diag | 2 2 2 0 | --locale cs --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale cs --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale cs --pretty false --noLib --noEmit loc-syntax.ts ;; --locale cs --help
+diag-locale-de | diag | 2 2 2 0 | --locale de --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale de --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale de --pretty false --noLib --noEmit loc-syntax.ts ;; --locale de --help
+diag-locale-es | diag | 2 2 2 0 | --locale es --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale es --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale es --pretty false --noLib --noEmit loc-syntax.ts ;; --locale es --help
+diag-locale-fr | diag | 2 2 2 0 | --locale fr --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale fr --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale fr --pretty false --noLib --noEmit loc-syntax.ts ;; --locale fr --help
+diag-locale-it | diag | 2 2 2 0 | --locale it --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale it --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale it --pretty false --noLib --noEmit loc-syntax.ts ;; --locale it --help
+diag-locale-ja | diag | 2 2 2 0 | --locale ja --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale ja --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale ja --pretty false --noLib --noEmit loc-syntax.ts ;; --locale ja --help
+diag-locale-ko | diag | 2 2 2 0 | --locale ko --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale ko --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale ko --pretty false --noLib --noEmit loc-syntax.ts ;; --locale ko --help
+diag-locale-pl | diag | 2 2 2 0 | --locale pl --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale pl --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale pl --pretty false --noLib --noEmit loc-syntax.ts ;; --locale pl --help
+diag-locale-pt-br | diag | 2 2 2 0 | --locale pt-br --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale pt-br --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale pt-br --pretty false --noLib --noEmit loc-syntax.ts ;; --locale pt-br --help
+diag-locale-ru | diag | 2 2 2 0 | --locale ru --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale ru --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale ru --pretty false --noLib --noEmit loc-syntax.ts ;; --locale ru --help
+diag-locale-tr | diag | 2 2 2 0 | --locale tr --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale tr --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale tr --pretty false --noLib --noEmit loc-syntax.ts ;; --locale tr --help
+diag-locale-zh-cn | diag | 2 2 2 0 | --locale zh-cn --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale zh-cn --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale zh-cn --pretty false --noLib --noEmit loc-syntax.ts ;; --locale zh-cn --help
+diag-locale-zh-tw | diag | 2 2 2 0 | --locale zh-tw --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale zh-tw --pretty --noLib --noEmit globals.d.ts loc.ts ;; --locale zh-tw --pretty false --noLib --noEmit loc-syntax.ts ;; --locale zh-tw --help
+diag-locale-case-0-de-de | diag | 2 2 | --locale DE-de --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale DE-de --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-case-1-pt-br | diag | 2 2 | --locale pt-BR --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale pt-BR --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-case-2-zh-tw | diag | 2 2 | --locale zh-TW --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale zh-TW --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-case-3-en | diag | 2 2 | --locale en --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale en --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-case-4-en-us | diag | 2 2 | --locale en-US --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale en-US --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-case-5-en | diag | 2 2 | --locale EN --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale EN --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-0 | diag | 2 2 | --locale 'xx' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale 'xx' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-1 | diag | 2 2 | --locale 'de-DE' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale 'de-DE' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-2 | diag | 2 2 | --locale 'pt' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale 'pt' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-3 | diag | 2 2 | --locale 'zh' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale 'zh' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-4 | diag | 1 1 | --locale 'fr-' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale 'fr-' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-5 | diag | 2 2 | --locale 'de_DE' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale 'de_DE' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-bad-6 | diag | 1 1 | --locale '' --pretty false --noLib --noEmit globals.d.ts loc.ts ;; --locale '' --pretty --noLib --noEmit globals.d.ts loc.ts
+diag-locale-missing-value | diag | 1 1 | --pretty false --noLib --noEmit globals.d.ts loc.ts --locale ;; --pretty --noLib --noEmit globals.d.ts loc.ts --locale
+diag-locale-pty | diag | 2 | @pty:24x100 --locale ja --noLib --noEmit globals.d.ts loc.ts
