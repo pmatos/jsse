@@ -1,0 +1,803 @@
+[
+  "THIS IS A GENERATED FILE. PLEASE DO NOT MODIFY DIRECTLY. See ../tools/IdnaTestV2-parser.py instead.",
+  "--exclude-ipv4-like: True; --exclude-std3: True; --exclude-bidi: True",
+  {
+    "input": "fass.de",
+    "output": "fass.de"
+  },
+  {
+    "input": "fa\u00df.de",
+    "output": "xn--fa-hia.de"
+  },
+  {
+    "input": "Fa\u00df.de",
+    "output": "xn--fa-hia.de"
+  },
+  {
+    "input": "xn--fa-hia.de",
+    "output": "xn--fa-hia.de"
+  },
+  {
+    "input": "\u00e0.\u05d0\u0308",
+    "output": "xn--0ca.xn--ssa73l"
+  },
+  {
+    "input": "a\u0300.\u05d0\u0308",
+    "output": "xn--0ca.xn--ssa73l"
+  },
+  {
+    "input": "A\u0300.\u05d0\u0308",
+    "output": "xn--0ca.xn--ssa73l"
+  },
+  {
+    "input": "\u00c0.\u05d0\u0308",
+    "output": "xn--0ca.xn--ssa73l"
+  },
+  {
+    "input": "xn--0ca.xn--ssa73l",
+    "output": "xn--0ca.xn--ssa73l"
+  },
+  {
+    "input": "\u00e0\u0308.\u05d0",
+    "output": "xn--0ca81i.xn--4db"
+  },
+  {
+    "input": "a\u0300\u0308.\u05d0",
+    "output": "xn--0ca81i.xn--4db"
+  },
+  {
+    "input": "A\u0300\u0308.\u05d0",
+    "output": "xn--0ca81i.xn--4db"
+  },
+  {
+    "input": "\u00c0\u0308.\u05d0",
+    "output": "xn--0ca81i.xn--4db"
+  },
+  {
+    "input": "xn--0ca81i.xn--4db",
+    "output": "xn--0ca81i.xn--4db"
+  },
+  {
+    "comment": "C1",
+    "input": "a\u200cb",
+    "output": null
+  },
+  {
+    "comment": "C1",
+    "input": "A\u200cB",
+    "output": null
+  },
+  {
+    "comment": "C1",
+    "input": "A\u200cb",
+    "output": null
+  },
+  {
+    "input": "ab",
+    "output": "ab"
+  },
+  {
+    "comment": "C1",
+    "input": "xn--ab-j1t",
+    "output": "xn--ab-j1t"
+  },
+  {
+    "input": "a\u094d\u200cb",
+    "output": "xn--ab-fsf604u"
+  },
+  {
+    "input": "A\u094d\u200cB",
+    "output": "xn--ab-fsf604u"
+  },
+  {
+    "input": "A\u094d\u200cb",
+    "output": "xn--ab-fsf604u"
+  },
+  {
+    "input": "xn--ab-fsf",
+    "output": "xn--ab-fsf"
+  },
+  {
+    "input": "a\u094db",
+    "output": "xn--ab-fsf"
+  },
+  {
+    "input": "A\u094dB",
+    "output": "xn--ab-fsf"
+  },
+  {
+    "input": "A\u094db",
+    "output": "xn--ab-fsf"
+  },
+  {
+    "input": "xn--ab-fsf604u",
+    "output": "xn--ab-fsf604u"
+  },
+  {
+    "comment": "C2",
+    "input": "a\u200db",
+    "output": null
+  },
+  {
+    "comment": "C2",
+    "input": "A\u200dB",
+    "output": null
+  },
+  {
+    "comment": "C2",
+    "input": "A\u200db",
+    "output": null
+  },
+  {
+    "comment": "C2",
+    "input": "xn--ab-m1t",
+    "output": "xn--ab-m1t"
+  },
+  {
+    "input": "a\u094d\u200db",
+    "output": "xn--ab-fsf014u"
+  },
+  {
+    "input": "A\u094d\u200dB",
+    "output": "xn--ab-fsf014u"
+  },
+  {
+    "input": "A\u094d\u200db",
+    "output": "xn--ab-fsf014u"
+  },
+  {
+    "input": "xn--ab-fsf014u",
+    "output": "xn--ab-fsf014u"
+  },
+  {
+    "input": "\u00a1",
+    "output": "xn--7a"
+  },
+  {
+    "input": "xn--7a",
+    "output": "xn--7a"
+  },
+  {
+    "input": "\u19da",
+    "output": "xn--pkf"
+  },
+  {
+    "input": "xn--pkf",
+    "output": "xn--pkf"
+  },
+  {
+    "comment": "A4_1 (ignored); A4_2 (ignored)",
+    "input": "",
+    "output": ""
+  },
+  {
+    "comment": "A4_1 (ignored); A4_2 (ignored)",
+    "input": "\u3002",
+    "output": "."
+  },
+  {
+    "comment": "A4_1 (ignored); A4_2 (ignored)",
+    "input": ".",
+    "output": "."
+  },
+  {
+    "input": "\uab60",
+    "output": "xn--3y9a"
+  },
+  {
+    "input": "xn--3y9a",
+    "output": "xn--3y9a"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1234567890\u00e41234567890123456789012345678901234567890123456",
+    "output": "xn--12345678901234567890123456789012345678901234567890123456-fxe"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1234567890a\u03081234567890123456789012345678901234567890123456",
+    "output": "xn--12345678901234567890123456789012345678901234567890123456-fxe"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1234567890A\u03081234567890123456789012345678901234567890123456",
+    "output": "xn--12345678901234567890123456789012345678901234567890123456-fxe"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1234567890\u00c41234567890123456789012345678901234567890123456",
+    "output": "xn--12345678901234567890123456789012345678901234567890123456-fxe"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "xn--12345678901234567890123456789012345678901234567890123456-fxe",
+    "output": "xn--12345678901234567890123456789012345678901234567890123456-fxe"
+  },
+  {
+    "input": "www.eXample.cOm",
+    "output": "www.example.com"
+  },
+  {
+    "input": "B\u00fccher.de",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "Bu\u0308cher.de",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "bu\u0308cher.de",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "b\u00fccher.de",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "B\u00dcCHER.DE",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "BU\u0308CHER.DE",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "xn--bcher-kva.de",
+    "output": "xn--bcher-kva.de"
+  },
+  {
+    "input": "\u00d6BB",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "O\u0308BB",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "o\u0308bb",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "\u00f6bb",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "\u00d6bb",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "O\u0308bb",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "xn--bb-eka",
+    "output": "xn--bb-eka"
+  },
+  {
+    "input": "FA\u1e9e.de",
+    "output": "xn--fa-hia.de"
+  },
+  {
+    "input": "FA\u1e9e.DE",
+    "output": "xn--fa-hia.de"
+  },
+  {
+    "input": "\u03b2\u03cc\u03bb\u03bf\u03c2.com",
+    "output": "xn--nxasmm1c.com"
+  },
+  {
+    "input": "\u03b2\u03bf\u0301\u03bb\u03bf\u03c2.com",
+    "output": "xn--nxasmm1c.com"
+  },
+  {
+    "input": "\u0392\u039f\u0301\u039b\u039f\u03a3.COM",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "\u0392\u038c\u039b\u039f\u03a3.COM",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "\u03b2\u03cc\u03bb\u03bf\u03c3.com",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "\u03b2\u03bf\u0301\u03bb\u03bf\u03c3.com",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "\u0392\u03bf\u0301\u03bb\u03bf\u03c3.com",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "\u0392\u03cc\u03bb\u03bf\u03c3.com",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "xn--nxasmq6b.com",
+    "output": "xn--nxasmq6b.com"
+  },
+  {
+    "input": "\u0392\u03bf\u0301\u03bb\u03bf\u03c2.com",
+    "output": "xn--nxasmm1c.com"
+  },
+  {
+    "input": "\u0392\u03cc\u03bb\u03bf\u03c2.com",
+    "output": "xn--nxasmm1c.com"
+  },
+  {
+    "input": "xn--nxasmm1c.com",
+    "output": "xn--nxasmm1c.com"
+  },
+  {
+    "input": "xn--nxasmm1c",
+    "output": "xn--nxasmm1c"
+  },
+  {
+    "input": "\u03b2\u03cc\u03bb\u03bf\u03c2",
+    "output": "xn--nxasmm1c"
+  },
+  {
+    "input": "\u03b2\u03bf\u0301\u03bb\u03bf\u03c2",
+    "output": "xn--nxasmm1c"
+  },
+  {
+    "input": "\u0392\u039f\u0301\u039b\u039f\u03a3",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "\u0392\u038c\u039b\u039f\u03a3",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "\u03b2\u03cc\u03bb\u03bf\u03c3",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "\u03b2\u03bf\u0301\u03bb\u03bf\u03c3",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "\u0392\u03bf\u0301\u03bb\u03bf\u03c3",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "\u0392\u03cc\u03bb\u03bf\u03c3",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "xn--nxasmq6b",
+    "output": "xn--nxasmq6b"
+  },
+  {
+    "input": "\u0392\u03cc\u03bb\u03bf\u03c2",
+    "output": "xn--nxasmm1c"
+  },
+  {
+    "input": "\u0392\u03bf\u0301\u03bb\u03bf\u03c2",
+    "output": "xn--nxasmm1c"
+  },
+  {
+    "input": "www.\u0dc1\u0dca\u200d\u0dbb\u0dd3.com",
+    "output": "www.xn--10cl1a0b660p.com"
+  },
+  {
+    "input": "WWW.\u0dc1\u0dca\u200d\u0dbb\u0dd3.COM",
+    "output": "www.xn--10cl1a0b660p.com"
+  },
+  {
+    "input": "Www.\u0dc1\u0dca\u200d\u0dbb\u0dd3.com",
+    "output": "www.xn--10cl1a0b660p.com"
+  },
+  {
+    "input": "www.xn--10cl1a0b.com",
+    "output": "www.xn--10cl1a0b.com"
+  },
+  {
+    "input": "www.\u0dc1\u0dca\u0dbb\u0dd3.com",
+    "output": "www.xn--10cl1a0b.com"
+  },
+  {
+    "input": "WWW.\u0dc1\u0dca\u0dbb\u0dd3.COM",
+    "output": "www.xn--10cl1a0b.com"
+  },
+  {
+    "input": "Www.\u0dc1\u0dca\u0dbb\u0dd3.com",
+    "output": "www.xn--10cl1a0b.com"
+  },
+  {
+    "input": "www.xn--10cl1a0b660p.com",
+    "output": "www.xn--10cl1a0b660p.com"
+  },
+  {
+    "input": "\u0646\u0627\u0645\u0647\u200c\u0627\u06cc",
+    "output": "xn--mgba3gch31f060k"
+  },
+  {
+    "input": "xn--mgba3gch31f",
+    "output": "xn--mgba3gch31f"
+  },
+  {
+    "input": "\u0646\u0627\u0645\u0647\u0627\u06cc",
+    "output": "xn--mgba3gch31f"
+  },
+  {
+    "input": "xn--mgba3gch31f060k",
+    "output": "xn--mgba3gch31f060k"
+  },
+  {
+    "input": "xn--mgba3gch31f060k.com",
+    "output": "xn--mgba3gch31f060k.com"
+  },
+  {
+    "input": "\u0646\u0627\u0645\u0647\u200c\u0627\u06cc.com",
+    "output": "xn--mgba3gch31f060k.com"
+  },
+  {
+    "input": "\u0646\u0627\u0645\u0647\u200c\u0627\u06cc.COM",
+    "output": "xn--mgba3gch31f060k.com"
+  },
+  {
+    "input": "xn--mgba3gch31f.com",
+    "output": "xn--mgba3gch31f.com"
+  },
+  {
+    "input": "\u0646\u0627\u0645\u0647\u0627\u06cc.com",
+    "output": "xn--mgba3gch31f.com"
+  },
+  {
+    "input": "\u0646\u0627\u0645\u0647\u0627\u06cc.COM",
+    "output": "xn--mgba3gch31f.com"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "a.b\uff0ec\u3002d\uff61",
+    "output": "a.b.c.d."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "a.b.c\u3002d\u3002",
+    "output": "a.b.c.d."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "A.B.C\u3002D\u3002",
+    "output": "a.b.c.d."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "A.b.c\u3002D\u3002",
+    "output": "a.b.c.d."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "a.b.c.d.",
+    "output": "a.b.c.d."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "A.B\uff0eC\u3002D\uff61",
+    "output": "a.b.c.d."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "A.b\uff0ec\u3002D\uff61",
+    "output": "a.b.c.d."
+  },
+  {
+    "input": "U\u0308.xn--tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00dc.xn--tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00fc.xn--tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "u\u0308.xn--tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "U\u0308.XN--TDA",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00dc.XN--TDA",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00dc.xn--Tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "U\u0308.xn--Tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "xn--tda.xn--tda",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00fc.\u00fc",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "u\u0308.u\u0308",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "U\u0308.U\u0308",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00dc.\u00dc",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "\u00dc.\u00fc",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "input": "U\u0308.u\u0308",
+    "output": "xn--tda.xn--tda"
+  },
+  {
+    "comment": "V1",
+    "input": "xn--u-ccb",
+    "output": "xn--u-ccb"
+  },
+  {
+    "comment": "V7",
+    "input": "a\u2488com",
+    "output": null
+  },
+  {
+    "input": "a1.com",
+    "output": "a1.com"
+  },
+  {
+    "comment": "V7",
+    "input": "A\u2488COM",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "A\u2488Com",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "xn--acom-0w1b",
+    "output": "xn--acom-0w1b"
+  },
+  {
+    "comment": "V7",
+    "input": "xn--a-ecp.ru",
+    "output": "xn--a-ecp.ru"
+  },
+  {
+    "comment": "P4",
+    "input": "xn--0.pt",
+    "output": "xn--0.pt"
+  },
+  {
+    "comment": "V7",
+    "input": "xn--a.pt",
+    "output": "xn--a.pt"
+  },
+  {
+    "comment": "P4",
+    "input": "xn--a-\u00c4.pt",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "xn--a-A\u0308.pt",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "xn--a-a\u0308.pt",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "xn--a-\u00e4.pt",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "XN--A-\u00c4.PT",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "XN--A-A\u0308.PT",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "Xn--A-A\u0308.pt",
+    "output": null
+  },
+  {
+    "comment": "P4",
+    "input": "Xn--A-\u00c4.pt",
+    "output": null
+  },
+  {
+    "comment": "V4; V2 (ignored)",
+    "input": "xn--xn--a--gua.pt",
+    "output": "xn--xn--a--gua.pt"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e\u3002\uff2a\uff30",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e\u3002JP",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e\u3002jp",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e\u3002Jp",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "xn--wgv71a119e.jp",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e.jp",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e.JP",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e.Jp",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e\u3002\uff4a\uff50",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u65e5\u672c\u8a9e\u3002\uff2a\uff50",
+    "output": "xn--wgv71a119e.jp"
+  },
+  {
+    "input": "\u2615",
+    "output": "xn--53h"
+  },
+  {
+    "input": "xn--53h",
+    "output": "xn--53h"
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.a\u00df\u200c\u200db\u200c\u200dc\u00df\u00df\u00df\u00dfd\u03c2\u03c3\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00dfe\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00dfx\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00dfy\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u0302\u00dfz",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.ASS\u200c\u200dB\u200c\u200dCSSSSSSSSD\u03a3\u03a3SSSSSSSSSSSSSSSSESSSSSSSSSSSSSSSSSSSSXSSSSSSSSSSSSSSSSSSSSYSSSSSSSSSSSSSSSS\u0302SSZ",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.ASS\u200c\u200dB\u200c\u200dCSSSSSSSSD\u03a3\u03a3SSSSSSSSSSSSSSSSESSSSSSSSSSSSSSSSSSSSXSSSSSSSSSSSSSSSSSSSSYSSSSSSSSSSSSSSS\u015cSSZ",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.ass\u200c\u200db\u200c\u200dcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssss\u015dssz",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.ass\u200c\u200db\u200c\u200dcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssyssssssssssssssss\u0302ssz",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.Ass\u200c\u200db\u200c\u200dcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssyssssssssssssssss\u0302ssz",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.Ass\u200c\u200db\u200c\u200dcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssss\u015dssz",
+    "output": null
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.assbcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssss\u015dssz",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.assbcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssyssssssssssssssss\u0302ssz",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.ASSBCSSSSSSSSD\u03a3\u03a3SSSSSSSSSSSSSSSSESSSSSSSSSSSSSSSSSSSSXSSSSSSSSSSSSSSSSSSSSYSSSSSSSSSSSSSSSS\u0302SSZ",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.ASSBCSSSSSSSSD\u03a3\u03a3SSSSSSSSSSSSSSSSESSSSSSSSSSSSSSSSSSSSXSSSSSSSSSSSSSSSSSSSSYSSSSSSSSSSSSSSS\u015cSSZ",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.Assbcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssss\u015dssz",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "1.Assbcssssssssd\u03c3\u03c3ssssssssssssssssessssssssssssssssssssxssssssssssssssssssssyssssssssssssssss\u0302ssz",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa"
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa69989dba9gc",
+    "output": "1.xn--assbcssssssssdssssssssssssssssessssssssssssssssssssxssssssssssssssssssssysssssssssssssssssz-pxq1419aa69989dba9gc"
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.A\u00df\u200c\u200db\u200c\u200dc\u00df\u00df\u00df\u00dfd\u03c2\u03c3\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00dfe\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00dfx\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00dfy\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u0302\u00dfz",
+    "output": null
+  },
+  {
+    "comment": "C1; C2; A4_2 (ignored)",
+    "input": "1.xn--abcdexyz-qyacaaabaaaaaaabaaaaaaaaabaaaaaaaaabaaaaaaaa010ze2isb1140zba8cc",
+    "output": "1.xn--abcdexyz-qyacaaabaaaaaaabaaaaaaaaabaaaaaaaaabaaaaaaaa010ze2isb1140zba8cc"
+  },
+  {
+    "comment": "C1; C2",
+    "input": "\u200cx\u200dn\u200c-\u200d-b\u00df",
+    "output": null
+  },
+  {
+    "comment": "C1; C2",
+    "input": "\u200cX\u200dN\u200c-\u200d-BSS",
+    "output": null
+  },
+  {
+    "comment": "C1; C2",
+    "input": "\u200cx\u200dn\u200c-\u200d-bss",
+    "output": null
+  },
+  {
+    "comment": "C1; C2",
+    "input": "\u200cX\u200dn\u200c-\u200d-Bss",
+    "output": null
+  },
+  {
+    "input": "xn--bss",
+    "output": "xn--bss"
+  },
+  {
+    "input": "\u5919",
+    "output": "xn--bss"
+  },
+  {
+    "comment": "C1; C2",
+    "input": "xn--xn--bss-7z6ccid",
+    "output": "xn--xn--bss-7z6ccid"
+  },
+  {
+    "comment": "C1; C2",
