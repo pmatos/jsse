@@ -1,0 +1,4 @@
+{
+    "compilerOptions": { "composite": true, "rootDir": ".", "outDir": "out" },
+    "files": ["src/main.ts", "src/lib.ts", "src/types.ts"]
+}
