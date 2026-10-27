@@ -18,7 +18,7 @@ generator scripts and for `tsc -b`.
    Node. jsse runs Node programs only under `--node` (`fork` already added the flag). The argument
    normaliser behind `spawn`, `spawnSync`, `exec*` and `execFile*`
    (`node-lib/internal/child_process/normalize.js`) now prepends `--node` when `file` is exactly
-   `process.execPath`, no shell is used and `args[0]` is not already `--node`. This changes nothing
+   `process.execPath`, no shell is used and the leading flags do not already include `--node`. This changes nothing
    without `--node` (the module is part of the prelude). Observable difference from Node:
    `child.spawnargs` and error `spawnargs` show the extra argument; a shell string that names the binary is not
    rewritten. `tests/node_hereby_local.rs` pins the rules and `run-node-child-process-oracle.sh` stays green.

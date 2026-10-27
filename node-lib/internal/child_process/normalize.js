@@ -98,6 +98,14 @@ function copyProcessEnvToEnv(env, name, optionEnv) {
   }
 }
 
+function hasLeadingNodeFlag(args) {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--node') return true;
+    if (typeof args[i] !== 'string' || args[i][0] !== '-') return false;
+  }
+  return false;
+}
+
 let emittedDEP0190Already = false;
 function normalizeSpawnArguments(file, args, options) {
   validateString(file, 'file');
@@ -211,7 +219,7 @@ function normalizeSpawnArguments(file, args, options) {
 
   // process.execPath is jsse, which runs Node programs only under --node
   // (fork() does the same); build tools spawn it as `node`.
-  if (!options.shell && file === process.execPath && args[0] !== '--node') {
+  if (!options.shell && file === process.execPath && !hasLeadingNodeFlag(args)) {
     ArrayPrototypeUnshift(args, '--node');
   }
 

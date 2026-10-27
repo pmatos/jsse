@@ -84,7 +84,7 @@ Unix only (`cfg(unix)` floor); on other platforms the floor is absent and
   are not implemented.
 - `process.execArgv` is `[]`. `process.execPath` is the bare binary; since
   #1253 `spawn`/`spawnSync`/`exec*File` prepend `--node` when `file` is exactly
-  `process.execPath` and `args[0]` is not already `--node` (`fork` always did),
+  `process.execPath` and the leading flags do not already include `--node` (`fork` always did),
   so build tools that spawn "node" get a Node-compatible child. A shell string
   that names the binary is not rewritten, and `spawnargs` shows the flag.
 

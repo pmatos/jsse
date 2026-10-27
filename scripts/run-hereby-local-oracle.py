@@ -188,7 +188,10 @@ def clone_clean(src, dst):
 
 def is_dts_gap(code, err):
     """True when a failed build is only the d.ts bundling step missing WebAssembly."""
-    return code == 1 and all(marker in err for marker in DTS_GAP)
+    if code != 1 or not all(marker in err for marker in DTS_GAP):
+        return False
+    failed = re.findall(r"^Error in (\S+)", err, re.M)
+    return all(task == "dts-services" for task in failed)
 
 
 def hereby_local(engine, exe, tree, timeout):
@@ -207,6 +210,7 @@ def hereby_local(engine, exe, tree, timeout):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
         start_new_session=True,
     )
     try:
@@ -225,6 +229,7 @@ def hereby_local(engine, exe, tree, timeout):
 
 def package_compiler(tree, pkg):
     """Lay the built compiler out as a typescript package (lib/ is built/local) for the tsc oracles."""
+    shutil.rmtree(pkg, ignore_errors=True)
     os.makedirs(pkg)
     subprocess.run(
         [

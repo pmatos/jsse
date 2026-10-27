@@ -58,6 +58,7 @@ class DtsGapTest(unittest.TestCase):
             oracle.is_dts_gap(1, "ReferenceError: WebAssembly is not defined\n")
         )
         self.assertFalse(oracle.is_dts_gap(124, self.ERR))
+        self.assertFalse(oracle.is_dts_gap(1, "Error in build-tsc in 3s\n" + self.ERR))
 
 
 class LogDiffTest(unittest.TestCase):

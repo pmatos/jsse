@@ -59,6 +59,18 @@ console.log(r.status, r.stdout.trim());"#,
 }
 
 #[test]
+fn a_node_flag_after_other_leading_flags_is_not_repeated() {
+    let got = run_node(
+        r#"const cp = require("child_process");
+const r = cp.spawnSync(process.execPath, ["--no-bytecode", "--node", "-e", "console.log(process.argv.length)"], { encoding: "utf8" });
+console.log(r.status, r.stdout.trim());
+const f = cp.fork("/dev/null", [], { execArgv: ["--no-bytecode", "--node"], silent: true });
+f.on("exit", (code) => console.log("fork", code));"#,
+    );
+    assert_eq!(got, "0 1\nfork 0");
+}
+
+#[test]
 fn spawn_through_a_shell_and_other_programs_are_left_alone() {
     let got = run_node(
         r#"const cp = require("child_process");
@@ -94,6 +106,7 @@ fn hereby_local_matches_node_when_a_checkout_is_given() {
         .arg("--jsse")
         .arg(env!("CARGO_BIN_EXE_jsse"))
         .arg("--skip-harness")
+        .arg("--require")
         .current_dir(root)
         .output()
         .expect("run the hereby local oracle");
