@@ -15,6 +15,8 @@
     return;
   }
 
+  if (!("global" in globalThis)) globalThis.global = globalThis;
+
   var hostArgv = __host_argv;
   var hostArgv0 = __host_argv0;
   var hostEnvSnapshot = __host_env_snapshot;
