@@ -382,7 +382,6 @@ impl Interpreter {
     /// through the uncaught-exception path, run the checkpoint, then the loop.
     pub(crate) fn node_drain_after_run(&mut self, result: &Completion) {
         self.scheduler.node_loop.main_throw_handled = false;
-        self.node_esm_main_ready();
         if self.pending_exit.is_some() {
             return;
         }

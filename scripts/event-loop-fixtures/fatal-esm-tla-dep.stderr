@@ -1,0 +1,13 @@
+tick 1
+tick 2
+tick 3
+tick 4
+exit
+file://<dir>/fatal-esm-tla-dep.fixture.mjs:8
+throw new Error("main");
+      ^
+
+Error: main
+    at file://<dir>/fatal-esm-tla-dep.fixture.mjs:8:7
+
+Node.js <version>

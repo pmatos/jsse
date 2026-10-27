@@ -53,7 +53,6 @@ fn string_value(text: &str) -> JsValue {
 
 impl Interpreter {
     /// Called by the CLI for the main script, so its frames carry its path.
-    /// The CommonJS bootstrap stub stands in for the file and stays unnamed.
     pub fn note_script_source(&mut self, path: &std::path::Path, source: &str, module: bool) {
         if self.node_host.stack.installed && source != Self::node_main_bootstrap() {
             let path = path.to_string_lossy();
@@ -153,7 +152,8 @@ impl Interpreter {
             if out.len() >= limit {
                 break;
             }
-            if frame.func_obj_id == 0 {
+            let id = frame.func_obj_id;
+            if id == 0 || self.node_host.stack.hidden_frames.iter().any(|h| h.0 == id) {
                 continue;
             }
             let pos = match frames.get(i + 1) {
@@ -505,9 +505,8 @@ impl Interpreter {
 }
 
 impl Interpreter {
-    /// Gives a hosted async body its own frame, so `--node` stack traces show
-    /// it; the frame is visible only once the prelude installed the hooks.
-    /// The body's environment is the innermost one on `call_stack_envs`.
+    /// Gives a hosted async body its own frame once the hooks are installed.
+    /// Its environment is the innermost one on `call_stack_envs`.
     pub(crate) fn push_async_stack_frame(&mut self, func_obj_id: u64) -> bool {
         if !self.node_host.stack.installed {
             return false;

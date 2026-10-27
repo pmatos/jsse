@@ -3344,12 +3344,9 @@ impl Interpreter {
                     .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
             }
             let mut err = None;
-            // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
-            // structurally from `exec_statement`/`exec_export_declaration`, the
-            // same way `Throw` does — it must stop this loop immediately (a
-            // later module item must not run) and must reach `dispose_resources`
-            // below as `Exit`, not be discarded and reconstructed as `Normal`,
-            // so the disposer short-circuit there actually fires (#554 review).
+            // A top-level `__host_exit` (#242) returns `Completion::Exit` like
+            // `Throw`: stop at once, and hand `Exit` itself to `dispose_resources`
+            // below so its disposer short-circuit fires (#554 review).
             let mut exit_code: Option<i32> = None;
             for item in &program.module_items {
                 match item {
@@ -3837,6 +3834,7 @@ impl Interpreter {
                         }
                     }
                     Err(e) => {
+                        self.node_esm_main_rejected(&ancestor, &e);
                         self.async_module_execution_rejected(&ancestor, &e);
                         continue;
                     }

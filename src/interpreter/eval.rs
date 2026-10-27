@@ -8278,8 +8278,8 @@ impl Interpreter {
         })
     }
 
-    /// Drives an async function's state machine: `Exit` (#242) if the body
-    /// called `__host_exit`, else `Normal(undefined)`.
+    /// Drives an async state machine: `Exit` (#242) if the body
+    /// called `__host_exit` (propagate it), else `Normal`.
     pub(crate) fn async_function_resume(
         &mut self,
         async_id: u64,

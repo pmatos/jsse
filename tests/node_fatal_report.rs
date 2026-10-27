@@ -73,7 +73,7 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
             .map(|ext| dir.join(format!("{name}.fixture.{ext}")))
             .into_iter()
             .find(|path| path.exists())
-            .unwrap();
+            .unwrap_or_else(|| panic!("no fixture for {name}.stderr"));
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_jsse"));
         cmd.arg("--node").args(args).arg(&fixture);
         if gc_stress {

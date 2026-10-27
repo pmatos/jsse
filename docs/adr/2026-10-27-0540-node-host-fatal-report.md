@@ -83,8 +83,9 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    its failure is a rejection delivered to `triggerUncaughtException(err, true)`,
    not a synchronous throw. jsse does the same: `Interpreter::node_uncaught_entry`
    calls the shim's `triggerUncaught(error, 'unhandledRejection', hops)`, which
-   waits `hops` microtask turns first (4 after a synchronous throw, one more
-   after a failing top-level `await`; measured on Node 26.8, stable over runs and
+   waits `hops` microtask turns first (4, one more when the main module itself
+   has a top-level `await`, whether it threw before or after it, and whether
+   or not a dependency awaited; measured on Node 26.8, stable over runs and
    chain lengths), so the microtasks the module queued run before `exit` and the
    report, and the tick and immediate queues never do. The origin is
    `unhandledRejection` for `uncaughtExceptionMonitor` and `uncaughtException`,
@@ -101,6 +102,9 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    parse origin of each module source is recorded where it is parsed. The async
    state-machine rewrites in `generator_transform.rs` keep a call's source
    position (they used to reset it, so calls after a `await` reported 1:1).
+   When a dependency's `await` settles it evaluates its importers inside its
+   own frame; that frame is hidden while theirs runs, so a stack has only the
+   module that made the error.
 
 ## Known differences from Node
 
@@ -110,9 +114,9 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
   throwing frame's latest call), so its caret column is not Node's.
 - A throw at script top level (`-e`, the REPL) has no frame, so no throw site
   and no header; `-e` does not print `[eval]:1`.
-- The microtask turns before an ES entry point's report are those of a module
-  with at most one failing top-level `await` chain; a failure inside a
-  dependency's top-level `await` was not measured.
+- The microtask turns before an ES entry point's report were measured for the
+  main module throwing, with or without a top-level `await` or a dependency
+  that awaits; a dependency whose own top-level `await` rejects was not.
 - Arrow functions have no receiver type, so `process.<anonymous>` reads
   `<anonymous>` (fixtures use `function` handlers).
 - A throw inside a generator or an async state machine, or followed by a later
