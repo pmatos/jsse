@@ -53,7 +53,7 @@ pub(crate) enum ChildEvent {
     },
 }
 
-const CHUNK: usize = 64 * 1024;
+pub(super) const CHUNK: usize = 64 * 1024;
 
 /// One-chunk-at-a-time flow control for a read pipe: the reader thread takes a
 /// token before each `read`, and JS adds one per `_read`, so an unconsumed

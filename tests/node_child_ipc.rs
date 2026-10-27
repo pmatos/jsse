@@ -138,7 +138,6 @@ fn child_sees_disconnect_when_the_parent_dies() {
 fn a_channel_without_listeners_does_not_keep_the_child_alive() {
     let source = r#"
       const { fork } = require("child_process");
-      let left = 2;
       for (const mode of ["noop", "addremove"]) {
         const c = fork(CHILD, [mode]);
         c.on("message", (m) => print(mode, m));
@@ -183,7 +182,6 @@ fn options_and_failures() {
       const flags = fork(CHILD, ["info"], { execArgv: ["--node"], silent: true });
       print(flags.spawnargs.filter((a) => a === "--node").length, flags.spawnargs.length);
       const plain = fork(CHILD, ["info", "x"], { silent: true });
-      let out = "";
       plain.once("message", (m) => print(m.fd, m.serialization, m.args.join(), m.connected));
       const none = fork(CHILD, [], { execPath: "/no/such/jsse", stdio: ["ignore", "ignore", "ignore", "ipc"] });
       none.on("error", (e) => print("error", e.code));

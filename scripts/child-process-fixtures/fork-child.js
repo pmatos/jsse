@@ -13,7 +13,8 @@ switch (mode) {
     break;
   case 'inspect':
     process.on('message', (m) => {
-      process.send(util.inspect(m, { depth: 6, breakLength: Infinity }), () => process.disconnect());
+      if (m !== null && typeof m === 'object' && m.cmd === 'quit') process.disconnect();
+      else process.send(util.inspect(m, { depth: 6, breakLength: Infinity }));
     });
     break;
   case 'info':

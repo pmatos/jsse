@@ -53,8 +53,10 @@ extends) and the event loop. Unix only, like that floor.
    `Date`, `RegExp`, `Map`, `Set`, `ArrayBuffer` and views (the view's bytes,
    as Node's serializer copies them; `Buffer` stays `Buffer`), errors (name,
    message, stack, cause), boxed primitives, plain objects and arrays (holes
-   and extra properties), with shared references and cycles. Functions and
-   symbols throw a `DataCloneError`. A jsse child cannot read a Node parent's
+   and extra properties; an own `__proto__` key stays an own property), with
+   shared references and cycles. Functions, symbols, promises, `WeakMap`,
+   `WeakSet` and `WeakRef` throw a `DataCloneError`. A frame over 256 MiB
+   is a `RangeError` on send and ends the channel on receive. A jsse child cannot read a Node parent's
    `'advanced'` frames and the reverse (a decoding error, not a hang); both
    ends must be jsse. Class instances arrive as plain objects, as in Node.
 7. **Liveness.** The channel keeps the loop alive while it is open, reading

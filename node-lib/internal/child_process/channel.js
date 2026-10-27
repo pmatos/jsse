@@ -5,8 +5,8 @@
 // `disconnect`, `connected` and `channel`, over an IpcPipe. Messages are
 // newline-delimited JSON, byte for byte what Node writes, or length-framed
 // 'advanced' frames (internal/child_process/serialization); the native channel
-// does the framing, so `send` hands over text and `onread` gets texts. Handle passing is
-// not supported: a handle argument is ERR_INVALID_HANDLE_TYPE.
+// does the framing, so `send` hands over text and `onread` gets texts. Handle
+// passing is not supported: a handle argument is ERR_INVALID_HANDLE_TYPE.
 
 const {
   ArrayPrototypePush,

@@ -9,23 +9,28 @@
 
 use super::super::*;
 use super::node_host_child::{
-    ChildCtl, ChildEvent, Completions, Endpoint, Flow, post, write_endpoint,
+    CHUNK, ChildCtl, ChildEvent, Completions, Endpoint, Flow, post, write_endpoint,
 };
 use super::node_host_fs_args::{arg, int, last_errno};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
-const CHUNK: usize = 64 * 1024;
+const MAX_FRAME: usize = 256 * 1024 * 1024;
 
 /// Cut the complete messages off the front of `carry`; `scanned` is how much
-/// of a line in progress is already known to hold no newline.
-fn take_messages(carry: &mut Vec<u8>, scanned: &mut usize, frames: bool) -> Vec<String> {
+/// of a line in progress is already known to hold no newline. `None` when a
+/// frame header announces more than `MAX_FRAME` bytes.
+fn take_messages(carry: &mut Vec<u8>, scanned: &mut usize, frames: bool) -> Option<Vec<String>> {
     let mut items = Vec::new();
     let mut start = 0;
     if frames {
         while carry.len() >= start + 4 {
             let head: [u8; 4] = carry[start..start + 4].try_into().unwrap();
-            let end = start + 4 + u32::from_be_bytes(head) as usize;
+            let len = u32::from_be_bytes(head) as usize;
+            if len > MAX_FRAME {
+                return None;
+            }
+            let end = start + 4 + len;
             if carry.len() < end {
                 break;
             }
@@ -45,7 +50,7 @@ fn take_messages(carry: &mut Vec<u8>, scanned: &mut usize, frames: bool) -> Vec<
     }
     carry.drain(..start);
     *scanned = if frames { 0 } else { carry.len() };
-    items
+    Some(items)
 }
 
 fn spawn_message_reader(
@@ -72,7 +77,10 @@ fn spawn_message_reader(
                 return;
             }
             carry.extend_from_slice(&buf[..n as usize]);
-            let items = take_messages(&mut carry, &mut scanned, frames);
+            let Some(items) = take_messages(&mut carry, &mut scanned, frames) else {
+                post(&queue, ChildEvent::Eof { id, index });
+                return;
+            };
             if !items.is_empty() {
                 post(&queue, ChildEvent::Messages { id, index, items });
             }
@@ -129,6 +137,9 @@ impl Interpreter {
             let index = int(interp, arg(args, 1))? as usize;
             let frames = int(interp, arg(args, 2))? == 1;
             let text = interp.to_string_lossy(arg(args, 3))?;
+            if frames && text.len() > MAX_FRAME {
+                return Err(interp.create_range_error("IPC message is too large"));
+            }
             let mut bytes = Vec::with_capacity(text.len() + 4);
             if frames {
                 bytes.extend_from_slice(&(text.len() as u32).to_be_bytes());

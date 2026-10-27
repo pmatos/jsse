@@ -13,6 +13,7 @@ const {
   JSONParse,
   JSONStringify,
   MapPrototypeEntries,
+  ObjectDefineProperty,
   ObjectKeys,
   SetPrototypeValues,
   TypedArrayPrototypeGetSymbolToStringTag,
@@ -24,8 +25,11 @@ const {
   isBoxedPrimitive,
   isDate,
   isMap,
+  isPromise,
   isRegExp,
   isSet,
+  isWeakMap,
+  isWeakSet,
 } = require('internal/util/types');
 
 const VIEWS = {
@@ -52,6 +56,7 @@ function toBase64(buffer, offset, length) {
 
 function fromBase64(text) {
   const bytes = Buffer.from(text, 'base64');
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes.buffer;
   const out = new ArrayBuffer(bytes.length);
   new Uint8Array(out).set(bytes);
   return out;
@@ -105,6 +110,10 @@ function encode(root) {
       return out;
     }
     if (isBoxedPrimitive(value)) return ['P', id, node(value.valueOf())];
+    if (isPromise(value) || isWeakMap(value) || isWeakSet(value) ||
+        (typeof WeakRef === 'function' && value instanceof WeakRef)) {
+      throw cloneError(value);
+    }
     const keys = ObjectKeys(value);
     const members = [];
     for (let i = 0; i < keys.length; i++) members.push(keys[i], node(value[keys[i]]));
@@ -118,7 +127,15 @@ function decode(root) {
   const objects = [];
 
   function fill(target, members) {
-    for (let i = 0; i < members.length; i += 2) target[members[i]] = node(members[i + 1]);
+    for (let i = 0; i < members.length; i += 2) {
+      ObjectDefineProperty(target, members[i], {
+        __proto__: null,
+        value: node(members[i + 1]),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+    }
     return target;
   }
 

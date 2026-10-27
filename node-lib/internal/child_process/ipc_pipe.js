@@ -3,9 +3,9 @@
 // The libuv `Pipe(IPC)` handle of an IPC channel (Node's `channel` argument of
 // `setupChannel`): `onread` gets the text of each whole message a chunk held
 // and then `null` at EOF, `write` takes one message and reports whether the
-// pipe took it at once, `writeQueueSize` counts what the pipe has not taken
-// (the native side frames messages: a JSON line, or a length-prefixed frame). The channel keeps the loop alive while it reads and is
-// ref'd, so `ref()`/`unref()` are the `Control` ones of the channel.
+// pipe took it at once, `writeQueueSize` counts what the pipe has not taken.
+// The native side frames messages. The channel keeps the loop alive while it
+// reads and is ref'd, so `ref()`/`unref()` are the `Control` ones.
 
 const binding = require('internal/host/child_process');
 const { Activity } = require('internal/child_process/handle');

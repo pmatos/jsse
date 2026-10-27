@@ -58,8 +58,11 @@ async function main() {
     e.type instanceof TypeError, e.type.message]);
   const same = await exchange('echo', [shared, shared]);
   show('shared identity', same[0] === same[1]);
+  const proto = (await exchange('echo', JSON.parse('{"__proto__":{"polluted":1},"a":1}')));
+  show('own __proto__ key', [Object.keys(proto), Object.getPrototypeOf(proto) === Object.prototype, proto.polluted]);
 
-  for (const [label, v] of [['function', { f() {} }], ['nested symbol', { s: Symbol('s') }]]) {
+  for (const [label, v] of [['function', { f() {} }], ['nested symbol', { s: Symbol('s') }],
+    ['weakmap', { w: new WeakMap() }], ['promise', { p: Promise.resolve(1) }]]) {
     try { await exchange('echo', v); show(label, 'sent'); } catch (err) { show(label, [err.name === 'Error' || err.name === 'DataCloneError', /could not be cloned/.test(err.message)]); }
   }
 }
