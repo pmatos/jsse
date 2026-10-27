@@ -1,6 +1,7 @@
 //! The source registry behind `--node` stack traces: which file a function's
 //! source belongs to, and the line and column of an offset in it.
 
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 pub(super) struct SourceEntry {
@@ -8,6 +9,7 @@ pub(super) struct SourceEntry {
     pub(super) name: Option<Rc<str>>,
     pub(super) line_delta: i32,
     column_delta: i32,
+    column_line: usize,
     line_starts: Option<Vec<u32>>,
 }
 
@@ -18,6 +20,7 @@ struct PendingName {
     name: Rc<str>,
     line_delta: i32,
     column_delta: i32,
+    column_line: usize,
 }
 
 #[derive(Default)]
@@ -25,7 +28,10 @@ pub(crate) struct NodeStackState {
     pub(super) installed: bool,
     pub(super) sources: Vec<SourceEntry>,
     pub(super) scripts: Vec<(Rc<str>, String)>,
-    pending: Vec<PendingName>,
+    /// Keyed by the address of the source's allocation; an entry whose source
+    /// is gone is ignored, and dead ones are swept as the table doubles.
+    pending: HashMap<usize, PendingName>,
+    prune_at: usize,
     /// Native functions standing in for a running `vm` script's top level.
     pub(super) script_frames: Vec<(u64, Rc<str>)>,
 }
@@ -83,13 +89,18 @@ impl NodeStackState {
             .iter()
             .find(|(_, text)| text.len() == source.len() && text.as_str() == &**source)
             .map(|(name, _)| name.clone());
-        let pending = self
+        let (pending_name, line_delta, column_delta, column_line) = self
             .pending
-            .iter()
-            .find(|p| std::ptr::eq(p.source.as_ptr(), Rc::as_ptr(source)));
-        let (pending_name, line_delta, column_delta) = pending.map_or((None, 0, 0), |p| {
-            (Some(p.name.clone()), p.line_delta, p.column_delta)
-        });
+            .get(&(Rc::as_ptr(source) as *const u8 as usize))
+            .filter(|p| p.source.strong_count() > 0)
+            .map_or((None, 0, 0, 0), |p| {
+                (
+                    Some(p.name.clone()),
+                    p.line_delta,
+                    p.column_delta,
+                    p.column_line,
+                )
+            });
         let name = match pending_name {
             Some(file) => source_url(source).or(Some(file)),
             None => noted.or_else(|| source_url(source)),
@@ -99,6 +110,7 @@ impl NodeStackState {
             name,
             line_delta,
             column_delta,
+            column_line,
             line_starts: None,
         });
         self.sources.len() - 1
@@ -117,7 +129,11 @@ impl NodeStackState {
         let line = starts.partition_point(|&s| s as usize <= offset) - 1;
         let from = starts[line] as usize;
         let text = entry.source.get(from..offset).unwrap_or("");
-        let first_line_shift = if line == 0 { entry.column_delta } else { 0 };
+        let first_line_shift = if line == entry.column_line {
+            entry.column_delta
+        } else {
+            0
+        };
         let column =
             (text.encode_utf16().count() as i64 + 1 + i64::from(first_line_shift)).max(1) as usize;
         let line = (line as i64 + 1 + i64::from(entry.line_delta)).max(1) as usize;
@@ -127,21 +143,30 @@ impl NodeStackState {
 
 impl NodeStackState {
     /// Name `source` for the frames that will mention it: `name`, with line
-    /// numbers shifted by `line_delta` and first-line columns by `column_delta`.
+    /// numbers shifted by `line_delta` and the columns of line `column_line`
+    /// (0-based) by `column_delta`.
     pub(crate) fn name_pending(
         &mut self,
         source: &Rc<str>,
         name: &str,
         line_delta: i32,
         column_delta: i32,
+        column_line: usize,
     ) {
-        self.pending.retain(|p| p.source.strong_count() > 0);
-        self.pending.push(PendingName {
-            source: Rc::downgrade(source),
-            name: Rc::from(name),
-            line_delta,
-            column_delta,
-        });
+        if self.pending.len() >= self.prune_at.max(64) {
+            self.pending.retain(|_, p| p.source.strong_count() > 0);
+            self.prune_at = self.pending.len() * 2;
+        }
+        self.pending.insert(
+            Rc::as_ptr(source) as *const u8 as usize,
+            PendingName {
+                source: Rc::downgrade(source),
+                name: Rc::from(name),
+                line_delta,
+                column_delta,
+                column_line,
+            },
+        );
     }
 
     pub(super) fn script_frame_source(&self, func: u64) -> Option<Rc<str>> {

@@ -132,7 +132,7 @@ function createSync(sandbox, global) {
         enumerable: desc.enumerable,
         configurable: true,
       });
-      tracked.set(key, { mode: kCopy, last: desc.value });
+      tracked.set(key, { mode: kCopy, last: desc.value, restorable: true });
     } else {
       tracked.set(key, forwarder(key, desc.enumerable));
     }
@@ -143,7 +143,7 @@ function createSync(sandbox, global) {
     host.settle(global);
     for (const { 0: key, 1: entry } of tracked) {
       if (lookup(sandbox, key) !== undefined) continue;
-      if (entry.mode === kForward) restore(key);
+      if (entry.mode === kForward || entry.restorable) restore(key);
       tracked.delete(key);
     }
     const keys = visibleKeys(sandbox);

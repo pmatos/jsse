@@ -15,6 +15,7 @@ const {
   ReflectApply,
   RegExpPrototypeExec,
   SafeWeakMap,
+  StringPrototypeIncludes,
   StringPrototypeRepeat,
   Symbol,
 } = primordials;
@@ -109,6 +110,7 @@ function throwSyntaxError(failure, filename, parsingContext) {
 }
 
 function lastDirective(code, name) {
+  if (!StringPrototypeIncludes(code, `${name}=`)) return undefined;
   const re = new RegExp(`//[#@][ \\t]*${name}=[ \\t]*(\\S+)`, 'g');
   let found;
   for (let m = RegExpPrototypeExec(re, code); m !== null;
@@ -143,11 +145,16 @@ class ContextifyScript {
     const { global, sync } = context;
     if (sync === undefined) return host.run(global, this.#id);
     sync.enter();
+    let result;
     try {
-      return host.run(global, this.#id);
-    } finally {
-      sync.leave();
+      result = host.run(global, this.#id);
+    } catch (error) {
+      // The script's own exception wins over one from the sandbox's traps.
+      try { sync.leave(); } catch { /* ignored */ }
+      throw error;
     }
+    sync.leave();
+    return result;
   }
 
   // For a script nobody else holds (the one-shot runIn* functions).

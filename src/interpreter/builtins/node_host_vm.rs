@@ -13,8 +13,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Properties a fresh realm gets from jsse that a V8 context does not have.
-const NOT_IN_V8_CONTEXT: [&str; 9] = [
+const NOT_IN_V8_CONTEXT: [&str; 10] = [
     "$262",
+    "print",
     "setTimeout",
     "setInterval",
     "clearTimeout",
@@ -34,6 +35,14 @@ struct Compiled {
 pub(crate) struct VmState {
     scripts: HashMap<u32, Rc<Compiled>>,
     next_id: u32,
+    /// Global object of each context realm -> its realm index.
+    globals: HashMap<u64, usize>,
+}
+
+impl VmState {
+    pub(super) fn is_context_global(&self, id: u64) -> bool {
+        self.globals.contains_key(&id)
+    }
 }
 
 struct Failure {
@@ -141,10 +150,12 @@ fn realm_of(interp: &Interpreter, global: &JsValue) -> Option<usize> {
     let Some(id) = global.as_object_id() else {
         return Some(interp.current_realm_id);
     };
-    interp
-        .realms
-        .iter()
-        .position(|r| r.global_object == Some(id))
+    interp.node_host.vm.globals.get(&id).copied().or_else(|| {
+        interp
+            .realms
+            .iter()
+            .position(|r| r.global_object == Some(id))
+    })
 }
 
 impl Interpreter {
@@ -167,7 +178,7 @@ impl Interpreter {
         self.call_stack_frames.push(CallFrame {
             func_obj_id,
             arguments: CallFrameArguments::None,
-            is_eval: false,
+            is_eval: true,
             caller_pos,
             env_index: self.call_stack_envs.len() - 1,
         });
@@ -224,6 +235,7 @@ fn new_context(interp: &mut Interpreter, _this: &JsValue, _args: &[JsValue]) -> 
             .bindings
             .remove(name);
     }
+    interp.node_host.vm.globals.insert(global, realm);
     done(JsValue::object(global))
 }
 
@@ -285,7 +297,7 @@ fn compile(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Compl
             interp
                 .node_host
                 .stack
-                .name_pending(&origin, &filename, line_offset, column_offset);
+                .name_pending(&origin, &filename, line_offset, column_offset, 0);
             let id = interp.node_host.vm.next_id;
             interp.node_host.vm.next_id += 1;
             interp
@@ -360,10 +372,13 @@ fn compile_function(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue])
         };
         return done(failure_value(interp, &f, line_offset, 0));
     };
-    interp
-        .node_host
-        .stack
-        .name_pending(&origin, &filename, line_offset - 1, column_offset);
+    interp.node_host.stack.name_pending(
+        &origin,
+        &filename,
+        line_offset.saturating_sub(1),
+        column_offset,
+        1,
+    );
     let caller_realm = interp.current_realm_id;
     interp.current_realm_id = realm;
     let mut env = interp.realm().global_env.clone();

@@ -72,7 +72,10 @@ impl Interpreter {
 
     fn receiver_type_name(&self, receiver: &JsValue) -> Option<String> {
         let mut id = receiver.as_object_id()?;
-        if self.realms.iter().any(|r| r.global_object == Some(id)) {
+        if self.node_host.vm.is_context_global(id)
+            || self.realm().global_object == Some(id)
+            || self.realms[0].global_object == Some(id)
+        {
             return None;
         }
         if self.is_callable(receiver) {

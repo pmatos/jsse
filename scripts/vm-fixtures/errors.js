@@ -79,6 +79,7 @@ runtime("stack: ReferenceError", () => vm.runInNewContext("(function f() { retur
 runtime("stack: Script reuse", () => { const s = new vm.Script("throw new Error('again')", { filename: "re.js" }); try { s.runInThisContext(); } catch {} s.runInNewContext({}); });
 runtime("stack: compileFunction", () => vm.compileFunction("throw new Error('cf')", [], { filename: "cfn.js" })());
 runtime("stack: compileFunction offsets", () => vm.compileFunction("\nthrow new Error('cf')", [], { filename: "cfo.js", lineOffset: 4 })());
+runtime("stack: compileFunction columnOffset", () => vm.compileFunction("throw new Error('cf')", [], { filename: "cfc.js", columnOffset: 3 })());
 runtime("stack: sourceURL", () => vm.runInThisContext("//# sourceURL=named.js\nthrow new Error('u')", { filename: "ignored.js" }));
 runtime("stack: eval in script", () => vm.runInThisContext("eval('throw new Error(\"e\")')", { filename: "ev.js" }));
 runtime("stack: captureStackTrace", () => vm.runInNewContext("const o = {}; Error.captureStackTrace(o); throw Object.assign(new Error('c'), { stack: o.stack })", {}, "cs.js"));

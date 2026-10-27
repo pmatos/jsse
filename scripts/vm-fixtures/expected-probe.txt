@@ -16,6 +16,7 @@ this: strict this: undefined
 this: strict does not stick: true
 this: completion: [null,null,3,{"a":1}]
 this: same realm: true
+this: caller of top-level function: null
 this: throw: THROW undefined undefined
 this: throw object: true r
 this: string options: at named.js:1:1
@@ -39,11 +40,12 @@ ctx: this and globalThis: [false,false,true]
 ctx: not main realm: [false,false,true]
 ctx: realms differ: false
 ctx: errors are the context's: false true TypeError
-ctx: no node globals: undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined
+ctx: no node globals: undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined
 ctx: has console: objectfunctionundefined
 ctx: builtins: object,object,function,function,function,object,object,object,function,function,object
 ctx: overwrite builtin: [5,"number"]
 ctx: delete: [false,"undefined"]
+ctx: host delete read-only: undefined
 ctx: host delete: undefined
 ctx: restore builtin: 1 function
 ctx: accessor: [7,7,9]
@@ -108,6 +110,7 @@ compileFunction: extension shadows: 2
 compileFunction: parsingContext: number,true,false
 compileFunction: parsingContext realm: true
 compileFunction: writes parsingContext: 4
+compileFunction: min lineOffset: 1
 compileFunction: closes wrapper: THROW SyntaxError undefined
 compileFunction: bad params: THROW TypeError ERR_INVALID_ARG_TYPE
 compileFunction: bad code: THROW TypeError ERR_INVALID_ARG_TYPE

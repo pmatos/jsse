@@ -47,6 +47,7 @@ t("this: strict this", () => String(vm.runInThisContext("'use strict'; (function
 t("this: strict does not stick", () => vm.runInThisContext("(function () { return this })()") === globalThis);
 t("this: completion", () => json([vm.runInThisContext(""), vm.runInThisContext("var q = 1"), vm.runInThisContext("if (true) { 3 }"), vm.runInThisContext("({ a: 1 })")]));
 t("this: same realm", () => vm.runInThisContext("[]") instanceof Array);
+t("this: caller of top-level function", () => vm.runInThisContext("function callerProbe() { return callerProbe.caller } callerProbe()"));
 t("this: throw", () => vm.runInThisContext("throw 5"));
 t("this: throw object", () => { try { vm.runInThisContext("throw new RangeError('r')"); } catch (e) { return `${e instanceof RangeError} ${e.message}`; } });
 t("this: string options", () => vm.runInThisContext("new Error('x').stack.split('\\n')[1].trim()", "named.js"));
@@ -73,11 +74,12 @@ t("ctx: this and globalThis", () => json([vm.runInContext("this", ctx) === ctx, 
 t("ctx: not main realm", () => json([vm.runInContext("Array", ctx) === Array, vm.runInContext("[]", ctx) instanceof Array, vm.runInContext("Object.getPrototypeOf([]) === Array.prototype", ctx)]));
 t("ctx: realms differ", () => vm.runInContext("Array", ctx) === vm.runInContext("Array", vm.createContext()));
 t("ctx: errors are the context's", () => { try { vm.runInContext("null.x", ctx); } catch (e) { return `${e instanceof TypeError} ${e.constructor === vm.runInContext("TypeError", ctx)} ${e.name}`; } });
-t("ctx: no node globals", () => vm.runInNewContext("[typeof require, typeof process, typeof Buffer, typeof setTimeout, typeof structuredClone, typeof atob, typeof $262, typeof URL, typeof queueMicrotask].join()"));
+t("ctx: no node globals", () => vm.runInNewContext("[typeof require, typeof process, typeof Buffer, typeof setTimeout, typeof structuredClone, typeof atob, typeof $262, typeof print, typeof URL, typeof queueMicrotask].join()"));
 t("ctx: has console", () => vm.runInNewContext("typeof console + typeof console.log + typeof console.log('hidden')"));
 t("ctx: builtins", () => vm.runInNewContext("[typeof JSON, typeof Math, typeof Promise, typeof Symbol, typeof Proxy, typeof Reflect, typeof Intl, typeof Atomics, typeof eval, typeof escape, typeof globalThis].join()"));
 t("ctx: overwrite builtin", () => { const c = vm.createContext({}); vm.runInContext("Array = 5", c); return json([c.Array, vm.runInContext("typeof Array", c)]); });
 t("ctx: delete", () => { const c = vm.createContext({ gone: 1 }); vm.runInContext("delete gone", c); return json(["gone" in c, vm.runInContext("typeof gone", c)]); });
+t("ctx: host delete read-only", () => { const c = vm.createContext({}); Object.defineProperty(c, "ro", { value: 1, enumerable: true, configurable: true }); vm.runInContext("ro", c); delete c.ro; return vm.runInContext("typeof ro", c); });
 t("ctx: host delete", () => { const c = vm.createContext({ x: 1 }); vm.runInContext("x", c); delete c.x; return vm.runInContext("typeof x", c); });
 t("ctx: restore builtin", () => { const c = vm.createContext({ JSON: 1 }); const a = vm.runInContext("JSON", c); delete c.JSON; return `${a} ${vm.runInContext("typeof JSON.parse", c)}`; });
 t("ctx: accessor", () => {
@@ -149,6 +151,7 @@ t("compileFunction: extension shadows", () => vm.compileFunction("return x", [],
 t("compileFunction: parsingContext", () => { const c = vm.createContext({ zz: 1 }); const f = vm.compileFunction("return [typeof zz, [] instanceof Array, this === undefined]", [], { parsingContext: c }); return f().join(); });
 t("compileFunction: parsingContext realm", () => { const c = vm.createContext({}); return vm.compileFunction("return Array", [], { parsingContext: c })() === vm.runInContext("Array", c); });
 t("compileFunction: writes parsingContext", () => { const c = vm.createContext({}); vm.compileFunction("implicit = 4", [], { parsingContext: c })(); vm.runInContext("1", c); return c.implicit; });
+t("compileFunction: min lineOffset", () => vm.compileFunction("return 1", [], { lineOffset: -2147483648 })());
 t("compileFunction: closes wrapper", () => vm.compileFunction("}); (function () {", []));
 t("compileFunction: bad params", () => vm.compileFunction("1", "a"));
 t("compileFunction: bad code", () => vm.compileFunction(1));
