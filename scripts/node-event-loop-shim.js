@@ -283,7 +283,11 @@
       proc.emit("uncaughtException", error, type);
     } catch (inHandler) {
       fatal(inHandler, 7);
+      return;
     }
+    // A handled throw abandons the tick checkpoint; Node makes sure the
+    // remaining ticks run by keeping the next check phase non-empty.
+    if (handoff.afterHandledUncaught !== undefined) handoff.afterHandledUncaught();
   }
 
   // ---- nextTick -------------------------------------------------------------

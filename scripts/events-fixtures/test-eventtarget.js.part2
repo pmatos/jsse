@@ -1,0 +1,373 @@
+  }));
+  target.dispatchEvent(event);
+}
+
+{
+  const target1 = new EventTarget();
+  const target2 = new EventTarget();
+  const event = new Event('foo');
+  target1.addEventListener('foo', common.mustCall((event) => {
+    assert.throws(() => target2.dispatchEvent(event), {
+      code: 'ERR_EVENT_RECURSION',
+    });
+  }));
+  target1.dispatchEvent(event);
+}
+
+{
+  const target = new EventTarget();
+  const a = common.mustCall(() => target.removeEventListener('foo', a));
+  const b = common.mustCall(2);
+
+  target.addEventListener('foo', a);
+  target.addEventListener('foo', b);
+
+  target.dispatchEvent(new Event('foo'));
+  target.dispatchEvent(new Event('foo'));
+}
+
+{
+  const target = new EventTarget();
+  const a = common.mustCall(3);
+
+  target.addEventListener('foo', a, { capture: true });
+  target.addEventListener('foo', a, { capture: false });
+
+  target.dispatchEvent(new Event('foo'));
+  target.removeEventListener('foo', a, { capture: true });
+  target.dispatchEvent(new Event('foo'));
+  target.removeEventListener('foo', a, { capture: false });
+  target.dispatchEvent(new Event('foo'));
+}
+{
+  const target = new EventTarget();
+  assert.strictEqual(target.toString(), '[object EventTarget]');
+  const event = new Event('');
+  assert.strictEqual(event.toString(), '[object Event]');
+}
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  target.onfoo = common.mustCall();
+  target.dispatchEvent(new Event('foo'));
+}
+
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  assert.strictEqual(target.onfoo, null);
+}
+
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  let count = 0;
+  target.onfoo = () => count++;
+  target.onfoo = common.mustCall(() => count++);
+  target.dispatchEvent(new Event('foo'));
+  assert.strictEqual(count, 1);
+}
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  let count = 0;
+  target.addEventListener('foo', () => count++);
+  target.onfoo = common.mustCall(() => count++);
+  target.dispatchEvent(new Event('foo'));
+  assert.strictEqual(count, 2);
+}
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  const fn = common.mustNotCall();
+  target.onfoo = fn;
+  assert.strictEqual(target.onfoo, fn);
+  target.onfoo = null;
+  target.dispatchEvent(new Event('foo'));
+}
+
+{
+  // `this` value of dispatchEvent
+  const target = new EventTarget();
+  const target2 = new EventTarget();
+  const event = new Event('foo');
+
+  assert.ok(target.dispatchEvent.call(target2, event));
+
+  [
+    'foo',
+    {},
+    [],
+    1,
+    null,
+    undefined,
+    false,
+    Symbol(),
+    /a/,
+  ].forEach((i) => {
+    assert.throws(() => target.dispatchEvent.call(i, event), {
+      code: 'ERR_INVALID_THIS',
+    });
+  });
+}
+
+{
+  // Event Statics
+  assert.strictEqual(Event.NONE, 0);
+  assert.strictEqual(Event.CAPTURING_PHASE, 1);
+  assert.strictEqual(Event.AT_TARGET, 2);
+  assert.strictEqual(Event.BUBBLING_PHASE, 3);
+  assert.strictEqual(new Event('foo').eventPhase, Event.NONE);
+  const target = new EventTarget();
+  target.addEventListener('foo', common.mustCall((e) => {
+    assert.strictEqual(e.eventPhase, Event.AT_TARGET);
+  }), { once: true });
+  target.dispatchEvent(new Event('foo'));
+  // Event is a function
+  assert.strictEqual(Event.length, 1);
+}
+
+{
+  const target = new EventTarget();
+  const ev = new Event('toString');
+  const fn = common.mustCall((event) => assert.strictEqual(event.type, 'toString'));
+  target.addEventListener('toString', fn);
+  target.dispatchEvent(ev);
+}
+{
+  const target = new EventTarget();
+  const ev = new Event('__proto__');
+  const fn = common.mustCall((event) => assert.strictEqual(event.type, '__proto__'));
+  target.addEventListener('__proto__', fn);
+  target.dispatchEvent(ev);
+}
+
+{
+  const eventTarget = new EventTarget();
+  // Single argument throws
+  assert.throws(() => eventTarget.addEventListener('foo'), TypeError);
+  // Null events - does not throw
+  eventTarget.addEventListener('foo', null);
+  eventTarget.removeEventListener('foo', null);
+  eventTarget.addEventListener('foo', undefined);
+  eventTarget.removeEventListener('foo', undefined);
+  // Strings, booleans
+  assert.throws(() => eventTarget.addEventListener('foo', 'hello'), TypeError);
+  assert.throws(() => eventTarget.addEventListener('foo', false), TypeError);
+  assert.throws(() => eventTarget.addEventListener('foo', Symbol()), TypeError);
+  asyncTest = asyncTest.then(async () => {
+    const eventTarget = new EventTarget();
+    // Single argument throws
+    assert.throws(() => eventTarget.addEventListener('foo'), TypeError);
+    // Null events - does not throw
+
+    eventTarget.addEventListener('foo', null);
+    eventTarget.removeEventListener('foo', null);
+
+    // Warnings always happen after nextTick, so wait for a timer of 0
+    await delay(0);
+    assert.strictEqual(lastWarning.name, 'AddEventListenerArgumentTypeWarning');
+    assert.strictEqual(lastWarning.target, eventTarget);
+    lastWarning = null;
+    eventTarget.addEventListener('foo', undefined);
+    await delay(0);
+    assert.strictEqual(lastWarning.name, 'AddEventListenerArgumentTypeWarning');
+    assert.strictEqual(lastWarning.target, eventTarget);
+    eventTarget.removeEventListener('foo', undefined);
+    // Strings, booleans
+    assert.throws(() => eventTarget.addEventListener('foo', 'hello'), TypeError);
+    assert.throws(() => eventTarget.addEventListener('foo', false), TypeError);
+    assert.throws(() => eventTarget.addEventListener('foo', Symbol()), TypeError);
+  });
+}
+{
+  const eventTarget = new EventTarget();
+  const event = new Event('foo');
+  eventTarget.dispatchEvent(event);
+  assert.strictEqual(event.target, eventTarget);
+}
+{
+  // Event target exported keys
+  const eventTarget = new EventTarget();
+  assert.deepStrictEqual(Object.keys(eventTarget), []);
+  assert.deepStrictEqual(Object.getOwnPropertyNames(eventTarget), []);
+  const parentKeys = Object.keys(Object.getPrototypeOf(eventTarget)).sort();
+  const keys = ['addEventListener', 'dispatchEvent', 'removeEventListener'];
+  assert.deepStrictEqual(parentKeys, keys);
+}
+{
+  // Subclassing
+  class SubTarget extends EventTarget {}
+  const target = new SubTarget();
+  target.addEventListener('foo', common.mustCall());
+  target.dispatchEvent(new Event('foo'));
+}
+{
+  // Test event order
+  const target = new EventTarget();
+  let state = 0;
+  target.addEventListener('foo', common.mustCall(() => {
+    assert.strictEqual(state, 0);
+    state++;
+  }));
+  target.addEventListener('foo', common.mustCall(() => {
+    assert.strictEqual(state, 1);
+  }));
+  target.dispatchEvent(new Event('foo'));
+}
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  const descriptor = Object.getOwnPropertyDescriptor(target, 'onfoo');
+  assert.strictEqual(descriptor.configurable, true);
+  assert.strictEqual(descriptor.enumerable, true);
+}
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo');
+  const output = [];
+  target.addEventListener('foo', () => output.push(1));
+  target.onfoo = common.mustNotCall();
+  target.addEventListener('foo', () => output.push(3));
+  target.onfoo = () => output.push(2);
+  target.addEventListener('foo', () => output.push(4));
+  target.dispatchEvent(new Event('foo'));
+  assert.deepStrictEqual(output, [1, 2, 3, 4]);
+}
+{
+  const target = new EventTarget();
+  defineEventHandler(target, 'foo', 'bar');
+  const output = [];
+  target.addEventListener('bar', () => output.push(1));
+  target.onfoo = () => output.push(2);
+  target.dispatchEvent(new Event('bar'));
+  assert.deepStrictEqual(output, [1, 2]);
+}
+{
+  const et = new EventTarget();
+  const listener = common.mustNotCall();
+  et.addEventListener('foo', common.mustCall((e) => {
+    et.removeEventListener('foo', listener);
+  }));
+  et.addEventListener('foo', listener);
+  et.dispatchEvent(new Event('foo'));
+}
+
+{
+  const ev = new Event('test');
+  const evConstructorName = inspect(ev, {
+    depth: -1,
+  });
+  assert.strictEqual(evConstructorName, 'Event');
+
+  const inspectResult = inspect(ev, {
+    depth: 1,
+  });
+  assert.ok(inspectResult.includes('Event'));
+}
+
+{
+  const et = new EventTarget();
+  const inspectResult = inspect(et, {
+    depth: 1,
+  });
+  assert.ok(inspectResult.includes('EventTarget'));
+}
+
+{
+  const ev = new Event('test');
+  assert.strictEqual(ev.constructor.name, 'Event');
+
+  const et = new EventTarget();
+  assert.strictEqual(et.constructor.name, 'EventTarget');
+}
+{
+  // Weak event listeners work
+  const et = new EventTarget();
+  const listener = common.mustCall();
+  et.addEventListener('foo', listener, { [kWeakHandler]: et });
+  et.dispatchEvent(new Event('foo'));
+}
+{
+  // Weak event listeners can be removed and weakness is not part of the key
+  const et = new EventTarget();
+  const listener = common.mustNotCall();
+  et.addEventListener('foo', listener, { [kWeakHandler]: et });
+  et.removeEventListener('foo', listener);
+  et.dispatchEvent(new Event('foo'));
+}
+{
+  // Test listeners are held weakly
+  const et = new EventTarget();
+  et.addEventListener('foo', common.mustNotCall(), { [kWeakHandler]: {} });
+  setImmediate(() => {
+    globalThis.gc();
+    et.dispatchEvent(new Event('foo'));
+  });
+}
+
+{
+  const et = new EventTarget();
+
+  assert.throws(() => et.addEventListener(), {
+    code: 'ERR_MISSING_ARGS',
+    name: 'TypeError',
+  });
+
+  assert.throws(() => et.addEventListener('foo'), {
+    code: 'ERR_MISSING_ARGS',
+    name: 'TypeError',
+  });
+
+  assert.throws(() => et.removeEventListener(), {
+    code: 'ERR_MISSING_ARGS',
+    name: 'TypeError',
+  });
+
+  assert.throws(() => et.removeEventListener('foo'), {
+    code: 'ERR_MISSING_ARGS',
+    name: 'TypeError',
+  });
+
+  assert.throws(() => et.dispatchEvent(), {
+    code: 'ERR_MISSING_ARGS',
+    name: 'TypeError',
+  });
+}
+
+{
+  const et = new EventTarget();
+
+  assert.throws(() => {
+    et.addEventListener(Symbol('symbol'), () => {});
+  }, TypeError);
+
+  assert.throws(() => {
+    et.removeEventListener(Symbol('symbol'), () => {});
+  }, TypeError);
+}
+
+{
+  // Test that event listeners are removed by signal even when
+  // signal's abort event propagation stopped
+  const controller = new AbortController();
+  const { signal } = controller;
+  signal.addEventListener('abort', (e) => e.stopImmediatePropagation(), { once: true });
+  const et = new EventTarget();
+  et.addEventListener('foo', common.mustNotCall(), { signal });
+  controller.abort();
+  et.dispatchEvent(new Event('foo'));
+}
+
+{
+  const event = new Event('foo');
+  assert.strictEqual(event.cancelBubble, false);
+  event.cancelBubble = true;
+  assert.strictEqual(event.cancelBubble, true);
+}
+
+{
+  // A null eventInitDict should not throw an error.
+  new Event('', null);
+  new Event('', undefined);
+}
