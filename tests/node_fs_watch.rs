@@ -36,19 +36,20 @@ fn scratch_reusing_inodes(name: &str) -> PathBuf {
     ];
     for base in &candidates {
         let probe = scratch_in(base, &format!("{name}-probe"));
-        let ino = |path: &Path| {
-            std::fs::create_dir(path).unwrap();
-            let ino = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap());
-            std::fs::remove_dir(path).unwrap();
-            ino
-        };
-        let reuses = ino(&probe.join("d")) == ino(&probe.join("d"));
+        let reuses = inode_of_new_dir(&probe.join("d")) == inode_of_new_dir(&probe.join("d"));
         let _ = std::fs::remove_dir_all(&probe);
         if reuses {
             return scratch_in(base, name);
         }
     }
     scratch(name)
+}
+
+fn inode_of_new_dir(path: &Path) -> u64 {
+    std::fs::create_dir(path).unwrap();
+    let ino = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap());
+    std::fs::remove_dir(path).unwrap();
+    ino
 }
 
 struct Session {

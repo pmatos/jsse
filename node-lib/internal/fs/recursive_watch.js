@@ -94,8 +94,8 @@ class RecursiveWatch {
   // deleted. Its path may hold a new directory that the parent's event found
   // with the dead one's inode number, which file systems reuse at once, so
   // watch whatever is there now.
-  restartDirectory(path, relative, dead) {
-    dead.close();
+  restartDirectory(path, relative) {
+    this.dirs.get(path).close();
     this.dirs.delete(path);
     this.inodes.delete(path);
     let stats;
@@ -111,7 +111,7 @@ class RecursiveWatch {
     if (this.closed) return;
     if (bits & kSelf) {
       if (dir !== this.root) {
-        if ((bits & kGone) && this.dirs.get(dir) === source) this.restartDirectory(dir, relative, source);
+        if ((bits & kGone) && this.dirs.get(dir) === source) this.restartDirectory(dir, relative);
         return;
       }
       const own = Buffer.from(name).toString();
