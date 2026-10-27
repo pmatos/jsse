@@ -50,6 +50,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/per_context/domexception"),
     builtin!("internal/perf/utils"),
     builtin!("internal/process/warning"),
+    builtin!("internal/process/fatal"),
     builtin!("internal/webidl"),
     builtin!("internal/console/node"),
     builtin!("internal/constants"),

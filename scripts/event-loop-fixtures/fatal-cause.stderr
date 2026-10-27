@@ -1,0 +1,12 @@
+<dir>/fatal-cause.fixture.js:4
+throw new Error("outer problem", { cause: inner });
+^
+
+Error: outer problem
+    at Object.<anonymous> (<dir>/fatal-cause.fixture.js:4:7)
+    ... N lines matching cause stack trace ...
+  [cause]: RangeError: inner problem
+      at Object.<anonymous> (<dir>/fatal-cause.fixture.js:3:15)
+}
+
+Node.js <version>

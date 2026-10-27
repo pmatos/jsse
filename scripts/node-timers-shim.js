@@ -435,3 +435,4 @@
     configurable: true,
   });
 })();
+//# sourceURL=node:internal/timers

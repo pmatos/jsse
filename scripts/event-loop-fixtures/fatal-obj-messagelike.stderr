@@ -1,0 +1,7 @@
+
+<dir>/fatal-obj-messagelike.fixture.js:3
+throw { message: "m", stack: "s" };
+^
+{ message: 'm', stack: 's' }
+
+Node.js <version>

@@ -42,9 +42,9 @@ pub(crate) struct GeneratorState {
     /// Number of frames the driver's lexical scope stack must hold while this
     /// state executes (`sec-block-runtime-semantics-evaluation`). Stamped from
     /// `TransformContext::scope_depth` at the moment this state is sealed, so
-    /// every state, however it's reached, carries its own static depth — the
-    /// driver reconciles toward it on every dispatch, which is what makes
-    /// break/continue/return/throw unwind the scope stack for free.
+    /// every state carries its own static depth; the driver reconciles toward
+    /// it on every dispatch, so break/continue/return/throw unwind the scope
+    /// stack for free.
     pub scope_depth: usize,
     /// What the driver must do to the top of the scope stack before this
     /// state can run, when `scope_depth` alone doesn't say (a plain entry
@@ -1425,7 +1425,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
             ctx.current_state_id = ctx.new_state();
         }
 
-        Statement::Throw(expr) => {
+        Statement::Throw(expr, _) => {
             if expr_has_suspension(expr, ctx.is_async) {
                 let temp_var = ctx.new_temp_var("throw");
                 let binding = SentValueBindingKind::Variable(temp_var.clone());
@@ -4561,7 +4561,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             scope_capture: Default::default(),
         }),
         Statement::Return(e) => Statement::Return(e.as_ref().map(rewrite_expr)),
-        Statement::Throw(e) => Statement::Throw(rewrite_expr(e)),
+        Statement::Throw(e, p) => Statement::Throw(rewrite_expr(e), *p),
         Statement::Try(t) => Statement::Try(TryStatement {
             block: rewrite_stmts_await_to_yield(&t.block),
             handler: t.handler.as_ref().map(|h| CatchClause {
@@ -5758,7 +5758,7 @@ mod tests {
         // (`is_await: true` instead of `false`), so it's gated by the same
         // widened `pattern_needs_await_lowering` check. Structural proof is
         // the only regression test this site gets: the mandatory per-step
-        // `Await(nextResult)` (`sec-forin-div-ofbodyevaluation`, step 6.b)
+        // `Await(nextResult)` (for-in/of body evaluation, step 6.b)
         // already forces a real suspension before the pattern is ever bound,
         // so a black-box job-ordering assertion can't distinguish the fixed
         // lowering from the pre-fix blocking `await_value` here -- both

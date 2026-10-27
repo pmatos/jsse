@@ -618,17 +618,18 @@ impl Interpreter {
             }
         }
         roots.extend_from_slice(self.gc_temp_roots.as_slice());
-        // Values held by active bytecode operand stacks
+        // Active bytecode operand stacks
         roots.extend_from_slice(self.gc_bytecode_roots.as_slice());
-        // Queued microtasks, pending async-generator requests and armed timers.
+        // Microtasks, async-generator requests and timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
-        // Promises a host worker will settle later may be reachable only through
-        // that worker's captured resolving function.
+        // Promises a host worker settles later, reachable only through its
+        // resolving function.
         roots.extend(self.scheduler.pending_async_promise_ids_lock().iter());
         for val in &self.pending_iter_close {
             Self::collect_value_roots(val, &mut roots);
         }
+        self.collect_node_throw_roots(&mut roots);
         for iters in self.generator_inline_iters.values() {
             for val in iters {
                 Self::collect_value_roots(val, &mut roots);

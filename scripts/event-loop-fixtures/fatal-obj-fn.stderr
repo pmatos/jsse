@@ -1,0 +1,7 @@
+
+<dir>/fatal-obj-fn.fixture.js:2
+throw function named() {};
+^
+[Function: named]
+
+Node.js <version>

@@ -41,6 +41,15 @@ impl Compiler {
         }
     }
 
+    /// The `throw` keyword's position for the `--node` fatal report; always
+    /// emitted while hooks are on, so `Op::Throw` never reads a stale call.
+    pub(super) fn emit_throw_pos(&mut self, at: u32) {
+        if call_positions_enabled() {
+            self.emit(Op::SetCallPos);
+            self.emit_u32(at);
+        }
+    }
+
     /// `[..., callee, this]` → `[..., result]` (`below` is 2), or `[...,
     /// callee]` → `[..., result]` for `new` (`below` is 1).
     pub(super) fn compile_spread_arguments(

@@ -1,0 +1,11 @@
+<dir>/fatal-props.fixture.js:11
+throw new AppError("custom");
+^
+
+AppError: custom
+    at Object.<anonymous> (<dir>/fatal-props.fixture.js:11:7)
+  code: 'E_APP',
+  details: { retry: false, items: [ 1, 2 ] }
+}
+
+Node.js <version>

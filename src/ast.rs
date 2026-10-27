@@ -81,8 +81,8 @@ pub(crate) enum SourceType {
     Module,
 }
 
-/// Dense identifier for a call IC site within a single `Body`, plus the call's
-/// source offset plus one (0 = unknown), which only stack traces read.
+/// Dense call IC site id within a `Body`, plus the call's source offset plus
+/// one (0 = unknown), read only by stack traces.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub(crate) struct CallSiteId(pub u32, pub u32);
 
@@ -293,7 +293,7 @@ pub(crate) enum Statement {
     Return(Option<Expression>),
     Break(Option<String>),
     Continue(Option<String>),
-    Throw(Expression),
+    Throw(Expression, u32),
     Try(TryStatement),
     Switch(SwitchStatement),
     Labeled(String, Box<Statement>),
@@ -1280,7 +1280,7 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
                 || stmt_uses_arguments(&f.body)
         }
         Statement::Return(e) => e.as_ref().is_some_and(expr_uses_arguments),
-        Statement::Throw(e) => expr_uses_arguments(e),
+        Statement::Throw(e, _) => expr_uses_arguments(e),
         Statement::Try(t) => {
             stmts_use_arguments(&t.block)
                 || t.handler.as_ref().is_some_and(|h| {
@@ -1514,7 +1514,7 @@ fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) 
         | Statement::Return(None)
         // Nested functions own their `arguments`/`super`; opaque.
         | Statement::FunctionDeclaration(_) => false,
-        Statement::Expression(e) | Statement::Throw(e) => expr_contains_matching(e, pred),
+        Statement::Expression(e) | Statement::Throw(e, _) => expr_contains_matching(e, pred),
         Statement::Return(Some(e)) => expr_contains_matching(e, pred),
         Statement::Block(stmts) => stmts_contain_matching(stmts, pred),
         Statement::Variable(decl) => decl
@@ -1767,7 +1767,7 @@ fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32)
                 assign_expr_sites(e, call_id, prop_id);
             }
         }
-        Statement::Throw(e) => assign_expr_sites(e, call_id, prop_id),
+        Statement::Throw(e, _) => assign_expr_sites(e, call_id, prop_id),
         Statement::Try(t) => {
             for s in t.block.iter_mut() {
                 assign_stmt_sites(s, call_id, prop_id);
@@ -2277,7 +2277,7 @@ fn clear_stmt_ic_sites(stmt: &mut Statement) {
                 clear_expr_ic_sites(e);
             }
         }
-        Statement::Throw(e) => clear_expr_ic_sites(e),
+        Statement::Throw(e, _) => clear_expr_ic_sites(e),
         Statement::Try(t) => {
             for s in t.block.iter_mut() {
                 clear_stmt_ic_sites(s);

@@ -1,0 +1,8 @@
+
+<dir>/uncaught-non-error.fixture.js:3
+setTimeout(function () { throw "just a string"; }, 1);
+                         ^
+just a string
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>
