@@ -362,3 +362,24 @@ fn a_directory_replaced_before_its_events_are_handled_is_watched_again() {
     session.wait_for("ev rename a/probe");
     session.child.kill().unwrap();
 }
+
+/// File systems such as ext4 hand a removed directory's inode number to the
+/// next directory created, so the replacement can look like the directory
+/// whose watch the kernel just dropped (#1377). Set `TMPDIR` to such a file
+/// system to exercise that case; elsewhere the replacement has a new inode.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_replaced_directory_tree_is_watched_down_to_its_nested_directories() {
+    let dir = scratch("replaced-tree");
+    std::fs::create_dir_all(dir.join("a/sub")).unwrap();
+    let script = "const fs = require('fs'); const d = process.env.DIR;
+        const w = fs.watch(d, { recursive: true }, (type, name) => console.log('ev', type, name));
+        fs.rmSync(d + '/a', { recursive: true }); fs.mkdirSync(d + '/a/sub', { recursive: true });
+        console.log('ready');";
+    let mut session = Session::start(script, &dir, &[]);
+    session.wait_for("ready");
+    session.wait_for("ev rename a/sub");
+    std::fs::write(dir.join("a/sub/probe"), "x").unwrap();
+    session.wait_for("ev rename a/sub/probe");
+    session.child.kill().unwrap();
+}

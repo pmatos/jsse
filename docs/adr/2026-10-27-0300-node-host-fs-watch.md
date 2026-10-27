@@ -64,7 +64,12 @@ for its whole life.
   appears is watched and everything in it is announced as a `rename`, which
   closes the window between its creation and its watch; one that vanishes
   loses its watches; sub-directory self-events are dropped because the parent
-  reports them; symlinked directories are not followed; `ignore` also prunes
+  reports them, except that a rename-type self-event (the directory was
+  deleted or moved, so the kernel dropped its watch) makes the tree re-examine
+  the path and watch whatever directory is there now. The parent's inode
+  comparison alone cannot do this: ext4 reuses a removed directory's inode
+  number for the next `mkdir`, so a replacement looked like the dead directory
+  and was never watched again (#1377); symlinked directories are not followed; `ignore` also prunes
   the walk. Node's own recursive watcher (a watch per file with stat
   comparisons) reports a different multiset of events, so the oracle compares
   only that the expected name is reported.
