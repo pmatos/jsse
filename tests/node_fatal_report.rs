@@ -96,6 +96,7 @@ fn fatal_reports_match_node() {
 
 #[test]
 fn fatal_reports_match_node_on_the_tree_walker() {
+    // The tree-walker drops the async function's frame (#1358).
     check_all(&["--no-bytecode"], false, &["fatal-reject-async"]);
 }
 

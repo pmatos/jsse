@@ -31,8 +31,8 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    (`report`, `unhandledRejectionError`). The event-loop shim only orders the
    steps: like Node's `process._fatalException` it sets `process.exitCode`,
    emits `exit` (a listener may change the status), then prints, then exits
-   with `process.exitCode`. A throwing `uncaughtException` handler exits with 7
-   the same way. `uncaughtExceptionMonitor` is emitted first. The builtin
+   with `process.exitCode`. A throwing `uncaughtException` handler prints the
+   report and exits with 7 directly: `exit` is not emitted. `uncaughtExceptionMonitor` is emitted first. The builtin
    loader hands the module to the shim through the one-shot symbol
    `jsse.node.fatal.handoff`; before it runs the shim falls back to the bare
    stack.
@@ -49,18 +49,22 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    offset of the `throw` keyword in `Statement::Throw(expr, at)`; the
    tree-walker and the VM (`Op::SetCallPos` before `Op::Throw`, emitted only
    once the stack hooks are installed, so default chunks are byte-identical)
-   call `Interpreter::node_note_throw`, which keeps the thrown value (in a
-   hidden slot of the global object, traced by the collector), the source and
-   the offset. `__host_stack_throw_site(value)` answers only for that same
-   value (SameValue); otherwise the header uses the error's own top frame
+   call `Interpreter::node_note_throw`, which keeps the thrown value, the source
+   and the offset in a list of the last four throws on the interpreter (traced
+   by the collector, so up to four thrown objects stay alive), so a throw
+   caught in a `finally` or cleanup does not hide the outer one. `__host_stack_throw_site(value)` answers only for a value in that list
+   (SameValue); otherwise the header uses the error's own top frame
    (parsed from its stack). Throws inside embedded `node:` modules never
    replace the site, so the CommonJS loader's `catch (e) { throw e }` keeps the
    user's position (V8's `finally` rethrow does the same). A throw in the
    chunk compiled with hooks on always sets the position first (0 when the
    parser had none), so `Op::Throw` never reads a stale call position. The header is
    omitted when the position lies in a `node:` source, in `<anonymous>` code
-   or when the source cannot be read. The caret copies tabs, as Node does.
-4. **Unhandled rejections.** A non-error reason becomes the
+   or when the source cannot be read. The excerpt is read with the unpatched synchronous `fs`
+   (`internal/host/fs`), not from the engine's source table, so a file changed
+   after loading shows its current text. The caret copies tabs, as Node does.
+4. **Unhandled rejections.** A reason is an error only with an own
+   `stack` (Node's `isErrorLike`); any other becomes the
    `UnhandledPromiseRejection` error with `code: 'ERR_UNHANDLED_REJECTION'`.
    The reason is rendered with V8's `NoSideEffectsToString` (`#<Object>`,
    `[object Array]`, function source, `Symbol(x)`). Its stack and header are
@@ -92,6 +96,11 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
   remembered), falls back to the error's top frame. Positions in `eval` code
   are resolved against the enclosing function's source, as call positions are
   (V8-errors gap).
+- Colours are never used, though Node colours the report on a terminal or with
+  `FORCE_COLOR`.
+- Under `--no-bytecode` an Error made in an async function's synchronous part
+  lacks that function's frame (#1358), so `fatal-reject-async` is skipped in the
+  tree-walker run of `tests/node_fatal_report.rs`.
 - Nothing is printed for `--trace-uncaught`, `--report-*` or inspector options.
 
 ## Verification

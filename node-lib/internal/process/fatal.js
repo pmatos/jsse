@@ -5,6 +5,7 @@
 // then the error as util.inspect shows it. The caller adds "Node.js vX".
 
 const {
+  ErrorPrototype,
   ObjectGetOwnPropertyDescriptor,
   ObjectGetPrototypeOf,
   ObjectPrototype,
@@ -55,7 +56,8 @@ function noSideEffectsToString(value) {
     default: return String(value);
   }
   if (value === null) return 'null';
-  if (isNativeError(value)) {
+  if (isNativeError(value) ||
+      dataProperty(value, 'toString') === ErrorPrototype.toString) {
     const name = dataProperty(value, 'name');
     const message = dataProperty(value, 'message');
     const head = typeof name === 'string' ? name : 'Error';
@@ -115,12 +117,14 @@ function topFrame(error) {
   return match === null ? undefined : [match[1], +match[2], +match[3]];
 }
 
+// The unpatched synchronous fs, so user code cannot run during the report.
 function sourceOf(file) {
-  const fs = require('fs');
+  require('fs');
+  const { readFileSync } = require('internal/host/fs').sync;
   if (file.startsWith('file://')) {
-    return fs.readFileSync(require('url').fileURLToPath(file), 'utf8');
+    return readFileSync(require('url').fileURLToPath(file), 'utf8');
   }
-  return fs.readFileSync(file, 'utf8');
+  return readFileSync(file, 'utf8');
 }
 
 // file:line, the source line and a caret under the column, ending in a newline.

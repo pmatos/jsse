@@ -1,6 +1,7 @@
 //! The source registry behind `--node` stack traces: which file a function's
 //! source belongs to, and the line and column of an offset in it.
 
+use crate::types::JsValue;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -34,8 +35,9 @@ pub(crate) struct NodeStackState {
     prune_at: usize,
     /// Native functions standing in for a running `vm` script's top level.
     pub(super) script_frames: Vec<(u64, Rc<str>)>,
-    /// Source id and offset plus one of the last `throw` statement run.
-    pub(super) throw_site: (usize, u32),
+    /// The last few thrown values with the source id and offset plus one of
+    /// their `throw`; traced by the collector.
+    pub(crate) throws: Vec<(JsValue, usize, u32)>,
     /// The source of the last noted throw, its id and whether it is a `node:` one.
     pub(super) throw_source: Option<(Rc<str>, usize, bool)>,
 }

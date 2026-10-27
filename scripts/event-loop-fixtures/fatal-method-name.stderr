@@ -1,0 +1,9 @@
+<dir>/fatal-method-name.fixture.js:5
+    throw new Error("from run");
+    ^
+
+Error: from run
+    at Object.run (<dir>/fatal-method-name.fixture.js:5:11)
+    at Object.<anonymous> (<dir>/fatal-method-name.fixture.js:9:10)
+
+Node.js <version>

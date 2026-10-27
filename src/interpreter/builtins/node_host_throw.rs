@@ -2,14 +2,15 @@
 //! report. The parser keeps the offset of the `throw` keyword; executing the
 //! statement notes it with the thrown value, and `__host_stack_throw_site`
 //! answers only for that same value, so an error built elsewhere or thrown by
-//! the engine falls back to its own stack. Throws in embedded Node modules do
-//! not count, so a rethrow by the loader keeps the user's site. Inert until
-//! the stack hooks are installed.
+//! the engine falls back to its own stack. The last few throws are kept, so a
+//! throw caught inside a `finally` does not hide the site of the outer one.
+//! Throws in embedded Node modules do not count, so a rethrow by the loader
+//! keeps the user's site. Inert until the stack hooks are installed.
 
 use super::super::*;
 use std::rc::Rc;
 
-const THROWN: PrivateId = PrivateId(u64::MAX - 6);
+const THROW_SITES: usize = 4;
 
 impl Interpreter {
     pub(crate) fn node_note_throw(&mut self, value: &JsValue, at: u32) {
@@ -36,12 +37,6 @@ impl Interpreter {
         let Some(source) = source else {
             return;
         };
-        let Some(global) = self.realm().global_object else {
-            return;
-        };
-        let Some(handle) = self.get_object_cell(global).cloned() else {
-            return;
-        };
         let (id, internal) = match &self.node_host.stack.throw_source {
             Some((cached, id, internal)) if Rc::ptr_eq(cached, &source) => (*id, *internal),
             _ => {
@@ -57,9 +52,18 @@ impl Interpreter {
         if internal {
             return;
         }
-        self.node_host.stack.throw_site = (id, at);
-        handle.borrow_mut().set_hidden_slot(THROWN, value.clone());
-        self.gc_write_barrier_value(&handle, value);
+        let throws = &mut self.node_host.stack.throws;
+        throws.retain(|(thrown, _, _)| !same_value(thrown, value));
+        if throws.len() == THROW_SITES {
+            throws.remove(0);
+        }
+        throws.push((value.clone(), id, at));
+    }
+
+    pub(crate) fn collect_node_throw_roots(&self, roots: &mut Vec<u64>) {
+        for (value, _, _) in &self.node_host.stack.throws {
+            roots.extend(value.as_object_id());
+        }
     }
 
     pub(crate) fn node_note_vm_throw(&mut self, value: &JsValue) {
@@ -74,19 +78,13 @@ impl Interpreter {
         for _ in 0..16 {
             let obj = self.get_object(id)?;
             let object = obj.borrow();
-            if object.array_elements().is_some() {
+            if object.array_elements().is_some() || object.proxy().is_some() {
                 return None;
             }
-            for key in object
-                .ordinary_own_property_keys(OwnKeyFilter::AllStrings)?
-                .into_iter()
-                .take(256)
-            {
-                let holds = object
-                    .get_own_property(&key)
-                    .and_then(|d| d.value?.as_object_id())
-                    == Some(func);
-                if let (true, Some(name)) = (holds, key.as_str()) {
+            for (key, desc) in object.properties.iter().take(256) {
+                if desc.value().and_then(JsValue::as_object_id) == Some(func)
+                    && let Some(name) = key.as_str()
+                {
                     return Some(name.to_string());
                 }
             }
@@ -101,16 +99,17 @@ impl Interpreter {
             1,
             |interp, _this, args| {
                 let undefined = Completion::Normal(JsValue::UNDEFINED);
-                let (id, at) = interp.node_host.stack.throw_site;
                 let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let stored = interp
-                    .realm()
-                    .global_object
-                    .and_then(|g| interp.get_object(g))
-                    .and_then(|g| g.borrow().hidden_slot(THROWN));
-                if at == 0 || !stored.is_some_and(|s| same_value(&s, &value)) {
+                let Some(&(_, id, at)) = interp
+                    .node_host
+                    .stack
+                    .throws
+                    .iter()
+                    .rev()
+                    .find(|(thrown, _, _)| same_value(thrown, &value))
+                else {
                     return undefined;
-                }
+                };
                 let Some((file, line, column)) = interp.node_host.stack.locate(id, at) else {
                     return undefined;
                 };

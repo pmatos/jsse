@@ -210,7 +210,7 @@
     return (
       typeof value === "object" &&
       value !== null &&
-      (value instanceof Error || Object.prototype.hasOwnProperty.call(value, "stack"))
+      Object.prototype.hasOwnProperty.call(value, "stack")
     );
   }
 
