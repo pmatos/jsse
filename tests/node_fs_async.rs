@@ -143,9 +143,11 @@ fn a_throwing_callback_is_an_uncaught_exception_and_exit_in_a_callback_exits() {
     assert_eq!(rc, 1);
     assert!(err.contains("Error: boom"), "{err}");
     let (out, _, rc) = run(
-        "process.on('uncaughtException', (e) => console.log('caught', e.message));
-         require('fs').stat('/', () => { throw new Error('boom'); });
-         require('fs').stat('/', () => console.log('second'));",
+        "process.on('uncaughtException', (e) => {
+           console.log('caught', e.message);
+           require('fs').stat('/', () => console.log('second'));
+         });
+         require('fs').stat('/', () => { throw new Error('boom'); });",
     );
     assert_eq!((out.as_str(), rc), ("caught boom\nsecond", 0));
     let (out, _, rc) = run(
