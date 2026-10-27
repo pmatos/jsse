@@ -51,8 +51,11 @@ Unix only (`cfg(unix)` floor); on other platforms the floor is absent and
    immediate is pending (it polls without waiting).
 7. **Back-pressure.** A read pipe delivers one 64 KiB chunk per `_read`; the
    reader thread waits for a token the stream grants, so an unconsumed stream
-   stops the child instead of buffering without bound. Writes go to a writer
-   thread through a channel; `Written` completes each write callback in order.
+   stops the child instead of buffering without bound. A write is first tried
+   at once, like `uv_write`: what the pipe takes completes straight into the
+   inbox, so it is ahead of the `Exit` of a child that read it. Only a full
+   pipe sends the rest to a writer thread through a channel; `Written`
+   completes each write callback in order.
    `spawnSync` feeds input and drains stdout/stderr on separate threads, so
    input larger than the pipe buffer cannot deadlock against output. It waits
    for exit and for every pipe thread to finish (so an `EPIPE` from the stdin
