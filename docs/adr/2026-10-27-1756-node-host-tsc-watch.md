@@ -52,8 +52,9 @@ Status: accepted, epic #1214, issue #1248 (builds on the fs.watch floor of
    `--excludeFiles` and the `watchOptions` of a config, a real `--lib es2020`, and `-b -w`
    over composite projects with an error introduced and fixed.
 6. **Result.** All 38 sessions are identical on Node v26.8.2 and jsse with TypeScript 6.0.3,
-   repeated at 6 and 12 parallel jobs, plus ten and four copies of the sessions that touch polling, strategies and
-   exclusion at 12 jobs (the one that diverged between runs on both engines, see 7, was split); no engine change was needed, so this PR touches
+   repeated at 6 and 12 parallel jobs; after the last fixture change (see 7) a Node-vs-jsse run, the
+   `--pin` run, a 56-session run of four copies of every polling, strategy and exclusion session
+   and the `--no-node` runs (4 and 12 jobs, and `tests/node_tsc_watch.rs`) all passed; no engine change was needed, so this PR touches
    no Rust source and the default (non-`--node`) environment and the test262 baseline are
    untouched. A session takes 2 to 10 s on both engines, 20 to 60 s on jsse for `-b -w` and
    for a broken config (they load the default `lib.d.ts` set or build three projects).
