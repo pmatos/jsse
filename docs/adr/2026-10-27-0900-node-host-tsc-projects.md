@@ -16,7 +16,7 @@ Status: accepted, epic #1214, issue #1243 (builds on #1242,
    a degenerate case cannot pass by both printing the same usage text (the first
    draft forgot the input files and "passed" on `tsc --help`).
 2. **What is diffed.** Per invocation: stdout, stderr and the exit code; per
-   case: every file the compiler created, changed or deleted. The only
+   case: every file, directory or symlink the compiler created, changed or deleted. The only
    normalisation is the work-tree path (`<DIR>`), the TypeScript package path
    (`<TSC>`) and `h:mm:ss AM` clock stamps (`--build --verbose` prints them).
    Nothing else is rewritten, so line endings, source-map `sources`, the
@@ -27,7 +27,7 @@ Status: accepted, epic #1214, issue #1243 (builds on #1242,
    ESNext/bundler and ES2015 (generator downlevel); `--declaration
    --declarationMap --sourceMap`; `--emitDeclarationOnly`; `--incremental`
    twice; `--listFilesOnly`, `--listEmittedFiles`, `--explainFiles`,
-   `--traceResolution`; and one compile against the default `lib.d.ts` set.
+   `--traceResolution`; and one `--listFilesOnly` compile against the default `lib.d.ts` set (a clean `--noEmit` run prints nothing, so it could not be told apart from `noemit`).
    `errors` (over thirty semantic diagnostics under `--strict` across three files,
    syntax errors in a fourth): plain, strict, emit with errors (exit 2),
    `--noEmitOnError` (exit 1), `--pretty`, syntax only. `ts-app` and
@@ -42,12 +42,12 @@ Status: accepted, epic #1214, issue #1243 (builds on #1242,
    for the two cases that load the default `lib.d.ts` set (`default-lib`,
    `tsconfig-bad`), the slow path #1242 measured. The full run takes a couple of minutes
    with `--jobs 8`.
-5. **Pins.** `--pin` rewrites `scripts/tsc-fixtures/expected-projects.txt`
-   (sha256 of each case's normalised Node result; two consecutive pins were
-   byte-identical). `--no-node` compares jsse against those digests, and
+5. **Pins.** `--pin` (Node required) merges into `scripts/tsc-fixtures/expected-projects.txt`
+   (sha256 of each case's normalised Node result; a case whose Node exit code is not the
+   expected one is not pinned, and `--pin case` re-pins only that case). `--no-node` compares jsse against those digests, and
    `tests/node_tsc_projects.rs` does so through the built binary.
 6. **Skips and CI.** Without `TSC_DIR`, or with another TypeScript version, the
-   script prints `SKIP: ...` and exits 0; `--require` turns a skip into exit 3.
+   script prints `SKIP: ...` and exits 0; `--require` turns a skip into exit 3 (the Rust guard does not use it: a wrong version skips there too).
    `--ci` prints plain output, full diffs and `::error` annotations. The sources
    are still not vendored (#1250), so the repository's CI never has `TSC_DIR`
    and these runs are local until that lands. What CI does run is

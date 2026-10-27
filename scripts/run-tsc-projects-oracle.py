@@ -12,7 +12,7 @@ Prints a pass/fail table; exits 1 on any difference.
 
 Options: --jobs N (default 4), --timeout SECONDS (default 900), --ci (plain output, GitHub
 annotations, full diffs), --list, --require, --pin (rewrite expected-projects.txt from Node's
-digests), --no-node (compare jsse with the pinned digests instead of running Node), --fixtures DIR.
+digests; merges into the existing pins, so single cases can be re-pinned), --no-node (compare jsse with the pinned digests instead of running Node), --fixtures DIR.
 """
 
 import argparse
@@ -37,28 +37,45 @@ DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS")
 
 def load_cases():
     cases = []
-    for line in open(os.path.join(FIX, "cases.txt"), encoding="utf-8"):
-        line = line.strip()
-        if line and not line.startswith("#"):
-            name, project, exit_codes, args = (p.strip() for p in line.split("|", 3))
-            cases.append(
-                (
-                    name,
-                    project,
-                    exit_codes,
-                    [shlex.split(a) for a in args.split(" ;; ")],
+    with open(os.path.join(FIX, "cases.txt"), encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                name, project, exit_codes, args = (
+                    p.strip() for p in line.split("|", 3)
                 )
-            )
+                cases.append(
+                    (
+                        name,
+                        project,
+                        exit_codes,
+                        [shlex.split(a) for a in args.split(" ;; ")],
+                    )
+                )
     return cases
+
+
+def load_pins():
+    try:
+        with open(PINNED, encoding="utf-8") as f:
+            return dict(row.split() for row in f if row.strip())
+    except FileNotFoundError:
+        return {}
 
 
 def snapshot(tree):
     files = {}
-    for dirpath, _, names in os.walk(tree):
-        for n in names:
+    for dirpath, dirs, names in os.walk(tree):
+        for n in dirs + names:
             p = os.path.join(dirpath, n)
-            with open(p, "rb") as f:
-                files[os.path.relpath(p, tree)] = f.read()
+            rel = os.path.relpath(p, tree)
+            if os.path.islink(p):
+                files[rel] = b"-> " + os.readlink(p).encode("utf-8", "surrogateescape")
+            elif os.path.isdir(p):
+                files[rel] = b"<dir>"
+            else:
+                with open(p, "rb") as f:
+                    files[rel] = f.read()
     return files
 
 
@@ -83,10 +100,10 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
             codes.append(str(r.returncode))
             out.append(r.stdout)
             err.append(r.stderr)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             codes.append("timeout")
-            out.append(b"")
-            err.append(b"")
+            out.append(e.stdout or b"")
+            err.append(e.stderr or b"")
             break
     elapsed = time.monotonic() - start
     after = snapshot(tree)
@@ -202,7 +219,8 @@ def main():
         os.path.join(tsc_dir, "lib", "_tsc.js")
     ) or not os.path.isfile(manifest):
         return skip(f"{tsc_dir} is not a typescript package (no lib/_tsc.js)")
-    version = re.search(r'"version"\s*:\s*"([^"]+)"', open(manifest).read())
+    with open(manifest, encoding="utf-8") as f:
+        version = re.search(r'"version"\s*:\s*"([^"]+)"', f.read())
     version = version.group(1) if version else "unknown"
     if version != "6.0.3":
         return skip(f"the tsc project oracle targets typescript 6.0.3, found {version}")
@@ -217,9 +235,9 @@ def main():
     if not os.access(jsse, os.X_OK):
         print("Building jsse (release)...", flush=True)
         subprocess.run(["cargo", "build", "--release"], cwd=ROOT, check=True)
-    pins = {}
-    if o.no_node:
-        pins = dict(row.split() for row in open(PINNED) if row.strip())
+    if o.pin and (o.no_node or not node):
+        sys.exit("--pin needs Node: it pins Node's results")
+    pins = load_pins() if o.no_node else {}
     print(
         f"typescript {version} from {tsc_dir} (jsse: {jsse}, {len(cases)} cases, {o.jobs} jobs)",
         flush=True,
@@ -267,9 +285,15 @@ def main():
         with ThreadPoolExecutor(o.jobs) as pool:
             results = list(pool.map(one, cases))
         if o.pin:
-            with open(PINNED, "w") as f:
-                for case, ref, _, _ in results:
-                    f.write(f"{case[0]} {digest(ref)}\n")
+            pins = load_pins()
+            for case, ref, _, bad in results:
+                if "node exit status" not in bad:
+                    pins[case[0]] = digest(ref)
+            order = [c[0] for c in load_cases()]
+            with open(PINNED, "w", encoding="utf-8") as f:
+                for name in order:
+                    if name in pins:
+                        f.write(f"{name} {pins[name]}\n")
             print(f"wrote {PINNED}")
         print(f"\n{'case':<26}{'node s':>9}{'jsse s':>9}  result")
         failed = 0

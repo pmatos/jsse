@@ -106,6 +106,35 @@ class OracleHarnessTest(unittest.TestCase):
         r = self.run_oracle(jsse.replace("same", "drift"), "--no-node")
         self.assertEqual(r.returncode, 1, r.stdout)
 
+    def test_pin_merges_single_cases_and_skips_wrong_exit_codes(self):
+        jsse = NODE.replace("$2", "$3")
+        self.assertEqual(self.run_oracle(jsse, "--pin").returncode, 0)
+        pins = self.fix / "expected-projects.txt"
+        full = pins.read_text()
+        self.assertEqual(self.run_oracle(jsse, "--pin", "one").returncode, 0)
+        self.assertEqual(pins.read_text(), full)
+        (self.fix / "cases.txt").write_text(
+            "one | p | 0 | --noEmit a.ts\ntwo | p | 2 2 | a.ts ;; b.ts\n"
+        )
+        self.assertEqual(self.run_oracle(jsse, "--pin").returncode, 1)
+        self.assertEqual(
+            [row.split()[0] for row in pins.read_text().splitlines()], ["one", "two"]
+        )
+        self.assertEqual(pins.read_text(), full)
+
+    def test_pin_refuses_no_node(self):
+        r = self.run_oracle(NODE, "--pin", "--no-node")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--pin needs Node", r.stdout + r.stderr)
+
+    def test_empty_directory_difference_fails(self):
+        r = self.run_oracle(
+            NODE.replace("exit 2", "mkdir -p only-here\nexit 2").replace("$2", "$3"),
+            "one",
+        )
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("file only-here", r.stdout)
+
     def test_skips_without_tsc_dir_and_fails_when_required(self):
         r = self.run_oracle(NODE, tsc_dir=False)
         self.assertEqual(r.returncode, 0)
