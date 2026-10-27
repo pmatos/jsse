@@ -27,33 +27,14 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).trim_end().to_string()
 }
 
-fn probe(source: &str) -> String {
-    stdout(&run(&["--node", "-e", source], None))
-}
-
-#[derive(Debug)]
-struct Needs {
-    process_events: bool,
-    inspect: bool,
-}
-
-fn node_tests() -> Vec<(String, Needs)> {
+fn node_tests() -> Vec<String> {
     let manifest = std::fs::read_to_string(fixtures().join("manifest.txt")).unwrap();
-    let tests: Vec<(String, Needs)> = manifest
+    let tests: Vec<String> = manifest
         .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| {
-            let mut words = l.split_whitespace();
-            let name = words.next().unwrap().to_string();
-            let flags: Vec<&str> = words.collect();
-            let needs = Needs {
-                process_events: flags.contains(&"needs-process-events"),
-                inspect: flags.contains(&"needs-inspect"),
-            };
-            (name, needs)
-        })
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))
+        .map(|l| l.trim().to_string())
         .collect();
-    assert!(tests.len() >= 25, "manifest too short: {tests:?}");
+    assert!(tests.len() >= 35, "manifest too short: {tests:?}");
     tests
 }
 
@@ -65,10 +46,26 @@ fn compose_corpus(dir: &Path) -> PathBuf {
 }
 
 fn compose(name: &str, dir: &Path) -> PathBuf {
-    let harness = std::fs::read_to_string(fixtures().join("harness.js")).unwrap();
-    let test = std::fs::read_to_string(fixtures().join(format!("{name}.js"))).unwrap();
+    let read = |file: &str| std::fs::read_to_string(fixtures().join(file)).unwrap();
+    if name.ends_with(".mjs") {
+        std::fs::write(dir.join("esm-shim.mjs"), read("esm-shim.mjs")).unwrap();
+        let path = dir.join(name);
+        let mut test = read(name);
+        for quote in ["'", "\""] {
+            for specifier in ["../common/index.mjs", "node:test"] {
+                test = test.replace(
+                    &format!("{quote}{specifier}{quote}"),
+                    &format!("{quote}./esm-shim.mjs{quote}"),
+                );
+            }
+        }
+        std::fs::write(&path, test).unwrap();
+        return path;
+    }
+    let harness = read("harness.js");
+    let test = read(&format!("{name}.js"));
     let script = format!(
-        "{harness}(function (require, __filename, __dirname) {{\n{test}\n}})(__eventsRequire, \"/node/test/parallel/{name}.js\", \"/node/test/parallel\");\n__eventsFinish();\n"
+        "{harness}try {{ (function (require, __filename, __dirname) {{\n{test}\n}})(__eventsRequire, \"/node/test/parallel/{name}.js\", \"/node/test/parallel\"); }} finally {{ __eventsFinish(); }}\n"
     );
     let path = dir.join(format!("{name}.js"));
     std::fs::write(&path, script).unwrap();
@@ -91,22 +88,15 @@ fn scratch(tag: &str) -> Scratch {
 
 fn run_node_tests(tag: &str, flags: &[&str], gc_stress: Option<&str>, only: &[&str]) {
     let dir = scratch(tag);
-    let process_events =
-        probe(r#"process.on("x", function () {}); print(process.emit("x"))"#) == "true";
-    let inspect =
-        probe(r#"print(require("util").inspect(new (class Foo {})(), { depth: -1 }))"#) == "[Foo]";
     let tests = node_tests();
     for wanted in only {
         assert!(
-            tests.iter().any(|(name, _)| name == wanted),
+            tests.iter().any(|name| name == wanted),
             "no fixture named {wanted} in the manifest"
         );
     }
-    for (name, needs) in tests {
+    for name in tests {
         if !only.is_empty() && !only.contains(&name.as_str()) {
-            continue;
-        }
-        if (needs.process_events && !process_events) || (needs.inspect && !inspect) {
             continue;
         }
         let script = compose(&name, &dir.0);
@@ -142,6 +132,7 @@ fn events_tests_pass_under_gc_stress() {
         &[
             "test-event-emitter-modify-in-emit",
             "test-event-emitter-remove-all-listeners",
+            "test-abortsignal-any.mjs",
             "test-events-once",
             "test-event-target",
             "test-abortcontroller",
