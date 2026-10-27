@@ -10,7 +10,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
-fn stat_values(md: &std::fs::Metadata) -> Vec<i128> {
+pub(super) fn stat_values(md: &std::fs::Metadata) -> Vec<i128> {
     let birth = md
         .created()
         .ok()
@@ -40,6 +40,19 @@ fn stat_values(md: &std::fs::Metadata) -> Vec<i128> {
     .to_vec()
 }
 
+pub(super) fn stat_items(values: &[i128], big: bool) -> Vec<JsValue> {
+    values
+        .iter()
+        .map(|&n| {
+            if big {
+                JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(n)))
+            } else {
+                JsValue::number(n as f64)
+            }
+        })
+        .collect()
+}
+
 impl Interpreter {
     pub(super) fn setup_node_host_fs_meta(&mut self) {
         // (pathOrFd, kind, bigint) with kind 0 stat, 1 lstat, 2 fstat ->
@@ -62,16 +75,7 @@ impl Interpreter {
             match md {
                 Ok(md) => {
                     let big = arg(args, 2).as_boolean() == Some(true);
-                    let items = stat_values(&md)
-                        .into_iter()
-                        .map(|n| {
-                            if big {
-                                JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(n)))
-                            } else {
-                                JsValue::number(n as f64)
-                            }
-                        })
-                        .collect();
+                    let items = stat_items(&stat_values(&md), big);
                     Ok(interp.create_array(items))
                 }
                 Err(e) => Err(io_error(interp, &e, syscall, path.as_deref(), None)),

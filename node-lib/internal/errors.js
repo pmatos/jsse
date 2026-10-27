@@ -435,6 +435,18 @@ E('ERR_INVALID_URL_SCHEME', TypeError, (expected) => {
   return `The URL must be ${res}`;
 });
 
+E('ERR_CHILD_PROCESS_STDIO_MAXBUFFER', RangeError, (stream) => `${stream} maxBuffer length exceeded`);
+E('ERR_UNKNOWN_SIGNAL', TypeError, (signal) => `Unknown signal: ${signal}`);
+E('ERR_INVALID_SYNC_FORK_INPUT', TypeError,
+  (value) => `Asynchronous forks do not support Buffer, TypedArray, DataView or string input: ${value}`);
+E('ERR_IPC_ONE_PIPE', Error, 'Child process can have only one IPC pipe');
+E('ERR_IPC_SYNC_FORK', Error, 'IPC cannot be used with synchronous forks');
+E('ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', TypeError,
+  (x) => `The feature ${x} is unavailable on the current platform, which is being used to run Node.js`);
+E('ERR_INVALID_FD', RangeError, (value) => format('"fd" must be a positive integer: %s', value));
+E('ERR_INVALID_CURSOR_POS', TypeError, 'Cannot set cursor row without setting its column');
+E('ERR_USE_AFTER_CLOSE', Error, (name) => `${name} was closed`);
+
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = undefined) {

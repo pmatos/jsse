@@ -1,0 +1,18 @@
+exit=0
+--- stdout
+1 console.log
+2 stdout.write
+5 fmt 7
+6 no newline ... continued
+7 buffer
+8 u8
+9 café ☃
+10 latin1 \xe9
+12 hex
+13 base64
+g
+  14 grouped
+15 last
+--- stderr
+3 console.error
+4 stderr.write

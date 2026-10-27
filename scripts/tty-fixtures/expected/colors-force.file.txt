@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+{ a: \e[33m1\e[39m, s: \e[32m'str'\e[39m }
+\e[90mundefined\e[39m \e[90mundefined\e[39m
+--- stderr
+[ \e[33mtrue\e[39m, \e[1mnull\e[22m ]

@@ -1,0 +1,20 @@
+exit=0
+--- stdout
+{
+  a: 1,
+  s: 'str',
+  n: null,
+  u: undefined,
+  arr: [ 1, 2, 3 ],
+  f: [Function: f],
+  d: 1970-01-01T00:00:00.000Z,
+  sym: Symbol(x)
+}
+{ x: 1 }
+plain string 5 true
+{ dir: 1, nested: [Object] }
+{ explicit: 1 }
+{ explicit: \e[33m1\e[39m }
+undefined undefined undefined
+--- stderr
+{ err: [ 1, { deep: [Object] } ] }
