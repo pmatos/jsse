@@ -5,7 +5,8 @@
 
 TSC_DIR is an installed typescript package; without it (or with another version) the script
 prints SKIP and exits 0 unless --require is given. Each case in scripts/tsc-fixtures/cases.txt
-runs lib/_tsc.js on a fresh copy of a project tree on both engines. Stdout, stderr, the exit
+and in every cases-<topic>.txt (pinned in expected-<topic>.txt; a leading NAME=value sets an
+environment variable, @pty:ROWSxCOLS runs on a pseudo-terminal) runs lib/_tsc.js on a fresh copy of a project tree on both engines. Stdout, stderr, the exit
 code and every file the compiler created, changed or deleted must be identical after
 normalising only the work-tree path, the TypeScript package path and h:mm:ss AM clock stamps.
 Prints a pass/fail table; exits 1 on any difference.
@@ -17,6 +18,7 @@ digests; merges into the existing pins, so single cases can be re-pinned), --no-
 
 import argparse
 import difflib
+import glob
 import hashlib
 import os
 import re
@@ -33,34 +35,89 @@ FIX = os.path.join(ROOT, "scripts", "tsc-fixtures")
 PINNED = os.path.join(FIX, "expected-projects.txt")
 CLOCK = re.compile(r"\b\d{1,2}:\d{2}:\d{2}\s?[AP]M\b")
 DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS")
+PTY_RUN = os.path.join(ROOT, "scripts", "tty-fixtures", "pty-run.py")
+ENV_TOKEN = re.compile(r"[A-Z_][A-Z0-9_]*=")
+PTY_TOKEN = re.compile(r"@pty:(\d+)x(\d+)$")
+
+
+def case_files():
+    """cases.txt (pinned in expected-projects.txt) and each cases-<topic>.txt (pinned in expected-<topic>.txt)."""
+    files = [(os.path.join(FIX, "cases.txt"), PINNED)]
+    for path in sorted(glob.glob(os.path.join(FIX, "cases-*.txt"))):
+        topic = os.path.basename(path)[len("cases-") : -len(".txt")]
+        files.append((path, os.path.join(FIX, f"expected-{topic}.txt")))
+    return files
 
 
 def load_cases():
     cases = []
-    with open(os.path.join(FIX, "cases.txt"), encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                name, project, exit_codes, args = (
-                    p.strip() for p in line.split("|", 3)
-                )
-                cases.append(
-                    (
-                        name,
-                        project,
-                        exit_codes,
-                        [shlex.split(a) for a in args.split(" ;; ")],
+    for path, pinfile in case_files():
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    name, project, exit_codes, args = (
+                        p.strip() for p in line.split("|", 3)
                     )
-                )
+                    cases.append(
+                        (
+                            name,
+                            project,
+                            exit_codes,
+                            [shlex.split(a) for a in args.split(" ;; ")],
+                            pinfile,
+                        )
+                    )
     return cases
 
 
 def load_pins():
-    try:
-        with open(PINNED, encoding="utf-8") as f:
-            return dict(row.split() for row in f if row.strip())
-    except FileNotFoundError:
-        return {}
+    pins = {}
+    for _, pinfile in case_files():
+        try:
+            with open(pinfile, encoding="utf-8") as f:
+                pins.update(row.split() for row in f if row.strip())
+        except FileNotFoundError:
+            pass
+    return pins
+
+
+ESCAPED = (
+    (".utf16le.esc", "utf-16-le"),
+    (".utf16be.esc", "utf-16-be"),
+    (".esc", "utf-8"),
+)
+
+
+def expand_escaped(tree):
+    """Write <name>.esc as <name>, decoding \\r, \\n and \\uXXXX escapes (UTF-8; <name>.utf16le.esc and .utf16be.esc
+    give UTF-16), for sources the repository hooks would normalise or reject: CRLF, lone CR, BOM, no final newline, UTF-16."""
+    for dirpath, _, names in os.walk(tree):
+        for n in names:
+            for suffix, codec in ESCAPED:
+                if n.endswith(suffix):
+                    p = os.path.join(dirpath, n)
+                    with open(p, encoding="ascii") as f:
+                        text = f.read().removesuffix("\n")
+                    with open(p[: -len(suffix)], "wb") as f:
+                        f.write(
+                            text.encode("ascii").decode("unicode_escape").encode(codec)
+                        )
+                    os.remove(p)
+                    break
+
+
+def split_invocation(tokens):
+    """Leading NAME=value tokens set the environment, @pty:ROWSxCOLS runs on a pseudo-terminal."""
+    env, pty = {}, None
+    while tokens and (ENV_TOKEN.match(tokens[0]) or PTY_TOKEN.match(tokens[0])):
+        tok = tokens.pop(0)
+        if m := PTY_TOKEN.match(tok):
+            pty = (m.group(1), m.group(2))
+        else:
+            k, _, v = tok.partition("=")
+            env[k] = v
+    return env, pty, tokens
 
 
 def snapshot(tree):
@@ -80,9 +137,10 @@ def snapshot(tree):
 
 
 def run_case(engine, exe, tsc_dir, work, case, timeout):
-    name, project, _, invocations = case
+    name, project, _, invocations, _ = case
     tree = os.path.join(work, engine, name)
     shutil.copytree(os.path.join(FIX, "projects", project), tree)
+    expand_escaped(tree)
     before = snapshot(tree)
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
     cmd = (
@@ -92,10 +150,19 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     )
     out, err, codes = [], [], []
     start = time.monotonic()
-    for i, args in enumerate(invocations):
+    for i, tokens in enumerate(invocations):
+        extra, pty, args = split_invocation(list(tokens))
+        run = cmd + args
+        if pty:
+            run = [sys.executable, "-I", PTY_RUN, "--rows", pty[0], "--cols", pty[1]]
+            run += ["--timeout", str(max(timeout - 5, 1)), "--"] + cmd + args
         try:
             r = subprocess.run(
-                cmd + args, cwd=tree, env=env, capture_output=True, timeout=timeout
+                run,
+                cwd=tree,
+                env={**env, **extra},
+                capture_output=True,
+                timeout=timeout,
             )
             codes.append(str(r.returncode))
             out.append(r.stdout)
@@ -289,12 +356,13 @@ def main():
             for case, ref, _, bad in results:
                 if "node exit status" not in bad:
                     pins[case[0]] = digest(ref)
-            order = [c[0] for c in load_cases()]
-            with open(PINNED, "w", encoding="utf-8") as f:
-                for name in order:
-                    if name in pins:
-                        f.write(f"{name} {pins[name]}\n")
-            print(f"wrote {PINNED}")
+            for _, pinfile in case_files():
+                order = [c[0] for c in load_cases() if c[4] == pinfile]
+                with open(pinfile, "w", encoding="utf-8") as f:
+                    for name in order:
+                        if name in pins:
+                            f.write(f"{name} {pins[name]}\n")
+                print(f"wrote {pinfile}")
         print(f"\n{'case':<26}{'node s':>9}{'jsse s':>9}  result")
         failed = 0
         for case, ref, got, bad in results:

@@ -1,0 +1,2 @@
+declare const u: { member000: number } | { member001: number } | { member002: number } | { member003: number } | { member004: number } | { member005: number } | { member006: number } | { member007: number } | { member008: number } | { member009: number } | { member010: number } | { member011: number } | { member012: number } | { member013: number } | { member014: number } | { member015: number } | { member016: number } | { member017: number } | { member018: number } | { member019: number };
+const n: number = u;
