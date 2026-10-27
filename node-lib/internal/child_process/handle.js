@@ -12,7 +12,7 @@ const kExit = 1;
 const kData = 2;
 const kEof = 3;
 const kWritten = 4;
-const kMessages = 6;
+const kMessages = 7;
 
 const handles = new Map();
 

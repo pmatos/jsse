@@ -1,0 +1,188 @@
+{
+ "source": "https://raw.githubusercontent.com/nodejs/node/v26.8.2/test/fixtures/wpt/url/resources/",
+ "files": [
+  {
+   "name": "urltestdata.json",
+   "bytes": 228373,
+   "sha256": "355c9f1e5f34aae66ba8adfabf3c853f5cd30ea22964ef7a53eb292e7975d81e",
+   "parts": [
+    {
+     "name": "urltestdata.json.part01",
+     "sha256": "dc48bb8af2cd4261a0d1584cfd17382a3ca42ab0bfad3d09cb351ff0b5add1f6"
+    },
+    {
+     "name": "urltestdata.json.part02",
+     "sha256": "96d8a77685e0a86d59a2ce9b95f789acafcc837c44dd680d7b65cc85f2944707"
+    },
+    {
+     "name": "urltestdata.json.part03",
+     "sha256": "2a7d38b186df3efd0ed06f827f1408b384f53576b02e04ef53e7f95af419bcd8"
+    },
+    {
+     "name": "urltestdata.json.part04",
+     "sha256": "3947366a8c208da39c89b0261e32b8cb57c9bf434303208d94881b778800bf34"
+    },
+    {
+     "name": "urltestdata.json.part05",
+     "sha256": "a90ea53299cea633e78a44c91c21d6a6a95c0e166b2bc473a81199ee04094251"
+    },
+    {
+     "name": "urltestdata.json.part06",
+     "sha256": "ae19d80865a4e57a97547c04cfc4a5609aea24a508e6e20414ee0bc3afefc808"
+    },
+    {
+     "name": "urltestdata.json.part07",
+     "sha256": "cb030b8e5314a817f262ffb995ca88737577522bd5a6decc61666ea148782746"
+    },
+    {
+     "name": "urltestdata.json.part08",
+     "sha256": "42d61ac2f1ce299ed9ac6eb4f7eff71b4eefc3f28b8dd543e4faa56110ee33ff"
+    },
+    {
+     "name": "urltestdata.json.part09",
+     "sha256": "4b32698ce569a58fb6bb1eae7f11ebd042b275d90e4b76466287d4885926ef64"
+    },
+    {
+     "name": "urltestdata.json.part10",
+     "sha256": "39d9135328759ee5b85b61c560eaf09b6352fc6c1410887c5da0d4e7b008d8a5"
+    },
+    {
+     "name": "urltestdata.json.part11",
+     "sha256": "112b62e43b7c862a0f4ef4dbd1a40b421aaccdcb9ba67d45cb265161d77b2250"
+    },
+    {
+     "name": "urltestdata.json.part12",
+     "sha256": "c6cb670af5590da87619c7b42a451db43b92f19efb7cc7ff59746b7db62ef90a"
+    },
+    {
+     "name": "urltestdata.json.part13",
+     "sha256": "cea09621faa07a1e9f6067ee1195012a65293502280f47f0f4a7d6692a9d6f7c"
+    }
+   ]
+  },
+  {
+   "name": "urltestdata-javascript-only.json",
+   "bytes": 902,
+   "sha256": "74eaf2f3b8246b1fe44c388e3ecf8eb8442e01f229418b634acecb9595caddfa",
+   "parts": [
+    {
+     "name": "urltestdata-javascript-only.json.part01",
+     "sha256": "74eaf2f3b8246b1fe44c388e3ecf8eb8442e01f229418b634acecb9595caddfa"
+    }
+   ]
+  },
+  {
+   "name": "setters_tests.json",
+   "bytes": 82134,
+   "sha256": "62e4b14bdaddd66b0f7d99bf066aed1c4a588667f4aa97bf26da212134fc24bf",
+   "parts": [
+    {
+     "name": "setters_tests.json.part01",
+     "sha256": "5e271c9c4b958eea907c986e9416cf925725855b9c56d9669b5ae722a2434377"
+    },
+    {
+     "name": "setters_tests.json.part02",
+     "sha256": "a2b3976c80d45909fad5dde0f8df417f4fc1719cd60f73ad2f0dcdd293a8750f"
+    },
+    {
+     "name": "setters_tests.json.part03",
+     "sha256": "5a8e807f0d9374b277fed0545123043067cbdb84055046043979cd17a17d910e"
+    },
+    {
+     "name": "setters_tests.json.part04",
+     "sha256": "b4982b2f16605d02b78654063dd5807b887837933914444ecc588c0fa4acc51e"
+    },
+    {
+     "name": "setters_tests.json.part05",
+     "sha256": "80d0dcdba980a42874c0c7f3c19f92fba0a2e0be1cb4fa9f2af5b540984c3a80"
+    }
+   ]
+  },
+  {
+   "name": "toascii.json",
+   "bytes": 9101,
+   "sha256": "644eba9d5b593df8095cfa307222f3014542ff9cc02d555f8e5660059d80470f",
+   "parts": [
+    {
+     "name": "toascii.json.part01",
+     "sha256": "644eba9d5b593df8095cfa307222f3014542ff9cc02d555f8e5660059d80470f"
+    }
+   ]
+  },
+  {
+   "name": "IdnaTestV2.json",
+   "bytes": 313831,
+   "sha256": "338192b9815dbdace6c035cb1acd50cd737070cd67d6e3f620d2543f63eb0cbb",
+   "parts": [
+    {
+     "name": "IdnaTestV2.json.part01",
+     "sha256": "ed0f6ae7c53d89b776b4cffce052a4c79c1a9604cd83761e73764770da220a5c"
+    },
+    {
+     "name": "IdnaTestV2.json.part02",
+     "sha256": "bd9b56211c5abee918d880b3bae62f1dece0428f868359fa373f311b43d20cd2"
+    },
+    {
+     "name": "IdnaTestV2.json.part03",
+     "sha256": "f40017963d622a117d80cc2bb1dab2cfe8dc30ad0a66069392dd27f2db7f3b6f"
+    },
+    {
+     "name": "IdnaTestV2.json.part04",
+     "sha256": "64e582ef2aa4ea4f5b71b23b31489e5be58f70db3484bbd14b8b0d4bba48534f"
+    },
+    {
+     "name": "IdnaTestV2.json.part05",
+     "sha256": "fcbdf10b08e13b81d71cfea5fc00a5ee95a4e2a81ed45e82361c10bc71e65d54"
+    },
+    {
+     "name": "IdnaTestV2.json.part06",
+     "sha256": "1cf4f0252569bd4fc5de9ef3feabcc4749711ed3db3364dc9f130c04abd67ea2"
+    },
+    {
+     "name": "IdnaTestV2.json.part07",
+     "sha256": "ce2d44466090f4615b935e849b1cb11a85e4c8b6e8f0d7813d7c25aa3d9ac0a3"
+    },
+    {
+     "name": "IdnaTestV2.json.part08",
+     "sha256": "94eede960a2a93e7e16843c38132eeb2e8e2f545aa2294f08a3c35326d06be32"
+    },
+    {
+     "name": "IdnaTestV2.json.part09",
+     "sha256": "01b644b6dc91facda74ae25c457bf481c05d217f5cd77f44bff580fea643a887"
+    },
+    {
+     "name": "IdnaTestV2.json.part10",
+     "sha256": "d1a1abb02348d01ceb421bc85950251e3010717e8736b7900d87afcb5fb935e9"
+    },
+    {
+     "name": "IdnaTestV2.json.part11",
+     "sha256": "f998999d51c1cc78da081d136c88df0994d5f7c489f112c94192bf577ea5e4ec"
+    },
+    {
+     "name": "IdnaTestV2.json.part12",
+     "sha256": "7697c2848159cbcd6379eba7a1ae144f6357cd4dd5f3cec37cdac0b873db2fab"
+    },
+    {
+     "name": "IdnaTestV2.json.part13",
+     "sha256": "7f1e0bea5a98f014b59c66d43b6aa0f1d0ee35f3b7051dacc5b934def15548ce"
+    },
+    {
+     "name": "IdnaTestV2.json.part14",
+     "sha256": "d9fd6733e909aa0b28dab5a79947a522bc25361061669b547b837991e895a8fd"
+    },
+    {
+     "name": "IdnaTestV2.json.part15",
+     "sha256": "39c231c769ca39f758649459a26da721dee601e816f8710192635c7ef10768c9"
+    },
+    {
+     "name": "IdnaTestV2.json.part16",
+     "sha256": "a87c425ecd56ef80eecd2e5e1c699eb9573ca198ad5e6c0d150a90abcf0dacb0"
+    },
+    {
+     "name": "IdnaTestV2.json.part17",
+     "sha256": "13a34603cf99aa2971e880cc31bd05e29957c0fcb3016755804f42d7b8ef38b4"
+    }
+   ]
+  }
+ ]
+}

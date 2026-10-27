@@ -51,6 +51,12 @@ pub(crate) enum ChildEvent {
         index: usize,
         items: Vec<String>,
     },
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Watch {
+        wd: i32,
+        events: u32,
+        name: Vec<u8>,
+    },
 }
 
 pub(super) const CHUNK: usize = 64 * 1024;
@@ -355,7 +361,7 @@ impl Interpreter {
             ChildEvent::Messages { id, index, items } => {
                 let items = items.iter().map(|text| js_str(text)).collect();
                 (
-                    6.0,
+                    7.0,
                     id,
                     JsValue::number(index as f64),
                     self.create_array(items),
@@ -367,6 +373,10 @@ impl Interpreter {
                 JsValue::number(f64::from(signum)),
                 JsValue::UNDEFINED,
             ),
+            ChildEvent::Watch { wd, events, name } => {
+                self.watch_deliver(wd, events, name);
+                return;
+            }
         };
         let args = [JsValue::number(kind), JsValue::number(id as f64), x, y];
         let result = self.node_call(&dispatch, &args);

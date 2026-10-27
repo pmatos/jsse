@@ -1,0 +1,24 @@
+# name | project (under tsc-fixtures/projects) | expected exit code per invocation | tsc arguments; ` ;; ` starts another invocation in the same tree
+noemit | app | 0 | --noEmit --pretty false --strict --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/index.ts
+emit-cjs | app | 0 | --pretty false --strict --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --outDir out src/index.ts
+emit-esnext | app | 0 | --pretty false --strict --target esnext --lib es2022 --module esnext --moduleResolution bundler --outDir out src/index.ts
+emit-es2015 | app | 0 | --pretty false --strict --target es2015 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --outDir out src/index.ts
+declaration | app | 0 | --pretty false --strict --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --declaration --declarationMap --sourceMap --outDir out src/index.ts
+declaration-only | app | 0 | --pretty false --strict --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --emitDeclarationOnly --declaration --outDir types src/index.ts
+incremental | app | 0 0 | --pretty false --strict --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --incremental --tsBuildInfoFile out/app.tsbuildinfo --outDir out src/index.ts ;; --pretty false --strict --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --incremental --tsBuildInfoFile out/app.tsbuildinfo --outDir out src/index.ts
+list-files | app | 0 | --pretty false --noEmit --listFilesOnly --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/index.ts
+list-emitted | app | 0 | --pretty false --listEmittedFiles --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --declaration --outDir out src/index.ts
+explain-files | app | 0 | --pretty false --noEmit --explainFiles --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/index.ts
+trace-resolution | app | 0 | --pretty false --noEmit --traceResolution --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/index.ts
+default-lib | app | 0 | --pretty false --noEmit --strict --listFilesOnly src/index.ts
+errors | errors | 2 | --pretty false --noEmit --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/a.ts src/b.ts src/c.ts
+errors-strict | errors | 2 | --pretty false --noEmit --strict --noUnusedLocals --noImplicitReturns --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/a.ts src/b.ts src/c.ts
+errors-emit | errors | 2 | --pretty false --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --outDir out src/a.ts src/b.ts src/c.ts
+errors-no-emit-on-error | errors | 1 | --pretty false --noEmitOnError --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 --outDir out src/a.ts src/b.ts src/c.ts
+errors-pretty | errors | 2 | --pretty --noEmit --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/a.ts src/b.ts src/c.ts
+tsconfig | ts-app | 0 | -p .
+tsconfig-show-config | ts-app | 0 | --showConfig
+tsconfig-strict-extends | ts-app | 2 | -p tsconfig.strict.json
+tsconfig-bad | bad-config | 2 | -p .
+build | refs | 0 0 0 | --build --verbose ;; --build --verbose ;; --build --clean
+errors-syntax | errors | 2 | --pretty false --noEmit --target es2020 --lib es2020 --module commonjs --moduleResolution node10 --ignoreDeprecations 6.0 src/syntax.ts

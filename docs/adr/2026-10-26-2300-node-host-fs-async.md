@@ -110,7 +110,7 @@ sparse-file RSS bound (`wait4`, Linux only).
 - `chmod`/`chown`/`utimes`/`link`/`symlink`/`mkdtemp`/`statfs` run on the loop
   thread (on a later turn), not on the pool.
 - Not provided: `readv`/`writev`, `openAsBlob`, `FileHandle.readLines` and
-  `readableWebStream`, `fs.watch`/`watchFile` (#1235), `lchmod` (absent on
+  `readableWebStream`, `fs.watch`/`watchFile` (now ADR 2026-10-27-0300), `lchmod` (absent on
   Linux in Node too), `util.promisify` custom hooks on `exists`.
 - `readFile`/`writeFile` ignore `signal`; a stream's `encoding` option needs
   `string_decoder` (#1231).

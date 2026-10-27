@@ -1,0 +1,614 @@
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Setting port to a string that doesn't parse as a number",
+            "href": "http://example.net:8080/path",
+            "new_value": "randomstring",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Port numbers are 16 bit integers, overflowing is an error",
+            "href": "non-special://example.net:8080/path",
+            "new_value": "65536",
+            "expected": {
+                "href": "non-special://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "href": "file://test/",
+            "new_value": "12",
+            "expected": {
+                "href": "file://test/",
+                "port": ""
+            }
+        },
+        {
+            "href": "file://localhost/",
+            "new_value": "12",
+            "expected": {
+                "href": "file:///",
+                "port": ""
+            }
+        },
+        {
+            "href": "non-base:value",
+            "new_value": "12",
+            "expected": {
+                "href": "non-base:value",
+                "port": ""
+            }
+        },
+        {
+            "href": "sc:///",
+            "new_value": "12",
+            "expected": {
+                "href": "sc:///",
+                "port": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "12",
+            "expected": {
+                "href": "sc://x:12/",
+                "port": "12"
+            }
+        },
+        {
+            "href": "javascript://x/",
+            "new_value": "12",
+            "expected": {
+                "href": "javascript://x:12/",
+                "port": "12"
+            }
+        },
+        {
+            "comment": "Leading u0009 on special scheme",
+            "href": "https://domain.com:443",
+            "new_value": "\u00098080",
+            "expected": {
+                "href": "https://domain.com:8080/",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Leading u0009 on non-special scheme",
+            "href": "wpt++://domain.com:443",
+            "new_value": "\u00098080",
+            "expected": {
+                "href": "wpt++://domain.com:8080",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Should use all ascii prefixed characters as port",
+            "href": "https://www.google.com:4343",
+            "new_value": "4wpt",
+            "expected": {
+                "href": "https://www.google.com:4/",
+                "port": "4"
+            }
+        },
+        {
+            "href": "https://domain.com:3000",
+            "new_value": "\n\t80\n\t80\n\t",
+            "expected": {
+                "href": "https://domain.com:8080/",
+                "port": "8080"
+            }
+        },
+        {
+            "href": "https://domain.com:3000",
+            "new_value": "\n\n\t\t",
+            "expected": {
+                "href": "https://domain.com:3000/",
+                "port": "3000"
+            }
+        }
+    ],
+    "pathname": [
+        {
+            "comment": "Opaque paths cannot be set",
+            "href": "mailto:me@example.net",
+            "new_value": "/foo",
+            "expected": {
+                "href": "mailto:me@example.net",
+                "pathname": "me@example.net"
+            }
+        },
+        {
+            "href": "data:original",
+            "new_value": "new value",
+            "expected": {
+                "href": "data:original",
+                "pathname": "original"
+            }
+        },
+        {
+            "href": "sc:original",
+            "new_value": "new value",
+            "expected": {
+                "href": "sc:original",
+                "pathname": "original"
+            }
+        },
+        {
+            "comment": "Special URLs cannot have their paths erased",
+            "href": "file:///some/path",
+            "new_value": "",
+            "expected": {
+                "href": "file:///",
+                "pathname": "/"
+            }
+        },
+        {
+            "comment": "Non-special URLs can have their paths erased",
+            "href": "foo://somehost/some/path",
+            "new_value": "",
+            "expected": {
+                "href": "foo://somehost",
+                "pathname": ""
+            }
+        },
+        {
+            "comment": "Non-special URLs with an empty host can have their paths erased",
+            "href": "foo:///some/path",
+            "new_value": "",
+            "expected": {
+                "href": "foo://",
+                "pathname": ""
+            }
+        },
+        {
+            "comment": "Path-only URLs cannot have their paths erased",
+            "href": "foo:/some/path",
+            "new_value": "",
+            "expected": {
+                "href": "foo:/",
+                "pathname": "/"
+            }
+        },
+        {
+            "comment": "Path-only URLs always have an initial slash",
+            "href": "foo:/some/path",
+            "new_value": "test",
+            "expected": {
+                "href": "foo:/test",
+                "pathname": "/test"
+            }
+        },
+        {
+            "href": "unix:/run/foo.socket?timeout=10",
+            "new_value": "/var/log/../run/bar.socket",
+            "expected": {
+                "href": "unix:/var/run/bar.socket?timeout=10",
+                "pathname": "/var/run/bar.socket"
+            }
+        },
+        {
+            "href": "https://example.net#nav",
+            "new_value": "home",
+            "expected": {
+                "href": "https://example.net/home#nav",
+                "pathname": "/home"
+            }
+        },
+        {
+            "href": "https://example.net#nav",
+            "new_value": "../home",
+            "expected": {
+                "href": "https://example.net/home#nav",
+                "pathname": "/home"
+            }
+        },
+        {
+            "comment": "\\ is a segment delimiter for 'special' URLs",
+            "href": "http://example.net/home?lang=fr#nav",
+            "new_value": "\\a\\%2E\\b\\%2e.\\c",
+            "expected": {
+                "href": "http://example.net/a/c?lang=fr#nav",
+                "pathname": "/a/c"
+            }
+        },
+        {
+            "comment": "\\ is *not* a segment delimiter for non-'special' URLs",
+            "href": "view-source+http://example.net/home?lang=fr#nav",
+            "new_value": "\\a\\%2E\\b\\%2e.\\c",
+            "expected": {
+                "href": "view-source+http://example.net/\\a\\%2E\\b\\%2e.\\c?lang=fr#nav",
+                "pathname": "/\\a\\%2E\\b\\%2e.\\c"
+            }
+        },
+        {
+            "comment": "UTF-8 percent encoding with the default encode set. Tabs and newlines are removed.",
+            "href": "a:/",
+            "new_value": "\u0000\u0001\t\n\r\u001f !\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~\u007f\u0080\u0081Éé",
+            "expected": {
+                "href": "a:/%00%01%1F%20!%22%23$%&'()*+,-./09:;%3C=%3E%3F@AZ[\\]%5E_%60az%7B|%7D~%7F%C2%80%C2%81%C3%89%C3%A9",
+                "pathname": "/%00%01%1F%20!%22%23$%&'()*+,-./09:;%3C=%3E%3F@AZ[\\]%5E_%60az%7B|%7D~%7F%C2%80%C2%81%C3%89%C3%A9"
+            }
+        },
+        {
+            "comment": "Bytes already percent-encoded are left as-is, including %2E outside dotted segments.",
+            "href": "http://example.net",
+            "new_value": "%2e%2E%c3%89té",
+            "expected": {
+                "href": "http://example.net/%2e%2E%c3%89t%C3%A9",
+                "pathname": "/%2e%2E%c3%89t%C3%A9"
+            }
+        },
+        {
+            "comment": "? needs to be encoded",
+            "href": "http://example.net",
+            "new_value": "?",
+            "expected": {
+                "href": "http://example.net/%3F",
+                "pathname": "/%3F"
+            }
+        },
+        {
+            "comment": "# needs to be encoded",
+            "href": "http://example.net",
+            "new_value": "#",
+            "expected": {
+                "href": "http://example.net/%23",
+                "pathname": "/%23"
+            }
+        },
+        {
+            "comment": "? needs to be encoded, non-special scheme",
+            "href": "sc://example.net",
+            "new_value": "?",
+            "expected": {
+                "href": "sc://example.net/%3F",
+                "pathname": "/%3F"
+            }
+        },
+        {
+            "comment": "# needs to be encoded, non-special scheme",
+            "href": "sc://example.net",
+            "new_value": "#",
+            "expected": {
+                "href": "sc://example.net/%23",
+                "pathname": "/%23"
+            }
+        },
+        {
+            "comment": "? doesn't mess up encoding",
+            "href": "http://example.net",
+            "new_value": "/?é",
+            "expected": {
+                "href": "http://example.net/%3F%C3%A9",
+                "pathname": "/%3F%C3%A9"
+            }
+        },
+        {
+            "comment": "# doesn't mess up encoding",
+            "href": "http://example.net",
+            "new_value": "/#é",
+            "expected": {
+                "href": "http://example.net/%23%C3%A9",
+                "pathname": "/%23%C3%A9"
+            }
+        },
+        {
+            "comment": "File URLs and (back)slashes",
+            "href": "file://monkey/",
+            "new_value": "\\\\",
+            "expected": {
+                "href": "file://monkey//",
+                "pathname": "//"
+            }
+        },
+        {
+            "comment": "File URLs and (back)slashes",
+            "href": "file:///unicorn",
+            "new_value": "//\\/",
+            "expected": {
+                "href": "file://////",
+                "pathname": "////"
+            }
+        },
+        {
+            "comment": "File URLs and (back)slashes",
+            "href": "file:///unicorn",
+            "new_value": "//monkey/..//",
+            "expected": {
+                "href": "file://///",
+                "pathname": "///"
+            }
+        },
+        {
+            "comment": "Serialize /. in path",
+            "href": "non-spec:/",
+            "new_value": "/.//p",
+            "expected": {
+                "href": "non-spec:/.//p",
+                "pathname": "//p"
+            }
+        },
+        {
+            "href": "non-spec:/",
+            "new_value": "/..//p",
+            "expected": {
+                "href": "non-spec:/.//p",
+                "pathname": "//p"
+            }
+        },
+        {
+            "href": "non-spec:/",
+            "new_value": "//p",
+            "expected": {
+                "href": "non-spec:/.//p",
+                "pathname": "//p"
+            }
+        },
+        {
+            "comment": "Drop /. from path",
+            "href": "non-spec:/.//",
+            "new_value": "p",
+            "expected": {
+                "href": "non-spec:/p",
+                "pathname": "/p"
+            }
+        },
+        {
+            "comment": "Non-special URLs with non-opaque paths percent-encode U+0020",
+            "href": "data:/nospace",
+            "new_value": "space ",
+            "expected": {
+                "href": "data:/space%20",
+                "pathname": "/space%20"
+            }
+        },
+        {
+            "href": "sc:/nospace",
+            "new_value": "space ",
+            "expected": {
+                "href": "sc:/space%20",
+                "pathname": "/space%20"
+            }
+        },
+        {
+            "comment": "Trailing space should be encoded",
+            "href": "http://example.net",
+            "new_value": " ",
+            "expected": {
+                "href": "http://example.net/%20",
+                "pathname": "/%20"
+            }
+        },
+        {
+            "comment": "Trailing C0 control should be encoded",
+            "href": "http://example.net",
+            "new_value": "\u0000",
+            "expected": {
+                "href": "http://example.net/%00",
+                "pathname": "/%00"
+            }
+        },
+        {
+            "href": "foo://path/to",
+            "new_value": "/..",
+            "expected": {
+                "href": "foo://path/",
+                "pathname": "/"
+            }
+        }
+    ],
+    "search": [
+        {
+            "href": "https://example.net#nav",
+            "new_value": "lang=fr",
+            "expected": {
+                "href": "https://example.net/?lang=fr#nav",
+                "search": "?lang=fr"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "lang=fr",
+            "expected": {
+                "href": "https://example.net/?lang=fr#nav",
+                "search": "?lang=fr"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "?lang=fr",
+            "expected": {
+                "href": "https://example.net/?lang=fr#nav",
+                "search": "?lang=fr"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "??lang=fr",
+            "expected": {
+                "href": "https://example.net/??lang=fr#nav",
+                "search": "??lang=fr"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "?",
+            "expected": {
+                "href": "https://example.net/?#nav",
+                "search": ""
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "",
+            "expected": {
+                "href": "https://example.net/#nav",
+                "search": ""
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US",
+            "new_value": "",
+            "expected": {
+                "href": "https://example.net/",
+                "search": ""
+            }
+        },
+        {
+            "href": "https://example.net",
+            "new_value": "",
+            "expected": {
+                "href": "https://example.net/",
+                "search": ""
+            }
+        },
+        {
+            "comment": "UTF-8 percent encoding with the query encode set. Tabs and newlines are removed.",
+            "href": "a:/",
+            "new_value": "\u0000\u0001\t\n\r\u001f !\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~\u007f\u0080\u0081Éé",
+            "expected": {
+                "href": "a:/?%00%01%1F%20!%22%23$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_`az{|}~%7F%C2%80%C2%81%C3%89%C3%A9",
+                "search": "?%00%01%1F%20!%22%23$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_`az{|}~%7F%C2%80%C2%81%C3%89%C3%A9"
+            }
+        },
+        {
+            "comment": "Bytes already percent-encoded are left as-is",
+            "href": "http://example.net",
+            "new_value": "%c3%89té",
+            "expected": {
+                "href": "http://example.net/?%c3%89t%C3%A9",
+                "search": "?%c3%89t%C3%A9"
+            }
+        },
+        {
+            "comment": "Trailing spaces and opaque paths",
+            "href": "data:space ?query",
+            "new_value": "",
+            "expected": {
+                "href": "data:space%20",
+                "pathname": "space%20",
+                "search": ""
+            }
+        },
+        {
+            "href": "sc:space ?query",
+            "new_value": "",
+            "expected": {
+                "href": "sc:space%20",
+                "pathname": "space%20",
+                "search": ""
+            }
+        },
+        {
+            "comment": "Trailing spaces and opaque paths",
+            "href": "data:space  ?query#fragment",
+            "new_value": "",
+            "expected": {
+                "href": "data:space %20#fragment",
+                "search": ""
+            }
+        },
+        {
+            "href": "sc:space  ?query#fragment",
+            "new_value": "",
+            "expected": {
+                "href": "sc:space %20#fragment",
+                "search": ""
+            }
+        },
+        {
+            "comment": "Trailing space should be encoded",
+            "href": "http://example.net",
+            "new_value": " ",
+            "expected": {
+                "href": "http://example.net/?%20",
+                "search": "?%20"
+            }
+        },
+        {
+            "comment": "Trailing C0 control should be encoded",
+            "href": "http://example.net",
+            "new_value": "\u0000",
+            "expected": {
+                "href": "http://example.net/?%00",
+                "search": "?%00"
+            }
+        }
+    ],
+    "hash": [
+        {
+            "href": "https://example.net",
+            "new_value": "main",
+            "expected": {
+                "href": "https://example.net/#main",
+                "hash": "#main"
+            }
+        },
+        {
+            "href": "https://example.net#nav",
+            "new_value": "main",
+            "expected": {
+                "href": "https://example.net/#main",
+                "hash": "#main"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US",
+            "new_value": "##nav",
+            "expected": {
+                "href": "https://example.net/?lang=en-US##nav",
+                "hash": "##nav"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "#main",
+            "expected": {
+                "href": "https://example.net/?lang=en-US#main",
+                "hash": "#main"
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "#",
+            "expected": {
+                "href": "https://example.net/?lang=en-US#",
+                "hash": ""
+            }
+        },
+        {
+            "href": "https://example.net?lang=en-US#nav",
+            "new_value": "",
+            "expected": {
+                "href": "https://example.net/?lang=en-US",
+                "hash": ""
+            }
+        },
+        {
+            "href": "http://example.net",
+            "new_value": "#foo bar",
+            "expected": {
+                "href": "http://example.net/#foo%20bar",
+                "hash": "#foo%20bar"
+            }
+        },
+        {
+            "href": "http://example.net",
+            "new_value": "#foo\"bar",
+            "expected": {
+                "href": "http://example.net/#foo%22bar",
+                "hash": "#foo%22bar"
+            }
+        },
+        {
+            "href": "http://example.net",
+            "new_value": "#foo<bar",
