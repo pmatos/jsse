@@ -35,6 +35,8 @@ pub(crate) struct NodeStackState {
     prune_at: usize,
     /// Native functions standing in for a running `vm` script's top level.
     pub(super) script_frames: Vec<(u64, Rc<str>)>,
+    /// The parse origin of each ES module's source, for its top-level frame.
+    pub(super) module_origins: HashMap<crate::interpreter::ModuleKey, Rc<str>>,
     /// The last few thrown values with the source id and offset plus one of
     /// their `throw`; traced by the collector.
     pub(crate) throws: Vec<(JsValue, usize, u32)>,

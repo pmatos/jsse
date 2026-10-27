@@ -1,0 +1,9 @@
+resumed
+file://<dir>/fatal-esm-tla.fixture.mjs:5
+throw new RangeError("after await");
+      ^
+
+RangeError: after await
+    at file://<dir>/fatal-esm-tla.fixture.mjs:5:7
+
+Node.js <version>

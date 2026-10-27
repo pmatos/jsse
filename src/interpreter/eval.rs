@@ -8278,11 +8278,8 @@ impl Interpreter {
         })
     }
 
-    /// Drives an async function's state machine. Returns `Completion::Exit`
-    /// (issue #242) if the body called `__host_exit` — the caller must
-    /// propagate it rather than settling the result promise — and
-    /// `Completion::Normal(undefined)` otherwise (the promise was settled or
-    /// the machine suspended at an await).
+    /// Drives an async function's state machine: `Exit` (#242) if the body
+    /// called `__host_exit`, else `Normal(undefined)`.
     pub(crate) fn async_function_resume(
         &mut self,
         async_id: u64,
@@ -8297,9 +8294,13 @@ impl Interpreter {
             return self.resume_hosted_async(async_id, sent_value, is_error);
         };
         let saved_realm = std::mem::replace(&mut self.current_realm_id, realm_id);
+        let framed = self.node_push_async_module_frame(async_id);
         let envs_base = self.call_stack_envs.len();
         let completion = self.async_function_resume_in_realm(async_id, sent_value, is_error);
         self.call_stack_envs.truncate(envs_base);
+        if framed {
+            self.node_pop_module_frame();
+        }
         self.current_realm_id = saved_realm;
         completion
     }

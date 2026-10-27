@@ -51,6 +51,7 @@ pub(crate) struct NodeEsm {
     checked: HashSet<(ModuleKey, Option<ImportModuleType>)>,
     main: Option<ModuleKey>,
     main_ready: bool,
+    entry_reported: bool,
 }
 
 impl NodeEsm {
@@ -60,6 +61,16 @@ impl NodeEsm {
 
     pub(crate) fn is_active(&self) -> bool {
         self.host.is_some()
+    }
+
+    pub(crate) fn has_main(&self) -> bool {
+        self.main.is_some()
+    }
+
+    /// Whether a rejection of the entry point's top-level await was already
+    /// delivered, so the throw the first run surfaces is not delivered again.
+    pub(crate) fn entry_reported(&self) -> bool {
+        self.entry_reported
     }
 
     pub(crate) fn lookup(&self, specifier: &str, referrer: Option<&Path>) -> Option<ModuleKey> {
@@ -418,7 +429,11 @@ impl Interpreter {
     pub(super) fn node_esm_main_rejected(&mut self, key: &ModuleKey, error: &JsValue) {
         let esm = &self.node_host.esm;
         if esm.main_ready && esm.main.as_ref() == Some(key) {
-            self.node_uncaught(error.clone());
+            self.node_host.esm.entry_reported = true;
+            self.node_uncaught_entry(
+                error.clone(),
+                event_loop::node_event_loop::ESM_ENTRY_HOPS + 1,
+            );
         }
     }
 

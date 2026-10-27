@@ -1,0 +1,7 @@
+
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+{ code: 'E_OBJ', list: [ 1, 2 ] }
+
+Node.js <version>

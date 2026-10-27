@@ -1,0 +1,8 @@
+file://<dir>/fatal-esm-throw.fixture.mjs:4
+throw new Error("boom");
+      ^
+
+Error: boom
+    at file://<dir>/fatal-esm-throw.fixture.mjs:4:7
+
+Node.js <version>

@@ -10,6 +10,10 @@
 use super::super::*;
 use std::collections::VecDeque;
 
+/// Microtask turns between an ES module entry point throwing and Node's
+/// report of it (measured; a throw after a top-level `await` takes one more).
+pub(crate) const ESM_ENTRY_HOPS: u32 = 4;
+
 #[derive(Default)]
 pub(crate) struct NodeLoopState {
     pub(crate) installed: bool,
@@ -147,11 +151,24 @@ impl Interpreter {
     }
 
     pub(crate) fn node_uncaught(&mut self, error: JsValue) {
+        self.node_report_uncaught(error, "uncaughtException", &[]);
+    }
+
+    /// An error that ended the ES module entry point. Node delivers it as a
+    /// rejection of the loader's promise: after `hops` microtask turns, with
+    /// origin `unhandledRejection` and no `unhandledRejection` event.
+    pub(crate) fn node_uncaught_entry(&mut self, error: JsValue, hops: u32) {
+        let hops = [JsValue::number(f64::from(hops))];
+        self.node_report_uncaught(error, "unhandledRejection", &hops);
+    }
+
+    fn node_report_uncaught(&mut self, error: JsValue, kind: &str, extra: &[JsValue]) {
         let Some(callback) = self.scheduler.node_loop.uncaught_cb.clone() else {
             return;
         };
-        let origin = JsValue::string(JsString::from_str("uncaughtException"));
-        match self.node_call(&callback, &[error, origin]) {
+        let mut args = vec![error, JsValue::string(JsString::from_str(kind))];
+        args.extend_from_slice(extra);
+        match self.node_call(&callback, &args) {
             Completion::Exit(code) => self.pending_exit = Some(code),
             Completion::Throw(_) => self.pending_exit = Some(7),
             _ => {}
@@ -370,7 +387,14 @@ impl Interpreter {
             return;
         }
         if let Completion::Throw(error) = result {
-            self.node_uncaught(error.clone());
+            if self.node_host.esm.has_main() {
+                if !self.node_host.esm.entry_reported() {
+                    self.node_uncaught_entry(error.clone(), ESM_ENTRY_HOPS);
+                    self.drain_microtasks();
+                }
+            } else {
+                self.node_uncaught(error.clone());
+            }
             self.scheduler.node_loop.main_throw_handled = self.pending_exit.is_none();
         }
         self.node_checkpoint();

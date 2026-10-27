@@ -173,8 +173,12 @@ fn run_source_with_interp(
         p.parse_program()
             .map_err(|e| EngineError::Parse(format!("{e:?}")))?
     };
+    let origin = p.source_origin();
     let result = if let Some(p) = path {
         interp.note_script_source(p, source, is_module);
+        if is_module {
+            interp.node_note_main_module_origin(p, origin);
+        }
         interp.run_with_path(&program, p)
     } else {
         interp.run(&program)

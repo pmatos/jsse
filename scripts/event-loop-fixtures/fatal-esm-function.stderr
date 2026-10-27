@@ -1,0 +1,9 @@
+file://<dir>/fatal-esm-function.fixture.mjs:5
+  return new TypeError("made elsewhere");
+         ^
+
+TypeError: made elsewhere
+    at make (file://<dir>/fatal-esm-function.fixture.mjs:5:10)
+    at file://<dir>/fatal-esm-function.fixture.mjs:7:15
+
+Node.js <version>

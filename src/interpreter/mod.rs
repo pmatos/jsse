@@ -3132,6 +3132,7 @@ impl Interpreter {
                     return Err(self.create_error("SyntaxError", &error.message.to_string()));
                 }
             };
+            self.node_note_module_origin(&canon_path, parser.source_origin());
 
             let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
             module_env.borrow_mut().strict = true;
@@ -3331,12 +3332,9 @@ impl Interpreter {
         };
         let module_env = module.borrow().env.clone();
         self.static_module_load_depth += 1;
-
+        let framed = self.node_push_module_frame(module_path, &module_env);
         let err = self.with_ic_body(&program.body, |interp| {
-            // Module items reach `exec_statement` without passing through
-            // `dispatch_body`, so without a frame their work lands in
-            // `ast_work_units` but in no BODY row — module-heavy runs could not
-            // localize their tree-walker work at all (#537 review, third pass).
+            // Module items bypass `dispatch_body`: give them a BODY row (#537).
             #[cfg(feature = "perf-counters")]
             {
                 interp.perf.body_non_function += 1;
@@ -3412,6 +3410,9 @@ impl Interpreter {
             interp.perf.leave_ast_body();
             err
         });
+        if framed {
+            self.node_pop_module_frame();
+        }
         self.static_module_load_depth -= 1;
         match err {
             Some(e) => Err(e),

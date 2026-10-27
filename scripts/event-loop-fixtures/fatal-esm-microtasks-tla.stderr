@@ -1,0 +1,17 @@
+m1
+m2
+resumed
+m3
+m4
+m5
+m6
+m7
+exit
+file://<dir>/fatal-esm-microtasks-tla.fixture.mjs:9
+throw new Error("microtasks after await");
+      ^
+
+Error: microtasks after await
+    at file://<dir>/fatal-esm-microtasks-tla.fixture.mjs:9:7
+
+Node.js <version>
