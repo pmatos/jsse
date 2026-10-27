@@ -212,6 +212,7 @@
   cache["internal/host/stack"] = {
     exports: { nameSource: takeHost("__host_stack_name_source") },
   };
+  cache["internal/host/vm"] = { exports: takeHost("__host_vm") };
   // The native `os` binding (#1222) is private to node-lib/os.js.
   var hostOs = globalThis.__host_os;
   delete globalThis.__host_os;
