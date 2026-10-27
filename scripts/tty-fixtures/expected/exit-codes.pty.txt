@@ -1,0 +1,4 @@
+exit=5
+--- tty
+data\r
+exiting while stdin is open\r

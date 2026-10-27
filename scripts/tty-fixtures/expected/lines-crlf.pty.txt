@@ -1,0 +1,11 @@
+exit=0
+--- tty
+x\r
+\r
+y\r
+z\r
+line "x"\r
+line ""\r
+line "y"\r
+line "z"\r
+close\r

@@ -28,6 +28,8 @@ pub(crate) struct NodeLoopState {
     /// Ref'd host handles JS reports through `__host_loop_ref`; each keeps the
     /// loop alive.
     pub(crate) external_refs: u32,
+    #[cfg(unix)]
+    pub(crate) stdin: super::builtins::node_host_tty::StdinState,
 }
 
 impl NodeLoopState {
@@ -66,6 +68,8 @@ impl NodeLoopState {
         if let Some(dispatch) = &self.host_dispatch {
             visit(dispatch);
         }
+        #[cfg(unix)]
+        self.stdin.for_each_root(&mut visit);
     }
 }
 
@@ -199,6 +203,17 @@ impl Interpreter {
             || self.scheduler.node_loop.immediate_refed > 0
             || self.scheduler.node_loop.external_refs > 0
             || self.has_awaited_pending_async()
+            || self.node_stdin_alive()
+    }
+
+    #[cfg(unix)]
+    fn node_stdin_alive(&self) -> bool {
+        self.scheduler.node_loop.stdin.keeps_alive()
+    }
+
+    #[cfg(not(unix))]
+    fn node_stdin_alive(&self) -> bool {
+        false
     }
 
     fn node_run_immediates(&mut self) {
@@ -217,7 +232,12 @@ impl Interpreter {
     /// completion, but not at all while a ref'd immediate is waiting or once
     /// nothing ref'd is left alive (libuv's zero poll timeout).
     fn node_poll(&mut self) {
+        #[cfg(unix)]
+        let stdin_ready = self.scheduler.node_loop.stdin.has_deliverable();
+        #[cfg(not(unix))]
+        let stdin_ready = false;
         let block = self.scheduler.node_loop.immediate_refed == 0
+            && !stdin_ready
             && !self.host_events_pending()
             && self.node_loop_alive();
         let wait = self.completion_wait(std::time::Duration::from_millis(100));
@@ -267,6 +287,8 @@ impl Interpreter {
                 break;
             }
             self.node_poll();
+            #[cfg(unix)]
+            self.node_stdin_deliver();
             self.node_run_immediates();
         }
         self.scheduler.node_loop.running = false;

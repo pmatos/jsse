@@ -1,0 +1,8 @@
+exit=0
+--- stdout
+line 1 "a"
+line 2 "b b"
+line 3 ""
+line 4 "last"
+close 4
+--- stderr

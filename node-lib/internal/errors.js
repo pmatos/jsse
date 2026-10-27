@@ -443,6 +443,9 @@ E('ERR_IPC_ONE_PIPE', Error, 'Child process can have only one IPC pipe');
 E('ERR_IPC_SYNC_FORK', Error, 'IPC cannot be used with synchronous forks');
 E('ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', TypeError,
   (x) => `The feature ${x} is unavailable on the current platform, which is being used to run Node.js`);
+E('ERR_INVALID_FD', RangeError, (value) => format('"fd" must be a positive integer: %s', value));
+E('ERR_INVALID_CURSOR_POS', TypeError, 'Cannot set cursor row without setting its column');
+E('ERR_USE_AFTER_CLOSE', Error, (name) => `${name} was closed`);
 
 // Node's AbortError is a plain Error with .code and .name, not a DOMException.
 class AbortError extends Error {

@@ -1,0 +1,10 @@
+exit=0
+--- tty
+a\r
+b\r
+write returned true\r
+write cb null\r
+tick\r
+write cb2\r
+microtask\r
+immediate\r

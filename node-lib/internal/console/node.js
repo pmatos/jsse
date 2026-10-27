@@ -3,13 +3,16 @@
 // of the shim's best-effort inspect. The builtin loader evaluates this once at
 // startup; the util module is loaded on the first call that needs it, and
 // calls whose arguments are all plain strings or primitives are formatted
-// here. The shim's global `util` is left as it is.
+// here. Output goes out through process.stdout/stderr (internal/process/stdio),
+// colored like Node's `colorMode: 'auto'` when the stream is a color TTY. The
+// shim's global `util` is left as it is.
 
 'use strict';
 
 {
   var hrtime = process.hrtime;
   var util;
+  var stdio;
   var groupIndent = "";
   var counts = Object.create(null);
   var timers = Object.create(null);
@@ -31,24 +34,40 @@
     }
   }
 
-  function format(args) {
+  function getStdio() {
+    return stdio || (stdio = require("internal/process/stdio"));
+  }
+
+  function colors(fd) {
+    var stream = getStdio().colorStream(fd);
+    if (stream === undefined && process.env.FORCE_COLOR === undefined) return false;
+    return !!require("internal/util/colors").shouldColorize(stream);
+  }
+
+  function format(fd, args) {
     var n = args.length;
     var plain = n > 0;
+    var strings = true;
     for (var i = 0; i < n && plain; i++) {
       plain = simple(args[i]) && (i > 0 || n === 1 || typeof args[0] !== "string" ||
         args[0].indexOf("%") === -1);
+      if (typeof args[i] !== "string") strings = false;
     }
-    if (!plain) return getUtil().format.apply(null, args);
+    if (plain && !strings && colors(fd)) plain = false;
+    if (!plain) {
+      var list = Array.prototype.slice.call(args);
+      return getUtil().formatWithOptions.apply(null, [{ colors: colors(fd) }].concat(list));
+    }
     var line = String(args[0]);
     for (var j = 1; j < n; j++) line += " " + String(args[j]);
     return line;
   }
 
-  function write(stream, text) {
+  function write(fd, text) {
     if (groupIndent) {
       text = groupIndent + text.split("\n").join("\n" + groupIndent);
     }
-    stream.write(text + "\n");
+    getStdio().write(fd, text + "\n");
   }
 
   function label(value) {
@@ -98,26 +117,26 @@
 
   var c = {
     log: function () {
-      write(process.stdout, format(arguments));
+      write(1, format(1, arguments));
     },
     error: function () {
-      write(process.stderr, format(arguments));
+      write(2, format(2, arguments));
     },
     dir: function (obj, opts) {
-      var options = Object.assign({ customInspect: false }, opts);
-      write(process.stdout, getUtil().inspect(obj, options));
+      var options = Object.assign({ customInspect: false, colors: colors(1) }, opts);
+      write(1, getUtil().inspect(obj, options));
     },
     trace: function () {
-      var msg = format(arguments);
+      var msg = format(2, arguments);
       var stack = new Error().stack || "";
-      write(process.stderr, "Trace" + (msg ? ": " + msg : "") + "\n" + stack);
+      write(2, "Trace" + (msg ? ": " + msg : "") + "\n" + stack);
     },
     assert: function (cond) {
       if (cond) return;
       var rest = Array.prototype.slice.call(arguments, 1);
       if (typeof rest[0] === "string") rest[0] = "Assertion failed: " + rest[0];
       else rest.unshift("Assertion failed");
-      write(process.stderr, format(rest));
+      write(2, format(2, rest));
     },
     group: function () {
       if (arguments.length) c.log.apply(c, arguments);
@@ -159,7 +178,7 @@
       var ms = elapsed(name, "timeLog");
       if (ms === undefined) return;
       var rest = Array.prototype.slice.call(arguments, 1);
-      c.log(name + ": " + ms + (rest.length ? " " + format(rest) : ""));
+      c.log(name + ": " + ms + (rest.length ? " " + format(1, rest) : ""));
     },
     // Node renders an ASCII table; an inspect dump is close enough here.
     table: function (data) {
