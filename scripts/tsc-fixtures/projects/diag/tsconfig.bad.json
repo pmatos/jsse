@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "noLib": true,
+    "target": "es3000",
+    "strict": "yes",
+    "nope": 1
+  },
+  "files": ["globals.d.ts", "missing.ts"],
+}

@@ -1,0 +1,1 @@
+\ufeffconst a: number = 'x';\nconst b: string = 1;\n
