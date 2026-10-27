@@ -48,6 +48,7 @@ if [ -z "${TSC_DIR:-}" ]; then
     echo "SKIP: TSC_DIR is not set; point it at an installed typescript package (6.0.3) to run the tsc oracle"
     exit 0
 fi
+TSC_DIR="$(cd "$TSC_DIR" 2>/dev/null && pwd || echo "$TSC_DIR")"
 TSC_JS="$TSC_DIR/lib/_tsc.js"
 if [ ! -f "$TSC_JS" ]; then
     echo "SKIP: $TSC_JS does not exist (TSC_DIR must be the typescript package directory)"
@@ -62,8 +63,11 @@ if [ ! -x "$JSSE" ]; then
     echo "Building jsse (release)..."
     (cd "$PROJECT_DIR" && cargo build --release)
 fi
-TS_VERSION="$("$NODE_BIN" -p "require('$TSC_DIR/package.json').version")"
-echo "typescript $TS_VERSION from $TSC_DIR"
+TS_VERSION="$("$NODE_BIN" -p 'require(process.argv[1] + "/package.json").version' "$TSC_DIR")"
+echo "typescript $TS_VERSION from $TSC_DIR (jsse: $JSSE)"
+if [ "$TS_VERSION" != "6.0.3" ]; then
+    echo "WARNING: the issue targets typescript 6.0.3; differences on $TS_VERSION are not necessarily jsse bugs" >&2
+fi
 
 # run <runner> <tag> <entry> args... : fresh tree, stdout/rc/emit digest into $WORK/<runner>.<tag>.*
 run() {
@@ -130,7 +134,11 @@ fi
 
 if [ "$TIMING" -eq 1 ]; then
     for entry in "$TSC_JS" "$TSC_DIR/bin/tsc"; do
-        "$JSSE" --node "$entry" --version > /dev/null
+        if ! "$JSSE" --node "$entry" --version > /dev/null; then
+            echo "FAIL startup: jsse --node ${entry#"$TSC_DIR"/} --version exited non-zero"
+            FAIL=1
+            continue
+        fi
         samples=()
         for _ in 1 2 3 4 5 6 7 8 9 10; do
             t0=$(date +%s%N)

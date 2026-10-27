@@ -15,13 +15,13 @@ fn fixtures() -> PathBuf {
 }
 
 fn tsc_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("TSC_DIR")?);
+    let dir = std::fs::canonicalize(std::env::var_os("TSC_DIR")?).ok()?;
     let manifest = std::fs::read_to_string(dir.join("package.json")).ok()?;
-    if !dir.join("lib/_tsc.js").is_file() || !manifest.contains("\"version\": \"6.0.3\"") {
-        eprintln!("SKIP: TSC_DIR is not a typescript 6.0.3 package");
-        return None;
-    }
-    Some(dir)
+    let version = manifest
+        .split("\"version\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1));
+    (dir.join("lib/_tsc.js").is_file() && version == Some("6.0.3")).then_some(dir)
 }
 
 fn skip() -> bool {
@@ -46,7 +46,22 @@ fn tsc(entry: &str, args: &[&str], cwd: &Path) -> Output {
         .expect("run jsse")
 }
 
-fn scratch_tree(name: &str) -> PathBuf {
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch_tree(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("jsse-tsc-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -54,7 +69,7 @@ fn scratch_tree(name: &str) -> PathBuf {
         let entry = entry.unwrap();
         std::fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
     }
-    dir
+    Scratch(dir)
 }
 
 fn pinned(tag: &str) -> String {
@@ -87,7 +102,8 @@ fn version_matches_node() {
         assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
         assert_eq!(text(&out.stdout), "Version 6.0.3\n");
     }
-    assert_eq!(sha256(b"Version 6.0.3\n"), pinned("version"));
+    let out = tsc("lib/_tsc.js", &["--version"], &cwd);
+    assert_eq!(sha256(&out.stdout), pinned("version"));
 }
 
 #[test]
