@@ -67,12 +67,12 @@ def load_pin(path=PIN):
 
 
 def cache_dir(arg):
-    d = os.path.abspath(
+    d = os.path.realpath(
         os.path.expanduser(
             arg or os.environ.get("TS_SUITE_DIR") or "~/.cache/jsse-ts-suite"
         )
     )
-    if os.path.commonpath([d, ROOT]) == ROOT:
+    if os.path.commonpath([d, os.path.realpath(ROOT)]) == os.path.realpath(ROOT):
         raise Fatal(
             f"cache directory {d} is inside the repository; TypeScript must not be vendored"
         )
@@ -98,7 +98,10 @@ def must(cmd, cwd, **kw):
 
 
 def capture(cmd, cwd=None):
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Fatal(f"command failed: {' '.join(cmd)}: {r.stderr.strip()}")
+    return r.stdout.strip()
 
 
 def fetch(src, pin):
@@ -183,6 +186,8 @@ def run(src, cache, workers, timeout, offline):
     os.makedirs(rundir)
     env = dict(os.environ, CI="true")
     prefix = ["unshare", "-rn"] if offline else []
+    if offline:
+        capture(prefix + ["true"])
     results = os.path.join(src, "TEST-results.xml")
     jobs = (
         (
@@ -346,9 +351,12 @@ def observe(rundir):
         entry.pop("suites", None)
         entry.pop("buckets", None)
         obs["eslint_rules"] = entry
+    return obs, good
+
+
+def write_pass_list(rundir, good):
     with open(os.path.join(rundir, "node-pass-list.txt"), "w", encoding="utf-8") as f:
         f.writelines(line + "\n" for line in sorted_escaped(good))
-    return obs
 
 
 def run_problems(rundir, obs):
@@ -368,6 +376,8 @@ def run_problems(rundir, obs):
         out.append("some tests were skipped")
     if obs.get("eslint_rules", {}).get("failed"):
         out.append("eslint rule tests failed")
+    if obs.get("eslint_rules", {}).get("skipped"):
+        out.append("some eslint rule tests were skipped")
     return out
 
 
@@ -459,11 +469,12 @@ def main(argv=None):
             rundir = run(src, cache, args.workers, args.timeout, args.offline)
         if "record" in stages or "check" in stages:
             rundir = rundir or os.path.join(cache, "runs", "latest")
-            obs = observe(rundir)
+            obs, good = observe(rundir)
             problems = run_problems(rundir, obs)
             if "record" in stages:
                 if problems:
                     raise Fatal("refusing to record: " + "; ".join(problems))
+                write_pass_list(rundir, good)
                 with open(MANIFEST, "w", encoding="utf-8") as f:
                     json.dump(build_manifest(obs, pin), f, indent=1, sort_keys=False)
                     f.write("\n")
@@ -475,6 +486,13 @@ def main(argv=None):
                 problems += diff(
                     manifest["typescript"], {k: pin[k] for k in manifest["typescript"]}
                 )
+                if manifest.get("oracle_engine") != environment():
+                    print(
+                        "NOTE this host is not the recorded oracle engine:",
+                        environment(),
+                        "vs",
+                        manifest.get("oracle_engine"),
+                    )
                 for p in problems:
                     print("DIFF", p)
                 print(
@@ -487,7 +505,7 @@ def main(argv=None):
                     "failed",
                 )
                 return 1 if problems else 0
-    except Fatal as e:
+    except (Fatal, OSError, ET.ParseError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     return 0

@@ -26,7 +26,7 @@ later jsse run localises a divergence to a runner without the list. Totals on No
 79 eslint-rule tests (327 unit-test suites and 19,676 runner test files discovered).
 
 **The full pass list is not committed.** 106k ids are 21.8 MB, 457 KB with xz at best: about 25 parts of 19,000
-bytes for one baseline. The run writes it to `runs/<stamp>/node-pass-list.txt` (sorted, one id per line, `\`, newline
+bytes for one baseline. The `record` stage writes it to `runs/<stamp>/node-pass-list.txt` (sorted, one id per line, `\`, newline
 and CR escaped, duplicates kept: 110 ids repeat) and `oracle.json` pins its digest as `totals.digest`. The Node run
 is deterministic (three runs with 8 workers, in separate cache directories, online and in an empty network namespace, gave identical ids), so the baseline ticket
 (#1296) can regenerate the list or commit a compressed form.

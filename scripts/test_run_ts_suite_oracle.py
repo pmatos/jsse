@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -162,7 +163,8 @@ class RunDirTest(unittest.TestCase):
             (self.dir / "eslint-rules.xml").write_text(xunit(eslint))
         for name, code in zip(("unit", "eslint-rules"), codes):
             (self.dir / f"{name}.exit-code").write_text(f"{code}\n")
-        return oracle.observe(str(self.dir))
+        obs, self.good = oracle.observe(str(self.dir))
+        return obs
 
     def test_pass_list_file_hashes_to_the_manifest_digest(self):
         tricky = [
@@ -170,6 +172,7 @@ class RunDirTest(unittest.TestCase):
             ("unittests:: a", "plain", True),
         ]
         obs = self.make(tricky, eslint=[("rule valid", "code\nmore", True)])
+        oracle.write_pass_list(str(self.dir), self.good)
         data = (self.dir / "node-pass-list.txt").read_bytes()
         self.assertEqual(hashlib.sha256(data).hexdigest(), obs["totals"]["digest"])
         self.assertEqual(data.count(b"\n"), 2)
@@ -201,6 +204,14 @@ class RunDirTest(unittest.TestCase):
         (self.dir / "eslint-rules.exit-code").unlink()
         self.assertIn(
             "eslint-rules exited with None", oracle.run_problems(str(self.dir), obs)
+        )
+
+    def test_skipped_eslint_rule_tests_are_a_problem(self):
+        obs = self.make(CASES, eslint=[("rule valid", "x", True)])
+        obs["eslint_rules"]["skipped"] = 1
+        self.assertIn(
+            "some eslint rule tests were skipped",
+            oracle.run_problems(str(self.dir), obs),
         )
 
     def test_empty_eslint_file_and_missing_unit_file_are_fatal(self):
@@ -274,7 +285,15 @@ class PinTest(unittest.TestCase):
     def test_cache_dir_must_be_outside_the_repository(self):
         with self.assertRaises(oracle.Fatal):
             oracle.cache_dir(str(oracle.ROOT) + "/ts-cache")
-        self.assertEqual(oracle.cache_dir(str(self.root)), str(self.root))
+        self.assertEqual(oracle.cache_dir(str(self.root)), os.path.realpath(self.root))
+        link = self.root / "link"
+        os.symlink(oracle.ROOT, link)
+        with self.assertRaises(oracle.Fatal):
+            oracle.cache_dir(str(link / "ts-cache"))
+
+    def test_capture_raises_on_a_failing_command(self):
+        with self.assertRaises(oracle.Fatal):
+            oracle.capture(["git", "rev-parse", "--verify", "no-such-ref-xyz"])
 
     def test_yargs_patch_drops_only_the_module_type(self):
         p = self.root / "src" / "node_modules" / "mocha" / "node_modules" / "yargs"
