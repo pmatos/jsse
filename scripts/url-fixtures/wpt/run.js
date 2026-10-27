@@ -1,7 +1,7 @@
 // Runs the vendored web-platform-tests URL data (see README.md) the way the
 // WPT harness files do and prints one line per failing vector plus a digest.
-// Node and `jsse --node` must print the same bytes; the last line is pinned in
-// expected.digest.
+// Node and `jsse --node` must print the same bytes, which are pinned in
+// expected.output.
 "use strict";
 const fs = require("fs");
 const path = require("path");

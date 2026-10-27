@@ -60,8 +60,9 @@ fi
 if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
     rc=0
     "$NODE_BIN" "$DIR/run.js" > "$WORK/node.out" 2> "$WORK/node.err" || rc=$?
-    if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -ne 0 ] || [ -s "$WORK/node.err" ]; then
         echo "FAIL wpt: node exit $rc"
+        head -5 "$WORK/node.err" | sed 's/^/  stderr: /'
         FAIL=1
     elif ! diff -u "$DIR/expected.output" "$WORK/node.out" > "$WORK/diff.txt"; then
         echo "FAIL wpt: node output differs from expected.output (--- expected, +++ node)"

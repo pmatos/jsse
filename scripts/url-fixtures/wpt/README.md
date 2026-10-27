@@ -27,7 +27,7 @@ every part and of the whole file, and `run.js` refuses to run on a mismatch.
 prints the failing vectors, a per-suite count and a digest line. Node and
 `jsse --node` must print identical output; `expected.output` is that output.
 Run it with `./scripts/run-node-url-wpt.sh`. To refresh the data, download the
-five files from the prefix above, split them at line boundaries below 19,000
+five files from the prefix above, split them at line boundaries at most 19,000
 bytes, and regenerate `manifest.json` and `expected.output`.
 
 `IdnaTestV2-removed.json` and the WPT `*.window.js` / `a-element` harness files
