@@ -50,11 +50,15 @@ def sha256_file(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def sha256_lines(ids):
-    esc = (
+def sorted_escaped(ids):
+    return sorted(
         i.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r") for i in ids
     )
-    return hashlib.sha256(("\n".join(sorted(esc)) + "\n").encode("utf-8")).hexdigest()
+
+
+def sha256_lines(ids):
+    text = "".join(line + "\n" for line in sorted_escaped(ids))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def load_pin(path=PIN):
@@ -116,11 +120,22 @@ def fetch(src, pin):
             ],
             None,
         )
+    verify_tree(src, pin)
+
+
+def verify_tree(src, pin):
+    if not os.path.isdir(os.path.join(src, ".git")):
+        raise Fatal(f"{src} is not a git checkout; run the fetch stage first")
     head = capture(["git", "rev-parse", "HEAD"], src)
     if head != pin["commit"]:
         raise Fatal(f"{src} is at {head}, expected {pin['tag']} = {pin['commit']}")
     if capture(["git", "status", "--porcelain", "--untracked-files=no"], src):
         raise Fatal(f"{src} has modified tracked files")
+    got = sha256_file(os.path.join(src, "package-lock.json"))
+    if got != pin["lockfile_sha256"]:
+        raise Fatal(
+            f"package-lock.json sha256 {got} != pinned {pin['lockfile_sha256']}"
+        )
 
 
 def patch_mocha_yargs(src):
@@ -130,6 +145,8 @@ def patch_mocha_yargs(src):
     p = os.path.join(
         src, "node_modules", "mocha", "node_modules", "yargs", "package.json"
     )
+    if not os.path.exists(p):
+        raise Fatal(f"{p} is missing; mocha's dependency layout changed")
     with open(p, encoding="utf-8") as f:
         data = json.load(f)
     if data.pop("type", None) is not None:
@@ -138,11 +155,7 @@ def patch_mocha_yargs(src):
 
 
 def install(src, pin):
-    got = sha256_file(os.path.join(src, "package-lock.json"))
-    if got != pin["lockfile_sha256"]:
-        raise Fatal(
-            f"package-lock.json sha256 {got} != pinned {pin['lockfile_sha256']}"
-        )
+    verify_tree(src, pin)
     must(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], src)
     patch_mocha_yargs(src)
     with open(
@@ -159,12 +172,13 @@ def hereby(src):
 
 def build(src, cache):
     log = os.path.join(cache, "build.log")
+    open(log, "wb").close()
     for task in ("local", "tests"):
         must(hereby(src) + [task, "--no-colors"], src, log=log)
 
 
 def run(src, cache, workers, timeout, offline):
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
     rundir = os.path.join(cache, "runs", stamp)
     os.makedirs(rundir)
     env = dict(os.environ, CI="true")
@@ -222,13 +236,17 @@ def bucket(runner, classname):
 
 
 def read_cases(xml_path):
-    """Yield (runner, suite, bucket, path, id, passed) for every testcase."""
+    """Yield (runner, suite, bucket, path, id, status) for every testcase; status is
+    "passed", "failed" or "skipped" (mocha's pending tests)."""
     for _, el in ET.iterparse(xml_path):
         if el.tag != "testcase":
             continue
         cn, name = el.get("classname") or "", el.get("name") or ""
         runner, suite = classify(cn, name)
-        passed = el.find("failure") is None and el.find("error") is None
+        if el.find("failure") is not None or el.find("error") is not None:
+            status = "failed"
+        else:
+            status = "skipped" if el.find("skipped") is not None else "passed"
         path = CASE_PATH.search(cn)
         yield (
             runner,
@@ -236,7 +254,7 @@ def read_cases(xml_path):
             bucket(runner, cn),
             path.group(1) if path else None,
             " ".join(cn.split()) + " :: " + name,
-            passed,
+            status,
         )
         el.clear()
 
@@ -244,19 +262,28 @@ def read_cases(xml_path):
 def summarise(xml_path):
     """Per-runner counts and digests from one mocha xunit file."""
     runners, ids = {}, {}
-    for runner, suite, bkt, path, ident, passed in read_cases(xml_path):
+    for runner, suite, bkt, path, ident, status in read_cases(xml_path):
         r = runners.setdefault(
             runner,
-            {"passed": 0, "failed": 0, "suites": {}, "buckets": {}, "files": set()},
+            {
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "suites": {},
+                "buckets": {},
+                "files": set(),
+            },
         )
-        r["passed" if passed else "failed"] += 1
+        r[status] += 1
         for table, key in (("suites", suite), ("buckets", bkt)):
             if key is not None:
-                t = r[table].setdefault(key, {"passed": 0, "failed": 0})
-                t["passed" if passed else "failed"] += 1
+                t = r[table].setdefault(key, {"passed": 0, "failed": 0, "skipped": 0})
+                t[status] += 1
         if path and runner != "project":
             r["files"].add(path)
-        ids.setdefault(runner, ([], []))[0 if passed else 1].append(ident)
+        good_bad = ids.setdefault(runner, ([], []))
+        if status != "skipped":
+            good_bad[status != "passed"].append(ident)
     out = {}
     for runner, r in sorted(runners.items()):
         good, bad = ids[runner]
@@ -265,11 +292,16 @@ def summarise(xml_path):
             "failed": r["failed"],
             "digest": sha256_lines(good),
         }
+        if r["skipped"]:
+            entry["skipped"] = r["skipped"]
         if r["files"]:
             entry["files"] = len(r["files"])
         for table in ("suites", "buckets"):
             if r[table]:
-                entry[table] = dict(sorted(r[table].items()))
+                entry[table] = {
+                    k: {n: c for n, c in v.items() if c or n != "skipped"}
+                    for k, v in sorted(r[table].items())
+                }
         if bad:
             entry["failed_ids"] = sorted(bad)
         out[runner] = entry
@@ -307,18 +339,36 @@ def observe(rundir):
     }
     eslint = os.path.join(rundir, "eslint-rules.xml")
     if os.path.exists(eslint):
-        er, eids = summarise(eslint)
+        er, _ = summarise(eslint)
+        if "unittests" not in er:
+            raise Fatal(f"{eslint} has no test cases")
         entry = er["unittests"]
         entry.pop("suites", None)
         entry.pop("buckets", None)
         obs["eslint_rules"] = entry
     with open(os.path.join(rundir, "node-pass-list.txt"), "w", encoding="utf-8") as f:
-        for ident in sorted(good):
-            f.write(
-                ident.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
-                + "\n"
-            )
+        f.writelines(line + "\n" for line in sorted_escaped(good))
     return obs
+
+
+def run_problems(rundir, obs):
+    """Why this run is not a clean Node run: non-zero hereby exit codes, failures, skips."""
+    out = []
+    for name in ("unit", "eslint-rules"):
+        try:
+            with open(os.path.join(rundir, f"{name}.exit-code")) as f:
+                code = int(f.read())
+        except (OSError, ValueError):
+            code = None
+        if code != 0:
+            out.append(f"{name} exited with {code!r}")
+    if obs["totals"]["failed"]:
+        out.append(f"{obs['totals']['failed']} tests failed")
+    if any(r.get("skipped") for r in obs["runners"].values()):
+        out.append("some tests were skipped")
+    if obs.get("eslint_rules", {}).get("failed"):
+        out.append("eslint rule tests failed")
+    return out
 
 
 def environment():
@@ -402,20 +452,29 @@ def main(argv=None):
         if "install" in stages:
             install(src, pin)
         if "build" in stages:
+            verify_tree(src, pin)
             build(src, cache)
         if "run" in stages:
+            verify_tree(src, pin)
             rundir = run(src, cache, args.workers, args.timeout, args.offline)
         if "record" in stages or "check" in stages:
             rundir = rundir or os.path.join(cache, "runs", "latest")
             obs = observe(rundir)
+            problems = run_problems(rundir, obs)
             if "record" in stages:
+                if problems:
+                    raise Fatal("refusing to record: " + "; ".join(problems))
                 with open(MANIFEST, "w", encoding="utf-8") as f:
                     json.dump(build_manifest(obs, pin), f, indent=1, sort_keys=False)
                     f.write("\n")
                 print(f"wrote {MANIFEST}")
             if "check" in stages:
                 with open(MANIFEST, encoding="utf-8") as f:
-                    problems = check(json.load(f), obs)
+                    manifest = json.load(f)
+                problems += check(manifest, obs)
+                problems += diff(
+                    manifest["typescript"], {k: pin[k] for k in manifest["typescript"]}
+                )
                 for p in problems:
                     print("DIFF", p)
                 print(

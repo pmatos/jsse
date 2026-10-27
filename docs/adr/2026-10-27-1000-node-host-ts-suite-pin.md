@@ -15,6 +15,8 @@ Status: accepted, epic #1214, issue #1250 (builds on #1243, `2026-10-27-0900-nod
    `hereby run-eslint-rules-tests --reporter=xunit`, each into `runs/<stamp>/` with a log, an exit-code file and the
    xunit file. `--offline` wraps the run in `unshare -rn`, which proves nothing reaches the network.
    `--no-lint` because lint is its own ticket (#1295); `--light=false` because that is `npm test`.
+   `build` and `run` re-verify the commit and lockfile first. `record` refuses a run with a non-zero hereby exit,
+   failed or skipped tests; `check` reports them as differences.
 3. **Why xunit.** In parallel mode the host prints only counts and writes failures to `.failed-tests`. With
    `CI=true` it also replays every result into mocha's xunit reporter, the only complete per-test list. A test id is
    the whitespace-normalised suite path plus the test title; 110 ids repeat, so the list is a multiset.

@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -146,6 +147,69 @@ class SummariseTest(unittest.TestCase):
         self.assertTrue(any("unittests/digest" in p for p in problems))
 
 
+class RunDirTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def make(self, cases, eslint=None, codes=(0, 0)):
+        (self.dir / "unit.xml").write_text(xunit(cases))
+        (self.dir / "unit.log").write_text(
+            "Discovered 3 unittest suites.\nDiscovered 9 test files in 1ms.\n"
+        )
+        if eslint is not None:
+            (self.dir / "eslint-rules.xml").write_text(xunit(eslint))
+        for name, code in zip(("unit", "eslint-rules"), codes):
+            (self.dir / f"{name}.exit-code").write_text(f"{code}\n")
+        return oracle.observe(str(self.dir))
+
+    def test_pass_list_file_hashes_to_the_manifest_digest(self):
+        tricky = [
+            ("unittests:: a", "back\\slash and\nnewline", True),
+            ("unittests:: a", "plain", True),
+        ]
+        obs = self.make(tricky, eslint=[("rule valid", "code\nmore", True)])
+        data = (self.dir / "node-pass-list.txt").read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), obs["totals"]["digest"])
+        self.assertEqual(data.count(b"\n"), 2)
+        self.assertEqual(obs["eslint_rules"]["passed"], 1)
+        self.assertEqual(obs["unittest_suites_discovered"], 3)
+        self.assertEqual(obs["test_files_discovered"], 9)
+        self.assertEqual(oracle.run_problems(str(self.dir), obs), [])
+
+    def test_skipped_tests_are_neither_passed_nor_failed(self):
+        xml = xunit(CASES).replace(
+            '<testcase classname="  unittests:: semver Version" name="toString"></testcase>',
+            '<testcase classname="  unittests:: semver Version" name="toString"><skipped/></testcase>',
+        )
+        (self.dir / "unit.xml").write_text(xml)
+        runners, ids = oracle.summarise(str(self.dir / "unit.xml"))
+        self.assertEqual(runners["unittests"]["skipped"], 1)
+        self.assertEqual(runners["unittests"]["passed"], 4)
+        self.assertEqual(
+            runners["unittests"]["suites"]["semver"],
+            {"passed": 0, "failed": 0, "skipped": 1},
+        )
+        self.assertEqual(len(ids["unittests"][0]), 4)
+
+    def test_problems_name_exit_codes_failures_and_skips(self):
+        obs = self.make(CASES, eslint=[("rule valid", "x", True)], codes=(1, 0))
+        problems = oracle.run_problems(str(self.dir), obs)
+        self.assertIn("unit exited with 1", problems)
+        self.assertIn("1 tests failed", problems)
+        (self.dir / "eslint-rules.exit-code").unlink()
+        self.assertIn(
+            "eslint-rules exited with None", oracle.run_problems(str(self.dir), obs)
+        )
+
+    def test_empty_eslint_file_and_missing_unit_file_are_fatal(self):
+        with self.assertRaises(oracle.Fatal):
+            self.make(CASES, eslint=[])
+        with self.assertRaises(oracle.Fatal):
+            oracle.observe(str(self.dir / "absent"))
+
+
 class PinTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -171,18 +235,27 @@ class PinTest(unittest.TestCase):
         self.git("tag", "v1", cwd=up)
         return up, self.git("rev-parse", "HEAD", cwd=up)
 
+    def pin(self, up, head):
+        lock = hashlib.sha256((up / "package-lock.json").read_bytes()).hexdigest()
+        return {"repo": str(up), "tag": "v1", "commit": head, "lockfile_sha256": lock}
+
     def test_fetch_verifies_the_commit(self):
         up, head = self.upstream()
-        pin = {"repo": str(up), "tag": "v1", "commit": head}
+        pin = self.pin(up, head)
         src = str(self.root / "cache" / "ts-src")
         oracle.fetch(src, pin)
         oracle.fetch(src, pin)
         with self.assertRaises(oracle.Fatal):
             oracle.fetch(src, dict(pin, commit="0" * 40))
+        with self.assertRaises(oracle.Fatal) as ctx:
+            oracle.verify_tree(src, dict(pin, lockfile_sha256="0" * 64))
+        self.assertIn("package-lock.json", str(ctx.exception))
+        with self.assertRaises(oracle.Fatal):
+            oracle.verify_tree(str(self.root / "nowhere"), pin)
 
     def test_fetch_rejects_modified_tree(self):
         up, head = self.upstream()
-        pin = {"repo": str(up), "tag": "v1", "commit": head}
+        pin = self.pin(up, head)
         src = self.root / "cache" / "ts-src"
         oracle.fetch(str(src), pin)
         (src / "package-lock.json").write_text("changed")
@@ -190,11 +263,12 @@ class PinTest(unittest.TestCase):
             oracle.fetch(str(src), pin)
 
     def test_install_rejects_a_changed_lockfile(self):
-        src = self.root / "src"
-        src.mkdir()
-        (src / "package-lock.json").write_text("{}")
+        up, head = self.upstream()
+        pin = self.pin(up, head)
+        src = str(self.root / "cache" / "ts-src")
+        oracle.fetch(src, pin)
         with self.assertRaises(oracle.Fatal) as ctx:
-            oracle.install(str(src), {"lockfile_sha256": "0" * 64, "mocha": "1"})
+            oracle.install(src, dict(pin, lockfile_sha256="0" * 64, mocha="1"))
         self.assertIn("package-lock.json", str(ctx.exception))
 
     def test_cache_dir_must_be_outside_the_repository(self):
