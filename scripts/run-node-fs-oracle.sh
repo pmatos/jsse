@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-check the synchronous `fs` of `jsse --node` (issues #1217, #1218) against Node
+# Cross-check the `fs` of `jsse --node` (issues #1217, #1218, #1234) against Node
 # on a fixture directory tree.
 #
 # Usage:
@@ -118,8 +118,8 @@ for fixture in "${FIXTURES[@]}"; do
 done
 
 if [ "$NODE_ONLY" -eq 0 ]; then
-    GATE='print(typeof __host_fs_open, typeof __host_fs_read_file, typeof __node_builtins, typeof __node_fs_support)'
-    EXPECT='undefined undefined undefined undefined'
+    GATE='print(typeof __host_fs_open, typeof __host_fs_read_file, typeof __host_fs_async, typeof __node_builtins, typeof __node_fs_support)'
+    EXPECT='undefined undefined undefined undefined undefined'
     echo 'void 0;' > "$WORK/empty-prelude.js"
     for mode in plain prelude; do
         args=()
@@ -132,8 +132,8 @@ if [ "$NODE_ONLY" -eq 0 ]; then
             echo "ok   gate ($mode): fs absent without --node"
         fi
     done
-    got="$("$JSSE" --node -e 'print(typeof __host_fs_open, typeof __node_fs_support, Object.keys(globalThis).filter(function (k) { return /fs|builtins/.test(k); }).length)' 2>&1 || true)"
-    if [ "$got" != "undefined undefined 0" ]; then
+    got="$("$JSSE" --node -e 'print(typeof __host_fs_open, typeof __host_fs_async, typeof __node_fs_support, Object.keys(globalThis).filter(function (k) { return /fs|builtins/.test(k); }).length)' 2>&1 || true)"
+    if [ "$got" != "undefined undefined undefined 0" ]; then
         echo "FAIL gate (--node): fs floor leaked into script scope: $got"
         FAIL=1
     else
