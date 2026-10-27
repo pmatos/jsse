@@ -55,7 +55,9 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    value (SameValue); otherwise the header uses the error's own top frame
    (parsed from its stack). Throws inside embedded `node:` modules never
    replace the site, so the CommonJS loader's `catch (e) { throw e }` keeps the
-   user's position (V8's `finally` rethrow does the same). The header is
+   user's position (V8's `finally` rethrow does the same). A throw in the
+   chunk compiled with hooks on always sets the position first (0 when the
+   parser had none), so `Op::Throw` never reads a stale call position. The header is
    omitted when the position lies in a `node:` source, in `<anonymous>` code
    or when the source cannot be read. The caret copies tabs, as Node does.
 4. **Unhandled rejections.** A non-error reason becomes the
@@ -85,8 +87,11 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
   its caret follows the top frame as in Node (a module's error is a rejection).
 - Arrow functions have no receiver type, so `process.<anonymous>` reads
   `<anonymous>` (fixtures use `function` handlers).
-- A throw inside a generator or an async state machine falls back to the
-  error's top frame.
+- A throw inside a generator or an async state machine, or followed by a later
+  throw of another value before the report (only the last throw is
+  remembered), falls back to the error's top frame. Positions in `eval` code
+  are resolved against the enclosing function's source, as call positions are
+  (V8-errors gap).
 - Nothing is printed for `--trace-uncaught`, `--report-*` or inspector options.
 
 ## Verification

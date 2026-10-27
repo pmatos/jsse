@@ -19,7 +19,11 @@ fn normalise(stderr: &str, dir: &Path) -> String {
     let mut out = String::new();
     for line in text.lines() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("at ") && trimmed.contains("node:") {
+        let internal = trimmed.strip_prefix("at ").is_some_and(|frame| {
+            let frame = frame.strip_prefix("async ").unwrap_or(frame);
+            frame.starts_with("node:") || frame.contains(" (node:")
+        });
+        if internal {
             continue;
         }
         if line.starts_with("Node.js v") {

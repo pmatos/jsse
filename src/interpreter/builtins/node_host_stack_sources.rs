@@ -36,6 +36,8 @@ pub(crate) struct NodeStackState {
     pub(super) script_frames: Vec<(u64, Rc<str>)>,
     /// Source id and offset plus one of the last `throw` statement run.
     pub(super) throw_site: (usize, u32),
+    /// The source of the last noted throw, its id and whether it is a `node:` one.
+    pub(super) throw_source: Option<(Rc<str>, usize, bool)>,
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a

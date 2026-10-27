@@ -70,7 +70,7 @@ normalise_stderr() {
     local text
     text="$(cat "$1")"
     printf '%s\n' "${text//"$FIXTURE_DIR"/<dir>}" \
-        | sed -E -e '/^[[:space:]]+at .*node:/d' \
+        | sed -E -e '/^[[:space:]]+at (async )?(.* \()?node:/d' \
             -e 's/^Node\.js v[0-9][0-9.]*$/Node.js <version>/' \
             -e 's/\.\.\. [0-9]+ lines matching cause/... N lines matching cause/'
 }
@@ -106,6 +106,7 @@ for fixture in "${FIXTURES[@]}"; do
             sed 's/^/  stderr: /' "$WORK/$engine.err" | head -5
             ok=0
         elif [ "$UPDATE_STDERR" -eq 1 ]; then
+            rm -f "${fixture%.fixture.js}.stderr"
             if grep -q '^Node\.js v' "$WORK/$engine.err"; then
                 normalise_stderr "$WORK/$engine.err" > "${fixture%.fixture.js}.stderr"
             fi

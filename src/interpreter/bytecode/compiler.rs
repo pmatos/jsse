@@ -791,9 +791,9 @@ impl Compiler {
                 }
                 Ok(())
             }
-            // NamedEvaluation is applied by the assignment: a function or arrow
-            // literal is named as its closure is created; an anonymous class
-            // needs the tree-walker's logic.
+            // NamedEvaluation (sec-runtime-semantics-namedevaluation) applies
+            // at the assignment: function/arrow literals are named as made;
+            // an anonymous class needs the tree-walker.
             Expression::Assign(_, target, value)
                 if matches!(target.as_ref(), Expression::Identifier(_))
                     && is_anonymous_class(value) =>
@@ -1930,7 +1930,7 @@ impl Compiler {
             }
             Statement::Throw(expr, at) => {
                 self.compile_expr(expr)?;
-                self.emit_call_pos(CallSiteId(0, *at));
+                self.emit_throw_pos(*at);
                 self.emit(Op::Throw);
                 self.pop_n(1);
                 Ok(())

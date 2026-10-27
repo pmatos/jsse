@@ -7,6 +7,7 @@
 //! the stack hooks are installed.
 
 use super::super::*;
+use std::rc::Rc;
 
 const THROWN: PrivateId = PrivateId(u64::MAX - 6);
 
@@ -17,10 +18,9 @@ impl Interpreter {
         }
         let Some(func) = self
             .call_stack_frames
-            .iter()
-            .rev()
+            .last()
+            .filter(|f| f.func_obj_id != 0 && !f.is_eval)
             .map(|f| f.func_obj_id)
-            .find(|&id| id != 0)
         else {
             return;
         };
@@ -42,12 +42,19 @@ impl Interpreter {
         let Some(handle) = self.get_object_cell(global).cloned() else {
             return;
         };
-        let id = self.node_host.stack.source_id(&source);
-        if self.node_host.stack.sources[id]
-            .name
-            .as_ref()
-            .is_some_and(|name| name.starts_with("node:"))
-        {
+        let (id, internal) = match &self.node_host.stack.throw_source {
+            Some((cached, id, internal)) if Rc::ptr_eq(cached, &source) => (*id, *internal),
+            _ => {
+                let id = self.node_host.stack.source_id(&source);
+                let internal = self.node_host.stack.sources[id]
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.starts_with("node:"));
+                self.node_host.stack.throw_source = Some((source, id, internal));
+                (id, internal)
+            }
+        };
+        if internal {
             return;
         }
         self.node_host.stack.throw_site = (id, at);
@@ -67,7 +74,14 @@ impl Interpreter {
         for _ in 0..16 {
             let obj = self.get_object(id)?;
             let object = obj.borrow();
-            for key in object.ordinary_own_property_keys(OwnKeyFilter::AllStrings)? {
+            if object.array_elements().is_some() {
+                return None;
+            }
+            for key in object
+                .ordinary_own_property_keys(OwnKeyFilter::AllStrings)?
+                .into_iter()
+                .take(256)
+            {
                 let holds = object
                     .get_own_property(&key)
                     .and_then(|d| d.value?.as_object_id())

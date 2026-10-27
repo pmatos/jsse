@@ -104,9 +104,9 @@ impl Interpreter {
     /// separate entry point rather than a synthetic function dispatch.
     pub(crate) fn exec_script_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
         if self.bytecode_enabled {
-            // Compiled once and matched on, so the counter build pays no
-            // second compile. Both outcomes are recorded; the run counts as a
-            // non-function body, never in `body_compiled` (function invocations).
+            // Compiled once and matched on, so the counter build pays no second
+            // compile; both outcomes are recorded. The run counts as a
+            // non-function body, never in `body_compiled` (#537 review).
             match crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice()) {
                 Ok(chunk) => {
                     #[cfg(feature = "perf-counters")]

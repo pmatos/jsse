@@ -229,9 +229,13 @@
     try {
       text = handoff.report(error, rejected);
     } catch (e) {
-      text = isErrorLike(error) && typeof error.stack === "string"
-        ? error.stack
-        : String(error);
+      try {
+        text = isErrorLike(error) && typeof error.stack === "string"
+          ? error.stack
+          : String(error);
+      } catch (ignored) {
+        text = "Uncaught exception";
+      }
     }
     stderrWrite(text + "\n\nNode.js " + proc.version + "\n");
   }
@@ -244,12 +248,14 @@
   }
 
   function fatal(error, code, rejected) {
-    try {
-      proc.exitCode = code;
-      emitExit(code);
-    } catch (ignored) {}
+    if (code === 1) {
+      try {
+        proc.exitCode = 1;
+        emitExit(1);
+      } catch (ignored) {}
+    }
     printUncaught(error, rejected);
-    hostExit(proc.exitCode !== undefined ? proc.exitCode : code);
+    hostExit(code === 1 && proc.exitCode !== undefined ? proc.exitCode : code);
   }
 
   function triggerUncaught(error, origin) {
