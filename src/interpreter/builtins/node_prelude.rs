@@ -84,6 +84,10 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         include_str!("../../../scripts/node-fs-shim.js"),
     ),
     (
+        "node-process-signals.js",
+        include_str!("../../../scripts/node-process-signals.js"),
+    ),
+    (
         "node-builtin-loader.js",
         include_str!("../../../scripts/node-builtin-loader.js"),
     ),
