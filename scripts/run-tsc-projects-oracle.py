@@ -14,6 +14,10 @@ Prints a pass/fail table; exits 1 on any difference.
 Options: --jobs N (default 4), --timeout SECONDS (default 900), --ci (plain output, GitHub
 annotations, full diffs), --list, --require, --pin (rewrite the expected-*.txt pins from Node's
 digests; merges into the existing pins, so single cases can be re-pinned), --no-node (compare jsse with the pinned digests instead of running Node), --fixtures DIR.
+
+Every cases-<topic>.txt next to cases.txt adds cases pinned in expected-<topic>.txt. A step of a
+case that starts with @ is run by the harness itself between tsc invocations (@utimes, @replace,
+@remove, @mtimes-after; see scenario_step), so multi-step scenarios do not depend on the clock.
 """
 
 import argparse
@@ -84,6 +88,51 @@ def load_pins():
         except FileNotFoundError:
             pass
     return pins
+
+
+def utimes(path, when):
+    if os.path.isdir(path) and not os.path.islink(path):
+        for dirpath, dirs, names in os.walk(path):
+            for n in dirs + names:
+                os.utime(os.path.join(dirpath, n), (when, when), follow_symlinks=False)
+    os.utime(path, (when, when), follow_symlinks=False)
+
+
+def scenario_step(tree, step):
+    """Run a harness step of a case (` ;; @name args`); returns text for the case's output or None.
+
+    @utimes EPOCH PATH...  set atime and mtime of the paths (a directory: everything below it)
+    @replace PATH OLD NEW  replace the text in a file
+    @remove PATH...        delete files or trees
+    @mtimes-after EPOCH PATH...  print whether each path's mtime is after EPOCH
+    """
+    op, args = step[0], step[1:]
+    if op == "@utimes":
+        for p in args[1:]:
+            utimes(os.path.join(tree, p), int(args[0]))
+    elif op == "@replace":
+        path = os.path.join(tree, args[0])
+        with open(path, encoding="utf-8", newline="") as f:
+            text = f.read()
+        if args[1] not in text:
+            raise SystemExit(f"@replace: {args[1]!r} not found in {args[0]}")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text.replace(args[1], args[2], 1))
+    elif op == "@remove":
+        for p in args:
+            full = os.path.join(tree, p)
+            if os.path.isdir(full):
+                shutil.rmtree(full)
+            else:
+                os.remove(full)
+    elif op == "@mtimes-after":
+        return "".join(
+            f"{p}: {'after' if os.stat(os.path.join(tree, p)).st_mtime > int(args[0]) else 'not after'}\n"
+            for p in args[1:]
+        )
+    else:
+        raise SystemExit(f"unknown scenario step {op}")
+    return None
 
 
 ESCAPE = re.compile(r"\\(?:([rn])|u([0-9a-fA-F]{4}))")
@@ -169,6 +218,15 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     out, err, codes = [], [], []
     start = time.monotonic()
     for i, tokens in enumerate(invocations):
+        if tokens[0].startswith("@") and not PTY_TOKEN.match(tokens[0]):
+            try:
+                note = scenario_step(tree, tokens)
+            except OSError as e:
+                raise SystemExit(f"{name}: step {' '.join(tokens)} failed: {e}")
+            if note is not None:
+                out.append(note.encode())
+                err.append(b"")
+            continue
         extra, pty, args = split_invocation(list(tokens))
         run = cmd + args
         if pty:
