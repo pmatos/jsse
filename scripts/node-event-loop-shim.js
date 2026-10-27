@@ -196,6 +196,12 @@
     delete proc[name];
   });
   Object.setPrototypeOf(proc, emitterProto);
+  Object.defineProperty(emitterProto, "constructor", {
+    value: function process() {},
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
 
   // ---- uncaught exceptions --------------------------------------------------
   var exiting = false;
@@ -204,7 +210,7 @@
     return (
       typeof value === "object" &&
       value !== null &&
-      (value instanceof Error || Object.prototype.hasOwnProperty.call(value, "stack"))
+      Object.prototype.hasOwnProperty.call(value, "stack")
     );
   }
 
@@ -216,18 +222,22 @@
     }
   }
 
-  function printUncaught(error) {
+  var handoff = { report: undefined, rejectionError: undefined };
+
+  function printUncaught(error, rejected) {
     var text;
-    if (isErrorLike(error)) {
-      text =
-        typeof error.stack === "string" && error.stack !== ""
+    try {
+      text = handoff.report(error, rejected);
+    } catch (e) {
+      try {
+        text = isErrorLike(error) && typeof error.stack === "string"
           ? error.stack
-          : error.name + ": " + error.message;
-    } else {
-      var inspect = globalThis.util && globalThis.util.inspect;
-      text = "Uncaught " + (inspect ? inspect(error) : String(error));
+          : String(error);
+      } catch (ignored) {
+        text = "Uncaught exception";
+      }
     }
-    stderrWrite("\n" + text + "\n\nNode.js " + proc.version + "\n");
+    stderrWrite(text + "\n\nNode.js " + proc.version + "\n");
   }
 
   function emitExit(code) {
@@ -237,24 +247,28 @@
     proc.emit("exit", code);
   }
 
-  function fatal(error, code) {
-    printUncaught(error);
+  function fatal(error, code, rejected) {
     if (code === 1) {
       try {
         proc.exitCode = 1;
         emitExit(1);
       } catch (ignored) {}
     }
+    printUncaught(error, rejected);
     hostExit(code === 1 && proc.exitCode !== undefined ? proc.exitCode : code);
   }
 
   function triggerUncaught(error, origin) {
+    var type = origin || "uncaughtException";
+    try {
+      proc.emit("uncaughtExceptionMonitor", error, type);
+    } catch (ignored) {}
     if (proc.listenerCount("uncaughtException") === 0) {
-      fatal(error, 1);
+      fatal(error, 1, type === "unhandledRejection");
       return;
     }
     try {
-      proc.emit("uncaughtException", error, origin || "uncaughtException");
+      proc.emit("uncaughtException", error, type);
     } catch (inHandler) {
       fatal(inHandler, 7);
     }
@@ -308,22 +322,7 @@
 
   // ---- unhandled rejections -------------------------------------------------
   function unhandledRejectionError(reason) {
-    var shown;
-    try {
-      shown = typeof reason === "string" ? reason : String(reason);
-    } catch (e) {
-      shown = "[object]";
-    }
-    var e = new Error(
-      "This error originated either by throwing inside of an async function " +
-        "without a catch block, or by rejecting a promise which was not handled " +
-        'with .catch(). The promise rejected with the reason "' +
-        shown +
-        '".'
-    );
-    e.name = "UnhandledPromiseRejection";
-    e.code = "ERR_UNHANDLED_REJECTION";
-    return e;
+    return handoff.rejectionError(reason);
   }
 
   function processRejections(list) {
@@ -412,17 +411,21 @@
 
   hostInstall(processTicks, triggerUncaught, processRejections, lifecycle);
 
+  handoff.hostSetImmediate = hostSetImmediate;
+  handoff.hostImmediateInfo = hostImmediateInfo;
+  handoff.hostTimerRef = hostTimerRef;
+  handoff.hostCheckpoint = hostCheckpoint;
+  handoff.triggerUncaught = triggerUncaught;
+  handoff.validateFunction = validateFunction;
+  handoff.invalidArgType = invalidArgType;
+  handoff.emitWarning = emitWarning;
   Object.defineProperty(globalThis, Symbol.for("jsse.node.loop.handoff"), {
-    value: {
-      hostSetImmediate: hostSetImmediate,
-      hostImmediateInfo: hostImmediateInfo,
-      hostTimerRef: hostTimerRef,
-      hostCheckpoint: hostCheckpoint,
-      triggerUncaught: triggerUncaught,
-      validateFunction: validateFunction,
-      invalidArgType: invalidArgType,
-      emitWarning: emitWarning,
-    },
+    value: handoff,
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, Symbol.for("jsse.node.fatal.handoff"), {
+    value: handoff,
     configurable: true,
   });
 })();
+//# sourceURL=node:internal/process/task_queues

@@ -123,8 +123,8 @@ fn validated_import_module_type(
     attrs: &[(String, String)],
 ) -> Result<Option<ImportModuleType>, ImportAttributeError> {
     // AllImportAttributesSupported checks the complete key list before the
-    // host sees any values. Keep this as a separate pass so an earlier invalid
-    // `type` value cannot hide a later unsupported key.
+    // host sees any values; a separate pass keeps an earlier invalid `type`
+    // value from hiding a later unsupported key.
     for (key, _) in attrs {
         if key != "type" {
             return Err(ImportAttributeError::UnsupportedKey(key.clone()));
@@ -3874,7 +3874,7 @@ impl Interpreter {
                     .iter()
                     .any(|d| d.init.as_ref().is_some_and(Self::expr_has_await))
             }
-            Statement::Return(Some(expr)) | Statement::Throw(expr) => Self::expr_has_await(expr),
+            Statement::Return(Some(expr)) | Statement::Throw(expr, _) => Self::expr_has_await(expr),
             Statement::If(if_stmt) => {
                 Self::expr_has_await(&if_stmt.test)
                     || Self::stmt_has_tla(&if_stmt.consequent)

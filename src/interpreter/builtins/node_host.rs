@@ -41,6 +41,7 @@ pub(crate) struct NodeHostState {
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
+    pub(crate) vm: super::node_host_vm::VmState,
     #[cfg(unix)]
     pub(crate) child: super::node_host_child::ChildState,
     #[cfg(unix)]
@@ -102,6 +103,7 @@ impl Interpreter {
 
     fn setup_node_host(&mut self) {
         self.setup_node_host_stack();
+        self.setup_node_host_throw();
         // __host_write(fd, str) -> bytesWritten
         //
         // Byte-accurate write of the UTF-8 encoding of `str` (from jsse's
@@ -290,6 +292,7 @@ impl Interpreter {
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();
+        self.setup_node_host_vm();
     }
 }
 

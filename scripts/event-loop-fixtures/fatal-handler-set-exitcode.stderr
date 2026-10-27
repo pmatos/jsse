@@ -1,0 +1,8 @@
+<dir>/fatal-handler-set-exitcode.fixture.js:4
+throw new Error("changed by listener");
+^
+
+Error: changed by listener
+    at Object.<anonymous> (<dir>/fatal-handler-set-exitcode.fixture.js:4:7)
+
+Node.js <version>

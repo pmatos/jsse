@@ -147,6 +147,9 @@ impl Interpreter {
     }
 
     pub(super) fn read_module_text(path: &Path) -> Result<String, JsValue> {
+        if let Some(source) = node_esm::virtual_source(path) {
+            return Ok(source);
+        }
         std::fs::read_to_string(path).map_err(|e| Self::module_read_error(path, &e))
     }
 

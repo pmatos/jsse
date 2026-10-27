@@ -1,0 +1,8 @@
+
+<dir>/fatal-prim-undefined.fixture.js:2
+throw undefined;
+^
+undefined
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

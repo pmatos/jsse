@@ -273,7 +273,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume and discard a list of decorator expressions (`@expr` prefixes).
-    /// Decorators may appear before class declarations, class expressions, and class elements.
+    /// They may appear before class declarations, class expressions and elements.
     /// We parse them for syntax validity but do not yet implement decorator semantics.
     pub(super) fn parse_decorator_list(&mut self) -> Result<(), ParseError> {
         while self.current == Token::At {
@@ -533,7 +533,7 @@ impl<'a> Parser<'a> {
     fn stmt_has_direct_super(stmt: &Statement) -> bool {
         use crate::ast::Statement;
         match stmt {
-            Statement::Expression(e) | Statement::Throw(e) => Self::expr_has_direct_super(e),
+            Statement::Expression(e) | Statement::Throw(e, _) => Self::expr_has_direct_super(e),
             Statement::Return(Some(e)) => Self::expr_has_direct_super(e),
             Statement::Return(None) | Statement::Empty | Statement::Debugger => false,
             Statement::Block(stmts) => Self::stmts_has_direct_super(stmts),

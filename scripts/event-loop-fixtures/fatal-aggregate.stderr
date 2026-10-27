@@ -1,0 +1,15 @@
+<dir>/fatal-aggregate.fixture.js:3
+throw new AggregateError([new Error("a"), new TypeError("b")], "many");
+^
+
+AggregateError: many
+    at Object.<anonymous> (<dir>/fatal-aggregate.fixture.js:3:7)
+  [errors]: [
+    Error: a
+        at Object.<anonymous> (<dir>/fatal-aggregate.fixture.js:3:27)
+    TypeError: b
+        at Object.<anonymous> (<dir>/fatal-aggregate.fixture.js:3:43)
+  ]
+}
+
+Node.js <version>

@@ -1,0 +1,9 @@
+<dir>/fatal-multiline-message.fixture.js:2
+throw new Error("line one\nline two");
+^
+
+Error: line one
+line two
+    at Object.<anonymous> (<dir>/fatal-multiline-message.fixture.js:2:7)
+
+Node.js <version>

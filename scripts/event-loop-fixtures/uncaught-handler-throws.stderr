@@ -1,0 +1,8 @@
+<dir>/uncaught-handler-throws.fixture.js:3
+process.on("uncaughtException", function () { throw new Error("handler-boom"); });
+                                              ^
+
+Error: handler-boom
+    at process.<anonymous> (<dir>/uncaught-handler-throws.fixture.js:3:53)
+
+Node.js <version>

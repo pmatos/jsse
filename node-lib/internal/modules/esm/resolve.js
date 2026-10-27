@@ -199,7 +199,7 @@ function defaultGetFormat(file) {
   }
 }
 
-function defaultResolve(specifier, parentPath) {
+function defaultResolve(specifier, parentPath, urlOnly) {
   const base = parentPath === undefined ? path.join(process.cwd(), '[eval1]') : parentPath;
   const parentDir = path.dirname(base);
 
@@ -226,7 +226,7 @@ function defaultResolve(specifier, parentPath) {
     resolved = packageResolve(specifier, base);
   }
   const target = finalizeResolution(resolved, base);
-  return { format: defaultGetFormat(target), target };
+  return { format: urlOnly ? undefined : defaultGetFormat(target), target };
 }
 
 function bareOrBuiltin(bare, base) {
@@ -245,4 +245,4 @@ function validateAttributes(format, target, type) {
   if (format !== 'json') throw new ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE(url, 'json');
 }
 
-module.exports = { defaultResolve, validateAttributes };
+module.exports = { defaultResolve, detectsEsmSyntax, validateAttributes };

@@ -23,7 +23,8 @@ ESM/CommonJS interop (#1241) build on `createRequire` and `Module` from here.
      `file:` string or absolute path, `ERR_INVALID_ARG_VALUE` otherwise, a plain
      `{ href }` object is rejected as in Node), `_preloadModules`, the
      `isPreloading` getter and `runMain` (`executeUserEntryPoint`). `createRequire`
-     is the one #1241 reuses for `import.meta`-style callers.
+     is the one `createRequire(import.meta.url)` uses; that form is pinned by the
+     #1241 fixture (`scripts/esm-interop-fixtures`).
    - `module.js`: `builtinModules`, `isBuiltin`, `constants`, the compile cache
      functions, `findPackageJSON`, `stripTypeScriptTypes`,
      `syncBuiltinESMExports`, and the source map entries below. These exist after

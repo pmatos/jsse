@@ -1,0 +1,7 @@
+
+<dir>/fatal-obj.fixture.js:2
+throw { a: 1, nested: { list: [1, 2, 3] } };
+^
+{ a: 1, nested: { list: [ 1, 2, 3 ] } }
+
+Node.js <version>

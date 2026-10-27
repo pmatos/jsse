@@ -1,0 +1,9 @@
+<dir>/fatal-reject-async.fixture.js:3
+  throw new Error("async failure");
+        ^
+
+Error: async failure
+    at work (<dir>/fatal-reject-async.fixture.js:3:9)
+    at Object.<anonymous> (<dir>/fatal-reject-async.fixture.js:5:1)
+
+Node.js <version>

@@ -1,0 +1,8 @@
+<dir>/fatal-throw-finally.fixture.js:10
+  throw err;
+  ^
+
+Error: outer
+    at Object.<anonymous> (<dir>/fatal-throw-finally.fixture.js:3:13)
+
+Node.js <version>

@@ -1,0 +1,8 @@
+<dir>/fatal-reject-first-wins.fixture.js:3
+Promise.reject(new Error("first"));
+               ^
+
+Error: first
+    at Object.<anonymous> (<dir>/fatal-reject-first-wins.fixture.js:3:16)
+
+Node.js <version>

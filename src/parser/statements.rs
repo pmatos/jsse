@@ -38,8 +38,8 @@ impl<'a> Parser<'a> {
                 if self.strict {
                     return self.parse_lexical_declaration();
                 }
-                // In sloppy mode, `let` is only a declaration if followed by a
-                // binding start token (identifier, `{`, `[`, or keyword-as-identifier).
+                // In sloppy mode `let` declares only before a binding start
+                // token (identifier, `{`, `[`, or keyword-as-identifier).
                 let is_decl = self.lookahead(|tokens| {
                     tokens.advance().is_ok()
                         && matches!(
@@ -78,9 +78,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
-        // Depth guard: nested statements (blocks, if/else, loops) recurse
-        // through here; bound it so deeply nested statements raise a catchable
-        // parse error instead of overflowing the native stack.
+        // Depth guard: nested statements recurse through here; bound it so
+        // deep nesting is a catchable parse error, not a native stack overflow.
         self.enter_recursion()?;
         let r = self.parse_statement_inner();
         self.exit_recursion();
@@ -1242,13 +1241,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_throw_statement(&mut self) -> Result<Statement, ParseError> {
+        let at = CallSiteId::at(self.current_token_start).1;
         self.advance()?; // throw
         if self.prev_line_terminator {
             return Err(self.error("Illegal newline after throw"));
         }
         let expr = self.parse_expression()?;
         self.eat_semicolon()?;
-        Ok(Statement::Throw(expr))
+        Ok(Statement::Throw(expr, at))
     }
 
     /// The plain brace-delimited statement list shared by the `try`, `catch`,

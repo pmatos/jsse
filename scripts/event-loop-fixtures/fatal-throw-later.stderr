@@ -1,0 +1,8 @@
+<dir>/fatal-throw-later.fixture.js:5
+  throw err;
+  ^
+
+TypeError: built early
+    at Object.<anonymous> (<dir>/fatal-throw-later.fixture.js:3:13)
+
+Node.js <version>

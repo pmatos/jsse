@@ -1,0 +1,8 @@
+<dir>/uncaught-fatal.fixture.js:7
+setTimeout(function () { throw new Error("boom"); }, 1);
+                         ^
+
+Error: boom
+    at Timeout._onTimeout (<dir>/uncaught-fatal.fixture.js:7:32)
+
+Node.js <version>

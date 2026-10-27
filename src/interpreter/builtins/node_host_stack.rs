@@ -14,9 +14,9 @@ pub(crate) use super::node_host_stack_sources::NodeStackState;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const HOOK_ERROR: PrivateId = PrivateId(u64::MAX - 2);
-const HOOK_GETTER: PrivateId = PrivateId(u64::MAX - 3);
-const HOOK_SETTER: PrivateId = PrivateId(u64::MAX - 4);
+pub(super) const HOOK_ERROR: PrivateId = PrivateId(u64::MAX - 2);
+pub(super) const HOOK_GETTER: PrivateId = PrivateId(u64::MAX - 3);
+pub(super) const HOOK_SETTER: PrivateId = PrivateId(u64::MAX - 4);
 const FRAMES: PrivateId = PrivateId(u64::MAX - 5);
 
 const FLAG_CONSTRUCTOR: f64 = 1.0;
@@ -72,7 +72,10 @@ impl Interpreter {
 
     fn receiver_type_name(&self, receiver: &JsValue) -> Option<String> {
         let mut id = receiver.as_object_id()?;
-        if self.realm().global_object == Some(id) {
+        if self.node_host.vm.is_context_global(id)
+            || self.realm().global_object == Some(id)
+            || self.realms[0].global_object == Some(id)
+        {
             return None;
         }
         if self.is_callable(receiver) {
@@ -188,6 +191,11 @@ impl Interpreter {
                 (source.clone(), start)
             });
         }
+        if origin.is_none()
+            && let Some(source) = self.node_host.stack.script_frame_source(raw.func)
+        {
+            origin = Some((source, 0));
+        }
         if let Some(own) = self.own_data_string(raw.func, "name") {
             name = Some(own);
         }
@@ -195,6 +203,12 @@ impl Interpreter {
             (Some(receiver), false) => self.receiver_type_name(receiver),
             _ => None,
         };
+        if !arrow
+            && name.as_deref().is_none_or(str::is_empty)
+            && let Some(receiver) = &raw.receiver
+        {
+            name = self.method_name_of(receiver, raw.func);
+        }
         let (source_id, pos) = match origin {
             Some((source, start)) => {
                 let id = self.node_host.stack.source_id(&source);

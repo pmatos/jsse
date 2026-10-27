@@ -27,6 +27,8 @@ mod node_host_child;
 mod node_host_child_spawn;
 #[cfg(unix)]
 mod node_host_child_sync;
+mod node_host_cjs_lexer;
+mod node_host_cjs_patterns;
 mod node_host_crypto;
 mod node_host_esm;
 #[cfg(unix)]
@@ -56,9 +58,11 @@ mod node_host_process_metrics;
 mod node_host_signal;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+mod node_host_throw;
 #[cfg(unix)]
 pub(crate) mod node_host_tty;
 mod node_host_util;
+mod node_host_vm;
 mod node_prelude;
 mod number;
 mod object;

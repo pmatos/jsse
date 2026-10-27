@@ -1,0 +1,9 @@
+exit 1
+<dir>/fatal-reject-exitcode.fixture.js:5
+Promise.reject(new Error("with code"));
+               ^
+
+Error: with code
+    at Object.<anonymous> (<dir>/fatal-reject-exitcode.fixture.js:5:16)
+
+Node.js <version>

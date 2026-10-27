@@ -1,0 +1,7 @@
+<dir>/fatal-string-stack.fixture.js:5
+throw e;
+^
+
+[custom stack text]
+
+Node.js <version>

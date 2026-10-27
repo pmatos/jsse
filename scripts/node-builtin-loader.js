@@ -210,8 +210,12 @@
   };
   // The CommonJS loader names each module's source for stack frames (#1228).
   cache["internal/host/stack"] = {
-    exports: { nameSource: takeHost("__host_stack_name_source") },
+    exports: {
+      nameSource: takeHost("__host_stack_name_source"),
+      throwSite: takeHost("__host_stack_throw_site"),
+    },
   };
+  cache["internal/host/vm"] = { exports: takeHost("__host_vm") };
   // The native `os` binding (#1222) is private to node-lib/os.js.
   var hostOs = globalThis.__host_os;
   delete globalThis.__host_os;
@@ -279,6 +283,7 @@
         source +
         "\n})"
     );
+    cache["internal/host/stack"].exports.nameSource(fn, "node:" + id, 0);
     var module = { exports: {}, id: id };
     cache[id] = module;
     try {
@@ -370,6 +375,19 @@
     });
   }
 
+  // The fatal-error report (#1229) is built by node-lib/internal/process/fatal.js.
+  var fatalKey = Symbol.for("jsse.node.fatal.handoff");
+  var handoff = globalThis[fatalKey];
+  delete globalThis[fatalKey];
+  if (handoff !== undefined) {
+    handoff.report = function (error, rejected) {
+      return requireBuiltin("internal/process/fatal").report(error, rejected);
+    };
+    handoff.rejectionError = function (reason) {
+      return requireBuiltin("internal/process/fatal").unhandledRejectionError(reason);
+    };
+  }
+
   // `console` writes through the embedded util module (Node's inspect/format).
   requireBuiltin("internal/console/node");
   requireBuiltin("internal/process/stdio");
@@ -397,7 +415,12 @@
   });
 
   cache["internal/host/module"] = {
-    exports: { tagFunction: takeHost("__host_tag_function") },
+    exports: {
+      tagFunction: takeHost("__host_tag_function"),
+      esmRequire: takeHost("__host_esm_require"),
+      esmFacade: takeHost("__host_esm_facade"),
+      cjsLex: takeHost("__host_cjs_lex"),
+    },
   };
   takeHost("__host_esm_install")(function (op, a, b, c) {
     return requireBuiltin("internal/modules/esm/host").host(op, a, b, c);
@@ -454,3 +477,4 @@
     });
   });
 })();
+//# sourceURL=node:internal/bootstrap/realm
