@@ -26,7 +26,7 @@ const TIMES = {
 
 function zeroStats(bigint) {
   if (bigint) return new S.stats.BigIntStats(...new Array(14).fill(0n));
-  return new S.stats.Stats(...new Array(14).fill(0));
+  return new S.stats.Stats(...new Array(18).fill(0));
 }
 
 class Poller {
@@ -56,6 +56,7 @@ class Poller {
   poll() {
     let current = null;
     let errno = 0;
+    let report = null;
     try {
       current = fs.statSync(this.file, { bigint: this.bigint });
     } catch (error) {
@@ -64,16 +65,17 @@ class Poller {
     if (errno !== 0) {
       if (this.busy !== errno) {
         this.busy = errno;
-        this.onchange(zeroStats(this.bigint), this.previous);
+        report = [zeroStats(this.bigint), this.previous];
       }
     } else {
-      const report = this.busy < 0 || (this.busy !== 0 && !this.same(this.previous, current));
+      const changed = this.busy < 0 || (this.busy !== 0 && !this.same(this.previous, current));
       const before = this.previous;
       this.previous = current;
       this.busy = 1;
-      if (report) this.onchange(current, before);
+      if (changed) report = [current, before];
     }
     if (!this.closed) this.schedule(this.interval);
+    if (report !== null) this.onchange(report[0], report[1]);
   }
 
   ref() {

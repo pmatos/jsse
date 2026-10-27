@@ -25,7 +25,16 @@ class RecursiveWatch {
     this.persistent = persistent;
     this.closed = false;
     this.dirs = new Map();
-    this.watchDirectory(this.root, '', false);
+    this.inodes = new Map();
+    this.starting = true;
+    try {
+      this.watchDirectory(this.root, '', false);
+    } catch (error) {
+      this.close();
+      throw error;
+    } finally {
+      this.starting = false;
+    }
   }
 
   watchDirectory(path, relative, announce) {
@@ -46,12 +55,26 @@ class RecursiveWatch {
     }
   }
 
-  watchSubtree(path, relative, announce) {
-    if (this.closed || this.dirs.has(path)) return;
+  watchSubtree(path, relative, announce, ino) {
+    if (this.closed) return;
+    if (ino === undefined) {
+      try {
+        ino = sync.lstatSync(path).ino;
+      } catch {
+        return;
+      }
+    }
+    if (this.dirs.has(path)) {
+      if (this.inodes.get(path) === ino) return;
+      this.unwatchSubtree(path);
+    }
     try {
       this.watchDirectory(path, relative, announce);
+      this.inodes.set(path, ino);
     } catch (error) {
-      if (error.code === 'ENOSPC' || error.code === 'EMFILE') this.onerror(error);
+      if (error.code !== 'ENOSPC' && error.code !== 'EMFILE') return;
+      if (this.starting) throw error;
+      this.onerror(error);
     }
   }
 
@@ -61,6 +84,7 @@ class RecursiveWatch {
       if (dir === path || dir.startsWith(prefix)) {
         handle.close();
         this.dirs.delete(dir);
+        this.inodes.delete(dir);
       }
     }
   }
@@ -68,7 +92,10 @@ class RecursiveWatch {
   handle(dir, relative, bits, name) {
     if (this.closed) return;
     if (bits & kSelf) {
-      if (dir === this.root) this.onevent(bits & kBoth, Buffer.from(name).toString());
+      const own = Buffer.from(name).toString();
+      if (dir === this.root && !(this.ignored !== null && this.ignored(own))) {
+        this.onevent(bits & kBoth, own);
+      }
       return;
     }
     const child = join(relative, Buffer.from(name).toString());
@@ -83,7 +110,7 @@ class RecursiveWatch {
       this.unwatchSubtree(path);
       return;
     }
-    if (stats.isDirectory()) this.watchSubtree(path, child, true);
+    if (stats.isDirectory()) this.watchSubtree(path, child, true, stats.ino);
   }
 
   ref() {
@@ -101,6 +128,7 @@ class RecursiveWatch {
     this.closed = true;
     for (const handle of this.dirs.values()) handle.close();
     this.dirs.clear();
+    this.inodes.clear();
   }
 }
 

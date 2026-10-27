@@ -60,8 +60,10 @@ class FSWatcher extends EventEmitter {
     validateBoolean(recursive, 'options.recursive');
     const ignored = createIgnoreMatcher(ignore);
     this[kEncoding] = encoding || 'utf8';
+    const filter = recursive ? null : ignored;
     const onevent = (bits, name) => {
-      if (ignored !== null && ignored(decode(name, 'utf8'))) return;
+      if (this._handle === null) return;
+      if (filter !== null && filter(decode(name, 'utf8'))) return;
       this.emit('change', bits & kRename ? 'rename' : 'change', decode(name, this[kEncoding]));
     };
     try {

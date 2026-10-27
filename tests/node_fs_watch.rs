@@ -172,13 +172,17 @@ fn watch_file_keeps_the_process_alive_until_unwatched() {
         &[],
     );
     session.wait_for("ready");
-    // The first poll only records the baseline, so keep growing the file
-    // until the process reports a change.
+    // The first poll only records the baseline, so keep appending to the file
+    // until the process reports a change. Appending never shrinks the file, so
+    // no poll can see a truncated size.
     let deadline = Instant::now() + DEADLINE;
-    let mut content = String::from("1");
     let line = loop {
-        content.push('x');
-        std::fs::write(&file, &content).unwrap();
+        let mut appender = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap();
+        std::io::Write::write_all(&mut appender, b"x").unwrap();
+        drop(appender);
         match session.lines.recv_timeout(Duration::from_millis(50)) {
             Ok(line) => break line,
             Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
@@ -339,5 +343,22 @@ fn recursive_watchers_follow_new_directories_and_drop_removed_ones() {
     session.wait_for("ev rename a/new/probe");
     std::fs::remove_dir_all(dir.join("a")).unwrap();
     session.wait_for("ev rename a");
+    session.child.kill().unwrap();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_directory_replaced_before_its_events_are_handled_is_watched_again() {
+    let dir = scratch("replaced");
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    let script = "const fs = require('fs'); const d = process.env.DIR;
+        const w = fs.watch(d, { recursive: true }, (type, name) => console.log('ev', type, name));
+        fs.rmSync(d + '/a', { recursive: true }); fs.mkdirSync(d + '/a');
+        console.log('ready');";
+    let mut session = Session::start(script, &dir, &[]);
+    session.wait_for("ready");
+    session.wait_for("ev rename a");
+    std::fs::write(dir.join("a/probe"), "x").unwrap();
+    session.wait_for("ev rename a/probe");
     session.child.kill().unwrap();
 }

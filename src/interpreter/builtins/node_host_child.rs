@@ -45,6 +45,7 @@ pub(crate) enum ChildEvent {
         errno: i32,
     },
     Signal(i32),
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Watch {
         wd: i32,
         events: u32,

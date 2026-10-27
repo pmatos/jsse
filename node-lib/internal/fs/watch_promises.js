@@ -55,7 +55,9 @@ async function* watchIterator(filename, options = {}) {
   });
   const onabort = () => {
     failure = new AbortError(undefined, { cause: signal.reason });
+    queue.length = 0;
     watcher.close();
+    notify();
   };
   if (signal) signal.addEventListener('abort', onabort);
   try {

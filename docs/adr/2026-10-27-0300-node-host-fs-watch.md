@@ -15,12 +15,14 @@ for its whole life.
 
 ## Decision
 
-- **One inotify instance** (`node_host_fs_watch.rs`, Linux). The floor is two
+- **One inotify instance per interpreter** (`node_host_fs_watch.rs`, Linux). The floor is two
   functions taken private by `node-process-signals.js` and handed to builtins on
   the `internal/host/child_process` binding: `watchAdd(path)` returns a watch id
   or throws the `uv` error of the failed `inotify_add_watch` (`syscall` `watch`,
   `path`), `watchRemove(id)` drops it. The first `watchAdd` creates the instance
-  and one reader thread that blocks in `read`. It decodes each event into
+  and one reader thread that polls it and a stop pipe; dropping the interpreter
+  closes the pipe's write end, and the thread closes both descriptors and exits.
+  It decodes each event into
   `(wd, bits, name)` and posts a `ChildEvent::Watch` to the host-async
   completion queue; nothing JS-visible crosses a thread.
 - **Libuv's event model.** The mask is libuv's (attrib, create, modify, delete,

@@ -1,5 +1,5 @@
 //! Native file-system watching for Node host mode (issue #1235): the floor
-//! under `fs.watch`, on one process-wide inotify instance.
+//! under `fs.watch`, on one inotify instance per interpreter.
 //!
 //! `__host_watch_add(path)` registers a watch and returns its id;
 //! `__host_watch_remove(id)` drops it. One reader thread blocks on the inotify
@@ -28,8 +28,17 @@ struct Descriptor {
 pub(crate) struct WatchState {
     next_id: u64,
     inotify: Option<i32>,
+    stop: Option<i32>,
     watches: HashMap<u64, i32>,
     descriptors: HashMap<i32, Descriptor>,
+}
+
+impl Drop for WatchState {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop {
+            sys::stop(stop);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -51,13 +60,32 @@ mod sys {
 
     pub(super) const AVAILABLE: bool = true;
 
-    pub(super) fn start(queue: Completions) -> Result<i32, i32> {
+    /// Returns the inotify descriptor and the write end of the pipe whose
+    /// closing ends the reader thread, which then closes both of its ends.
+    pub(super) fn start(queue: Completions) -> Result<(i32, i32), i32> {
         let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
         if fd < 0 {
             return Err(last_errno());
         }
-        std::thread::spawn(move || read_events(fd, &queue));
-        Ok(fd)
+        let mut ends = [0i32; 2];
+        if unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+            let errno = last_errno();
+            unsafe { libc::close(fd) };
+            return Err(errno);
+        }
+        let [reader, writer] = ends;
+        std::thread::spawn(move || {
+            read_events(fd, reader, &queue);
+            unsafe {
+                libc::close(fd);
+                libc::close(reader);
+            }
+        });
+        Ok((fd, writer))
+    }
+
+    pub(super) fn stop(writer: i32) {
+        unsafe { libc::close(writer) };
     }
 
     pub(super) fn add(fd: i32, path: &CStr) -> Result<i32, i32> {
@@ -69,9 +97,28 @@ mod sys {
         unsafe { libc::inotify_rm_watch(fd, wd) };
     }
 
-    fn read_events(fd: i32, queue: &Completions) {
+    fn read_events(fd: i32, stop: i32, queue: &Completions) {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
+            let mut fds = [
+                libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: stop,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+            if ready < 0 && last_errno() == libc::EINTR {
+                continue;
+            }
+            if ready < 0 || fds[1].revents != 0 {
+                return;
+            }
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
             if n < 0 && last_errno() == libc::EINTR {
                 continue;
@@ -114,9 +161,11 @@ mod sys {
 
     pub(super) const AVAILABLE: bool = false;
 
-    pub(super) fn start(_: Completions) -> Result<i32, i32> {
+    pub(super) fn start(_: Completions) -> Result<(i32, i32), i32> {
         Err(libc::ENOSYS)
     }
+
+    pub(super) fn stop(_: i32) {}
 
     pub(super) fn add(_: i32, _: &CStr) -> Result<i32, i32> {
         Err(libc::ENOSYS)
@@ -174,9 +223,10 @@ impl Interpreter {
             let fd = match interp.node_host.watch.inotify {
                 Some(fd) => fd,
                 None => {
-                    let fd = sys::start(interp.agent_async_completions.clone())
+                    let (fd, stop) = sys::start(interp.agent_async_completions.clone())
                         .map_err(|errno| fail(interp, errno))?;
                     interp.node_host.watch.inotify = Some(fd);
+                    interp.node_host.watch.stop = Some(stop);
                     fd
                 }
             };

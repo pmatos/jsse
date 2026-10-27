@@ -112,10 +112,12 @@ class PollWatch {
     const flag = next.directory ? 0 : kSelf;
     for (const [name, signed] of next.entries) {
       const old = before.get(name);
+      if (this.closed) return;
       if (old === undefined) this.onevent(kRename | flag, name);
       else if (old !== signed) this.onevent(kChange | flag, name);
     }
     for (const name of before.keys()) {
+      if (this.closed) return;
       if (!next.entries.has(name)) this.onevent(kRename | flag, name);
     }
   }
