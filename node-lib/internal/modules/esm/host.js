@@ -5,6 +5,8 @@
 // import attributes, `load` runs a CommonJS module or fetches a builtin's
 // exports.
 
+const { ArrayFrom } = primordials;
+
 const { defaultResolve, validateAttributes } = require('internal/modules/esm/resolve');
 const { loadBuiltin } = require('internal/modules/builtins');
 
@@ -17,6 +19,11 @@ function host(op, a, b, c) {
     case 'check':
       validateAttributes(a, b, c);
       return undefined;
+    case 'meta':
+      require('internal/modules/esm/meta').initializeImportMeta(a, b, c);
+      return undefined;
+    case 'names':
+      return ArrayFrom(require('internal/modules/esm/cjs_names').cjsExportNames(a));
     case 'load':
       if (a === 'builtin') return loadBuiltin(b);
       return require('internal/modules/cjs/loader').Module._load(b, null, false);

@@ -27,6 +27,8 @@ mod node_host_child;
 mod node_host_child_spawn;
 #[cfg(unix)]
 mod node_host_child_sync;
+mod node_host_cjs_lexer;
+mod node_host_cjs_patterns;
 mod node_host_crypto;
 mod node_host_esm;
 #[cfg(unix)]
