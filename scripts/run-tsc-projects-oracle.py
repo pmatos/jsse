@@ -218,7 +218,7 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     out, err, codes = [], [], []
     start = time.monotonic()
     for i, tokens in enumerate(invocations):
-        if tokens[0].startswith("@"):
+        if tokens[0].startswith("@") and not PTY_TOKEN.match(tokens[0]):
             try:
                 note = scenario_step(tree, tokens)
             except OSError as e:
