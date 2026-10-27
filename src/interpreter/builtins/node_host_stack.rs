@@ -54,9 +54,14 @@ fn string_value(text: &str) -> JsValue {
 impl Interpreter {
     /// Called by the CLI for the main script, so its frames carry its path.
     /// The CommonJS bootstrap stub stands in for the file and stays unnamed.
-    pub fn note_script_source(&mut self, path: &std::path::Path, source: &str) {
+    pub fn note_script_source(&mut self, path: &std::path::Path, source: &str, module: bool) {
         if self.node_host.stack.installed && source != Self::node_main_bootstrap() {
-            let name: Rc<str> = Rc::from(path.to_string_lossy().as_ref());
+            let path = path.to_string_lossy();
+            let name: Rc<str> = if module {
+                Rc::from(super::node_host_stack_sources::file_url(&path))
+            } else {
+                Rc::from(path.as_ref())
+            };
             self.node_host
                 .stack
                 .scripts

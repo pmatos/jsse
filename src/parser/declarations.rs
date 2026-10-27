@@ -895,10 +895,12 @@ impl<'a> Parser<'a> {
         }
 
         let kind = match &self.current {
-            Token::Identifier(n) if n == "get" => {
+            Token::Identifier(n) if n == "get" || n == "set" => {
+                let is_get = n == "get";
+                let name = if is_get { "get" } else { "set" };
                 self.advance()?;
                 if self.current == Token::LeftParen {
-                    let key = PropertyKey::Identifier("get".to_string());
+                    let key = PropertyKey::Identifier(name.to_string());
                     let func =
                         self.parse_class_method_function(false, false, false, method_source_start)?;
                     return Ok(ClassElement::Method(ClassMethod {
@@ -909,43 +911,39 @@ impl<'a> Parser<'a> {
                         computed: false,
                     }));
                 }
-                // ASI: if the next token is `*`, `get` is a field and `*` starts a generator method
-                if self.current == Token::Star {
+                // A field named `get`/`set`; before `*` it relies on ASI
+                if matches!(
+                    self.current,
+                    Token::Assign | Token::Semicolon | Token::RightBrace | Token::Star
+                ) {
+                    let value = if self.current == Token::Assign {
+                        self.advance()?;
+                        let expr = self.parse_field_initializer_value()?;
+                        if crate::ast::expr_contains_matching(
+                            &expr,
+                            &crate::ast::is_arguments_reference,
+                        ) {
+                            return Err(
+                                self.error("Class field initializer cannot reference 'arguments'")
+                            );
+                        }
+                        Some(expr)
+                    } else {
+                        None
+                    };
                     self.eat_semicolon()?;
                     return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier("get".to_string()),
-                        value: None,
+                        key: PropertyKey::Identifier(name.to_string()),
+                        value,
                         is_static,
                         computed: false,
                     }));
                 }
-                ClassMethodKind::Get
-            }
-            Token::Identifier(n) if n == "set" => {
-                self.advance()?;
-                if self.current == Token::LeftParen {
-                    let key = PropertyKey::Identifier("set".to_string());
-                    let func =
-                        self.parse_class_method_function(false, false, false, method_source_start)?;
-                    return Ok(ClassElement::Method(ClassMethod {
-                        key,
-                        kind: ClassMethodKind::Method,
-                        value: func,
-                        is_static,
-                        computed: false,
-                    }));
+                if is_get {
+                    ClassMethodKind::Get
+                } else {
+                    ClassMethodKind::Set
                 }
-                // ASI: if the next token is `*`, `set` is a field and `*` starts a generator method
-                if self.current == Token::Star {
-                    self.eat_semicolon()?;
-                    return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier("set".to_string()),
-                        value: None,
-                        is_static,
-                        computed: false,
-                    }));
-                }
-                ClassMethodKind::Set
             }
             _ => ClassMethodKind::Method,
         };

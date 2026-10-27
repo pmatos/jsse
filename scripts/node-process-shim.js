@@ -15,6 +15,13 @@
     return;
   }
 
+  Object.defineProperty(globalThis, "global", {
+    value: globalThis,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
   var hostArgv = __host_argv;
   var hostArgv0 = __host_argv0;
   var hostEnvSnapshot = __host_env_snapshot;

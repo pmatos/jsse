@@ -167,6 +167,9 @@ impl Interpreter {
                 .checked
                 .insert((key.clone(), import_type));
         }
+        if format == EsmFormat::Module {
+            self.node_host.stack.note_module(&target);
+        }
         match format {
             EsmFormat::Module | EsmFormat::Json => None,
             EsmFormat::Builtin | EsmFormat::CommonJs => {
