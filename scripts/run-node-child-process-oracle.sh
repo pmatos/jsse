@@ -17,6 +17,9 @@
 # while jsse cannot require that module. Then the opt-in gate is checked: without --node
 # (and with --prelude, which test262 uses) none of the floor exists.
 #
+# fork() fixtures (fork*.fixture.js) also run with FORK_EXEC pointing the child
+# at the other engine: jsse parent with a Node child and the reverse.
+#
 # Options:
 #   --node             run on Node only (reference / debugging)
 #   --no-cross-check   run on jsse only, compare against the RUN line alone
@@ -104,9 +107,37 @@ for fixture in "${FIXTURES[@]}"; do
     fi
 done
 
+# fork() across engines (issue #1237): the fork fixtures again with the child on
+# the other engine, diffed against Node forking Node. A fixture marked
+# "// SAME-ENGINE" depends on an engine-private wire format and is skipped;
+# FORK_JSON_ONLY=1 makes the others leave out their serialization: "advanced" part.
+if [ "$NODE_ONLY" -eq 0 ] && [ "$CROSS_CHECK" -eq 1 ]; then
+    for fixture in "$FIXTURE_DIR"/fork*.fixture.js; do
+        name="$(basename "$fixture" .fixture.js)"
+        grep -q '^// SAME-ENGINE' "$fixture" && continue
+        export FORK_JSON_ONLY=1
+        run_engine "$WORK/base" "$NODE_BIN" "$fixture"
+        for pass in jsse-parent node-parent; do
+            if [ "$pass" = jsse-parent ]; then
+                FORK_EXEC="$NODE_BIN" FORK_ARGS="" run_engine "$WORK/$pass" "$JSSE" --node "$fixture"
+            else
+                FORK_EXEC="$JSSE" FORK_ARGS="--node" run_engine "$WORK/$pass" "$NODE_BIN" "$fixture"
+            fi
+            if [ "$RC" -ne 0 ] || ! diff -u "$WORK/base.out" "$WORK/$pass.out" > "$WORK/diff.txt"; then
+                echo "FAIL $name ($pass): exit $RC or stdout differs from node forking node"
+                head -20 "$WORK/diff.txt"
+                FAIL=1
+            else
+                echo "ok   $name ($pass)"
+            fi
+        done
+    done
+    unset FORK_JSON_ONLY
+fi
+
 if [ "$NODE_ONLY" -eq 0 ]; then
-    GATE='var r = [typeof process, typeof __host_cp_spawn, typeof __host_cp_spawn_sync, typeof __host_kill, typeof __host_signal_watch, typeof require, typeof Symbol.for("jsse.node.child") === "symbol" && typeof globalThis[Symbol.for("jsse.node.child")]]; print(r.join(" "))'
-    EXPECT='undefined undefined undefined undefined undefined undefined undefined'
+    GATE='var r = [typeof process, typeof __host_cp_spawn, typeof __host_cp_spawn_sync, typeof __host_kill, typeof __host_signal_watch, typeof __host_cp_adopt, typeof __host_cp_ipc_read, typeof __host_cp_ipc_write, typeof require, typeof Symbol.for("jsse.node.child") === "symbol" && typeof globalThis[Symbol.for("jsse.node.child")]]; print(r.join(" "))'
+    EXPECT='undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined'
     echo 'void 0;' > "$WORK/empty-prelude.js"
     for mode in plain prelude; do
         args=()

@@ -430,6 +430,16 @@
     return requireBuiltin("internal/modules/cjs/loader");
   }
 
+  // A forked child opens the IPC channel it inherited before its main program
+  // runs (#1237), as Node's setupChildProcessIpcChannel does.
+  if (childBinding !== undefined && proc.env.NODE_CHANNEL_FD !== undefined) {
+    var channelFd = parseInt(proc.env.NODE_CHANNEL_FD, 10);
+    var channelMode = proc.env.NODE_CHANNEL_SERIALIZATION_MODE || "json";
+    delete proc.env.NODE_CHANNEL_FD;
+    delete proc.env.NODE_CHANNEL_SERIALIZATION_MODE;
+    if (channelFd >= 0) requireBuiltin("child_process")._forkChild(channelFd, channelMode);
+  }
+
   if (mainKind === "cjs") {
     Object.defineProperty(globalThis, "__node_run_main", {
       value: function () {
