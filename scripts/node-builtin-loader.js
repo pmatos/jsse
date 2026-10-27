@@ -254,6 +254,11 @@
   hostCrypto.webcrypto = globalThis.crypto;
   cache["internal/host/crypto"] = { exports: hostCrypto };
 
+  // The native `zlib` stream table (#1239).
+  var hostZlib = globalThis.__host_zlib;
+  delete globalThis.__host_zlib;
+  cache["internal/host/zlib"] = { exports: hostZlib };
+
   // The child process and signal floor (#1236), assembled by node-process-signals.js.
   var childKey = Symbol.for("jsse.node.child");
   var childBinding = globalThis[childKey];

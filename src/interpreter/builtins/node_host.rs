@@ -41,6 +41,7 @@ pub(crate) struct NodeHostState {
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
+    pub(crate) zlib: super::node_host_zlib::ZlibState,
     #[cfg(unix)]
     pub(crate) child: super::node_host_child::ChildState,
     /// Test-only: the platform name the `os` binding reports.
@@ -284,6 +285,7 @@ impl Interpreter {
         self.setup_node_host_idna();
         self.setup_node_host_os();
         self.setup_node_host_crypto();
+        self.setup_node_host_zlib();
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();
