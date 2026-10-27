@@ -34,6 +34,9 @@
     shutdown: take("__host_cp_shutdown"),
     close: take("__host_cp_close"),
     release: take("__host_cp_release"),
+    adopt: take("__host_cp_adopt"),
+    ipcRead: take("__host_cp_ipc_read"),
+    ipcWrite: take("__host_cp_ipc_write"),
     killChild: take("__host_cp_kill"),
     loopRef: take("__host_loop_ref"),
     onEvent: function (handler) {

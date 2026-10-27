@@ -27,7 +27,8 @@ Unix only (`cfg(unix)` floor); on other platforms the floor is absent and
    served to builtins as the private module `internal/host/child_process`).
 3. **Pipes are socketpairs**, as `uv_spawn` makes them, so a child sees a socket
    on fd 0-2 and EOF on stdin after `shutdown(SHUT_WR)`. Pipes at fd >= 3 are
-   duplex. `ipc` stdio is refused with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
+   duplex. `ipc` stdio is a pipe at its slot with `NODE_CHANNEL_FD` set
+   (`fork`, `2026-10-26-2330-node-host-fork-ipc.md`).
 4. **Environment.** The child's environment is exactly Node's `envPairs`, built
    from `process.env` (ADR item 6), never from the OS environment. The spread
    `{ ...process.env }` of Node's source is `ObjectAssign({}, process.env)`
@@ -77,13 +78,12 @@ Unix only (`cfg(unix)` floor); on other platforms the floor is absent and
 
 ## Not done
 
-- `fork`, `send`, the IPC channel and `serialization` (needs a message pipe).
 - `process.stdin` and `net`-based stdio objects; `stdio` entries that are
   streams must carry an `fd` number.
 - `uid`/`gid` are passed through; `windowsHide` and win32 command-line quoting
   are not implemented.
-- jsse as a child needs `--node`: `process.execPath` is the bare binary, and
-  `process.execArgv` is not forwarded (no `fork`).
+- jsse as a child needs `--node`: `process.execPath` is the bare binary
+  (`fork` adds the flag itself); `process.execArgv` is `[]`.
 
 ## Verification
 
