@@ -31,7 +31,7 @@ regex = "1"
 # at an arbitrary start offset, which a sticky RegExp match needs. Features
 # mirror what `regex` enables by default so the shared build is unchanged.
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "nfa-backtrack", "dfa-onepass", "hybrid", "perf-literal", "unicode"] }
-fancy-regex = "0.19"
+fancy-regex = "0.20"
 chrono = "0.4"
 ryu-js = "1.0.2"
 iana-time-zone = "0.1"
