@@ -1,0 +1,6 @@
+exit=0
+--- tty
+age? 42\r
+\r
+age 42\r
+closed\r

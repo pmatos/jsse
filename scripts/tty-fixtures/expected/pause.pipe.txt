@@ -1,0 +1,7 @@
+exit=0
+--- stdout
+got true
+paused true
+end
+exit 0
+--- stderr

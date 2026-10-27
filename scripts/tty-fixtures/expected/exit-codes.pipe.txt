@@ -1,0 +1,4 @@
+exit=5
+--- stdout
+exiting while stdin is open
+--- stderr

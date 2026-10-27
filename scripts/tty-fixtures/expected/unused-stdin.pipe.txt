@@ -1,0 +1,4 @@
+exit=0
+--- stdout
+finished without touching stdin
+--- stderr

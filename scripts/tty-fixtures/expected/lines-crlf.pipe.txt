@@ -1,0 +1,8 @@
+exit=0
+--- stdout
+line "x"
+line "y"
+line "z"
+line "\u0004"
+close
+--- stderr
