@@ -1,0 +1,5 @@
+{
+    "extends": "./tsconfig.helpers.json",
+    "compilerOptions": { "experimentalDecorators": true, "emitDecoratorMetadata": true },
+    "files": ["src/deco.ts", "src/pdeco.ts", "src/lib.ts", "src/types.ts"]
+}
