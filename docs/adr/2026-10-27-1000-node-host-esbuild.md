@@ -34,8 +34,9 @@ Status: accepted, epic #1214, issue #1252 (builds on #1236 child_process, #1233 
    `exportIsTsObject` options: `typescript.js` (9,143,356 bytes), its map and the metafile are identical to
    Node's.
 4. **Pinned digests.** `--pin` writes the sha256 of Node's stdout per fixture to
-   `scripts/esbuild-fixtures/expected-sha256.txt`; the fixtures print no absolute path and no length that depends
-   on one, so the digests hold on any checkout directory. `tests/node_esbuild.rs` compares jsse against them
+   `scripts/esbuild-fixtures/expected-sha256.txt`; the fixtures print no absolute path (the scratch directory and
+   `ESBUILD_DIR` are scrubbed) and no length that depends on one, so the digests hold on any checkout directory
+   and any esbuild install location. `tests/node_esbuild.rs` compares jsse against them
    without Node, and re-runs five fixtures under `JSSE_GC_STRESS=7`.
 5. **CI-visible guard.** Because CI cannot install esbuild, two tests need nothing: a stand-in service (jsse
    itself, `stdio: ['pipe', 'pipe', 'inherit']`, the same unref/ref counter) echoes a 6 MiB message through the

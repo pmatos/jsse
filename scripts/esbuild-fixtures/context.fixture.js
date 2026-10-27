@@ -37,12 +37,14 @@ run(async () => {
   await watcher.cancel();
   await watcher.dispose();
 
+  let loading;
+  const started = new Promise((resolve) => { loading = resolve; });
   const slow = await esbuild.context({
     entryPoints: ['entry.js'], bundle: true, write: false, logLevel: 'silent',
-    plugins: [{ name: 'slow', setup(build) { build.onLoad({ filter: /entry\.js$/ }, async () => { await new Promise((r) => setTimeout(r, 50)); return null; }); } }],
+    plugins: [{ name: 'slow', setup(build) { build.onLoad({ filter: /entry\.js$/ }, async () => { loading(); await new Promise((r) => setTimeout(r, 200)); return null; }); } }],
   });
   const pending = slow.rebuild().then(() => 'built', (e) => e.errors.map((x) => x.text));
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await started;
   await slow.cancel();
   show('canceled', await pending);
   await slow.dispose();

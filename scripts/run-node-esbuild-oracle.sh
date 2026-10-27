@@ -79,9 +79,6 @@ if [ -z "$BINARY" ] || [ ! -x "$BINARY" ]; then
     echo "SKIP: no esbuild platform binary next to $ESBUILD_DIR (install @esbuild/<platform> or set ESBUILD_BINARY_PATH)"
     exit 0
 fi
-if [ "$CROSS_CHECK" -eq 1 ] && [ "$NODE_ONLY" -eq 0 ] && [ -z "$NODE_BIN" ]; then
-    CROSS_CHECK=0
-fi
 if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
     echo "Building jsse (release)..."
     (cd "$PROJECT_DIR" && cargo build --release)

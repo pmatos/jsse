@@ -4,7 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const root = process.cwd();
-const scrub = (text) => text.split(root).join('<cwd>');
+const esbuildDir = fs.realpathSync(process.env.ESBUILD_DIR);
+const scrub = (text) => text.split(root).join('<cwd>').split(esbuildDir).join('<esbuild>');
 
 exports.esbuild = require(process.env.ESBUILD_DIR);
 
