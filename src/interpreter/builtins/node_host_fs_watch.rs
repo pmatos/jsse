@@ -8,9 +8,11 @@
 //! when it delivers the event, so a watcher closed in between receives
 //! nothing. Event bits follow libuv: bit 1 is attribute/modify, bit 2 is any
 //! other event; bit 4 marks an event on the watched path itself, whose name
-//! is then the path's basename. Watchers share a descriptor per inode, as in libuv. Where
-//! inotify is missing (or `JSSE_NODE_WATCH_POLL` is set) `add` throws `ENOSYS`
-//! and the JS side polls instead. Whether a watcher keeps the loop alive is
+//! is then the path's basename. Bit 8 (not libuv's) marks the kernel having
+//! dropped the watch (`IN_IGNORED`), whose path may now be a new object.
+//! Watchers share a descriptor per inode, as in libuv. Where inotify is
+//! missing (or `JSSE_NODE_WATCH_POLL` is set) `add` throws `ENOSYS` and the JS
+//! side polls instead. Whether a watcher keeps the loop alive is
 //! decided by JS through `__host_loop_ref`. See
 //! `docs/adr/2026-10-27-0300-node-host-fs-watch.md`.
 
@@ -147,6 +149,9 @@ mod sys {
                 }
                 if mask & !CHANGE != 0 {
                     events |= 2;
+                }
+                if mask & libc::IN_IGNORED != 0 {
+                    events |= 8;
                 }
                 post(queue, ChildEvent::Watch { wd, events, name });
             }

@@ -4,8 +4,8 @@
 // `__host_watch_*` floor, or, where the host has none (`ENOSYS`), a polling
 // stand-in with the same interface, and the table that routes native events to
 // the handle. Events are `(bits, name)`: bit 1 is a change, bit 2 a rename,
-// bit 4 marks the watched path itself. See
-// docs/adr/2026-10-27-0300-node-host-fs-watch.md.
+// bit 4 marks the watched path itself, bit 8 that the kernel dropped the
+// watch. See docs/adr/2026-10-27-0300-node-host-fs-watch.md.
 
 const binding = require('internal/host/child_process');
 const { sync } = require('internal/host/fs');
@@ -13,6 +13,7 @@ const { sync } = require('internal/host/fs');
 const kChange = 1;
 const kRename = 2;
 const kSelf = 4;
+const kGone = 8;
 const POLL_INTERVAL = 100;
 
 const natives = new Map();
@@ -146,4 +147,4 @@ function startWatch(path, onevent, persistent) {
   return new PollWatch(path, onevent, persistent);
 }
 
-module.exports = { startWatch, kRename, kSelf };
+module.exports = { startWatch, kRename, kSelf, kGone };
