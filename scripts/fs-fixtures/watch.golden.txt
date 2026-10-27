@@ -1,0 +1,57 @@
+-- directory watch
+FSWatcher function true true
+create             change:b.txt rename:b.txt
+modify             change:b.txt
+rename             rename:b.txt rename:c.txt
+chmod              change:c.txt
+delete             rename:c.txt
+mkdir              rename:d
+rmdir              rename:d
+nested (none)      (none)
+-- file watch
+modify file        change:a.txt
+chmod file         change:a.txt
+delete file        change:a.txt rename:a.txt
+-- two watchers, one path
+both see           change:e.txt rename:e.txt
+second saw change:e.txt rename:e.txt
+-- encoding buffer
+buffer name        change:f.txt rename:f.txt
+buffer events change:true:662e747874 rename:true:662e747874
+-- close
+true true true
+closed-sync,close
+abort closed true
+-- errors
+missing Error ENOENT -2 watch <D>/watched/missing <D>/watched/missing ENOENT: no such file or directory, watch '<D>/watched/missing'
+number TypeError ERR_INVALID_ARG_TYPE undefined undefined undefined undefined The "path" argument must be of type string or an instance of Buffer or URL. Received type number (5)
+encoding TypeError ERR_INVALID_ARG_VALUE undefined undefined undefined undefined The argument 'encoding' is invalid encoding. Received 'nope'
+recursive TypeError ERR_INVALID_ARG_TYPE undefined undefined undefined undefined The "options.recursive" property must be of type boolean. Received type number (1)
+options TypeError ERR_INVALID_ARG_TYPE undefined undefined undefined undefined The "options" argument must be one of type string or object. Received type number (1)
+signal TypeError ERR_INVALID_ARG_TYPE undefined undefined undefined undefined The "options.signal" property must be an instance of AbortSignal. Received type number (3)
+-- recursive
+modify deep        true
+create deep        true
+create dir         true
+new dir adopted    true
+rename deep        true
+-- watchFile
+StatWatcher true
+cur 0 false prev 0 false
+cur 3 true prev 0 false
+cur 6 true prev 3 true
+cur 0 false prev 6 true
+listeners left 1
+after unwatch 0
+no listener TypeError ERR_INVALID_ARG_TYPE undefined undefined undefined undefined The "listener" argument must be of type function. Received undefined
+bad interval TypeError ERR_INVALID_ARG_TYPE undefined undefined undefined undefined The "interval" argument must be of type number. Received type string ('x')
+bigint bigint:0
+-- promises.watch
+change:p.txt:eventType,filename rename:p.txt:eventType,filename
+{"done":true}
+AbortError ABORT_ERR
+missing ENOENT ENOENT: no such file or directory, watch '<D>/watched/missing'
+bad path ERR_INVALID_ARG_TYPE The "path" argument must be of type string or an instance of Buffer or URL. Received type number (5)
+bad overflow ERR_INVALID_ARG_VALUE The property 'options.overflow' must be one of: 'ignore', 'error'. Received 'x'
+bad persistent ERR_INVALID_ARG_TYPE The "options.persistent" property must be of type boolean. Received type string ('x')
+done

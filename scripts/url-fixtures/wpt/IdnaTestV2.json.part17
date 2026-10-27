@@ -1,0 +1,456 @@
+    "output": "xn--6-8cb7433a2ba.xn--zca894k"
+  },
+  {
+    "input": "\u10c1\u10b16\u0318\u3002SS\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "\u2d21\u2d116\u0318\u3002ss\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "\u10c1\u2d116\u0318\u3002Ss\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "xn--6-8cb7433a2ba.xn--ss-2vq",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "\u2d21\u2d116\u0318.ss\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "\u10c1\u10b16\u0318.SS\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "\u10c1\u2d116\u0318.Ss\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--ss-2vq"
+  },
+  {
+    "input": "xn--6-8cb7433a2ba.xn--zca894k",
+    "output": "xn--6-8cb7433a2ba.xn--zca894k"
+  },
+  {
+    "input": "\u2d21\u2d116\u0318.\u00df\u1b03",
+    "output": "xn--6-8cb7433a2ba.xn--zca894k"
+  },
+  {
+    "comment": "V7",
+    "input": "xn--6-8cb306hms1a.xn--ss-2vq",
+    "output": "xn--6-8cb306hms1a.xn--ss-2vq"
+  },
+  {
+    "comment": "V7",
+    "input": "xn--6-8cb555h2b.xn--ss-2vq",
+    "output": "xn--6-8cb555h2b.xn--ss-2vq"
+  },
+  {
+    "comment": "V7",
+    "input": "xn--6-8cb555h2b.xn--zca894k",
+    "output": "xn--6-8cb555h2b.xn--zca894k"
+  },
+  {
+    "comment": "V7",
+    "input": "\ud9ee\udc50\uff61\u226f\ud804\udeea",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "\ud9ee\udc50\uff61>\u0338\ud804\udeea",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "\ud9ee\udc50\u3002\u226f\ud804\udeea",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "\ud9ee\udc50\u3002>\u0338\ud804\udeea",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "xn--eo08b.xn--hdh3385g",
+    "output": "xn--eo08b.xn--hdh3385g"
+  },
+  {
+    "comment": "V6; V7; A4_2 (ignored)",
+    "input": "\udb40\udd0f\ud81a\udf34\udb43\udcbd\uff61\uffa0",
+    "output": null
+  },
+  {
+    "comment": "V6; V7; A4_2 (ignored)",
+    "input": "\udb40\udd0f\ud81a\udf34\udb43\udcbd\u3002\u1160",
+    "output": null
+  },
+  {
+    "comment": "V6; V7; A4_2 (ignored)",
+    "input": "xn--619ep9154c.",
+    "output": "xn--619ep9154c."
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--619ep9154c.xn--psd",
+    "output": "xn--619ep9154c.xn--psd"
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--619ep9154c.xn--cl7c",
+    "output": "xn--619ep9154c.xn--cl7c"
+  },
+  {
+    "comment": "V7",
+    "input": "\udb42\udf54.\ud800\udef1\u2082",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "\udb42\udf54.\ud800\udef12",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "xn--vi56e.xn--2-w91i",
+    "output": "xn--vi56e.xn--2-w91i"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u2dbf.\u00df\u200d",
+    "output": null
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u2dbf.SS\u200d",
+    "output": null
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u2dbf.ss\u200d",
+    "output": null
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u2dbf.Ss\u200d",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "xn--7pj.ss",
+    "output": "xn--7pj.ss"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "xn--7pj.xn--ss-n1t",
+    "output": "xn--7pj.xn--ss-n1t"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "xn--7pj.xn--zca870n",
+    "output": "xn--7pj.xn--zca870n"
+  },
+  {
+    "comment": "C1",
+    "input": "\u6889\u3002\u200c",
+    "output": null
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "xn--7zv.",
+    "output": "xn--7zv."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "\u6889.",
+    "output": "xn--7zv."
+  },
+  {
+    "comment": "C1",
+    "input": "xn--7zv.xn--0ug",
+    "output": "xn--7zv.xn--0ug"
+  },
+  {
+    "input": "xn--iwb.ss",
+    "output": "xn--iwb.ss"
+  },
+  {
+    "input": "\u0853.ss",
+    "output": "xn--iwb.ss"
+  },
+  {
+    "input": "\u0853.SS",
+    "output": "xn--iwb.ss"
+  },
+  {
+    "comment": "V7; V3 (ignored)",
+    "input": "\u40da\u87e5-\u3002-\ud9b5\udc98\u2488",
+    "output": null
+  },
+  {
+    "comment": "V7; V3 (ignored); A4_2 (ignored)",
+    "input": "\u40da\u87e5-\u3002-\ud9b5\udc981.",
+    "output": null
+  },
+  {
+    "comment": "V7; V3 (ignored); A4_2 (ignored)",
+    "input": "xn----n50a258u.xn---1-up07j.",
+    "output": "xn----n50a258u.xn---1-up07j."
+  },
+  {
+    "comment": "V7; V3 (ignored)",
+    "input": "xn----n50a258u.xn----ecp33805f",
+    "output": "xn----n50a258u.xn----ecp33805f"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u1894\u2260\udbec\ude42.\u200d\ud800\udee2",
+    "output": null
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u1894=\u0338\udbec\ude42.\u200d\ud800\udee2",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "xn--ebf031cf7196a.xn--587c",
+    "output": "xn--ebf031cf7196a.xn--587c"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "xn--ebf031cf7196a.xn--1ug9540g",
+    "output": "xn--ebf031cf7196a.xn--1ug9540g"
+  },
+  {
+    "comment": "V3 (ignored)",
+    "input": "-\uff61\u2e90",
+    "output": "-.xn--6vj"
+  },
+  {
+    "comment": "V3 (ignored)",
+    "input": "-\u3002\u2e90",
+    "output": "-.xn--6vj"
+  },
+  {
+    "comment": "V3 (ignored)",
+    "input": "-.xn--6vj",
+    "output": "-.xn--6vj"
+  },
+  {
+    "comment": "V6; V7",
+    "input": "\udb43\udc29\ud807\udcac\uff0e\u065c",
+    "output": null
+  },
+  {
+    "comment": "V6; V7",
+    "input": "\udb43\udc29\ud807\udcac.\u065c",
+    "output": null
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--sn3d59267c.xn--4hb",
+    "output": "xn--sn3d59267c.xn--4hb"
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "\ud800\udf7a.\ud928\uddc3\u200c",
+    "output": null
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--ie8c.xn--2g51a",
+    "output": "xn--ie8c.xn--2g51a"
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "xn--ie8c.xn--0ug03366c",
+    "output": "xn--ie8c.xn--0ug03366c"
+  },
+  {
+    "comment": "C2; V7; V3 (ignored)",
+    "input": "\u200d\u226e\uff0e\udb41\udfea\ud8a6\udecf-",
+    "output": null
+  },
+  {
+    "comment": "C2; V7; V3 (ignored)",
+    "input": "\u200d<\u0338\uff0e\udb41\udfea\ud8a6\udecf-",
+    "output": null
+  },
+  {
+    "comment": "C2; V7; V3 (ignored)",
+    "input": "\u200d\u226e.\udb41\udfea\ud8a6\udecf-",
+    "output": null
+  },
+  {
+    "comment": "C2; V7; V3 (ignored)",
+    "input": "\u200d<\u0338.\udb41\udfea\ud8a6\udecf-",
+    "output": null
+  },
+  {
+    "comment": "V7; V3 (ignored)",
+    "input": "xn--gdh.xn----cr99a1w710b",
+    "output": "xn--gdh.xn----cr99a1w710b"
+  },
+  {
+    "comment": "C2; V7; V3 (ignored)",
+    "input": "xn--1ug95g.xn----cr99a1w710b",
+    "output": "xn--1ug95g.xn----cr99a1w710b"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u200d\u200d\u8954\u3002\u10bc5\ua86e\ud995\udf4f",
+    "output": null
+  },
+  {
+    "comment": "C2; V7",
+    "input": "\u200d\u200d\u8954\u3002\u2d1c5\ua86e\ud995\udf4f",
+    "output": null
+  },
+  {
+    "comment": "V7",
+    "input": "xn--2u2a.xn--5-uws5848bpf44e",
+    "output": "xn--2u2a.xn--5-uws5848bpf44e"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "xn--1uga7691f.xn--5-uws5848bpf44e",
+    "output": "xn--1uga7691f.xn--5-uws5848bpf44e"
+  },
+  {
+    "comment": "V7",
+    "input": "xn--2u2a.xn--5-r1g7167ipfw8d",
+    "output": "xn--2u2a.xn--5-r1g7167ipfw8d"
+  },
+  {
+    "comment": "C2; V7",
+    "input": "xn--1uga7691f.xn--5-r1g7167ipfw8d",
+    "output": "xn--1uga7691f.xn--5-r1g7167ipfw8d"
+  },
+  {
+    "input": "xn--ix9c26l.xn--q0s",
+    "output": "xn--ix9c26l.xn--q0s"
+  },
+  {
+    "input": "\ud802\udedc\ud804\udf3c.\u5a40",
+    "output": "xn--ix9c26l.xn--q0s"
+  },
+  {
+    "comment": "C2; V6; V7",
+    "input": "\ua9b9\u200d\ud077\ud8af\udda1\uff61\u2082",
+    "output": null
+  },
+  {
+    "comment": "C2; V6; V7",
+    "input": "\ua9b9\u200d\u110f\u1173\u11b2\ud8af\udda1\uff61\u2082",
+    "output": null
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--0m9as84e2e21c.c",
+    "output": "xn--0m9as84e2e21c.c"
+  },
+  {
+    "comment": "C2; V6; V7",
+    "input": "xn--1ug1435cfkyaoi04d.c",
+    "output": "xn--1ug1435cfkyaoi04d.c"
+  },
+  {
+    "input": "\ud802\udec0\uff0e\u0689\ud804\udf00",
+    "output": "xn--pw9c.xn--fjb8658k"
+  },
+  {
+    "input": "\ud802\udec0.\u0689\ud804\udf00",
+    "output": "xn--pw9c.xn--fjb8658k"
+  },
+  {
+    "input": "xn--pw9c.xn--fjb8658k",
+    "output": "xn--pw9c.xn--fjb8658k"
+  },
+  {
+    "comment": "V6",
+    "input": "\u2260\u81a3\u3002\u0f83",
+    "output": null
+  },
+  {
+    "comment": "V6",
+    "input": "=\u0338\u81a3\u3002\u0f83",
+    "output": null
+  },
+  {
+    "comment": "V6",
+    "input": "xn--1chy468a.xn--2ed",
+    "output": "xn--1chy468a.xn--2ed"
+  },
+  {
+    "comment": "C2",
+    "input": "\ud800\udef7\u3002\u200d",
+    "output": null
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "xn--r97c.",
+    "output": "xn--r97c."
+  },
+  {
+    "comment": "A4_2 (ignored)",
+    "input": "\ud800\udef7.",
+    "output": "xn--r97c."
+  },
+  {
+    "comment": "C2",
+    "input": "xn--r97c.xn--1ug",
+    "output": "xn--r97c.xn--1ug"
+  },
+  {
+    "comment": "V6",
+    "input": "\ud807\udc33\ud804\ude2f\u3002\u296a",
+    "output": null
+  },
+  {
+    "comment": "V6",
+    "input": "xn--2g1d14o.xn--jti",
+    "output": "xn--2g1d14o.xn--jti"
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "\ud804\udd80\u4074\ud952\udde3\uff0e\u10b5\ud835\udfdc\u200c\u0348",
+    "output": null
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "\ud804\udd80\u4074\ud952\udde3.\u10b54\u200c\u0348",
+    "output": null
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "\ud804\udd80\u4074\ud952\udde3.\u2d154\u200c\u0348",
+    "output": null
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--1mnx647cg3x1b.xn--4-zfb5123a",
+    "output": "xn--1mnx647cg3x1b.xn--4-zfb5123a"
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "xn--1mnx647cg3x1b.xn--4-zfb502tlsl",
+    "output": "xn--1mnx647cg3x1b.xn--4-zfb502tlsl"
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "\ud804\udd80\u4074\ud952\udde3\uff0e\u2d15\ud835\udfdc\u200c\u0348",
+    "output": null
+  },
+  {
+    "comment": "V6; V7",
+    "input": "xn--1mnx647cg3x1b.xn--4-zfb324h",
+    "output": "xn--1mnx647cg3x1b.xn--4-zfb324h"
+  },
+  {
+    "comment": "C1; V6; V7",
+    "input": "xn--1mnx647cg3x1b.xn--4-zfb324h32o",
+    "output": "xn--1mnx647cg3x1b.xn--4-zfb324h32o"
+  }
+]

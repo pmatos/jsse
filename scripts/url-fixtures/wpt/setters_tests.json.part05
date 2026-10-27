@@ -1,0 +1,167 @@
+            "expected": {
+                "href": "http://example.net/#foo%3Cbar",
+                "hash": "#foo%3Cbar"
+            }
+        },
+        {
+            "href": "http://example.net",
+            "new_value": "#foo>bar",
+            "expected": {
+                "href": "http://example.net/#foo%3Ebar",
+                "hash": "#foo%3Ebar"
+            }
+        },
+        {
+            "href": "http://example.net",
+            "new_value": "#foo`bar",
+            "expected": {
+                "href": "http://example.net/#foo%60bar",
+                "hash": "#foo%60bar"
+            }
+        },
+        {
+            "comment": "Simple percent-encoding; tabs and newlines are removed",
+            "href": "a:/",
+            "new_value": "\u0000\u0001\t\n\r\u001f !\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~\u007f\u0080\u0081Éé",
+            "expected": {
+                "href": "a:/#%00%01%1F%20!%22#$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_%60az{|}~%7F%C2%80%C2%81%C3%89%C3%A9",
+                "hash": "#%00%01%1F%20!%22#$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_%60az{|}~%7F%C2%80%C2%81%C3%89%C3%A9"
+            }
+        },
+        {
+            "comment": "Percent-encode NULLs in fragment",
+            "href": "http://example.net",
+            "new_value": "a\u0000b",
+            "expected": {
+                "href": "http://example.net/#a%00b",
+                "hash": "#a%00b"
+            }
+        },
+        {
+            "comment": "Percent-encode NULLs in fragment",
+            "href": "non-spec:/",
+            "new_value": "a\u0000b",
+            "expected": {
+                "href": "non-spec:/#a%00b",
+                "hash": "#a%00b"
+            }
+        },
+        {
+            "comment": "Bytes already percent-encoded are left as-is",
+            "href": "http://example.net",
+            "new_value": "%c3%89té",
+            "expected": {
+                "href": "http://example.net/#%c3%89t%C3%A9",
+                "hash": "#%c3%89t%C3%A9"
+            }
+        },
+        {
+            "href": "javascript:alert(1)",
+            "new_value": "castle",
+            "expected": {
+                "href": "javascript:alert(1)#castle",
+                "hash": "#castle"
+            }
+        },
+        {
+            "comment": "Trailing spaces and opaque paths",
+            "href": "data:space                                                                                                                                  #fragment",
+            "new_value": "",
+            "expected": {
+                "href": "data:space                                                                                                                                 %20",
+                "pathname": "space                                                                                                                                 %20",
+                "hash": ""
+            }
+        },
+        {
+            "href": "sc:space    #fragment",
+            "new_value": "",
+            "expected": {
+                "href": "sc:space   %20",
+                "pathname": "space   %20",
+                "hash": ""
+            }
+        },
+        {
+            "comment": "Trailing spaces and opaque paths",
+            "href": "data:space  ?query#fragment",
+            "new_value": "",
+            "expected": {
+                "href": "data:space %20?query",
+                "hash": ""
+            }
+        },
+        {
+            "href": "sc:space  ?query#fragment",
+            "new_value": "",
+            "expected": {
+                "href": "sc:space %20?query",
+                "hash": ""
+            }
+        },
+        {
+            "comment": "Trailing space should be encoded",
+            "href": "http://example.net",
+            "new_value": " ",
+            "expected": {
+                "href": "http://example.net/#%20",
+                "hash": "#%20"
+            }
+        },
+        {
+            "comment": "Trailing C0 control should be encoded",
+            "href": "http://example.net",
+            "new_value": "\u0000",
+            "expected": {
+                "href": "http://example.net/#%00",
+                "hash": "#%00"
+            }
+        },
+        {
+            "comment": "Fragment with <> on data: URI",
+            "href": "data:text/plain,test",
+            "new_value": "#<foo> <bar>",
+            "expected": {
+                "href": "data:text/plain,test#%3Cfoo%3E%20%3Cbar%3E",
+                "hash": "#%3Cfoo%3E%20%3Cbar%3E"
+            }
+        },
+        {
+            "comment": "Fragment with <> on about:blank",
+            "href": "about:blank",
+            "new_value": "#<foo> <bar>",
+            "expected": {
+                "href": "about:blank#%3Cfoo%3E%20%3Cbar%3E",
+                "hash": "#%3Cfoo%3E%20%3Cbar%3E"
+            }
+        },
+        {
+            "comment": "Fragment percent-encode set on data: URI; tabs and newlines are removed",
+            "href": "data:text/plain,test",
+            "new_value": "#\u0000\u0001\t\n\r\u001f !\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~\u007f\u0080\u0081Éé",
+            "expected": {
+                "href": "data:text/plain,test#%00%01%1F%20!%22#$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_%60az{|}~%7F%C2%80%C2%81%C3%89%C3%A9",
+                "hash": "#%00%01%1F%20!%22#$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_%60az{|}~%7F%C2%80%C2%81%C3%89%C3%A9"
+            }
+        },
+        {
+            "comment": "Fragment percent-encode set on about:blank; tabs and newlines are removed",
+            "href": "about:blank",
+            "new_value": "#\u0000\u0001\t\n\r\u001f !\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az{|}~\u007f\u0080\u0081Éé",
+            "expected": {
+                "href": "about:blank#%00%01%1F%20!%22#$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_%60az{|}~%7F%C2%80%C2%81%C3%89%C3%A9",
+                "hash": "#%00%01%1F%20!%22#$%&'()*+,-./09:;%3C=%3E?@AZ[\\]^_%60az{|}~%7F%C2%80%C2%81%C3%89%C3%A9"
+            }
+        }
+    ],
+    "href": [
+        {
+            "href": "file:///var/log/system.log",
+            "new_value": "http://0300.168.0xF0",
+            "expected": {
+                "href": "http://192.168.0.240/",
+                "protocol": "http:"
+            }
+        }
+    ]
+}

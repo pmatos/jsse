@@ -44,6 +44,8 @@ pub(crate) struct NodeHostState {
     pub(crate) vm: super::node_host_vm::VmState,
     #[cfg(unix)]
     pub(crate) child: super::node_host_child::ChildState,
+    #[cfg(unix)]
+    pub(crate) watch: super::node_host_fs_watch::WatchState,
     /// Test-only: the platform name the `os` binding reports.
     #[cfg(test)]
     pub(crate) platform_override: Option<&'static str>,
@@ -279,6 +281,7 @@ impl Interpreter {
             self.setup_node_host_child_sync();
             self.setup_node_host_signal();
             self.setup_node_host_fs_async();
+            self.setup_node_host_fs_watch();
         }
         self.setup_node_host_loop();
         #[cfg(unix)]

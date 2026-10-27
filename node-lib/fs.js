@@ -43,6 +43,8 @@ defineLazy('internal/fs/streams', [
 ]);
 
 defineLazy('internal/fs/glob', ['glob', 'globSync']);
+defineLazy('internal/fs/watchers', ['watch']);
+defineLazy('internal/fs/stat_watcher', ['watchFile', 'unwatchFile']);
 
 ObjectDefineProperty(fs, 'promises', {
   get() { return require('fs/promises'); },
