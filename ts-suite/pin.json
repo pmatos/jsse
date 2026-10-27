@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/microsoft/TypeScript",
+  "tag": "v6.0.3",
+  "commit": "050880ce59e30b356b686bd3144efe24f875ebc8",
+  "lockfile_sha256": "e85be648176ba25eaa38f9c1b7b7ca9bab782b0c448fb15fc44c355c40ef9a4b",
+  "mocha": "10.8.2"
+}
