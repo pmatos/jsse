@@ -10,6 +10,8 @@
   var S = globalThis.__node_fs_support;
   if (!S) return;
   delete globalThis.__node_fs_support;
+  var asyncHost = globalThis.__host_fs_async;
+  delete globalThis.__host_fs_async;
   var host = S.host;
   var Buffer = S.Buffer;
   var hostConstants = S.hostConstants;
@@ -247,5 +249,9 @@
       configurable: true,
     });
   }
-  globalThis.__node_builtins.fs = fs;
+  globalThis.__node_builtins["internal/host/fs"] = {
+    fs: fs,
+    support: S,
+    async: asyncHost,
+  };
 })();

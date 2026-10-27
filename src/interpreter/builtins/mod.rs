@@ -28,7 +28,11 @@ mod node_host_fs;
 #[cfg(unix)]
 mod node_host_fs_args;
 #[cfg(unix)]
+mod node_host_fs_async;
+#[cfg(unix)]
 mod node_host_fs_error;
+#[cfg(unix)]
+mod node_host_fs_jobs;
 #[cfg(unix)]
 mod node_host_fs_meta;
 #[cfg(unix)]
