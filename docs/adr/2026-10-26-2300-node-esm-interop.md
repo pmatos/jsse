@@ -50,7 +50,7 @@ of ES modules, the `module-sync` condition under `require()` and a typeless
    matched loosely (it must mention `default`, `__esModule` and `exports`),
    whitespace is ASCII, an unterminated string stops the scan, and `import` or
    `export` statements do not raise. `scripts/esm-interop-fixtures/proj/lex.mjs`
-   pins 54 snippets against Node.
+   pins 60 snippets against Node.
 4. **`require()` of an ES module.** `cjs/esm_interop.js` decides the format of
    a `.js` file (`.mjs` and `"type": "module"` are ES, `.cjs` and
    `"type": "commonjs"` CommonJS, a typeless package is compiled as CommonJS
@@ -94,6 +94,8 @@ of ES modules, the `module-sync` condition under `require()` and a typeless
    - `ERR_REQUIRE_CYCLE_MODULE` is raised when any module of the required
      graph is mid-evaluation; the message was checked against Node for the
      self-require case only.
+   - A second `require()` of an ES module whose graph failed to link throws the
+     cached link `SyntaxError`; Node throws `ERR_REQUIRE_ESM`-style `Error`.
    - `Module.runMain()` and `module.register` are unchanged (module ADR).
    - Pre-existing engine issues seen while testing: a module namespace with N
      exports costs O(N^2) to create (jsse#1347: 7,000 exports take 3 s, also
@@ -101,7 +103,7 @@ of ES modules, the `module-sync` condition under `require()` and a typeless
      expression literal is a `SyntaxError` here but parses in V8 (jsse#1348).
 8. **Verification.** `scripts/run-node-esm-interop-oracle.sh` runs
    `scripts/esm-interop-fixtures/proj/{main.mjs,main.cjs,lex.mjs}` (71, 30 and
-   54 lines: `import.meta` shape and `resolve` over 23 specifiers,
+   61 lines: `import.meta` shape and `resolve` over 23 specifiers,
    `createRequire(import.meta.url)`, 14 CommonJS shapes imported with names,
    default and identity, snapshot versus live bindings, the facade, `module.exports`
    export, live bindings through the facade, async/cycle/throwing/syntax-error

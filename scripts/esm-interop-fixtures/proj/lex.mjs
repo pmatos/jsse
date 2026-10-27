@@ -21,6 +21,12 @@ const cases = {
  stringkeys: `exports['a b'] = 1; exports["q\\"uote"] = 2; exports['esc\\u0041'] = 3;`,
  litkeys: `module.exports = { 'a-b': c, "d": e, f };\nvar c, e, f;`,
  litnest: `module.exports = { a: { b: 1 }, c: 2 };`,
+ litget: `var x = 1, y = 2; module.exports = { x, get a() { return 1; }, y };`,
+ litgetcall: `var get = 1, y = 2; module.exports = { get, y };`,
+ litgetstr: `module.exports = { get 'a'() { return 1; }, y: 1 };`,
+ reexnoext: `module.exports = require('./noext-inner');`,
+ reextxt: `module.exports = require('./inner.txt');`,
+ getorder: `globalThis.__order = []; exports.p1 = 1; exports.p2 = 1; exports.p3 = 1; exports.p4 = 1; exports.p5 = 1; exports.p6 = 1; exports.p7 = 1; exports.p8 = 1; for (const n of Object.keys(exports)) Object.defineProperty(exports, n, { enumerable: true, get() { globalThis.__order.push(n); return 1; } });`,
  litcomma: `module.exports = { a, b, };\nvar a, b;`,
  litspace: `module.exports = { a: b , c: d, e };\nvar a,b,c,d,e;`,
  litspread: `module.exports = { ...a, b };\nvar a, b;`,
@@ -66,6 +72,8 @@ const cases = {
 for (const helper of ['dot', 'define', 'reexport']) {
   fs.copyFileSync(path.join(here, 'cjs', `${helper}.cjs`), path.join(dir, `${helper}.cjs`));
 }
+fs.writeFileSync(path.join(dir, 'noext-inner'), 'exports.inner = 1;');
+fs.writeFileSync(path.join(dir, 'inner.txt'), 'exports.inner2 = 1;');
 const out = [];
 for (const [name, source] of Object.entries(cases)) {
   fs.writeFileSync(path.join(dir, `${name}.cjs`), source);
@@ -76,5 +84,6 @@ for (const [name, source] of Object.entries(cases)) {
     out.push(`${name} threw ${e.name} ${e.code}`);
   }
 }
+out.push(`order ${globalThis.__order.join(',')}`);
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(out.join('\n'));

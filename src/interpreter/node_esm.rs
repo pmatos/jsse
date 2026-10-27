@@ -47,6 +47,7 @@ pub(crate) struct NodeEsm {
     host: Option<JsValue>,
     resolved: HashMap<(Option<PathBuf>, String), ModuleKey>,
     targets: HashMap<ModuleKey, (EsmFormat, String)>,
+    cjs_order: HashMap<ModuleKey, Vec<String>>,
     checked: HashSet<(ModuleKey, Option<ImportModuleType>)>,
     main: Option<ModuleKey>,
     main_ready: bool,
@@ -251,6 +252,10 @@ impl Interpreter {
             self.node_esm_cjs_names(target)?
         };
 
+        if !evaluated {
+            let order = names.iter().map(|(name, _)| name.clone()).collect();
+            self.node_host.esm.cjs_order.insert(key.clone(), order);
+        }
         let env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         env.borrow_mut().strict = true;
         let mut exports = HashMap::new();
@@ -314,7 +319,13 @@ impl Interpreter {
             }
         };
         let env = module.borrow().env.clone();
-        let named: Vec<String> = module.borrow().exports.keys().cloned().collect();
+        let named = self
+            .node_host
+            .esm
+            .cjs_order
+            .get(key)
+            .cloned()
+            .unwrap_or_default();
         let frame = self.gc_root_frame();
         self.gc_root_value(&value);
         for name in named {

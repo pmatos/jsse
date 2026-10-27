@@ -537,9 +537,9 @@ function makeRequireFunction(mod) {
 }
 
 Module._extensions['.js'] = function(module, filename) {
-  const content = fs.readFileSync(filename, 'utf8');
   const format = esmInterop.getFormat(filename);
   if (format === 'module') return esmInterop.load(module, filename);
+  const content = fs.readFileSync(filename, 'utf8');
   try {
     module._compile(content, filename);
   } catch (error) {

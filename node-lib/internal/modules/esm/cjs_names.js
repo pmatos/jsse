@@ -9,7 +9,6 @@ const {
   ObjectCreate,
   Set: SafeSet,
   SetPrototypeAdd,
-  SetPrototypeHas,
 } = primordials;
 
 const fs = require('fs');
@@ -48,11 +47,11 @@ function cjsExportNames(filename) {
     }
     if (canBeRequiredByUsers(resolved)) continue;
     const ext = path.extname(resolved);
-    if (ext !== '.js' && ext !== '.cjs') continue;
+    if (ext !== '.js' && ext !== '.cjs' && Module._extensions[ext]) continue;
     const inner = cjsExportNames(resolved);
     const list = ArrayFrom(inner);
     for (let j = 0; j < list.length; j++) {
-      if (!SetPrototypeHas(names, list[j])) SetPrototypeAdd(names, list[j]);
+      SetPrototypeAdd(names, list[j]);
     }
   }
   return names;

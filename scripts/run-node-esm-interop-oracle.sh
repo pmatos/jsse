@@ -16,7 +16,7 @@
 #             'module.exports' export, live bindings, ERR_REQUIRE_ASYNC_MODULE,
 #             ERR_REQUIRE_CYCLE_MODULE, the module-sync condition, typeless
 #             files with ES syntax
-#   lex.mjs   54 CommonJS source snippets and the export names Node detects
+#   lex.mjs   60 CommonJS source snippets and the export names Node detects
 #
 # Node's output is pinned in scripts/esm-interop-fixtures/expected-*.txt, which
 # tests/node_esm_interop.rs compares jsse against without Node.

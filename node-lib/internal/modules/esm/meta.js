@@ -15,6 +15,7 @@ const { defaultResolve } = require('internal/modules/esm/resolve');
 const schemeRegEx = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 
 function createResolve(filename) {
+  // parentURL is ignored; it only gives the function Node's length of 2.
   return function resolve(specifier, parentURL) {
     specifier = `${specifier}`;
     if (StringPrototypeStartsWith(specifier, 'node:')) {

@@ -121,6 +121,12 @@ impl Lexer<'_> {
                     next = self.peek();
                 }
                 let name = self.text(a, b);
+                if name == "get"
+                    && (next.is_ascii_alphabetic() || matches!(next, b'_' | b'$') || next >= 0x80)
+                {
+                    self.pos -= 1;
+                    return;
+                }
                 self.add_export(name);
             } else if c == b'.' && self.starts("..", self.pos + 1) {
                 self.pos += 3;
