@@ -751,9 +751,8 @@ fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completio
 
 fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsValue) -> Completion {
     if base.is_nullish() {
-        let err = interp.create_type_error(&format!(
-            "Cannot read properties of {base} (reading property)"
-        ));
+        let msg = interp.nullish_computed_read_message(base, key_val);
+        let err = interp.create_type_error(&msg);
         return Completion::Throw(err);
     }
     let key = match interp.to_property_key(key_val) {

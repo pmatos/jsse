@@ -1,5 +1,7 @@
 use super::*;
 
+mod nullish_message;
+
 /// Outcome of evaluating a computed member key: the key, or a completion that
 /// ends the access early (an abrupt key expression, the nullish-base
 /// TypeError, or the numeric-index fast read).
@@ -718,9 +720,8 @@ impl Interpreter {
                         other => return ComputedKey::Done(other),
                     };
                     if obj_val.is_nullish() {
-                        return ComputedKey::Done(Completion::Throw(this.create_type_error(
-                            &format!("Cannot read properties of {obj_val} (reading property)"),
-                        )));
+                        let msg = this.nullish_computed_read_message(&obj_val, &v);
+                        return ComputedKey::Done(Completion::Throw(this.create_type_error(&msg)));
                     }
                     if let Some(index) = v.as_number()
                         && let Some(result) = this.numeric_index_fast_get(&obj_val, index)
