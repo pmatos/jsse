@@ -69,11 +69,20 @@ class CompareTest(unittest.TestCase):
         problems = oracle.compare(GROUP, node, node, {"unittests:: semver b"})
         self.assertTrue(problems[0].startswith("Node itself fails or skips 1 tests"))
 
-    def test_duplicate_titles_count_once_each(self):
+    def test_a_lost_duplicate_title_is_a_difference(self):
         node = report(["unittests:: semver a", "unittests:: semver a"])
         jsse = report(["unittests:: semver a"])
         problems = oracle.compare(GROUP, node, jsse, set())
-        self.assertEqual(problems, [])
+        self.assertEqual(problems, ["did not run on jsse: unittests:: semver a"])
+
+    def test_one_failing_duplicate_is_reported(self):
+        node = report(["unittests:: semver a", "unittests:: semver a"])
+        jsse = report(["unittests:: semver a"], ["unittests:: semver a"])
+        problems = oracle.compare(GROUP, node, jsse, set())
+        self.assertEqual(
+            problems,
+            ["passes on Node, fails on jsse (unlisted): unittests:: semver a"],
+        )
 
 
 class ReportTest(unittest.TestCase):
@@ -103,6 +112,17 @@ class ReportTest(unittest.TestCase):
             oracle.overlaps(parsed, [GROUP, wide]), ["unittests:: semver a"]
         )
         self.assertEqual(oracle.overlaps(parsed, BATCH), [])
+
+    def test_known_failure_titles_may_hold_newlines(self):
+        self.assertEqual(
+            oracle.unescape("unittests:: x\\ny \\\\ z"), "unittests:: x\ny \\ z"
+        )
+
+    def test_annotations_escape_the_characters_that_split_them(self):
+        self.assertEqual(
+            oracle.annotation("a 100%\nb"),
+            "::error title=unit-test oracle::a 100%25%0Ab",
+        )
 
     def test_known_failures_ignore_comments(self):
         with tempfile.TemporaryDirectory() as d:
@@ -136,13 +156,22 @@ class GroupsTest(unittest.TestCase):
             (base / "asserts.ts").write_text(
                 'describe("unittests:: assert", () => {});\n'
             )
+            (base / "quoted.ts").write_text(
+                "describe(\n    'unittests:: semver',\n    () => {},\n);\n"
+            )
+            (base / "skipped.ts").write_text(
+                "describe.skip(`unittests:: qux`, () => {});\n"
+            )
             (base / "nested.ts").write_text(
                 '    describe("unittests:: indented", () => {});\n'
             )
             problems = groups.check_groups(d)
         self.assertEqual(
             problems,
-            ["new.ts: describe('unittests:: brandNew') matches groups none"],
+            [
+                "new.ts: describe('unittests:: brandNew') matches groups none",
+                "skipped.ts: describe('unittests:: qux') matches groups none",
+            ],
         )
 
     def test_every_pattern_is_anchored(self):

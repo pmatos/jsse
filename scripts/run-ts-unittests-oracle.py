@@ -52,14 +52,25 @@ mocha = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mocha)
 
 
+def unescape(line):
+    """A title line with `\\n` read as a newline and `\\\\` as a backslash (mocha titles may span lines)."""
+    return re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), line)
+
+
 def read_known_failures(path=KNOWN_FAILURES):
-    """Full titles of the tests jsse is known to fail: one per line, `#` comments, `\\n` escaped as `\\\\n`."""
+    """Full titles of the tests jsse is known to fail: one per line, `#` comments, see unescape()."""
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
         return set()
-    return {ln for ln in lines if ln and not ln.startswith("#")}
+    return {unescape(ln) for ln in lines if ln and not ln.startswith("#")}
+
+
+def annotation(line):
+    """`line` as a GitHub workflow error command, with the characters that end or split one escaped."""
+    escaped = line.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error title=unit-test oracle::{escaped}"
 
 
 def parse_report(text):
@@ -84,9 +95,9 @@ def compare(group, node, jsse, known):
             f"Node passed {sum(n_pass.values())} tests, the group pins {group.tests}"
         )
     ran = j_pass + j_fail + j_pend
-    for title in sorted(set(n_pass) - set(ran)):
+    for title in sorted(n_pass - ran):
         problems.append(f"did not run on jsse: {title}")
-    for title in sorted(set(ran) - set(n_pass)):
+    for title in sorted(ran - n_pass):
         problems.append(f"ran only on jsse: {title}")
     for title in sorted(set(j_fail) | set(j_pend)):
         if title in n_pass and title not in known:
@@ -294,7 +305,7 @@ def main():
     for line in lines:
         print(line)
         if o.ci:
-            print(f"::error title=unit-test oracle::{line}")
+            print(annotation(line))
     secs = ", ".join(f"{rs:.0f}s/{gs:.0f}s" for _, rs, gs, _ in results)
     rows = [r for rs in results for r in rs[0]]
     total = {

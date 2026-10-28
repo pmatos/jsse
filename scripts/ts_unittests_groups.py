@@ -60,7 +60,7 @@ GROUPS = [
     ),
 ]
 
-DESCRIBE = re.compile(r'^describe\("([^"]+)"', re.M)
+DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*["'`]([^"'`]+)["'`]""", re.M)
 
 
 def top_level_titles(ts_dir):

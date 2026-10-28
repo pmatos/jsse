@@ -2,7 +2,7 @@
 //! Node, test by test: `scripts/run-ts-unittests-oracle.py` runs mocha on `built/local/run.js` per group of
 //! files and fails on a test that passes on Node and not on jsse unless `ts-suite/unittests-core-known-failures.txt`
 //! lists it. The case below runs a few small groups when TS_SRC_DIR points at a built TypeScript 6.0.3 checkout;
-//! the whole set takes about six minutes and is run by hand or by the nightly job.
+//! the whole set takes about six minutes and is run by hand (the nightly TypeScript-suite job is #1298).
 
 use std::path::Path;
 use std::process::Command;
