@@ -1,8 +1,12 @@
+import contextlib
 import importlib.util
+import io
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 ORACLE = SCRIPTS_DIR / "run-ts-unittests-tsc-oracle.py"
@@ -18,6 +22,13 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(list(oracle.GROUPS)[0], "tsc-cancellationToken")
         self.assertTrue(oracle.BASELINE.endswith("ts-suite/unittests-tsc.json"))
         self.assertEqual(oracle.SUITE_OF, {"tsc": "tsc-"})
+
+    def test_main_lists_the_tsc_groups(self):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["oracle", "--list"]):
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(oracle.main(), 0)
+        self.assertEqual(out.getvalue().split(), list(oracle.GROUPS))
 
     def test_each_title_belongs_to_exactly_one_group(self):
         titles = (
