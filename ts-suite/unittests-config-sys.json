@@ -1,0 +1,55 @@
+{
+ "counts": {
+  "config-commandLineParsing": {
+   "passing": 80,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-configurationExtension": {
+   "passing": 8,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-convertCompilerOptionsFromJson": {
+   "passing": 54,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-convertTypeAcquisitionFromJson": {
+   "passing": 16,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-initTSConfig": {
+   "passing": 11,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-matchFiles": {
+   "passing": 142,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-showConfig": {
+   "passing": 148,
+   "failing": 0,
+   "pending": 0
+  },
+  "config-tsconfigParsing": {
+   "passing": 60,
+   "failing": 0,
+   "pending": 0
+  },
+  "sys-symlinkWatching": {
+   "passing": 16,
+   "failing": 0,
+   "pending": 0
+  },
+  "debugDeprecation": {
+   "passing": 6,
+   "failing": 0,
+   "pending": 0
+  }
+ },
+ "known_failures": {}
+}
