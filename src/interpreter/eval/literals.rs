@@ -1261,7 +1261,7 @@ impl Interpreter {
     }
 
     /// CopyDataProperties (§7.3.26) — copies own enumerable properties from source
-    /// to target obj_data. Properly handles Proxy traps and Symbol keys.
+    /// to target obj_data. Handles Proxy traps and Symbol keys.
     ///
     /// Each already-fetched `val` is rooted for the rest of the loop: a later
     /// key's getter (or proxy trap) can run arbitrary code that reaches a GC
@@ -1300,52 +1300,8 @@ impl Interpreter {
                 if excluded.contains(&key_str) {
                     continue;
                 }
-                let is_enumerable = if interp.get_proxy_info(src_id).is_some() {
-                    let target_proxy_val = interp.get_proxy_target_val(src_id);
-                    match interp.invoke_proxy_trap(
-                        src_id,
-                        "getOwnPropertyDescriptor",
-                        vec![target_proxy_val, key_val.clone()],
-                    ) {
-                        Ok(Some(v)) => {
-                            if v.is_undefined() {
-                                continue;
-                            }
-                            if let Some(dobj) =
-                                (v).as_object_id().map(|id| crate::types::JsObject { id })
-                                && let Some(desc_rc) = interp.get_object_cell(dobj.id)
-                            {
-                                match desc_rc.borrow().get_property_value("enumerable") {
-                                    Some(ev) => interp.to_boolean_val(&ev),
-                                    None => false,
-                                }
-                            } else {
-                                continue;
-                            }
-                        }
-                        Ok(None) => {
-                            if let Some(obj) = interp.get_object_cell(src_id) {
-                                let desc = obj.borrow().get_own_property(&key_str);
-                                match desc {
-                                    Some(d) => d.enumerable != Some(false),
-                                    None => continue,
-                                }
-                            } else {
-                                continue;
-                            }
-                        }
-                        Err(e) => return Err(e),
-                    }
-                } else if let Some(obj) = interp.get_object_cell(src_id) {
-                    let desc = obj.borrow().get_own_property(&key_str);
-                    match desc {
-                        Some(d) => d.enumerable != Some(false),
-                        None => continue,
-                    }
-                } else {
-                    continue;
-                };
-                if !is_enumerable {
+                let desc = interp.proxy_get_own_property_native(src_id, &key_str)?;
+                if desc.is_none_or(|d| d.enumerable == Some(false)) {
                     continue;
                 }
                 let val = match interp.get_object_property(src_id, &key_str, src_val) {
