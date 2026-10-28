@@ -1,0 +1,9 @@
+exit 1
+file://<dir>/fatal-esm-exit-code.fixture.mjs:7
+throw new Error("exit code");
+      ^
+
+Error: exit code
+    at file://<dir>/fatal-esm-exit-code.fixture.mjs:7:7
+
+Node.js <version>

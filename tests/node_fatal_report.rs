@@ -19,6 +19,10 @@ fn normalise(stderr: &str, dir: &Path) -> String {
     let mut out = String::new();
     for line in text.lines() {
         let trimmed = line.trim_start();
+        let trimmed = trimmed
+            .strip_prefix("\x1b[90m")
+            .unwrap_or(trimmed)
+            .trim_start();
         let internal = trimmed.strip_prefix("at ").is_some_and(|frame| {
             let frame = frame.strip_prefix("async ").unwrap_or(frame);
             frame.starts_with("node:") || frame.contains(" (node:")
@@ -41,15 +45,16 @@ fn normalise(stderr: &str, dir: &Path) -> String {
     out
 }
 
-fn expected_status(fixture: &Path) -> i32 {
-    std::fs::read_to_string(fixture)
-        .unwrap()
-        .lines()
-        .find_map(|l| l.strip_prefix("// RUN:"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap()
+fn header(text: &str, key: &str) -> Vec<String> {
+    let prefix = format!("// {key}:");
+    text.lines()
+        .filter_map(|l| l.strip_prefix(&prefix))
+        .map(|v| v.trim().to_string())
+        .collect()
+}
+
+fn expected_status(text: &str) -> i32 {
+    header(text, "RUN")[0].parse().unwrap()
 }
 
 fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
@@ -69,9 +74,26 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
         if skip.contains(&name) {
             continue;
         }
-        let fixture = dir.join(format!("{name}.fixture.js"));
+        let fixture = ["js", "mjs"]
+            .map(|ext| dir.join(format!("{name}.fixture.{ext}")))
+            .into_iter()
+            .find(|path| path.exists())
+            .unwrap_or_else(|| panic!("no fixture for {name}.stderr"));
+        let text = std::fs::read_to_string(&fixture).unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_jsse"));
-        cmd.arg("--node").args(args).arg(&fixture);
+        cmd.arg("--node").args(args).current_dir(&dir);
+        if header(&text, "MODE").iter().any(|mode| mode == "eval") {
+            cmd.arg("-e").arg(text.trim_end_matches('\n'));
+        } else {
+            cmd.arg(&fixture);
+        }
+        for name in ["FORCE_COLOR", "NO_COLOR", "NODE_DISABLE_COLORS"] {
+            cmd.env_remove(name);
+        }
+        for pair in header(&text, "ENV") {
+            let (name, value) = pair.split_once('=').unwrap();
+            cmd.env(name, value);
+        }
         if gc_stress {
             cmd.env("JSSE_GC_STRESS", "7");
         }
@@ -81,12 +103,12 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
         assert_eq!(got, expected, "{name} {args:?}");
         assert_eq!(
             out.status.code(),
-            Some(expected_status(&fixture)),
+            Some(expected_status(&text)),
             "{name} {args:?}"
         );
         checked += 1;
     }
-    assert!(checked > 30, "only {checked} fixtures with expectations");
+    assert!(checked > 40, "only {checked} fixtures with expectations");
 }
 
 #[test]

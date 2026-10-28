@@ -717,13 +717,13 @@ impl Interpreter {
                             ($o:expr) => {
                                 $o.class_name = "AggregateError".into();
                                 $o.prototype_id = Some(proto);
-                                $o.insert_builtin("errors".to_string(), errors_arr.clone());
                                 if let Some(ref ms) = msg_str {
                                     $o.insert_builtin("message".to_string(), ms.clone());
                                 }
                                 if let Some(ref cv) = cause_val {
                                     $o.insert_builtin("cause".to_string(), cv.clone());
                                 }
+                                $o.insert_builtin("errors".to_string(), errors_arr.clone());
                             };
                         }
 

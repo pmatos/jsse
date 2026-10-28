@@ -26,7 +26,7 @@ struct PendingName {
 
 #[derive(Default)]
 pub(crate) struct NodeStackState {
-    pub(super) installed: bool,
+    pub(crate) installed: bool,
     pub(super) sources: Vec<SourceEntry>,
     pub(super) scripts: Vec<(Rc<str>, String)>,
     /// Keyed by the address of the source's allocation; an entry whose source
@@ -35,11 +35,24 @@ pub(crate) struct NodeStackState {
     prune_at: usize,
     /// Native functions standing in for a running `vm` script's top level.
     pub(super) script_frames: Vec<(u64, Rc<str>)>,
+    /// The parse origin of each ES module's source, for its top-level frame.
+    pub(super) module_origins: HashMap<crate::interpreter::ModuleKey, Rc<str>>,
+    /// Stand-in frames of module bodies, and the (hidden, by) pairs where one
+    /// runs inside another's frame.
+    pub(super) module_frames: Vec<u64>,
+    pub(super) hidden_frames: Vec<(u64, u64)>,
     /// The last few thrown values with the source id and offset plus one of
     /// their `throw`; traced by the collector.
     pub(crate) throws: Vec<(JsValue, usize, u32)>,
     /// The source of the last noted throw, its id and whether it is a `node:` one.
     pub(super) throw_source: Option<(Rc<str>, usize, bool)>,
+    /// The `-e` source, and whether its program has yet to run under the
+    /// `[eval]` stand-in frames.
+    pub(crate) eval_origin: Option<Rc<str>>,
+    pub(super) eval_armed: bool,
+    /// The receiver each running arrow function was called with, by frame
+    /// index: V8 names an arrow's frame after it (`Timeout._onTimeout`).
+    pub(crate) arrow_receivers: Vec<(usize, JsValue)>,
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a

@@ -1,0 +1,9 @@
+[eval]:3
+const make = () => new RangeError('made');
+                   ^
+
+RangeError: made
+    at make ([eval]:3:20)
+    at [eval]:5:9
+
+Node.js <version>

@@ -7,8 +7,10 @@
 #
 # 1. Every test in scripts/events-fixtures/manifest.txt (Node's own
 #    test/parallel files, verbatim) is wrapped by scripts/events-fixtures/harness.js
-#    (.mjs tests: their common and node:test imports point at esm-shim.mjs) and
+#    (.mjs tests: their common, common/gc and node:test imports point at esm-shim.mjs) and
 #    must print "events-fixture: ok" and exit 0 on jsse (`--node`) and on Node.
+#    A test whose "// Flags:" line names --expose-internals runs with that flag
+#    on both (the jsse switch is --node only).
 #    Subtests jsse cannot run are skipped by name in harness.js; manifest lines
 #    starting with "!" record the Node tests that are not vendored, and why.
 # 2. scripts/events-fixtures/corpus-emitter.js followed by corpus-web.js (events,
@@ -50,26 +52,58 @@ if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
 fi
 
 FAIL=0
-while read -r name; do
-    case "$name" in ""|"#"*|"!"*) continue ;; esac
+while read -r name sum; do
+    case "$name" in ""|"#"*|"!"*|"~"*) continue ;; esac
+    src="$DIR/$name.js"
+    if [[ "$name" == *.mjs ]]; then
+        src="$DIR/$name"
+    elif [ ! -f "$src" ]; then
+        src="$WORK/$name.src"
+        cat $(ls "$DIR/$name".js.part* | sort -V) > "$src"
+        if [ "$(sha256sum "$src" | cut -d' ' -f1)" != "$sum" ]; then
+            echo "FAIL $name: vendored text does not match sha256 $sum"
+            FAIL=1
+            continue
+        fi
+    fi
+    flags=()
+    if grep -qE '^// Flags:.*--expose-internals' "$src"; then
+        flags=(--expose-internals)
+    fi
     if [[ "$name" == *.mjs ]]; then
         file="$WORK/$name"
         cp "$DIR/esm-shim.mjs" "$WORK/esm-shim.mjs"
-        sed -E -e "s#(['\"])../common/index.mjs\1#\1./esm-shim.mjs\1#" -e "s#(['\"])node:test\1#\1./esm-shim.mjs\1#" \
+        sed -E -e "s#(['\"])../common/index.mjs\1#\1./esm-shim.mjs\1#" -e "s#(['\"])../common/gc.js\1#\1./esm-shim.mjs\1#" -e "s#(['\"])node:test\1#\1./esm-shim.mjs\1#" \
             "$DIR/$name" > "$file"
     else
         file="$WORK/$name.js"
         {
             cat "$DIR/harness.js"
             echo "try { (function (require, __filename, __dirname) {"
-            cat "$DIR/$name.js"
+            cat "$src"
             printf '\n})(__eventsRequire, "/node/test/parallel/%s.js", "/node/test/parallel"); } finally { __eventsFinish(); }\n' "$name"
         } > "$file"
+    fi
+    jfile="$file"
+    if grep -q "^~$name|" "$DIR/manifest.txt"; then
+        jfile="$WORK/$name.jsse.js"
+        cp "$file" "$jfile"
+        while IFS='|' read -r _ expr _; do
+            python3 -I - "$expr" "$jfile" <<'PY'
+import sys
+expr, path = sys.argv[1:]
+frm, to = expr[2:-1].split("#", 1)
+text = open(path, encoding="utf-8").read()
+if frm not in text:
+    sys.exit("patch does not apply: " + frm)
+open(path, "w", encoding="utf-8").write(text.replace(frm, to))
+PY
+        done < <(grep "^~$name|" "$DIR/manifest.txt")
     fi
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then
         rc=0
-        "$JSSE" --node "$file" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
+        "$JSSE" --node ${flags[@]+"${flags[@]}"} "$jfile" > "$WORK/jsse.out" 2> "$WORK/jsse.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/jsse.out"; then
             echo "FAIL $name: jsse --node exit $rc"
             head -5 "$WORK/jsse.err" | sed 's/^/  stderr: /'
@@ -78,7 +112,7 @@ while read -r name; do
     fi
     if [ "$CROSS_CHECK" -eq 1 ] || [ "$NODE_ONLY" -eq 1 ]; then
         rc=0
-        "$NODE_BIN" --expose-gc --no-warnings "$file" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
+        "$NODE_BIN" --expose-gc --no-warnings ${flags[@]+"${flags[@]}"} "$file" > "$WORK/node.out" 2> "$WORK/node.err" < /dev/null || rc=$?
         if [ "$rc" -ne 0 ] || ! grep -qxF "events-fixture: ok" "$WORK/node.out"; then
             echo "FAIL $name: node exit $rc"
             head -5 "$WORK/node.err" | sed 's/^/  stderr: /'

@@ -1,0 +1,9 @@
+file://<dir>/fatal-esm-dep.helper.mjs:2
+  throw new Error("in dependency");
+        ^
+
+Error: in dependency
+    at fail (file://<dir>/fatal-esm-dep.helper.mjs:2:9)
+    at file://<dir>/fatal-esm-dep.helper.mjs:4:1
+
+Node.js <version>

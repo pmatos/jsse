@@ -67,7 +67,12 @@ for its whole life.
   reports them; symlinked directories are not followed; `ignore` also prunes
   the walk. Node's own recursive watcher (a watch per file with stat
   comparisons) reports a different multiset of events, so the oracle compares
-  only that the expected name is reported.
+  only that the expected name is reported. The one self-event that is acted on
+  is the kernel dropping a sub-directory's watch (`IN_IGNORED`, bit 8): the
+  tree then watches whatever directory is at that path. The parent's inode
+  comparison cannot cover this, because ext4 reuses a removed directory's inode
+  number for the next `mkdir`, so a replacement looked like the dead directory
+  and was never watched again (#1377).
 - **`watchFile`** is libuv's `uv_fs_poll` over a timer (`stat_watcher.js`): the
   first poll reports only a failure, later polls compare ctime, mtime,
   birthtime, size, mode, uid, gid, ino and dev, a missing path reports all-zero

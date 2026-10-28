@@ -1,0 +1,8 @@
+<dir>/fatal-arrow-handler.fixture.js:4
+  throw new Error('thrown by a handler');
+  ^
+
+Error: thrown by a handler
+    at process.<anonymous> (<dir>/fatal-arrow-handler.fixture.js:4:9)
+
+Node.js <version>

@@ -1,0 +1,39 @@
+# name | project | tsc arguments | steps (` ;; ` separated; see scripts/run-tsc-watch-oracle.py). Issue #1248.
+watch-edit | watch | -w -p . | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @replace src/util.ts "'x'" "4" ;; @wait
+watch-create | watch | -w -p . | @write src/extra.ts "export const extra: number = 1;\n" ;; @wait ;; @append src/main.ts "import { extra } from './extra';\nexport const again: number = extra;\n" ;; @wait ;; @mkdir src/deep ;; @write src/deep/more.ts "export const more: string = 1;\n" ;; @wait
+watch-delete | watch | -w -p . | @remove src/lib/helper.ts ;; @wait ;; @write src/lib/helper.ts "export const name: string = 'back';\n" ;; @wait ;; @remove vendor/vendored.ts ;; @wait ;; @remove src/lib ;; @wait
+watch-rename | watch | -w -p . | @rename src/util.ts src/calc.ts ;; @wait ;; @replace src/main.ts "./util" "./calc" ;; @wait
+watch-atomic-save | watch | -w -p . | @write src/util.ts.tmp "export function add(a: number, b: number): string {\n  return 'x';\n}\n" ;; @rename src/util.ts.tmp src/util.ts ;; @wait ;; @write src/util.ts.tmp "export function add(a: number, b: number): number {\n  return a + b;\n}\n" ;; @rename src/util.ts.tmp src/util.ts ;; @wait
+watch-burst | watch | -w -p . | @append src/util.ts "export const one: number = 'a';\n" ;; @append src/util.ts "export const two: number = 'b';\n" ;; @append src/lib/helper.ts "export const three: number = 'c';\n" ;; @write src/burst.ts "export const four: number = 'd';\n" ;; @wait
+watch-touch | watch | -w -p . | @touch src/util.ts ;; @idle 2
+watch-config-edit | watch | -w -p . | @replace tsconfig.json "\"strict\": true" "\"strict\": false, \"noUnusedLocals\": true" ;; @wait ;; @append src/util.ts "const unused = 1;\n" ;; @wait ;; @replace tsconfig.json "\"include\": [\"src\", \"vendor\"]" "\"include\": [\"src\"]" ;; @wait
+watch-config-broken | watch | -w -p . | @write tsconfig.json "{ \"compilerOptions\": { \"noLib\": \n" ;; @wait ;; @write tsconfig.json "{ \"compilerOptions\": { \"noLib\": true, \"strict\": true, \"outDir\": \"out\" }, \"files\": [\"globals.d.ts\", \"src/main.ts\"] }\n" ;; @wait
+watch-config-removed | watch | -w -p . | @exits ;; @remove tsconfig.json ;; @wait
+watch-preserve | watch | -w -p . --preserveWatchOutput | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @replace src/util.ts "'x'" "4" ;; @wait
+watch-pretty | watch | -w -p . --pretty | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @replace src/util.ts "'x'" "4" ;; @wait
+watch-no-pretty-forced | watch | -w -p . --pretty false | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait
+watch-noemit | watch | -w -p . --noEmit | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @replace src/util.ts "'x'" "4" ;; @wait
+watch-noemit-on-error | watch | -w -p . --noEmitOnError | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @replace src/util.ts "'x'" "4" ;; @wait
+watch-listemitted | watch | -w -p . --listEmittedFiles | @append src/util.ts "export const more: number = 4;\n" ;; @wait
+watch-listfiles | watch | -w -p . --listFiles | @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-diagnostics | watch | -w -p . --extendedDiagnostics | @append src/util.ts "export const more: number = 4;\n" ;; @wait
+watch-declaration | watch | -w -p . --declaration --sourceMap | @append src/util.ts "export const more: number = 4;\n" ;; @wait ;; @replace src/util.ts "4" "'four'" ;; @wait
+watch-incremental | watch | -w -p . --incremental | @append src/util.ts "export const more: number = 4;\n" ;; @wait ;; @append src/util.ts "export const bad: number = 'x';\n" ;; @wait
+watch-files-only | watch | -w --ignoreConfig --noLib --outDir out2 globals.d.ts src/main.ts | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @remove src/lib/helper.ts ;; @wait ;; @write src/lib/helper.ts "export const name: string = 'back';\n" ;; @wait
+watch-fixed-polling | watch | -w -p . --watchFile fixedPollingInterval --watchDirectory fixedPollingInterval | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @write src/extra.ts "export const extra: number = 1;\n" ;; @wait ;; @remove src/extra.ts ;; @wait
+watch-priority-polling | watch | -w -p . --watchFile priorityPollingInterval --watchDirectory dynamicPriorityPolling | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-dynamic-polling | watch | -w -p . --watchFile dynamicPriorityPolling --watchDirectory fixedChunkSizePolling | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-fs-events-parent | watch | -w -p . --watchFile useFsEventsOnParentDirectory --watchDirectory useFsEvents | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @write src/extra.ts "export const extra: number = 1;\n" ;; @wait ;; @remove src/extra.ts ;; @wait
+watch-fs-events | watch | -w -p . --watchFile useFsEvents --watchDirectory useFsEvents --fallbackPolling dynamicPriority | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-sync-dir | watch | -w -p . --synchronousWatchDirectory | @write src/extra.ts "export const extra: number = 1;\n" ;; @wait ;; @mkdir src/sub ;; @write src/sub/a.ts "export const a: string = 2;\n" ;; @wait
+watch-exclude-idle | watch | -w -p . --excludeDirectories vendor | @write vendor/created.ts "export const created: string = 1;\n" ;; @idle 2 ;; @append src/util.ts "export const more: number = 4;\n" ;; @wait
+watch-exclude-files-idle | watch | -w -p . --excludeFiles src/lib/created.ts | @write src/lib/created.ts "export const created: string = 1;\n" ;; @idle 2 ;; @append src/util.ts "export const more: number = 4;\n" ;; @wait
+watch-exclude-dirs | watch | -w -p . --excludeDirectories vendor | @append vendor/vendored.ts "export const bad: number = 'x';\n" ;; @append src/util.ts "export const more: number = 4;\n" ;; @wait
+watch-exclude-files | watch | -w -p . --excludeFiles src/lib/helper.ts | @append src/lib/helper.ts "export const bad: number = 'x';\n" ;; @append src/util.ts "export const more: number = 4;\n" ;; @wait
+watch-config-options | watch | -w -p tsconfig.opts.json | @write vendor/created.ts "export const created: string = 1;\n" ;; @idle 2 ;; @append vendor/vendored.ts "export const bad: number = 'x';\n" ;; @wait ;; @write src/lib/skipped.ts "export const skipped: number = 1;\n" ;; @wait ;; @append src/util.ts "export const more: number = 4;\n" ;; @wait ;; @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-env-file | watch | TSC_WATCHFILE=PriorityPollingInterval -w -p . | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait
+watch-env-dir | watch | TSC_WATCHDIRECTORY=RecursiveDirectoryUsingDynamicPriorityPolling -w -p . | @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-env-nonpolling | watch | TSC_NONPOLLING_WATCHER=1 -w -p . | @write src/extra.ts "export const extra: number = 1;\n" ;; @wait
+watch-lib | watch | -w -p . --noLib false --lib es2020 | @append src/util.ts "export const bad: number = 'x';\n" ;; @wait ;; @append src/util.ts "export const set: Set<number> = new Set([1]);\n" ;; @wait
+watch-build | chain | -b -w -v | @append core/src/index.ts "export const added: number = 1;\n" ;; @wait ;; @append util/src/index.ts "export const bad: string = 1;\n" ;; @wait
+watch-build-errors | chain | -b -w | @append util/src/index.ts "export const bad: string = 1;\n" ;; @wait ;; @replace util/src/index.ts "bad: string = 1" "bad: string = 'ok'" ;; @wait

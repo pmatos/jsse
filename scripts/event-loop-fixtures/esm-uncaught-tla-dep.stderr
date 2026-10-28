@@ -1,0 +1,9 @@
+tick 1
+tick 2
+tick 3
+tick 4
+handler unhandledRejection main
+tick 5
+tick 6
+tick 7
+tick 8

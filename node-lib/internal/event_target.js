@@ -51,6 +51,11 @@ const {
   kTrustEvent,
 } = require('internal/event_target_event');
 
+const {
+  kHybridDispatch,
+  kIsNodeStyleListener,
+} = require('internal/events/symbols');
+
 const kIsEventTarget = SymbolFor('nodejs.event_target');
 
 const EventEmitter = require('events');
@@ -64,12 +69,10 @@ const kHandlers = Symbol('kHandlers');
 const kWeakHandler = Symbol('kWeak');
 const kResistStopPropagation = Symbol('kResistStopPropagation');
 
-const kHybridDispatch = SymbolFor('nodejs.internal.kHybridDispatch');
 const kRemoveWeakListenerHelper = Symbol('kRemoveWeakListenerHelper');
 const kCreateEvent = Symbol('kCreateEvent');
 const kNewListener = Symbol('kNewListener');
 const kRemoveListener = Symbol('kRemoveListener');
-const kIsNodeStyleListener = Symbol('kIsNodeStyleListener');
 
 // Weak listener cleanup
 // This has to be lazy for snapshots to work
@@ -647,8 +650,14 @@ module.exports = {
   Event,
   CustomEvent,
   EventTarget,
+  get NodeEventTarget() {
+    return require('internal/event_target_node').NodeEventTarget;
+  },
   defineEventHandler,
   initEventTarget,
+  get initNodeEventTarget() {
+    return require('internal/event_target_node').initNodeEventTarget;
+  },
   kCreateEvent,
   kNewListener,
   kTrustEvent,

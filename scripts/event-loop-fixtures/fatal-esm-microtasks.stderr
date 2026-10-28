@@ -1,0 +1,13 @@
+m1
+m2
+m3
+m4
+exit
+file://<dir>/fatal-esm-microtasks.fixture.mjs:10
+throw new Error("microtasks");
+      ^
+
+Error: microtasks
+    at file://<dir>/fatal-esm-microtasks.fixture.mjs:10:7
+
+Node.js <version>

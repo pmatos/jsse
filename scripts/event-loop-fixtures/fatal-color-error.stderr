@@ -1,0 +1,15 @@
+<dir>/fatal-color-error.fixture.js:10
+throw error;
+^
+
+RangeError: outer
+    at Object.<anonymous> [90m(<dir>/[39mfatal-color-error.fixture.js:6:15[90m)[39m
+[90m    ... N lines matching cause stack trace ...[39m
+  code: [32m'E_COLOR'[39m,
+  count: [33m5[39m,
+  nested: { list: [ [33m1[39m, [33m2[39m ], missing: [90mundefined[39m, tag: [32mSymbol(t)[39m },
+  [cause]: TypeError: inner
+      at Object.<anonymous> [90m(<dir>/[39mfatal-color-error.fixture.js:5:15[90m)[39m
+}
+
+Node.js <version>

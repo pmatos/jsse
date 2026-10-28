@@ -1,0 +1,119 @@
+## keys: message
+["stack","message"]
+## keys: no message
+["stack"]
+## keys: cause
+["stack","message","cause"]
+## keys: aggregate
+["stack","message","errors"]
+## keys: subclass
+["stack","message"]
+## keys: engine error
+["stack","message"]
+## keys: captureStackTrace appends
+["a","stack"]
+## exports.member
+Error: exports
+    at exports.validateLegacyPlugin (<dir>/names.js:37:12)
+    at caseInferred (<dir>/names.js:39:34)
+## alias keeps the inferred name
+Error: exports
+    at exports.validateLegacyPlugin (<dir>/names.js:37:12)
+    at caseInferred (<dir>/names.js:41:41)
+## nested member
+Error: deep
+    at a.b.deep.fn (<dir>/names.js:45:12)
+    at caseInferred (<dir>/names.js:47:34)
+## string-literal key
+Error: string key
+    at a.str (<dir>/names.js:50:12)
+    at caseInferred (<dir>/names.js:52:32)
+## index key
+Error: index key
+    at a.<computed> (<dir>/names.js:55:12)
+    at caseInferred (<dir>/names.js:57:25)
+## arrow member
+Error: arrow
+    at a.arrow (<dir>/names.js:59:19)
+    at caseInferred (<dir>/names.js:60:26)
+## logical assignment
+Error: nullish
+    at a.nullish (<dir>/names.js:63:12)
+    at caseInferred (<dir>/names.js:65:32)
+## conditional branch
+Error: conditional
+    at a.choice (<dir>/names.js:69:16)
+    at caseInferred (<dir>/names.js:72:32)
+## parenthesis inside the body
+Error: body paren
+    at <dir>/names.js:75:19
+    at a.paren (<dir>/names.js:75:43)
+    at caseInferred (<dir>/names.js:77:41)
+## parenthesized function
+Error: parenthesized function
+    at Object.fn (<dir>/names.js:80:12)
+    at caseInferred (<dir>/names.js:82:42)
+## parenthesized arrow
+Error: parenthesized arrow
+    at Object.arrow (<dir>/names.js:83:26)
+    at caseInferred (<dir>/names.js:84:39)
+## parenthesized class
+Error: parenthesized class
+    at new wrapper.cls (<dir>/names.js:87:20)
+    at caseInferred (<dir>/names.js:90:31)
+## assignment chain
+Error: chain
+    at a.first.a.second (<dir>/names.js:92:12)
+    at caseInferred (<dir>/names.js:94:30)
+## prototype member
+Error: prototype
+    at Widget.render (<dir>/names.js:98:12)
+    at caseInferred (<dir>/names.js:100:41)
+## static member
+Error: static
+    at Widget.build (<dir>/names.js:102:12)
+    at caseInferred (<dir>/names.js:104:32)
+## class
+Error: class
+    at new a.klass (<dir>/names.js:108:20)
+    at caseInferred (<dir>/names.js:111:17)
+## this member
+Error: this
+    at Object.viaThis (<dir>/names.js:116:14)
+    at caseInferred (<dir>/names.js:119:6)
+## a real name wins
+Error: named
+    at Object.field (<dir>/names.js:123:12)
+    at caseInferred (<dir>/names.js:125:34)
+## call site names
+[["names.fn","fn","Object"]]
+## arrow.call(object)
+Error: arrow
+    at Context.arrow (<dir>/names.js:143:23)
+    at caseArrowReceivers (<dir>/names.js:144:36)
+## arrow.call(string)
+Error: arrow
+    at String.arrow (<dir>/names.js:143:23)
+    at caseArrowReceivers (<dir>/names.js:145:36)
+## arrow.call(number)
+Error: arrow
+    at Number.arrow (<dir>/names.js:143:23)
+    at caseArrowReceivers (<dir>/names.js:146:36)
+## arrow.call(null prototype)
+Error: arrow
+    at Object.arrow (<dir>/names.js:143:23)
+    at caseArrowReceivers (<dir>/names.js:147:44)
+## arrow.call(undefined)
+Error: arrow
+    at arrow (<dir>/names.js:143:23)
+    at caseArrowReceivers (<dir>/names.js:148:39)
+## callback
+Error: callback
+    at Context.<anonymous> (<dir>/names.js:150:30)
+    at run (<dir>/names.js:149:26)
+    at caseArrowReceivers (<dir>/names.js:150:20)
+## async arrow body
+Error: async sync
+    at Context.sync (<dir>/names.js:156:13)
+    at asyncSynchronous (<dir>/names.js:158:8)
+    at caseAsyncArrows (<dir>/names.js:163:28)

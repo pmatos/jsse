@@ -41,7 +41,7 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    not one). The body is `util.inspect(error, { customInspect: false, depth: 5 })`
    from the embedded util, so own properties, `[cause]`, `[errors]` and the
    `... N lines matching cause stack trace ...` elision come from Node's code.
-   Colours are never used.
+   Colours follow `shouldColorize(process.stderr)` (item 8).
 3. **The header's position.** Node reports the V8 message location: the
    `throw` keyword for a synchronous throw (even of an error built elsewhere,
    and of primitives, which have no stack), the top stack frame for a
@@ -79,25 +79,81 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
    holds them (`Timeout._onTimeout`, `Module._compile`), which V8 infers;
    `process.constructor.name` is `process`.
 
+6. **The ES module entry point.** Node runs an ES main in an async loader, so
+   its failure is a rejection delivered to `triggerUncaughtException(err, true)`,
+   not a synchronous throw. jsse does the same: `Interpreter::node_uncaught_entry`
+   calls the shim's `triggerUncaught(error, 'unhandledRejection', hops)`, which
+   waits `hops` microtask turns first (4, one more when the main module itself
+   has a top-level `await`, whether it threw before or after it, and whether
+   or not a dependency awaited; measured on Node 26.8, stable over runs and
+   chain lengths), so the microtasks the module queued run before `exit` and the
+   report, and the tick and immediate queues never do. The origin is
+   `unhandledRejection` for `uncaughtExceptionMonitor` and `uncaughtException`,
+   no `unhandledRejection` event fires, and a non-error value is not wrapped:
+   the report is the loader's literal header (`node:internal/modules/run_main:107`
+   / `triggerUncaughtException(`) and the raw value. An error's header follows
+   its top frame, as for any rejection. A failing `await` of the main module was
+   also delivered a second time through the first run's completion;
+   `NodeEsm::entry_reported` stops that.
+7. **Module top-level frames.** A module body has no function, so its errors had
+   no frame (`[Error: m]`). `builtins/node_host_module_frame.rs` runs each module
+   body, and every resumption of a top-level `await`, under a native stand-in
+   frame (the `vm` script mechanism), named by the module's `file:` URL; the
+   parse origin of each module source is recorded where it is parsed. The async
+   state-machine rewrites in `generator_transform.rs` keep a call's source
+   position (they used to reset it, so calls after a `await` reported 1:1).
+   When a dependency's `await` settles it evaluates its importers inside its
+   own frame; that frame is hidden while theirs runs, so a stack has only the
+   module that made the error.
+
+8. **`-e`, colours and arrow receivers.** `node -e` runs the text as the script
+   `[eval]`, reached from `[eval]-wrapper:6:24` through Node's internal frames.
+   The CLI hands the parse origin of the `-e` source to
+   `Interpreter::node_note_eval_origin`, and `builtins/node_host_eval_frame.rs`
+   runs the program (still on the global environment, so semantics are
+   untouched) under eight native stand-in frames: Node 26.8's chain with its
+   literal internal positions (as in item 4) around `[eval]-wrapper` and the
+   program's own `[eval]` frame. `node_note_throw` accepts a non-module
+   stand-in frame as the throwing function, so a top-level `throw` has a site
+   and the header is `[eval]:N`; its text is served by
+   `__host_stack_eval_source`. The sync throw of the program itself is
+   reported with mode `eval` (`triggerUncaught(.., -1)`): Node lays an object
+   out as header, blank line, inspect (no leading blank line), and prefixes the
+   `stack` string of any object it throws with the excerpt before
+   `uncaughtExceptionMonitor`/`uncaughtException` run (`decorate` in
+   `fatal.js`; the report then does not repeat the header). Colours: both
+   `inspect` calls pass `colors: shouldColorize(process.stderr)`, which is Node's
+   `FORCE_COLOR`/TTY rule (`NO_COLOR` does not override `FORCE_COLOR`); the
+   header, the raw primitive and the version line stay plain. An arrow
+   function's frame is named after the receiver it was *called* with, as
+   V8 does (`Timeout._onTimeout`, `process.<anonymous>`, `Object.method`):
+   `run_activation` keeps that receiver in a side stack (traced by the
+   collector) while the hooks are installed, so default mode pays one
+   `Option` check per arrow call.
+
 ## Known differences from Node
 
 - Internal frames: their names, count and line numbers differ from Node's.
   The oracle drops every `    at ... node:...` line.
 - An engine-thrown error (`null.x`) has the V8-errors gap (position of the
   throwing frame's latest call), so its caret column is not Node's.
-- A throw at script top level (`-e`, the REPL, an ES module's top level) has
-  no frame, so no throw site and no header; `-e` does not print `[eval]:1`.
-- An ES module reports `path:line` where Node prints `file://path:line`, and
-  its caret follows the top frame as in Node (a module's error is a rejection).
-- Arrow functions have no receiver type, so `process.<anonymous>` reads
-  `<anonymous>` (fixtures use `function` handlers).
+- The REPL has no frames or throw sites. `-e --input-type=module` is not
+  framed (`[eval1]`).
+- The microtask turns before an ES entry point's report were measured for the
+  main module throwing, with or without a top-level `await` or a dependency
+  that awaits; a dependency whose own top-level `await` rejects was not.
+- An async arrow keeps no call-time receiver (its frame reads `<anonymous>`).
 - A throw inside a generator or an async state machine, or followed by a later
   throw of another value before the report (only the last throw is
   remembered), falls back to the error's top frame. Positions in `eval` code
   are resolved against the enclosing function's source, as call positions are
   (V8-errors gap).
-- Colours are never used, though Node colours the report on a terminal or with
-  `FORCE_COLOR`.
+- Coloured, jsse greys `node:` frames of the modules the embedded `inspect`
+  knows as builtins only; Node's `bootstrap/realm` and `main/` frames are
+  plain in jsse's own chain (the oracle drops them).
+- A throw inside `eval()` or `new Function` code takes the enclosing frame's
+  position (V8-errors gap), so `-e 'eval("throw ...")'` shows an `[eval]`
+  header where Node shows `<anonymous_script>`.
 - Under `--no-bytecode` an Error made in an async function's synchronous part
   lacks that function's frame (#1358), so `fatal-reject-async` is skipped in the
   tree-walker run of `tests/node_fatal_report.rs`.
@@ -105,7 +161,14 @@ non-errors, no header, and its loader frames read `<anonymous>:N:M`.
 
 ## Verification
 
-`scripts/run-node-event-loop-oracle.sh` runs every fixture on both engines and
+Fixtures may carry `// MODE: eval` (the file text runs as `-e <text>`) and
+`// ENV: NAME=VALUE` lines. Both engines run in the fixture directory, because a
+coloured stack greys the working directory (it normalises to `<dir>`), with
+`FORCE_COLOR`, `NO_COLOR` and `NODE_DISABLE_COLORS` unset unless an `ENV` line
+sets them; coloured `node:` frames are dropped like plain ones.
+
+`scripts/run-node-event-loop-oracle.sh` runs every `*.fixture.js` and
+`*.fixture.mjs` (ES entry point; `*.helper.mjs` are its imports) on both engines and
 compares stdout and the exit status, then stderr in full with
 `scripts/event-loop-fixtures/<name>.stderr` after normalising the fixture
 directory (`<dir>`), the version line, `node:` frames and the `N` of the cause

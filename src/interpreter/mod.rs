@@ -16,7 +16,9 @@ pub(crate) struct AgentBroadcastMsg {
     pub sab_shared: Arc<types::SharedBufferInner>,
 }
 
+mod dollar_262;
 mod types;
+mod weak_slots;
 pub(crate) use types::*;
 
 mod helpers;
@@ -338,6 +340,11 @@ pub(crate) struct Interpreter {
     gc: crate::interpreter::gc::GcPacer,
     // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
     gc_marks: Vec<bool>,
+    /// [[KeptAlive]] (ECMA-262 §9.10.3): objects a WeakRef saw during the
+    /// running job; GC roots until `finish_job` ends the outermost one.
+    pub(crate) kept_alive: rustc_hash::FxHashSet<u64>,
+    /// Running jobs (program run, promise job, timer or loop callback).
+    pub(crate) job_depth: u32,
     /// Every environment a collection has scanned, weakly: a minor collection
     /// re-scans the ones written to since (`BindingMap::is_clean`).
     env_registry: Vec<std::rc::Weak<RefCell<Environment>>>,
@@ -817,6 +824,8 @@ impl Interpreter {
             new_target: None,
             gc: crate::interpreter::gc::GcPacer::new(),
             gc_marks: Vec::new(),
+            kept_alive: Default::default(),
+            job_depth: 0,
             env_registry: Vec::new(),
             gc_young: Default::default(),
             generator_context: None,
@@ -950,339 +959,6 @@ impl Interpreter {
         self.setup_globals();
         self.current_realm_id = old_realm;
         new_id
-    }
-
-    pub(crate) fn create_dollar_262(&mut self, realm_id: usize) -> JsValue {
-        let dollar_262_id = self.create_object_id();
-
-        // $262.detachArrayBuffer
-        let detach_fn = self.create_function(JsFunction::native(
-            "detachArrayBuffer".to_string(),
-            1,
-            |interp, _this, args| {
-                let buf = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                interp.detach_arraybuffer(&buf)
-            },
-        ));
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("detachArrayBuffer".to_string(), detach_fn);
-
-        // $262.gc
-        let gc_fn = self.create_function(JsFunction::native(
-            "gc".to_string(),
-            0,
-            |interp, _this, _args| {
-                interp.gc.request();
-                interp.gc_safepoint();
-                Completion::Normal(JsValue::UNDEFINED)
-            },
-        ));
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("gc".to_string(), gc_fn);
-
-        // $262.global — reference to the realm's global object
-        let global_env = self.realms[realm_id].global_env.clone();
-        if let Some(go_id) = global_env.borrow().global_object_id {
-            self.get_object_cell_expect(dollar_262_id)
-                .borrow_mut()
-                .insert_builtin("global".to_string(), JsValue::object(go_id));
-        }
-
-        // $262.createRealm
-        let create_realm_fn = self.create_function(JsFunction::native(
-            "createRealm".to_string(),
-            0,
-            |interp, _this, _args| {
-                let new_realm_id = interp.create_new_realm();
-                let new_dollar_262 = interp.create_dollar_262(new_realm_id);
-                Completion::Normal(new_dollar_262)
-            },
-        ));
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("createRealm".to_string(), create_realm_fn);
-
-        // $262.evalScript — parse and execute code in this $262's realm
-        let eval_realm_id = realm_id;
-        let eval_script_fn = self.create_function(JsFunction::native(
-            "evalScript".to_string(),
-            1,
-            move |interp, _this, args| {
-                let code_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let (code, stand_ins) = if let Some(s) = (code_val).as_string() {
-                    crate::interpreter::builtins::regexp::encode_source_units(s.as_units())
-                } else {
-                    match interp.to_string_lossy(&code_val) {
-                        Ok(s) => (s, false),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-                let mut p = match crate::parser::Parser::for_source(&code, stand_ins) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", "Invalid eval source"),
-                        );
-                    }
-                };
-                let program = match p.parse_program() {
-                    Ok(prog) => prog,
-                    Err(e) => {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", &format!("{}", e)),
-                        );
-                    }
-                };
-                let old_realm = interp.current_realm_id;
-                interp.current_realm_id = eval_realm_id;
-                let result = interp.run(&program);
-                interp.current_realm_id = old_realm;
-                match result {
-                    Completion::Normal(v) => Completion::Normal(v),
-                    Completion::Empty => Completion::Normal(JsValue::UNDEFINED),
-                    other => other,
-                }
-            },
-        ));
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("evalScript".to_string(), eval_script_fn);
-
-        // $262.IsHTMLDDA — B.3.6 [[IsHTMLDDA]] internal slot
-        let htmldda_obj_id = self.create_object_id();
-        self.get_object_cell_expect(htmldda_obj_id)
-            .borrow_mut()
-            .callable = Some(Box::new(JsFunction::native(
-            "".to_string(),
-            0,
-            |_interp, _this, _args| Completion::Normal(JsValue::NULL),
-        )));
-        self.get_object_cell_expect(htmldda_obj_id)
-            .borrow_mut()
-            .is_htmldda = true;
-        let htmldda_val = JsValue::object(htmldda_obj_id);
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
-
-        // $262.agent
-        let agent_obj_id = self.create_object_id();
-
-        // $262.agent.start(script)
-        let _reports_clone = self.agent_reports.clone();
-        let start_fn = self.create_function(JsFunction::native(
-            "start".to_string(),
-            1,
-            move |interp, _this, args| {
-                let script_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let script = match interp.to_string_lossy(&script_val) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                };
-
-                let (tx, rx) = std::sync::mpsc::channel::<AgentBroadcastMsg>();
-                interp.agent_broadcast_txs.push(tx);
-
-                let reports = interp.agent_reports.clone();
-                let handle = std::thread::spawn(move || {
-                    let mut agent_interp = Interpreter::new();
-                    agent_interp.is_agent_thread = true;
-                    agent_interp.can_block = true;
-                    agent_interp.agent_reports = reports;
-                    agent_interp.agent_broadcast_rx = Some(rx);
-
-                    // Set up agent-side $262.agent on the global
-                    setup_agent_side_262(&mut agent_interp);
-
-                    let mut p = match crate::parser::Parser::new(&script) {
-                        Ok(p) => p,
-                        Err(_) => return,
-                    };
-                    let program = match p.parse_program() {
-                        Ok(prog) => prog,
-                        Err(_) => return,
-                    };
-                    let _ = agent_interp.run(&program);
-                    agent_interp.drain_microtasks_blocking();
-                });
-                interp.agent_handles.push(handle);
-
-                Completion::Normal(JsValue::UNDEFINED)
-            },
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("start".to_string(), start_fn);
-
-        // $262.agent.broadcast(sab)
-        let broadcast_fn = self.create_function(JsFunction::native(
-            "broadcast".to_string(),
-            1,
-            |interp, _this, args| {
-                let sab_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if let Some(o) = sab_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                    && let Some(cell) = interp.get_object_cell(o.id)
-                {
-                    let sab_shared = cell.borrow().sab_shared().cloned();
-                    if let Some(inner) = sab_shared {
-                        for tx in &interp.agent_broadcast_txs {
-                            let _ = tx.send(AgentBroadcastMsg {
-                                sab_shared: inner.clone(),
-                            });
-                        }
-                    }
-                }
-                Completion::Normal(JsValue::UNDEFINED)
-            },
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("broadcast".to_string(), broadcast_fn);
-
-        // $262.agent.getReport()
-        let get_report_fn = self.create_function(JsFunction::native(
-            "getReport".to_string(),
-            0,
-            |interp, _this, _args| {
-                let (ref reports_lock, _) = *interp.agent_reports;
-                let mut reports = reports_lock.lock().unwrap();
-                if let Some(report) = reports.pop_front() {
-                    Completion::Normal(JsValue::string(JsString::from_str(&report)))
-                } else {
-                    Completion::Normal(JsValue::NULL)
-                }
-            },
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("getReport".to_string(), get_report_fn);
-
-        // $262.agent.getReportAsync()
-        let get_report_async_fn = self.create_function(JsFunction::native(
-            "getReportAsync".to_string(),
-            0,
-            |interp, _this, _args| {
-                let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
-
-                let immediate_report = {
-                    let (ref reports_lock, _) = *interp.agent_reports;
-                    reports_lock.lock().unwrap().pop_front()
-                };
-                if let Some(report) = immediate_report {
-                    let report_val = JsValue::string(JsString::from_str(&report));
-                    let _ = interp.call_function(&resolve_fn, &JsValue::UNDEFINED, &[report_val]);
-                    return Completion::Normal(promise_val);
-                }
-
-                interp.scheduler.incr_pending_async_jobs();
-                let reports = interp.agent_reports.clone();
-                let resolve = resolve_fn;
-                let pending = interp.agent_async_completions.clone();
-                let pending_jobs = interp.scheduler.pending_async_jobs_handle();
-                let pending_promise_ids = interp.scheduler.pending_async_promise_ids_handle();
-                let promise_id = if let Some(o) = (promise_val)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    o.id
-                } else {
-                    0
-                };
-                if promise_id != 0 {
-                    pending_promise_ids.lock().unwrap().insert(promise_id);
-                }
-
-                std::thread::spawn(move || {
-                    let report = {
-                        let (ref reports_lock, ref reports_cvar) = *reports;
-                        let mut queue = reports_lock.lock().unwrap();
-                        loop {
-                            if let Some(report) = queue.pop_front() {
-                                break report;
-                            }
-                            queue = reports_cvar.wait(queue).unwrap();
-                        }
-                    };
-                    let report_val = JsValue::string(JsString::from_str(&report));
-                    let (ref mtx, ref completion_cvar) = *pending;
-                    mtx.lock()
-                        .unwrap()
-                        .push(Box::new(move |interp: &mut Interpreter| {
-                            let _ =
-                                interp.call_function(&resolve, &JsValue::UNDEFINED, &[report_val]);
-                            if promise_id != 0 {
-                                pending_promise_ids.lock().unwrap().remove(&promise_id);
-                            }
-                            pending_jobs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                        }));
-                    completion_cvar.notify_one();
-                });
-
-                Completion::Normal(promise_val)
-            },
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("getReportAsync".to_string(), get_report_async_fn);
-
-        // $262.agent.sleep(ms)
-        let sleep_fn = self.create_function(JsFunction::native(
-            "sleep".to_string(),
-            1,
-            |interp, _this, args| {
-                let ms_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let ms = match interp.to_number_value(&ms_val) {
-                    Ok(n) => n.max(0.0) as u64,
-                    Err(e) => return Completion::Throw(e),
-                };
-                std::thread::sleep(std::time::Duration::from_millis(ms));
-                Completion::Normal(JsValue::UNDEFINED)
-            },
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("sleep".to_string(), sleep_fn);
-
-        // $262.agent.monotonicNow()
-        let start_time = std::time::Instant::now();
-        let monotonic_fn = self.create_function(JsFunction::native(
-            "monotonicNow".to_string(),
-            0,
-            move |_interp, _this, _args| {
-                let elapsed = start_time.elapsed().as_millis() as f64;
-                Completion::Normal(JsValue::number(elapsed))
-            },
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("monotonicNow".to_string(), monotonic_fn);
-
-        // $262.agent.leaving()
-        let leaving_fn = self.create_function(JsFunction::native(
-            "leaving".to_string(),
-            0,
-            |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
-        ));
-        self.get_object_cell_expect(agent_obj_id)
-            .borrow_mut()
-            .insert_builtin("leaving".to_string(), leaving_fn);
-
-        let agent_val = JsValue::object(agent_obj_id);
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("agent".to_string(), agent_val);
-
-        // $262.AbstractModuleSource — §28.1.1.1 (source-phase imports proposal)
-        let ams_fn = self.abstract_module_source_constructor(realm_id);
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
-
-        JsValue::object(dollar_262_id)
     }
 
     /// Get (or lazily mint) the per-realm %AbstractModuleSource% constructor.
@@ -2365,13 +2041,14 @@ impl Interpreter {
 
     fn run_program(&mut self, program: &Program) -> Completion {
         self.gc_safepoint();
+        self.begin_job();
         let result = match program.source_type {
             SourceType::Script => {
                 let global = self.realm().global_env.clone();
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                self.exec_script_body(&program.body, &global)
+                self.exec_framed(&program.body, &global)
             }
             SourceType::Module => self.run_module(program, None),
         };
@@ -2381,6 +2058,7 @@ impl Interpreter {
         if let Completion::Exit(code) = &result {
             self.pending_exit = Some(*code);
         }
+        self.finish_job();
         self.drain_after_run(&result);
         result
     }
@@ -2415,12 +2093,14 @@ impl Interpreter {
                     if program.body_is_strict {
                         global.borrow_mut().strict = true;
                     }
+                    interp.begin_job();
                     let r = interp.exec_script_body(&program.body, &global);
                     // A top-level `__host_exit` (issue #242) latches its code (read
                     // by `main`) so draining is skipped.
                     if let Completion::Exit(code) = &r {
                         interp.pending_exit = Some(*code);
                     }
+                    interp.finish_job();
                     // Async callbacks need the file's key for relative imports.
                     interp.drain_after_run(&r);
                     r
@@ -2428,11 +2108,13 @@ impl Interpreter {
             }
             SourceType::Module => {
                 let module_key = ModuleKey::for_file(path.to_path_buf());
+                self.begin_job();
                 self.node_esm_enter_main(&module_key);
                 let r = self.run_module(program, Some(module_key.clone()));
                 if let Completion::Exit(code) = &r {
                     self.pending_exit = Some(*code);
                 }
+                self.finish_job();
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 self.with_module_key(Some(module_key), |interp| interp.drain_after_run(&r));
                 r
@@ -3132,6 +2814,7 @@ impl Interpreter {
                     return Err(self.create_error("SyntaxError", &error.message.to_string()));
                 }
             };
+            self.node_note_module_origin(&canon_path, parser.source_origin());
 
             let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
             module_env.borrow_mut().strict = true;
@@ -3331,12 +3014,9 @@ impl Interpreter {
         };
         let module_env = module.borrow().env.clone();
         self.static_module_load_depth += 1;
-
+        let framed = self.node_push_module_frame(module_path, &module_env);
         let err = self.with_ic_body(&program.body, |interp| {
-            // Module items reach `exec_statement` without passing through
-            // `dispatch_body`, so without a frame their work lands in
-            // `ast_work_units` but in no BODY row — module-heavy runs could not
-            // localize their tree-walker work at all (#537 review, third pass).
+            // Module items bypass `dispatch_body`: give them a BODY row (#537).
             #[cfg(feature = "perf-counters")]
             {
                 interp.perf.body_non_function += 1;
@@ -3346,12 +3026,9 @@ impl Interpreter {
                     .enter_ast_body(name, perf_counters::SYNTHETIC_BODY_ID, false);
             }
             let mut err = None;
-            // A top-level `__host_exit` (issue #242) returns `Completion::Exit`
-            // structurally from `exec_statement`/`exec_export_declaration`, the
-            // same way `Throw` does — it must stop this loop immediately (a
-            // later module item must not run) and must reach `dispose_resources`
-            // below as `Exit`, not be discarded and reconstructed as `Normal`,
-            // so the disposer short-circuit there actually fires (#554 review).
+            // A top-level `__host_exit` (#242) returns `Completion::Exit` like
+            // `Throw`: stop at once, and hand `Exit` itself to `dispose_resources`
+            // below so its disposer short-circuit fires (#554 review).
             let mut exit_code: Option<i32> = None;
             for item in &program.module_items {
                 match item {
@@ -3412,6 +3089,9 @@ impl Interpreter {
             interp.perf.leave_ast_body();
             err
         });
+        if framed {
+            self.node_pop_module_frame();
+        }
         self.static_module_load_depth -= 1;
         match err {
             Some(e) => Err(e),
@@ -3836,6 +3516,7 @@ impl Interpreter {
                         }
                     }
                     Err(e) => {
+                        self.node_esm_main_rejected(&ancestor, &e);
                         self.async_module_execution_rejected(&ancestor, &e);
                         continue;
                     }
@@ -5149,6 +4830,7 @@ impl Interpreter {
         let frame = self.gc_root_frame();
         task.for_each_root(|value| self.gc_root_value(value));
         let rooted_depth = self.gc_root_frame();
+        self.begin_job();
         let result = match task {
             Microtask::Closure { job, .. } => job(self),
             Microtask::Reaction { reaction, argument } => {
@@ -5160,6 +4842,7 @@ impl Interpreter {
                 then_fn,
             } => self.run_promise_resolve_thenable_job(promise_id, thenable, then_fn),
         };
+        self.finish_job();
         self.gc_assert_root_depth(rooted_depth, "a microtask job");
         self.gc_unroot_frame(frame);
         result

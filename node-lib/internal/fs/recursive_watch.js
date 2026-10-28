@@ -4,11 +4,12 @@
 // recursive: one watch per directory, kept in step with the tree. Reported
 // names are relative to the root. A directory that appears is watched and its
 // entries announced as renames; one that disappears loses its watches. Events
-// on a sub-directory itself are dropped, because its parent reports them.
+// on a sub-directory itself are dropped, because its parent reports them,
+// unless the kernel dropped its watch (it was deleted): that is then redone.
 
 const { sync } = require('internal/host/fs');
 const { Buffer } = require('buffer');
-const { startWatch, kRename, kSelf } = require('internal/fs/watch_native');
+const { startWatch, kRename, kSelf, kGone } = require('internal/fs/watch_native');
 
 const kBoth = 3;
 
@@ -39,7 +40,7 @@ class RecursiveWatch {
 
   watchDirectory(path, relative, announce) {
     const handle = startWatch(
-      path, (bits, name) => this.handle(path, relative, bits, name), this.persistent);
+      path, (bits, name) => this.handle(path, relative, bits, name, handle), this.persistent);
     this.dirs.set(path, handle);
     let entries;
     try {
@@ -89,13 +90,32 @@ class RecursiveWatch {
     }
   }
 
-  handle(dir, relative, bits, name) {
+  // The kernel dropped a sub-directory's watch because the directory was
+  // deleted. Its path may hold a new directory that the parent's event found
+  // with the dead one's inode number, which file systems reuse at once, so
+  // watch whatever is there now.
+  restartDirectory(path, relative) {
+    this.dirs.get(path).close();
+    this.dirs.delete(path);
+    this.inodes.delete(path);
+    let stats;
+    try {
+      stats = sync.lstatSync(path);
+    } catch {
+      return;
+    }
+    if (stats.isDirectory()) this.watchSubtree(path, relative, true, stats.ino);
+  }
+
+  handle(dir, relative, bits, name, source) {
     if (this.closed) return;
     if (bits & kSelf) {
-      const own = Buffer.from(name).toString();
-      if (dir === this.root && !(this.ignored !== null && this.ignored(own))) {
-        this.onevent(bits & kBoth, own);
+      if (dir !== this.root) {
+        if ((bits & kGone) && this.dirs.get(dir) === source) this.restartDirectory(dir, relative);
+        return;
       }
+      const own = Buffer.from(name).toString();
+      if (!(this.ignored !== null && this.ignored(own))) this.onevent(bits & kBoth, own);
       return;
     }
     const child = join(relative, Buffer.from(name).toString());

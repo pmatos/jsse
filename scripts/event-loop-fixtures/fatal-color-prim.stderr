@@ -1,0 +1,8 @@
+
+<dir>/fatal-color-prim.fixture.js:3
+throw 'text';
+^
+text
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

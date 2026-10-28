@@ -15,8 +15,10 @@
 
   var hostSource = __host_builtin_source;
   var mainKind = __host_main_kind();
+  var exposeInternals = __host_expose_internals();
   delete globalThis.__host_builtin_source;
   delete globalThis.__host_main_kind;
+  delete globalThis.__host_expose_internals;
 
   // Preludes that register a public module put it in one of these; both are
   // taken private here.
@@ -213,6 +215,7 @@
     exports: {
       nameSource: takeHost("__host_stack_name_source"),
       throwSite: takeHost("__host_stack_throw_site"),
+      evalSource: takeHost("__host_stack_eval_source"),
     },
   };
   cache["internal/host/vm"] = { exports: takeHost("__host_vm") };
@@ -303,7 +306,8 @@
     if (id in requirable) return true;
     var found =
       id in registered ||
-      (strSlice(id, 0, 9) !== "internal/" && hostSource(id) !== undefined);
+      ((exposeInternals || strSlice(id, 0, 9) !== "internal/") &&
+        hostSource(id) !== undefined);
     if (found) requirable[id] = true;
     return found;
   }
@@ -382,6 +386,9 @@
   if (handoff !== undefined) {
     handoff.report = function (error, rejected) {
       return requireBuiltin("internal/process/fatal").report(error, rejected);
+    };
+    handoff.decorate = function (error) {
+      return requireBuiltin("internal/process/fatal").decorate(error);
     };
     handoff.rejectionError = function (reason) {
       return requireBuiltin("internal/process/fatal").unhandledRejectionError(reason);

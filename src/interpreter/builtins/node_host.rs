@@ -39,6 +39,8 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    /// `--expose-internals`: user `require` may name `internal/...` builtins.
+    pub(crate) expose_internals: bool,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
     pub(crate) vm: super::node_host_vm::VmState,
@@ -71,6 +73,10 @@ impl Interpreter {
         self.node_host.main_kind = kind;
     }
 
+    pub(crate) fn set_node_host_expose_internals(&mut self, expose: bool) {
+        self.node_host.expose_internals = expose;
+    }
+
     /// Exit status requested through `process.exitCode`, if any.
     pub fn node_host_exit_code(&self) -> Option<i32> {
         self.node_host.exit_code
@@ -84,6 +90,13 @@ impl Interpreter {
         self.node_host_enabled = true;
         self.node_host.clock_start = Some(std::time::Instant::now());
         self.setup_node_host();
+    }
+
+    /// Whether a strict call in tail position may replace its caller's
+    /// frame. Off under `--node`: V8 has no proper tail calls, and mocha's
+    /// traces of a failing `it(() => assert...)` need the test's own frame.
+    pub(crate) fn tco_on(&self, env: &EnvRef) -> bool {
+        env.borrow().strict && !self.node_host_enabled
     }
 
     /// Install a `__host_*` primitive as a non-enumerable, writable,
