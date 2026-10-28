@@ -27,7 +27,9 @@ changed, so the default (non-`--node`) global environment and the test262 baseli
 The 31 groups are rows of `scripts/ts_unittests_tsbuild_groups.py`, appended to the table of
 `scripts/ts_unittests_groups.py` and run by the same `scripts/run-ts-unittests-oracle.py` (per-test comparison of Node
 and jsse reports, the ratchet on known failures, 600 s mocha `-t`): `run-ts-unittests-oracle.py 'tsbuild-*'`. The
-four batches (20 to 23) hold about 100 tests each; a run takes about five minutes at 4 jobs. `check_groups` now also
+four batches (20 to 23) are balanced by measured jsse time rather than test count (`declarationEmit`,
+`moduleResolution`, `outputPaths` and `rootDirInParent` cost several times more per test than `noEmit`); a run takes
+about five minutes at 4 jobs. `check_groups` now also
 walks `unittests/tsbuild/`, so a new or renamed tsbuild suite that no group selects fails the run; `tsbuildWatch`
 (`unittests/tsbuildWatch/`) stays a separate directory and ticket, and no pattern selects it. The `DESCRIBE` scan
 reads a title up to its closing quote of the same kind, because `sample.ts`'s title contains `'sample1'`.

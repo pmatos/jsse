@@ -1,11 +1,11 @@
-"""Groups of TypeScript's unit-test suites for run-ts-unittests-oracle.py (issues #1259 and #1261).
+"""Groups of TypeScript's unit-test suites for run-ts-unittests-oracle.py (issues #1259, #1261 and #1264).
 
 `src/testRunner/unittests/*.ts` register the mocha suites of 26 groups (#1259, 2334 tests). The 16 `services-*`
 groups (#1261, 1531 tests) cover everything under `unittests/services/`, the 31 `tsbuild-*` groups (#1264, 410
 tests, rows in ts_unittests_tsbuild_groups.py) everything under `unittests/tsbuild/`. The other subdirectories
 (config and sys: run-ts-unittests-config-sys-oracle.py; evaluation, tsbuildWatch, tscWatch, tsc, tsserver: their
-own tickets) are not scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting that file's tests (a
-test's full title is its `describe` titles and its own title joined by spaces, so every pattern is anchored on the
+own tickets) are not scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting
+that file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every pattern is anchored on the
 file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript v6.0.3. Every
 mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle runs the
 groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
@@ -87,7 +87,9 @@ GROUPS += [
 
 GROUPS += [Group(*row) for row in ts_unittests_tsbuild_groups.ROWS]
 
-DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*(["'`])((?:(?!\1).)+)\1""", re.M)
+OWNED_SUBDIRS = ("services", "tsbuild")
+
+DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*(["'`])((?:\\.|(?!\1).)+)\1""", re.M)
 
 
 def ts_files(ts_dir):
@@ -99,7 +101,7 @@ def ts_files(ts_dir):
         path = os.path.join(base, name)
         if name.endswith(".ts") and os.path.isfile(path):
             yield name, path
-    for sub in ("services", "tsbuild"):
+    for sub in OWNED_SUBDIRS:
         for root, dirs, files in os.walk(os.path.join(base, sub)):
             dirs.sort()
             for name in sorted(files):
@@ -128,7 +130,7 @@ def check_groups(ts_dir):
     """Problems (a list of strings) between the groups and the checkout's top-level suites."""
     problems = []
     base = os.path.join(ts_dir, "src", "testRunner", "unittests")
-    for sub in ("services", "tsbuild"):
+    for sub in OWNED_SUBDIRS:
         if not os.path.isdir(os.path.join(base, sub)):
             problems.append(f"unittests/{sub} is missing: its groups select nothing")
     for file, titles in top_level_titles(ts_dir).items():

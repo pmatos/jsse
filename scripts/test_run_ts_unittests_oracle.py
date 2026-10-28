@@ -2,6 +2,7 @@ import collections
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,7 +137,7 @@ class ReportTest(unittest.TestCase):
 
     def test_the_committed_known_failures_name_a_group(self):
         for title in oracle.read_known_failures():
-            hits = [g for g in groups.GROUPS if oracle.re.search(g.pattern, title)]
+            hits = [g for g in groups.GROUPS if re.search(g.pattern, title)]
             self.assertEqual(len(hits), 1, title)
 
 
@@ -215,7 +216,7 @@ class GroupsTest(unittest.TestCase):
 
     def test_tsbuild_patterns_leave_tsbuild_watch_and_outfile_alone(self):
         def hit(title):
-            return [g.name for g in groups.GROUPS if oracle.re.search(g.pattern, title)]
+            return [g.name for g in groups.GROUPS if re.search(g.pattern, title)]
 
         self.assertEqual(
             hit("unittests:: tsbuild:: outFile:: amdModulesWithOut:: x y"),

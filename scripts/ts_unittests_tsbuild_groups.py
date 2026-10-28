@@ -3,8 +3,8 @@
 Each row is (name, pattern, tests, batch) like `ts_unittests_groups.Group`; `tests` is the count Node 26 reports on
 TypeScript v6.0.3 and the rows add up to the `tsbuild` suite of `ts-suite/oracle.json`. `tsbuildWatch` (a
 separate directory and ticket) is not selected: every pattern needs `tsbuild:: ` or `tsbuild - `. The batches
-(20 to 23, about 100 tests each) balance the four mocha processes: the `noEmit`, `sample` and `noEmitOnError`
-suites build the solution after many edits and take the longest on jsse.
+(20 to 23) balance the four mocha processes by measured jsse time, not by test count: `declarationEmit`,
+`moduleResolution`, `outputPaths` and `rootDirInParent` cost several times more per test than `noEmit`.
 """
 
 B = r"^unittests:: tsbuild:: "
@@ -39,16 +39,16 @@ ROWS = [
     ("tsbuild-javascriptProjectEmit", B + r"javascriptProjectEmit:: ", 2, 23),
     ("tsbuild-lateBoundSymbol", B + r"lateBoundSymbol:: ", 2, 23),
     ("tsbuild-libraryResolution", B + r"libraryResolution:: ", 2, 23),
-    ("tsbuild-moduleResolution", B + r"moduleResolution:: ", 9, 20),
+    ("tsbuild-moduleResolution", B + r"moduleResolution:: ", 9, 23),
     ("tsbuild-moduleSpecifiers", B + r"moduleSpecifiers:: ", 2, 23),
     ("tsbuild-noCheck", B + r"noCheck:: ", 24, 22),
     ("tsbuild-noEmit", B + r"noEmit:: ", 88, 20),
     ("tsbuild-noEmitOnError", C + r"with noEmitOnError:: ", 48, 21),
     ("tsbuild-outFile", B + r"outFile:: (?!amdModulesWithOut:: )", 18, 22),
-    ("tsbuild-outputPaths", B + r"outputPaths:: ", 15, 20),
+    ("tsbuild-outputPaths", B + r"outputPaths:: ", 15, 23),
     ("tsbuild-publicApi", B + r"PublicAPI:: ", 1, 23),
     ("tsbuild-resolveJsonModule", B + r"with resolveJsonModule:: ", 26, 22),
-    ("tsbuild-rootDirInParent", B + r"projectReferenceWithRootDirInParent:: ", 9, 20),
+    ("tsbuild-rootDirInParent", B + r"projectReferenceWithRootDirInParent:: ", 9, 21),
     ("tsbuild-roots", B + r"roots:: ", 12, 20),
     ("tsbuild-sample", B + r"on 'sample1' project ", 54, 21),
     ("tsbuild-transitiveReferences", B + r"transitiveReferences:: ", 3, 23),
