@@ -6767,8 +6767,8 @@ fn lookbehind_needs_custom_rtl(source: &str) -> bool {
 }
 
 /// Detect patterns where lookbehind captures are referenced by backrefs outside
-/// the lookbehind. Returns verify info if so, None otherwise.
-fn lookbehind_captures_with_external_backrefs(
+/// the lookbehind; `None` if there are none.
+pub(super) fn lookbehind_captures_with_external_backrefs(
     source: &str,
 ) -> Option<Vec<super::regexp_lookbehind::LookbehindVerifyInfo>> {
     let chars: Vec<char> = source.chars().collect();
@@ -8279,8 +8279,8 @@ fn build_regex_ex_with_nullable_state(
             .ok_or_else(|| meta_build_error(&tr.pattern, true));
     }
 
-    // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
-    if lookbehind_needs_custom_rtl(&source)
+    if (lookbehind_needs_custom_rtl(&source)
+        || super::regexp_lookbehind_route::unbounded_capture_read_outside(&source))
         && let Some(result) =
             try_build_custom_lookbehind(&source, flags, base, dup_map.clone(), name_order.clone())
     {

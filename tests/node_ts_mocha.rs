@@ -3,8 +3,9 @@
 //! call (V8 has no proper tail calls, so a failing `it(() => assert...)` must
 //! show the test's own frame), while the default environment keeps ES2015
 //! tail calls. The mocha CLI and `built/local/run.js` against Node is
-//! `scripts/run-ts-mocha-oracle.py`; the case below only drives it when
-//! TS_SRC_DIR points at a built TypeScript 6.0.3 checkout.
+//! `scripts/run-ts-mocha-oracle.py` (the runner's command line, sharding and
+//! `.failed-tests` flow are its `cli-*` cases); the case below only drives it
+//! when TS_SRC_DIR points at a built TypeScript 6.0.3 checkout.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -85,7 +86,20 @@ fn mocha_matches_node_when_a_typescript_checkout_is_given() {
             "async-*",
             "late-*",
             "exit-*",
+            "timers-spec",
+            "timeouts-json",
+            "cli-timeout-*",
+            "diff-colors",
+            "retries-cli-spec",
+            "fail-fivemat",
+            "list-reporters",
             "ts-semver-and-failures",
+            "cli-list-fourslash-server",
+            "cli-tests-*",
+            "cli-shards-project-*",
+            "cli-failed-*",
+            "cli-timeout-*",
+            "cli-baseline-accept",
         ])
         .output()
         .expect("run python3");

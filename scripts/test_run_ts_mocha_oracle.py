@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,7 @@ FIXTURES = SCRIPTS_DIR / "ts-mocha-fixtures"
 spec = importlib.util.spec_from_file_location("run_ts_mocha_oracle", ORACLE)
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
+cli = oracle.cli
 
 
 class NormaliseTest(unittest.TestCase):
@@ -75,6 +77,44 @@ class NormaliseTest(unittest.TestCase):
         self.assertEqual(one, two)
 
 
+class TrailingBraceAfterFrameTest(unittest.TestCase):
+    def test_a_brace_after_a_dropped_frame_reads_like_one_after_another(self):
+        node = "Error: x\n    at k (/w/a.js:1:1)\n    at async y (/ts/z.js:2:2) {\n  code: 'E'\n}\n"
+        jsse = "Error: x\n    at k (/w/a.js:1:1)\n    at node:internal/boot:4:5 {\n  code: 'E'\n}\n"
+        self.assertEqual(
+            oracle.normalise(node, "/w", "/ts"), oracle.normalise(jsse, "/w", "/ts")
+        )
+
+
+class JsonReportersTest(unittest.TestCase):
+    def norm(self, text):
+        return oracle.normalise_json(text, "/w", "/ts")
+
+    def test_text_printed_before_the_report_is_kept(self):
+        text = 'beforeEach 1\n{"stats": {"duration": 4}, "n": 1}\n'
+        out = self.norm(text)
+        self.assertTrue(out.startswith("beforeEach 1\n{"))
+        self.assertIn('"duration": "<T>"', out)
+
+    def test_json_stream_lines_are_normalised_one_by_one(self):
+        a = '["start",{"total":1}]\n["fail",{"duration":7,"err":{"stack":"E\\n    at f (/w/a.js:1:1)","message":"m"}}]\n'
+        b = '["start",{"total":1}]\n["fail",{"duration":2,"err":{"message":"m","stack":"E\\n    at f (/w/a.js:1:1)"}}]\n'
+        self.assertEqual(
+            oracle.normalise_json(a, "/w", "/ts", stream=True),
+            oracle.normalise_json(b, "/w", "/ts", stream=True),
+        )
+
+    def test_text_printed_after_the_report_does_not_stop_normalising(self):
+        out = self.norm('{"stats": {"duration": 4}}\nlate output\n')
+        self.assertIn('"duration": "<T>"', out)
+        self.assertTrue(out.endswith("late output\n"))
+
+    def test_speed_survives_but_timings_do_not(self):
+        out = self.norm('{"tests": [{"duration": 3, "speed": "slow"}]}')
+        self.assertIn('"speed": "slow"', out)
+        self.assertNotIn("3", out)
+
+
 class CaseTableTest(unittest.TestCase):
     def test_names_are_unique(self):
         names = [c[0] for c in oracle.CASES]
@@ -86,9 +126,99 @@ class CaseTableTest(unittest.TestCase):
                 if spec_file not in ("RUN", "absent.spec.js"):
                     self.assertTrue((FIXTURES / spec_file).is_file(), name)
 
+    def test_the_timing_and_failure_output_cases_exist(self):
+        names = {c[0] for c in oracle.CASES}
+        for want in (
+            "timers-spec",
+            "timeouts-json",
+            "cli-timeout-60ms",
+            "diff-colors",
+            "retries-cli-spec",
+            "fail-fivemat",
+            "fail-full-trace",
+            "list-reporters",
+        ):
+            self.assertIn(want, names)
+
     def test_runs_stay_small(self):
         for path in FIXTURES.iterdir():
             self.assertLess(path.stat().st_size, 20000, path.name)
+
+
+class CliCasesTest(unittest.TestCase):
+    def cases(self):
+        return [c for c in oracle.CASES if c.kind != "mocha"]
+
+    def test_runtests_cases_run_the_driver_with_a_fixture_or_the_bundle(self):
+        for c in self.cases():
+            if c.kind == "runtests":
+                self.assertEqual(c.specs[0], "runtests.mjs", c.name)
+                self.assertEqual(len(c.specs) == 2, "TS_RUN_JS" in c.env, c.name)
+
+    def test_listing_cases_are_dry_runs_and_the_others_are_not(self):
+        for c in self.cases():
+            if c.name.startswith(("cli-list-", "cli-tests-", "cli-shards-")):
+                self.assertEqual(c.mocharc, {"dry-run": True}, c.name)
+            else:
+                self.assertIsNone(c.mocharc, c.name)
+
+    def test_expectations_name_keys_a_result_can_have(self):
+        keys = re.compile(r"^(then )?(stdout|stderr|file [\w. -]+)$")
+        for c in oracle.CASES:
+            for key, pattern in c.must:
+                self.assertRegex(key, keys, c.name)
+                re.compile(pattern)
+
+    def test_partitions_name_existing_cases(self):
+        names = {c.name for c in oracle.CASES}
+        for whole, shards in cli.PARTITIONS.items():
+            self.assertLessEqual({whole, *shards}, names)
+
+    def test_failed_flow_cases_that_rerun_have_a_second_step(self):
+        for c in self.cases():
+            if "rerun" in c.name or "keep-without" in c.name:
+                self.assertIsNotNone(c.then, c.name)
+
+    def test_titles_skip_the_leaked_unit_test_and_summary_lines(self):
+        out = "ok 1 unittests:: a\nok 2 compiler x\n# tests 2\nnot ok 3 y\nok 3 z\n"
+        self.assertEqual(cli.titles(out), ["compiler x", "z"])
+
+    def test_shards_that_do_not_add_up_are_reported(self):
+        def res(name, *titles):
+            out = "".join(f"ok {i} {t}\n" for i, t in enumerate(titles, 1))
+            r = {"stdout": out}
+            return (cli.Case(name, [], []), r, r, {})
+
+        whole = res("cli-list-project", "a", "b", "c")
+        a = res("cli-shards-project-1of3", "a")
+        b = res("cli-shards-project-2of3", "b", "c")
+        c = res("cli-shards-project-3of3")
+        self.assertEqual(cli.partition_problems([whole, a, b, c]), [])
+        short = res("cli-shards-project-2of3", "b")
+        problems = cli.partition_problems([whole, a, short, c])
+        self.assertEqual(len(problems), 2)
+        self.assertEqual(cli.partition_problems([whole, a]), [])
+
+    def test_tree_lists_files_with_content_hashes(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "sub").mkdir()
+            Path(d, "sub", "b.txt").write_text("hello\n")
+            Path(d, "a.js").write_text("x")
+            plain = cli.tree(d)
+            self.assertEqual(plain.count("\n"), 2)
+            self.assertTrue(plain.startswith("a.js 1 "))
+            self.assertIn("sub/b.txt 6 ", plain)
+            self.assertIn("sub/b.txt\nhello", cli.tree(d, content=True))
+
+    def test_exec_lines_and_hereby_durations_are_normalised(self):
+        self.assertEqual(
+            oracle.EXEC_LINE.sub("> <EXEC> ", "> /bin/node mocha -t 1\nplain > x\n"),
+            "> <EXEC> mocha -t 1\nplain > x\n",
+        )
+        self.assertEqual(
+            oracle.HEREBY_TIME.sub("<T>", "Finished baseline-accept in 14ms"),
+            "Finished baseline-accept in <T>",
+        )
 
 
 class SkipTest(unittest.TestCase):
@@ -144,6 +274,13 @@ class SkipTest(unittest.TestCase):
     def test_unknown_case_is_an_error(self):
         r = self.run_oracle({"TS_SRC_DIR": "/nonexistent"}, "no-such-case")
         self.assertNotEqual(r.returncode, 0)
+
+    def test_a_negated_glob_removes_cases(self):
+        r = self.run_oracle({}, "--list", "!ts-*", "!fail-*")
+        self.assertEqual(r.returncode, 0)
+        names = r.stdout.split()
+        self.assertIn("pass-spec", names)
+        self.assertFalse([n for n in names if n.startswith(("ts-", "fail-"))])
 
     def test_list_prints_case_names(self):
         r = self.run_oracle({}, "--list", "pass-*")

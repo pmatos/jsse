@@ -129,6 +129,20 @@ fn node_ticks_run_before_promise_jobs_and_timers_return_objects() {
 }
 
 #[test]
+fn node_tick_callbacks_run_detached_like_node() {
+    let (out, rc, _) = node_run(
+        r#"process.nextTick(function seen() { console.log(new Error("x").stack); });
+        process.nextTick(function seen2(a) { console.log(new Error("y").stack); }, 1);"#,
+    );
+    assert_eq!(rc, 0);
+    assert!(
+        out.contains("at seen ") && out.contains("at seen2 "),
+        "{out}"
+    );
+    assert!(!out.contains("Object.callback"), "{out}");
+}
+
+#[test]
 fn node_uncaught_exception_is_fatal_with_exit_event_and_status_one() {
     let (out, rc, err) = node_run(
         r#"process.on("exit", function (c) { console.log("exit", c); });

@@ -8,7 +8,8 @@ use md5::Md5;
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256};
+use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
+use shake::{Shake128, Shake256};
 use std::collections::HashMap;
 
 fn fixed<D: Digest>(h: D, _out_len: usize) -> Result<Vec<u8>, ()> {
@@ -199,10 +200,10 @@ macro_rules! tri {
 /// The bytes behind an ArrayBuffer, typed array or DataView, read through the
 /// engine's own slots (never through properties the caller can shadow). A
 /// detached buffer is empty, as it is for Node.
-struct Window {
-    buffer: std::rc::Rc<std::cell::RefCell<BufferData>>,
-    offset: usize,
-    len: usize,
+pub(super) struct Window {
+    pub(super) buffer: std::rc::Rc<std::cell::RefCell<BufferData>>,
+    pub(super) offset: usize,
+    pub(super) len: usize,
 }
 
 fn data_view_byte_length(dv: &DataViewInfo) -> usize {
@@ -216,7 +217,7 @@ fn data_view_byte_length(dv: &DataViewInfo) -> usize {
     }
 }
 
-fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
+pub(super) fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
     let cell = interp.get_object_cell(v.as_object_id()?)?;
     let obj = cell.borrow();
     let (buffer, offset, len, detached) = match &obj.kind {
