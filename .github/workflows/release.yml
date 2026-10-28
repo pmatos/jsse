@@ -49,6 +49,23 @@ jobs:
         run: bash .github/semantic-release/reconcile-release.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install the release deploy key
+        env:
+          RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+        run: |
+          install -m 700 -d "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$RELEASE_SSH_KEY" > "$RUNNER_TEMP/ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/ssh/id_ed25519"
+          # GitHub's published host keys (https://api.github.com/meta).
+          cat > "$RUNNER_TEMP/ssh/known_hosts" <<'EOF'
+          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          EOF
+      - name: Check the deploy key can reach the repository
+        env:
+          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=${{ runner.temp }}/ssh/known_hosts
+        run: git ls-remote git@github.com:pmatos/jsse.git HEAD
       - name: Run semantic-release
         uses: cycjimmy/semantic-release-action@d9bf53a078bd2f86aaffaec796dbb3d28f1b6f34 # v8.1.3
         with:
@@ -57,7 +74,9 @@ jobs:
             @semantic-release/git@10
             @semantic-release/exec@7
         env:
-          # The `main` ruleset requires status checks that a direct push
-          # cannot satisfy, so the chore(release) commit is pushed with a
-          # token whose owner is a ruleset bypass actor, not GITHUB_TOKEN.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          # The `main` ruleset blocks direct pushes for everyone except the
+          # release deploy key, so the chore(release) commit and tag go over
+          # SSH (repositoryUrl in .releaserc.json) with that key.
+          # GITHUB_TOKEN only covers the GitHub API calls.
+          GIT_SSH_COMMAND: ssh -i ${{ runner.temp }}/ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=${{ runner.temp }}/ssh/known_hosts
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

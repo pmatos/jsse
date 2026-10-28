@@ -23,10 +23,6 @@ rules:
   artipacked:
     ignore:
       - claude.yml
-      # release.yml persists checkout credentials so the version-bump commit and
-      # tag can be pushed back to main. It uploads only the packaged binary and
-      # checksums (no .git), so the token cannot leak via artifacts.
-      - release.yml
 
   # lint-pr-title.yml uses pull_request_target so the check runs for PRs from
   # forks. Its checkout deliberately leaves ref unset, so GitHub checks out the
