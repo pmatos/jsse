@@ -136,16 +136,8 @@ impl Parser<'_> {
         right: &Expression,
         right_start: usize,
     ) {
-        // V8 leaves a directly parenthesized function or arrow unnamed.
-        let literal = match right {
-            Expression::Function(f) => f.source_text.as_ref(),
-            Expression::ArrowFunction(a) => a.source_text.as_ref(),
-            _ => None,
-        };
-        if literal.is_some_and(|text| text.origin().1 > right_start) {
-            return;
-        }
-        if !matches!(left, Expression::Member(..))
+        if !ENABLED.load(Ordering::Relaxed)
+            || !matches!(left, Expression::Member(..))
             || !matches!(
                 op,
                 AssignOp::Assign
@@ -153,8 +145,16 @@ impl Parser<'_> {
                     | AssignOp::LogicalOrAssign
                     | AssignOp::NullishAssign
             )
-            || !ENABLED.load(Ordering::Relaxed)
         {
+            return;
+        }
+        // V8 leaves a directly parenthesized function or arrow unnamed.
+        let literal = match right {
+            Expression::Function(f) => f.source_text.as_ref(),
+            Expression::ArrowFunction(a) => a.source_text.as_ref(),
+            _ => None,
+        };
+        if literal.is_some_and(|text| text.origin().1 > right_start) {
             return;
         }
         let mut names = Vec::new();
