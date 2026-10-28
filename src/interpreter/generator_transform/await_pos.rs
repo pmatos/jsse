@@ -1,7 +1,7 @@
 //! The `await` keyword's offset through the async-function rewrite, which
 //! turns each `await` into a `yield` and the `Yield` terminators back into
 //! `Await` ones. Under `--node` the operand travels as `(offset, operand)`
-//! in a `Comma`; a yield the transform hoisted into a temporary loses it.
+//! in a `Comma`; the `Yield` arm re-applies it to an operand it hoists.
 
 use crate::ast::{Expression, Literal};
 
@@ -26,12 +26,9 @@ pub(super) fn at_of(operand: &Expression) -> u32 {
 
 pub(super) fn untag(value: &Option<Expression>) -> (Option<Expression>, u32) {
     match value {
-        Some(Expression::Comma(parts)) => match parts.as_slice() {
-            [Expression::Literal(Literal::Number(at)), operand] => {
-                (Some(operand.clone()), *at as u32)
-            }
-            _ => (value.clone(), 0),
-        },
+        Some(tagged @ Expression::Comma(parts)) if at_of(tagged) != 0 => {
+            (parts.get(1).cloned(), at_of(tagged))
+        }
         _ => (value.clone(), 0),
     }
 }

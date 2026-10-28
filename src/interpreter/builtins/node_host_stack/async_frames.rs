@@ -132,8 +132,8 @@ impl Interpreter {
         for raw in &raws {
             self.frame_record(raw, &mut record);
         }
-        let skipped_all = until.is_some() && raws.is_empty();
-        if self.node_host.stack.job_promise.is_some() && !skipped_all && raws.len() < limit {
+        let found_nothing = matches!(until, Some(Until::Seen(_))) && raws.is_empty();
+        if self.node_host.stack.job_promise.is_some() && !found_nothing && raws.len() < limit {
             for parked in self.async_awaiters(limit - raws.len()) {
                 self.async_record(parked, &mut record);
             }
