@@ -44,6 +44,7 @@ pub(crate) struct NodeHostState {
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
     pub(crate) vm: super::node_host_vm::VmState,
+    pub(crate) wasm: super::node_host_wasm::WasmSlot,
     #[cfg(unix)]
     pub(crate) child: super::node_host_child::ChildState,
     #[cfg(unix)]
@@ -303,6 +304,7 @@ impl Interpreter {
         self.setup_node_host_idna();
         self.setup_node_host_os();
         self.setup_node_host_crypto();
+        self.setup_node_host_wasm();
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();

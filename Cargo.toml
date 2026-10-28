@@ -60,6 +60,11 @@ md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
+# WebAssembly interpreter behind the `WebAssembly` global of `--node` mode (#1378): a pure-Rust
+# register-machine interpreter (MIT OR Apache-2.0), without the `wat` text parser and SIMD. `portable-dispatch`:
+# the default tail-call dispatch only avoids native stack growth if LLVM turns every handler call into a
+# sibling call, which fails under LTO off and in the release-nolto/release-checked profiles.
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "portable-dispatch"] }
 
 # Shipped build: fat LTO and one codegen unit, +6.4% JetStream 3 score geomean
 # and -5.9% micro-suite wall time for ~2.5-3x crate build time (issue #935;

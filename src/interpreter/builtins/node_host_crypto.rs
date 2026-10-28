@@ -199,10 +199,10 @@ macro_rules! tri {
 /// The bytes behind an ArrayBuffer, typed array or DataView, read through the
 /// engine's own slots (never through properties the caller can shadow). A
 /// detached buffer is empty, as it is for Node.
-struct Window {
-    buffer: std::rc::Rc<std::cell::RefCell<BufferData>>,
-    offset: usize,
-    len: usize,
+pub(super) struct Window {
+    pub(super) buffer: std::rc::Rc<std::cell::RefCell<BufferData>>,
+    pub(super) offset: usize,
+    pub(super) len: usize,
 }
 
 fn data_view_byte_length(dv: &DataViewInfo) -> usize {
@@ -216,7 +216,7 @@ fn data_view_byte_length(dv: &DataViewInfo) -> usize {
     }
 }
 
-fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
+pub(super) fn window(interp: &Interpreter, v: &JsValue) -> Option<Window> {
     let cell = interp.get_object_cell(v.as_object_id()?)?;
     let obj = cell.borrow();
     let (buffer, offset, len, detached) = match &obj.kind {
