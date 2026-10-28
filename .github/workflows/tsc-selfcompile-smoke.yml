@@ -12,6 +12,8 @@ on:
     branches: [main]
     paths:
       - "src/**"
+      - "node-lib/**"
+      - "scripts/node-*.js"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/run-tsc-selfcompile-oracle.py"
@@ -21,6 +23,8 @@ on:
     branches: [main]
     paths:
       - "src/**"
+      - "node-lib/**"
+      - "scripts/node-*.js"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/run-tsc-selfcompile-oracle.py"
@@ -35,9 +39,10 @@ env:
 permissions:
   contents: read
 
+# Only PR pushes cancel each other; every commit on main keeps its own result.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   smoke:
@@ -54,7 +59,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # Peak RSS does not depend on LTO, so skip the slow fat-LTO link.
+      # The smoke case peaks at about 2.4x Node, far below the 6x cap, so the
+      # slow fat-LTO link buys nothing here (the nightly job uses the shipped profile).
       - name: Build
         env:
           CARGO_PROFILE_RELEASE_LTO: "off"
@@ -63,7 +69,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.11.0
 
       - name: Install typescript
         run: npm install --prefix "$RUNNER_TEMP/tsc" "typescript@${TYPESCRIPT_VERSION}" --ignore-scripts --no-audit --no-fund

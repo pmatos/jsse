@@ -5,7 +5,7 @@ name: Nightly tsc self-compile
 # generated program on Node and on `jsse --node`; the emitted files must be
 # byte-identical and jsse's peak RSS within the max_rss_ratio of
 # scripts/tsc-fixtures/selfcompile-budget.json. Wall time is recorded in the
-# step summary and the report artifact, never enforced. Non-blocking by
+# step summary (the tail of the log) and the report artifact, never enforced. Non-blocking by
 # trigger only (schedule/workflow_dispatch never gate pull_request/push).
 
 on:
@@ -27,7 +27,7 @@ concurrency:
 jobs:
   selfcompile:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.11.0
 
       - name: Fetch the TypeScript sources and compiler
         run: |
@@ -61,19 +61,19 @@ jobs:
           TSC_DIR: ${{ runner.temp }}/tsc/node_modules/typescript
         run: |
           set -o pipefail
-          uv run python scripts/run-tsc-selfcompile-oracle.py --require --ci --jsse ./target/release/jsse --timeout 10800 --report "$RUNNER_TEMP/selfcompile-report.json" | tee "$RUNNER_TEMP/selfcompile.log"
+          uv run python scripts/run-tsc-selfcompile-oracle.py --require --ci --jsse ./target/release/jsse --timeout 4200 --report "$RUNNER_TEMP/selfcompile-report.json" | tee "$RUNNER_TEMP/selfcompile.log"
 
       - name: Summarise
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         run: |
           {
             echo '```'
-            grep -A6 '^case ' "$RUNNER_TEMP/selfcompile.log" || true
+            tail -n 20 "$RUNNER_TEMP/selfcompile.log" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload report
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tsc-selfcompile-report

@@ -1,7 +1,7 @@
 //! The small self-compile guard (#1249): `scripts/run-tsc-selfcompile-oracle.py --smoke` compiles a
 //! generated 60-module program with tsc 6.0.3 on Node and on `jsse --node` and requires the emitted
-//! JS, declarations and maps to be byte-identical (and within the budget of
-//! scripts/tsc-fixtures/selfcompile-budget.json, if one is set). The full cases (the compiler
+//! JS, declarations and maps to be byte-identical and jsse's peak RSS to stay within the
+//! `max_rss_ratio` (6x Node) of scripts/tsc-fixtures/selfcompile-budget.json. The full cases (the compiler
 //! project and all of src/, minutes on jsse) are the same script without `--smoke` and need
 //! TS_SRC_DIR. Like tests/node_tsc.rs this guard needs TSC_DIR (an installed typescript 6.0.3) and
 //! passes with a notice without it. Run it with `--profile release-nolto`.
