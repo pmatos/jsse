@@ -1,5 +1,6 @@
 use super::super::*;
 use super::array_dense;
+use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
 use super::predicate_quantification::{self, Quantifier};
 use super::reduction::{self, Reduction};
@@ -136,7 +137,7 @@ pub(super) fn get_if_present(
 
 // CreateDataPropertyOrThrow(A, ToString(idx), value) appending in place when
 // A is a plain dense Array whose next index is `idx`.
-fn create_data_property_at(
+pub(super) fn create_data_property_at(
     interp: &mut Interpreter,
     a: &JsValue,
     idx: usize,
@@ -960,7 +961,7 @@ fn require_callable(interp: &mut Interpreter, val: &JsValue, msg: &str) -> Resul
 }
 
 // ArraySpeciesCreate (§23.1.3.7.1)
-fn array_species_create(
+pub(super) fn array_species_create(
     interp: &mut Interpreter,
     original_array: &JsValue,
     length: usize,
@@ -1838,99 +1839,12 @@ impl Interpreter {
 
         // Array.prototype.map
         self.define_method(proto_id, "map", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(interp, &callback, "map callback is not a function") {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let a = match array_species_create(interp, &o, len) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            interp.with_gc_root_scope(|interp| {
-                interp.gc_root_value(&a);
-                for k in 0..len {
-                    match get_if_present(interp, &o, k) {
-                        Ok(Some(kvalue)) => {
-                            match interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue, JsValue::number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => {
-                                    if let Err(e) = create_data_property_at(interp, &a, k, v) {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                                other => return other,
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(c) => return c,
-                    }
-                }
-                Completion::Normal(a)
-            })
+            array_transform::transform(interp, Transform::ArrayMap, this_val, args)
         });
 
         // Array.prototype.filter
         self.define_method(proto_id, "filter", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            if let Err(c) = require_callable(interp, &callback, "filter callback is not a function")
-            {
-                return c;
-            }
-            let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let a = match array_species_create(interp, &o, 0) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            interp.with_gc_root_scope(|interp| {
-                interp.gc_root_value(&a);
-                let mut to: usize = 0;
-                for k in 0..len {
-                    match get_if_present(interp, &o, k) {
-                        Ok(Some(kvalue)) => {
-                            match interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue.clone(), JsValue::number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
-                                        if let Err(e) =
-                                            create_data_property_at(interp, &a, to, kvalue)
-                                        {
-                                            return Completion::Throw(e);
-                                        }
-                                        to += 1;
-                                    }
-                                }
-                                other => return other,
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(c) => return c,
-                    }
-                }
-                Completion::Normal(a)
-            })
+            array_transform::transform(interp, Transform::ArrayFilter, this_val, args)
         });
 
         // Array.prototype.reduce

@@ -1,4 +1,5 @@
 use super::super::*;
+use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
 use super::predicate_quantification::{self, Quantifier};
 use super::reduction::{self, Reduction};
@@ -2596,51 +2597,7 @@ impl Interpreter {
             "map".to_string(),
             1,
             |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = typed_array_length(&ta);
-
-                // Use TypedArraySpeciesCreate
-                let new_ta_val = match interp
-                    .typed_array_species_create(this_val, &[JsValue::number(len as f64)])
-                {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
-                interp.with_gc_root_scope(|interp| {
-                    interp.gc_root_value(&new_ta_val);
-
-                    let new_ta = if let Some(o) = new_ta_val.as_object_id()
-                        && let Some(obj) = interp.get_object_cell(o)
-                    {
-                        obj.borrow().typed_array_info().unwrap().clone()
-                    } else {
-                        return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                    };
-                    // TypedArrayCreateFromConstructor(..., accessMode=~write~):
-                    // result must not be backed by an immutable buffer.
-                    if let Err(c) = check_ta_buffer_writable(interp, &new_ta) {
-                        return c;
-                    }
-
-                    for i in 0..len {
-                        let val = typed_array_get_index(&ta, i);
-                        match interp.call_function(
-                            &callback,
-                            &this_arg,
-                            &[val, JsValue::number(i as f64), this_val.clone()],
-                        ) {
-                            Completion::Normal(result) => {
-                                typed_array_set_index(&new_ta, i, &result);
-                            }
-                            other => return other,
-                        }
-                    }
-                    Completion::Normal(new_ta_val)
-                })
+                array_transform::transform(interp, Transform::TypedArrayMap, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2652,52 +2609,7 @@ impl Interpreter {
             "filter".to_string(),
             1,
             |interp, this_val, args| {
-                let (ta, callback) = match extract_ta_and_callback(interp, this_val, args) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let mut kept: Vec<JsValue> = Vec::new();
-                let len = typed_array_length(&ta);
-                for i in 0..len {
-                    let val = typed_array_get_index(&ta, i);
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[val.clone(), JsValue::number(i as f64), this_val.clone()],
-                    ) {
-                        Completion::Normal(result) => {
-                            if interp.to_boolean_val(&result) {
-                                kept.push(val);
-                            }
-                        }
-                        other => return other,
-                    }
-                }
-                let len = kept.len();
-
-                // Use TypedArraySpeciesCreate
-                let new_ta_val = match interp
-                    .typed_array_species_create(this_val, &[JsValue::number(len as f64)])
-                {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
-
-                if let Some(o) = new_ta_val.as_object_id()
-                    && let Some(obj) = interp.get_object_cell(o)
-                {
-                    let new_ta = obj.borrow().typed_array_info().unwrap().clone();
-                    // TypedArrayCreateFromConstructor(..., accessMode=~write~):
-                    // result must not be backed by an immutable buffer.
-                    if let Err(c) = check_ta_buffer_writable(interp, &new_ta) {
-                        return c;
-                    }
-                    for (i, val) in kept.iter().enumerate() {
-                        typed_array_set_index(&new_ta, i, val);
-                    }
-                }
-                Completion::Normal(new_ta_val)
+                array_transform::transform(interp, Transform::TypedArrayFilter, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -4916,7 +4828,7 @@ impl Interpreter {
     }
 }
 
-fn extract_ta_and_callback(
+pub(super) fn extract_ta_and_callback(
     interp: &mut Interpreter,
     this_val: &JsValue,
     args: &[JsValue],
@@ -5341,7 +5253,7 @@ fn ta_buffer_is_immutable(interp: &Interpreter, ta: &TypedArrayInfo) -> bool {
 
 /// Spec ValidateTypedArray(..., accessMode=~write~) — throws TypeError if the
 /// TypedArray's backing buffer is immutable.
-fn check_ta_buffer_writable(
+pub(super) fn check_ta_buffer_writable(
     interp: &mut Interpreter,
     ta: &TypedArrayInfo,
 ) -> Result<(), Completion> {

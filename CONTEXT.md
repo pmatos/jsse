@@ -192,7 +192,6 @@ roots. `RootStack` permits only LIFO push/pop/truncate, via `gc_root_id`,
 `gc_unroot_id` and frame helpers. `gc_root_frame` saves the depth;
 `gc_unroot_frame` truncates to it. Values outliving the call belong in a
 Pinned Native Root or Rooted Slot.
-Roots retain Rust locals across GC safepoints.
 _Avoid_: root scope marker, gc stack pointer.
 
 **GC Root Scope**:
@@ -259,28 +258,31 @@ Borrows end before `create_type_error` mutates the arena.
 _Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
 
 **FindViaPredicate**:
-The shared Array/TypedArray find-family module (`builtins/find_via_predicate.rs`).
-`FindMethod` selects the method; its two family entry points own receiver
-preparation, captured length, callable validation, traversal, callback arguments,
-result selection and GC Root Scopes. Array reads visit holes through Get;
-TypedArray reads retain live detach/resize checks without changing the range.
+`FindMethod` in `builtins/find_via_predicate.rs` selects Array/TypedArray find
+operations. Two family entries own preparation, captured range, validation,
+callbacks, results and roots. Array visits holes; TypedArray checks live bounds.
 _Avoid_: search cursor, predicate strategy.
 
 **Reduction**:
-The Array/TypedArray `reduce`/`reduceRight` operation (`builtins/reduction.rs`).
-One entry selects four natives and owns preparation, length capture, seed
-selection, callbacks and abrupt propagation. Array reads skip holes via
-HasProperty/Get; TypedArray reads retain live bounds checks. Each visit roots
-the accumulator before observable reads, then releases replaced accumulators.
+`builtins/reduction.rs` owns Array/TypedArray reduce/reduceRight: preparation,
+captured range, seeds, callbacks and completions. Array skips holes; TypedArray
+checks live bounds. Each visit roots its accumulator before observable reads,
+releasing replaced accumulators.
 _Avoid_: fold strategy, accumulator cursor.
 
 **Predicate Quantification**:
 Array/TypedArray some/every (`builtins/predicate_quantification.rs`): `quantify`
-and `Quantifier` own preparation, captured length, validation, callbacks,
-truthiness, short-circuit results and GC Root Scopes. Private readers skip Array
-holes via HasProperty/Get or read every TypedArray index with live bounds checks.
-Input roots precede preparation; per-visit roots do not accumulate.
+and `Quantifier` own preparation, captured range, validation, callbacks,
+truthiness, short-circuit results and roots. Array skips holes; TypedArray checks
+live bounds. Input roots precede preparation; visit roots do not accumulate.
 _Avoid_: predicate loop, quantifier strategy.
+
+**Array Transformation**:
+`transform`/`Transform` in `builtins/array_transform.rs` own Array/TypedArray
+map/filter: preparation, captured range, callbacks, species, writes and roots.
+Array skips holes and creates output before callbacks; TypedArray reads every
+index, deferring filter output until selection finishes.
+_Avoid_: transform cursor, species builder protocol.
 
 **Close-on-Reject**:
 An iterator helper's argument-validation failure: `require_callable_arg`
