@@ -1,5 +1,9 @@
 use std::cell::Cell;
 mod exact_capacity;
+mod slot_index;
+#[cfg(test)]
+mod slot_index_tests;
+use slot_index::SlotIndex;
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
@@ -270,8 +274,9 @@ type IndexState = foldhash::fast::RandomState;
 // Hybrid storage for `JsObjectData.properties`, in property creation order
 // (the order [[OwnPropertyKeys]] reports String and Symbol keys in): up to
 // `LINEAR_MAX` entries in a linear-scan `SmallVec` (the first `INLINE_CAP`
-// without a heap alloc), then a dense entry list plus a randomised key->slot
-// index once that overflows. Spill is one-way.
+// without a heap alloc), then a dense entry list plus a key->slot `SlotIndex`
+// (tag bytes up to 64 slots, a randomised hash table beyond) once that
+// overflows. Spill is one-way.
 //
 // Entries are addressable by slot (`slot_of` / `entry_at`) so a hot site can
 // remember where a key lived and skip the hash. A slot is only ever a *hint*:
@@ -302,7 +307,7 @@ enum PropertyMapInner {
         // Creation order. `None` is a deleted entry whose slot the index no
         // longer names; `live` counts the `Some`s.
         entries: Vec<Option<Entry>>,
-        index: HashMap<JsPropertyKey, u32, IndexState>,
+        index: SlotIndex,
         live: usize,
     },
 }
@@ -347,9 +352,9 @@ impl PropertyMap {
             PropertyMapInner::Inline(v) => v
                 .iter()
                 .position(|(k, _)| key_bytes_eq(k.as_bytes(), key.as_property_key_bytes())),
-            PropertyMapInner::Spilled { index, .. } => index
-                .get(key.as_property_key_bytes())
-                .map(|&slot| slot as usize),
+            PropertyMapInner::Spilled { entries, index, .. } => {
+                index.find(entries, key.as_property_key_bytes())
+            }
         }
     }
 
@@ -455,19 +460,12 @@ impl PropertyMap {
                 index,
                 live,
             } => {
-                match index.entry(key.clone()) {
-                    std::collections::hash_map::Entry::Occupied(e) => {
-                        let entry = entries[*e.get() as usize]
-                            .as_mut()
-                            .expect("indexed slot is live");
-                        return Some(std::mem::replace(&mut entry.1, value).into_descriptor());
-                    }
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(entries.len() as u32);
-                    }
+                if let Some(slot) = index.find(entries, key.as_bytes()) {
+                    let entry = entries[slot].as_mut().expect("indexed slot is live");
+                    return Some(std::mem::replace(&mut entry.1, value).into_descriptor());
                 }
                 self.digit_leading_keys += u32::from(Self::is_digit_leading(key.as_bytes()));
-                entries.push(Some((key, value)));
+                index.push(entries, key, value);
                 *live += 1;
                 return None;
             }
@@ -501,8 +499,7 @@ impl PropertyMap {
                 index,
                 live,
             } => {
-                index.insert(key.clone(), entries.len() as u32);
-                entries.push(Some((key, value)));
+                index.push(entries, key, value);
                 *live += 1;
             }
         }
@@ -522,18 +519,8 @@ impl PropertyMap {
                     return;
                 }
                 let mut entries: Vec<Option<Entry>> = Vec::with_capacity(total);
-                let mut index: HashMap<JsPropertyKey, u32, IndexState> =
-                    HashMap::with_capacity_and_hasher(total, IndexState::default());
-                for (k, d) in v.drain(..) {
-                    index.insert(k.clone(), entries.len() as u32);
-                    entries.push(Some((k, d)));
-                }
-                let live = entries.len();
-                self.inner = PropertyMapInner::Spilled {
-                    entries,
-                    index,
-                    live,
-                };
+                entries.extend(v.drain(..).map(Some));
+                self.inner = Self::spilled(entries, total);
             }
             PropertyMapInner::Spilled { entries, index, .. } => {
                 entries.reserve(additional);
@@ -548,19 +535,17 @@ impl PropertyMap {
         value: PropertyRecord,
     ) -> PropertyMapInner {
         let mut entries: Vec<Option<Entry>> = Vec::with_capacity(LINEAR_MAX + 1);
-        let mut index: HashMap<JsPropertyKey, u32, IndexState> =
-            HashMap::with_capacity_and_hasher(LINEAR_MAX + 1, IndexState::default());
-        for (k, d) in v.drain(..) {
-            index.insert(k.clone(), entries.len() as u32);
-            entries.push(Some((k, d)));
-        }
-        index.insert(key.clone(), entries.len() as u32);
+        entries.extend(v.drain(..).map(Some));
         entries.push(Some((key, value)));
-        let live = entries.len();
+        Self::spilled(entries, LINEAR_MAX + 1)
+    }
+
+    fn spilled(entries: Vec<Option<Entry>>, capacity: usize) -> PropertyMapInner {
+        let index = SlotIndex::build(&entries, capacity);
         PropertyMapInner::Spilled {
+            live: entries.len(),
             entries,
             index,
-            live,
         }
     }
 
@@ -580,24 +565,17 @@ impl PropertyMap {
                 index,
                 live,
             } => {
-                let slot = index.remove(key.as_property_key_bytes())? as usize;
+                let slot = index.find(entries, key.as_property_key_bytes())?;
+                index.forget(key.as_property_key_bytes());
                 let (_, removed) = entries[slot].take()?;
                 *live -= 1;
                 if slot + 1 == entries.len() {
                     while matches!(entries.last(), Some(None)) {
                         entries.pop();
                     }
+                    index.truncated(entries.len());
                 } else if entries.len() >= COMPACT_MIN_ENTRIES && entries.len() > 2 * *live {
-                    let mut remap = Vec::with_capacity(entries.len());
-                    let mut next = 0u32;
-                    for entry in entries.iter() {
-                        remap.push(next);
-                        next += u32::from(entry.is_some());
-                    }
-                    entries.retain(Option::is_some);
-                    for slot in index.values_mut() {
-                        *slot = remap[*slot as usize];
-                    }
+                    index.compact(entries);
                 }
                 removed
             }
