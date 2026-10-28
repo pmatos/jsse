@@ -41,14 +41,17 @@ pub(super) fn mem_buffer(
     }
 }
 
-/// `memGrow(id, delta)`: the previous size in pages. Always replaces the buffer, as the JS API does.
+/// `memGrow(id, delta)`: the previous size in pages. A successful grow always replaces the buffer, as
+/// the JS API does; a failed one leaves it alone.
 pub(super) fn mem_grow(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
     let id = id_arg(args, 0);
     let Some(memory) = wasm(interp).mems.get(id) else {
         return invalid(interp);
     };
     let outcome = with_ctx(interp, |c| memory.grow(&mut *c, u64::from(id_arg(args, 1))));
-    detach_buffer(interp, id);
+    if outcome.is_ok() {
+        detach_buffer(interp, id);
+    }
     match outcome {
         Ok(previous) => Completion::Normal(JsValue::number(previous as f64)),
         Err(_) => mk_error(

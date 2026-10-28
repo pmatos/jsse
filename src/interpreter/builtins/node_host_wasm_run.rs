@@ -137,7 +137,11 @@ fn trap_message(code: TrapCode) -> &'static str {
 /// `RangeError` for stack exhaustion, a `RuntimeError` for a trap and a `LinkError` for the rest.
 pub(super) fn error_completion(interp: &mut Interpreter, error: wasmi::Error) -> Completion {
     match wasm(interp).pending.take() {
-        Some(Pending::Throw(slot)) => return Completion::Throw(slot_get(interp, slot)),
+        Some(Pending::Throw(slot)) => {
+            let thrown = slot_get(interp, slot);
+            slot_set(interp, slot, JsValue::UNDEFINED);
+            return Completion::Throw(thrown);
+        }
         Some(Pending::Exit(code)) => return Completion::Exit(code),
         None => {}
     }

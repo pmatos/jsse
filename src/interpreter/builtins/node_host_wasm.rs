@@ -60,7 +60,7 @@ impl<T: Copy + std::fmt::Debug> Registry<T> {
 
 pub(super) struct ModuleEntry {
     pub(super) module: Module,
-    pub(super) bytes: Vec<u8>,
+    pub(super) bytes: Rc<Vec<u8>>,
 }
 
 /// The `ArrayBuffer` currently handed out as a memory's `buffer`, the window it covers and the slot

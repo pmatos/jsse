@@ -181,18 +181,18 @@ fn import_decls(bytes: &[u8], module: &Module) -> Vec<DeclImport> {
         .collect()
 }
 
-fn module_entry(interp: &mut Interpreter, id: u32) -> Option<(Module, Vec<u8>)> {
+fn module_entry(interp: &mut Interpreter, id: u32) -> Option<(Module, Rc<Vec<u8>>)> {
     wasm(interp)
         .modules
         .get(id as usize)
-        .map(|m| (m.module.clone(), m.bytes.clone()))
+        .map(|m| (m.module.clone(), Rc::clone(&m.bytes)))
 }
 
-fn module_bytes(interp: &mut Interpreter, id: u32) -> Option<Vec<u8>> {
+fn module_bytes(interp: &mut Interpreter, id: u32) -> Option<Rc<Vec<u8>>> {
     wasm(interp)
         .modules
         .get(id as usize)
-        .map(|m| m.bytes.clone())
+        .map(|m| Rc::clone(&m.bytes))
 }
 
 fn type_error(interp: &mut Interpreter, message: &str) -> Completion {
@@ -217,17 +217,18 @@ pub(super) fn compile(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue
     match Module::new(&wasm(interp).engine, &bytes[..]) {
         Ok(module) => {
             let w = wasm(interp);
-            w.modules.push(ModuleEntry { module, bytes });
+            w.modules.push(ModuleEntry {
+                module,
+                bytes: Rc::new(bytes),
+            });
             Completion::Normal(JsValue::number((w.modules.len() - 1) as f64))
         }
         Err(e) => mk_error(interp, "compile", &e.to_string()),
     }
 }
 
-fn desc(strings: &[&str], numbers: [Option<u64>; 2]) -> Vec<JsValue> {
-    let mut out: Vec<JsValue> = strings.iter().map(|s| js_str(s)).collect();
-    out.extend(numbers.map(|n| n.map_or(JsValue::UNDEFINED, |n| JsValue::number(n as f64))));
-    out
+fn limit_value(n: Option<u64>) -> JsValue {
+    n.map_or(JsValue::UNDEFINED, |n| JsValue::number(n as f64))
 }
 
 /// `[module, name, kind, typeText, min, max]` per import: `typeText` is the signature of a function,
@@ -258,8 +259,14 @@ pub(super) fn module_imports(
                 t.maximum(),
             ),
         };
-        let mut row = vec![js_str(&import.module), js_str(&import.name), js_str(kind)];
-        row.extend(desc(&[&text], [min, max]));
+        let row = vec![
+            js_str(&import.module),
+            js_str(&import.name),
+            js_str(kind),
+            js_str(&text),
+            limit_value(min),
+            limit_value(max),
+        ];
         rows.push(interp.create_array(row));
     }
     Completion::Normal(interp.create_array(rows))
@@ -332,6 +339,9 @@ pub(super) fn instantiate(
     };
     let externs = array_items(interp, arg(args, 1));
     let decls = import_decls(&bytes, &module);
+    if decls.len() != module.imports().count() {
+        return mk_error(interp, "link", "unsupported import section");
+    }
     let mut plan = Vec::with_capacity(decls.len());
     for index in 0..decls.len() {
         let entry = array_items(

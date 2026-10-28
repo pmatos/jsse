@@ -114,6 +114,7 @@
   }
 
   var TYPE_CHARS = {
+    __proto__: null,
     i32: "i",
     i64: "l",
     f32: "f",
@@ -383,7 +384,8 @@
         externs.push(["table", linkHandle(v, "table", where + ": table import requires a WebAssembly.Table")]);
       } else if (row[2] === "global") {
         var held = brandOf(v);
-        var plain = row[3] === "l" ? typeof v === "bigint" : typeof v === "number";
+        var t = row[3];
+        var plain = t === "l" ? typeof v === "bigint" : t === "e" || (t === "r" ? v === null || held[0] === "func" : typeof v === "number");
         if (held[0] === "global") {
           externs.push(["global", held[1]]);
         } else if (plain && !row[4]) {
