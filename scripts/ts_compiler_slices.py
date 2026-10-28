@@ -11,7 +11,8 @@ A slice spec selects suites of the runner's enumeration order (the order of the 
                          the buckets of ts-suite/oracle.json and of the #1269-#1273 tickets)
     shard:I/N            suites I, I+N, ... of the enumeration, as the runner's own --shards/--shardId pick files
     files:a.ts,b.ts      suites of the named test files (base name or tests/cases/compiler/ path)
-    match:REGEX          suites whose title matches the (Python) regular expression
+    match:REGEX          suites whose title matches the (Python) regular expression (it takes the rest of the
+                         spec, '+' included, so it comes last in a union)
     NAME                 a row of SLICES below (another module's rows come with --slices-module)
 
 A spec is a '+'-joined union (`prefix:A-B+files:x.ts`) of the above; a table row may be such a union.
@@ -62,7 +63,9 @@ def suites_from_titles(entries):
         key = full[: len(full) - len(title)].rstrip()
         if not key.startswith(PREFIX + "compiler tests for "):
             continue
-        out.setdefault(key, []).append(full)
+        titles = out.setdefault(key, [])
+        if full not in titles:
+            titles.append(full)
     return [Suite(k, v) for k, v in out.items()]
 
 
@@ -80,12 +83,32 @@ def char_ranges(text):
     return lambda name: any(lo <= name[:1].lower() <= hi for lo, hi in spans)
 
 
-def select(spec, suites, table=None, _seen=()):
+def split_terms(spec):
+    """The '+'-joined terms of a spec; a `match:` term takes the rest of the spec (a regex may contain '+')."""
+    head, sep, tail = spec.partition("match:")
+    if sep and (not head or head.endswith("+")):
+        return [t.strip() for t in head.split("+") if t.strip()] + [sep + tail]
+    return [t.strip() for t in spec.split("+") if t.strip()]
+
+
+def flat_terms(spec, table, _seen=()):
+    """The terms of `spec` with named rows expanded; a row that names itself raises ValueError."""
+    out = []
+    for term in split_terms(spec):
+        if term in table:
+            if term in _seen:
+                raise ValueError(f"slice row {term!r} refers to itself")
+            out += flat_terms(table[term], table, _seen + (term,))
+        else:
+            out.append(term)
+    return out
+
+
+def select(spec, suites, table=None):
     """Suites of `suites` chosen by `spec`, in enumeration order, without duplicates."""
     table = SLICES if table is None else table
     chosen = set()
-    for term in spec.split("+"):
-        term = term.strip()
+    for term in flat_terms(spec, table):
         kind, _, arg = term.partition(":")
         if kind == "first" and arg.isdigit():
             chosen.update(range(min(int(arg), len(suites))))
@@ -103,10 +126,6 @@ def select(spec, suites, table=None, _seen=()):
         elif kind == "match" and arg:
             rx = re.compile(arg)
             chosen.update(i for i, s in enumerate(suites) if rx.search(s.key))
-        elif term in table and term not in _seen:
-            sub = select(table[term], suites, table, _seen + (term,))
-            ids = {id(s) for s in sub}
-            chosen.update(i for i, s in enumerate(suites) if id(s) in ids)
         else:
             raise ValueError(f"unknown slice: {term!r}")
     return [suites[i] for i in sorted(chosen)]

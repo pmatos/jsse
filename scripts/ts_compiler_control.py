@@ -1,6 +1,7 @@
 """Corrupted reference baselines for the control run of scripts/run-ts-compiler-oracle.py (issue #1268)."""
 
 import os
+import re
 import shutil
 
 CONTROL_SUITES = 7
@@ -29,13 +30,19 @@ def make_control(ref, chosen, dest):
         if len(names) < 2 or any(p.base == s.base for p in picked):
             continue
         exts, action = CONTROL_MODES[len(picked)]
-        if action == "add" and any(n.endswith(".errors.txt") for n in names):
+        own = re.compile(
+            re.escape(stem) + r"(?:\(.*\))?(" + "|".join(map(re.escape, exts)) + ")$"
+        )
+        found = [n for e in exts for n in names if own.match(n) and n.endswith(e)]
+        if action == "add":
+            if any(n.endswith(".errors.txt") for n in names):
+                continue
+            found = [stem + exts[0]]
+        if not found:
             continue
         for n in names:
             shutil.copy(os.path.join(ref, n), os.path.join(dest, n))
-        target = next((n for e in exts for n in names if n.endswith(e)), names[0])
-        if action == "add":
-            target = stem + exts[0]
+        target = found[0]
         path = os.path.join(dest, target)
         if action == "remove":
             os.remove(path)

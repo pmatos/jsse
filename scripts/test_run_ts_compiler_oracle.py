@@ -94,6 +94,28 @@ class SelectTest(unittest.TestCase):
             [b for b, _ in self.names("y", table)], ["2dArrays.ts", "E.ts"]
         )
 
+    def test_match_takes_the_rest_of_the_spec_plus_signs_included(self):
+        self.assertEqual(
+            slices.split_terms("first:1+match:a+b|c+d"), ["first:1", "match:a+b|c+d"]
+        )
+        self.assertEqual(slices.split_terms("match:x"), ["match:x"])
+        self.assertEqual(
+            slices.select("match:Arrays\\.t.+$", SUITES)[0].base, "2dArrays.ts"
+        )
+
+    def test_a_row_naming_itself_is_an_error_not_a_hang(self):
+        with self.assertRaises(ValueError):
+            slices.flat_terms("x", {"x": "x+first:1"})
+        with self.assertRaises(ValueError):
+            slices.flat_terms("x", {"x": "y", "y": "x"})
+        self.assertEqual(
+            slices.flat_terms("x", {"x": "first:1+prefix:a"}), ["first:1", "prefix:a"]
+        )
+
+    def test_repeated_titles_are_not_counted_twice(self):
+        doubled = slices.suites_from_titles(entries("d.ts") * 2)
+        self.assertEqual(len(doubled[0].tests), 6)
+
     def test_bad_specs_raise(self):
         for bad in ("nope", "shard:4/3", "prefix:ab", "first:x"):
             with self.assertRaises(ValueError):
@@ -156,6 +178,37 @@ class LocalTest(unittest.TestCase):
         self.assertIn("c.js only written by jsse", text)
         self.assertIn("same.js equals its reference", text)
         self.assertNotIn("a.js", text)
+
+
+class RecordTest(unittest.TestCase):
+    def test_only_known_failure_problems_are_resolved_by_recording(self):
+        problems = [
+            "passes on Node, fails on jsse (not in the baseline): t",
+            "known-failures file lists a test that no longer fails on jsse: u",
+            "local baseline x differs",
+        ]
+        self.assertEqual(oracle.recordable(problems), ["local baseline x differs"])
+
+
+class ControlTest(unittest.TestCase):
+    def test_corrupts_the_suites_own_files_not_a_dotted_neighbour(self):
+        import ts_compiler_control as control
+
+        with (
+            tempfile.TemporaryDirectory() as ref,
+            tempfile.TemporaryDirectory() as dest,
+        ):
+            for n in ("foo.js", "foo.types", "foo.bar.js", "foo.bar.types"):
+                Path(ref, n).write_text("ref\n")
+            suite = slices.Suite(
+                "compiler tests compiler tests for tests/cases/compiler/foo.ts", []
+            )
+            picked, done = control.make_control(ref, [suite], dest)
+            self.assertEqual(done, ["foo.js: append"])
+            self.assertTrue(
+                Path(dest, "foo.js").read_text().endswith("corrupted reference\n")
+            )
+            self.assertEqual(Path(dest, "foo.bar.js").read_text(), "ref\n")
 
 
 class KnownFileTest(unittest.TestCase):
