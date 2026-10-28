@@ -220,6 +220,33 @@ print(construct().stack.split('\\n').length);";
 }
 
 #[test]
+fn private_and_symbol_methods_have_no_type_name_and_private_calls_point_at_the_paren() {
+    let source = r#"const s = Symbol('fin');
+class R {
+  #m() { return new Error('e').stack.split('\n').slice(1, 3).map((l) => l.trim()).join(' | '); }
+  [s]() { return new Error('e').stack.split('\n')[1].trim(); }
+  k() { return new Error('e').stack.split('\n')[1].trim(); }
+  run() { return [this.#m(), this[s](), this.k(), this?.#m()]; }
+}
+for (const f of new R().run()) console.log(f);"#;
+    for mode in [None, Some("--no-bytecode")] {
+        let mut args = vec!["--node"];
+        args.extend(mode);
+        args.extend(["-e", source]);
+        let out = jsse(&args, None);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(
+            stdout(&out),
+            "at #m ([eval]:3:17) | at R.run ([eval]:6:26)\n\
+             at [fin] ([eval]:4:18)\n\
+             at R.k ([eval]:5:16)\n\
+             at #m ([eval]:3:17) | at R.run ([eval]:6:59)",
+            "mode {mode:?}"
+        );
+    }
+}
+
+#[test]
 fn source_url_comments_supply_file_and_line() {
     let out = jsse(
         &[

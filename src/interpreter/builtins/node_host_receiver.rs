@@ -29,7 +29,16 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn receiver_type_name(&self, receiver: &JsValue) -> Option<String> {
+    /// V8 prints a private (`#m`) or symbol-keyed (`[sym]`) method without
+    /// its receiver's type.
+    pub(super) fn receiver_type_name(
+        &self,
+        receiver: &JsValue,
+        method: &Option<String>,
+    ) -> Option<String> {
+        if method.as_deref().is_some_and(|n| n.starts_with(['#', '['])) {
+            return None;
+        }
         let Some(mut id) = receiver.as_object_id() else {
             return [
                 (receiver.is_string(), "String"),

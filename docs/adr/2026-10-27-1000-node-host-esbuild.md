@@ -46,6 +46,9 @@ Status: accepted, epic #1214, issue #1252 (builds on #1236 child_process, #1233 
 6. **The sync API has no worker.** `worker_threads` does not exist, so `buildSync` and `transformSync` take
    esbuild's own fallback (`execFileSync` of a one-shot service fed on stdin) instead of Node's
    `Worker` + `Atomics.wait`. Results are identical; plugins are rejected in the sync API in both.
+   Since #1294 `worker_threads` exists (ESLint needs it), so the CommonJS loader answers esbuild's own
+   `require('worker_threads')` (from `node_modules/esbuild/lib/main.js`) with `MODULE_NOT_FOUND`, keeping the
+   fallback; `tests/node_worker_threads.rs` pins it.
 7. **`defaultWD` is captured when `esbuild` is first required** (`process.cwd()` at that moment), on Node and jsse
    alike; a script that `chdir`s afterwards must pass `absWorkingDir`.
 
