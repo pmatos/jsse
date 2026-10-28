@@ -61,7 +61,8 @@
     getMethodName() {
       var frame = this.#frame;
       if (frame.toplevel || frame.constructor) return null;
-      return frame.functionName;
+      var name = frame.functionName;
+      return name === null ? null : name.slice(name.lastIndexOf(".") + 1);
     }
     getFileName() {
       return this.#frame.file;
@@ -126,7 +127,8 @@
         var type = frame.typeName;
         if (name === null) return type + ".<anonymous> (" + where + ")";
         var accessor = name.lastIndexOf("get ", 0) === 0 || name.lastIndexOf("set ", 0) === 0;
-        if (type !== null && !accessor && name.lastIndexOf(type, 0) !== 0) {
+        var qualified = name.indexOf(".") !== -1;
+        if (type !== null && !accessor && !qualified && name.lastIndexOf(type, 0) !== 0) {
           name = type + "." + name;
         }
         return name + " (" + where + ")";

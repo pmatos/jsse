@@ -834,7 +834,7 @@ impl Interpreter {
                             return Completion::Normal(JsValue::boolean(true));
                         }
                     }
-                    // Check if it's a binding in the global env (var declaration not on global object)
+                    // A binding in the global env (var declaration not on global object)
                     if self.realm().global_env.borrow().bindings.contains_key(name) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
@@ -1022,7 +1022,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                 // import.defer() loads module without evaluation, returns deferred namespace
-                // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
+                // but eagerly evaluates async transitive deps (ContinueDynamicImport step 25)
                 let module_path = self.import_referrer(env);
                 let resolved = match self.resolve_module_specifier(
                     &source,
@@ -4647,7 +4647,7 @@ impl Interpreter {
                             excluded_keys.push(key.clone());
                         }
 
-                        // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
+                        // §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
                         let (target, default_expr) =
                             if let Expression::Assign(AssignOp::Assign, target, default) =
                                 &prop.value
@@ -5817,7 +5817,7 @@ impl Interpreter {
                                 if !is_simple_g {
                                     func_env.borrow_mut().has_parameter_expressions = true;
                                 }
-                                // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
+                                // §14.4.10 step 1: FunctionDeclarationInstantiation
                                 if let Err(error) = self.bind_function_parameters(
                                     &params,
                                     args,
@@ -6780,7 +6780,7 @@ impl Interpreter {
             }
         }
 
-        // Pre-instantiate lexical declarations (let/const/class) in lex_env — uninitialized (TDZ)
+        // Pre-instantiate lexical declarations (let/const/class) in lex_env (TDZ)
         // Per spec §19.2.1.4 step 14
         for stmt in body {
             match stmt {
@@ -8202,6 +8202,7 @@ impl Interpreter {
                 &resolvers,
                 &promise,
                 has_simple_params,
+                is_arrow.then_some(this_val),
             ) {
                 return done;
             }

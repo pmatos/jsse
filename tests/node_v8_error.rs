@@ -66,6 +66,7 @@ fn replay_named(name: &str, extra: &[&str], stress: Option<&str>) {
             *text = text
                 .split("## async before await")
                 .next()
+                .and_then(|kept| kept.split("## async arrow body").next())
                 .unwrap()
                 .trim_end()
                 .to_string();
@@ -93,6 +94,35 @@ fn required_modules_report_their_file_line_and_column() {
     ] {
         replay_named("modules", extra, stress);
     }
+}
+
+#[test]
+fn frame_names_and_error_keys_match_node() {
+    for (extra, stress) in [
+        (&[][..], None),
+        (&["--no-bytecode"][..], None),
+        (&[][..], Some("7")),
+    ] {
+        replay_named("names", extra, stress);
+    }
+}
+
+#[test]
+fn default_mode_keeps_engine_error_keys() {
+    let out = jsse(
+        &[
+            "-e",
+            r#"var e; try { null.x } catch (x) { e = x }
+var a = {}; a.f = function () { return new Error("x") };
+print(JSON.stringify(Object.getOwnPropertyNames(e)), JSON.stringify(Object.getOwnPropertyNames(new AggregateError([], "m", { cause: 1 }))), a.f().stack === "")"#,
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        r#"["message","name"] ["message","cause","errors"] true"#
+    );
 }
 
 #[test]

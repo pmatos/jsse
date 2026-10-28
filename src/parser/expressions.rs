@@ -167,7 +167,7 @@ impl<'a> Parser<'a> {
                             if let Expression::Assign(AssignOp::Assign, target, _) = &prop.value {
                                 self.validate_destructuring_target(target)?;
                             } else if prop.shorthand {
-                                // Shorthand { eval } or { arguments } invalid in strict
+                                // Shorthand { eval }/{ arguments } invalid in strict
                                 if let Expression::Identifier(name) = &prop.value {
                                     if self.strict && (name == "eval" || name == "arguments") {
                                         return Err(self.error(
@@ -206,7 +206,7 @@ impl<'a> Parser<'a> {
             // Single-element Sequence is a parenthesization marker
             Expression::Sequence(exprs) if exprs.len() == 1 => {
                 match &exprs[0] {
-                    // Parenthesized Object/Array patterns are not valid destructuring targets
+                    // Parenthesized Object/Array patterns are not destructuring targets
                     Expression::Object(..) | Expression::Array(..) => {
                         Err(self.error("Invalid destructuring assignment target"))
                     }
@@ -291,7 +291,9 @@ impl<'a> Parser<'a> {
             self.last_obj_had_proto_dup = saved_proto_dup;
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
             self.advance()?;
+            let right_start = self.current_token_start;
             let right = self.parse_assignment_expression()?;
+            self.infer_assigned_name(op, &left, &right, right_start);
             // When LHS is parenthesized, wrap in Sequence to prevent IsIdentifierRef
             let left = if lhs_parenthesized && matches!(left, Expression::Identifier(_)) {
                 Expression::Sequence(vec![left])
@@ -304,7 +306,7 @@ impl<'a> Parser<'a> {
                 ExprBox::new(right),
             ))
         } else {
-            // Not a destructuring assignment — check for deferred __proto__ dup error
+            // Not a destructuring assignment — deferred __proto__ dup error
             if self.last_obj_had_proto_dup {
                 self.last_obj_had_proto_dup = saved_proto_dup;
                 return Err(
@@ -793,7 +795,7 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         Expression::Identifier(name)
                     };
-                    // Continue consuming .prop, [expr], () as part of the same optional chain
+                    // Keep consuming .prop, [expr], () in the same optional chain
                     loop {
                         match &self.current {
                             Token::Dot => {
@@ -868,8 +870,8 @@ impl<'a> Parser<'a> {
         let mut callee = if self.current == Token::Keyword(Keyword::New) {
             self.parse_new_expression()?
         } else {
-            // `new import(...)` is a syntax error (ImportCall is CallExpression, not MemberExpression)
-            // but `new (import(...))` is valid — parens make it a CoveredParenthesizedExpression
+            // `new import(...)` is a syntax error (ImportCall is not a MemberExpression)
+            // but `new (import(...))` is valid — parenthesized
             let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
             let primary = self.parse_primary_expression()?;
             if is_direct_import
@@ -1355,7 +1357,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let saved_no_in = self.no_in;
                 self.no_in = false;
-                // Could be: parenthesized expression, arrow params, or empty arrow ()=>
+                // Parenthesized expression, arrow params, or empty arrow ()=>
                 if self.current == Token::RightParen {
                     // () => ...
                     self.advance()?;
@@ -1801,7 +1803,7 @@ impl<'a> Parser<'a> {
         }
 
         // Check for get/set accessor
-        // Escaped identifiers like g\u0065t don't count as get/set keyword — error if used as accessor
+        // Escaped g\u0065t is not get/set — error if used as accessor
         let escaped_get_or_set =
             matches!(&self.current, Token::IdentifierWithEscape(n) if n == "get" || n == "set");
         let get_or_set_name = match &self.current {
@@ -1929,11 +1931,11 @@ impl<'a> Parser<'a> {
                     return Err(self.error(format!("Unexpected token '{n}'")));
                 }
             }
-            // await cannot be a shorthand IdentifierReference in static blocks, async, or modules
+            // await is not a shorthand IdentifierReference in static blocks, async, modules
             if (self.in_static_block || self.in_async || self.is_module) && name == "await" {
                 return Err(self.error("'await' is not allowed as an identifier in this context"));
             }
-            // yield cannot be a shorthand IdentifierReference in generators or strict mode
+            // yield is not a shorthand IdentifierReference in generators or strict mode
             if self.in_generator && name == "yield" {
                 return Err(self.error("'yield' is not allowed as an identifier in this context"));
             }
@@ -2060,7 +2062,7 @@ impl<'a> Parser<'a> {
         self.in_static_block = false;
         let prev_generator = self.in_generator;
         let prev_async = self.in_async;
-        // FunctionExpression name uses [~Yield]; GeneratorExpression name uses [+Yield]
+        // FunctionExpression name is [~Yield]; GeneratorExpression name is [+Yield]
         self.in_generator = is_generator;
         self.in_async = false;
         let name = if let Some(n) = self.current_identifier_name() {
