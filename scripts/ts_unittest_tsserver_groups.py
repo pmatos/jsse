@@ -224,6 +224,7 @@ def regex_of(files):
 
 
 GROUPS = {name: regex_of(files) for name, files in BATCHES.items()}
+BATCH_OF = {f: name for name, files in BATCHES.items() for f in files}
 
 
 def groups_of_half(half):
@@ -276,9 +277,7 @@ def check_groups(ts_dir):
                     problems.append(
                         f"{rel}.ts: describe {title!r} is selected by {hits or 'no group'}"
                     )
-                elif rel in FILES and hits[0] != next(
-                    (b for b, fs in BATCHES.items() if rel in fs), None
-                ):
+                elif rel in BATCH_OF and hits[0] != BATCH_OF[rel]:
                     problems.append(
                         f"{rel}.ts: describe {title!r} is selected by {hits[0]}, not by its own group"
                     )

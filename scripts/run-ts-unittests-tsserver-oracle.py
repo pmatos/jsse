@@ -56,8 +56,7 @@ def main(argv):
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--half", default="a-m", choices=(*table.HALVES, "all"))
     o, rest = ap.parse_known_args(argv)
-    half = o.half
-    base.DEFAULT_GROUPS = table.groups_of_half(half)
+    base.DEFAULT_GROUPS = table.groups_of_half(o.half)
     given = os.environ.get("TS_SRC_DIR")
     ts_dir = os.path.realpath(given) if given else None
     if ts_dir and "--list" not in rest and base.check_checkout(ts_dir) is None:
