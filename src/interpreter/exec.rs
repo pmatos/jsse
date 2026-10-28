@@ -1103,7 +1103,7 @@ impl Interpreter {
             Statement::ForOf(fo) => self.exec_for_of(fo, env, None),
             Statement::Return(expr) => {
                 let val = if let Some(e) = expr {
-                    let can_tco = env.borrow().strict
+                    let can_tco = self.tco_on(env)
                         && self.generator_context.is_none()
                         && !self.in_state_machine
                         && self.tco_suppress_depth == 0

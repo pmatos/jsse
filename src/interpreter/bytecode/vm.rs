@@ -1830,14 +1830,14 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 2;
                     let site_id = CallSiteId(decode_u32(chunk, pc), 0);
                     pc += 4;
-                    // Counted before the strict tail-call return below, which leaves
+                    // Counted before the tail-call return below, which leaves
                     // the VM without reaching the dispatch site: strict tail calls
                     // stay in `calls_from_vm`.
                     #[cfg(feature = "perf-counters")]
                     {
                         interp.perf.calls_from_vm += 1;
                     }
-                    if op == Op::ReturnCall && frame_env.borrow().strict {
+                    if op == Op::ReturnCall && interp.tco_on(frame_env) {
                         let (callee, this_value, args) = take_call_operands(stack, argc);
                         release_call_operands(interp, &callee, &this_value, &args);
                         // Persistent slots below the call (a for-in enumerator, a

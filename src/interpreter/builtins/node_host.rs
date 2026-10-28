@@ -92,6 +92,13 @@ impl Interpreter {
         self.setup_node_host();
     }
 
+    /// Whether a strict call in tail position may replace its caller's
+    /// frame. Off under `--node`: V8 has no proper tail calls, and mocha's
+    /// traces of a failing `it(() => assert...)` need the test's own frame.
+    pub(crate) fn tco_on(&self, env: &EnvRef) -> bool {
+        env.borrow().strict && !self.node_host_enabled
+    }
+
     /// Install a `__host_*` primitive as a non-enumerable, writable,
     /// configurable property on the realm's global object. This makes it
     /// reachable both as a bare identifier and as `globalThis.__host_*`.
