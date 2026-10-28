@@ -74,7 +74,12 @@ function runTest(fn) {
   const t = { assert: nodeAssert, diagnostic() {}, after() {} };
   if (fn.length < 2) return fn(t);
   return new Promise((resolve, reject) => {
-    fn(t, (error) => (error ? reject(error) : resolve()));
+    const timer = setTimeout(() => reject(new Error('callback-style test never called done()')), 120000);
+    fn(t, (error) => {
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    });
   });
 }
 

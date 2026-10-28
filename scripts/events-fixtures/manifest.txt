@@ -5,7 +5,8 @@
 # '../common/index.mjs', '../common/gc.js' and 'node:test' imports are rewritten to
 # esm-shim.mjs (which also carries gcUntil and the jsse-only subtest skips).
 # Subtests that cannot run on jsse yet are skipped by name in harness.js
-# (__eventsJsseSkips) with their reason. A test is one file, or consecutive
+# (__eventsJsseSkips; esm-shim.mjs has jsseSkips for .mjs tests) with their
+# reason. A test is one file, or consecutive
 # <name>.js.partN slices (the 20,000-byte file budget) whose concatenation has
 # the sha256 on its line. "~<test>|s#from#to#|<reason>" (literal text) patches
 # the wrapped test text on jsse only, for a block that cannot run there. A test

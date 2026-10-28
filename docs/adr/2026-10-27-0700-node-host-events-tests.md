@@ -41,7 +41,8 @@ probe could never pass.
    - `Does not hang forever` (`test-aborted-util`): spawns `process.execPath
      --input-type=module` and feeds the module on stdin; jsse has no
      `--input-type` flag.
-5. **Not vendored (`!` lines in the manifest).** `test-abortsignal-cloneable`
+5. **Not vendored (`!` lines in the manifest).** Two of the five below were
+   vendored later (last addendum). `test-abortsignal-cloneable`
    needs `MessageChannel`; `test-eventemitter-asyncresource` needs
    `async_hooks`; `test-event-emitter-no-error-provided-to-error-event` needs
    `domain`; `test-abortsignal-drop-settled-signals.mjs` needs
