@@ -43,6 +43,7 @@ pub(crate) struct NodeHostState {
     pub(crate) expose_internals: bool,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
+    pub(crate) zlib: super::node_host_zlib::ZlibState,
     pub(crate) vm: super::node_host_vm::VmState,
     pub(crate) wasm: super::node_host_wasm::WasmSlot,
     #[cfg(unix)]
@@ -179,6 +180,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     },
                 };
+                interp.latch_exit(code);
                 Completion::Exit(code)
             },
         ));
@@ -305,6 +307,7 @@ impl Interpreter {
         self.setup_node_host_os();
         self.setup_node_host_crypto();
         self.setup_node_host_wasm();
+        self.setup_node_host_zlib();
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();

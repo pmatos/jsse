@@ -73,6 +73,8 @@ mod node_host_wasm;
 mod node_host_wasm_module;
 mod node_host_wasm_objects;
 mod node_host_wasm_run;
+mod node_host_zlib;
+mod node_host_zlib_ctx;
 mod node_prelude;
 mod number;
 mod object;

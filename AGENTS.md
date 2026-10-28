@@ -103,6 +103,8 @@ local hook was bypassed.
 ## Conventions
  - PR titles: [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   PRs are squash-merged by default - clean-history branches.
+ - Every change reaches `main` through a PR: the `main` ruleset blocks direct
+  pushes for everyone except the release deploy key used by `release.yml`.
 
 ## Testing
 - Primary validation: test262 suite

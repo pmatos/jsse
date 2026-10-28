@@ -321,8 +321,9 @@
       while (tickHead < tickQueue.length) {
         var tock = tickQueue[tickHead];
         tickQueue[tickHead++] = undefined;
-        if (tock.args === undefined) tock.callback();
-        else tock.callback.apply(undefined, tock.args);
+        var callback = tock.callback;
+        if (tock.args === undefined) callback();
+        else callback.apply(undefined, tock.args);
       }
       tickQueue = [];
       tickHead = 0;

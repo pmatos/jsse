@@ -223,6 +223,13 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/readline/interface_state"),
     builtin!("internal/readline/promises"),
     builtin!("internal/readline/utils"),
+    builtin!("zlib"),
+    builtin!("internal/zlib/base"),
+    builtin!("internal/zlib/binding"),
+    builtin!("internal/zlib/classes"),
+    builtin!("internal/zlib/constants"),
+    builtin!("internal/zlib/errors"),
+    builtin!("internal/zlib/util"),
 ];
 
 impl Interpreter {

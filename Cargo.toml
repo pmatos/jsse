@@ -65,6 +65,10 @@ sha3 = "0.10"
 # the default tail-call dispatch only avoids native stack growth if LLVM turns every handler call into a
 # sibling call, which fails under LTO off and in the release-nolto/release-checked profiles.
 wasmi = { version = "2", default-features = false, features = ["std", "validate", "portable-dispatch"] }
+# zlib's z_stream API in pure Rust (a zlib-ng port) behind the `zlib` module of
+# `--node` mode (#1239); the high-level wrapper crates' safe API cannot express
+# Z_BLOCK, memLevel or a strategy change in params().
+libz-rs-sys = { version = "0.6", default-features = false, features = ["std", "rust-allocator"] }
 
 # Shipped build: fat LTO and one codegen unit, +6.4% JetStream 3 score geomean
 # and -5.9% micro-suite wall time for ~2.5-3x crate build time (issue #935;
