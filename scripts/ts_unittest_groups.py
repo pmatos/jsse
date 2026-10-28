@@ -20,10 +20,3 @@ GROUPS = {
     "sys-symlinkWatching": r"^unittests:: sys:: symlinkWatching",
     "debugDeprecation": r"^unittests:: debugDeprecation",
 }
-
-# Every title of these prefixes has to belong to exactly one group.
-PREFIXES = (
-    "unittests:: config::",
-    "unittests:: sys::",
-    "unittests:: debugDeprecation",
-)

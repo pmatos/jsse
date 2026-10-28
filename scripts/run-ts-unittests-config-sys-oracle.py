@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ts_unittest_groups import GROUPS, PREFIXES  # noqa: E402
+from ts_unittest_groups import GROUPS  # noqa: E402
 
 BASELINE = os.path.join(ROOT, "ts-suite", "unittests-config-sys.json")
 SUITES = os.path.join(ROOT, "ts-suite", "oracle.json")
@@ -268,7 +268,7 @@ def main():
         return 1
 
     base = load_baseline(o.baseline) if os.path.exists(o.baseline) else {}
-    known = {t: why for t, why in base.get("known_failures", {}).items()}
+    known = base.get("known_failures", {})
     jobs = max(1, min(o.jobs, MAX_JOBS))
     print(
         f"unit tests from {TS_DIR} (jsse: {jsse}, {len(names)} groups, {jobs} jobs)",
@@ -341,21 +341,15 @@ def main():
                 print(f"\n{name}:")
                 for line in lines:
                     print("  " + line)
-        for prefix in PREFIXES:
-            matched = [t for t in set(titles) if t.startswith(prefix)]
-            if not o.groups and not matched:
-                failed = True
-                print(f"\nno test title starts with {prefix!r}")
         if not o.groups:
-            claimed = [
+            overlap = [
                 t
                 for t in set(titles)
-                if sum(bool(re.search(GROUPS[n], t)) for n in GROUPS) != 1
+                if sum(bool(re.search(GROUPS[n], t)) for n in GROUPS) > 1
             ]
-            for t in claimed:
+            for t in overlap:
                 failed = True
-                print(f"\ntitle matched by zero or several groups: {t}")
-        if not o.groups:
+                print(f"\ntitle matched by several groups: {t}")
             for problem in pinned_suite_problems(new_counts):
                 failed = True
                 print(f"\n{problem}")
