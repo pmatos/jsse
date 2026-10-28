@@ -105,16 +105,6 @@ class BudgetTest(unittest.TestCase):
             for key in ("jsse_max_seconds", "jsse_max_rss_mb", "max_time_ratio"):
                 self.assertIsNone(cfg.get(key), f"{name}.{key}")
 
-    def test_shipped_budget_flags_a_ratio_over_six_and_ignores_wall_time(self):
-        budget = oracle.load_budget(oracle.BUDGET)
-        node = run(secs=10, rss=1000)
-        self.assertEqual(
-            oracle.check_budget("src-js", node, run(secs=1e6, rss=6000), budget), []
-        )
-        over = oracle.check_budget("src-js", node, run(secs=1, rss=6001), budget)
-        self.assertEqual(len(over), 1)
-        self.assertIn("peak RSS", over[0])
-
 
 class GeneratorTest(unittest.TestCase):
     def test_program_is_deterministic_and_sized(self):

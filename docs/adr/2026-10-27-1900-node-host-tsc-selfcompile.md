@@ -44,8 +44,8 @@ and the `hereby local` measurement of #1253).
    the same case) and **no wall-time cap**; wall time is recorded in the table, `--report` and
    the nightly summary but never enforced, because it moves by an order of magnitude with host
    load (see Result). The worst ratio after #1407 is 5.6x (`src-js`), so the cap leaves about
-   7% headroom on `src-js` and 5% on `compiler-js` (5.7x); a regression past it, or a further reduction under #1401, is a deliberate
-   edit of this file. Byte-identity and the exit status are enforced regardless.
+   7% headroom on `src-js` and 5% on `compiler-js` (5.7x); a regression past it, or a
+   further reduction under #1401, is a deliberate edit of this file. Byte-identity and the exit status are enforced regardless.
 6. **CI, both non-required.** `.github/workflows/tsc-selfcompile-smoke.yml` runs `--smoke
    --require` (the generated program, a `typescript@6.0.3` download, about 15 s of tsc on
    jsse) on pushes and PRs that touch `src/`, `Cargo.*`, the oracle or the budget; it is a
