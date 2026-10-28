@@ -411,6 +411,9 @@ pub(crate) struct AsyncFunctionState {
     /// Realm of the function, restored around every resumption: a reaction job
     /// runs in whichever realm drained the queue.
     pub realm_id: usize,
+    /// `--node` `at async` frames: the function (0: a module) and its `await`.
+    pub func_obj_id: u64,
+    pub await_pos: u32,
 }
 
 /// One lowered lexical environment, innermost last. `EnterScope`/`ExitScope`
@@ -2572,10 +2575,9 @@ impl ArrayData {
 /// fields on JsObjectData; the kind enum captures only the exotic-shape data
 /// the spec demands a particular object carry.
 ///
-/// This is currently introduced *alongside* the existing `Option<XData>` fields
-/// — both are populated on construction. Subsequent slices migrate predicate
-/// methods to read from this enum (B2), move call sites to match on it (B3),
-/// and finally delete the now-vestigial orthogonal Options (B4).
+/// Introduced *alongside* the existing `Option<XData>` fields (both populated
+/// on construction); later slices migrate readers (B2), call sites (B3), then
+/// delete the vestigial Options (B4).
 #[derive(Clone, Default)]
 #[allow(dead_code)] // Variants populated as Phase B2/B3 migrate call sites onto this enum.
 pub(crate) enum ObjectKind {
@@ -5008,16 +5010,15 @@ pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + 
 /// StringGetOwnProperty).
 ///
 /// Returns `Some(i)` when `key` is the CanonicalNumericIndexString of an
-/// integral index `i` with `0 <= i < len` — i.e. `key` names an own indexed
-/// character property of a String value whose UTF-16 length is `len`. Returns
-/// `None` for non-canonical spellings (`"01"`, `"+1"`, `"1.0"`), `-0`,
-/// negative, non-integral, or non-finite indices, and indices `>= len`.
+/// integral index `i` with `0 <= i < len`, i.e. an own indexed character
+/// property of a String whose UTF-16 length is `len`. Returns `None` for
+/// non-canonical spellings (`"01"`, `"+1"`, `"1.0"`), `-0`, negative,
+/// non-integral or non-finite indices, and indices `>= len`.
 ///
-/// This concentrates the one canonical predicate so every String-exotic MOP
-/// operation ([[Get]], [[GetOwnProperty]], [[HasProperty]],
-/// [[DefineOwnProperty]], [[Set]], [[Delete]]) agrees, instead of each caller
-/// reaching for `str::parse::<usize>()`, which wrongly accepts a leading `+`
-/// and leading zeros. `len` must be the string's UTF-16 code-unit length.
+/// One canonical predicate keeps every String-exotic MOP operation ([[Get]],
+/// [[GetOwnProperty]], [[HasProperty]], [[DefineOwnProperty]], [[Set]],
+/// [[Delete]]) in agreement, instead of `str::parse::<usize>()`, which wrongly
+/// accepts a leading `+` and leading zeros. `len` is the UTF-16 length.
 pub(crate) fn string_exotic_index<K: crate::types::PropertyKeyLike + ?Sized>(
     key: &K,
     len: usize,

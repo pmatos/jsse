@@ -197,6 +197,10 @@ impl JobScheduler {
         self.async_function_states.remove(&id)
     }
 
+    pub(crate) fn async_function_state(&self, id: u64) -> Option<&AsyncFunctionState> {
+        self.async_function_states.get(&id)
+    }
+
     pub(crate) fn async_function_state_mut(&mut self, id: u64) -> Option<&mut AsyncFunctionState> {
         self.async_function_states.get_mut(&id)
     }

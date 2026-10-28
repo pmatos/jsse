@@ -1003,7 +1003,9 @@ impl Compiler {
             Expression::Yield(argument, false) if self.generator => {
                 self.compile_yield(argument.as_deref(), false)
             }
-            Expression::Await(argument) if self.async_body => self.compile_await(argument, false),
+            Expression::Await(argument, at) if self.async_body => {
+                self.compile_await(argument, *at, false)
+            }
             _ => Err(CompileError::Unsupported(expression_kind(expr))),
         }
     }
@@ -1250,8 +1252,8 @@ impl Compiler {
             Expression::Yield(argument, false) if self.generator => {
                 return self.compile_yield(argument.as_deref(), true);
             }
-            Expression::Await(argument) if self.async_body => {
-                return self.compile_await(argument, true);
+            Expression::Await(argument, at) if self.async_body => {
+                return self.compile_await(argument, *at, true);
             }
             _ => {}
         }
@@ -2340,8 +2342,7 @@ impl Compiler {
     ///   EndFinally table
     ///   [Jump end] exit pads...        one per kind: the rest of the exit
     ///
-    /// A `Throw` is dispatched through the chunk's handler table, so the
-    /// block's and the catch's ranges are the only places it can resume from.
+    /// A `Throw` resumes only from the block's or the catch's handler range.
     fn compile_try(&mut self, t: &TryStatement) -> Result<(), CompileError> {
         if self.goal != CompileGoal::Function {
             return Err(CompileError::Unsupported("statement:Try"));

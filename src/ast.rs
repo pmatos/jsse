@@ -436,7 +436,7 @@ pub(crate) enum Expression {
     Comma(Vec<Expression>),
     Spread(ExprBox),
     Yield(Option<ExprBox>, bool), // expr, delegate
-    Await(ExprBox),
+    Await(ExprBox, u32),
     TaggedTemplate(ExprBox, TemplateLiteral),
     Template(TemplateLiteral),
     Typeof(ExprBox),
@@ -593,7 +593,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         | Expression::Spread(e)
         | Expression::PreIterated(e)
         | Expression::ClassProtoParent(e)
-        | Expression::Await(e)
+        | Expression::Await(e, _)
         | Expression::Typeof(e)
         | Expression::Void(e)
         | Expression::Delete(e)
@@ -1377,7 +1377,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e)
             | Expression::Yield(Some(e), _)
-            | Expression::Await(e)
+            | Expression::Await(e, _)
             | Expression::Typeof(e)
             | Expression::Void(e)
             | Expression::Delete(e) => stack.push(e),
@@ -1627,7 +1627,7 @@ pub(crate) fn expr_contains_matching(
         | Expression::Spread(e)
         | Expression::PreIterated(e)
         | Expression::ClassProtoParent(e)
-        | Expression::Await(e)
+        | Expression::Await(e, _)
         | Expression::Typeof(e)
         | Expression::Void(e)
         | Expression::Delete(e) => expr_contains_matching(e, pred),
@@ -1963,7 +1963,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e)
             | Expression::Yield(Some(e), _)
-            | Expression::Await(e)
+            | Expression::Await(e, _)
             | Expression::Typeof(e)
             | Expression::Void(e)
             | Expression::Delete(e) => stack.push(SiteWork::Expr(e)),
@@ -2068,16 +2068,14 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
 /// Reset the inline-cache site ids reachable from `expr` (without descending
 /// into nested function/arrow bodies) to `UNASSIGNED`, forcing the IC slow path.
 ///
-/// Used for generator/async state-machine *terminator* expressions — yield /
-/// await / return / throw values, `ConditionalGoto` and `SwitchDispatch`
-/// conditions, and `ForOfInit` iterables. The state driver evaluates these after
-/// `exec_body` has restored the previous `current_ic`, i.e. under whatever
-/// body is driving the generator (often the caller), not under any state body's
-/// store. A numbered site would then index the wrong store and panic, so these
-/// expressions must stay unnumbered. Nested function/arrow bodies are left intact
-/// because they execute under their own stores; a class literal's `extends`,
-/// computed keys, and static-field initializers are cleared because they evaluate
-/// at class-definition time (i.e. when the terminator expression runs).
+/// Used for generator/async state-machine *terminator* expressions (yield,
+/// await, return and throw values, `ConditionalGoto`/`SwitchDispatch`
+/// conditions, `ForOfInit` iterables). The state driver evaluates these after
+/// `exec_body` restored the previous `current_ic`, i.e. under whatever body
+/// drives the generator, so a numbered site would index the wrong store and
+/// panic. Nested function/arrow bodies keep their own stores; a class literal's
+/// `extends`, computed keys, and static-field initializers are cleared because
+/// they evaluate when the terminator expression runs.
 pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
     // Walked with an explicit stack for the same reason as `assign_expr_sites`:
     // flat operand and member/call chains nest as deeply as the source is long
@@ -2109,7 +2107,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e)
             | Expression::Yield(Some(e), _)
-            | Expression::Await(e)
+            | Expression::Await(e, _)
             | Expression::Typeof(e)
             | Expression::Void(e)
             | Expression::Delete(e) => stack.push(e),

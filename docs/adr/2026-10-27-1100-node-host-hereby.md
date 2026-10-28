@@ -42,8 +42,8 @@ as on Node; the oracle pins that.
 
 ## Known gaps (filed)
 
-- Module top-level frame and `at async` frames in stacks (#1368). The oracle normalises both away on both sides;
-  a user frame that is present on only one side still fails it.
+- The module top-level frame and `at async` frames of stacks (#1368) are no longer normalised away: the oracle
+  drops only `node:internal` frames, and every user frame must match.
 - `null`/`true`/`false` as module export names (#1367): `zod/mini` (via `knip`) does not parse. Lint only.
 - `eslint`, `typescript-eslint`, `playwright`, `monocart-coverage-reports`, `azure-devops-node-api` need
   `worker_threads`, `http`, `net` (lint and coverage tickets, not the build chain).

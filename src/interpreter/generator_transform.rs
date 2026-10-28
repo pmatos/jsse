@@ -1,3 +1,5 @@
+mod await_pos;
+
 use crate::ast::*;
 use crate::interpreter::atom::Atom;
 use crate::interpreter::generator_analysis::*;
@@ -212,6 +214,7 @@ pub(crate) enum StateTerminator {
         value: Expression,
         resume_state: usize,
         sent_value_binding: Option<SentValueBinding>,
+        at: u32,
     },
     /// One primitive of `IteratorBindingInitialization` for a lowered array
     /// binding pattern (`lower_array_pattern_binding`): opening the iterator,
@@ -1522,6 +1525,9 @@ fn transform_yielding_expression(
 ) {
     match expr {
         Expression::Yield(inner_expr, is_delegate) => {
+            let tagged = inner_expr
+                .as_ref()
+                .map_or(0, |inner| await_pos::at_of(inner));
             let yield_value = if let Some(inner) = inner_expr {
                 if expr_has_suspension(inner, ctx.is_async) {
                     let temp_var = ctx.new_temp_var("yield_val");
@@ -1542,6 +1548,12 @@ fn transform_yielding_expression(
             } else {
                 None
             };
+            let yield_value = match yield_value {
+                Some(value) if tagged != 0 && await_pos::at_of(&value) == 0 => {
+                    Some(await_pos::tag(value, tagged))
+                }
+                other => other,
+            };
 
             let resume_state = ctx.new_state();
 
@@ -1558,7 +1570,7 @@ fn transform_yielding_expression(
             ctx.yield_counter += 1;
         }
 
-        Expression::Await(inner_expr) if ctx.is_async => {
+        Expression::Await(inner_expr, at) if ctx.is_async => {
             let await_value = if expr_has_suspension(inner_expr, ctx.is_async) {
                 let temp_var = ctx.new_temp_var("await_val");
                 let inner_binding = SentValueBindingKind::Variable(temp_var.clone());
@@ -1575,6 +1587,7 @@ fn transform_yielding_expression(
                 value: await_value,
                 resume_state,
                 sent_value_binding,
+                at: *at,
             });
 
             ctx.current_state_id = resume_state;
@@ -2610,20 +2623,16 @@ fn lower_pattern_assignment(pattern: &Pattern, source: &str, ctx: &mut Transform
 /// `ArrayAssignmentPattern` left side of `=`. Every element still costs
 /// exactly one `Step` terminator regardless of suspension (`IteratorStepValue`
 /// order is itself observable, #725). A leaf's default (if any) and a
-/// member-expression target's reference capture are applied unconditionally
-/// -- *not* only when that element's own target or default happens to
-/// contain a suspension -- because `IteratorDestructuringAssignmentEvaluation`'s
-/// `AssignmentElement` step order (spec.html:21172-21197 — "Left to right
-/// evaluation order is maintained by evaluating a DestructuringAssignmentTarget
-/// that is not a destructuring pattern prior to accessing the iterator or
-/// evaluating the Initializer") and the Initializer-only-if-undefined rule
-/// both apply regardless of which sibling element is the one that forced this
-/// whole pattern through the lowering. A plain identifier or nested-pattern
-/// leaf with no default needs neither: identifier resolution has no
-/// observable ordering effect, and a nested pattern defers entirely to the
-/// recursive `lower_pattern_assignment` call once its value is ready. The
-/// `Rest` arm mirrors the same unconditional-capture rule for its target.
-/// Callers only pass patterns `pattern_needs_assignment_lowering` accepts.
+/// member-expression target's reference capture are applied unconditionally,
+/// not only when that element contains a suspension, because
+/// `IteratorDestructuringAssignmentEvaluation` (spec.html:21172-21197)
+/// evaluates a non-pattern target before accessing the iterator, and applies
+/// the Initializer only if undefined, whichever sibling forced the lowering.
+/// A plain identifier or nested-pattern leaf with no default needs neither:
+/// identifier resolution has no observable ordering effect, and a nested
+/// pattern defers to the recursive `lower_pattern_assignment` call. The `Rest`
+/// arm mirrors the unconditional-capture rule. Callers only pass patterns
+/// `pattern_needs_assignment_lowering` accepts.
 fn lower_array_pattern_assignment(
     elements: &[Option<ArrayPatternElement>],
     source: &str,
@@ -3875,23 +3884,17 @@ fn transform_for_in_of_loop(
     let body_state = ctx.new_state();
 
     // `ForOfHead` binds its per-iteration `left` with a single, non-suspending
-    // runtime call, the same constraint `EnterCatch` has on its `param` (see
-    // the comment there). A `Variable` head whose pattern's default contains
-    // `yield` or `await` desugars the same way: `ForOfHead` sees a trivial
-    // `Pattern::Identifier`, and the real pattern becomes a synthesized
-    // `let <pattern> = <temp>;` prepended to the loop body, where the
-    // ordinary `Statement::Variable` lowering picks it up. A `Pattern`
-    // (assignment-form) head whose pattern contains a `yield` or a
-    // shape-supported `await` (see `for_in_of_variable_head_contains_await`'s
-    // own `Pattern` arm) mirrors this with a synthesized `<pattern> =
-    // <temp>;` instead, picked up by the ordinary destructuring-assignment
-    // lowering. `ForOfInit`'s own `left` is deliberately *not*
-    // rewritten -- it exists solely to supply `BoundNames` for the head's TDZ
-    // environment (`for_of_head_tdz_env`), evaluated before the iterable
-    // expression, so it must keep seeing the real pattern for a
-    // self-referential head (`for (let x of [x])`) to still throw from TDZ;
-    // `for_of_head_lexical` returns `None` for a `Pattern` head regardless,
-    // so this is a no-op for the assignment-form case.
+    // runtime call, like `EnterCatch` does for its `param`. A `Variable` head
+    // whose pattern's default contains `yield` or `await` therefore desugars
+    // to a trivial `Pattern::Identifier` plus a synthesized `let <pattern> =
+    // <temp>;` prepended to the loop body, which the ordinary
+    // `Statement::Variable` lowering picks up. A `Pattern` (assignment-form)
+    // head with a `yield` or a shape-supported `await` does the same with
+    // `<pattern> = <temp>;`. `ForOfInit`'s own `left` is deliberately *not*
+    // rewritten: it only supplies `BoundNames` for the head's TDZ environment
+    // (`for_of_head_tdz_env`), evaluated before the iterable, so `for (let x
+    // of [x])` must still throw from TDZ; `for_of_head_lexical` returns `None`
+    // for a `Pattern` head, so this is a no-op for the assignment form.
     let mut left_param_synth: Option<Statement> = None;
     let rewritten_left = if let ForInOfLeft::Variable(decl) = left
         && let Some(d) = decl.declarations.first()
@@ -4473,13 +4476,15 @@ fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMachine) {
                 is_delegate: false,
                 resume_state,
                 sent_value_binding,
-            } => Some(StateTerminator::Await {
-                value: value
-                    .clone()
-                    .unwrap_or(Expression::Identifier("undefined".to_string())),
-                resume_state: *resume_state,
-                sent_value_binding: sent_value_binding.clone(),
-            }),
+            } => {
+                let (value, at) = await_pos::untag(value);
+                Some(StateTerminator::Await {
+                    value: value.unwrap_or(Expression::Identifier("undefined".to_string())),
+                    resume_state: *resume_state,
+                    sent_value_binding: sent_value_binding.clone(),
+                    at,
+                })
+            }
             _ => None,
         };
         if let Some(new_term) = replacement {
@@ -4603,8 +4608,9 @@ fn rewrite_for_left(left: &ForInOfLeft) -> ForInOfLeft {
 
 fn rewrite_expr(expr: &Expression) -> Expression {
     match expr {
-        Expression::Await(inner) => {
-            Expression::Yield(Some(ExprBox::new(rewrite_expr(inner))), false)
+        Expression::Await(inner, at) => {
+            let operand = await_pos::tag(rewrite_expr(inner), *at);
+            Expression::Yield(Some(ExprBox::new(operand)), false)
         }
         Expression::Function(_)
         | Expression::ArrowFunction(_)

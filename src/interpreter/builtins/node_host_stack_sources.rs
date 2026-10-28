@@ -53,6 +53,8 @@ pub(crate) struct NodeStackState {
     /// The receiver each running arrow function was called with, by frame
     /// index: V8 names an arrow's frame after it (`Timeout._onTimeout`).
     pub(crate) arrow_receivers: Vec<(usize, JsValue)>,
+    /// The promise the running reaction job settles, where `at async` frames start.
+    pub(super) job_promise: Option<u64>,
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a

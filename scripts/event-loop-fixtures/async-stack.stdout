@@ -1,0 +1,35 @@
+Error: sync
+    at k (file://<dir>/async-stack.fixture.mjs:9:9)
+    at file://<dir>/async-stack.fixture.mjs:12:3
+Error: await
+    at f (file://<dir>/async-stack.fixture.mjs:19:9)
+    at async g (file://<dir>/async-stack.fixture.mjs:22:3)
+    at async file://<dir>/async-stack.fixture.mjs:24:1
+Error: then
+    at file://<dir>/async-stack.fixture.mjs:28:11
+    at async viaThen (file://<dir>/async-stack.fixture.mjs:27:3)
+    at async file://<dir>/async-stack.fixture.mjs:31:1
+Error: method
+    at Worker.run (file://<dir>/async-stack.fixture.mjs:36:11)
+    at async Worker.start (file://<dir>/async-stack.fixture.mjs:39:5)
+    at async file://<dir>/async-stack.fixture.mjs:42:1
+Error: await
+    at f (file://<dir>/async-stack.fixture.mjs:19:9)
+Error: await
+    at f (file://<dir>/async-stack.fixture.mjs:19:9)
+    at async g (file://<dir>/async-stack.fixture.mjs:22:3)
+Error: before the first await
+    at first (file://<dir>/async-stack.fixture.mjs:57:9)
+    at second (file://<dir>/async-stack.fixture.mjs:60:9)
+    at file://<dir>/async-stack.fixture.mjs:62:7
+Error: await
+    at f (file://<dir>/async-stack.fixture.mjs:19:9)
+    at async g (file://<dir>/async-stack.fixture.mjs:22:3)
+Error: await
+    at f (file://<dir>/async-stack.fixture.mjs:19:9)
+Error: arrow
+    at Object.method (file://<dir>/async-stack.fixture.mjs:70:53)
+    at async arrow (file://<dir>/async-stack.fixture.mjs:71:29)
+    at async file://<dir>/async-stack.fixture.mjs:72:1
+Error: after the top-level await
+    at file://<dir>/async-stack.fixture.mjs:75:6

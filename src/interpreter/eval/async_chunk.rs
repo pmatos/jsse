@@ -11,6 +11,7 @@
 //! counts are unchanged.
 
 use super::*;
+use crate::interpreter::builtins::node_host_stack::ParkedAwait;
 use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::vm::{self, GeneratorFrame, Resume};
 use crate::interpreter::literal_frame::LiteralFrame;
@@ -30,6 +31,8 @@ pub(crate) struct AsyncActivation {
     /// The call receiver of an async arrow, which its `--node` stack frame
     /// names even though the body's `this` is lexical.
     receiver: Option<JsValue>,
+    /// The offset plus one of the `await` it is parked at (`--node` only).
+    await_pos: u32,
     #[cfg(feature = "perf-counters")]
     perf_key: crate::interpreter::perf_counters::BodyKey,
 }
@@ -142,6 +145,7 @@ impl Interpreter {
             resolvers: resolvers.clone(),
             realm_id: self.current_realm_id,
             receiver: receiver.filter(|_| self.node_host.stack.installed).cloned(),
+            await_pos: 0,
             #[cfg(feature = "perf-counters")]
             perf_key: self.perf_body_name(func_obj_id),
         };
@@ -219,6 +223,7 @@ impl Interpreter {
                 )
             });
         self.tco_suppress_depth = saved_tco;
+        let await_pos = self.node_host.call_pos;
         #[cfg(feature = "perf-counters")]
         if !activation.chunk.ast.is_empty() {
             let exclusive = self.perf.leave_ast_body();
@@ -235,6 +240,7 @@ impl Interpreter {
         let completion = match result {
             Completion::Yield(awaited) => {
                 self.gc_unroot_frame(gc_frame);
+                activation.await_pos = await_pos;
                 self.park_at_await(activation, id, awaited);
                 return Completion::Normal(JsValue::UNDEFINED);
             }
@@ -287,6 +293,23 @@ impl Interpreter {
         let promise = self.await_promise_resolve(&awaited);
         self.await_then_internal(promise, &awaited, ReactionTarget::AsyncResume(id));
         self.gc_unroot_frame(gc_frame);
+    }
+
+    /// What `--node` stack traces show of the parked activation `id`.
+    pub(crate) fn parked_hosted_await(&self, id: u64) -> Option<ParkedAwait> {
+        let a = self.async_activations.get(&id)?;
+        let called_with = a.receiver.is_some();
+        Some(ParkedAwait {
+            func: a.func_obj_id,
+            receiver: a.receiver.clone().or_else(|| a.env.borrow().get_this()),
+            called_with,
+            pos: a.await_pos,
+            result: match a.resolvers {
+                PromiseResolvers::Internal(promise) => Some(promise),
+                PromiseResolvers::Functions { .. } => None,
+            },
+            module: None,
+        })
     }
 
     /// Roots of the parked async activations: the environments and operand

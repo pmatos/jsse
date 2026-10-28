@@ -460,49 +460,51 @@ impl Interpreter {
         let resolve_root = resolve.clone();
         let reject_root = reject.clone();
 
-        self.scheduler.enqueue_microtask((
-            vec![promise_root, resolve_root.clone(), reject_root.clone()],
-            Box::new(move |interp: &mut Interpreter| {
-                match interp.load_module_for_type(
-                    &resolved_path,
-                    None,
-                    super::ModuleLoadMode::Evaluate,
-                ) {
-                    Ok(m) => {
-                        let resolved_canon = resolved_path.canonicalize();
-                        let mut stack = vec![];
-                        if let Err(ref e) =
-                            interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
-                        {
-                            for m_path in &stack {
-                                if let Some(m) = interp.module_registry_get(m_path) {
-                                    let mut mb = m.borrow_mut();
-                                    mb.evaluated = true;
-                                    mb.is_evaluating = false;
-                                    if mb.error.is_none() {
-                                        mb.error = Some(e.clone());
-                                    }
+        let job_promise = promise.clone();
+        let roots = vec![promise_root, resolve_root.clone(), reject_root.clone()];
+        let job = move |interp: &mut Interpreter| {
+            match interp.load_module_for_type(&resolved_path, None, super::ModuleLoadMode::Evaluate)
+            {
+                Ok(m) => {
+                    let resolved_canon = resolved_path.canonicalize();
+                    let mut stack = vec![];
+                    if let Err(ref e) =
+                        interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
+                    {
+                        for m_path in &stack {
+                            if let Some(m) = interp.module_registry_get(m_path) {
+                                let mut mb = m.borrow_mut();
+                                mb.evaluated = true;
+                                mb.is_evaluating = false;
+                                if mb.error.is_none() {
+                                    mb.error = Some(e.clone());
                                 }
                             }
-                            let _ = interp.call_function(
-                                &reject_root,
-                                &JsValue::UNDEFINED,
-                                std::slice::from_ref(e),
-                            );
-                            return Completion::Normal(JsValue::UNDEFINED);
                         }
-                        let _ = interp.settle_dynamic_import_promise(
-                            &m,
-                            promise_for_settle.clone(),
-                            resolve_root.clone(),
-                            reject_root.clone(),
+                        let _ = interp.call_function(
+                            &reject_root,
+                            &JsValue::UNDEFINED,
+                            std::slice::from_ref(e),
                         );
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
-                    Err(e) => {
-                        let _ = interp.call_function(&reject_root, &JsValue::UNDEFINED, &[e]);
-                    }
+                    let _ = interp.settle_dynamic_import_promise(
+                        &m,
+                        promise_for_settle.clone(),
+                        resolve_root.clone(),
+                        reject_root.clone(),
+                    );
                 }
-                Completion::Normal(JsValue::UNDEFINED)
+                Err(e) => {
+                    let _ = interp.call_function(&reject_root, &JsValue::UNDEFINED, &[e]);
+                }
+            }
+            Completion::Normal(JsValue::UNDEFINED)
+        };
+        self.scheduler.enqueue_microtask((
+            roots,
+            Box::new(move |interp: &mut Interpreter| {
+                interp.node_with_job_promise(&job_promise, job)
             }),
         ));
 

@@ -217,6 +217,24 @@ function caseAsync() {
   afterAwait().then((stack) => show("async after await", stack));
 }
 
+async function leaf() {
+  await null;
+  return new Error("leaf").stack;
+}
+async function mid() {
+  return await leaf();
+}
+async function top() {
+  return await mid();
+}
+function caseAsyncChain() {
+  top().then((stack) => show("async chain", stack));
+  Promise.resolve()
+    .then(() => leaf())
+    .then((stack) => show("async through a then handler", stack));
+  Promise.resolve().then(() => top().then((stack) => show("async in a job", stack)));
+}
+
 caseFrames();
 caseCapture();
 caseLimit();
@@ -225,3 +243,4 @@ caseCallSites();
 caseCauseDisplay();
 casePositions();
 caseAsync();
+caseAsyncChain();
