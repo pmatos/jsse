@@ -108,7 +108,7 @@ def half_of(file):
     return "a-m" if file[0].lower() <= "m" else "n-z"
 
 
-# group name -> files; the sizes in the comments are Node's test counts
+# group name -> files
 BATCHES = {
     "tsserver-apply-autoImport-auxiliary": [
         "applyChangesToOpenFiles",
@@ -268,7 +268,7 @@ def check_groups(ts_dir):
             with open(path, encoding="utf-8") as f:
                 text = f.read()
             for m in re.finditer(
-                r"^describe\((?:\"|`)(unittests:: tsserver:: [^\"`]*)", text, re.M
+                r"^describe\((?:[\"'`])(unittests:: tsserver:: [^\"'`]*)", text, re.M
             ):
                 title = m.group(1)
                 hits = [g for g, rx in GROUPS.items() if re.search(rx, title)]

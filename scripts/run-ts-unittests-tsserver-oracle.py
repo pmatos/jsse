@@ -13,6 +13,7 @@ TS_SRC_DIR set, it is checked against the checkout (a file or a top-level descri
 The pinned total covers both halves, so it is checked against the baseline counts of the groups this run left out.
 """
 
+import argparse
 import importlib.util
 import json
 import os
@@ -52,22 +53,15 @@ base.pinned_suite_problems = pinned_with_baseline
 
 
 def main(argv):
-    half = "a-m"
-    rest = []
-    it = iter(argv)
-    for arg in it:
-        if arg == "--half":
-            half = next(it, "")
-        elif arg.startswith("--half="):
-            half = arg[len("--half=") :]
-        else:
-            rest.append(arg)
-    if half not in (*table.HALVES, "all"):
-        sys.exit(f"--half must be a-m, n-z or all, not {half!r}")
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--half", default="a-m", choices=(*table.HALVES, "all"))
+    o, rest = ap.parse_known_args(argv)
+    half = o.half
     base.DEFAULT_GROUPS = table.groups_of_half(half)
-    ts_dir = os.environ.get("TS_SRC_DIR")
-    if ts_dir and "--list" not in rest:
-        problems = table.check_groups(os.path.realpath(ts_dir))
+    given = os.environ.get("TS_SRC_DIR")
+    ts_dir = os.path.realpath(given) if given else None
+    if ts_dir and "--list" not in rest and base.check_checkout(ts_dir) is None:
+        problems = table.check_groups(ts_dir)
         if problems:
             print("tsserver group table does not match the checkout:")
             print("\n".join("  " + p for p in problems))
