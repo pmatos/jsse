@@ -69,6 +69,10 @@ mod node_host_throw;
 pub(crate) mod node_host_tty;
 mod node_host_util;
 mod node_host_vm;
+mod node_host_wasm;
+mod node_host_wasm_module;
+mod node_host_wasm_objects;
+mod node_host_wasm_run;
 mod node_host_zlib;
 mod node_host_zlib_ctx;
 mod node_prelude;
@@ -89,6 +93,7 @@ pub(crate) mod string;
 mod structured_clone;
 mod temporal;
 pub(crate) mod typedarray;
+mod typedarray_codec;
 mod weak_ref;
 
 use super::*;

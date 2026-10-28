@@ -47,20 +47,6 @@ class NormaliseLogTest(unittest.TestCase):
         self.assertEqual(a, b)
 
 
-class DtsGapTest(unittest.TestCase):
-    ERR = "ReferenceError: WebAssembly is not defined\nError in dts-services in 1m 52.8s\n"
-
-    def test_only_the_dts_step_missing_webassembly_is_the_gap(self):
-        self.assertTrue(oracle.is_dts_gap(1, self.ERR))
-        self.assertFalse(oracle.is_dts_gap(0, self.ERR))
-        self.assertFalse(oracle.is_dts_gap(1, "Error in build-tsc in 3s\n"))
-        self.assertFalse(
-            oracle.is_dts_gap(1, "ReferenceError: WebAssembly is not defined\n")
-        )
-        self.assertFalse(oracle.is_dts_gap(124, self.ERR))
-        self.assertFalse(oracle.is_dts_gap(1, "Error in build-tsc in 3s\n" + self.ERR))
-
-
 class LogDiffTest(unittest.TestCase):
     def test_task_order_does_not_matter(self):
         self.assertEqual(oracle.diff_logs(["a", "b", "c"], ["c", "a", "b"]), [])

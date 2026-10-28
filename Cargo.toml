@@ -61,6 +61,11 @@ sha1 = "0.11"
 sha2 = "0.11"
 sha3 = "0.12"
 shake = "0.1"
+# WebAssembly interpreter behind the `WebAssembly` global of `--node` mode (#1378): a pure-Rust
+# register-machine interpreter (MIT OR Apache-2.0), without the `wat` text parser and SIMD. `portable-dispatch`:
+# the default tail-call dispatch only avoids native stack growth if LLVM turns every handler call into a
+# sibling call, which fails under LTO off and in the release-nolto/release-checked profiles.
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "portable-dispatch"] }
 # zlib's z_stream API in pure Rust (a zlib-ng port) behind the `zlib` module of
 # `--node` mode (#1239); the high-level wrapper crates' safe API cannot express
 # Z_BLOCK, memLevel or a strategy change in params().

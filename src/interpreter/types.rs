@@ -1,4 +1,5 @@
 use crate::ast::*;
+mod buffer_data;
 mod function_props;
 use crate::interpreter::Atom;
 use crate::interpreter::binding_map::{BindingMap, BindingName};
@@ -12,6 +13,7 @@ use crate::interpreter::property_map::PropertyRecord;
 pub(crate) use crate::interpreter::weak_slots::FinalizationRegistryData;
 use crate::interpreter::{ElementVec, PropertyMap};
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
+pub(crate) use buffer_data::{BufferData, ForeignBytes};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -159,69 +161,6 @@ impl std::fmt::Debug for SharedBufferInner {
             .field("id", &self.id)
             .field("len", &self.len())
             .finish()
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum BufferData {
-    Owned(Vec<u8>),
-    Shared(Arc<SharedBufferInner>),
-}
-
-impl BufferData {
-    #[allow(clippy::len_without_is_empty)]
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            BufferData::Owned(v) => v.len(),
-            BufferData::Shared(s) => s.len(),
-        }
-    }
-
-    pub fn resize(&mut self, new_len: usize, value: u8) {
-        match self {
-            BufferData::Owned(v) => v.resize(new_len, value),
-            BufferData::Shared(s) => s.resize(new_len, value),
-        }
-    }
-
-    pub(crate) fn to_vec(&self) -> Vec<u8> {
-        match self {
-            BufferData::Owned(v) => v.clone(),
-            BufferData::Shared(s) => s.to_vec(),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn is_shared(&self) -> bool {
-        matches!(self, BufferData::Shared(_))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
-        match self {
-            BufferData::Shared(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
-        match self {
-            BufferData::Owned(v) => f(v),
-            BufferData::Shared(s) => s.with_read(f),
-        }
-    }
-
-    pub(crate) fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
-        match self {
-            BufferData::Owned(v) => f(v),
-            BufferData::Shared(s) => s.with_write(f),
-        }
-    }
-}
-
-impl Clone for BufferData {
-    fn clone(&self) -> Self {
-        BufferData::Owned(self.to_vec())
     }
 }
 
@@ -3570,6 +3509,12 @@ impl JsObjectData {
     /// True iff this is a SharedArrayBuffer.
     pub(crate) fn arraybuffer_is_shared(&self) -> bool {
         self.arraybuffer().is_some_and(|b| b.is_shared)
+    }
+
+    /// True iff this ArrayBuffer is a view of a WebAssembly linear memory.
+    pub(crate) fn arraybuffer_is_foreign(&self) -> bool {
+        self.arraybuffer_data()
+            .is_some_and(|d| d.borrow().is_foreign())
     }
 
     /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).

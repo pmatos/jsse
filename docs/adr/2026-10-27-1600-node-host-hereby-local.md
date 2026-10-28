@@ -32,13 +32,13 @@ generator scripts and for `tsc -b`.
    and finally packages the jsse-built `built/local` as `lib/` of a `typescript` package and runs the tsc
    project oracle (`run-tsc-projects-oracle.py`: the base, build, diagnostics, informational-flag and emit-matrix
    cases) on it, on both engines. A timeout kills the whole process group.
-3. **Known gap, not hidden.** `dts-services` formats the declaration bundles with dprint's WebAssembly plugin
-   and jsse has no `WebAssembly` (#1378). `hereby local` therefore ends with
-   `Error in dts-services ... WebAssembly is not defined` after all other tasks have finished. Without `--full`
-   the oracle accepts exactly that failure and leaves the four d.ts bundles (`typescript.d.ts`,
-   `typescript.internal.d.ts`, `tsserverlibrary.d.ts`, `tsserverlibrary.internal.d.ts`) out of the comparison;
-   any other failure, log difference or file difference is an error. When jsse gets `WebAssembly` the build exits 0
-   and the comparison covers everything with no change to the script; `--full` makes the gap an error.
+3. **Known gap, closed by #1378.** `dts-services` formats the declaration bundles with dprint's WebAssembly
+   plugin and jsse had no `WebAssembly`, so `hereby local` ended with
+   `Error in dts-services ... WebAssembly is not defined` and the oracle accepted exactly that failure, leaving
+   the four d.ts bundles (`typescript.d.ts`, `typescript.internal.d.ts`, `tsserverlibrary.d.ts`,
+   `tsserverlibrary.internal.d.ts`) out of the comparison. `--node` now has `WebAssembly`
+   (`2026-10-28-1200-node-host-webassembly.md`); the oracle tolerates no failing task and compares every file
+   (`--full` is accepted and does nothing).
 
 ## Cost
 

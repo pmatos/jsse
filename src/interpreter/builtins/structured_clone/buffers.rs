@@ -29,6 +29,11 @@ impl Cloner {
                     interp.data_clone_error("An ArrayBuffer is detached and could not be cloned.")
                 );
             }
+            if self.transfer.contains(&id) && data.data.borrow().is_foreign() {
+                return Err(interp.data_clone_error(
+                    "An ArrayBuffer of a WebAssembly.Memory cannot be transferred.",
+                ));
+            }
             let bytes = if self.transfer.contains(&id) {
                 Vec::new()
             } else {

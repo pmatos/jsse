@@ -15,10 +15,8 @@ the esbuild bundles run on jsse), then
   3. packages the jsse-built compiler (built/local as lib/) and runs the tsc oracles
      (scripts/run-tsc-oracle.sh --full and scripts/run-tsc-projects-oracle.py) on it, so the compiler built on jsse is the one the harness runs.
 
-jsse has no WebAssembly, which dtsBundler.mjs needs (dprint formats the d.ts bundles), so `hereby local` ends
-with `Error in dts-services ... WebAssembly is not defined` after every other task has finished. Unless --full is
-given that one failure is a known gap (reported, `DTS_FILES` left out of the comparison); once jsse has
-WebAssembly the build exits 0 and everything is compared. --full makes the failure an error.
+The whole `local` task runs, the d.ts bundles included: dtsBundler.mjs formats them with dprint's WebAssembly
+plugin, which runs on jsse's `WebAssembly` (#1378). Any failing task is an error. --full is accepted and ignored.
 
 Without TS_SRC_DIR (or with another TypeScript version) it prints SKIP and exits 0 unless --require is given.
 Exits 1 on any difference. Options: --jsse PATH (else $JSSE, else target/release/jsse), --work DIR (kept),
@@ -46,15 +44,6 @@ DROP_ENV = (
     "COLUMNS",
     "NODE_DISABLE_COLORS",
     "CI",
-)
-# dtsBundler.mjs formats the declaration bundles with dprint's WebAssembly plugin and jsse has no WebAssembly:
-# `dts-services` fails with this signature after every other task has finished, and these four files are missing.
-DTS_GAP = ("Error in dts-services", "WebAssembly is not defined")
-DTS_FILES = (
-    "built/local/typescript.d.ts",
-    "built/local/typescript.internal.d.ts",
-    "built/local/tsserverlibrary.d.ts",
-    "built/local/tsserverlibrary.internal.d.ts",
 )
 GENERATED = (
     "src/compiler/diagnosticInformationMap.generated.ts",
@@ -183,14 +172,6 @@ def clone_clean(src, dst):
             os.remove(target)
 
 
-def is_dts_gap(code, err):
-    """True when a failed build is only the d.ts bundling step missing WebAssembly."""
-    if code != 1 or not all(marker in err for marker in DTS_GAP):
-        return False
-    failed = re.findall(r"^Error in (\S+)", err, re.M)
-    return all(task == "dts-services" for task in failed)
-
-
 def hereby_local(engine, exe, tree, timeout):
     """Run `hereby local` in tree; return (exit code, stdout, stderr, seconds)."""
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
@@ -270,7 +251,7 @@ def main():
     ap.add_argument(
         "--full",
         action="store_true",
-        help="run the whole `local` task, d.ts bundles included (needs WebAssembly on jsse)",
+        help="no effect: the whole `local` task, d.ts bundles included, always runs",
     )
     ap.add_argument("--skip-harness", action="store_true")
     ap.add_argument("--require", action="store_true")
@@ -334,28 +315,20 @@ def main():
         print(f"  exit {code} in {secs:.1f}s", flush=True)
 
     problems = []
-    gap = not o.full and is_dts_gap(results["jsse"][0], results["jsse"][2])
     for name, _ in engines:
-        if results[name][0] != 0 and not (gap and name == "jsse"):
+        if results[name][0] != 0:
             problems.append(
                 f"hereby exited {results[name][0]} on {name}:\n"
                 + results[name][2][-3000:]
             )
-    if gap:
-        print(
-            "  known gap: dts-services needs WebAssembly; the d.ts bundles are not compared"
-        )
     logs = {
         name: normalise_log(results[name][1] + results[name][2], trees[name], exe)
         for name, exe in engines
     }
     log_diff = diff_logs(logs["node"], logs["jsse"])
-    if log_diff and not problems and not gap:
+    if log_diff and not problems:
         problems.append("build logs differ:\n" + "\n".join(log_diff))
     shots = {name: snapshot(trees[name]) for name, _ in engines}
-    if gap:
-        for rel in DTS_FILES:
-            shots["node"].pop(rel, None)
     print(
         f"  built files: node {len(shots['node'])}, jsse {len(shots['jsse'])}",
         flush=True,
@@ -390,10 +363,7 @@ def main():
             return 1
     if not o.work:
         shutil.rmtree(work, ignore_errors=True)
-    print(
-        "\nOK: hereby local on jsse --node matches Node"
-        + (" except the d.ts bundles (no WebAssembly)" if gap else "")
-    )
+    print("\nOK: hereby local on jsse --node matches Node")
     return 0
 
 
