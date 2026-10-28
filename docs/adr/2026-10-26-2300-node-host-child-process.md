@@ -82,8 +82,11 @@ Unix only (`cfg(unix)` floor); on other platforms the floor is absent and
   streams must carry an `fd` number.
 - `uid`/`gid` are passed through; `windowsHide` and win32 command-line quoting
   are not implemented.
-- jsse as a child needs `--node`: `process.execPath` is the bare binary
-  (`fork` adds the flag itself); `process.execArgv` is `[]`.
+- `process.execArgv` is `[]`. `process.execPath` is the bare binary; since
+  #1253 `spawn`/`spawnSync`/`exec*File` prepend `--node` when `file` is exactly
+  `process.execPath` and the leading flags do not already include `--node` (`fork` always did),
+  so build tools that spawn "node" get a Node-compatible child. A shell string
+  that names the binary is not rewritten, and `spawnargs` shows the flag.
 
 ## Verification
 

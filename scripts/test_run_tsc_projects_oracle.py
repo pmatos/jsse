@@ -75,6 +75,12 @@ class OracleHarnessTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("tsc project oracle: 2/2 passed", r.stdout)
 
+    def test_a_case_without_arguments_runs(self):
+        (self.fix / "cases.txt").write_text("bare | p | 2 |\n")
+        r = self.run_oracle(NODE.replace("$2", "$3"))
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("bare", r.stdout)
+
     def test_stdout_difference_fails(self):
         r = self.run_oracle(NODE.replace("out $2", "OUT $3"))
         self.assertEqual(r.returncode, 1, r.stdout)
