@@ -5,12 +5,12 @@ groups (#1261, 1531 tests) cover everything under `unittests/services/` and the 
 350 tests) the files of `unittests/evaluation/`, whose tests compile a snippet and run the emitted code. The other
 subdirectories (config and sys: run-ts-unittests-config-sys-oracle.py; tsbuild, tscWatch, tsc, tsserver: their own
 tickets) are not scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting that
-file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every
-pattern is anchored on the file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript v6.0.3. Every
-mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle runs the
-groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
-group; the batches balance the slow suites (`canWatch`, `programApi`, `convertToAsyncFunction` and the `extract`
-tests take two to ten minutes of test time on jsse) over the processes.
+file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every pattern is
+anchored on the file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript
+v6.0.3. Every mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle
+runs the groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
+group; the batches balance the slow suites (`canWatch`, `programApi`, `convertToAsyncFunction` and the `extract` tests
+take two to ten minutes of test time on jsse) over the processes.
 
 `check_groups()` is the drift guard: every top-level `describe("...")` in the checkout must be matched by exactly
 one group, so a new or renamed suite cannot be left out of the oracle unnoticed.

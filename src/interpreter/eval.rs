@@ -2737,8 +2737,7 @@ impl Interpreter {
                         let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
                         if obj_val.is_nullish() {
-                            let msg = this.nullish_computed_read_message(&obj_val, &v);
-                            return Completion::Throw(this.create_type_error(&msg));
+                            return Completion::Throw(this.nullish_read_error(&obj_val, &v));
                         }
                         this.update_member_computed(&obj_val, &v, op, prefix, strict)
                     }
@@ -3193,11 +3192,13 @@ impl Interpreter {
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
                         if obj_val.is_null() || obj_val.is_undefined() {
-                            let msg = match key_val.as_ref() {
-                                Some(k) => interp.nullish_computed_read_message(&obj_val, k),
-                                None => format!("Cannot read properties of {obj_val}"),
+                            let error = match key_val.as_ref() {
+                                Some(k) => interp.nullish_read_error(&obj_val, k),
+                                None => interp.create_type_error(&format!(
+                                    "Cannot read properties of {obj_val}"
+                                )),
                             };
-                            return Completion::Throw(interp.create_type_error(&msg));
+                            return Completion::Throw(error);
                         }
                         if let Some(current) = numeric_key
                             .and_then(|index| interp.numeric_index_fast_get(&obj_val, index))

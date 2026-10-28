@@ -720,8 +720,9 @@ impl Interpreter {
                         other => return ComputedKey::Done(other),
                     };
                     if obj_val.is_nullish() {
-                        let msg = this.nullish_computed_read_message(&obj_val, &v);
-                        return ComputedKey::Done(Completion::Throw(this.create_type_error(&msg)));
+                        return ComputedKey::Done(Completion::Throw(
+                            this.nullish_read_error(&obj_val, &v),
+                        ));
                     }
                     if let Some(index) = v.as_number()
                         && let Some(result) = this.numeric_index_fast_get(&obj_val, index)

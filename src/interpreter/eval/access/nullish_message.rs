@@ -28,9 +28,9 @@ impl Interpreter {
 
     fn not_iterable_read_message(base: &JsValue) -> String {
         let shown = if base.is_null() {
-            "object null".to_string()
+            "object null"
         } else {
-            base.to_string()
+            "undefined"
         };
         format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
     }
