@@ -26,6 +26,9 @@ var tail = " is not iterable (cannot read property Symbol(Symbol.iterator))";
 check("undefined", function () { var u; u[Symbol.iterator]; }, "undefined" + tail);
 check("null", function () { var n = null; n[Symbol.iterator]; }, "object null" + tail);
 check("key in a variable", function () { var u, k = Symbol.iterator; u[k]; }, "undefined" + tail);
+check("method call", function () { var u; u[Symbol.iterator](); }, "undefined" + tail);
+check("update", function () { var u; u[Symbol.iterator]++; }, "undefined" + tail);
+check("compound assignment", function () { var u; u[Symbol.iterator] += 1; }, "undefined" + tail);
 check("other symbol", function () { var n = null; n[Symbol("x")]; }, "Cannot read properties of null (reading property)");
 check("string key", function () { var u; u.x; }, "Cannot read properties of undefined (reading 'x')");
 

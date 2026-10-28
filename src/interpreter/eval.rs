@@ -2737,10 +2737,8 @@ impl Interpreter {
                         let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
                         if obj_val.is_nullish() {
-                            let err = this.create_type_error(&format!(
-                                "Cannot read properties of {obj_val} (reading property)"
-                            ));
-                            return Completion::Throw(err);
+                            let msg = this.nullish_computed_read_message(&obj_val, &v);
+                            return Completion::Throw(this.create_type_error(&msg));
                         }
                         this.update_member_computed(&obj_val, &v, op, prefix, strict)
                     }
@@ -3195,14 +3193,11 @@ impl Interpreter {
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
                         if obj_val.is_null() || obj_val.is_undefined() {
-                            let base_str = if obj_val.is_null() {
-                                "null"
-                            } else {
-                                "undefined"
+                            let msg = match key_val.as_ref() {
+                                Some(k) => interp.nullish_computed_read_message(&obj_val, k),
+                                None => format!("Cannot read properties of {obj_val}"),
                             };
-                            return Completion::Throw(interp.create_type_error(&format!(
-                                "Cannot read properties of {base_str}"
-                            )));
+                            return Completion::Throw(interp.create_type_error(&msg));
                         }
                         if let Some(current) = numeric_key
                             .and_then(|index| interp.numeric_index_fast_get(&obj_val, index))
@@ -4914,10 +4909,8 @@ impl Interpreter {
                         (JsValue::UNDEFINED, obj_val)
                     }
                 } else if obj_val.is_nullish() {
-                    let err = self.create_type_error(&format!(
-                        "Cannot read properties of {obj_val} (reading '{key}')"
-                    ));
-                    return Completion::Throw(err);
+                    let msg = self.nullish_keyed_read_message(&obj_val, &key);
+                    return Completion::Throw(self.create_type_error(&msg));
                 } else {
                     (JsValue::UNDEFINED, obj_val)
                 }
