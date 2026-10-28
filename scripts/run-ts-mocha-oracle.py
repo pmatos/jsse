@@ -226,17 +226,18 @@ def prepare(work, engine, c, ts_dir):
     os.makedirs(os.path.join(cwd, "tests", "baselines", "local"))
     for link in LINKS:
         os.symlink(os.path.join(ts_dir, link), os.path.join(cwd, link))
-    if c.kind == "accept":
-        shutil.copy(os.path.join(ts_dir, "Herebyfile.mjs"), cwd)
     for link in TEST_INPUTS:
         os.symlink(
             os.path.join(ts_dir, "tests", link), os.path.join(cwd, "tests", link)
         )
-    reference = os.path.join(cwd, "tests", "baselines", "reference")
     if c.kind == "accept":
+        shutil.copy(os.path.join(ts_dir, "Herebyfile.mjs"), cwd)
         cli.seed_baselines(cwd)
     else:
-        os.symlink(os.path.join(ts_dir, "tests", "baselines", "reference"), reference)
+        os.symlink(
+            os.path.join(ts_dir, "tests", "baselines", "reference"),
+            os.path.join(cwd, "tests", "baselines", "reference"),
+        )
     for spec in c.specs:
         if spec != "RUN" and os.path.exists(os.path.join(FIX, spec)):
             shutil.copy(os.path.join(FIX, spec), cwd)
@@ -452,7 +453,7 @@ def main():
                     "Node's own result does not\n",
                 )
         if not o.ci:
-            print(f"{'ok  ' if not bad else 'FAIL'} {c[0]}", flush=True)
+            print(f"{'ok  ' if not bad else 'FAIL'} {c.name}", flush=True)
         return c, ref, got, bad
 
     try:
