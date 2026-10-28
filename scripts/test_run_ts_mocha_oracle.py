@@ -78,11 +78,12 @@ class NormaliseTest(unittest.TestCase):
 
 
 class EslintCasesTest(unittest.TestCase):
-    def test_builtin_anonymous_frames_are_dropped(self):
-        text = "Error: x\n    at k (/w/a.js:1:1)\n    at Array.forEach (<anonymous>)\n"
+    def test_native_frames_are_dropped_for_eslint_cases_only(self):
+        text = "Error: x\n    at k (a.js:1:1)\n    at Array.forEach (<anonymous>)\n"
         self.assertEqual(
-            oracle.normalise(text, "/w", "/ts"), "Error: x\n    at k (a.js:1:1)\n"
+            oracle.NATIVE_FRAME.sub("", text), "Error: x\n    at k (a.js:1:1)\n"
         )
+        self.assertIn("(<anonymous>)", oracle.normalise(text, "/w", "/ts"))
 
     def test_speed_can_be_blurred_per_run(self):
         text = '{"tests": [{"duration": 3, "speed": "fast"}]}'

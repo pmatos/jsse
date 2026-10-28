@@ -65,7 +65,7 @@ JSON_TIME = re.compile(r'("(?:duration|start|end)": )(?:"[^"]*"|\d+)')
 XML_TIME = re.compile(r' (time|timestamp)="[^"]*"')
 FRAME = re.compile(r"^\s+at ")
 ASYNC_FRAME = re.compile(r"^\s+at async ")
-BUILTIN_FRAME = re.compile(r"\(?node:[\w/]+:\d+:\d+\)?$|\(<anonymous>\)$")
+BUILTIN_FRAME = re.compile(r"\(?node:[\w/]+:\d+:\d+\)?$")
 ARROW = r"(?:[\w$]+\.(?:<anonymous>|&#x3C;anonymous&#x3E;)|Timeout\._onTimeout|Immediate\._onImmediate|exports\.[\w$]+)"
 RECEIVER_FRAME = re.compile(r"^(\s+at )" + ARROW + r" \((.*:\d+:\d+)\)")
 PID = re.compile(r"\(node:\d+\)")
@@ -73,12 +73,13 @@ SLOW_MARK = re.compile(r"^(\s*✔ .*?) \(<T>\)$", re.M)
 SLOW_TITLE = re.compile(
     r" \(<T>\)$", re.M
 )  # a multi-line test title ends on the line the mark lands on
+NATIVE_FRAME = re.compile(r"^ +at [^\n(]*\(<anonymous>\)\n", re.M)  # `at Array.forEach`
 
 
 def normalise(text, work, ts_dir):
     """Make two runs comparable: paths, durations, pids, and stack frames that differ between the engines.
 
-    Dropped on both sides: frames inside Node's own modules (jsse's node-lib has other line numbers), builtin `(<anonymous>)` frames and
+    Dropped on both sides: frames inside Node's own modules (jsse's node-lib has other line numbers) and
     `at async` frames (issue #1368). `at Context.<anonymous> (file:1:2)` and `at Timeout._onTimeout (file:1:2)`
     are read as `at file:1:2`: V8 names the receiver of an arrow function and infers `exports.name` for a
     function assigned to it; jsse does neither. Mocha shows frames under the working directory relative to it.
@@ -262,7 +263,7 @@ def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix
         if c.kind in ("runtests", "eslint"):
             text = EXEC_LINE.sub("> <EXEC> ", text)
         if c.kind == "eslint":
-            text = SLOW_TITLE.sub("", text)
+            text = NATIVE_FRAME.sub("", SLOW_TITLE.sub("", text))
         return HEREBY_TIME.sub("<T>", text) if c.kind in ("accept", "eslint") else text
 
     result = {

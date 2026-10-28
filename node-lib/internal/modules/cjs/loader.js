@@ -396,7 +396,18 @@ Module._resolveFilename = function(request, parent, isMain, options) {
   throw err;
 };
 
+// esbuild's sync API starts a Worker when `require('worker_threads')` succeeds and
+// otherwise falls back to a one-shot child process. jsse has no workers, so esbuild
+// keeps the fallback (ESLint, which only reads the thread identity, gets the module).
+const kWorkerlessConsumer = /[\\/]node_modules[\\/]esbuild[\\/]lib[\\/]main\.js$/;
+
 Module._load = function(request, parent, isMain) {
+  if (request === 'worker_threads' && parent && RegExpPrototypeExec(kWorkerlessConsumer, parent.filename) !== null) {
+    const err = new Error(`Cannot find module '${request}'`);
+    err.code = 'MODULE_NOT_FOUND';
+    err.requireStack = [parent.filename];
+    throw err;
+  }
   let relResolveCacheIdentifier;
   if (parent) {
     relResolveCacheIdentifier = `${parent.path}\x00${request}`;

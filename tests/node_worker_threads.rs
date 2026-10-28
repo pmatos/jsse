@@ -3,6 +3,7 @@
 //! the feature. ESLint loads the module for `isMainThread`/`threadId`; the end-to-end check is the
 //! `eslint-*` cases of `scripts/run-ts-mocha-oracle.py`.
 
+use std::path::Path;
 use std::process::Command;
 
 fn run(source: &str, node: bool) -> String {
@@ -99,5 +100,42 @@ fn the_module_does_not_exist_outside_node_mode() {
     assert_eq!(
         run("console.log(typeof require, typeof process)", false),
         "undefined undefined"
+    );
+}
+
+fn write(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(path, text).expect("write");
+}
+
+#[test]
+fn esbuild_keeps_its_one_shot_child_fallback_for_the_sync_api() {
+    let dir = std::env::temp_dir().join(format!("jsse-worker-threads-{}", std::process::id()));
+    let probe = "let r; try { r = typeof require('worker_threads').Worker; } catch (e) { r = e.code; }\n\
+                 module.exports = r;\n";
+    write(&dir.join("node_modules/esbuild/lib/main.js"), probe);
+    write(
+        &dir.join("node_modules/esbuild/package.json"),
+        r#"{"main": "lib/main.js"}"#,
+    );
+    write(&dir.join("node_modules/other/index.js"), probe);
+    write(
+        &dir.join("main.js"),
+        "console.log(require('esbuild'), require('other'));\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .args(["--node"])
+        .arg(dir.join("main.js"))
+        .output()
+        .expect("run jsse");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "MODULE_NOT_FOUND function"
     );
 }

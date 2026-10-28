@@ -21,6 +21,11 @@ it runs 6 files, 79 tests, in 0.8 s.
    (ESLint only starts workers for `--concurrency`). `MessageChannel`, `MessagePort`, `BroadcastChannel`,
    `receiveMessageOnPort` and `postMessageToThread` are absent: they need a message-passing layer that nothing in
    the epic uses. Out of `--node` mode the module does not exist.
+   A package that feature-detects the module and then starts a `Worker` breaks instead of falling back, which
+   is what esbuild's sync API did (`new MessageChannel` is not a constructor), so the CommonJS loader refuses
+   `require('worker_threads')` from `node_modules/esbuild/lib/main.js` as before (`ESBUILD_WORKER_THREADS=0`
+   does the same by esbuild's own switch). Other readers of `isMainThread` (source-map-support, workerpool)
+   are unaffected.
 2. **Stack frames of private and symbol-keyed methods.** A failing rule test prints RuleTester's frames
    (`this.#testInvalidTemplate(...)`, `this[finalizeConfig](...)`). V8 prints `at #m` and `at [sym]` where jsse
    printed `at R.#m` and `at R.[sym]`: V8 leaves out the receiver's type for these names. And for a call through a
@@ -37,7 +42,7 @@ files with the default fivemat reporter (colour and `--no-color`), `spec`, `tap`
 filters (one rule, an alternation, no match); `extra-rules.test.cjs` (fixers and `output`, `filename`, options, error
 locations, TypeScript-only syntax: 31 more tests, all passing on Node); and `broken.test.cjs`, which fails in every
 way RuleTester reports (wrong message id, wrong count, wrong location, a valid case that reports, an invalid case
-that does not, a duplicate case, a rule that throws, a schema violation, a parse error) with the `--failed` re-run
+that does not, a wrong fix output, a rule that throws, a schema violation, a parse error) with the `--failed` re-run
 before and after `ESLINT_FIXED=1` repairs it. The normaliser also drops builtin `(<anonymous>)` frames and the
 timing-derived `speed` of the json reporter, and the ` (Nms)` mark that a slow multi-line title carries.
 
