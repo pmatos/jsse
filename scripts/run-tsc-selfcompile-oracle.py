@@ -150,13 +150,12 @@ def snapshot(directory, tree):
     for dirpath, _, names in os.walk(directory):
         for n in names:
             p = os.path.join(dirpath, n)
+            rel = os.path.relpath(p, tree)
             if os.path.islink(p):
-                files[os.path.relpath(p, tree)] = "link:" + os.readlink(p)
+                files[rel] = "link:" + os.readlink(p)
                 continue
             with open(p, "rb") as f:
-                files[os.path.relpath(p, tree)] = hashlib.sha256(
-                    normalise(f.read(), tree)
-                ).hexdigest()
+                files[rel] = hashlib.sha256(normalise(f.read(), tree)).hexdigest()
     return files
 
 
@@ -168,7 +167,6 @@ def run_measured(argv, cwd, env, timeout):
             argv, cwd=cwd, env=env, stdout=out, stderr=err, start_new_session=True
         )
         code = "timeout"
-        usage = None
         while True:
             pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
             if pid:
@@ -266,12 +264,12 @@ def check_budget(name, node, jsse, budget, max_seconds=None, max_rss_mb=None):
         ("wall time", jsse["seconds"], cfg.get("jsse_max_seconds"), "s"),
         ("peak RSS", jsse["rss_mb"], cfg.get("jsse_max_rss_mb"), " MiB"),
     ]
-    for label, got, limit_key, unit in (
-        ("wall time", "seconds", "max_time_ratio", "x node"),
-        ("peak RSS", "rss_mb", "max_rss_ratio", "x node"),
+    for label, field, key in (
+        ("wall time", "seconds", "max_time_ratio"),
+        ("peak RSS", "rss_mb", "max_rss_ratio"),
     ):
-        if cfg.get(limit_key) is not None and node[got] > 0:
-            limits.append((label, jsse[got] / node[got], cfg[limit_key], unit))
+        if cfg.get(key) is not None and node[field] > 0:
+            limits.append((label, jsse[field] / node[field], cfg[key], "x node"))
     return [
         f"{name}: jsse {label} {got:.1f}{unit} exceeds the budget of {limit}{unit}"
         for label, got, limit, unit in limits
