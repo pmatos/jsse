@@ -43,6 +43,7 @@ pub(crate) struct NodeHostState {
     pub(crate) expose_internals: bool,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
+    pub(crate) zlib: super::node_host_zlib::ZlibState,
     pub(crate) vm: super::node_host_vm::VmState,
     #[cfg(unix)]
     pub(crate) child: super::node_host_child::ChildState,
@@ -304,6 +305,7 @@ impl Interpreter {
         self.setup_node_host_idna();
         self.setup_node_host_os();
         self.setup_node_host_crypto();
+        self.setup_node_host_zlib();
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();

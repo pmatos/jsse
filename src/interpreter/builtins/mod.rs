@@ -69,6 +69,8 @@ mod node_host_throw;
 pub(crate) mod node_host_tty;
 mod node_host_util;
 mod node_host_vm;
+mod node_host_zlib;
+mod node_host_zlib_ctx;
 mod node_prelude;
 mod number;
 mod object;

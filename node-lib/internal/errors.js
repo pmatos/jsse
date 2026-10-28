@@ -509,3 +509,4 @@ function isErrorStackTraceLimitWritable() {
 
 module.exports = { AbortError, codes, genericNodeError, isErrorStackTraceLimitWritable, isStackOverflowError };
 module.exports.aggregateTwoErrors = aggregateTwoErrors;
+module.exports.E = E;
