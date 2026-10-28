@@ -9,11 +9,17 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return;
         }
-        if let Some(obj) = self.get_object(id) {
-            let mut error = obj.borrow_mut();
-            if error.prototype_id.is_some() {
-                error.properties.remove("name");
-            }
+        let Some(own) = self.own_data_string(id, "name") else {
+            return;
+        };
+        let Some(proto) = self.get_object(id).and_then(|o| o.borrow().prototype_id) else {
+            return;
+        };
+        let inherited = self.get_property_on_id(proto, "name");
+        if inherited.as_string().is_some_and(|s| s.to_string() == own)
+            && let Some(error) = self.get_object(id)
+        {
+            error.borrow_mut().remove_property("name");
         }
     }
 }

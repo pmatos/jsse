@@ -108,6 +108,21 @@ fn frame_names_and_error_keys_match_node() {
 }
 
 #[test]
+fn engine_errors_keep_a_name_their_prototype_does_not_supply() {
+    let out = jsse(
+        &[
+            "--node",
+            "-e",
+            r#"globalThis.TypeError = function TypeError() {}; TypeError.prototype = {};
+try { null.x } catch (e) { print(e.name, JSON.stringify(Object.getOwnPropertyNames(e))) }"#,
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), r#"TypeError ["stack","message","name"]"#);
+}
+
+#[test]
 fn default_mode_keeps_engine_error_keys() {
     let out = jsse(
         &[

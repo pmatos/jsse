@@ -299,7 +299,7 @@ impl Interpreter {
                 Vec::new()
             };
             for (key, _) in &earlier {
-                b.properties.remove(key);
+                b.remove_property(key);
             }
             b.insert_property(
                 "stack".to_string(),
@@ -311,7 +311,7 @@ impl Interpreter {
                 ),
             );
             for (key, descriptor) in earlier {
-                b.properties.insert(key, descriptor);
+                b.insert_property(key, descriptor);
             }
         }
         for value in [&frames, &getter, &setter] {
