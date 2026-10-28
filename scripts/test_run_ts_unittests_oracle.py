@@ -146,6 +146,25 @@ class GroupsTest(unittest.TestCase):
         self.assertEqual(sorted(flat), sorted(g.name for g in groups.GROUPS))
         self.assertEqual(len({g.name for g in groups.GROUPS}), len(groups.GROUPS))
 
+    def test_check_groups_covers_the_services_directories(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d, "src", "testRunner", "unittests", "services")
+            (base / "extract").mkdir(parents=True)
+            (base / "textChanges.ts").write_text(
+                'describe("unittests:: services:: textChanges", () => {});\n'
+            )
+            (base / "extract" / "ranges.ts").write_text(
+                'describe("unittests:: services:: extract:: extractRanges", () => {});\n'
+                'describe("unittests:: services:: extract:: brandNew", () => {});\n'
+            )
+            self.assertEqual(
+                groups.check_groups(d),
+                [
+                    "services/extract/ranges.ts: describe("
+                    "'unittests:: services:: extract:: brandNew') matches groups none"
+                ],
+            )
+
     def test_check_groups_flags_an_unmatched_suite(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d, "src", "testRunner", "unittests")

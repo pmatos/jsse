@@ -1,7 +1,9 @@
 """Groups of TypeScript's top-level unit-test suites for run-ts-unittests-oracle.py (issue #1259).
 
-`src/testRunner/unittests/*.ts` (not its subdirectories, which the config, evaluation, services, sys, tsbuild,
-tscWatch, tsc and tsserver tickets own) register the mocha suites of 26 groups. A group is one file: its
+`src/testRunner/unittests/*.ts` register the mocha suites of 26 groups (#1259); the 16 `services-*` groups
+(#1261) cover `unittests/services/*.ts` and `unittests/services/extract/*.ts`, 1531 tests. The other subdirectories
+(config and sys: run-ts-unittests-config-sys-oracle.py; evaluation, tsbuild, tscWatch, tsc, tsserver: their own
+tickets) are not in SUBDIRS. A group is one file: its
 `pattern` is the mocha `-g` regular expression selecting that file's tests (a test's full title is its
 `describe` titles and its own title joined by spaces, so every pattern is anchored on the file's first
 describe title plus a space), and `tests` is the count Node 26 reports on TypeScript v6.0.3. Every mocha process pays jsse's 80 s start-up (parsing and
@@ -60,20 +62,47 @@ GROUPS = [
     ),
 ]
 
+S = r"^unittests:: services:: "
+GROUPS += [
+    Group("services-cancellable", S + r"cancellableLanguageServiceOperations ", 5, 6),
+    Group("services-colorization", S + r"Colorization ", 38, 7),
+    Group("services-convertToAsyncFunction", S + r"convertToAsyncFunction:: ", 264, 4),
+    Group("services-documentRegistry", S + r"DocumentRegistry ", 4, 6),
+    Group("services-extractConstants", S + r"extract:: extractConstants ", 92, 5),
+    Group("services-extractFunctions", S + r"extract:: extractFunctions ", 122, 5),
+    Group("services-extractRanges", S + r"extract:: extractRanges ", 50, 5),
+    Group("services-extractSymbolWalker", S + r"extract:: Symbol Walker ", 1, 5),
+    Group("services-hostNewLineSupport", S + r"hostNewLineSupport ", 3, 6),
+    Group("services-languageService", S + r"languageService:: ", 6, 6),
+    Group("services-organizeImports", S + r"organizeImports:: ", 91, 6),
+    Group("services-patternMatcher", S + r"PatternMatcher ", 75, 7),
+    Group("services-preProcessFile", S + r"PreProcessFile: ", 41, 7),
+    Group("services-textChanges", S + r"textChanges ", 84, 6),
+    Group("services-transpile", S + r"Transpile ", 654, 7),
+    Group("services-utilities", S + r"utilities ", 1, 6),
+]
+
 DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*["'`]([^"'`]+)["'`]""", re.M)
 
 
+SUBDIRS = ("", "services", os.path.join("services", "extract"))
+
+
 def top_level_titles(ts_dir):
-    """The first-level describe titles of every `unittests/*.ts` file, by file name."""
-    base = os.path.join(ts_dir, "src", "testRunner", "unittests")
+    """The first-level describe titles of every `.ts` file of the directories in SUBDIRS under
+    `unittests/` (the other subdirectories belong to other oracles), by file name."""
     found = {}
-    for name in sorted(os.listdir(base)):
-        path = os.path.join(base, name)
-        if name.endswith(".ts") and os.path.isfile(path):
-            with open(path, encoding="utf-8") as f:
-                titles = DESCRIBE.findall(f.read())
-            if titles:
-                found[name] = titles
+    for sub in SUBDIRS:
+        base = os.path.join(ts_dir, "src", "testRunner", "unittests", sub)
+        if not os.path.isdir(base):
+            continue
+        for name in sorted(os.listdir(base)):
+            path = os.path.join(base, name)
+            if name.endswith(".ts") and os.path.isfile(path):
+                with open(path, encoding="utf-8") as f:
+                    titles = DESCRIBE.findall(f.read())
+                if titles:
+                    found[os.path.join(sub, name)] = titles
     return found
 
 
