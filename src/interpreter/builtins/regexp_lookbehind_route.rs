@@ -7,5 +7,5 @@ pub(super) fn unbounded_capture_read_outside(source: &str) -> bool {
         && super::regexp_lookbehind::extract_lookbehinds(source)
             .0
             .iter()
-            .any(|lb| lb.content.contains(['+', '*']))
+            .any(|lb| lb.content.contains(['+', '*', '{', '|']))
 }
