@@ -171,12 +171,8 @@ def prepare(work, engine, c, ts_dir):
             os.path.join(ts_dir, "tests", "baselines", "reference"),
             os.path.join(cwd, "tests", "baselines", "reference"),
         )
-    for spec in c.specs:
-        if (
-            c.kind != "eslint"
-            and spec != "RUN"
-            and os.path.exists(os.path.join(FIX, spec))
-        ):
+    for spec in () if c.kind == "eslint" else c.specs:
+        if spec != "RUN" and os.path.exists(os.path.join(FIX, spec)):
             shutil.copy(os.path.join(FIX, spec), cwd)
     if c.mocharc:
         with open(os.path.join(cwd, ".mocharc.json"), "w") as f:

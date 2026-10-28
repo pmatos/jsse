@@ -14,7 +14,6 @@ const SHARE_ENV = Symbol.for('nodejs.worker_threads.SHARE_ENV');
 
 const environmentData = new Map();
 const untransferable = new WeakSet();
-const uncloneable = new WeakSet();
 
 class Worker {
   constructor() {
@@ -43,9 +42,8 @@ function isMarkedAsUntransferable(object) {
   return isObjectLike(object) && untransferable.has(object);
 }
 
-function markAsUncloneable(object) {
-  if (isObjectLike(object)) uncloneable.add(object);
-}
+// structuredClone does not consult the mark, so there is nothing to record.
+function markAsUncloneable() {}
 
 module.exports = {
   isMainThread: true,
