@@ -18,6 +18,7 @@ use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 pub(super) type Completions = Arc<(
     Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>,
@@ -76,6 +77,42 @@ impl Flow {
     }
 }
 
+/// Orders a child's `Exit` after the end of its IPC channel. The kernel closes
+/// the child's descriptors before the parent can reap it, so libuv reports the
+/// channel's EOF (`'disconnect'`) before the exit; here the waiter and the
+/// message reader are separate threads, and the waiter posts `Exit` only after
+/// the reader has posted its `Eof`, within `GRACE` (a process that inherited
+/// the channel can keep it open past the child's death).
+#[derive(Default)]
+pub(super) struct ChannelGate {
+    state: Mutex<(bool, bool)>,
+    changed: Condvar,
+}
+
+const GRACE: Duration = Duration::from_secs(1);
+
+impl ChannelGate {
+    pub(super) fn reader_started(&self) {
+        self.state.lock().unwrap().0 = true;
+    }
+
+    pub(super) fn reader_done(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.changed.notify_all();
+    }
+
+    fn wait_for_eof(&self) {
+        let deadline = Instant::now() + GRACE;
+        let mut state = self.state.lock().unwrap();
+        while state.0 && !state.1 {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return;
+            };
+            state = self.changed.wait_timeout(state, left).unwrap().0;
+        }
+    }
+}
+
 enum WriteMsg {
     Data(Vec<u8>),
     End,
@@ -106,6 +143,7 @@ impl Endpoint {
 pub(super) struct ChildCtl {
     pub(super) pid: i32,
     pub(super) exited: Arc<Mutex<bool>>,
+    pub(super) gate: Arc<ChannelGate>,
     pub(super) endpoints: Vec<Option<Endpoint>>,
 }
 
@@ -151,10 +189,12 @@ fn spawn_waiter(
     queue: Completions,
     id: u64,
     exited: Arc<Mutex<bool>>,
+    gate: Arc<ChannelGate>,
     mut child: std::process::Child,
 ) {
     std::thread::spawn(move || {
         let (code, signal) = reap(&mut child, &exited);
+        gate.wait_for_eof();
         post(
             &queue,
             ChildEvent::Exit {
@@ -419,12 +459,14 @@ impl Interpreter {
                 .into_iter()
                 .map(|parent| parent.map(|fd| Endpoint::new(Arc::new(fd))))
                 .collect();
-            spawn_waiter(queue, id, exited.clone(), spawned.child);
+            let gate = Arc::new(ChannelGate::default());
+            spawn_waiter(queue, id, exited.clone(), gate.clone(), spawned.child);
             interp.node_host.child.children.insert(
                 id,
                 ChildCtl {
                     pid,
                     exited,
+                    gate,
                     endpoints,
                 },
             );
