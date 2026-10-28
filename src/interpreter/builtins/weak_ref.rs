@@ -347,6 +347,7 @@ impl Interpreter {
         let Some(callback) = callback else {
             return Completion::Normal(JsValue::UNDEFINED);
         };
+        let mut scan_from = 0;
         loop {
             let held = self.get_object_cell(registry_id).and_then(|cell| {
                 let mut obj = cell.borrow_mut();
@@ -354,7 +355,9 @@ impl Interpreter {
                 let Some(index) = data
                     .cells
                     .iter()
+                    .skip(scan_from)
                     .position(|c| c.as_ref().is_some_and(|(target, _)| target.is_undefined()))
+                    .map(|offset| scan_from + offset)
                 else {
                     let cells = std::mem::take(&mut data.cells);
                     let tokens = std::mem::take(&mut data.tokens);
@@ -366,6 +369,7 @@ impl Interpreter {
                     }
                     return None;
                 };
+                scan_from = index;
                 data.tokens[index] = None;
                 data.cells[index].take().map(|(_, held)| held)
             });
