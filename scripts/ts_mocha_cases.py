@@ -70,7 +70,7 @@ for flag, label in (("-t 60", "60ms"), ("-t 0", "off"), ("-t 1s", "1s")):
         ["cli-timeout.spec.js"],
     )
 case("cli-timeout-json", ["-R", "json", "-t", "60"], ["cli-timeout.spec.js"])
-case("cli-slow-json", ["-R", "json", "--slow", "30"], ["cli-timeout.spec.js"])
+case("cli-slow-json", ["-R", "json", "--slow", "1000"], ["cli-timeout.spec.js"])
 case("diff-no-diff", ["-R", "spec", "--no-diff"], ["diff.spec.js"])
 case("diff-inline", ["-R", "spec", "--inline-diffs"], ["diff.spec.js"])
 case("diff-colors", ["-R", "spec", "--colors"], ["diff.spec.js"])

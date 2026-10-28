@@ -102,10 +102,11 @@ def normalise(text, work, ts_dir):
 TIME_KEYS = ("duration", "start", "end")
 
 
-def normalise_json(text, work, ts_dir):
+def normalise_json(text, work, ts_dir, stream=False):
     """The json and json-stream reporters embed stacks in strings and list error keys in own-property order
     (V8 puts `stack` first, jsse after `message`): normalise the stacks line by line, sort the keys and blank
-    the timestamps. Text a test printed before the report (a line that is not JSON) goes through normalise()."""
+    the timestamps. Text a test printed before or after the report goes through normalise(); json-stream
+    is one JSON document per line."""
 
     def walk(v):
         if isinstance(v, str):
@@ -120,24 +121,24 @@ def normalise_json(text, work, ts_dir):
         return json.dumps(walk(doc), indent=1, sort_keys=True) + "\n"
 
     lines = text.splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        if line.startswith("{") or line.startswith("["):
-            break
-    else:
-        return text
-    head = "".join(lines[:i])
-    rest = "".join(lines[i:])
+    start = next(
+        (i for i, line in enumerate(lines) if line[:1] in ("{", "[")), len(lines)
+    )
+    head = "".join(lines[:start])
+    rest = "".join(lines[start:])
+    if stream:
+        out = []
+        for line in lines[start:]:
+            try:
+                out.append(dump(json.loads(line)))
+            except ValueError:
+                out.append(line)
+        return head + "".join(out)
     try:
-        return head + dump(json.loads(rest))
+        doc, end = json.JSONDecoder().raw_decode(rest)
     except ValueError:
-        pass
-    out = []
-    for line in lines[i:]:
-        try:
-            out.append(dump(json.loads(line)))
-        except ValueError:
-            out.append(line)
-    return head + "".join(out)
+        return text
+    return head + dump(doc) + rest[end:].lstrip("\n")
 
 
 def prepare(work, engine, name, ts_dir, specs):
@@ -207,7 +208,7 @@ def execute(engine, exe, cwd, args, specs, config, env_extra, timeout, ts_dir, w
     def norm(raw):
         text = raw.decode("utf-8", "replace")
         if "json" in args or "json-stream" in args:
-            text = normalise_json(text, cwd, ts_dir)
+            text = normalise_json(text, cwd, ts_dir, "json-stream" in args)
         return normalise(text, cwd, ts_dir).replace(wd, "<WORK>")
 
     result = {

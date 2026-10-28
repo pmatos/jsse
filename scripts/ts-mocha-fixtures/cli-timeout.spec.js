@@ -11,6 +11,11 @@ describe("cli timeout", function () {
         this.slow(100000);
         setTimeout(done, 5);
     });
+    it("is medium for its threshold", function (done) {
+        this.slow(400);
+        this.timeout(0);
+        setTimeout(done, 300);
+    });
     it("is slow for its threshold", function (done) {
         this.slow(10);
         this.timeout(0);

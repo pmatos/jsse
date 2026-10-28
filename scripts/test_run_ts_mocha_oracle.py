@@ -75,7 +75,7 @@ class NormaliseTest(unittest.TestCase):
         self.assertEqual(one, two)
 
 
-class ForbiddenExclusivityTest(unittest.TestCase):
+class TrailingBraceAfterFrameTest(unittest.TestCase):
     def test_a_brace_after_a_dropped_frame_reads_like_one_after_another(self):
         node = "Error: x\n    at k (/w/a.js:1:1)\n    at async y (/ts/z.js:2:2) {\n  code: 'E'\n}\n"
         jsse = "Error: x\n    at k (/w/a.js:1:1)\n    at node:internal/boot:4:5 {\n  code: 'E'\n}\n"
@@ -97,7 +97,15 @@ class JsonReportersTest(unittest.TestCase):
     def test_json_stream_lines_are_normalised_one_by_one(self):
         a = '["start",{"total":1}]\n["fail",{"duration":7,"err":{"stack":"E\\n    at f (/w/a.js:1:1)","message":"m"}}]\n'
         b = '["start",{"total":1}]\n["fail",{"duration":2,"err":{"message":"m","stack":"E\\n    at f (/w/a.js:1:1)"}}]\n'
-        self.assertEqual(self.norm(a), self.norm(b))
+        self.assertEqual(
+            oracle.normalise_json(a, "/w", "/ts", stream=True),
+            oracle.normalise_json(b, "/w", "/ts", stream=True),
+        )
+
+    def test_text_printed_after_the_report_does_not_stop_normalising(self):
+        out = self.norm('{"stats": {"duration": 4}}\nlate output\n')
+        self.assertIn('"duration": "<T>"', out)
+        self.assertTrue(out.endswith("late output\n"))
 
     def test_speed_survives_but_timings_do_not(self):
         out = self.norm('{"tests": [{"duration": 3, "speed": "slow"}]}')
