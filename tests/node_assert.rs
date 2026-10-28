@@ -93,11 +93,11 @@ fn source(name: &str) -> String {
         .unwrap_or_else(|| panic!("{name} is not in the manifest"))
         .trim()
         .to_string();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(text.as_bytes())),
-        want,
-        "{name}: vendored text does not match its sha256"
-    );
+    let got: String = Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(got, want, "{name}: vendored text does not match its sha256");
     text
 }
 
