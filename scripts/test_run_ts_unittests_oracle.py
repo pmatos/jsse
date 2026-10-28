@@ -151,6 +151,7 @@ class GroupsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d, "src", "testRunner", "unittests", "services")
             (base / "extract").mkdir(parents=True)
+            Path(d, "src", "testRunner", "unittests", "evaluation").mkdir()
             (base / "textChanges.ts").write_text(
                 'describe("unittests:: services:: textChanges", () => {});\n'
             )
@@ -172,13 +173,39 @@ class GroupsTest(unittest.TestCase):
                 ],
             )
 
-    def test_check_groups_flags_a_missing_services_directory(self):
+    def test_check_groups_flags_a_missing_owned_directory(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "src", "testRunner", "unittests").mkdir(parents=True)
             self.assertEqual(
                 groups.check_groups(d),
-                ["unittests/services is missing: its groups select nothing"],
+                [
+                    "unittests/services is missing: its groups select nothing",
+                    "unittests/evaluation is missing: its groups select nothing",
+                ],
             )
+
+    def test_check_groups_covers_the_evaluation_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d, "src", "testRunner", "unittests")
+            Path(base, "services").mkdir(parents=True)
+            Path(base, "evaluation").mkdir()
+            (base / "evaluation" / "forOf.ts").write_text(
+                'describe("unittests:: evaluation:: forOfEvaluation", () => {});\n'
+                'describe("unittests:: evaluation:: brandNew", () => {});\n'
+            )
+            self.assertEqual(
+                groups.check_groups(d),
+                [
+                    "evaluation/forOf.ts: describe("
+                    "'unittests:: evaluation:: brandNew') matches groups none"
+                ],
+            )
+
+    def test_the_evaluation_counts_equal_the_pinned_suite_count(self):
+        pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
+        pinned = pins["runners"]["unittests"]["suites"]["evaluation"]["passed"]
+        got = sum(g.tests for g in groups.GROUPS if g.name.startswith("evaluation-"))
+        self.assertEqual(got, pinned)
 
     def test_the_services_counts_equal_the_pinned_suite_count(self):
         pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
@@ -206,6 +233,7 @@ class GroupsTest(unittest.TestCase):
                 '    describe("unittests:: indented", () => {});\n'
             )
             Path(base, "services").mkdir()
+            Path(base, "evaluation").mkdir()
             problems = groups.check_groups(d)
         self.assertEqual(
             problems,

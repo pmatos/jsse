@@ -1,15 +1,16 @@
-"""Groups of TypeScript's unit-test suites for run-ts-unittests-oracle.py (issues #1259 and #1261).
+"""Groups of TypeScript's unit-test suites for run-ts-unittests-oracle.py (issues #1259, #1261 and #1262).
 
 `src/testRunner/unittests/*.ts` register the mocha suites of 26 groups (#1259, 2334 tests). The 16 `services-*`
-groups (#1261, 1531 tests) cover everything under `unittests/services/`. The other subdirectories (config and sys:
-run-ts-unittests-config-sys-oracle.py; evaluation, tsbuild, tscWatch, tsc, tsserver: their own tickets) are not
-scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting that file's tests (a
-test's full title is its `describe` titles and its own title joined by spaces, so every pattern is anchored on the
-file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript v6.0.3. Every
-mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle runs the
-groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
-group; the batches balance the slow suites (`canWatch`, `programApi`, `convertToAsyncFunction` and the `extract`
-tests take two to ten minutes of test time on jsse) over the processes.
+groups (#1261, 1531 tests) cover everything under `unittests/services/` and the 20 `evaluation-*` groups (#1262,
+350 tests) the files of `unittests/evaluation/`, whose tests compile a snippet and run the emitted code. The other
+subdirectories (config and sys: run-ts-unittests-config-sys-oracle.py; tsbuild, tscWatch, tsc, tsserver: their own
+tickets) are not scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting that
+file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every pattern is
+anchored on the file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript
+v6.0.3. Every mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle
+runs the groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
+group; the batches balance the slow suites (`canWatch`, `programApi`, `convertToAsyncFunction` and the `extract` tests
+take two to ten minutes of test time on jsse) over the processes.
 
 `check_groups()` is the drift guard: every top-level `describe("...")` in the checkout must be matched by exactly
 one group, so a new or renamed suite cannot be left out of the oracle unnoticed.
@@ -82,24 +83,54 @@ GROUPS += [
     Group("services-utilities", S + r"utilities ", 1, 6),
 ]
 
+E = r"^unittests:: evaluation:: "
+GROUPS += [
+    Group("evaluation-arraySpread", E + r"arraySpread ", 4, 10),
+    Group("evaluation-asyncArrow", E + r"asyncArrowEvaluation ", 2, 10),
+    Group("evaluation-asyncGenerator", E + r"asyncGeneratorEvaluation ", 6, 10),
+    Group("evaluation-autoAccessors", E + r"autoAccessors ", 12, 10),
+    Group("evaluation-awaitUsing", E + r"awaitUsingDeclarations ", 44, 9),
+    Group("evaluation-awaiter", E + r"awaiter ", 1, 10),
+    Group("evaluation-constEnum", E + r"constEnum ", 1, 10),
+    Group("evaluation-destructuring", E + r"destructuring ", 7, 10),
+    Group("evaluation-esDecorators", E + r"esDecorators ", 162, 8),
+    Group("evaluation-esDecoratorsMetadata", E + r"esDecoratorsMetadata ", 12, 10),
+    Group("evaluation-externalModules", E + r"externalModules ", 2, 10),
+    Group("evaluation-forAwaitOf", E + r"forAwaitOfEvaluation ", 11, 10),
+    Group("evaluation-forOf", E + r"forOfEvaluation ", 7, 10),
+    Group("evaluation-generator", E + r"generatorEvaluation ", 4, 10),
+    Group("evaluation-objectRest", E + r"objectRest ", 3, 10),
+    Group("evaluation-optionalCall", E + r"optionalCall ", 13, 10),
+    Group(
+        "evaluation-superInStaticInitializer", E + r"superInStaticInitializer ", 8, 10
+    ),
+    Group("evaluation-templateLiteral", E + r"templateLiteral ", 2, 10),
+    Group(
+        "evaluation-updateExpressionInModule", E + r"updateExpressionInModule ", 8, 10
+    ),
+    Group("evaluation-using", E + r"usingDeclarations ", 41, 9),
+]
+
+OWNED_DIRS = ("services", "evaluation")
 DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*["'`]([^"'`]+)["'`]""", re.M)
 
 
 def ts_files(ts_dir):
     """(path relative to `unittests/`, absolute path) of the `.ts` files the oracle owns: those of `unittests/`
-    itself and, recursively, of `unittests/services/`. A missing `services` directory yields no file here;
-    check_groups() reports it."""
+    itself and, recursively, of `unittests/services/` and `unittests/evaluation/`. A missing directory yields no
+    file here; check_groups() reports it."""
     base = os.path.join(ts_dir, "src", "testRunner", "unittests")
     for name in sorted(os.listdir(base)):
         path = os.path.join(base, name)
         if name.endswith(".ts") and os.path.isfile(path):
             yield name, path
-    for root, dirs, files in os.walk(os.path.join(base, "services")):
-        dirs.sort()
-        for name in sorted(files):
-            if name.endswith(".ts"):
-                path = os.path.join(root, name)
-                yield os.path.relpath(path, base), path
+    for sub in OWNED_DIRS:
+        for root, dirs, files in os.walk(os.path.join(base, sub)):
+            dirs.sort()
+            for name in sorted(files):
+                if name.endswith(".ts"):
+                    path = os.path.join(root, name)
+                    yield os.path.relpath(path, base), path
 
 
 def top_level_titles(ts_dir):
@@ -121,9 +152,11 @@ def matching(title):
 def check_groups(ts_dir):
     """Problems (a list of strings) between the groups and the checkout's top-level suites."""
     problems = []
-    services = os.path.join(ts_dir, "src", "testRunner", "unittests", "services")
-    if not os.path.isdir(services):
-        problems.append("unittests/services is missing: its groups select nothing")
+    for sub in OWNED_DIRS:
+        if not os.path.isdir(
+            os.path.join(ts_dir, "src", "testRunner", "unittests", sub)
+        ):
+            problems.append(f"unittests/{sub} is missing: its groups select nothing")
     for file, titles in top_level_titles(ts_dir).items():
         for title in titles:
             hits = matching(title)

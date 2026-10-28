@@ -751,10 +751,7 @@ fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completio
 
 fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsValue) -> Completion {
     if base.is_nullish() {
-        let err = interp.create_type_error(&format!(
-            "Cannot read properties of {base} (reading property)"
-        ));
-        return Completion::Throw(err);
+        return Completion::Throw(interp.nullish_read_error(base, key_val));
     }
     let key = match interp.to_property_key(key_val) {
         Ok(k) => k,
@@ -829,9 +826,7 @@ fn member_update_computed(
     strict: bool,
 ) -> Completion {
     if base.is_nullish() {
-        return Completion::Throw(interp.create_type_error(&format!(
-            "Cannot read properties of {base} (reading property)"
-        )));
+        return Completion::Throw(interp.nullish_read_error(base, key_val));
     }
     interp.update_member_computed(base, key_val, op, prefix, strict)
 }
@@ -2434,8 +2429,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         .expect("stack underflow on ToPrimitiveKey base");
                     if stack[base_index].is_nullish() {
                         let base = stack[base_index].clone();
-                        let error =
-                            interp.create_type_error(&format!("Cannot read properties of {base}"));
+                        let key = stack[base_index + 1].clone();
+                        let error = interp.nullish_read_error(&base, &key);
                         throw!('dispatch, error);
                     }
                     assert_operands_rooted!();
