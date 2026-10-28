@@ -223,7 +223,7 @@
     }
   }
 
-  var handoff = { report: undefined, rejectionError: undefined };
+  var handoff = { report: undefined, rejectionError: undefined, decorate: undefined };
 
   function printUncaught(error, rejected) {
     var text;
@@ -261,7 +261,8 @@
 
   // `entry` is set for an error that ended the ES module entry point: Node
   // delivers it as a rejection after that many microtask turns (and reports a
-  // non-error value with the loader's own header).
+  // non-error value with the loader's own header). `entry` is -1 for a throw
+  // of the `-e` program itself, whose non-error objects Node lays out apart.
   function triggerUncaught(error, origin, entry) {
     if (entry > 0) {
       var turns = resolved;
@@ -272,11 +273,17 @@
       return;
     }
     var type = origin || "uncaughtException";
+    if (entry === -1) {
+      try {
+        handoff.decorate(error);
+      } catch (ignored) {}
+    }
     try {
       proc.emit("uncaughtExceptionMonitor", error, type);
     } catch (ignored) {}
     if (proc.listenerCount("uncaughtException") === 0) {
-      fatal(error, 1, entry === 0 ? "entry" : type === "unhandledRejection");
+      var mode = entry === 0 ? "entry" : entry === -1 ? "eval" : type === "unhandledRejection";
+      fatal(error, 1, mode);
       return;
     }
     try {

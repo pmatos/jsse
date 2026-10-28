@@ -171,6 +171,7 @@ fn run_source_with_interp(
     source: &str,
     is_module: bool,
     path: Option<&Path>,
+    eval_main: bool,
 ) -> Result<(), EngineError> {
     let mut p = parser::Parser::new(source).map_err(|e| EngineError::Parse(format!("{e:?}")))?;
     let program = if is_module {
@@ -181,6 +182,9 @@ fn run_source_with_interp(
             .map_err(|e| EngineError::Parse(format!("{e:?}")))?
     };
     let origin = p.source_origin();
+    if eval_main && !is_module {
+        interp.node_note_eval_origin(origin.clone());
+    }
     let result = if let Some(p) = path {
         interp.note_script_source(p, source, is_module);
         if is_module {
@@ -301,7 +305,7 @@ fn execute_code(
     step_budget: Option<u64>,
 ) -> ExitCode {
     let mut interp = new_interp(can_block, bytecode, node, step_budget);
-    let result = run_source_with_interp(&mut interp, code, is_module, path);
+    let result = run_source_with_interp(&mut interp, code, is_module, path, path.is_none());
     interp.node_host_finish();
     let exit = exit_code_from_result(&interp, result);
     retire_interpreter(interp);
@@ -367,7 +371,7 @@ fn run_repl(interp: &mut interpreter::Interpreter) -> ExitCode {
             Ok(_) => {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
-                    let repl_result = run_source_with_interp(interp, trimmed, false, None);
+                    let repl_result = run_source_with_interp(interp, trimmed, false, None, false);
                     // A `__host_exit` (issue #229) surfaces as a sentinel
                     // Runtime error; honor the exit code before reporting it,
                     // matching the file/eval paths' `exit_code_from_result`.
@@ -462,7 +466,7 @@ fn run_with_preludes(
                 return exit_after_execution(interp, 1);
             }
         };
-        let prelude_result = run_source_with_interp(interp, &source, false, None);
+        let prelude_result = run_source_with_interp(interp, &source, false, None, false);
         // A prelude that called `__host_exit` is a clean exit, not an error.
         if interp.pending_exit.is_some() {
             return exit_code_from_result(interp, prelude_result);
@@ -483,7 +487,7 @@ fn run_with_preludes(
 
     // Now run the main input.
     if let Some(code) = &cli.eval {
-        let result = run_source_with_interp(interp, code, cli.module, None);
+        let result = run_source_with_interp(interp, code, cli.module, None, true);
         interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else if let Some(path) = &cli.file {
@@ -496,7 +500,7 @@ fn run_with_preludes(
         };
         let is_module = is_module_main(path, cli.module, node);
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
+        let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path), false);
         interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else {

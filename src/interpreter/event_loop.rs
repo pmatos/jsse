@@ -68,7 +68,9 @@ impl Interpreter {
                 self.gc_root_value(arg);
             }
             let rooted_depth = self.gc_root_frame();
+            self.begin_job();
             let result = self.call_budgeted_timer(&callback, &args);
+            self.finish_job();
             self.gc_assert_root_depth(rooted_depth, "a timer callback");
             self.gc_unroot_frame(frame);
             if let Completion::Exit(code) = result {

@@ -66,6 +66,7 @@ fn replay_named(name: &str, extra: &[&str], stress: Option<&str>) {
             *text = text
                 .split("## async before await")
                 .next()
+                .and_then(|kept| kept.split("## async arrow body").next())
                 .unwrap()
                 .trim_end()
                 .to_string();
@@ -93,6 +94,50 @@ fn required_modules_report_their_file_line_and_column() {
     ] {
         replay_named("modules", extra, stress);
     }
+}
+
+#[test]
+fn frame_names_and_error_keys_match_node() {
+    for (extra, stress) in [
+        (&[][..], None),
+        (&["--no-bytecode"][..], None),
+        (&[][..], Some("7")),
+    ] {
+        replay_named("names", extra, stress);
+    }
+}
+
+#[test]
+fn engine_errors_keep_a_name_their_prototype_does_not_supply() {
+    let out = jsse(
+        &[
+            "--node",
+            "-e",
+            r#"globalThis.TypeError = function TypeError() {}; TypeError.prototype = {};
+try { null.x } catch (e) { print(e.name, JSON.stringify(Object.getOwnPropertyNames(e))) }"#,
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), r#"TypeError ["stack","message","name"]"#);
+}
+
+#[test]
+fn default_mode_keeps_engine_error_keys() {
+    let out = jsse(
+        &[
+            "-e",
+            r#"var e; try { null.x } catch (x) { e = x }
+var a = {}; a.f = function () { return new Error("x") };
+print(JSON.stringify(Object.getOwnPropertyNames(e)), JSON.stringify(Object.getOwnPropertyNames(new AggregateError([], "m", { cause: 1 }))), a.f().stack === "")"#,
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        r#"["message","name"] ["message","cause","errors"] true"#
+    );
 }
 
 #[test]
@@ -170,7 +215,7 @@ print(construct().stack.split('\\n').length);";
         args.extend(["-e", source]);
         let out = jsse(&args, None);
         assert!(out.status.success(), "{}", stderr(&out));
-        assert_eq!(stdout(&out), "(<anonymous>:2:36)\n3", "mode {mode:?}");
+        assert_eq!(stdout(&out), "([eval]:2:36)\n11", "mode {mode:?}");
     }
 }
 
@@ -236,7 +281,7 @@ print(churn().split(",").length, churn().slice(0, 16));"#;
     for stress in [None, Some("3")] {
         let out = jsse(&["--node", "-e", source], stress);
         assert!(out.status.success(), "{}", stderr(&out));
-        assert_eq!(stdout(&out), "20 prepared:1:100:e", "stress {stress:?}");
+        assert_eq!(stdout(&out), "20 prepared:9:100:e", "stress {stress:?}");
     }
 }
 
@@ -253,7 +298,7 @@ fn uncaught_error_prints_its_stack() {
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
-        err.contains("Error: fatal\n    at boom (<anonymous>:1:"),
+        err.contains("Error: fatal\n    at boom ([eval]:1:"),
         "{err}"
     );
 }

@@ -1,0 +1,11 @@
+[eval]:6
+throw error;
+^
+
+SyntaxError: colour eval
+    at [eval]:4:15
+    at [eval]-wrapper:6:24
+  detail: { n: [33m1[39m }
+}
+
+Node.js <version>

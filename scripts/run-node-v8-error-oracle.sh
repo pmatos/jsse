@@ -5,7 +5,8 @@
 #   ./scripts/run-node-v8-error-oracle.sh [--node] [--no-cross-check]
 #
 # Each fixture in scripts/v8-error-fixtures (cases.js: frame shapes; modules.js:
-# frames of code loaded through require()) runs on Node and on `jsse --node`.
+# frames of code loaded through require(); names.js: inferred names, arrow
+# receivers, error key order) runs on Node and on `jsse --node`.
 # Each run's stdout is normalised (the fixture directory becomes <dir>; stack
 # frames outside it, and the top-level `Object.<anonymous>` frame Node adds, are
 # dropped) and the two must be identical and equal expected-<name>.txt, which
@@ -52,7 +53,7 @@ normalise() {
 }
 
 FAIL=0
-for NAME in cases modules; do
+for NAME in cases modules names; do
     FIXTURE="$DIR/$NAME.js"
     EXPECTED="$DIR/expected-$NAME.txt"
     if [ "$NODE_ONLY" -eq 1 ]; then

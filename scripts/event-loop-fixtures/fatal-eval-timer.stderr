@@ -1,0 +1,8 @@
+[eval]:5
+  throw new Error('late');
+  ^
+
+Error: late
+    at Timeout._onTimeout ([eval]:5:9)
+
+Node.js <version>

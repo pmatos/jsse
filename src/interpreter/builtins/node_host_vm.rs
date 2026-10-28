@@ -160,10 +160,19 @@ fn realm_of(interp: &Interpreter, global: &JsValue) -> Option<usize> {
 
 impl Interpreter {
     pub(super) fn push_script_frame(&mut self, origin: &Rc<str>, env: &EnvRef) -> bool {
+        self.push_named_script_frame(origin, env, "")
+    }
+
+    pub(super) fn push_named_script_frame(
+        &mut self,
+        origin: &Rc<str>,
+        env: &EnvRef,
+        name: &str,
+    ) -> bool {
         if !self.node_host.stack.installed {
             return false;
         }
-        let stand_in = self.create_function(JsFunction::native(String::new(), 0, |_, _, _| {
+        let stand_in = self.create_function(JsFunction::native(name.to_string(), 0, |_, _, _| {
             Completion::Normal(JsValue::UNDEFINED)
         }));
         let Some(func_obj_id) = stand_in.as_object_id() else {

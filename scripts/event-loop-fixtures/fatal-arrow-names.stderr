@@ -1,0 +1,8 @@
+<dir>/fatal-arrow-names.fixture.js:20
+  throw new Error('thrown by an exit handler');
+  ^
+
+Error: thrown by an exit handler
+    at process.<anonymous> (<dir>/fatal-arrow-names.fixture.js:20:9)
+
+Node.js <version>

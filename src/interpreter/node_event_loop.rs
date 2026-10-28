@@ -134,7 +134,9 @@ impl Interpreter {
             self.gc_root_value(arg);
         }
         let rooted_depth = self.gc_root_frame();
+        self.begin_job();
         let result = self.call_function(callback, &JsValue::UNDEFINED, args);
+        self.finish_job();
         self.gc_assert_root_depth(rooted_depth, "a node loop callback");
         self.gc_unroot_frame(frame);
         result
@@ -391,6 +393,12 @@ impl Interpreter {
                     self.node_uncaught_entry(error.clone(), ESM_ENTRY_HOPS);
                     self.drain_microtasks();
                 }
+            } else if self.node_host.stack.eval_origin.is_some() {
+                self.node_report_uncaught(
+                    error.clone(),
+                    "uncaughtException",
+                    &[JsValue::number(-1.0)],
+                );
             } else {
                 self.node_uncaught(error.clone());
             }

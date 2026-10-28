@@ -1,0 +1,7 @@
+[eval]:3
+throw { code: 'E_EVAL', list: [1, 2] };
+^
+
+{ code: 'E_EVAL', list: [ 1, 2 ] }
+
+Node.js <version>

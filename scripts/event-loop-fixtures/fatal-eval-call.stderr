@@ -1,0 +1,11 @@
+[eval]:5
+  throw new TypeError('deep');
+  ^
+
+TypeError: deep
+    at inner ([eval]:5:9)
+    at outer ([eval]:8:3)
+    at [eval]:10:1
+    at [eval]-wrapper:6:24
+
+Node.js <version>
