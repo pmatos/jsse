@@ -178,6 +178,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     },
                 };
+                interp.latch_exit(code);
                 Completion::Exit(code)
             },
         ));

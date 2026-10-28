@@ -73,6 +73,45 @@ register its 327 suites before any test runs (about 50 s user time in the releas
 at load 60), then 16 s for the tests themselves. Startup of the runner is not part of this ticket's criteria;
 the parallel host (#1258) and the full-suite tickets will want it down.
 
+## Reporters, timeouts, grep and failure output (issue #1256)
+
+The oracle grew from 51 to 109 cases (the table moved to `scripts/ts_mocha_cases.py`, new fixtures under
+`scripts/ts-mocha-fixtures`). New coverage, all identical to Node after normalisation:
+
+- every non-browser reporter (the `doc` and `json-stream` reporters join the eleven), `--reporter-option output=`
+  for `xunit` and `json`, the TypeScript `failed-tests.cjs` wrapper around `min` and
+  `mocha-fivemat-progress-reporter` on a failing suite;
+- timing under the jsse timer queue: `timers.spec.js` checks inside the test that timers never fire early, fire in
+  deadline then creation order, that `nextTick`, promise jobs, `queueMicrotask`, immediates and timers keep Node's
+  phase order, that `setInterval`, `clearTimeout`, `refresh`, `ref`/`unref`, `timers/promises` and `AbortSignal`
+  behave, and that mocha's `test.duration` brackets the sleep; `timeouts.spec.js` and `cli-timeout.spec.js` pin
+  the messages and exit status of test and hook timeouts, `this.timeout(0)`, limits above 2^31-1, limits changed
+  mid-test, a synchronous overrun, `done` after the timeout, per-suite and per-retry limits, `-t 60|0|1s` and the
+  `speed` class from `--slow`;
+- failure text: assertion diffs for objects, maps, sets, typed arrays, circular values, long lists (default,
+  `--no-diff`, `--inline-diffs`, `--colors`), `--retries`, `--full-trace`, `--forbid-only`, `--forbid-pending`,
+  `--check-leaks`, `--dry-run`, `--async-only`, `--delay`, `-u tdd`, `--sort`, regexp/fixed-string/inverted `-g`/`-f`.
+
+Two engine differences surfaced and are fixed:
+
+1. **`process.exit()` inside a builtin callback.** `mocha --list-reporters` (and `--help`/`--version` paths of other
+   yargs CLIs) call `process.exit()` from a `forEach` callback. `Array.prototype.forEach` kept only
+   `Completion::Throw` from the callback, so the `Completion::Exit` (#242) was dropped and the run went on: the
+   second callback ran, the code after the loop ran, and mocha printed its usage error and exited 1. A sweep of
+   about 120 callback sites (`sort` comparators, `JSON.stringify` replacers, Proxy traps, setters,
+   `Symbol.toPrimitive`, iterator helpers, `Object.groupBy`, static blocks, class fields, ...) showed some sixty
+   with the same leak. Instead of patching each, `__host_exit` now calls `Interpreter::latch_exit`, which
+   latches `pending_exit` and sets the same sticky poll bit the step budget (#1173) uses: the next statement
+   boundary or loop back-edge returns `Completion::Exit`, and `budget_tick` (microtask jobs, timer callbacks) does
+   too. Nothing changes without `--node`, and the unset-budget fast path is untouched.
+2. **`process.nextTick` callbacks had a receiver.** The tick loop called `tock.callback()`, so a failing tick shows
+   `at Object.callback (f.js:1:2)`; Node calls a detached function (`at f.js:1:2`). The shim now detaches it.
+
+The oracle's normaliser also learned that a trailing ` {` (an error's property list after the last stack frame)
+belongs to the frame line whether the frame is dropped or kept, and that the `json`/`json-stream` reporters and
+`--reporter-option output=report.json` are compared as parsed JSON with timings blanked even when a test printed
+text before the report.
+
 ## Runner flags, sharding and `.failed-tests` (issue #1257)
 
 `hereby runtests` is `runConsoleTests` in `scripts/build/tests.mjs` after its build tasks: minimist parses
