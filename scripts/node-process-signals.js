@@ -27,6 +27,7 @@
   var watchHandler;
   var binding = {
     kill: take("__host_kill"),
+    abort: take("__host_abort"),
     signalWatch: take("__host_signal_watch"),
     spawn: take("__host_cp_spawn"),
     spawnSync: take("__host_cp_spawn_sync"),
@@ -70,6 +71,10 @@
 
   define("kill", function kill(pid, sig) {
     return binding.load().kill(pid, sig);
+  });
+
+  define("abort", function abort() {
+    binding.abort();
   });
 
   function isSignalEvent(type) {

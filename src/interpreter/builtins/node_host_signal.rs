@@ -96,6 +96,9 @@ impl Interpreter {
             }))
         });
 
+        // __host_abort(): `process.abort()`, SIGABRT regardless of handlers
+        self.host_fs_fn("__host_abort", 0, |_, _| unsafe { libc::abort() });
+
         // __host_signal_watch(signal, on) -> 0 | negative errno
         self.host_fs_fn("__host_signal_watch", 2, |interp, args| {
             let signal = int(interp, arg(args, 0))? as i32;

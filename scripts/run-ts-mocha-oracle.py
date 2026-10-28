@@ -29,7 +29,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -51,14 +50,18 @@ TEST_INPUTS = ("cases", "lib")
 COMMON = ["--no-colors", "-t", "40000"]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ts_eslint_cases as eslint  # noqa: E402
+from oracle_procs import install_cleanup, run_group  # noqa: E402
 import ts_runner_cli_cases as cli  # noqa: E402
+import ts_runner_parallel_cases as parallel  # noqa: E402
 from ts_mocha_cases import CASES  # noqa: E402
 
 CASES.extend(cli.cli_cases())
+CASES.extend(parallel.parallel_cases())
 CASES.extend(eslint.eslint_cases())
 
 EXEC_LINE = re.compile(r"^> \S+ ", re.M)
 HEREBY_TIME = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m)\b")
+DISCOVERED = re.compile(r"(?<=test files in )\d+ms")
 
 DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s|m)\)|(?<=: )\d+(?:\.\d+)?ms$", re.M)
 JSON_TIME = re.compile(r'("(?:duration|start|end)": )(?:"[^"]*"|\d+)')
@@ -213,26 +216,6 @@ def command(engine, exe, cwd, c, flags):
     return [exe] + node_flag + [mocha] + COMMON + flags + files
 
 
-def launch(cmd, cwd, env, timeout):
-    start = time.monotonic()
-    child = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    try:
-        out, err = child.communicate(timeout=timeout)
-        code = str(child.returncode)
-    except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)
-        out, err = child.communicate()
-        code = "timeout"
-    return code, out, err, time.monotonic() - start
-
-
 def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix=""):
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
     env["NODE_ENV"] = "development"
@@ -242,9 +225,9 @@ def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix
     if c.config is not None:
         with open(os.path.join(cwd, "test.config"), "w") as f:
             json.dump(c.config, f)
-    code, out, err, secs = launch(
-        command(engine, exe, cwd, c, flags), cwd, env, timeout
-    )
+    start = time.monotonic()
+    code, out, err = run_group(command(engine, exe, cwd, c, flags), cwd, env, timeout)
+    secs = time.monotonic() - start
     wd = os.path.join(work, engine)
     stream = "json-stream" in flags
 
@@ -257,6 +240,8 @@ def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix
         text = normalise(text, cwd, ts_dir).replace(wd, "<WORK>")
         if c.kind in ("runtests", "eslint"):
             text = EXEC_LINE.sub("> <EXEC> ", text)
+        if c.kind == "runtests":
+            text = DISCOVERED.sub("<T>", text)
         if c.kind == "eslint":
             text = NATIVE_FRAME.sub("", SLOW_TITLE.sub("", text))
         return HEREBY_TIME.sub("<T>", text) if c.kind in ("accept", "eslint") else text
@@ -387,6 +372,7 @@ def main():
         flush=True,
     )
 
+    install_cleanup()
     work = os.path.realpath(tempfile.mkdtemp(prefix="ts-mocha-oracle-"))
 
     def one(c):
@@ -421,7 +407,7 @@ def main():
                     print(
                         f"::error title=mocha oracle::{c[0]} differs between node and jsse: {', '.join(bad)}"
                     )
-        problems = cli.partition_problems(results)
+        problems = cli.partition_problems(results) + parallel.serial_problems(results)
         for problem in problems:
             print(f"\nshards: {problem}")
             if o.ci:
