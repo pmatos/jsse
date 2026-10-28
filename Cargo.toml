@@ -56,7 +56,7 @@ foldhash = "0.2"
 smallvec = "1"
 getrandom = "0.4"
 # Digests behind the `crypto` module of `--node` mode (#1226); one shared `digest` 0.10.
-md-5 = "0.10"
+md-5 = "0.11"
 sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
