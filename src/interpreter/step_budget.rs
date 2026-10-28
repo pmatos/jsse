@@ -16,6 +16,7 @@ pub(crate) struct StepBudget {
     used: u64,
     active: bool,
     exhausted: bool,
+    exit_latched: bool,
 }
 
 impl StepBudget {
@@ -62,6 +63,18 @@ impl Interpreter {
     pub(crate) fn set_step_budget(&mut self, limit: Option<u64>) {
         self.step_budget.set(limit);
         self.gc.set_budget_active(limit.is_some());
+    }
+
+    /// `__host_exit` ran: latch the code and make every later safepoint stop
+    /// with `Completion::Exit`, like an exhausted budget. A builtin that takes
+    /// a callback and keeps only `Completion::Throw` drops the `Exit` the
+    /// callback returned; the next statement boundary or loop back-edge sees
+    /// the latch instead, so `process.exit()` inside `forEach`, a `sort`
+    /// comparator, a Proxy trap or a setter still ends the run at once.
+    pub(crate) fn latch_exit(&mut self, code: i32) {
+        self.pending_exit.get_or_insert(code);
+        self.step_budget.exit_latched = true;
+        self.gc.set_budget_active(true);
     }
 
     pub(crate) fn step_budget_exhausted(&self) -> bool {
@@ -111,6 +124,9 @@ impl Interpreter {
     /// read when no budget is installed.
     #[inline(always)]
     pub(crate) fn budget_tick(&mut self) -> bool {
+        if self.step_budget.exit_latched {
+            return true;
+        }
         if self.step_budget.is_active() && self.step_budget.tick() {
             self.pending_exit.get_or_insert(STEP_BUDGET_EXIT_CODE);
             return true;

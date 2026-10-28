@@ -75,6 +75,36 @@ class NormaliseTest(unittest.TestCase):
         self.assertEqual(one, two)
 
 
+class ForbiddenExclusivityTest(unittest.TestCase):
+    def test_a_brace_after_a_dropped_frame_reads_like_one_after_another(self):
+        node = "Error: x\n    at k (/w/a.js:1:1)\n    at async y (/ts/z.js:2:2) {\n  code: 'E'\n}\n"
+        jsse = "Error: x\n    at k (/w/a.js:1:1)\n    at node:internal/boot:4:5 {\n  code: 'E'\n}\n"
+        self.assertEqual(
+            oracle.normalise(node, "/w", "/ts"), oracle.normalise(jsse, "/w", "/ts")
+        )
+
+
+class JsonReportersTest(unittest.TestCase):
+    def norm(self, text):
+        return oracle.normalise_json(text, "/w", "/ts")
+
+    def test_text_printed_before_the_report_is_kept(self):
+        text = 'beforeEach 1\n{"stats": {"duration": 4}, "n": 1}\n'
+        out = self.norm(text)
+        self.assertTrue(out.startswith("beforeEach 1\n{"))
+        self.assertIn('"duration": "<T>"', out)
+
+    def test_json_stream_lines_are_normalised_one_by_one(self):
+        a = '["start",{"total":1}]\n["fail",{"duration":7,"err":{"stack":"E\\n    at f (/w/a.js:1:1)","message":"m"}}]\n'
+        b = '["start",{"total":1}]\n["fail",{"duration":2,"err":{"message":"m","stack":"E\\n    at f (/w/a.js:1:1)"}}]\n'
+        self.assertEqual(self.norm(a), self.norm(b))
+
+    def test_speed_survives_but_timings_do_not(self):
+        out = self.norm('{"tests": [{"duration": 3, "speed": "slow"}]}')
+        self.assertIn('"speed": "slow"', out)
+        self.assertNotIn("3", out)
+
+
 class CaseTableTest(unittest.TestCase):
     def test_names_are_unique(self):
         names = [c[0] for c in oracle.CASES]
@@ -85,6 +115,20 @@ class CaseTableTest(unittest.TestCase):
             for spec_file in specs:
                 if spec_file not in ("RUN", "absent.spec.js"):
                     self.assertTrue((FIXTURES / spec_file).is_file(), name)
+
+    def test_the_timing_and_failure_output_cases_exist(self):
+        names = {c[0] for c in oracle.CASES}
+        for want in (
+            "timers-spec",
+            "timeouts-json",
+            "cli-timeout-60ms",
+            "diff-colors",
+            "retries-cli-spec",
+            "fail-fivemat",
+            "fail-full-trace",
+            "list-reporters",
+        ):
+            self.assertIn(want, names)
 
     def test_runs_stay_small(self):
         for path in FIXTURES.iterdir():
@@ -144,6 +188,13 @@ class SkipTest(unittest.TestCase):
     def test_unknown_case_is_an_error(self):
         r = self.run_oracle({"TS_SRC_DIR": "/nonexistent"}, "no-such-case")
         self.assertNotEqual(r.returncode, 0)
+
+    def test_a_negated_glob_removes_cases(self):
+        r = self.run_oracle({}, "--list", "!ts-*", "!fail-*")
+        self.assertEqual(r.returncode, 0)
+        names = r.stdout.split()
+        self.assertIn("pass-spec", names)
+        self.assertFalse([n for n in names if n.startswith(("ts-", "fail-"))])
 
     def test_list_prints_case_names(self):
         r = self.run_oracle({}, "--list", "pass-*")

@@ -85,6 +85,13 @@ fn mocha_matches_node_when_a_typescript_checkout_is_given() {
             "async-*",
             "late-*",
             "exit-*",
+            "timers-spec",
+            "timeouts-json",
+            "cli-timeout-*",
+            "diff-colors",
+            "retries-cli-spec",
+            "fail-fivemat",
+            "list-reporters",
             "ts-semver-and-failures",
         ])
         .output()
