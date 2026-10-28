@@ -30,7 +30,17 @@ impl Interpreter {
     }
 
     pub(super) fn receiver_type_name(&self, receiver: &JsValue) -> Option<String> {
-        let mut id = receiver.as_object_id()?;
+        let Some(mut id) = receiver.as_object_id() else {
+            return [
+                (receiver.is_string(), "String"),
+                (receiver.is_number(), "Number"),
+                (receiver.is_boolean(), "Boolean"),
+                (receiver.is_symbol(), "Symbol"),
+                (receiver.is_bigint(), "BigInt"),
+            ]
+            .into_iter()
+            .find_map(|(is, name)| is.then(|| name.to_string()));
+        };
         if self.node_host.vm.is_context_global(id)
             || self.realm().global_object == Some(id)
             || self.realms[0].global_object == Some(id)
@@ -63,7 +73,8 @@ impl Interpreter {
                 }
                 break;
             }
-            id = proto?;
+            let Some(next) = proto else { break };
+            id = next;
         }
         Some("Object".to_string())
     }

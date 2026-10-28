@@ -27,6 +27,9 @@ pub(crate) struct AsyncActivation {
     resolvers: PromiseResolvers,
     frame: GeneratorFrame,
     realm_id: usize,
+    /// The call receiver of an async arrow, which its `--node` stack frame
+    /// names even though the body's `this` is lexical.
+    receiver: Option<JsValue>,
     #[cfg(feature = "perf-counters")]
     perf_key: crate::interpreter::perf_counters::BodyKey,
 }
@@ -113,6 +116,7 @@ impl Interpreter {
         resolvers: &PromiseResolvers,
         promise: &JsValue,
         has_simple_params: bool,
+        receiver: Option<&JsValue>,
     ) -> Option<Completion> {
         use crate::interpreter::bytecode::{BytecodeCacheState, compiler};
         if !self.bytecode_enabled {
@@ -137,6 +141,7 @@ impl Interpreter {
             env,
             resolvers: resolvers.clone(),
             realm_id: self.current_realm_id,
+            receiver: receiver.filter(|_| self.node_host.stack.installed).cloned(),
             #[cfg(feature = "perf-counters")]
             perf_key: self.perf_body_name(func_obj_id),
         };
@@ -184,6 +189,13 @@ impl Interpreter {
             .for_each_value(|value| self.gc_root_value(value));
         self.call_stack_envs.push(activation.env.clone());
         let stack_frame = self.push_async_stack_frame(activation.func_obj_id);
+        let noted = match &activation.receiver {
+            Some(receiver) if stack_frame => {
+                self.node_note_arrow_receiver(receiver);
+                true
+            }
+            _ => false,
+        };
         #[cfg(feature = "perf-counters")]
         {
             self.perf.body_non_function += 1;
@@ -211,6 +223,9 @@ impl Interpreter {
         if !activation.chunk.ast.is_empty() {
             let exclusive = self.perf.leave_ast_body();
             self.perf.ast_units_in_fallbacks += exclusive;
+        }
+        if noted {
+            self.node_host.stack.arrow_receivers.pop();
         }
         if stack_frame {
             self.pop_call_frame();
@@ -297,6 +312,7 @@ impl Interpreter {
                 Self::collect_env_roots(env, roots, seen_envs);
             }
             roots.extend(activation.frame.with_objects());
+            roots.extend(activation.receiver.iter().filter_map(JsValue::as_object_id));
         }
     }
 }
