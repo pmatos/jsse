@@ -148,8 +148,14 @@ def counts(res):
     return {k: c.get(k, 0) for k in ("passing", "failing", "pending")}
 
 
+Verdict = collections.namedtuple(
+    "Verdict", "regress unexpected stale node_fail differing"
+)
+
+
 def classify(node, jsse, known):
-    """Titles of Node passes that fail on jsse, split into known and unexpected, plus stale baseline entries."""
+    """Titles of Node passes that fail on jsse, split into known and unexpected, stale baseline entries, and
+    titles whose passing/pending outcomes (with multiplicity) differ between the engines without a failure."""
     node_pass = collections.Counter()
     for (title, kind), n in node["outcomes"].items():
         if kind == "passing":
@@ -160,7 +166,18 @@ def classify(node, jsse, known):
     only_jsse = sorted(jsse_fail - set(regress) - set(node_fail))
     unexpected = [t for t in regress + only_jsse if t not in known]
     stale = sorted(t for t in known if t not in jsse_fail)
-    return regress, unexpected, stale, node_fail
+    ok = {k: v for k, v in node["outcomes"].items() if k[1] != "failing"}
+    got = {k: v for k, v in jsse["outcomes"].items() if k[1] != "failing"}
+    differing = sorted(
+        {
+            t
+            for (t, kind) in set(ok) | set(got)
+            if ok.get((t, kind), 0) != got.get((t, kind), 0)
+            and t not in jsse_fail
+            and t not in node_fail
+        }
+    )
+    return Verdict(regress, unexpected, stale, node_fail, differing)
 
 
 def check_checkout(ts_dir):
@@ -295,13 +312,18 @@ def main():
                 for eng, r in (("node", ref), ("jsse", got)):
                     if r["report"] is None:
                         lines.append(f"  {eng} output tail:\n" + r["tail"])
-            regress, unexpected, stale, node_fail = classify(ref, got, set(known))
+            mine = {t for t in known if re.search(GROUPS[name], t)}
+            regress, unexpected, stale, node_fail, differing = classify(ref, got, mine)
             total_jsse += counts(got)["passing"]
             for t in node_fail:
                 lines.append(f"fails on Node itself: {t}")
             for t in unexpected:
                 lines.append(
                     f"passes on Node, fails on jsse (not in the baseline): {t}\n    {got['errors'].get(t, '')}"
+                )
+            for t in differing:
+                lines.append(
+                    f"ran a different number of times (or not at all) on jsse: {t}"
                 )
             for t in stale:
                 lines.append(f"baseline lists a test that no longer fails on jsse: {t}")
@@ -339,8 +361,7 @@ def main():
                 print(f"\n{problem}")
         print(f"\nnode passing {total_node}, jsse passing {total_jsse}")
         if o.record:
-            record(o.baseline, base, new_counts, results)
-            return 0
+            return record(o.baseline, base, new_counts, results)
         print("unit-test oracle: " + ("FAIL" if failed else "PASS"))
         return 1 if failed else 0
     finally:
@@ -350,30 +371,49 @@ def main():
 
 
 def record(path, base, new_counts, results):
-    known = dict(base.get("known_failures", {}))
-    still = set()
+    """Rewrite the baseline for the groups just run; the other groups' entries stay as they are."""
+    bad = [
+        f"{name}: no report from {eng}"
+        for name, ref, got in results
+        for eng, r in (("node", ref), ("jsse", got))
+        if r["report"] is None
+    ] + [
+        f"{name}: {t} fails on Node"
+        for name, ref, got in results
+        for t in classify(ref, got, set()).node_fail
+    ]
+    if bad:
+        print("refusing to record:\n  " + "\n  ".join(bad))
+        return 1
+    selected = [name for name, _, _ in results]
+    old = base.get("known_failures", {})
+    known = {
+        t: why
+        for t, why in old.items()
+        if not any(re.search(GROUPS[n], t) for n in selected)
+    }
     for _, ref, got in results:
-        regress, unexpected, _, _ = classify(ref, got, set())
-        still.update(regress)
-        for t in regress + unexpected:
-            known.setdefault(t, "TODO: file the bug and put its number here")
-    known = {t: why for t, why in known.items() if t in still}
-    doc = {"counts": new_counts, "known_failures": dict(sorted(known.items()))}
+        v = classify(ref, got, set())
+        for t in v.regress + v.unexpected:
+            known[t] = old.get(t, "TODO: file the bug and put its number here")
+    merged = {**base.get("counts", {}), **new_counts}
+    counts_all = {n: merged[n] for n in GROUPS if n in merged}
     with open(path, "w", encoding="utf-8") as f:
         f.write('{\n "counts": {\n')
         f.write(
             ",\n".join(
-                f"  {json.dumps(n)}: {json.dumps(c)}" for n, c in new_counts.items()
+                f"  {json.dumps(n)}: {json.dumps(c)}" for n, c in counts_all.items()
             )
         )
         f.write('\n },\n "known_failures": ')
         f.write(
-            json.dumps(doc["known_failures"], indent=1, ensure_ascii=False).replace(
-                "\n", "\n "
-            )
+            json.dumps(
+                dict(sorted(known.items())), indent=1, ensure_ascii=False
+            ).replace("\n", "\n ")
         )
         f.write("\n}\n")
     print(f"wrote {path}: {len(known)} known failures")
+    return 0
 
 
 TS_DIR = ""

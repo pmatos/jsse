@@ -1,7 +1,8 @@
 //! TypeScript's config, sys and debugDeprecation unit tests (#1260) run on
 //! `jsse --node` and Node, compared per test title by
 //! `scripts/run-ts-unittests-config-sys-oracle.py`. The case below drives the
-//! oracle on two small groups when TS_SRC_DIR points at a built TypeScript
+//! oracle on three small groups (debugDeprecation, initTSConfig,
+//! tsconfigParsing) when TS_SRC_DIR points at a built TypeScript
 //! 6.0.3 checkout; the full set (541 tests, `symlinkWatching` included) is
 //! `uv run python scripts/run-ts-unittests-config-sys-oracle.py`.
 
