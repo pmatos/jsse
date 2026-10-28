@@ -4,15 +4,16 @@ Each case is (name, mocha arguments, spec files, test.config or None, extra envi
 scripts/ts-mocha-fixtures or "RUN" for the TypeScript runner built/local/run.js.
 """
 
+from ts_runner_cli_cases import Case
+
 UNIT_CONFIG = {"test": ["unittests:: semver"], "runners": ["unittest"], "light": False}
 FAILED_TESTS = "scripts/failed-tests.cjs"
 
-# name, test.config (None = none), mocha arguments, spec files (fixtures or "RUN" for built/local/run.js), env
 CASES = []
 
 
 def case(name, args, specs, config=None, env=None):
-    CASES.append((name, args, specs, config, env or {}))
+    CASES.append(Case(name, args, specs, config, env or {}))
 
 
 for reporter in (
