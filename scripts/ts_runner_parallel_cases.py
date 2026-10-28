@@ -24,9 +24,8 @@ SAMPLE = {
 }
 PASSING = ("stdout", r"\d+ passing")
 PAR = {"TS_PARALLEL": "1"}
-SLOW = [
-    "--timeout=600000"
-]  # each worker parses lib.d.ts for its first test: tens of seconds on jsse
+# each worker parses lib.d.ts for its first test: tens of seconds on jsse
+SLOW = ["--timeout=600000"]
 COUNT = re.compile(r"^\s*(\d+) (passing|failing)", re.M)
 
 
@@ -72,10 +71,7 @@ def crashes():
 
 
 def counts(stdout):
-    found = {}
-    for number, kind in COUNT.findall(stdout):
-        found[kind] = int(number)
-    return found
+    return {kind: int(number) for number, kind in COUNT.findall(stdout)}
 
 
 def serial_problems(results):
@@ -91,10 +87,16 @@ def serial_problems(results):
             continue
         deltas = []
         for idx, engine in ((0, "node"), (1, "jsse")):
-            run1, pa = counts(s[idx]["stdout"]), counts(p[idx]["stdout"])
-            if run1.get("failing") or pa.get("failing") or "passing" not in pa:
-                problems.append(f"{engine}: {r} has failures or no result: {run1} {pa}")
-            deltas.append(run1.get("passing", 0) - pa.get("passing", 0))
+            serial, par_run = counts(s[idx]["stdout"]), counts(p[idx]["stdout"])
+            if (
+                serial.get("failing")
+                or par_run.get("failing")
+                or "passing" not in par_run
+            ):
+                problems.append(
+                    f"{engine}: {r} has failures or no result: {serial} {par_run}"
+                )
+            deltas.append(serial.get("passing", 0) - par_run.get("passing", 0))
         if deltas != [1, 1]:
             problems.append(
                 f"{r}: serial minus parallel passing is {deltas} (node, jsse)"

@@ -133,7 +133,7 @@ fn an_aborted_child_and_a_signalled_worker_report_their_signal() {
       worker.on("message", () => { worker.send("work"); setTimeout(() => worker.kill("SIGABRT"), 50); });
       let disconnected = false;
       worker.on("disconnect", () => { disconnected = true; });
-      worker.on("exit", (code, signal) => finish("worker " + code + " " + signal + " " + (disconnected || worker.connected === false)));
+      worker.on("exit", (code, signal) => finish("worker " + code + " " + signal + " " + disconnected));
     "#;
     let source = source.replace("CHILD", &format!("{:?}", fixture("fork-child.js")));
     let out = Command::new("sh")
