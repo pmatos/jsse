@@ -53,6 +53,8 @@ LINKS = ("built", "node_modules", "scripts", "lib", "src", "package.json")
 TEST_INPUTS = ("cases", "lib")
 MAX_JOBS = 4
 CONFIG = {"runners": ["unittest"], "light": False}
+TEST_TIMEOUT_MS = 40000
+DEFAULT_GROUPS = None
 
 
 def prepare(work, engine, group):
@@ -108,7 +110,8 @@ def run_group(engine, exe, group, regex, work, timeout):
     mocha = os.path.join(cwd, "node_modules", "mocha", "bin", "_mocha")
     report = os.path.join(cwd, "report.json")
     cmd = [exe] + (["--node"] if engine == "jsse" else [])
-    cmd += [mocha, "--no-colors", "-t", "40000", "-R", "json", "-O", f"output={report}"]
+    cmd += [mocha, "--no-colors", "-t", str(TEST_TIMEOUT_MS)]
+    cmd += ["-R", "json", "-O", f"output={report}"]
     cmd += ["-g", regex, "built/local/run.js"]
     code, out, err, secs = launch(cmd, cwd, env, timeout)
     res = {
@@ -236,7 +239,7 @@ def main():
     ap.add_argument("--keep-work")
     o = ap.parse_args()
 
-    names = list(GROUPS)
+    names = list(GROUPS if o.groups else DEFAULT_GROUPS or GROUPS)
     if o.groups:
         unknown = [p for p in o.groups if not any(fnmatch.fnmatch(n, p) for n in names)]
         if unknown:
