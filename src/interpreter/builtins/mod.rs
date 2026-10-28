@@ -87,6 +87,7 @@ mod reduction;
 mod reflect;
 pub(crate) mod regexp;
 mod regexp_lookbehind;
+mod regexp_lookbehind_route;
 mod shadow_realm;
 pub(crate) mod string;
 mod structured_clone;
