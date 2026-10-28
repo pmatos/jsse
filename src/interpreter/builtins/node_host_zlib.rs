@@ -302,14 +302,10 @@ fn crc32(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion
     let bytes = if data.is_string() {
         tri!(interp.to_string_lossy(data)).into_bytes()
     } else {
-        let Some(w) = window(interp, data) else {
+        let Some(bytes) = view_bytes(interp, data) else {
             return Completion::Throw(interp.create_type_error("zlib: expected a string or view"));
         };
-        let copied = w
-            .buffer
-            .borrow()
-            .with_read(|b| b.get(w.offset..w.offset + w.len).map(<[u8]>::to_vec));
-        copied.unwrap_or_default()
+        bytes
     };
     let mut crc = u64::from(start);
     for chunk in bytes.chunks(1 << 30) {
