@@ -189,6 +189,7 @@ def run_measured(argv, cwd, env, timeout):
 
 def prepare(tree, ts_dir, generated):
     """Lay out a fresh tree: a copy of src/ with the self-compile config, or the generated program."""
+    shutil.rmtree(tree, ignore_errors=True)
     os.makedirs(tree)
     if generated:
         gen_program(os.path.join(tree, "gen"))
@@ -196,11 +197,17 @@ def prepare(tree, ts_dir, generated):
             json.dump(GEN_CONFIG, f, indent=4)
         return
     src = os.path.join(tree, "src")
-    subprocess.run(
-        ["cp", "-a", "--reflink=auto", os.path.join(ts_dir, "src"), src], check=True
+    src_root = os.path.join(ts_dir, "src")
+    shutil.copytree(
+        src_root,
+        src,
+        symlinks=True,
+        ignore=lambda d, names: (
+            [n for n in names if n in ("testRunner", "harness")]
+            if d == src_root
+            else []
+        ),
     )
-    shutil.rmtree(os.path.join(src, "testRunner"), ignore_errors=True)
-    shutil.rmtree(os.path.join(src, "harness"), ignore_errors=True)
     with open(os.path.join(src, "tsconfig.selfcompile.json"), "w") as f:
         json.dump(SELF_CONFIG, f, indent=4)
     os.symlink(os.path.join(ts_dir, "node_modules"), os.path.join(tree, "node_modules"))
@@ -437,7 +444,7 @@ def main():
         with open(o.report, "w", encoding="utf-8") as f:
             json.dump({"host": meta, "cases": slim}, f, indent=2)
     if (
-        not any(budget.get(n) for n in names)
+        not any(v is not None for n in names for v in (budget.get(n) or {}).values())
         and o.max_seconds is None
         and o.max_rss_mb is None
     ):
@@ -447,7 +454,11 @@ def main():
     if problems:
         for p in problems:
             print(
-                ("::error title=tsc self-compile oracle::" if o.ci else "") + p,
+                (
+                    "::error title=tsc self-compile oracle::" + p.replace("\n", "%0A")
+                    if o.ci
+                    else p
+                ),
                 file=sys.stderr,
             )
         print(

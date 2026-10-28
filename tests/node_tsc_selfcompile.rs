@@ -21,7 +21,7 @@ fn generated_large_program_matches_node() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let out = Command::new("python3")
         .arg(root.join("scripts/run-tsc-selfcompile-oracle.py"))
-        .args(["--smoke", "--ci"])
+        .args(["--smoke", "--ci", "--timeout", "1200"])
         .env("JSSE", env!("CARGO_BIN_EXE_jsse"))
         .output()
         .expect("run python3");

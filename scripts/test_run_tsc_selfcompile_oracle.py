@@ -116,6 +116,38 @@ class GeneratorTest(unittest.TestCase):
         self.assertTrue(set(oracle.SMOKE) <= set(oracle.CASES))
 
 
+class PrepareTest(unittest.TestCase):
+    def test_src_copy_drops_test_dirs_links_node_modules_and_replaces_a_stale_tree(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as d:
+            ts = Path(d, "ts")
+            for rel in ("src/compiler/a.ts", "src/testRunner/t.ts", "src/harness/h.ts"):
+                (ts / rel).parent.mkdir(parents=True, exist_ok=True)
+                (ts / rel).write_text("x")
+            (ts / "node_modules").mkdir()
+            tree = Path(d, "tree")
+            tree.mkdir()
+            (tree / "stale").write_text("old")
+            oracle.prepare(str(tree), str(ts), False)
+            self.assertEqual(
+                sorted(os.listdir(tree / "src")),
+                ["compiler", "tsconfig.selfcompile.json"],
+            )
+            self.assertTrue((tree / "node_modules").is_symlink())
+            self.assertFalse((tree / "stale").exists())
+            config = json.loads(
+                (tree / "src" / "tsconfig.selfcompile.json").read_text()
+            )
+            self.assertEqual(config["extends"], "./tsconfig-base")
+
+    def test_generated_tree_has_its_own_config_and_no_src(self):
+        with tempfile.TemporaryDirectory() as d:
+            oracle.prepare(os.path.join(d, "t"), None, True)
+            self.assertEqual(sorted(os.listdir(Path(d, "t"))), ["gen"])
+            self.assertTrue(Path(d, "t", "gen", "tsconfig.json").is_file())
+
+
 class InputsTest(unittest.TestCase):
     def package(self, root, version):
         (root / "lib").mkdir(parents=True, exist_ok=True)
