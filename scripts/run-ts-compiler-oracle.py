@@ -218,9 +218,7 @@ def main():
             print("cannot list the compiler tests:\n" + listing["tail"])
             return 1
         everything = slices.suites_from_titles(
-            (t["fullTitle"], t["title"])
-            for t in listing["report"].get("tests", [])
-            + listing["report"].get("pending", [])
+            (t["fullTitle"], t["title"]) for t in listing["report"].get("tests", [])
         )
         try:
             chosen = slices.select(spec, everything, table)

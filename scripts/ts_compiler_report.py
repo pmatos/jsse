@@ -61,7 +61,7 @@ def counts(res):
 def classify(node, jsse, known):
     """Problems of one comparison (list of lines): Node failures, unlisted jsse failures, stale known failures,
     tests run a different number of times, differing messages and differing local baselines."""
-    node_pass, jsse_fail, node_fail = collections.Counter(), set(), set()
+    node_pass, node_fail = collections.Counter(), set()
     for (t, kind), n in node["outcomes"].items():
         if kind == "passing":
             node_pass[t] += n
