@@ -1,5 +1,6 @@
 import collections
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -157,13 +158,33 @@ class GroupsTest(unittest.TestCase):
                 'describe("unittests:: services:: extract:: extractRanges", () => {});\n'
                 'describe("unittests:: services:: extract:: brandNew", () => {});\n'
             )
+            (base / "extract" / "deeper").mkdir()
+            (base / "extract" / "deeper" / "new.ts").write_text(
+                'describe("unittests:: services:: deeper", () => {});\n'
+            )
             self.assertEqual(
                 groups.check_groups(d),
                 [
                     "services/extract/ranges.ts: describe("
-                    "'unittests:: services:: extract:: brandNew') matches groups none"
+                    "'unittests:: services:: extract:: brandNew') matches groups none",
+                    "services/extract/deeper/new.ts: describe("
+                    "'unittests:: services:: deeper') matches groups none",
                 ],
             )
+
+    def test_check_groups_flags_a_missing_services_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "src", "testRunner", "unittests").mkdir(parents=True)
+            self.assertEqual(
+                groups.check_groups(d),
+                ["unittests/services is missing: its groups select nothing"],
+            )
+
+    def test_the_services_counts_equal_the_pinned_suite_count(self):
+        pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
+        pinned = pins["runners"]["unittests"]["suites"]["services"]["passed"]
+        got = sum(g.tests for g in groups.GROUPS if g.name.startswith("services-"))
+        self.assertEqual(got, pinned)
 
     def test_check_groups_flags_an_unmatched_suite(self):
         with tempfile.TemporaryDirectory() as d:
@@ -184,6 +205,7 @@ class GroupsTest(unittest.TestCase):
             (base / "nested.ts").write_text(
                 '    describe("unittests:: indented", () => {});\n'
             )
+            Path(base, "services").mkdir()
             problems = groups.check_groups(d)
         self.assertEqual(
             problems,
