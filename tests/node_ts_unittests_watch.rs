@@ -2,7 +2,7 @@
 //! `jsse --node` and Node, compared per test title by
 //! `scripts/run-ts-unittests-watch-oracle.py`. The case below drives the oracle
 //! on three small groups (extends in both suites, publicApi) when TS_SRC_DIR
-//! points at a built TypeScript 6.0.3 checkout; the full set (456 tests) is
+//! points at a built TypeScript 6.0.3 checkout; the full set (457 tests) is
 //! `uv run python scripts/run-ts-unittests-watch-oracle.py`.
 
 use std::path::Path;

@@ -29,18 +29,9 @@ base.GROUPS = GROUPS
 base.BASELINE = os.path.join(os.path.dirname(HERE), "ts-suite", "unittests-watch.json")
 base.SUITE_OF = {"tscWatch": "tscWatch-", "tsbuildWatch": "tsbuildWatch-"}
 
-_pinned_suite_problems = base.pinned_suite_problems
-
-
-def pinned_suite_problems(new_counts):
-    """tsbuildWatch/publicApi.ts has a top-level `it` (no describe), which the pin files under "other", not in
-    its 81 tsbuildWatch tests; the group is the 82nd."""
-    return _pinned_suite_problems(
-        {n: c for n, c in new_counts.items() if n != "tsbuildWatch-publicApi"}
-    )
-
-
-base.pinned_suite_problems = pinned_suite_problems
+# tsbuildWatch/publicApi.ts has a top-level `it` (no describe), which the pin files under "other", not in its
+# 81 tsbuildWatch tests; the group is the 82nd.
+base.UNPINNED_GROUPS = ("tsbuildWatch-publicApi",)
 
 if __name__ == "__main__":
     sys.exit(base.main())
