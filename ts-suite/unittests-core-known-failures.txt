@@ -1,0 +1,3 @@
+# Top-level TypeScript unit tests (src/testRunner/unittests/*.ts) that pass on Node and fail on jsse --node.
+# One full mocha title per line; scripts/run-ts-unittests-oracle.py fails on a failure not listed here and on a
+# listed test that no longer fails. Each entry names the filed bug (epic #1214, umbrella #1418).
