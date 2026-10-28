@@ -6,6 +6,7 @@
 //! `docs/adr/2026-10-27-0450-node-host-zlib.md`.
 
 use super::super::*;
+use super::node_host_brotli_ctx::BrotliCtx;
 use super::node_host_crypto::window;
 use super::node_host_zlib_ctx::{Mode, ZCtx, ZError};
 use std::collections::HashMap;
@@ -14,7 +15,45 @@ use std::rc::Rc;
 #[derive(Default)]
 pub(crate) struct ZlibState {
     next: u64,
-    streams: HashMap<u64, ZCtx>,
+    streams: HashMap<u64, Codec>,
+}
+
+const BROTLI_DECODE: i64 = 8;
+const BROTLI_ENCODE: i64 = 9;
+
+enum Codec {
+    Zlib(ZCtx),
+    Brotli(BrotliCtx),
+}
+
+impl Codec {
+    fn work(&mut self, flush: i32, input: &[u8], output: &mut [u8]) {
+        match self {
+            Codec::Zlib(ctx) => ctx.work(flush, input, output),
+            Codec::Brotli(ctx) => ctx.work(flush as u32, input, output),
+        }
+    }
+
+    fn error_info(&self) -> Option<ZError> {
+        match self {
+            Codec::Zlib(ctx) => ctx.error_info(),
+            Codec::Brotli(ctx) => ctx.error_info(),
+        }
+    }
+
+    fn avail_in(&self) -> u32 {
+        match self {
+            Codec::Zlib(ctx) => ctx.avail_in(),
+            Codec::Brotli(ctx) => ctx.avail_in(),
+        }
+    }
+
+    fn avail_out(&self) -> u32 {
+        match self {
+            Codec::Zlib(ctx) => ctx.avail_out(),
+            Codec::Brotli(ctx) => ctx.avail_out(),
+        }
+    }
 }
 
 type Native = fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion;
@@ -51,7 +90,7 @@ fn error_value(interp: &mut Interpreter, err: Option<ZError>) -> Completion {
         Some(e) => interp.create_array(vec![
             js_str(&e.message),
             JsValue::number(f64::from(e.errno)),
-            js_str(e.code),
+            js_str(&e.code),
         ]),
     })
 }
@@ -59,12 +98,16 @@ fn error_value(interp: &mut Interpreter, err: Option<ZError>) -> Completion {
 /// (mode) -> handle
 fn create(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
     let mode = tri!(int(interp, arg(args, 0)));
-    let Some(mode) = Mode::from_node(mode as u32) else {
-        return Completion::Throw(interp.create_type_error("zlib: invalid mode"));
+    let codec = match mode {
+        BROTLI_DECODE | BROTLI_ENCODE => Codec::Brotli(BrotliCtx::new(mode == BROTLI_DECODE)),
+        _ => match Mode::from_node(mode as u32) {
+            Some(mode) => Codec::Zlib(ZCtx::new(mode)),
+            None => return Completion::Throw(interp.create_type_error("zlib: invalid mode")),
+        },
     };
     let state = &mut interp.node_host.zlib;
     state.next += 1;
-    state.streams.insert(state.next, ZCtx::new(mode));
+    state.streams.insert(state.next, codec);
     Completion::Normal(JsValue::number(state.next as f64))
 }
 
@@ -75,17 +118,11 @@ fn init(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion 
     for (slot, n) in numbers.iter_mut().enumerate() {
         *n = tri!(int(interp, arg(args, slot + 1)));
     }
-    let dictionary = window(interp, arg(args, 5))
-        .and_then(|w| {
-            w.buffer
-                .borrow()
-                .with_read(|b| b.get(w.offset..w.offset + w.len).map(<[u8]>::to_vec))
-        })
-        .unwrap_or_default();
+    let dictionary = view_bytes(interp, arg(args, 5)).unwrap_or_default();
     let reject = interp.to_boolean_val(arg(args, 6));
     let [window_bits, level, mem_level, strategy] = numbers;
     match interp.node_host.zlib.streams.get_mut(&id) {
-        Some(ctx) => ctx.init(
+        Some(Codec::Zlib(ctx)) => ctx.init(
             level as i32,
             window_bits as i32,
             mem_level as i32,
@@ -93,9 +130,39 @@ fn init(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion 
             reject,
             dictionary,
         ),
-        None => return stale(interp),
+        _ => return stale(interp),
     }
     Completion::Normal(JsValue::UNDEFINED)
+}
+
+/// (id, params: Uint32Array, dictionary | undefined) -> whether the codec
+/// accepted every parameter
+fn brotli_init(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
+    let id = tri!(int(interp, arg(args, 0))) as u64;
+    let Some(params) = view_bytes(interp, arg(args, 1)) else {
+        return Completion::Throw(interp.create_type_error("zlib: expected a Uint32Array"));
+    };
+    let params: Vec<u32> = params
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_ne_bytes(*c))
+        .collect();
+    let dictionary = view_bytes(interp, arg(args, 2)).unwrap_or_default();
+    match interp.node_host.zlib.streams.get_mut(&id) {
+        Some(Codec::Brotli(ctx)) => {
+            Completion::Normal(JsValue::boolean(ctx.init(&params, &dictionary)))
+        }
+        _ => stale(interp),
+    }
+}
+
+/// A copy of the bytes an ArrayBuffer view covers.
+fn view_bytes(interp: &mut Interpreter, v: &JsValue) -> Option<Vec<u8>> {
+    let w = window(interp, v)?;
+    w.buffer
+        .borrow()
+        .with_read(|b| b.get(w.offset..w.offset + w.len).map(<[u8]>::to_vec))
 }
 
 fn bounds(offset: i64, len: i64, total: usize) -> Option<(usize, usize)> {
@@ -198,10 +265,11 @@ fn params(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completio
     let level = tri!(int(interp, arg(args, 1))) as i32;
     let strategy = tri!(int(interp, arg(args, 2))) as i32;
     match interp.node_host.zlib.streams.get_mut(&id) {
-        Some(ctx) => {
+        Some(Codec::Zlib(ctx)) => {
             let err = ctx.set_params(level, strategy);
             error_value(interp, err)
         }
+        Some(Codec::Brotli(_)) => Completion::Normal(JsValue::UNDEFINED),
         None => stale(interp),
     }
 }
@@ -210,9 +278,13 @@ fn params(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completio
 fn reset(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion {
     let id = tri!(int(interp, arg(args, 0))) as u64;
     match interp.node_host.zlib.streams.get_mut(&id) {
-        Some(ctx) => {
+        Some(Codec::Zlib(ctx)) => {
             let err = ctx.reset_stream();
             error_value(interp, err)
+        }
+        Some(Codec::Brotli(ctx)) => {
+            ctx.reset();
+            Completion::Normal(JsValue::UNDEFINED)
         }
         None => stale(interp),
     }
@@ -251,9 +323,10 @@ fn crc32(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completion
 impl Interpreter {
     pub(super) fn setup_node_host_zlib(&mut self) {
         let binding = self.create_object_id();
-        let functions: [(&str, usize, Native); 7] = [
+        let functions: [(&str, usize, Native); 8] = [
             ("create", 1, create),
             ("init", 7, init),
+            ("brotliInit", 2, brotli_init),
             ("write", 9, write),
             ("params", 3, params),
             ("reset", 1, reset),

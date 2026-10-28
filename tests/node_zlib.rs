@@ -201,18 +201,164 @@ ERR_INVALID_ARG_TYPE||The \"buffer\" argument must be of type string or an insta
 }
 
 #[test]
-fn brotli_reports_unavailable_until_the_codec_lands() {
+fn brotli_pinned_compressed_bytes() {
     let source = r#"
       const z = require("zlib");
-      try { z.brotliCompressSync("a"); } catch (e) { print(e.code, e.message); }
-      print(typeof z.createBrotliDecompress, z.constants.BROTLI_PARAM_QUALITY);
+      const c = z.constants;
+      const h = (b) => b.toString("hex");
+      const text = "hello world hello world hello world hello world";
+      const q = (n, extra = {}) => ({ params: { [c.BROTLI_PARAM_QUALITY]: n, ...extra } });
+      print([
+        h(z.brotliCompressSync("")),
+        h(z.brotliCompressSync(text, q(0))),
+        h(z.brotliCompressSync(text, q(1))),
+        h(z.brotliCompressSync(text, q(6))),
+        h(z.brotliCompressSync(text, q(6, { [c.BROTLI_PARAM_LGWIN]: 10 }))),
+        h(z.brotliCompressSync(text, q(6, { [c.BROTLI_PARAM_MODE]: 1 }))),
+        h(z.brotliCompressSync(Buffer.from([1, 2, 3, 250, 251, 252, 9, 8, 7]), q(1))),
+        h(z.brotliCompressSync(text, { dictionary: Buffer.from("hello world"), ...q(6) })),
+      ].join("\n"));
     "#;
-    assert_eq!(
-        node(source, &[], None),
-        "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM The feature Brotli is unavailable on the current platform, which is being used to run Node.js\nfunction 1"
+    each_mode(
+        source,
+        "3b\n\
+0b178068656c6c6f20776f726c642068656c6c6f20776f726c642068656c6c6f20776f726c642068656c6c6f20776f726c6403\n\
+0b17000080aaaaaaeaff74e5fb8119800f04c00072113880fbd22f452676006b7cb681e97758cd06\n\
+1b2e000024407290459ac965f23c5d5d\n\
+a1700100200192832cd24c2e93e7e9ea02\n\
+1b2e000024407290459ac965f23c5d5d\n\
+0b0480010203fafbfc09080703\n\
+1b2e000024400a98662a28b401",
     );
 }
 
+#[test]
+fn brotli_decodes_streams_made_by_node() {
+    let source = r#"
+      const z = require("zlib");
+      const from = (s) => Buffer.from(s, "hex");
+      const dict = Buffer.from("hello world");
+      print([
+        z.brotliDecompressSync(from("1b2e000080aaaaaaeaff74e5fb8119800f04c00072910138180b2231490c70a74d51dbc0f43b2c1a")),
+        z.brotliDecompressSync(from("1b2e0000009c63a9da83826120bc3c8a8ac53630fd0e0b")),
+        z.brotliDecompressSync(from("1b2e00000436c6d6f51fa12154cdc053cb9a59e7b2af00")),
+        z.brotliDecompressSync(from("1b2e000024407290459ac965f23c5d5d")),
+        z.brotliDecompressSync(from("1b2e00f88d946ede44558696206c6f354b33b5400654bb00")),
+        z.brotliDecompressSync(from("1b2e000024400a98662a28b401"), { dictionary: dict }),
+        z.brotliDecompressSync(from("3b")).length,
+      ].join("\n"));
+    "#;
+    let line = "hello world hello world hello world hello world";
+    each_mode(
+        source,
+        &format!("{line}\n{line}\n{line}\n{line}\n{line}\n{line}\n0"),
+    );
+}
+
+#[test]
+fn brotli_round_trips_every_quality_window_and_mode() {
+    let source = r#"
+      const z = require("zlib");
+      const c = z.constants;
+      const data = Buffer.from("The quick brown fox jumps over the lazy dog. ".repeat(900));
+      let bad = 0, runs = 0;
+      for (let quality = 0; quality <= 9; quality++) {
+        for (const lgwin of [10, 16, 22, 24]) {
+          for (const mode of [0, 1, 2]) {
+            runs++;
+            const params = {
+              [c.BROTLI_PARAM_QUALITY]: quality, [c.BROTLI_PARAM_LGWIN]: lgwin,
+              [c.BROTLI_PARAM_MODE]: mode, [c.BROTLI_PARAM_SIZE_HINT]: data.length,
+            };
+            if (!z.brotliDecompressSync(z.brotliCompressSync(data, { params })).equals(data)) bad++;
+          }
+        }
+      }
+      print(runs, bad);
+    "#;
+    both_engines(source, "120 0");
+}
+
+#[test]
+fn brotli_errors_and_parameters_match_node() {
+    let source = r#"
+      const z = require("zlib");
+      const c = z.constants;
+      const t = (fn) => { try { return fn(); } catch (e) { return [e.code, e.errno, e.message].join("|"); } };
+      const packed = z.brotliCompressSync("hello world hello world", { params: { [c.BROTLI_PARAM_QUALITY]: 6 } });
+      print([
+        t(() => z.brotliDecompressSync(Buffer.from("hello world, not brotli"))),
+        t(() => z.brotliDecompressSync(Buffer.alloc(0))),
+        t(() => z.brotliDecompressSync(packed.subarray(0, 5))),
+        t(() => z.brotliDecompressSync(Buffer.concat([packed, Buffer.from("zz")])).toString()),
+        t(() => z.brotliDecompressSync(packed, { maxOutputLength: 5 })),
+        t(() => z.brotliCompressSync("a", { params: { 1000: 1 } })),
+        t(() => z.brotliCompressSync("a", { params: { [c.BROTLI_PARAM_QUALITY]: "5" } })),
+        t(() => z.createBrotliCompress({ params: { [c.BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING]: 5 } })),
+        t(() => z.createBrotliDecompress({ params: { 3: 1 } })),
+        t(() => z.brotliCompressSync("a", { params: { [c.BROTLI_PARAM_QUALITY]: 99, [c.BROTLI_PARAM_MODE]: 99 } }).toString("hex")),
+        t(() => z.brotliDecompressSync(z.brotliCompressSync("a", { params: { [c.BROTLI_PARAM_LARGE_WINDOW]: 1, [c.BROTLI_PARAM_LGWIN]: 28 } }))),
+      ].join("\n"));
+    "#;
+    each_mode(
+        source,
+        "ERR__ERROR_FORMAT_CL_SPACE|-6|Decompression failed\n\
+Z_BUF_ERROR|-5|unexpected end of file\n\
+Z_BUF_ERROR|-5|unexpected end of file\n\
+hello world hello world\n\
+ERR_BUFFER_TOO_LARGE||Cannot create a Buffer larger than 5 bytes\n\
+ERR_BROTLI_INVALID_PARAM||1000 is not a valid Brotli parameter\n\
+ERR_INVALID_ARG_TYPE||The \"options.params[key]\" property must be of type number. Received type string ('5')\n\
+ERR_ZLIB_INITIALIZATION_FAILED||Initialization failed\n\
+ERR_ZLIB_INITIALIZATION_FAILED||Initialization failed\n\
+0b00806103\n\
+ERR__ERROR_FORMAT_WINDOW_BITS|-13|Decompression failed",
+    );
+}
+
+#[test]
+fn brotli_streams_keep_node_ordering() {
+    let source = r#"
+      const z = require("zlib");
+      const c = z.constants;
+      const log = [];
+      z.brotliCompress("async", { params: { [c.BROTLI_PARAM_QUALITY]: 5 } }, (e, b) => {
+        log.push("compress:" + e + ":" + b.toString("hex"));
+        z.brotliDecompress(b, (e2, r) => {
+          log.push("decompress:" + e2 + ":" + r);
+          const s = z.createBrotliCompress({ params: { [c.BROTLI_PARAM_QUALITY]: 5 } });
+          const chunks = [];
+          s.on("data", (d) => chunks.push(d.toString("hex")));
+          s.on("end", () => log.push("end:" + chunks.join(",")));
+          s.on("close", () => { log.push("close"); print(log.join("\n")); });
+          s.write("abc");
+          s.flush(() => { chunks.push("|"); s.write("def"); s.end(); });
+        });
+      });
+      log.push("sync-first");
+    "#;
+    each_mode(
+        source,
+        "sync-first\n\
+compress:null:0b02806173796e6303\n\
+decompress:null:async\n\
+end:0b0180616263,|,10000864656603\n\
+close",
+    );
+}
+
+#[test]
+fn brotli_reset_restores_default_parameters_as_node_does() {
+    let source = r#"
+      const z = require("zlib");
+      const s = z.createBrotliCompress({ params: { [z.constants.BROTLI_PARAM_QUALITY]: 0 } });
+      const parts = [];
+      s.on("data", (d) => parts.push(d.toString("hex")));
+      s.on("close", () => print(parts[0], parts[1].slice(0, 4)));
+      s.write("first", () => s.flush(() => { s.reset(); s.write("second"); s.end(); }));
+    "#;
+    each_mode(source, "0b02806669727374 1b05");
+}
 #[test]
 fn stream_error_destroys_the_engine() {
     let source = r#"

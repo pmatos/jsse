@@ -53,7 +53,7 @@ impl Mode {
 pub(super) struct ZError {
     pub(super) message: String,
     pub(super) errno: c_int,
-    pub(super) code: &'static str,
+    pub(super) code: String,
 }
 
 fn strerror(err: c_int) -> &'static str {
@@ -147,7 +147,7 @@ impl ZCtx {
         ZError {
             message,
             errno: self.err,
-            code: strerror(self.err),
+            code: strerror(self.err).to_string(),
         }
     }
 
@@ -448,7 +448,7 @@ mod tests {
         ctx.work(Z_FINISH, &zlib[..zlib.len() - 3], &mut out);
         let err = ctx.error_info().expect("error");
         assert_eq!(
-            (err.message.as_str(), err.code),
+            (err.message.as_str(), err.code.as_str()),
             ("unexpected end of file", "Z_BUF_ERROR")
         );
         assert_eq!(err.errno, -5);
@@ -462,7 +462,7 @@ mod tests {
         ctx.work(Z_FINISH, b"not zlib data", &mut out);
         let err = ctx.error_info().expect("error");
         assert_eq!(
-            (err.message.as_str(), err.code),
+            (err.message.as_str(), err.code.as_str()),
             ("incorrect header check", "Z_DATA_ERROR")
         );
     }

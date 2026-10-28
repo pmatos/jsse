@@ -24,8 +24,8 @@
 
 // Node's `zlib` for `--node` (issue #1239): lib/zlib.js (v26.8.2) split across
 // internal/zlib/{base,classes,binding}.js, over a native z_stream binding
-// (libz-rs-sys). Zstd, the experimental ZIP archive API and Brotli's codec are
-// not provided. See docs/adr/2026-10-27-0450-node-host-zlib.md.
+// (libz-rs-sys) and the `brotli` crate. Zstd and the experimental ZIP archive
+// API are not provided. See docs/adr/2026-10-27-0450-node-host-zlib.md.
 
 const {
   ObjectDefineProperties,
