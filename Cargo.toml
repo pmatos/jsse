@@ -70,6 +70,9 @@ wasmi = { version = "2", default-features = false, features = ["std", "validate"
 # `--node` mode (#1239); the high-level wrapper crates' safe API cannot express
 # Z_BLOCK, memLevel or a strategy change in params().
 libz-rs-sys = { version = "0.6", default-features = false, features = ["std", "rust-allocator"] }
+# Brotli encoder and decoder in safe Rust behind `zlib.brotli*` of `--node` mode
+# (#1239); the stream functions mirror the C API Node's `BrotliEncoderContext` uses.
+brotli = { version = "8", default-features = false, features = ["std"] }
 
 # Shipped build: fat LTO and one codegen unit, +6.4% JetStream 3 score geomean
 # and -5.9% micro-suite wall time for ~2.5-3x crate build time (issue #935;

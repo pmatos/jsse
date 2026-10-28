@@ -6,11 +6,14 @@
 // `internal/host/zlib`. Every JS value (the write state, the process callback,
 // the in-flight buffers) stays on the handle object. `write` runs the work from
 // a `setImmediate` job where Node uses a threadpool, so the completion
-// callback is never synchronous. Brotli handles throw until the native codec
-// lands.
+// callback is never synchronous. The Brotli handles share the write loop; their
+// `init(params, writeState, processCallback, dictionary)` throws
+// ERR_ZLIB_INITIALIZATION_FAILED when the codec rejects a parameter, as
+// node_zlib.cc does.
 
 const native = require('internal/host/zlib');
-const { codes: { ERR_FEATURE_UNAVAILABLE_ON_PLATFORM } } = require('internal/errors');
+require('internal/zlib/errors');
+const { codes: { ERR_ZLIB_INITIALIZATION_FAILED } } = require('internal/errors');
 
 const kId = Symbol('kId');
 const kWriteState = Symbol('kWriteState');
@@ -93,17 +96,23 @@ class Zlib {
   }
 }
 
-class BrotliEncoder {
-  constructor() {
-    throw new ERR_FEATURE_UNAVAILABLE_ON_PLATFORM('Brotli');
+class BrotliHandle extends Zlib {
+  init(params, writeState, processCallback, dictionary) {
+    this[kWriteState] = writeState;
+    this[kCallback] = processCallback;
+    if (!native.brotliInit(this[kId], params, dictionary)) {
+      this.close();
+      throw new ERR_ZLIB_INITIALIZATION_FAILED();
+    }
   }
+
+  // Brotli cannot change parameters on the fly: a no-op, as in Node.
+  params() {}
 }
 
-class BrotliDecoder {
-  constructor() {
-    throw new ERR_FEATURE_UNAVAILABLE_ON_PLATFORM('Brotli');
-  }
-}
+class BrotliEncoder extends BrotliHandle {}
+
+class BrotliDecoder extends BrotliHandle {}
 
 module.exports = {
   BrotliDecoder,

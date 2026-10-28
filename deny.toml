@@ -29,6 +29,7 @@ allow = [
   "BSL-1.0",
   "Unlicense",
   "Zlib",
+  "BSD-3-Clause",
 ]
 confidence-threshold = 0.8
 exceptions = []

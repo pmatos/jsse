@@ -4,12 +4,16 @@
 # Usage:
 #   ./scripts/run-node-zlib-oracle.sh [--node] [--no-cross-check]
 #
-# scripts/zlib-fixtures/{matrix,errors,misc,streams}.js print one line per check
+# scripts/zlib-fixtures/{matrix,errors,misc,streams,brotli,brotli-streams}.js
+# print one line per check
 # and jsse's stdout must equal Node's byte for byte: the sync/callback round
 # trips over every mode, level, strategy, windowBits and memLevel, compressed
 # bytes where the algorithm pins them (stored, Huffman-only, RLE, tiny inputs),
 # error messages/codes/errnos, option validation, constants, crc32, Node-made
-# golden streams, and stream chunk boundaries and event order. cross.js then
+# golden streams, and stream chunk boundaries and event order. The Brotli
+# fixtures do the same for every quality, window, mode, size hint, dictionary,
+# error code and stream operation; their compressed bytes are compared at the
+# qualities where the `brotli` crate matches libbrotli. cross.js then
 # makes each engine decode the streams the other compressed (levels where Node's
 # Chromium zlib and jsse's zlib-rs legitimately differ are compared only by
 # decoding, so every line must read "ok").
@@ -49,7 +53,7 @@ if [ "$NODE_ONLY" -eq 0 ] && [ ! -x "$JSSE" ]; then
 fi
 
 FAIL=0
-for fixture in matrix errors misc streams; do
+for fixture in matrix errors misc streams brotli brotli-streams; do
     FILE="$FIXTURES/$fixture.js"
     status="ok  "
     if [ "$NODE_ONLY" -eq 0 ]; then

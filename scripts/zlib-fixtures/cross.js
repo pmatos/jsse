@@ -27,12 +27,31 @@ function* configs() {
     }
   }
 }
+const BROTLI = ["brotliCompress", "brotliDecompress"];
+function* brotliConfigs() {
+  for (const name of NAMES) {
+    for (let quality = 0; quality <= 11; quality++) {
+      if (quality > 9 && name !== "empty" && name !== "hello" && name !== "text5k") continue;
+      yield { name, comp: BROTLI[0], decomp: BROTLI[1], opts: { params: { 1: quality } } };
+    }
+    for (const lgwin of [10, 16, 24]) {
+      yield { name, comp: BROTLI[0], decomp: BROTLI[1], opts: { params: { 1: 5, 2: lgwin, 3: 16 } } };
+    }
+    for (const mode of [1, 2]) {
+      yield { name, comp: BROTLI[0], decomp: BROTLI[1], opts: { params: { 0: mode, 1: 6 } } };
+    }
+  }
+}
+const allConfigs = function* () {
+  yield* configs();
+  yield* brotliConfigs();
+};
 const keyOf = (c) => `${c.name} ${c.comp}/${c.decomp} ${JSON.stringify(c.opts)}`;
 
 if (process.argv[2] === "produce") {
   const rows = {};
   const inputs = {};
-  for (const c of configs()) {
+  for (const c of allConfigs()) {
     if (c.name === "text70k" && c.opts.strategy > 1) continue;
     inputs[c.name] ??= INPUTS[c.name]();
     rows[keyOf(c)] = zlib[c.comp + "Sync"](inputs[c.name], c.opts).toString("hex");
@@ -43,13 +62,13 @@ if (process.argv[2] === "produce") {
   const lines = [];
   const digests = {};
   (async () => {
-    for (const c of configs()) {
+    for (const c of allConfigs()) {
       const key = keyOf(c);
       if (!(key in rows)) continue;
       const packed = Buffer.from(rows[key], "hex");
       const want = (digests[c.name] ??= sha(INPUTS[c.name]()));
       let ok = sha(zlib[c.decomp + "Sync"](packed)) === want;
-      if (packed.length > 1000 && c.opts.level % 3 === 0) {
+      if (packed.length > 1000 && (c.opts.level % 3 === 0 || c.comp === BROTLI[0])) {
         const parts = [];
         const s = zlib["create" + c.decomp[0].toUpperCase() + c.decomp.slice(1)]();
         s.on("data", (d) => parts.push(d));
