@@ -9,7 +9,7 @@
 
 use super::super::*;
 use super::node_host_child::{
-    CHUNK, ChildCtl, ChildEvent, Completions, Endpoint, Flow, post, write_endpoint,
+    CHUNK, ChannelGate, ChildCtl, ChildEvent, Completions, Endpoint, Flow, post, write_endpoint,
 };
 use super::node_host_fs_args::{arg, int, last_errno};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -59,9 +59,17 @@ fn spawn_message_reader(
     index: usize,
     fd: Arc<OwnedFd>,
     flow: Arc<Flow>,
+    gate: Arc<ChannelGate>,
     frames: bool,
 ) {
     std::thread::spawn(move || {
+        struct Done(Arc<ChannelGate>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                self.0.reader_done();
+            }
+        }
+        let _done = Done(gate);
         let mut buf = vec![0u8; CHUNK];
         let mut carry = Vec::new();
         let mut scanned = 0;
@@ -108,6 +116,7 @@ impl Interpreter {
                 ChildCtl {
                     pid: 0,
                     exited: Arc::new(Mutex::new(true)),
+                    gate: Arc::default(),
                     endpoints: vec![Some(Endpoint::new(Arc::new(owned)))],
                 },
             );
@@ -120,12 +129,21 @@ impl Interpreter {
             let index = int(interp, arg(args, 1))? as usize;
             let frames = int(interp, arg(args, 2))? == 1;
             let queue = interp.agent_async_completions.clone();
+            let gate = interp
+                .node_host
+                .child
+                .children
+                .get(&id)
+                .map(|child| child.gate.clone())
+                .unwrap_or_default();
             if let Some(end) = interp.child_endpoint(id, index)
                 && end.open
                 && !end.reading
             {
                 end.reading = true;
-                spawn_message_reader(queue, id, index, end.fd.clone(), end.flow.clone(), frames);
+                gate.reader_started();
+                let (fd, flow) = (end.fd.clone(), end.flow.clone());
+                spawn_message_reader(queue, id, index, fd, flow, gate, frames);
             }
             Ok(JsValue::UNDEFINED)
         });

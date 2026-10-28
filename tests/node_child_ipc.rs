@@ -153,6 +153,24 @@ fn an_aborted_child_and_a_signalled_worker_report_their_signal() {
 }
 
 #[test]
+fn a_killed_worker_disconnects_before_it_exits() {
+    let source = r#"
+      const { fork } = require("child_process");
+      const bad = [];
+      let pending = 40;
+      for (let i = 0; i < pending; i++) {
+        const worker = fork(CHILD, ["hold"]);
+        let disconnected = false;
+        worker.once("message", () => worker.kill("SIGKILL"));
+        worker.on("disconnect", () => { disconnected = true; });
+        worker.on("exit", () => { if (!disconnected) bad.push(i); });
+        worker.on("close", () => { if (--pending === 0) print("out of order: " + bad.length); });
+      }
+    "#;
+    assert_eq!(node(source), "out of order: 0");
+}
+
+#[test]
 fn child_sees_disconnect_when_the_parent_dies() {
     let source = r#"
       const { fork } = require("child_process");
