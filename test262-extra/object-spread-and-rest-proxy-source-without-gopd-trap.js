@@ -80,3 +80,22 @@ var hiddenByTrap = { ...new Proxy({ p: 1, q: 2 }, {
   }
 }) };
 assert.compareArray(Object.keys(hiddenByTrap), ["q"], "trap-reported non-enumerable key skipped");
+
+var fromString = { ...new String("ab") };
+assert.compareArray(Object.keys(fromString), ["0", "1"], "String wrapper source");
+assert.sameValue(fromString[1], "b", "String wrapper value");
+
+var fromTyped = { ...new Uint8Array([7, 8]) };
+assert.compareArray(Object.keys(fromTyped), ["0", "1"], "TypedArray source");
+assert.sameValue(fromTyped[1], 8, "TypedArray value");
+
+var proto = { enumerable: true };
+var inheritedDesc = { ...new Proxy({ z: 3 }, {
+  getOwnPropertyDescriptor: function (t, k) {
+    var d = Object.create(proto);
+    d.value = t[k];
+    d.configurable = true;
+    return d;
+  }
+}) };
+assert.sameValue(inheritedDesc.z, 3, "enumerable read through the descriptor's prototype chain");

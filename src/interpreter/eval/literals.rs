@@ -1261,7 +1261,7 @@ impl Interpreter {
     }
 
     /// CopyDataProperties (§7.3.26) — copies own enumerable properties from source
-    /// to target obj_data. Properly handles Proxy traps and Symbol keys.
+    /// to target obj_data. Handles Proxy traps and Symbol keys.
     ///
     /// Each already-fetched `val` is rooted for the rest of the loop: a later
     /// key's getter (or proxy trap) can run arbitrary code that reaches a GC
@@ -1300,9 +1300,9 @@ impl Interpreter {
                 if excluded.contains(&key_str) {
                     continue;
                 }
-                match interp.proxy_get_own_property_native(src_id, &key_str)? {
-                    Some(d) if d.enumerable == Some(true) => {}
-                    _ => continue,
+                let desc = interp.proxy_get_own_property_native(src_id, &key_str)?;
+                if desc.is_none_or(|d| d.enumerable == Some(false)) {
+                    continue;
                 }
                 let val = match interp.get_object_property(src_id, &key_str, src_val) {
                     Completion::Normal(v) => v,
