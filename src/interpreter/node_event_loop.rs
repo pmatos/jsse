@@ -134,7 +134,9 @@ impl Interpreter {
             self.gc_root_value(arg);
         }
         let rooted_depth = self.gc_root_frame();
+        self.job_depth += 1;
         let result = self.call_function(callback, &JsValue::UNDEFINED, args);
+        self.finish_job();
         self.gc_assert_root_depth(rooted_depth, "a node loop callback");
         self.gc_unroot_frame(frame);
         result

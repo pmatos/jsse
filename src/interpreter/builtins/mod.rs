@@ -85,6 +85,7 @@ pub(crate) mod string;
 mod structured_clone;
 mod temporal;
 pub(crate) mod typedarray;
+mod weak_ref;
 
 use super::*;
 

@@ -86,3 +86,8 @@ probe could never pass.
    format) swaps the `common.mustNotCall()` listener for a no-op on jsse only;
    Node runs the text verbatim. One more subtest is skipped by name
    (`A weak event listener should not prevent gc`).
+
+Addendum (#1317): `$262.gc()` now collects `WeakRef` targets, so the three
+`gc` subtests, `A weak event listener should not prevent gc` and the
+`~test-eventtarget` patched block above are gone; those tests run verbatim
+(ADR-2026-10-28-0200).
