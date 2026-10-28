@@ -315,6 +315,10 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn begin_job(&mut self) {
+        self.job_depth += 1;
+    }
+
     /// ClearKeptObjects, once the outermost running job has finished.
     pub(crate) fn finish_job(&mut self) {
         debug_assert!(self.job_depth > 0);

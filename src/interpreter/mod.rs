@@ -2041,7 +2041,7 @@ impl Interpreter {
 
     fn run_program(&mut self, program: &Program) -> Completion {
         self.gc_safepoint();
-        self.job_depth += 1;
+        self.begin_job();
         let result = match program.source_type {
             SourceType::Script => {
                 let global = self.realm().global_env.clone();
@@ -2093,7 +2093,7 @@ impl Interpreter {
                     if program.body_is_strict {
                         global.borrow_mut().strict = true;
                     }
-                    interp.job_depth += 1;
+                    interp.begin_job();
                     let r = interp.exec_script_body(&program.body, &global);
                     // A top-level `__host_exit` (issue #242) latches its code (read
                     // by `main`) so draining is skipped.
@@ -2108,7 +2108,7 @@ impl Interpreter {
             }
             SourceType::Module => {
                 let module_key = ModuleKey::for_file(path.to_path_buf());
-                self.job_depth += 1;
+                self.begin_job();
                 self.node_esm_enter_main(&module_key);
                 let r = self.run_module(program, Some(module_key.clone()));
                 if let Completion::Exit(code) = &r {
@@ -4830,7 +4830,7 @@ impl Interpreter {
         let frame = self.gc_root_frame();
         task.for_each_root(|value| self.gc_root_value(value));
         let rooted_depth = self.gc_root_frame();
-        self.job_depth += 1;
+        self.begin_job();
         let result = match task {
             Microtask::Closure { job, .. } => job(self),
             Microtask::Reaction { reaction, argument } => {
