@@ -50,12 +50,15 @@ TEST_INPUTS = ("cases", "lib")
 COMMON = ["--no-colors", "-t", "40000"]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ts_runner_cli_cases as cli  # noqa: E402
+import ts_runner_parallel_cases as parallel  # noqa: E402
 from ts_mocha_cases import CASES  # noqa: E402
 
 CASES.extend(cli.cli_cases())
+CASES.extend(parallel.parallel_cases())
 
 EXEC_LINE = re.compile(r"^> \S+ ", re.M)
 HEREBY_TIME = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m)\b")
+DISCOVERED = re.compile(r"(?<=test files in )\d+ms")
 
 DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s|m)\)|(?<=: )\d+(?:\.\d+)?ms$", re.M)
 JSON_TIME = re.compile(r'("(?:duration|start|end)": )(?:"[^"]*"|\d+)')
@@ -243,7 +246,7 @@ def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix
             text = normalise_json(text, cwd, ts_dir, ndjson)
         text = normalise(text, cwd, ts_dir).replace(wd, "<WORK>")
         if c.kind == "runtests":
-            text = EXEC_LINE.sub("> <EXEC> ", text)
+            text = DISCOVERED.sub("<T>", EXEC_LINE.sub("> <EXEC> ", text))
         return HEREBY_TIME.sub("<T>", text) if c.kind == "accept" else text
 
     result = {
@@ -406,7 +409,7 @@ def main():
                     print(
                         f"::error title=mocha oracle::{c[0]} differs between node and jsse: {', '.join(bad)}"
                     )
-        problems = cli.partition_problems(results)
+        problems = cli.partition_problems(results) + parallel.serial_problems(results)
         for problem in problems:
             print(f"\nshards: {problem}")
             if o.ci:

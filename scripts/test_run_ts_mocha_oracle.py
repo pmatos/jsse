@@ -15,6 +15,7 @@ spec = importlib.util.spec_from_file_location("run_ts_mocha_oracle", ORACLE)
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
 cli = oracle.cli
+parallel = oracle.parallel
 
 
 class NormaliseTest(unittest.TestCase):
@@ -163,7 +164,7 @@ class CliCasesTest(unittest.TestCase):
                 self.assertIsNone(c.mocharc, c.name)
 
     def test_expectations_name_keys_a_result_can_have(self):
-        keys = re.compile(r"^(then )?(stdout|stderr|file [\w. -]+)$")
+        keys = re.compile(r"^(then )?(exit|stdout|stderr|file [\w. -]+)$")
         for c in oracle.CASES:
             for key, pattern in c.must:
                 self.assertRegex(key, keys, c.name)
@@ -219,6 +220,46 @@ class CliCasesTest(unittest.TestCase):
             oracle.HEREBY_TIME.sub("<T>", "Finished baseline-accept in 14ms"),
             "Finished baseline-accept in <T>",
         )
+
+
+class ParallelCasesTest(unittest.TestCase):
+    def cases(self):
+        return [c for c in oracle.CASES if c.name.startswith("par-")]
+
+    def test_parallel_cases_set_the_flag_and_enough_workers_for_the_sample(self):
+        for c in self.cases():
+            self.assertEqual(
+                c.env.get("TS_PARALLEL") == "1", "par-serial" not in c.name
+            )
+            self.assertTrue(c.kind == "runtests" and c.mocharc is None, c.name)
+
+    def test_crash_cases_use_the_wrapper_and_expect_an_exit_status(self):
+        crash = [c for c in self.cases() if c.name.startswith("par-crash-")]
+        self.assertGreaterEqual(len(crash), 3)
+        for c in crash:
+            self.assertEqual(c.specs, ["runtests.mjs", "par-crash.js"], c.name)
+            self.assertTrue(any(k == "exit" for k, _ in c.must), c.name)
+
+    def test_counts_read_the_reporter_summary(self):
+        out = "x\n\n  54 passing (<T>)\n  2 failing\n"
+        self.assertEqual(parallel.counts(out), {"passing": 54, "failing": 2})
+
+    def test_a_parallel_run_has_to_agree_with_the_serial_run(self):
+        def res(name, node, jsse):
+            c = cli.Case(name, [], [])
+            return (c, {"stdout": node}, {"stdout": jsse}, {})
+
+        ok = "  %d passing (1s)\n"
+        good = [
+            res("par-serial-compiler", ok % 55, ok % 55),
+            res("par-run-compiler", ok % 54, ok % 54),
+        ]
+        self.assertEqual(parallel.serial_problems(good), [])
+        lost = [good[0], res("par-run-compiler", ok % 54, ok % 50)]
+        self.assertEqual(len(parallel.serial_problems(lost)), 1)
+        failing = [good[0], res("par-run-compiler", ok % 54, ok % 54 + "  1 failing\n")]
+        self.assertEqual(len(parallel.serial_problems(failing)), 1)
+        self.assertEqual(parallel.serial_problems(good[:1]), [])
 
 
 class SkipTest(unittest.TestCase):

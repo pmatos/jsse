@@ -122,6 +122,26 @@ fn child_exit_code_and_signal_reach_the_parent() {
 }
 
 #[test]
+fn an_aborted_child_and_a_signalled_worker_report_their_signal() {
+    let source = r#"
+      const { spawn, fork } = require("child_process");
+      const done = [];
+      const finish = (line) => { done.push(line); if (done.length === 2) print(done.sort().join(" | ")); };
+      const abort = spawn("sh", ["-c", 'ulimit -c 0; exec "$0" --node -e "process.abort()"', process.execPath]);
+      abort.on("exit", (code, signal) => finish("abort " + code + " " + signal));
+      const worker = fork(CHILD, ["hold"]);
+      worker.on("message", () => { worker.send("work"); setTimeout(() => worker.kill("SIGABRT"), 50); });
+      let disconnected = false;
+      worker.on("disconnect", () => { disconnected = true; });
+      worker.on("exit", (code, signal) => finish("worker " + code + " " + signal + " " + (disconnected || worker.connected === false)));
+    "#;
+    assert_eq!(
+        node(source),
+        "abort null SIGABRT | worker null SIGABRT true"
+    );
+}
+
+#[test]
 fn child_sees_disconnect_when_the_parent_dies() {
     let source = r#"
       const { fork } = require("child_process");
