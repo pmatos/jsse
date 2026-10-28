@@ -34,18 +34,26 @@ and the `hereby local` measurement of #1253).
    process, including its worker threads) in a table; `--report FILE` writes them as JSON with
    the binary, the load average and the CPU count, because the numbers are only comparable at
    equal load. Cases run one at a time by default (`--jobs 1`); Node always runs first.
-5. **Budget guard, thresholds unset.** `scripts/tsc-fixtures/selfcompile-budget.json` has, per
+5. **Budget guard.** `scripts/tsc-fixtures/selfcompile-budget.json` has, per
    case, `jsse_max_seconds`, `jsse_max_rss_mb`, `max_time_ratio` and `max_rss_ratio` (a ratio
    to the Node run of the same invocation, so it travels between hosts better than seconds).
    `null` means no limit; `--max-seconds` and `--max-rss-mb` override for one invocation.
-   The guard is implemented and unit-tested (`scripts/test_run_tsc_selfcompile_oracle.py`:
-   limits exactly at and just over the line, ratios, overrides) but **every value is `null`**:
-   choosing a threshold is a ruling (recorded in the PR), and the script says so when no
-   budget applies. Byte-identity and the exit status are enforced regardless.
-6. **CI.** No tsc oracle runs in CI (it has no TypeScript). `tests/node_tsc_selfcompile.rs`
-   runs `--smoke` when `TSC_DIR` is set and passes with a notice otherwise, like the other
-   tsc guards. Wiring `--smoke` (a `typescript@6.0.3` download, about 15 s on jsse) or the
-   full cases into a workflow or a nightly job is left to a ruling.
+   The guard is unit-tested (`scripts/test_run_tsc_selfcompile_oracle.py`: limits exactly at
+   and just over the line, ratios, overrides, and the shipped values). **Ruling (2026-10-28,
+   the maintainer):** every case has `max_rss_ratio = 6` (jsse peak RSS at most 6x Node's for
+   the same case) and **no wall-time cap**; wall time is recorded in the table, `--report` and
+   the nightly summary but never enforced, because it moves by an order of magnitude with host
+   load (see Result). The worst ratio after #1407 is 5.6x (`src-js`), so the cap leaves about
+   7% headroom; a regression past it, or a further reduction under #1401, is a deliberate
+   edit of this file. Byte-identity and the exit status are enforced regardless.
+6. **CI, both non-required.** `.github/workflows/tsc-selfcompile-smoke.yml` runs `--smoke
+   --require` (the generated program, a `typescript@6.0.3` download, about 15 s of tsc on
+   jsse) on pushes and PRs that touch `src/`, `Cargo.*`, the oracle or the budget; it is a
+   separate workflow so a registry hiccup can never fail the required `build` check.
+   `.github/workflows/nightly-tsc-selfcompile.yml` runs all four cases daily (cron, like
+   `nightly-gc-stress.yml`) against a `v6.0.3` checkout with `npm ci`, writes the table to
+   the step summary and uploads the JSON report. `tests/node_tsc_selfcompile.rs` still runs
+   `--smoke` when `TSC_DIR` is set and passes with a notice otherwise.
 
 ## Result
 
@@ -64,10 +72,12 @@ Shipped config (fat LTO, same host and load, a second run of two cases): `compil
 jsse 639 s (54x), RSS 709 vs 4739 MiB (6.7x); `generated-large` Node 0.8 s, jsse 10.3 s (14x), RSS 159 vs 387 MiB.
 
 The wall times are inflated by the load (the LTO run of `compiler-js` took 639 s against 1470 s
-without LTO) and must not be used as budgets; the RSS figures are the stable ones. They are why no threshold is set here: a
-whole-`src` compile peaks at about 6 GiB on jsse against 0.9 GiB on Node, which is far outside
-the 512 MB limit of the test262 runner and needs an engine-memory decision, not a number
-picked by this change (filed as #1401; #1297 asks for the same for the full suite).
+without LTO) and must not be used as budgets, which is why none is set. The RSS figures are
+the stable ones. A whole-`src` compile peaked at about 6 GiB on jsse against 0.9 GiB on Node,
+far outside the 512 MB limit of the test262 runner (#1401 tracks reducing it; #1297 asks for
+the same for the full suite). After #1407 (tag-byte index for spilled property maps) the same
+byte-identical runs peak at 2986 / 4044 / 5065 MiB, ratios 4.6 / 5.7 / 5.6 for `compiler-dts`
+/ `compiler-js` / `src-js`, which the 6x cap is set against.
 
 ## Not covered
 

@@ -45,7 +45,14 @@ rules:
   # lock against. The jobs only have `contents: read`, disable persisted
   # checkout credentials, and never push, so a compromised transitive
   # dependency has no credentials to exfiltrate.
+  #
+  # The tsc self-compile workflows install the exact typescript@6.0.3 (and
+  # `npm ci` the TypeScript v6.0.3 checkout, which has its own lockfile) as the
+  # oracle's input; the repo has no package.json to lock it against. They have
+  # `contents: read`, no persisted credentials, and are not required checks.
   adhoc-packages:
     ignore:
       - commitlint.yml
       - lint-pr-title.yml
+      - tsc-selfcompile-smoke.yml
+      - nightly-tsc-selfcompile.yml
