@@ -226,12 +226,16 @@ class ParallelCasesTest(unittest.TestCase):
     def cases(self):
         return [c for c in oracle.CASES if c.name.startswith("par-")]
 
-    def test_parallel_cases_set_the_flag_and_enough_workers_for_the_sample(self):
+    def test_parallel_cases_set_the_flag_and_ask_for_several_workers(self):
         for c in self.cases():
             self.assertEqual(
                 c.env.get("TS_PARALLEL") == "1", "par-serial" not in c.name
             )
             self.assertTrue(c.kind == "runtests" and c.mocharc is None, c.name)
+            if "par-serial" not in c.name:
+                workers = [a for a in c.args if a.startswith("--workers=")]
+                workers += [c.args[i + 1] for i, a in enumerate(c.args) if a == "-w"]
+                self.assertGreaterEqual(int(workers[0].split("=")[-1]), 2, c.name)
 
     def test_crash_cases_use_the_wrapper_and_expect_an_exit_status(self):
         crash = [c for c in self.cases() if c.name.startswith("par-crash-")]
@@ -257,6 +261,8 @@ class ParallelCasesTest(unittest.TestCase):
         self.assertEqual(parallel.serial_problems(good), [])
         lost = [good[0], res("par-run-compiler", ok % 54, ok % 50)]
         self.assertEqual(len(parallel.serial_problems(lost)), 1)
+        same = [good[0], res("par-run-compiler", ok % 55, ok % 55)]
+        self.assertEqual(len(parallel.serial_problems(same)), 1)
         failing = [good[0], res("par-run-compiler", ok % 54, ok % 54 + "  1 failing\n")]
         self.assertEqual(len(parallel.serial_problems(failing)), 1)
         self.assertEqual(parallel.serial_problems(good[:1]), [])

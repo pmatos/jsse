@@ -95,7 +95,7 @@ def serial_problems(results):
             if run1.get("failing") or pa.get("failing") or "passing" not in pa:
                 problems.append(f"{engine}: {r} has failures or no result: {run1} {pa}")
             deltas.append(run1.get("passing", 0) - pa.get("passing", 0))
-        if deltas[0] != deltas[1] or not 0 <= deltas[0] <= 1:
+        if deltas != [1, 1]:
             problems.append(
                 f"{r}: serial minus parallel passing is {deltas} (node, jsse)"
             )
