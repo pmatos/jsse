@@ -16,6 +16,7 @@ pub(super) const TAG_MAX: usize = 64;
 
 const LOW_BITS: u64 = 0x0101_0101_0101_0101;
 const LOW_SEVEN: u64 = 0x7F7F_7F7F_7F7F_7F7F;
+const MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 
 pub(super) enum SlotIndex {
     /// Byte `slot % 8` of word `slot / 8` is `tag_of` the key `entries[slot]`
@@ -36,7 +37,7 @@ pub(super) fn tag_of(key: &[u8]) -> u8 {
         let mut h = u64::from_le_bytes(key[n - 8..].try_into().unwrap());
         for chunk in key.as_chunks::<8>().0 {
             h = (h ^ u64::from_le_bytes(*chunk))
-                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_mul(MIX)
                 .rotate_left(23);
         }
         h
@@ -53,7 +54,7 @@ pub(super) fn tag_of(key: &[u8]) -> u8 {
     } else {
         0
     };
-    ((bits ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as u8
+    ((bits ^ n as u64).wrapping_mul(MIX) >> 56) as u8
 }
 
 #[inline]
