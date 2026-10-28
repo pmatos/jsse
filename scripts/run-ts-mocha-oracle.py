@@ -86,12 +86,9 @@ def normalise(text, work, ts_dir):
             for suffix in (" {", "</failure></testcase>"):
                 if line.endswith(suffix):
                     line, tail = line[: -len(suffix)], suffix.strip()
-        if FRAME.match(line) and (
-            BUILTIN_FRAME.search(line) or ASYNC_FRAME.match(line)
-        ):
-            pass
-        else:
-            if FRAME.match(line):
+        is_frame = FRAME.match(line) is not None
+        if not (is_frame and (BUILTIN_FRAME.search(line) or ASYNC_FRAME.match(line))):
+            if is_frame:
                 line = RECEIVER_FRAME.sub(r"\1\2", line).replace("<WORK>/", "")
             kept.append(line)
         if tail:

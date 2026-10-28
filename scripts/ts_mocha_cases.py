@@ -63,12 +63,8 @@ for reporter in ("spec", "dot", "tap", "json", "xunit"):
     case(f"diff-{reporter}", ["-R", reporter], ["diff.spec.js"])
 case("timeouts-bail", ["-R", "spec", "--bail"], ["timeouts.spec.js"])
 case("timeouts-retries", ["-R", "spec", "--retries", "1"], ["timeouts.spec.js"])
-for flag, label in (("-t 60", "60ms"), ("-t 0", "off"), ("-t 1s", "1s")):
-    case(
-        f"cli-timeout-{label}",
-        ["-R", "spec", *flag.split()],
-        ["cli-timeout.spec.js"],
-    )
+for limit, label in (("60", "60ms"), ("0", "off"), ("1s", "1s")):
+    case(f"cli-timeout-{label}", ["-R", "spec", "-t", limit], ["cli-timeout.spec.js"])
 case("cli-timeout-json", ["-R", "json", "-t", "60"], ["cli-timeout.spec.js"])
 case("cli-slow-json", ["-R", "json", "--slow", "1000"], ["cli-timeout.spec.js"])
 case("diff-no-diff", ["-R", "spec", "--no-diff"], ["diff.spec.js"])
