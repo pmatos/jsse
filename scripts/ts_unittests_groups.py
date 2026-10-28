@@ -5,8 +5,9 @@ groups (#1261, 1531 tests) cover everything under `unittests/services/`, the 31 
 tests, rows in ts_unittests_tsbuild_groups.py) everything under `unittests/tsbuild/`. The other subdirectories
 (config and sys: run-ts-unittests-config-sys-oracle.py; evaluation, tsbuildWatch, tscWatch, tsc, tsserver: their
 own tickets) are not scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting
-that file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every pattern is anchored on the
-file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript v6.0.3. Every
+that file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every
+pattern is anchored on the file's first describe title plus a space), and `tests` is the count Node 26 reports on
+TypeScript v6.0.3. Every
 mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle runs the
 groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
 group; the batches balance the slow suites (`canWatch`, `programApi`, `convertToAsyncFunction` and the `extract`

@@ -208,11 +208,14 @@ class GroupsTest(unittest.TestCase):
                 ],
             )
 
-    def test_the_tsbuild_counts_equal_the_pinned_suite_count(self):
+    def assert_counts_equal_the_pinned_suite(self, suite):
         pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
-        pinned = pins["runners"]["unittests"]["suites"]["tsbuild"]["passed"]
-        got = sum(g.tests for g in groups.GROUPS if g.name.startswith("tsbuild-"))
-        self.assertEqual(got, pinned)
+        pinned = pins["runners"]["unittests"]["suites"][suite]["passed"]
+        got = sum(g.tests for g in groups.GROUPS if g.name.startswith(suite + "-"))
+        self.assertEqual(got, pinned, suite)
+
+    def test_the_tsbuild_counts_equal_the_pinned_suite_count(self):
+        self.assert_counts_equal_the_pinned_suite("tsbuild")
 
     def test_tsbuild_patterns_leave_tsbuild_watch_and_outfile_alone(self):
         def hit(title):
@@ -228,10 +231,7 @@ class GroupsTest(unittest.TestCase):
         self.assertEqual(hit("unittests:: tsbuildWatch:: on sample x"), [])
 
     def test_the_services_counts_equal_the_pinned_suite_count(self):
-        pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
-        pinned = pins["runners"]["unittests"]["suites"]["services"]["passed"]
-        got = sum(g.tests for g in groups.GROUPS if g.name.startswith("services-"))
-        self.assertEqual(got, pinned)
+        self.assert_counts_equal_the_pinned_suite("services")
 
     def test_check_groups_flags_an_unmatched_suite(self):
         with tempfile.TemporaryDirectory() as d:
