@@ -553,10 +553,8 @@ pub(crate) struct Interpreter {
 /// still gets the release numbers below and could still abort; #606 accepted
 /// the same limitation for `MAX_PARSE_DEPTH`.
 ///
-/// Debug keeps release's internal ratios (`rearm` = 0.6×`hard`, `soft` =
-/// 0.8×`hard`); the compile-time assertion below couples all three arms in
-/// both profiles at once, so an edit to one without the others fails to
-/// build regardless of which profile you happen to compile.
+/// Debug keeps release's ratios (`rearm` = 0.6×`hard`, `soft` = 0.8×`hard`);
+/// the compile-time assertion below couples all three arms in both profiles.
 const CALL_DEPTH_SOFT_LIMIT_DEBUG: usize = 160;
 const CALL_DEPTH_SOFT_LIMIT_RELEASE: usize = 4_000;
 pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = if cfg!(debug_assertions) {
@@ -3222,6 +3220,8 @@ impl Interpreter {
                 module_path: Some(module_path.clone()),
                 scope_stack: vec![],
                 realm_id: self.current_realm_id,
+                func_obj_id: 0,
+                await_pos: 0,
             },
         );
         self.with_module_key(Some(module_path.clone()), |interp| {
@@ -3626,7 +3626,7 @@ impl Interpreter {
     fn expr_has_await(expr: &crate::ast::Expression) -> bool {
         use crate::ast::Expression;
         match expr {
-            Expression::Await(_) => true,
+            Expression::Await(..) => true,
             Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => false,
             Expression::Binary(_, left, right)
             | Expression::Logical(_, left, right)
@@ -4834,7 +4834,7 @@ impl Interpreter {
         let result = match task {
             Microtask::Closure { job, .. } => job(self),
             Microtask::Reaction { reaction, argument } => {
-                self.run_promise_reaction_job(reaction, argument)
+                self.node_run_reaction_job(reaction, argument)
             }
             Microtask::ResolveThenable {
                 promise_id,

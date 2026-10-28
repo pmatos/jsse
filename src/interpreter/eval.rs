@@ -519,20 +519,15 @@ impl Interpreter {
             self.perf.ast_exprs += 1;
         }
         // Catchable stack-depth guard for expression evaluation. Every
-        // expression node — and each recursive descent into an operand —
-        // funnels through here, so bounding this depth bounds the native
-        // recursion a deeply left-nested AST (`1+1+1+…`, `1&&1&&1…`, parsed in
-        // a loop so it never trips the parser's `MAX_PARSE_DEPTH`) would
-        // otherwise use to overflow the stack (SIGABRT).
+        // expression node and each recursive descent into an operand funnels
+        // through here, so bounding this depth bounds the native recursion a
+        // deeply left-nested AST (`1+1+1+…`, built in a loop so it never trips
+        // `MAX_PARSE_DEPTH`) would otherwise use to overflow the stack.
         //
-        // Kept a single function on purpose. Splitting the depth accounting
-        // into a thin wrapper around an inner `_impl` added a call frame per
-        // operand, which roughly *tripled* the native stack each level consumes
-        // — lowering the overflow ceiling and eroding the headroom the
-        // `call_depth` guard depends on. Instead, `EvalDepthGuard` decrements on
-        // every one of this match's exit paths (its many early `return`s and
-        // any unwind included), so the counter reflects real native depth
-        // without splitting the hot function.
+        // Kept a single function on purpose: a thin wrapper around an inner
+        // `_impl` added a call frame per operand, roughly tripling the native
+        // stack each level uses. `EvalDepthGuard` decrements on every exit path
+        // of this match instead, so the counter reflects real native depth.
         use crate::interpreter::EVAL_DEPTH_LIMIT;
         let depth = self.eval_depth.get();
         if depth >= EVAL_DEPTH_LIMIT {
@@ -971,7 +966,7 @@ impl Interpreter {
                     Completion::Yield(value)
                 }
             }
-            Expression::Await(expr) => {
+            Expression::Await(expr, _) => {
                 let val = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -8245,6 +8240,8 @@ impl Interpreter {
                     module_path: None,
                     scope_stack: vec![],
                     realm_id: interp.current_realm_id,
+                    func_obj_id: _func_obj_id,
+                    await_pos: 0,
                 },
             );
 
@@ -9212,7 +9209,9 @@ impl Interpreter {
                     ref value,
                     resume_state,
                     ref sent_value_binding,
+                    at,
                 } => {
+                    self.node_note_await_pos(async_id, at);
                     // The only operand site with bespoke `Suspend` handling
                     // — an inline yield here parks the function at *this*
                     // state, not at `resume_state` — so it spells the match out

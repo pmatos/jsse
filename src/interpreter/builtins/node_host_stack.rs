@@ -11,6 +11,8 @@
 
 use super::super::*;
 pub(crate) use super::node_host_stack_sources::NodeStackState;
+mod async_frames;
+pub(crate) use async_frames::ParkedAwait;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -278,11 +280,7 @@ impl Interpreter {
         }
         let frames = match self.stack_trace_limit() {
             Some(limit) => {
-                let raws = self.raw_frames(skip_top, until, limit);
-                let mut record = Vec::with_capacity(raws.len() * RECORD_LEN);
-                for raw in &raws {
-                    self.frame_record(raw, &mut record);
-                }
+                let record = self.capture_records(skip_top, until, limit);
                 self.create_array(record)
             }
             None => JsValue::UNDEFINED,

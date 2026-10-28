@@ -9,7 +9,7 @@ cases run the hereby CLI against the TypeScript Herebyfile (--tasks, --help, tas
 against the fixtures in scripts/hereby-fixtures (task graphs, failing tasks, Herebyfile load
 errors, colour, a pseudo-terminal) and exercise chokidar, glob, picocolors, @esfx/canceltoken,
 which and minimist (deps/deps.mjs). Stdout, stderr and the exit code must be identical after
-normalising paths, durations, pids and the frames jsse does not have yet (see normalise()).
+normalising paths, durations, pids and Node's own `node:internal` frames (see normalise()).
 Never runs a build task. Exits 1 on any difference.
 
 Options: --jobs N (default 4), --timeout SECONDS (default 300), --ci, --list, --require,
@@ -34,8 +34,6 @@ DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS", "NODE_DISABLE_
 DURATION = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m|h|d)(?: \d[\d.]*(?:ms|s|m|h|d))*")
 PID = re.compile(r"\(node:\d+\)")
 FRAME = re.compile(r"^\s+at ")
-ASYNC_FRAME = re.compile(r"^\s+at async ")
-TOP_LEVEL = re.compile(r"^\s+at (?:file://|/)\S+:\d+:\d+$")
 
 # name, directory under hereby-fixtures ("" = the TypeScript checkout), argv, env, pty columns
 HEREBY_CASES = [
@@ -89,26 +87,19 @@ DEPS_CASES = [
 
 
 def normalise(text, work, ts_dir):
-    """Make two runs comparable: paths, durations, pids, and stack frames Node has and jsse lacks.
+    """Make two runs comparable: paths, durations, pids, and Node's internal stack frames.
 
-    Dropped on both sides (issue #1368): frames inside node:internal, `at async` frames, and
-    the anonymous module top-level frame that precedes Node's ModuleJob.run frame.
+    Frames inside node:internal are dropped on both sides; every user frame, module top-level
+    and `at async` ones included, must match (issue #1368).
     """
     text = text.replace(work, "<WORK>").replace(ts_dir, "<TS>")
     text = DURATION.sub("<T>", text)
     text = PID.sub("(node:<PID>)", text)
-    lines = text.splitlines()
-    kept = []
-    for i, line in enumerate(lines):
-        if FRAME.match(line):
-            nxt = lines[i + 1] if i + 1 < len(lines) else ""
-            if (
-                "node:internal" in line
-                or ASYNC_FRAME.match(line)
-                or (TOP_LEVEL.match(line) and "ModuleJob.run" in nxt)
-            ):
-                continue
-        kept.append(line)
+    kept = [
+        line
+        for line in text.splitlines()
+        if not (FRAME.match(line) and "node:internal" in line)
+    ]
     return "\n".join(kept) + "\n"
 
 

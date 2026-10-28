@@ -24,6 +24,7 @@
   var RECORD = 5;
   var CONSTRUCTOR = 1;
   var TOPLEVEL = 2;
+  var ASYNC = 4;
 
   function describe(frames, index) {
     var base = index * RECORD;
@@ -36,6 +37,7 @@
       column: place === undefined ? null : place[2],
       constructor: (frames[base + 4] & CONSTRUCTOR) !== 0,
       toplevel: (frames[base + 4] & TOPLEVEL) !== 0,
+      async: (frames[base + 4] & ASYNC) !== 0,
     };
   }
 
@@ -107,12 +109,16 @@
       return this.#frame.constructor;
     }
     isAsync() {
-      return false;
+      return this.#frame.async;
     }
     isPromiseAll() {
       return false;
     }
     toString() {
+      var text = this.#plain();
+      return this.#frame.async ? "async " + text : text;
+    }
+    #plain() {
       var frame = this.#frame;
       var where =
         (frame.file === undefined || frame.file === null

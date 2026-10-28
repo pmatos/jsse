@@ -588,7 +588,7 @@ fn analyze_expression(
             analyze_expression(this, analysis, ctx, true);
         }
 
-        Expression::Await(inner) => {
+        Expression::Await(inner, _) => {
             analyze_expression(inner, analysis, ctx, true);
         }
 
@@ -821,7 +821,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
             target != SuspensionTarget::Await
                 || inner.as_ref().is_some_and(|e| expr_contains(e, target))
         }
-        Expression::Await(inner) => {
+        Expression::Await(inner, _) => {
             target != SuspensionTarget::Yield || expr_contains(inner, target)
         }
         Expression::Literal(_)
@@ -1249,7 +1249,7 @@ fn blocked_by_annexb_sibling(body: AwaitUsingScan, loop_body: &Statement) -> Awa
 /// blocks. The check must reach a function declaration nested inside a
 /// *sibling* container in this same list (e.g. `{ { function g(){} } {
 /// await using a = null; } }`), not just a direct `FunctionDeclaration`
-/// item, so it uses the deep walker rather than a shallow one. `switch`
+/// item, so it uses the deep walker. `switch`
 /// shares this same fold (over its flattened `cases[].consequent`): its
 /// `CaseBlock` now gets the identical per-entry `ScopeAction::OpenBlock`
 /// treatment `#703` gave `Block`/`try` clause bodies (issue #841), so a
@@ -1519,7 +1519,7 @@ mod tests {
     }
 
     fn make_await() -> Expression {
-        Expression::Await(ExprBox::new(Expression::Literal(Literal::Number(1.0))))
+        Expression::Await(ExprBox::new(Expression::Literal(Literal::Number(1.0))), 0)
     }
 
     fn make_function_expr() -> FunctionExpr {
@@ -1866,7 +1866,7 @@ mod tests {
             assert!(expr_contains(&yield_await, target));
         }
 
-        let await_yield = Expression::Await(ExprBox::new(make_yield(false)));
+        let await_yield = Expression::Await(ExprBox::new(make_yield(false)), 0);
         for target in [
             SuspensionTarget::Yield,
             SuspensionTarget::Await,

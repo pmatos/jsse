@@ -50,8 +50,8 @@ impl From<LexError> for ParseError {
 /// values into the snapshot step silently overwrote that fifth site's
 /// ambient `in_block_or_function` and dropped `in_switch_case` to `false`
 /// instead of `true` — accepting `using`/`await using` declarations
-/// directly in a case body that must reject them. Each call site's `enter`
-/// closure sets exactly the fields it needs instead.
+/// directly in a case body that must reject them. Each site's `enter`
+/// closure sets exactly the fields it needs.
 #[derive(Clone, Copy)]
 struct SavedBlockScope {
     in_block_or_function: bool,
@@ -801,7 +801,7 @@ impl<'a> Parser<'a> {
             Expression::Spread(inner)
             | Expression::PreIterated(inner)
             | Expression::ClassProtoParent(inner)
-            | Expression::Await(inner) => Self::expr_contains_await_identifier(inner),
+            | Expression::Await(inner, _) => Self::expr_contains_await_identifier(inner),
             Expression::BoundCallee(func, this) | Expression::ResolvedHeritage(func, this) => {
                 Self::expr_contains_await_identifier(func) || Self::expr_contains_await_identifier(this)
             }
@@ -892,7 +892,7 @@ impl<'a> Parser<'a> {
     pub(super) fn expr_contains_await_expression(expr: &Expression) -> bool {
         use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
         match expr {
-            Expression::Await(_) => true,
+            Expression::Await(..) => true,
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_expression)),
@@ -1019,7 +1019,7 @@ impl<'a> Parser<'a> {
                 exprs.iter().any(Self::expr_contains_yield_expression)
             }
             Expression::Spread(inner) => Self::expr_contains_yield_expression(inner),
-            Expression::Await(inner) => Self::expr_contains_yield_expression(inner),
+            Expression::Await(inner, _) => Self::expr_contains_yield_expression(inner),
             Expression::ArrowFunction(af) => {
                 af.params.iter().any(Self::pattern_contains_yield_expression)
                     || match &af.body {

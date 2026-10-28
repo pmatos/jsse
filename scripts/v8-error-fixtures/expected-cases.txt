@@ -130,3 +130,16 @@ Error: before await
 ## async after await
 Error: after await
     at afterAwait (<dir>/cases.js:212:10)
+## async chain
+Error: leaf
+    at leaf (<dir>/cases.js:222:10)
+    at async mid (<dir>/cases.js:225:10)
+    at async top (<dir>/cases.js:228:10)
+## async through a then handler
+Error: leaf
+    at leaf (<dir>/cases.js:222:10)
+## async in a job
+Error: leaf
+    at leaf (<dir>/cases.js:222:10)
+    at async mid (<dir>/cases.js:225:10)
+    at async top (<dir>/cases.js:228:10)

@@ -478,7 +478,7 @@ impl<'a> Parser<'a> {
                     || opts.as_ref().is_some_and(|e| Self::expr_has_direct_super(e))
             }
             Expression::Spread(inner)
-            | Expression::Await(inner)
+            | Expression::Await(inner, _)
             | Expression::Typeof(inner)
             | Expression::Void(inner)
             | Expression::Delete(inner) => Self::expr_has_direct_super(inner),
@@ -661,7 +661,7 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        // Handle `accessor FieldName` — auto-accessor syntax from the decorators proposal.
+        // `accessor FieldName`: auto-accessor syntax (decorators proposal).
         // Spec: `accessor [no LineTerminator here] ClassElementName`
         // If "accessor" is followed by `;`, `=`, `}`, or a line terminator,
         // it is just a field named "accessor", not an auto-accessor modifier.

@@ -235,7 +235,7 @@ impl<'a> CaptureWalk<'a> {
             | Expression::Spread(e)
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e)
-            | Expression::Await(e)
+            | Expression::Await(e, _)
             | Expression::Typeof(e)
             | Expression::Void(e)
             | Expression::Delete(e) => self.push_expr(e),

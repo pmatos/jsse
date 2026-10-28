@@ -119,9 +119,13 @@ impl Compiler {
     pub(super) fn compile_await(
         &mut self,
         argument: &Expression,
+        at: u32,
         discard: bool,
     ) -> Result<(), CompileError> {
         self.compile_expr(argument)?;
+        if at != 0 {
+            self.emit_throw_pos(at);
+        }
         self.emit_await(discard)
     }
 

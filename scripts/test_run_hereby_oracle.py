@@ -29,7 +29,7 @@ class NormaliseTest(unittest.TestCase):
     def test_only_durations_after_in_are_replaced(self):
         self.assertEqual(self.norm("took 5ms to run 3s\n"), "took 5ms to run 3s\n")
 
-    def test_drops_frames_jsse_lacks(self):
+    def test_drops_only_node_internal_frames(self):
         text = "\n".join(
             [
                 "RangeError: boom",
@@ -37,18 +37,14 @@ class NormaliseTest(unittest.TestCase):
                 "    at file:///w/node/a.mjs:8:1",
                 "    at ModuleJob.run (node:internal/modules/esm/module_job:569:25)",
                 "    at async loadHerebyfile (file:///ts/node_modules/hereby/dist/cli.js:35:24)",
+                "    at async node:internal/modules/esm/loader:650:26",
             ]
         )
         self.assertEqual(
             self.norm(text),
-            "RangeError: boom\n    at explode (file://<WORK>/a.mjs:4:9)\n",
-        )
-
-    def test_keeps_anonymous_frames_that_are_not_the_module_top_level(self):
-        text = "    at file:///w/node/a.mjs:3:5\n    at k (file:///w/node/a.mjs:2:15)\n"
-        self.assertEqual(
-            self.norm(text),
-            "    at file://<WORK>/a.mjs:3:5\n    at k (file://<WORK>/a.mjs:2:15)\n",
+            "RangeError: boom\n    at explode (file://<WORK>/a.mjs:4:9)\n"
+            "    at file://<WORK>/a.mjs:8:1\n"
+            "    at async loadHerebyfile (file://<TS>/node_modules/hereby/dist/cli.js:35:24)\n",
         )
 
     def test_keeps_named_frames_and_plain_lines(self):

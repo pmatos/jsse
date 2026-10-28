@@ -146,10 +146,8 @@ impl Interpreter {
     /// flavour, and a sync driver can no longer write the async tag.
     ///
     /// Ordering: tables first, latch second. No user code runs in between, so
-    /// the order is unobservable — which is what lets this retire the two
-    /// orders the sync driver used to use. Runs no user code and allocates
-    /// nothing beyond the two handle clones; the `borrow_mut` ends before
-    /// return.
+    /// the order is unobservable. Allocates nothing beyond the two handle
+    /// clones; the `borrow_mut` ends before return.
     ///
     /// Caller obligation: nothing may read a side table for this generator
     /// between this call and the caller's own `return`.
@@ -5608,6 +5606,7 @@ impl Interpreter {
                     value,
                     resume_state,
                     sent_value_binding,
+                    ..
                 } => {
                     let await_val = match self.eval_operand(value, &term_env) {
                         Operand::Value(v) => v,

@@ -86,6 +86,29 @@ fn fixture_matches_node_under_the_tree_walker() {
 }
 
 #[test]
+fn async_frames_follow_the_awaiting_chain_as_node_does() {
+    let dir = root().join("scripts/event-loop-fixtures");
+    let fixture = dir.join("async-stack.fixture.mjs");
+    let expected = std::fs::read_to_string(dir.join("async-stack.stdout")).expect("snapshot");
+    let dir = dir.to_string_lossy();
+    for stress in [None, Some("7"), Some("1")] {
+        let out = jsse(&["--node", fixture.to_str().expect("utf-8 path")], stress);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let actual = stdout(&out).replace(dir.as_ref(), "<dir>");
+        assert_eq!(actual, expected.trim_end(), "GC stress {stress:?}");
+    }
+}
+
+#[test]
+fn async_frames_exist_only_under_node_mode() {
+    let source = "async function f() { await 1; return new Error('x').stack }\n\
+                  f().then((s) => print(s === '' ? 'empty' : s))";
+    let out = jsse(&["-e", source], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "empty");
+}
+
+#[test]
 fn required_modules_report_their_file_line_and_column() {
     for (extra, stress) in [
         (&[][..], None),

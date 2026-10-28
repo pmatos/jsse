@@ -60,8 +60,8 @@ run: `tests/node_ts_mocha.rs` (tail calls; it also drives the oracle when `TS_SR
 ### What the oracle normalises
 
 Paths, durations, pids, the `(Nms)` mark the spec reporter adds to slow passing tests, and four things about
-stack frames that are cosmetic and not fixed here (filed as #1379): frames inside Node's own modules and
-`at async` frames (#1368); V8's receiver name of an arrow function (`at Context.<anonymous> (f.js:1:2)`,
+stack frames that are cosmetic and not fixed here (filed as #1379): frames inside Node's own modules
+(`at async` frames match since #1368); V8's receiver name of an arrow function (`at Context.<anonymous> (f.js:1:2)`,
 `at Timeout._onTimeout (...)`) which jsse does not record for arrows, so the line reads `at f.js:1:2`; V8's
 inferred name `exports.f` for a function assigned to a member; and, in the `json` reporter only, own-key order
 (`stack` before `message` in V8). The json case is compared as parsed JSON with sorted keys.

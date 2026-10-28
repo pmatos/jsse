@@ -34,7 +34,7 @@ class NormaliseTest(unittest.TestCase):
             "    ✔ one\n  1 passing (<T>)\n",
         )
 
-    def test_drops_frames_in_node_builtins_and_async_frames(self):
+    def test_drops_frames_in_node_builtins_and_keeps_async_user_frames(self):
         text = "\n".join(
             [
                 "Error: boom",
@@ -42,10 +42,13 @@ class NormaliseTest(unittest.TestCase):
                 "    at process.emit (node:events:514:20)",
                 "    at listOnTimeout (node:internal/timers:685:17)",
                 "    at async run (/ts/x.js:1:1)",
-                "    at node:internal/timers:40:7 {",
+                "    at async node:internal/timers:40:7 {",
             ]
         )
-        self.assertEqual(self.norm(text), "Error: boom\n    at k (a.js:2:15)\n{\n")
+        self.assertEqual(
+            self.norm(text),
+            "Error: boom\n    at k (a.js:2:15)\n    at async run (<TS>/x.js:1:1)\n{\n",
+        )
 
     def test_arrow_receivers_and_relative_frames_read_alike(self):
         node = "    at Context.<anonymous> (a.spec.js:5:36)\n    at Timeout._onTimeout (a.spec.js:2:9)\n"
@@ -133,7 +136,7 @@ class EslintCasesTest(unittest.TestCase):
 
 class TrailingBraceAfterFrameTest(unittest.TestCase):
     def test_a_brace_after_a_dropped_frame_reads_like_one_after_another(self):
-        node = "Error: x\n    at k (/w/a.js:1:1)\n    at async y (/ts/z.js:2:2) {\n  code: 'E'\n}\n"
+        node = "Error: x\n    at k (/w/a.js:1:1)\n    at async node:internal/z:2:2 {\n  code: 'E'\n}\n"
         jsse = "Error: x\n    at k (/w/a.js:1:1)\n    at node:internal/boot:4:5 {\n  code: 'E'\n}\n"
         self.assertEqual(
             oracle.normalise(node, "/w", "/ts"), oracle.normalise(jsse, "/w", "/ts")

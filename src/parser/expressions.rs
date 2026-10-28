@@ -546,7 +546,7 @@ impl<'a> Parser<'a> {
                     | Expression::Typeof(_)
                     | Expression::Void(_)
                     | Expression::Delete(_)
-                    | Expression::Await(_)
+                    | Expression::Await(..)
             );
             let is_parenthesized = self.source.as_bytes().get(start) == Some(&b'(');
             if is_unary && !is_parenthesized {
@@ -567,9 +567,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> Result<Expression, ParseError> {
-        // Depth guard: prefix unary operators (!, -, +, ~, typeof, void,
-        // delete, await, ++/--) recurse here, bypassing
-        // parse_assignment_expression, so they need their own bound.
+        // Prefix operators recurse here, bypassing
+        // parse_assignment_expression, so they need their own guard.
         self.enter_recursion()?;
         let r = self.parse_unary_inner();
         self.exit_recursion();
@@ -639,9 +638,10 @@ impl<'a> Parser<'a> {
                         "Await expression is not allowed in formal parameters of an async function",
                     ));
                 }
+                let at = CallSiteId::at(self.current_token_start).1;
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Await(ExprBox::new(expr)))
+                Ok(Expression::Await(ExprBox::new(expr), at))
             }
             _ => self.parse_postfix(),
         }

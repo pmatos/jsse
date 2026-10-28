@@ -64,7 +64,6 @@ DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s|m)\)|(?<=: )\d+(?:\.\d+)?ms$", re
 JSON_TIME = re.compile(r'("(?:duration|start|end)": )(?:"[^"]*"|\d+)')
 XML_TIME = re.compile(r' (time|timestamp)="[^"]*"')
 FRAME = re.compile(r"^\s+at ")
-ASYNC_FRAME = re.compile(r"^\s+at async ")
 BUILTIN_FRAME = re.compile(r"\(?node:[\w/]+:\d+:\d+\)?$")
 ARROW = r"(?:[\w$]+\.(?:<anonymous>|&#x3C;anonymous&#x3E;)|Timeout\._onTimeout|Immediate\._onImmediate|exports\.[\w$]+)"
 RECEIVER_FRAME = re.compile(r"^(\s+at )" + ARROW + r" \((.*:\d+:\d+)\)")
@@ -79,8 +78,8 @@ NATIVE_FRAME = re.compile(r"^ +at [^\n(]*\(<anonymous>\)\n", re.M)  # `at Array.
 def normalise(text, work, ts_dir):
     """Make two runs comparable: paths, durations, pids, and stack frames that differ between the engines.
 
-    Dropped on both sides: frames inside Node's own modules (jsse's node-lib has other line numbers) and
-    `at async` frames (issue #1368). `at Context.<anonymous> (file:1:2)` and `at Timeout._onTimeout (file:1:2)`
+    Dropped on both sides: frames inside Node's own modules (jsse's node-lib has other line numbers).
+    `at Context.<anonymous> (file:1:2)` and `at Timeout._onTimeout (file:1:2)`
     are read as `at file:1:2`: V8 names the receiver of an arrow function and infers `exports.name` for a
     function assigned to it; jsse does neither. Mocha shows frames under the working directory relative to it.
     The spec reporter appends a duration to a passing test slower than half its threshold, so a loaded host
@@ -100,7 +99,7 @@ def normalise(text, work, ts_dir):
                 if line.endswith(suffix):
                     line, tail = line[: -len(suffix)], suffix.strip()
         is_frame = FRAME.match(line) is not None
-        if not (is_frame and (BUILTIN_FRAME.search(line) or ASYNC_FRAME.match(line))):
+        if not (is_frame and BUILTIN_FRAME.search(line)):
             if is_frame:
                 line = RECEIVER_FRAME.sub(r"\1\2", line).replace("<WORK>/", "")
             kept.append(line)

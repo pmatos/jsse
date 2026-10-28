@@ -90,8 +90,9 @@ test262 measures, so everything here is `--node` only.
 
 - No frame for script top level, `eval`/`Function` code (shown as
   `<anonymous>`), generators, or state-machine async functions; no native
-  frames (`at Array.map (<anonymous>)`); no `at async` frames. Hosted async
-  functions have their own frame, also after an `await`.
+  frames (`at Array.map (<anonymous>)`). `at async` frames came with
+  `2026-10-28-1400-node-host-async-frames.md`. Hosted async functions have
+  their own frame, also after an `await`.
 - A frame entered implicitly (getter, setter, `valueOf`, proxy trap, iterator
   protocol) reports the caller's most recent call position; an error the engine
   throws reports the throwing frame's most recent call, or the function start.
