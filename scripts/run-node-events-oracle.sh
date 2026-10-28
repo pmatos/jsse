@@ -7,7 +7,7 @@
 #
 # 1. Every test in scripts/events-fixtures/manifest.txt (Node's own
 #    test/parallel files, verbatim) is wrapped by scripts/events-fixtures/harness.js
-#    (.mjs tests: their common and node:test imports point at esm-shim.mjs) and
+#    (.mjs tests: their common, common/gc and node:test imports point at esm-shim.mjs) and
 #    must print "events-fixture: ok" and exit 0 on jsse (`--node`) and on Node.
 #    A test whose "// Flags:" line names --expose-internals runs with that flag
 #    on both (the jsse switch is --node only).
@@ -73,7 +73,7 @@ while read -r name sum; do
     if [[ "$name" == *.mjs ]]; then
         file="$WORK/$name"
         cp "$DIR/esm-shim.mjs" "$WORK/esm-shim.mjs"
-        sed -E -e "s#(['\"])../common/index.mjs\1#\1./esm-shim.mjs\1#" -e "s#(['\"])node:test\1#\1./esm-shim.mjs\1#" \
+        sed -E -e "s#(['\"])../common/index.mjs\1#\1./esm-shim.mjs\1#" -e "s#(['\"])../common/gc.js\1#\1./esm-shim.mjs\1#" -e "s#(['\"])node:test\1#\1./esm-shim.mjs\1#" \
             "$DIR/$name" > "$file"
     else
         file="$WORK/$name.js"

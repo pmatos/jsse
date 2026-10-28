@@ -2,9 +2,11 @@
 # scripts/run-node-events-oracle.sh (and tests/node_events.rs) through harness.js on
 # jsse --node and on Node. One name per line: <name> is <name>.js (a CommonJS
 # test wrapped by harness.js); <name>.mjs is an ES module test whose
-# '../common/index.mjs' and 'node:test' imports are rewritten to esm-shim.mjs.
+# '../common/index.mjs', '../common/gc.js' and 'node:test' imports are rewritten to
+# esm-shim.mjs (which also carries gcUntil and the jsse-only subtest skips).
 # Subtests that cannot run on jsse yet are skipped by name in harness.js
-# (__eventsJsseSkips) with their reason. A test is one file, or consecutive
+# (__eventsJsseSkips; esm-shim.mjs has jsseSkips for .mjs tests) with their
+# reason. A test is one file, or consecutive
 # <name>.js.partN slices (the 20,000-byte file budget) whose concatenation has
 # the sha256 on its line. "~<test>|s#from#to#|<reason>" (literal text) patches
 # the wrapped test text on jsse only, for a block that cannot run there. A test
@@ -57,8 +59,10 @@ test-eventtarget-custom-inspect-does-not-throw
 test-eventtarget-once-twice
 test-abortsignal-any.mjs
 test-events-add-abort-listener.mjs
+test-abortsignal-drop-settled-signals.mjs
+test-eventtarget-memoryleakwarning
+~test-eventtarget-memoryleakwarning|s#new MessageChannel()#{ port1: new EventTarget() }#|MessageChannel is not in the host: a plain EventTarget stands in for the port
+~test-eventtarget-memoryleakwarning|s#[MessagePort [EventTarget]]#EventTarget#|the expected warning names the stand-in EventTarget, not a MessagePort
 !test-abortsignal-cloneable: needs MessageChannel (worker message ports are not in the host)
 !test-eventemitter-asyncresource: needs the async_hooks module (not in the host)
 !test-event-emitter-no-error-provided-to-error-event: needs the domain module (deprecated, not in the host)
-!test-abortsignal-drop-settled-signals.mjs: needs test/common/gc.js (gcUntil), not vendored
-!test-eventtarget-memoryleakwarning: needs MessageChannel (the warning text names [MessagePort [EventTarget]])

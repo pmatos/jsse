@@ -105,7 +105,7 @@ fn compose(name: &str, dir: &Path) -> PathBuf {
         let path = dir.join(name);
         let mut test = read(name);
         for quote in ["'", "\""] {
-            for specifier in ["../common/index.mjs", "node:test"] {
+            for specifier in ["../common/index.mjs", "../common/gc.js", "node:test"] {
                 test = test.replace(
                     &format!("{quote}{specifier}{quote}"),
                     &format!("{quote}./esm-shim.mjs{quote}"),
