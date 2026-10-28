@@ -1,16 +1,17 @@
-"""Groups of TypeScript's unit-test suites for run-ts-unittests-oracle.py (issues #1259, #1261 and #1262).
+"""Groups of TypeScript's unit-test suites for run-ts-unittests-oracle.py (issues #1259, #1261, #1262 and #1264).
 
 `src/testRunner/unittests/*.ts` register the mocha suites of 26 groups (#1259, 2334 tests). The 16 `services-*`
-groups (#1261, 1531 tests) cover everything under `unittests/services/` and the 20 `evaluation-*` groups (#1262,
-350 tests) the files of `unittests/evaluation/`, whose tests compile a snippet and run the emitted code. The other
-subdirectories (config and sys: run-ts-unittests-config-sys-oracle.py; tsbuild, tscWatch, tsc, tsserver: their own
-tickets) are not scanned. A group is one file: its `pattern` is the mocha `-g` regular expression selecting that
-file's tests (a test's full title is its `describe` titles and its own title joined by spaces, so every pattern is
-anchored on the file's first describe title plus a space), and `tests` is the count Node 26 reports on TypeScript
-v6.0.3. Every mocha process pays jsse's 80 s start-up (parsing and running the 13 MB `run.js` bundle), so the oracle
-runs the groups of one `batch` in a single process (the pattern is the alternation of theirs) and splits the report by
-group; the batches balance the slow suites (`canWatch`, `programApi`, `convertToAsyncFunction` and the `extract` tests
-take two to ten minutes of test time on jsse) over the processes.
+groups (#1261, 1531 tests) cover everything under `unittests/services/`, the 20 `evaluation-*` groups (#1262,
+350 tests) the files of `unittests/evaluation/`, whose tests compile a snippet and run the emitted code, and the 31
+`tsbuild-*` groups (#1264, 410 tests, rows in ts_unittests_tsbuild_groups.py) everything under `unittests/tsbuild/`.
+The other subdirectories (config and sys: run-ts-unittests-config-sys-oracle.py; tsc, tscWatch and tsbuildWatch:
+their own oracles; tsserver: its own ticket) are not scanned. A group is one file: its `pattern` is the mocha `-g`
+regular expression selecting that file's tests (a test's full title is its `describe` titles and its own title joined
+by spaces, so every pattern is anchored on the file's first describe title plus a space), and `tests` is the count
+Node 26 reports on TypeScript v6.0.3. Every mocha process pays jsse's 80 s start-up (parsing and running the 13 MB
+`run.js` bundle), so the oracle runs the groups of one `batch` in a single process (the pattern is the alternation of
+theirs) and splits the report by group; the batches balance the slow suites (`canWatch`, `programApi`,
+`convertToAsyncFunction` and the `extract` tests take two to ten minutes of test time on jsse) over the processes.
 
 `check_groups()` is the drift guard: every top-level `describe("...")` in the checkout must be matched by exactly
 one group, so a new or renamed suite cannot be left out of the oracle unnoticed.
@@ -19,6 +20,8 @@ one group, so a new or renamed suite cannot be left out of the oracle unnoticed.
 import os
 import re
 from typing import NamedTuple
+
+import ts_unittests_tsbuild_groups
 
 
 class Group(NamedTuple):
@@ -83,6 +86,8 @@ GROUPS += [
     Group("services-utilities", S + r"utilities ", 1, 6),
 ]
 
+GROUPS += [Group(*row) for row in ts_unittests_tsbuild_groups.ROWS]
+
 E = r"^unittests:: evaluation:: "
 GROUPS += [
     Group("evaluation-arraySpread", E + r"arraySpread ", 4, 10),
@@ -111,20 +116,21 @@ GROUPS += [
     Group("evaluation-using", E + r"usingDeclarations ", 41, 9),
 ]
 
-OWNED_DIRS = ("services", "evaluation")
-DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*["'`]([^"'`]+)["'`]""", re.M)
+OWNED_SUBDIRS = ("services", "evaluation", "tsbuild")
+
+DESCRIBE = re.compile(r"""^describe(?:\.\w+)?\(\s*(["'`])((?:\\.|(?!\1).)+)\1""", re.M)
 
 
 def ts_files(ts_dir):
     """(path relative to `unittests/`, absolute path) of the `.ts` files the oracle owns: those of `unittests/`
-    itself and, recursively, of `unittests/services/` and `unittests/evaluation/`. A missing directory yields no
-    file here; check_groups() reports it."""
+    itself and, recursively, of `unittests/services/`, `unittests/evaluation/` and `unittests/tsbuild/`. A
+    missing directory yields no file here; check_groups() reports it."""
     base = os.path.join(ts_dir, "src", "testRunner", "unittests")
     for name in sorted(os.listdir(base)):
         path = os.path.join(base, name)
         if name.endswith(".ts") and os.path.isfile(path):
             yield name, path
-    for sub in OWNED_DIRS:
+    for sub in OWNED_SUBDIRS:
         for root, dirs, files in os.walk(os.path.join(base, sub)):
             dirs.sort()
             for name in sorted(files):
@@ -138,7 +144,7 @@ def top_level_titles(ts_dir):
     found = {}
     for rel, path in ts_files(ts_dir):
         with open(path, encoding="utf-8") as f:
-            titles = DESCRIBE.findall(f.read())
+            titles = [m.group(2) for m in DESCRIBE.finditer(f.read())]
         if titles:
             found[rel] = titles
     return found
@@ -152,10 +158,9 @@ def matching(title):
 def check_groups(ts_dir):
     """Problems (a list of strings) between the groups and the checkout's top-level suites."""
     problems = []
-    for sub in OWNED_DIRS:
-        if not os.path.isdir(
-            os.path.join(ts_dir, "src", "testRunner", "unittests", sub)
-        ):
+    base = os.path.join(ts_dir, "src", "testRunner", "unittests")
+    for sub in OWNED_SUBDIRS:
+        if not os.path.isdir(os.path.join(base, sub)):
             problems.append(f"unittests/{sub} is missing: its groups select nothing")
     for file, titles in top_level_titles(ts_dir).items():
         for title in titles:

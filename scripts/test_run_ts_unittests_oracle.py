@@ -2,6 +2,7 @@ import collections
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,7 +137,7 @@ class ReportTest(unittest.TestCase):
 
     def test_the_committed_known_failures_name_a_group(self):
         for title in oracle.read_known_failures():
-            hits = [g for g in groups.GROUPS if oracle.re.search(g.pattern, title)]
+            hits = [g for g in groups.GROUPS if re.search(g.pattern, title)]
             self.assertEqual(len(hits), 1, title)
 
 
@@ -151,6 +152,7 @@ class GroupsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d, "src", "testRunner", "unittests", "services")
             (base / "extract").mkdir(parents=True)
+            (base.parent / "tsbuild").mkdir()
             Path(d, "src", "testRunner", "unittests", "evaluation").mkdir()
             (base / "textChanges.ts").write_text(
                 'describe("unittests:: services:: textChanges", () => {});\n'
@@ -181,6 +183,31 @@ class GroupsTest(unittest.TestCase):
                 [
                     "unittests/services is missing: its groups select nothing",
                     "unittests/evaluation is missing: its groups select nothing",
+                    "unittests/tsbuild is missing: its groups select nothing",
+                ],
+            )
+
+    def test_check_groups_covers_the_tsbuild_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d, "src", "testRunner", "unittests")
+            (base / "services").mkdir(parents=True)
+            (base / "evaluation").mkdir()
+            (base / "tsbuild").mkdir()
+            (base / "tsbuild" / "sample.ts").write_text(
+                "describe(\"unittests:: tsbuild:: on 'sample1' project\", () => {});\n"
+                '    describe("unittests:: tsbuild:: nested", () => {});\n'
+            )
+            (base / "tsbuild" / "watch.ts").write_text(
+                'describe("unittests:: tsbuildWatch:: on sample", () => {});\n'
+                'describe("unittests:: tsbuild:: brandNew:: x", () => {});\n'
+            )
+            self.assertEqual(
+                groups.check_groups(d),
+                [
+                    "tsbuild/watch.ts: describe('unittests:: tsbuildWatch:: on sample') "
+                    "matches groups none",
+                    "tsbuild/watch.ts: describe('unittests:: tsbuild:: brandNew:: x') "
+                    "matches groups none",
                 ],
             )
 
@@ -188,6 +215,7 @@ class GroupsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d, "src", "testRunner", "unittests")
             Path(base, "services").mkdir(parents=True)
+            Path(base, "tsbuild").mkdir()
             Path(base, "evaluation").mkdir()
             (base / "evaluation" / "forOf.ts").write_text(
                 'describe("unittests:: evaluation:: forOfEvaluation", () => {});\n'
@@ -201,17 +229,33 @@ class GroupsTest(unittest.TestCase):
                 ],
             )
 
-    def test_the_evaluation_counts_equal_the_pinned_suite_count(self):
+    def assert_counts_equal_the_pinned_suite(self, suite):
         pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
-        pinned = pins["runners"]["unittests"]["suites"]["evaluation"]["passed"]
-        got = sum(g.tests for g in groups.GROUPS if g.name.startswith("evaluation-"))
-        self.assertEqual(got, pinned)
+        pinned = pins["runners"]["unittests"]["suites"][suite]["passed"]
+        got = sum(g.tests for g in groups.GROUPS if g.name.startswith(suite + "-"))
+        self.assertEqual(got, pinned, suite)
+
+    def test_the_evaluation_counts_equal_the_pinned_suite_count(self):
+        self.assert_counts_equal_the_pinned_suite("evaluation")
 
     def test_the_services_counts_equal_the_pinned_suite_count(self):
-        pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
-        pinned = pins["runners"]["unittests"]["suites"]["services"]["passed"]
-        got = sum(g.tests for g in groups.GROUPS if g.name.startswith("services-"))
-        self.assertEqual(got, pinned)
+        self.assert_counts_equal_the_pinned_suite("services")
+
+    def test_the_tsbuild_counts_equal_the_pinned_suite_count(self):
+        self.assert_counts_equal_the_pinned_suite("tsbuild")
+
+    def test_tsbuild_patterns_leave_tsbuild_watch_and_outfile_alone(self):
+        def hit(title):
+            return [g.name for g in groups.GROUPS if re.search(g.pattern, title)]
+
+        self.assertEqual(
+            hit("unittests:: tsbuild:: outFile:: amdModulesWithOut:: x y"),
+            ["tsbuild-amdModulesWithOut"],
+        )
+        self.assertEqual(
+            hit("unittests:: tsbuild:: outFile:: x y"), ["tsbuild-outFile"]
+        )
+        self.assertEqual(hit("unittests:: tsbuildWatch:: on sample x"), [])
 
     def test_check_groups_flags_an_unmatched_suite(self):
         with tempfile.TemporaryDirectory() as d:
@@ -234,6 +278,7 @@ class GroupsTest(unittest.TestCase):
             )
             Path(base, "services").mkdir()
             Path(base, "evaluation").mkdir()
+            Path(base, "tsbuild").mkdir()
             problems = groups.check_groups(d)
         self.assertEqual(
             problems,
