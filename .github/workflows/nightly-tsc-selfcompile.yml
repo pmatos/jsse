@@ -1,0 +1,83 @@
+name: Nightly tsc self-compile
+
+# Runs every case of scripts/run-tsc-selfcompile-oracle.py (#1249): tsc 6.0.3
+# compiles TypeScript's own sources (compiler-dts, compiler-js, src-js) and a
+# generated program on Node and on `jsse --node`; the emitted files must be
+# byte-identical and jsse's peak RSS within the max_rss_ratio of
+# scripts/tsc-fixtures/selfcompile-budget.json. Wall time is recorded in the
+# step summary (the tail of the log) and the report artifact, never enforced. Non-blocking by
+# trigger only (schedule/workflow_dispatch never gate pull_request/push).
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  TYPESCRIPT_VERSION: 6.0.3
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selfcompile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - name: Fetch the TypeScript sources and compiler
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "v${TYPESCRIPT_VERSION}" https://github.com/microsoft/TypeScript.git "$RUNNER_TEMP/TypeScript"
+          (cd "$RUNNER_TEMP/TypeScript" && npm ci --ignore-scripts --no-audit --no-fund)
+          npm install --prefix "$RUNNER_TEMP/tsc" "typescript@${TYPESCRIPT_VERSION}" --ignore-scripts --no-audit --no-fund
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      - name: Self-compile (all cases)
+        env:
+          TS_SRC_DIR: ${{ runner.temp }}/TypeScript
+          TSC_DIR: ${{ runner.temp }}/tsc/node_modules/typescript
+        run: |
+          set -o pipefail
+          uv run python scripts/run-tsc-selfcompile-oracle.py --require --ci --jsse ./target/release/jsse --timeout 4200 --report "$RUNNER_TEMP/selfcompile-report.json" | tee "$RUNNER_TEMP/selfcompile.log"
+
+      - name: Summarise
+        if: ${{ always() }}
+        run: |
+          {
+            echo '```'
+            tail -n 20 "$RUNNER_TEMP/selfcompile.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tsc-selfcompile-report
+          path: |
+            ${{ runner.temp }}/selfcompile-report.json
+            ${{ runner.temp }}/selfcompile.log
+          if-no-files-found: ignore

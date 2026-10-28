@@ -19,7 +19,8 @@ The files each run wrote must be byte-identical (the tree's own path is the only
 and the exit status must agree. The wall time and peak RSS of every run are printed as a table (--report FILE writes
 them as JSON) and checked against the budget file scripts/tsc-fixtures/selfcompile-budget.json (per case:
 jsse_max_seconds, jsse_max_rss_mb, max_time_ratio, max_rss_ratio; null or absent means no limit) and against
---max-seconds / --max-rss-mb. Exits 1 on any difference or exceeded budget.
+--max-seconds / --max-rss-mb. The shipped budget caps peak RSS at 6x Node per case; wall time is recorded, not
+enforced. Exits 1 on any difference or exceeded budget.
 
 Options: --jsse PATH (else $JSSE, else target/release/jsse), --jobs N (jsse cases at once, default 1; budgets are only
 meaningful at 1), --timeout SECONDS per run (default 7200), --smoke (generated-large only), --list, --keep DIR,
