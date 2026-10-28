@@ -1,9 +1,11 @@
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -14,6 +16,7 @@ FIXTURES = SCRIPTS_DIR / "ts-mocha-fixtures"
 spec = importlib.util.spec_from_file_location("run_ts_mocha_oracle", ORACLE)
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
+procs = sys.modules["oracle_procs"]
 cli = oracle.cli
 parallel = oracle.parallel
 
@@ -392,6 +395,73 @@ class SkipTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("pass-spec", r.stdout)
         self.assertNotIn("fail-spec", r.stdout)
+
+
+TREE = (
+    "import os, subprocess, sys, time\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "open(sys.argv[1], 'w').write(str(g.pid))\n"
+    "time.sleep(%s)\n"
+)
+
+
+def gone(pid, wait=5.0):
+    end = time.monotonic() + wait
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        time.sleep(0.05)
+    return False
+
+
+class ProcessGroupTest(unittest.TestCase):
+    """A case's whole process tree dies with it, as `hereby runtests-parallel`'s forked workers must."""
+
+    def tree(self, sleep):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        pidfile = os.path.join(d, "pid")
+        return [sys.executable, "-c", TREE % sleep, pidfile], pidfile
+
+    def grandchild(self, pidfile):
+        with open(pidfile) as f:
+            pid = int(f.read())
+        self.addCleanup(lambda: os.path.exists(f"/proc/{pid}") and os.kill(pid, 9))
+        return pid
+
+    def test_a_timeout_kills_the_grandchildren(self):
+        cmd, pidfile = self.tree(60)
+        code, _, _ = procs.run_group(cmd, None, os.environ, 1)
+        self.assertEqual(code, "timeout")
+        self.assertTrue(gone(self.grandchild(pidfile)))
+
+    def test_a_normal_exit_kills_the_stragglers_too(self):
+        cmd, pidfile = self.tree(0.5)
+        code, _, _ = procs.run_group(cmd, None, os.environ, 30)
+        self.assertEqual(code, "0")
+        self.assertTrue(gone(self.grandchild(pidfile)))
+
+    def test_sigterm_to_the_driver_kills_the_tree(self):
+        cmd, pidfile = self.tree(60)
+        driver = (
+            "import sys; sys.path.insert(0, %r); import oracle_procs as p\n"
+            "p.install_cleanup(); p.run_group(%r, None, None, 60)\n"
+        ) % (str(SCRIPTS_DIR), cmd)
+        d = subprocess.Popen([sys.executable, "-c", driver])
+        end = time.monotonic() + 10
+        while not os.path.exists(pidfile) and time.monotonic() < end:
+            time.sleep(0.05)
+        time.sleep(0.2)
+        pid = self.grandchild(pidfile)
+        d.terminate()
+        d.wait(10)
+        self.assertTrue(gone(pid))
 
 
 if __name__ == "__main__":
