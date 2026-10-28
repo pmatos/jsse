@@ -1,0 +1,3 @@
+{ stack: "[eval]:5\nthrow { stack: 'custom' };\n^\n\ncustom" }
+
+Node.js <version>

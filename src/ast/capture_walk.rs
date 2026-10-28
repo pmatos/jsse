@@ -111,7 +111,7 @@ impl<'a> CaptureWalk<'a> {
             Statement::FunctionDeclaration(_)
             | Statement::ClassDeclaration(_)
             | Statement::With(..) => return true,
-            Statement::Expression(e) | Statement::Throw(e) | Statement::Return(Some(e)) => {
+            Statement::Expression(e) | Statement::Throw(e, _) | Statement::Return(Some(e)) => {
                 self.push_expr(e)
             }
             Statement::Block(stmts) => stmts.iter().for_each(|s| self.push_stmt(s)),

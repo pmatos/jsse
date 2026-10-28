@@ -1,0 +1,7 @@
+<dir>/fatal-no-stack.fixture.js:5
+throw e;
+^
+
+[Error: stackless]
+
+Node.js <version>

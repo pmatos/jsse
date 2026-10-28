@@ -95,9 +95,8 @@ test262 measures, so everything here is `--node` only.
 - A frame entered implicitly (getter, setter, `valueOf`, proxy trap, iterator
   protocol) reports the caller's most recent call position; an error the engine
   throws reports the throwing frame's most recent call, or the function start.
-- Arrow functions have no receiver type; `getThis`/`getFunction` return
-  `undefined`; `getMethodName` is the function name; V8-inferred names
-  (`F.s` for `F.s = function(){}`) are not synthesised.
+- `getThis`/`getFunction` return `undefined`. Frames have no ` [as method]`
+  suffix, and a generator or class method has no V8-inferred name.
 - Tail calls replace frames only as far as the engine already does.
 
 ## Verification
@@ -106,9 +105,27 @@ test262 measures, so everything here is `--node` only.
 on Node and on `jsse --node`, normalises paths and drops frames outside the
 fixture (and Node's top-level `Object.<anonymous>`), and diffs both against
 `expected-cases.txt` (Node 26.8's own output; regenerate with `--node`).
-`modules.js` (with `lib/`) does the same for frames of required modules, including a shebang module. `tests/node_v8_error.rs` replays both under the VM, the tree-walker and
+`modules.js` (with `lib/`) does the same for frames of required modules, including a shebang module. `names.js` (#1379) covers the rest below. `tests/node_v8_error.rs` replays both under the VM, the tree-walker and
 `JSSE_GC_STRESS=7`, and adds default-mode absence, engine-thrown errors, spread
 and construct positions, `sourceURL` and loader-named module sources, an allocating
 `prepareStackTrace` that calls `$262.gc()`, and the uncaught-error printer.
 Oversized files this touches stay byte-neutral: edits there are offset by
 shortening comments, per the staged-file ratchet.
+
+## Names and key order (#1379)
+
+- An anonymous function, arrow or class assigned to a member
+  (`exports.run = function () {}`) is named like V8's inferrer does: the
+  target's text, `this` and `prototype` dropped, a string-literal key by value,
+  any other key `<computed>`, a chain `a.x = b.y = f` as `a.x.b.y`. The parser
+  records it per function literal in a thread-local table keyed by source
+  address and offset (`parser/inferred_names.rs`), only once the prelude has
+  installed the hooks, so default mode parses as before and `SourceText`, which
+  `Expression` embeds, does not grow. A name containing `.` gets no receiver
+  type prefix, and `getMethodName` is its last part.
+- An async arrow keeps its call receiver for its frames, also after an `await`.
+  A primitive receiver is `String`, `Number`, ..., a null-prototype one `Object`.
+- An error made by a constructor or thrown by the engine has `stack` before
+  `message` in its own keys, and the engine's own errors no `name` (inherited),
+  as in V8; `captureStackTrace` appends `stack`. `AggregateError` defines
+  `message`, `cause`, `errors` in the order of its steps in every mode.

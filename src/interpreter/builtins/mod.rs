@@ -24,11 +24,17 @@ mod node_host_builtins;
 #[cfg(unix)]
 mod node_host_child;
 #[cfg(unix)]
+mod node_host_child_ipc;
+#[cfg(unix)]
 mod node_host_child_spawn;
 #[cfg(unix)]
 mod node_host_child_sync;
+mod node_host_cjs_lexer;
+mod node_host_cjs_patterns;
 mod node_host_crypto;
+mod node_host_error_keys;
 mod node_host_esm;
+mod node_host_eval_frame;
 #[cfg(unix)]
 mod node_host_fs;
 #[cfg(unix)]
@@ -43,20 +49,26 @@ mod node_host_fs_jobs;
 mod node_host_fs_meta;
 #[cfg(unix)]
 mod node_host_fs_ops;
+#[cfg(unix)]
+mod node_host_fs_watch;
 mod node_host_idna;
 mod node_host_loop;
+mod node_host_module_frame;
 mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
 mod node_host_process_metrics;
+mod node_host_receiver;
 #[cfg(unix)]
 mod node_host_signal;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+mod node_host_throw;
 #[cfg(unix)]
 pub(crate) mod node_host_tty;
 mod node_host_util;
+mod node_host_vm;
 mod node_host_zlib;
 mod node_host_zlib_ctx;
 mod node_prelude;
@@ -76,6 +88,7 @@ pub(crate) mod string;
 mod structured_clone;
 mod temporal;
 pub(crate) mod typedarray;
+mod weak_ref;
 
 use super::*;
 

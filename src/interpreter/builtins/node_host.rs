@@ -39,11 +39,16 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
+    /// `--expose-internals`: user `require` may name `internal/...` builtins.
+    pub(crate) expose_internals: bool,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
     pub(crate) zlib: super::node_host_zlib::ZlibState,
+    pub(crate) vm: super::node_host_vm::VmState,
     #[cfg(unix)]
     pub(crate) child: super::node_host_child::ChildState,
+    #[cfg(unix)]
+    pub(crate) watch: super::node_host_fs_watch::WatchState,
     /// Test-only: the platform name the `os` binding reports.
     #[cfg(test)]
     pub(crate) platform_override: Option<&'static str>,
@@ -69,6 +74,10 @@ impl Interpreter {
         self.node_host.main_kind = kind;
     }
 
+    pub(crate) fn set_node_host_expose_internals(&mut self, expose: bool) {
+        self.node_host.expose_internals = expose;
+    }
+
     /// Exit status requested through `process.exitCode`, if any.
     pub fn node_host_exit_code(&self) -> Option<i32> {
         self.node_host.exit_code
@@ -82,6 +91,13 @@ impl Interpreter {
         self.node_host_enabled = true;
         self.node_host.clock_start = Some(std::time::Instant::now());
         self.setup_node_host();
+    }
+
+    /// Whether a strict call in tail position may replace its caller's
+    /// frame. Off under `--node`: V8 has no proper tail calls, and mocha's
+    /// traces of a failing `it(() => assert...)` need the test's own frame.
+    pub(crate) fn tco_on(&self, env: &EnvRef) -> bool {
+        env.borrow().strict && !self.node_host_enabled
     }
 
     /// Install a `__host_*` primitive as a non-enumerable, writable,
@@ -101,6 +117,7 @@ impl Interpreter {
 
     fn setup_node_host(&mut self) {
         self.setup_node_host_stack();
+        self.setup_node_host_throw();
         // __host_write(fd, str) -> bytesWritten
         //
         // Byte-accurate write of the UTF-8 encoding of `str` (from jsse's
@@ -162,6 +179,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     },
                 };
+                interp.latch_exit(code);
                 Completion::Exit(code)
             },
         ));
@@ -276,8 +294,10 @@ impl Interpreter {
             self.setup_node_host_fs_ops();
             self.setup_node_host_child();
             self.setup_node_host_child_sync();
+            self.setup_node_host_child_ipc();
             self.setup_node_host_signal();
             self.setup_node_host_fs_async();
+            self.setup_node_host_fs_watch();
         }
         self.setup_node_host_loop();
         #[cfg(unix)]
@@ -289,6 +309,7 @@ impl Interpreter {
         self.setup_node_host_util();
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();
+        self.setup_node_host_vm();
     }
 }
 

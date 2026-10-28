@@ -78,7 +78,7 @@
       tls: false,
       openssl_is_boringssl: false,
       cached_builtins: false,
-      require_module: false,
+      require_module: true,
       quic: false,
       typescript: false,
     },

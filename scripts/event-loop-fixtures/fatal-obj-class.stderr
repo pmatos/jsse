@@ -1,0 +1,7 @@
+
+<dir>/fatal-obj-class.fixture.js:3
+throw new Point();
+^
+Point { x: 1, y: 2 }
+
+Node.js <version>

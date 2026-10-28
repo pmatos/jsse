@@ -12,6 +12,7 @@ const kExit = 1;
 const kData = 2;
 const kEof = 3;
 const kWritten = 4;
+const kMessages = 7;
 
 const handles = new Map();
 
@@ -116,6 +117,34 @@ class Process extends Activity {
   }
 }
 
+// The inherited IPC descriptor of a forked child: one adopted pipe, no process.
+class AdoptedHandle {
+  constructor(id) {
+    this.id = id;
+    this.pipes = [];
+  }
+
+  addPipe(index, pipe) {
+    this.pipes[index] = pipe;
+  }
+
+  pipeClosed(index) {
+    if (this.pipes[index] === undefined) return;
+    this.pipes[index] = undefined;
+    handles.delete(this.id);
+    binding.release(this.id);
+  }
+}
+
+// An AdoptedHandle for `fd`, or the negative errno.
+function adopt(fd) {
+  const id = binding.adopt(fd);
+  if (id < 0) return id;
+  const handle = new AdoptedHandle(id);
+  handles.set(id, handle);
+  return handle;
+}
+
 function dispatch(kind, id, x, y) {
   const handle = handles.get(id);
   if (handle === undefined) return;
@@ -128,8 +157,9 @@ function dispatch(kind, id, x, y) {
   if (kind === kData) pipe.onData(y);
   else if (kind === kEof) pipe.onEof();
   else if (kind === kWritten) pipe.onWritten(y);
+  else if (kind === kMessages) pipe.onMessages(y);
 }
 
 binding.onEvent(dispatch);
 
-module.exports = { Activity, Process, UV_ESRCH };
+module.exports = { Activity, Process, UV_ESRCH, adopt };

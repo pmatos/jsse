@@ -36,3 +36,9 @@ exports.finish = (child) => new Promise((resolve) => {
 });
 
 exports.show = (label, value) => console.log(label, JSON.stringify(value));
+
+// fork() options that point the child at another engine when FORK_EXEC is set
+// (the oracle's jsse-to-node and node-to-jsse passes).
+exports.forkOpts = (extra = {}) => process.env.FORK_EXEC ?
+  { execPath: process.env.FORK_EXEC, execArgv: process.env.FORK_ARGS ? [process.env.FORK_ARGS] : [], ...extra } :
+  extra;

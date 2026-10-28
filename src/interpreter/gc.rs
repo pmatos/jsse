@@ -270,72 +270,9 @@ impl GcPacer {
     }
 }
 
-/// A growable, indexable run of GC-visible values that a native closure can
-/// replace in place — the engine's Rooted Slot (see `CONTEXT.md`).
-///
-/// Pin the container **once** on a long-lived anchor with [`Self::pin_on`] (or
-/// root it with `gc_root_value(&slots.root())`), then `push`/`set` freely: the
-/// tracer follows the anchor to the container and reads whatever it holds now,
-/// so a superseded value is collectable and nothing accumulates the way repeated
-/// `pin_native_root` calls do.
-///
-/// The backing store is a real arena object, not a Rust container: writes go
-/// through `ObjectHandle::borrow_mut`, which runs the generational write
-/// barrier, so an old anchor that takes on a young value is remembered for the
-/// next minor collection. A container the arena does not own would be both
-/// untraced and unbarriered.
-///
-/// Every write goes to the backing's `array_elements` and nowhere else.
-/// `trace_object_fields` also visits `properties`, so mirroring a write into an
-/// index property would retain every superseded value and silently degrade the
-/// slot to accumulate-only pinning. The `length` and index properties that
-/// `create_array` seeds go stale after the first `push`; that is harmless
-/// because the backing object is never reachable from JavaScript.
-///
-/// Reads and writes borrow the backing for the duration of one call and never
-/// hold it across an allocation; `snapshot` returns an owned `Vec` for that
-/// reason.
-#[derive(Clone)]
-pub(crate) struct RootedSlots(JsValue);
-
-impl RootedSlots {
-    pub(crate) fn new(interp: &mut Interpreter, len: usize) -> Self {
-        Self(interp.create_array(vec![JsValue::UNDEFINED; len]))
-    }
-
-    /// The value to hand to `gc_root_value` or `set_helper_gc_roots`; rooting it
-    /// roots every slot.
-    pub(crate) fn root(&self) -> JsValue {
-        self.0.clone()
-    }
-
-    /// Pin the container — not any one value — on `anchor`, so the slots live as
-    /// long as `anchor` does. Do this once per anchor.
-    pub(crate) fn pin_on(&self, interp: &Interpreter, anchor: &JsValue) {
-        interp.pin_native_root(anchor, &self.0);
-    }
-
-    pub(crate) fn len(&self, interp: &Interpreter) -> usize {
-        interp.with_array_elements(&self.0, |elements| elements.len())
-    }
-
-    pub(crate) fn push(&self, interp: &Interpreter, value: JsValue) {
-        interp.with_array_elements_mut(&self.0, |elements| elements.push(value));
-    }
-
-    /// The stored value, whatever it is: occupancy is the caller's business.
-    pub(crate) fn get(&self, interp: &Interpreter, index: usize) -> JsValue {
-        interp.with_array_elements(&self.0, |elements| elements[index].clone())
-    }
-
-    pub(crate) fn set(&self, interp: &Interpreter, index: usize, value: JsValue) {
-        interp.with_array_elements_mut(&self.0, |elements| elements[index] = value);
-    }
-
-    pub(crate) fn snapshot(&self, interp: &Interpreter) -> Vec<JsValue> {
-        interp.with_array_elements(&self.0, |e| e.to_vec())
-    }
-}
+#[path = "gc_rooted_slots.rs"]
+mod rooted_slots;
+pub(crate) use rooted_slots::RootedSlots;
 
 fn object_ids<'a>(values: impl IntoIterator<Item = &'a JsValue>) -> impl Iterator<Item = u64> {
     values.into_iter().filter_map(JsValue::as_object_id)
@@ -618,17 +555,19 @@ impl Interpreter {
             }
         }
         roots.extend_from_slice(self.gc_temp_roots.as_slice());
-        // Values held by active bytecode operand stacks
+        roots.extend(self.kept_alive.iter().copied());
+        // Active bytecode operand stacks
         roots.extend_from_slice(self.gc_bytecode_roots.as_slice());
-        // Queued microtasks, pending async-generator requests and armed timers.
+        // Microtasks, async-generator requests and timers.
         self.scheduler
             .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
-        // Promises a host worker will settle later may be reachable only through
-        // that worker's captured resolving function.
+        // Promises a host worker settles later, reachable only through its
+        // resolving function.
         roots.extend(self.scheduler.pending_async_promise_ids_lock().iter());
         for val in &self.pending_iter_close {
             Self::collect_value_roots(val, &mut roots);
         }
+        self.collect_node_throw_roots(&mut roots);
         for iters in self.generator_inline_iters.values() {
             for val in iters {
                 Self::collect_value_roots(val, &mut roots);
@@ -741,6 +680,7 @@ impl Interpreter {
             }
             children.clear();
             Self::trace_object_fields(&obj, &mut children, seen_envs);
+            Self::trace_weak_slots_strongly(&obj, &mut children);
             drop(obj);
             if self.enqueue_young(children.drain(..), worklist, young) {
                 young.note_young_edge(id);
@@ -950,6 +890,7 @@ impl Interpreter {
             let mut retain = false;
             if scan_fields {
                 Self::trace_object_fields_in(&obj, &mut children, &mut seen_envs, false);
+                Self::trace_weak_slots_strongly(&obj, &mut children);
                 retain = Self::object_requires_persistent_minor_scan(&obj)
                     || self.object_has_young_weak_edge(&obj);
             }
@@ -1280,6 +1221,7 @@ impl Interpreter {
 
         // One pass: free the unmarked; tenure survivors, drop their dead weak
         // entries and keep environment owners visible to minor collections.
+        let mut cleanup_registries = Vec::new();
         for i in 0..obj_count {
             let id = i as u64;
             let Some(obj_rc) = self.objects.get(id) else {
@@ -1292,7 +1234,15 @@ impl Interpreter {
             }
             obj_rc.tenure_after_major();
             obj_rc.reset_cards_after_major();
-            if obj_rc.borrow_untracked().is_weak_container() {
+            let (weak_slots, weak_container) = {
+                let obj = obj_rc.borrow_untracked();
+                (obj.has_weak_slots(), obj.is_weak_container())
+            };
+            if weak_slots && Self::clear_dead_weak_slots(&mut obj_rc.borrow_mut_untracked(), &marks)
+            {
+                cleanup_registries.push(id);
+            }
+            if weak_container {
                 let mut obj = obj_rc.borrow_mut_untracked();
                 if obj.is_weak_map() {
                     if let Some(entries) = obj.map_data_mut() {
@@ -1313,6 +1263,9 @@ impl Interpreter {
             if requires_persistent_scan {
                 obj_rc.remember_if_old();
             }
+        }
+        for registry_id in cleanup_registries {
+            self.enqueue_finalization_cleanup(registry_id);
         }
         let live_count = self.objects.live_count();
         self.gc.end_major_collection(live_count);
@@ -1514,12 +1467,13 @@ impl Interpreter {
                 }
             }
             ObjectKind::FinalizationRegistry(data) => {
-                // Cells (target+heldValue) are held WEAKLY via the ephemeron pass;
-                // tokens are unregister keys, also weak. No strong roots here.
+                // Held values are strong; targets and tokens are weak slots,
+                // see `trace_weak_slots_strongly` and `clear_dead_weak_slots`.
                 for entry in data.cells.iter().flatten() {
                     Self::collect_value_roots(&entry.1, worklist);
                 }
             }
+            ObjectKind::WeakRef(_) => {}
             ObjectKind::Iterator(state) => {
                 Self::collect_iterator_state_roots(state, worklist, seen_envs);
             }
@@ -3213,3 +3167,10 @@ mod tests {
         assert!(interp.objects.get_cell(child).is_some());
     }
 }
+
+#[path = "gc_weak.rs"]
+mod weak;
+
+#[cfg(test)]
+#[path = "gc_weak_slot_tests.rs"]
+mod weak_slot_tests;

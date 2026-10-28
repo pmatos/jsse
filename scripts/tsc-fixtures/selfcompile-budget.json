@@ -1,0 +1,6 @@
+{
+  "compiler-dts": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": null},
+  "compiler-js": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": null},
+  "src-js": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": null},
+  "generated-large": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": null}
+}

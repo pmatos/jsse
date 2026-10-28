@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 /// The program a `--node` launch runs in place of the script file: the
 /// prelude's CommonJS loader reads `process.argv[1]` and runs it as the main
 /// module. The entry point is a hidden global that is taken private here.
-const NODE_MAIN_BOOTSTRAP: &str = "(function () {\n  var run = globalThis.__node_run_main;\n  delete globalThis.__node_run_main;\n  run();\n})();";
+const NODE_MAIN_BOOTSTRAP: &str = "(function () {\n  var run = globalThis.__node_run_main;\n  delete globalThis.__node_run_main;\n  run();\n})();\n//# sourceURL=node:internal/main/run_main_module";
 
 impl Interpreter {
     pub(crate) fn node_main_bootstrap() -> &'static str {
@@ -44,6 +44,16 @@ impl Interpreter {
             |interp, _this, _args| Completion::Normal(js_str(interp.node_host.main_kind.as_str())),
         ));
         self.install_host_global("__host_main_kind", main_kind_fn);
+
+        // __host_expose_internals() -> boolean: `--expose-internals` was given
+        let expose_fn = self.create_function(JsFunction::native(
+            "__host_expose_internals".to_string(),
+            0,
+            |interp, _this, _args| {
+                Completion::Normal(JsValue::boolean(interp.node_host.expose_internals))
+            },
+        ));
+        self.install_host_global("__host_expose_internals", expose_fn);
 
         // __host_argv0() -> the launcher's original argv[0]
         let argv0_fn = self.create_function(JsFunction::native(

@@ -1,6 +1,7 @@
 use super::*;
 
 mod declarator_list;
+mod patterns;
 
 fn bigint_literal_to_decimal(s: &str) -> String {
     crate::interpreter::parse_bigint_literal(s).to_string()
@@ -45,172 +46,6 @@ impl<'a> Parser<'a> {
             kind,
             declarations,
         }))
-    }
-
-    pub(super) fn parse_binding_pattern(&mut self) -> Result<Pattern, ParseError> {
-        if let Some(name) = self.current_identifier_name() {
-            self.check_strict_binding_identifier(&name)?;
-            self.advance()?;
-            return Ok(Pattern::Identifier(name));
-        }
-        match &self.current {
-            Token::LeftBracket => self.parse_array_pattern(),
-            Token::LeftBrace => self.parse_object_pattern(),
-            _ => Err(self.error(format!("Expected binding pattern, got {:?}", self.current))),
-        }
-    }
-
-    fn parse_array_pattern(&mut self) -> Result<Pattern, ParseError> {
-        self.eat(&Token::LeftBracket)?;
-        let mut elements = Vec::new();
-        while self.current != Token::RightBracket {
-            if self.current == Token::Comma {
-                elements.push(None);
-                self.advance()?;
-                continue;
-            }
-            if self.current == Token::Ellipsis {
-                self.advance()?;
-                let rest = self.parse_binding_pattern()?;
-                elements.push(Some(ArrayPatternElement::Rest(rest)));
-                break;
-            }
-            let pat = self.parse_binding_pattern()?;
-            let pat = if self.current == Token::Assign {
-                self.advance()?;
-                let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), ExprBox::new(default))
-            } else {
-                pat
-            };
-            elements.push(Some(ArrayPatternElement::Pattern(pat)));
-            if self.current == Token::Comma {
-                self.advance()?;
-            }
-        }
-        self.eat(&Token::RightBracket)?;
-        Ok(Pattern::Array(elements))
-    }
-
-    fn parse_object_pattern(&mut self) -> Result<Pattern, ParseError> {
-        self.eat(&Token::LeftBrace)?;
-        let mut props = Vec::new();
-        while self.current != Token::RightBrace {
-            if self.current == Token::Ellipsis {
-                self.advance()?;
-                let rest = self.parse_binding_pattern()?;
-                props.push(ObjectPatternProperty::Rest(rest));
-                break;
-            }
-            let key = self.parse_property_key_for_pattern()?;
-            if self.current == Token::Colon {
-                self.advance()?;
-                let mut pat = self.parse_binding_pattern()?;
-                if self.current == Token::Assign {
-                    self.advance()?;
-                    let default = self.parse_assignment_expression()?;
-                    pat = Pattern::Assign(Box::new(pat), ExprBox::new(default));
-                }
-                props.push(ObjectPatternProperty::KeyValue(key, pat));
-            } else {
-                // Shorthand: { x } or { x = default }
-                let name = match &key {
-                    PropertyKey::Identifier(n) => n.clone(),
-                    _ => return Err(self.error("Expected identifier for shorthand pattern")),
-                };
-                // `async` followed by something that looks like a method name/modifier
-                if name == "async"
-                    && !matches!(
-                        self.current,
-                        Token::Colon | Token::Assign | Token::Comma | Token::RightBrace
-                    )
-                {
-                    return Err(self.error("Invalid destructuring assignment target"));
-                }
-                if Self::is_reserved_identifier(&name, false) {
-                    return Err(self.error(format!("Unexpected token '{name}'")));
-                }
-                if self.in_static_block && name == "await" {
-                    return Err(self.error(
-                        "'await' is not allowed as a binding identifier in class static blocks",
-                    ));
-                }
-                if (self.in_generator || self.strict) && name == "yield" {
-                    return Err(self
-                        .error("'yield' is not allowed as a binding identifier in this context"));
-                }
-                self.check_strict_binding_identifier(&name)?;
-                if self.current == Token::Assign {
-                    self.advance()?;
-                    let default = self.parse_assignment_expression()?;
-                    let pat =
-                        Pattern::Assign(Box::new(Pattern::Identifier(name)), ExprBox::new(default));
-                    props.push(ObjectPatternProperty::KeyValue(key, pat));
-                } else {
-                    props.push(ObjectPatternProperty::Shorthand(name));
-                }
-            }
-            if self.current == Token::Comma {
-                self.advance()?;
-            }
-        }
-        self.eat(&Token::RightBrace)?;
-        Ok(Pattern::Object(props))
-    }
-
-    fn parse_property_key_for_pattern(&mut self) -> Result<PropertyKey, ParseError> {
-        match &self.current {
-            Token::Identifier(name) | Token::IdentifierWithEscape(name) => {
-                let name = name.clone();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::StringLiteral(s) => {
-                let s = s.clone();
-                self.advance()?;
-                Ok(PropertyKey::String(s))
-            }
-            Token::NumericLiteral(n)
-            | Token::LegacyOctalLiteral(n)
-            | Token::NonOctalDecimalLiteral(n) => {
-                if matches!(
-                    &self.current,
-                    Token::LegacyOctalLiteral(_) | Token::NonOctalDecimalLiteral(_)
-                ) && self.strict
-                {
-                    return Err(self.error("Octal literals are not allowed in strict mode"));
-                }
-                let n = *n;
-                self.advance()?;
-                Ok(PropertyKey::Number(n))
-            }
-            Token::LeftBracket => {
-                self.advance()?;
-                let expr = self.parse_assignment_expression()?;
-                self.eat(&Token::RightBracket)?;
-                Ok(PropertyKey::Computed(ExprBox::new(expr)))
-            }
-            Token::Keyword(kw) => {
-                let name = kw.to_string();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::BooleanLiteral(b) => {
-                let name = if *b { "true" } else { "false" }.to_string();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::NullLiteral => {
-                self.advance()?;
-                Ok(PropertyKey::Identifier("null".to_string()))
-            }
-            Token::BigIntLiteral(s) => {
-                let name = bigint_literal_to_decimal(s);
-                self.advance()?;
-                Ok(PropertyKey::String(name.encode_utf16().collect()))
-            }
-            _ => Err(self.error("Expected property name in object pattern")),
-        }
     }
 
     pub(super) fn parse_function_declaration(&mut self) -> Result<Statement, ParseError> {
@@ -273,7 +108,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume and discard a list of decorator expressions (`@expr` prefixes).
-    /// Decorators may appear before class declarations, class expressions, and class elements.
+    /// They may appear before class declarations, class expressions and elements.
     /// We parse them for syntax validity but do not yet implement decorator semantics.
     pub(super) fn parse_decorator_list(&mut self) -> Result<(), ParseError> {
         while self.current == Token::At {
@@ -327,9 +162,10 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                     }
                     self.parse_assignment_expression()?;
-                    if self.current == Token::Comma {
-                        self.advance()?;
+                    if self.current != Token::Comma {
+                        break;
                     }
+                    self.advance()?;
                 }
                 self.eat(&Token::RightParen)?;
                 break;
@@ -533,7 +369,7 @@ impl<'a> Parser<'a> {
     fn stmt_has_direct_super(stmt: &Statement) -> bool {
         use crate::ast::Statement;
         match stmt {
-            Statement::Expression(e) | Statement::Throw(e) => Self::expr_has_direct_super(e),
+            Statement::Expression(e) | Statement::Throw(e, _) => Self::expr_has_direct_super(e),
             Statement::Return(Some(e)) => Self::expr_has_direct_super(e),
             Statement::Return(None) | Statement::Empty | Statement::Debugger => false,
             Statement::Block(stmts) => Self::stmts_has_direct_super(stmts),
@@ -875,30 +711,20 @@ impl<'a> Parser<'a> {
                 }));
             }
             // field named "accessor" (followed by =, ;, or })
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                let expr = self.parse_field_initializer_value()?;
-                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
-                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
-                }
-                Some(expr)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            return Ok(ClassElement::Property(ClassProperty {
-                key: PropertyKey::Identifier("accessor".to_string()),
-                value,
+            return self.finish_class_field(
+                PropertyKey::Identifier("accessor".to_string()),
                 is_static,
-                computed: false,
-            }));
+                false,
+            );
         }
 
         let kind = match &self.current {
-            Token::Identifier(n) if n == "get" => {
+            Token::Identifier(n) if n == "get" || n == "set" => {
+                let is_get = n == "get";
+                let name = if is_get { "get" } else { "set" };
                 self.advance()?;
                 if self.current == Token::LeftParen {
-                    let key = PropertyKey::Identifier("get".to_string());
+                    let key = PropertyKey::Identifier(name.to_string());
                     let func =
                         self.parse_class_method_function(false, false, false, method_source_start)?;
                     return Ok(ClassElement::Method(ClassMethod {
@@ -909,43 +735,22 @@ impl<'a> Parser<'a> {
                         computed: false,
                     }));
                 }
-                // ASI: if the next token is `*`, `get` is a field and `*` starts a generator method
-                if self.current == Token::Star {
-                    self.eat_semicolon()?;
-                    return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier("get".to_string()),
-                        value: None,
+                // A field named `get`/`set`; before `*` it relies on ASI
+                if matches!(
+                    self.current,
+                    Token::Assign | Token::Semicolon | Token::RightBrace | Token::Star
+                ) {
+                    return self.finish_class_field(
+                        PropertyKey::Identifier(name.to_string()),
                         is_static,
-                        computed: false,
-                    }));
+                        false,
+                    );
                 }
-                ClassMethodKind::Get
-            }
-            Token::Identifier(n) if n == "set" => {
-                self.advance()?;
-                if self.current == Token::LeftParen {
-                    let key = PropertyKey::Identifier("set".to_string());
-                    let func =
-                        self.parse_class_method_function(false, false, false, method_source_start)?;
-                    return Ok(ClassElement::Method(ClassMethod {
-                        key,
-                        kind: ClassMethodKind::Method,
-                        value: func,
-                        is_static,
-                        computed: false,
-                    }));
+                if is_get {
+                    ClassMethodKind::Get
+                } else {
+                    ClassMethodKind::Set
                 }
-                // ASI: if the next token is `*`, `set` is a field and `*` starts a generator method
-                if self.current == Token::Star {
-                    self.eat_semicolon()?;
-                    return Ok(ClassElement::Property(ClassProperty {
-                        key: PropertyKey::Identifier("set".to_string()),
-                        value: None,
-                        is_static,
-                        computed: false,
-                    }));
-                }
-                ClassMethodKind::Set
             }
             _ => ClassMethodKind::Method,
         };
@@ -997,25 +802,37 @@ impl<'a> Parser<'a> {
                 computed,
             }))
         } else {
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                let expr = self.parse_field_initializer_value()?;
-                // Class field initializers cannot contain 'arguments'
-                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
-                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
-                }
-                Some(expr)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            Ok(ClassElement::Property(ClassProperty {
-                key,
-                value,
-                is_static,
-                computed,
-            }))
+            if kind != ClassMethodKind::Method {
+                return Err(self.error("Expected '(' after the accessor name"));
+            }
+            self.finish_class_field(key, is_static, computed)
         }
+    }
+
+    /// The initializer and terminator of a public class field whose name is parsed.
+    fn finish_class_field(
+        &mut self,
+        key: PropertyKey,
+        is_static: bool,
+        computed: bool,
+    ) -> Result<ClassElement, ParseError> {
+        let value = if self.current == Token::Assign {
+            self.advance()?;
+            let expr = self.parse_field_initializer_value()?;
+            if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
+                return Err(self.error("Class field initializer cannot reference 'arguments'"));
+            }
+            Some(expr)
+        } else {
+            None
+        };
+        self.eat_semicolon()?;
+        Ok(ClassElement::Property(ClassProperty {
+            key,
+            value,
+            is_static,
+            computed,
+        }))
     }
 
     /// Parse field initializer value with ~Await, ~Yield parameters per spec §15.7.
@@ -1167,9 +984,10 @@ impl<'a> Parser<'a> {
                 pat
             };
             params.push(pat);
-            if self.current == Token::Comma {
-                self.advance()?;
+            if self.current != Token::Comma {
+                break;
             }
+            self.advance()?;
         }
         self.eat(&Token::RightParen)?;
         self.in_formal_parameters = prev_formal;

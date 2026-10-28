@@ -1,20 +1,58 @@
 //! The source registry behind `--node` stack traces: which file a function's
 //! source belongs to, and the line and column of an offset in it.
 
-use std::rc::Rc;
+use crate::types::JsValue;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 pub(super) struct SourceEntry {
     pub(super) source: Rc<str>,
     pub(super) name: Option<Rc<str>>,
     pub(super) line_delta: i32,
+    column_delta: i32,
+    column_line: usize,
     line_starts: Option<Vec<u32>>,
+}
+
+/// A `vm` script or function source whose name and offsets apply once a frame
+/// first mentions it; held weakly so a source nobody can reach is not kept.
+struct PendingName {
+    source: Weak<str>,
+    name: Rc<str>,
+    line_delta: i32,
+    column_delta: i32,
+    column_line: usize,
 }
 
 #[derive(Default)]
 pub(crate) struct NodeStackState {
-    pub(super) installed: bool,
+    pub(crate) installed: bool,
     pub(super) sources: Vec<SourceEntry>,
     pub(super) scripts: Vec<(Rc<str>, String)>,
+    /// Keyed by the address of the source's allocation; an entry whose source
+    /// is gone is ignored, and dead ones are swept as the table doubles.
+    pending: HashMap<usize, PendingName>,
+    prune_at: usize,
+    /// Native functions standing in for a running `vm` script's top level.
+    pub(super) script_frames: Vec<(u64, Rc<str>)>,
+    /// The parse origin of each ES module's source, for its top-level frame.
+    pub(super) module_origins: HashMap<crate::interpreter::ModuleKey, Rc<str>>,
+    /// Stand-in frames of module bodies, and the (hidden, by) pairs where one
+    /// runs inside another's frame.
+    pub(super) module_frames: Vec<u64>,
+    pub(super) hidden_frames: Vec<(u64, u64)>,
+    /// The last few thrown values with the source id and offset plus one of
+    /// their `throw`; traced by the collector.
+    pub(crate) throws: Vec<(JsValue, usize, u32)>,
+    /// The source of the last noted throw, its id and whether it is a `node:` one.
+    pub(super) throw_source: Option<(Rc<str>, usize, bool)>,
+    /// The `-e` source, and whether its program has yet to run under the
+    /// `[eval]` stand-in frames.
+    pub(crate) eval_origin: Option<Rc<str>>,
+    pub(super) eval_armed: bool,
+    /// The receiver each running arrow function was called with, by frame
+    /// index: V8 names an arrow's frame after it (`Timeout._onTimeout`).
+    pub(crate) arrow_receivers: Vec<(usize, JsValue)>,
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a
@@ -70,10 +108,28 @@ impl NodeStackState {
             .iter()
             .find(|(_, text)| text.len() == source.len() && text.as_str() == &**source)
             .map(|(name, _)| name.clone());
+        let (pending_name, line_delta, column_delta, column_line) = self
+            .pending
+            .get(&(Rc::as_ptr(source) as *const u8 as usize))
+            .filter(|p| p.source.strong_count() > 0)
+            .map_or((None, 0, 0, 0), |p| {
+                (
+                    Some(p.name.clone()),
+                    p.line_delta,
+                    p.column_delta,
+                    p.column_line,
+                )
+            });
+        let name = match pending_name {
+            Some(file) => source_url(source).or(Some(file)),
+            None => noted.or_else(|| source_url(source)),
+        };
         self.sources.push(SourceEntry {
             source: source.clone(),
-            name: noted.or_else(|| source_url(source)),
-            line_delta: 0,
+            name,
+            line_delta,
+            column_delta,
+            column_line,
             line_starts: None,
         });
         self.sources.len() - 1
@@ -92,8 +148,80 @@ impl NodeStackState {
         let line = starts.partition_point(|&s| s as usize <= offset) - 1;
         let from = starts[line] as usize;
         let text = entry.source.get(from..offset).unwrap_or("");
-        let column = text.encode_utf16().count() + 1;
+        let first_line_shift = if line == entry.column_line {
+            entry.column_delta
+        } else {
+            0
+        };
+        let column =
+            (text.encode_utf16().count() as i64 + 1 + i64::from(first_line_shift)).max(1) as usize;
         let line = (line as i64 + 1 + i64::from(entry.line_delta)).max(1) as usize;
         Some((entry.name.clone(), line, column))
     }
+}
+
+impl NodeStackState {
+    /// Name `source` for the frames that will mention it: `name`, with line
+    /// numbers shifted by `line_delta` and the columns of line `column_line`
+    /// (0-based) by `column_delta`.
+    pub(crate) fn name_pending(
+        &mut self,
+        source: &Rc<str>,
+        name: &str,
+        line_delta: i32,
+        column_delta: i32,
+        column_line: usize,
+    ) {
+        if self.pending.len() >= self.prune_at.max(64) {
+            self.pending.retain(|_, p| p.source.strong_count() > 0);
+            self.prune_at = self.pending.len() * 2;
+        }
+        self.pending.insert(
+            Rc::as_ptr(source) as *const u8 as usize,
+            PendingName {
+                source: Rc::downgrade(source),
+                name: Rc::from(name),
+                line_delta,
+                column_delta,
+                column_line,
+            },
+        );
+    }
+
+    pub(super) fn script_frame_source(&self, func: u64) -> Option<Rc<str>> {
+        self.script_frames
+            .iter()
+            .rev()
+            .find(|(id, _)| *id == func)
+            .map(|(_, source)| source.clone())
+    }
+
+    /// Name the source of a function defined in the ES module file `path` by
+    /// its `file:` URL, as Node's frames do, unless it is named already.
+    pub(super) fn name_module_source(&mut self, source: &Rc<str>, path: &str) {
+        let key = Rc::as_ptr(source) as *const u8 as usize;
+        if self.sources.iter().any(|e| Rc::ptr_eq(&e.source, source)) {
+            return;
+        }
+        if self
+            .pending
+            .get(&key)
+            .is_some_and(|p| p.source.strong_count() > 0)
+        {
+            return;
+        }
+        self.name_pending(source, &file_url(path), 0, 0, 0);
+    }
+}
+
+pub(super) fn file_url(path: &str) -> String {
+    let mut url = String::from("file://");
+    for byte in path.bytes() {
+        if byte <= b' ' || byte >= 0x7f || b"\"#%<>?^`{}\\".contains(&byte) {
+            url.push_str(&format!("%{byte:02X}"));
+        } else {
+            url.push(char::from(byte));
+        }
+    }
+    url
 }

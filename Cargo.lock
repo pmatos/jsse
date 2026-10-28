@@ -603,8 +603,8 @@ dependencies = [
  "icu_provider 2.1.1",
  "ixdtf",
  "serde",
- "tinystr 0.8.4",
- "zerovec 0.11.7",
+ "tinystr 0.8.5",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -632,7 +632,7 @@ dependencies = [
  "icu_provider 2.1.1",
  "potential_utf",
  "writeable 0.6.4",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -657,7 +657,7 @@ dependencies = [
  "smallvec",
  "utf16_iter",
  "utf8_iter",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -675,9 +675,9 @@ dependencies = [
  "displaydoc",
  "potential_utf",
  "serde",
- "yoke 0.8.3",
+ "yoke 0.8.4",
  "zerofrom",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -722,9 +722,9 @@ dependencies = [
  "icu_provider 2.1.1",
  "icu_time",
  "potential_utf",
- "tinystr 0.8.4",
+ "tinystr 0.8.5",
  "writeable 0.6.4",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -766,7 +766,7 @@ dependencies = [
  "icu_provider 2.1.1",
  "serde",
  "writeable 0.6.4",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -808,10 +808,10 @@ dependencies = [
  "num-traits",
  "potential_utf",
  "smallvec",
- "tinystr 0.8.4",
+ "tinystr 0.8.5",
  "writeable 0.6.4",
  "zerotrie 0.2.3",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -832,7 +832,7 @@ dependencies = [
  "regex-automata",
  "serde",
  "writeable 0.6.4",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -852,8 +852,8 @@ dependencies = [
  "icu_locale_data",
  "icu_provider 2.1.1",
  "potential_utf",
- "tinystr 0.8.4",
- "zerovec 0.11.7",
+ "tinystr 0.8.5",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -865,9 +865,9 @@ dependencies = [
  "displaydoc",
  "litemap 0.8.1",
  "serde",
- "tinystr 0.8.4",
+ "tinystr 0.8.5",
  "writeable 0.6.4",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -923,7 +923,7 @@ dependencies = [
  "utf16_iter",
  "utf8_iter",
  "write16",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -942,8 +942,8 @@ dependencies = [
  "either",
  "serde",
  "writeable 0.6.4",
- "yoke 0.8.3",
- "zerovec 0.11.7",
+ "yoke 0.8.4",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -970,7 +970,7 @@ dependencies = [
  "icu_locale",
  "icu_plurals_data 2.1.1",
  "icu_provider 2.1.1",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -997,7 +997,7 @@ dependencies = [
  "icu_provider 2.1.1",
  "serde",
  "zerotrie 0.2.3",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -1034,10 +1034,10 @@ dependencies = [
  "serde",
  "stable_deref_trait",
  "writeable 0.6.4",
- "yoke 0.8.3",
+ "yoke 0.8.4",
  "zerofrom",
  "zerotrie 0.2.3",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -1064,7 +1064,7 @@ dependencies = [
  "icu_segmenter_data",
  "potential_utf",
  "utf8_iter",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -1088,7 +1088,7 @@ dependencies = [
  "ixdtf",
  "serde",
  "zerotrie 0.2.3",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -1263,7 +1263,7 @@ dependencies = [
  "sha3",
  "smallvec",
  "tikv-jemallocator",
- "tinystr 0.8.4",
+ "tinystr 0.8.5",
  "unicode-ident",
  "writeable 0.6.4",
 ]
@@ -1279,9 +1279,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libm"
@@ -1452,7 +1452,7 @@ checksum = "b73949432f5e2a09657003c25bca5e19a0e9c84f8058ca374f49e0ebe605af77"
 dependencies = [
  "serde_core",
  "writeable 0.6.4",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -1649,9 +1649,9 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "smallvec"
-version = "1.16.3"
+version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
+checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "stable_deref_trait"
@@ -1706,6 +1706,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "synstructure"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1770,13 +1781,13 @@ dependencies = [
 
 [[package]]
 name = "tinystr"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
+checksum = "abc840c238154d58f9e86b2792261edfde565a17696e1cda1a449de27979801a"
 dependencies = [
  "displaydoc",
  "serde_core",
- "zerovec 0.11.7",
+ "zerovec 0.11.9",
 ]
 
 [[package]]
@@ -2002,12 +2013,12 @@ dependencies = [
 
 [[package]]
 name = "yoke"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5"
+checksum = "417ef3fcf6c300b7dbd25c85531a746931c02ad536f3cf4786ed1e88223340b3"
 dependencies = [
  "stable_deref_trait",
- "yoke-derive 0.8.2",
+ "yoke-derive 0.8.4",
  "zerofrom",
 ]
 
@@ -2020,19 +2031,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
- "synstructure",
+ "synstructure 0.13.2",
 ]
 
 [[package]]
 name = "yoke-derive"
-version = "0.8.2"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de844c262c8848816172cef550288e7dc6c7b7814b4ee56b3e1553f275f1858e"
+checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
- "synstructure",
+ "syn 3.0.3",
+ "synstructure 0.14.0",
 ]
 
 [[package]]
@@ -2053,7 +2064,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
- "synstructure",
+ "synstructure 0.13.2",
 ]
 
 [[package]]
@@ -2074,7 +2085,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a59c17a5562d507e4b54960e8569ebee33bee890c70aa3fe7b97e85a9fd7851"
 dependencies = [
  "displaydoc",
- "yoke 0.8.3",
+ "yoke 0.8.4",
  "zerofrom",
 ]
 
@@ -2091,14 +2102,14 @@ dependencies = [
 
 [[package]]
 name = "zerovec"
-version = "0.11.7"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94b5c6b5976d66c1d703c4fd17d3f5e43c8cedaacf604961b171adc7130896d8"
+checksum = "f58a2799cfe9a1670c7ea8edbd52ef8edb93cb37a7f83bf31ba9e35d9dae6a40"
 dependencies = [
  "serde",
- "yoke 0.8.3",
+ "yoke 0.8.4",
  "zerofrom",
- "zerovec-derive 0.11.5",
+ "zerovec-derive 0.11.7",
 ]
 
 [[package]]
@@ -2114,9 +2125,9 @@ dependencies = [
 
 [[package]]
 name = "zerovec-derive"
-version = "0.11.5"
+version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f212a141d820099d57ffafb9569be9617a6f27d3dc881fbee8fb56642f917a9"
+checksum = "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
 dependencies = [
  "proc-macro2",
  "quote",

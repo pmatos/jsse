@@ -16,6 +16,7 @@ impl Interpreter {
                 &m.cached_namespace,
                 &m.cached_deferred_namespace,
                 &m.cached_import_meta,
+                &m.error,
             ];
             for val in cached.into_iter().flatten() {
                 Self::collect_value_roots(val, roots);

@@ -1,35 +1,68 @@
-# Node v26.8.2 test/parallel files in this directory, verbatim. One name per
-# line; further words mark what a test needs from the --node prelude. They run
-# when the probe below passes and are skipped (and reported) before:
-#   needs-process-events  process.on/emit work (Node event loop, #1229)
-#   needs-inspect         util.inspect(x, {depth: -1}) names the class, e.g. [Foo] (#1224)
+# Node v26.8.2 test/parallel files in this directory, verbatim, run by
+# scripts/run-node-events-oracle.sh (and tests/node_events.rs) through harness.js on
+# jsse --node and on Node. One name per line: <name> is <name>.js (a CommonJS
+# test wrapped by harness.js); <name>.mjs is an ES module test whose
+# '../common/index.mjs', '../common/gc.js' and 'node:test' imports are rewritten to
+# esm-shim.mjs (which also carries gcUntil and the jsse-only subtest skips).
+# Subtests that cannot run on jsse yet are skipped by name in harness.js
+# (__eventsJsseSkips; esm-shim.mjs has jsseSkips for .mjs tests) with their
+# reason. A test is one file, or consecutive
+# <name>.js.partN slices (the 20,000-byte file budget) whose concatenation has
+# the sha256 on its line. "~<test>|s#from#to#|<reason>" (literal text) patches
+# the wrapped test text on jsse only, for a block that cannot run there. A test
+# whose "// Flags:" line names --expose-internals runs with that switch on jsse
+# --node and on Node. Lines starting with "!" name a Node events/AbortSignal
+# test that is not vendored, with the reason.
+# test-abort-controller-any-timeout waits on a real 9 s timer in every pass.
+test-abort-controller-any-timeout
 test-abortcontroller
+test-abortcontroller-internal
+test-aborted-util
+test-event-capture-rejections
 test-event-emitter-add-listeners
 test-event-emitter-check-listener-leaks
 test-event-emitter-emit-context
 test-event-emitter-error-monitor
+test-event-emitter-errors
 test-event-emitter-get-max-listeners
 test-event-emitter-invalid-listener
 test-event-emitter-listener-count
 test-event-emitter-listeners
 test-event-emitter-listeners-side-effects
 test-event-emitter-max-listeners
-test-event-emitter-max-listeners-warning needs-process-events needs-inspect
-test-event-emitter-max-listeners-warning-for-null needs-process-events needs-inspect
-test-event-emitter-max-listeners-warning-for-symbol needs-process-events needs-inspect
+test-event-emitter-max-listeners-warning
+test-event-emitter-max-listeners-warning-for-null
+test-event-emitter-max-listeners-warning-for-symbol
 test-event-emitter-method-names
 test-event-emitter-modify-in-emit
 test-event-emitter-num-args
 test-event-emitter-once
+test-event-emitter-prepend
 test-event-emitter-remove-all-listeners
+test-event-emitter-remove-listeners
 test-event-emitter-set-max-listeners-side-effects
-test-event-emitter-special-event-names needs-process-events
+test-event-emitter-special-event-names
 test-event-emitter-subclass
 test-event-emitter-symbols
 test-event-target
-test-eventtarget-custom-inspect-does-not-throw
-test-eventtarget-once-twice
+test-events-customevent
 test-events-getmaxlisteners
 test-events-list
 test-events-listener-count-with-listener
+test-events-on-async-iterator
 test-events-once
+test-events-static-geteventlisteners
+test-events-uncaught-exception-stack
+test-eventtarget f4844bcd1bc1c643a2530bd2779e8cd00c28f8fe60c965d5088795de29f4e941
+test-eventtarget-brandcheck
+test-eventtarget-custom-inspect-does-not-throw
+test-eventtarget-once-twice
+test-abortsignal-any.mjs
+test-events-add-abort-listener.mjs
+test-abortsignal-drop-settled-signals.mjs
+test-eventtarget-memoryleakwarning
+~test-eventtarget-memoryleakwarning|s#new MessageChannel()#{ port1: new EventTarget() }#|MessageChannel is not in the host: a plain EventTarget stands in for the port
+~test-eventtarget-memoryleakwarning|s#[MessagePort [EventTarget]]#EventTarget#|the expected warning names the stand-in EventTarget, not a MessagePort
+!test-abortsignal-cloneable: needs MessageChannel (worker message ports are not in the host)
+!test-eventemitter-asyncresource: needs the async_hooks module (not in the host)
+!test-event-emitter-no-error-provided-to-error-event: needs the domain module (deprecated, not in the host)

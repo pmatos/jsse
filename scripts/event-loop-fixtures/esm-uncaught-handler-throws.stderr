@@ -1,0 +1,8 @@
+file://<dir>/esm-uncaught-handler-throws.fixture.mjs:3
+process.on("uncaughtException", function () { throw new Error("handler failed"); });
+                                              ^
+
+Error: handler failed
+    at process.<anonymous> (file://<dir>/esm-uncaught-handler-throws.fixture.mjs:3:53)
+
+Node.js <version>

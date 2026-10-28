@@ -1,0 +1,8 @@
+<dir>/uncaught-main.fixture.js:8
+throw new Error("main-boom");
+^
+
+Error: main-boom
+    at Object.<anonymous> (<dir>/uncaught-main.fixture.js:8:7)
+
+Node.js <version>

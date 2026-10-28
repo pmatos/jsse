@@ -2,7 +2,8 @@
 # test-pipeline-*.js, test-finished-*.js and test-compose-*.js files in this directory,
 # verbatim. One name per line; further words mark what a test needs from --node
 # beyond the stream module, probed by scripts/run-node-stream-oracle.sh and tests/node_stream.rs:
-#   needs-webstreams      ReadableStream and friends exist (web streams)
+#   needs-webstreams      ReadableStream and friends exist (web streams, tracked in #1360;
+#                         these seven tests stay skipped until then)
 # A line starting with "!" names a Node test that is not vendored, with the reason.
 
 test-readable-from
@@ -56,6 +57,7 @@ test-stream-pipe-flow
 test-stream-pipe-flow-after-unpipe
 test-stream-pipe-manual-resume
 test-stream-pipe-multiple-destinations-error
+test-stream-pipe-multiple-pipes
 test-stream-pipe-needDrain
 test-stream-pipe-objectmode-to-non-objectmode
 test-stream-pipe-same-destination-twice
@@ -183,8 +185,10 @@ test-stream2-readable-wrap-empty
 test-stream2-readable-wrap-error
 test-stream2-readable-wrap-proxy-methods
 test-stream2-set-encoding
+test-stream2-transform
 test-stream2-unpipe-drain
 test-stream2-unpipe-leak
+test-stream2-writable
 test-stream3-cork-end
 test-stream3-cork-uncork
 test-stream3-pause-then-read
@@ -258,6 +262,3 @@ test-streams-highwatermark
 ! test-stream-wrap-encoding requires internal/js_stream_socket (not available in jsse yet)
 ! test-stream-writable-samecb-singletick requires async_hooks, console (not available in jsse yet)
 ! test-stream2-httpclient-response-end requires http (not available in jsse yet)
-! test-stream2-transform the typos hook flags two plural identifiers in the verbatim file (allow-list pending a ruling)
-! test-stream-pipe-multiple-pipes the typos hook flags two plural identifiers in the verbatim file (allow-list pending a ruling)
-! test-stream2-writable the typos hook flags two plural identifiers in the verbatim file (allow-list pending a ruling); also needs process.stdout (#1232)

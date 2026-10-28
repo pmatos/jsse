@@ -1,0 +1,9 @@
+
+<dir>/fatal-prim-string.fixture.js:2
+setTimeout(function () { throw "plain text\nsecond line"; }, 1);
+                         ^
+plain text
+second line
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

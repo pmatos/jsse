@@ -8,6 +8,7 @@ use crate::interpreter::literal_frame::{CallShape, CompiledCall, LiteralFrame, N
 use crate::interpreter::property::SetOutcome;
 
 mod access;
+mod activation;
 mod array_pattern;
 mod call_ic;
 mod compiled_call_record;
@@ -833,7 +834,7 @@ impl Interpreter {
                             return Completion::Normal(JsValue::boolean(true));
                         }
                     }
-                    // Check if it's a binding in the global env (var declaration not on global object)
+                    // A binding in the global env (var declaration not on global object)
                     if self.realm().global_env.borrow().bindings.contains_key(name) {
                         return Completion::Normal(JsValue::boolean(false));
                     }
@@ -977,46 +978,7 @@ impl Interpreter {
                 };
                 self.await_value(&val)
             }
-            Expression::ImportMeta => {
-                // §16.2.1.5.2 GetActiveScriptOrModule: walk env chain to find module path
-                let module_path =
-                    Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
-                if let Some(ref path) = module_path {
-                    let canon = path.canonicalize();
-                    if let Some(module) = self.module_registry_get(&canon)
-                        && let Some(ref cached) = module.borrow().cached_import_meta
-                    {
-                        return Completion::Normal(cached.clone());
-                    }
-                }
-                let meta_id = self.create_object_id();
-                self.get_object_cell_expect(meta_id)
-                    .borrow_mut()
-                    .prototype_id = None;
-                if let Some(path) = module_path.as_ref().and_then(ModuleKey::file_path) {
-                    let url = format!("file://{}", path.display());
-                    self.get_object_cell_expect(meta_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "url".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::string(JsString::from_str(&url)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                }
-                let id = meta_id;
-                let meta_val = JsValue::object(id);
-                if let Some(ref path) = module_path {
-                    let canon = path.canonicalize();
-                    if let Some(module) = self.module_registry_get(&canon) {
-                        module.borrow_mut().cached_import_meta = Some(meta_val.clone());
-                    }
-                }
-                Completion::Normal(meta_val)
-            }
+            Expression::ImportMeta => self.eval_import_meta(env),
             Expression::Import(source_expr, options_expr) => {
                 // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
                 let source_val = match self.eval_expr(source_expr, env) {
@@ -1060,7 +1022,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                 // import.defer() loads module without evaluation, returns deferred namespace
-                // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
+                // but eagerly evaluates async transitive deps (ContinueDynamicImport step 25)
                 let module_path = self.import_referrer(env);
                 let resolved = match self.resolve_module_specifier(
                     &source,
@@ -4685,7 +4647,7 @@ impl Interpreter {
                             excluded_keys.push(key.clone());
                         }
 
-                        // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
+                        // §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
                         let (target, default_expr) =
                             if let Expression::Assign(AssignOp::Assign, target, default) =
                                 &prop.value
@@ -5855,7 +5817,7 @@ impl Interpreter {
                                 if !is_simple_g {
                                     func_env.borrow_mut().has_parameter_expressions = true;
                                 }
-                                // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
+                                // §14.4.10 step 1: FunctionDeclarationInstantiation
                                 if let Err(error) = self.bind_function_parameters(
                                     &params,
                                     args,
@@ -6032,6 +5994,7 @@ impl Interpreter {
                                 o.id,
                                 call_frame_arguments,
                                 &exec_env,
+                                is_arrow.then_some(_this_val),
                                 |interp| {
                                     interp.dispatch_body(
                                         o.id,
@@ -6159,9 +6122,16 @@ impl Interpreter {
         } else {
             CallFrameArguments::None
         };
-        let result = self.run_activation(func_obj_id, call_frame_arguments, &func_env, |interp| {
-            interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
-        });
+        let arrow_this = call.is_arrow.then_some(this_val);
+        let result = self.run_activation(
+            func_obj_id,
+            call_frame_arguments,
+            &func_env,
+            arrow_this,
+            |interp| {
+                interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
+            },
+        );
         self.current_realm_id = caller_realm;
         self.recycle_environment(func_env);
         self.finish_user_call(result)
@@ -6221,6 +6191,7 @@ impl Interpreter {
             func_obj_id,
             CallFrameArguments::Materialized(arguments_obj),
             &func_env,
+            None,
             |interp| {
                 interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
             },
@@ -6295,9 +6266,16 @@ impl Interpreter {
         } else {
             CallFrameArguments::None
         };
-        let result = self.run_activation(func_obj_id, call_frame_arguments, &exec_env, |interp| {
-            interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &exec_env)
-        });
+        let arrow_this = call.is_arrow.then_some(this_val);
+        let result = self.run_activation(
+            func_obj_id,
+            call_frame_arguments,
+            &exec_env,
+            arrow_this,
+            |interp| {
+                interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &exec_env)
+            },
+        );
         self.current_realm_id = caller_realm;
         if separate_body_env {
             self.recycle_environment(exec_env);
@@ -6306,41 +6284,6 @@ impl Interpreter {
         }
         self.recycle_environment(func_env);
         self.finish_user_call(result)
-    }
-
-    /// Runs `run` as the activation of `func_obj_id` in `exec_env`, visible to
-    /// `fn.arguments`/`fn.caller` and the collector; resources declared in the
-    /// body are disposed on exit.
-    #[inline(always)]
-    fn run_activation(
-        &mut self,
-        func_obj_id: u64,
-        arguments: CallFrameArguments,
-        exec_env: &EnvRef,
-        run: impl FnOnce(&mut Self) -> Completion,
-    ) -> Completion {
-        let caller_pos = self.take_call_pos();
-        self.call_stack_frames.push(CallFrame {
-            func_obj_id,
-            arguments,
-            is_eval: false,
-            caller_pos,
-            env_index: self.call_stack_envs.len(),
-        });
-        let frame_depth = self.call_stack_frames.len();
-        self.call_stack_envs.push(exec_env.clone());
-        self.in_tail_position = false;
-        let saved_tco_suppress = std::mem::take(&mut self.tco_suppress_depth);
-        let result = run(self);
-        self.tco_suppress_depth = saved_tco_suppress;
-        self.call_stack_envs.pop();
-        debug_assert_eq!(self.call_stack_frames.len(), frame_depth);
-        self.pop_call_frame();
-        if exec_env.borrow().has_dispose_stack() {
-            self.dispose_resources(exec_env, result)
-        } else {
-            result
-        }
     }
 
     /// The `fn.arguments` record of a sloppy call whose body never mentions
@@ -6837,7 +6780,7 @@ impl Interpreter {
             }
         }
 
-        // Pre-instantiate lexical declarations (let/const/class) in lex_env — uninitialized (TDZ)
+        // Pre-instantiate lexical declarations (let/const/class) in lex_env (TDZ)
         // Per spec §19.2.1.4 step 14
         for stmt in body {
             match stmt {
@@ -8259,6 +8202,7 @@ impl Interpreter {
                 &resolvers,
                 &promise,
                 has_simple_params,
+                is_arrow.then_some(this_val),
             ) {
                 return done;
             }
@@ -8317,11 +8261,8 @@ impl Interpreter {
         })
     }
 
-    /// Drives an async function's state machine. Returns `Completion::Exit`
-    /// (issue #242) if the body called `__host_exit` — the caller must
-    /// propagate it rather than settling the result promise — and
-    /// `Completion::Normal(undefined)` otherwise (the promise was settled or
-    /// the machine suspended at an await).
+    /// Drives an async state machine: `Exit` (#242) if the body
+    /// called `__host_exit` (propagate it), else `Normal`.
     pub(crate) fn async_function_resume(
         &mut self,
         async_id: u64,
@@ -8336,9 +8277,13 @@ impl Interpreter {
             return self.resume_hosted_async(async_id, sent_value, is_error);
         };
         let saved_realm = std::mem::replace(&mut self.current_realm_id, realm_id);
+        let framed = self.node_push_async_module_frame(async_id);
         let envs_base = self.call_stack_envs.len();
         let completion = self.async_function_resume_in_realm(async_id, sent_value, is_error);
         self.call_stack_envs.truncate(envs_base);
+        if framed {
+            self.node_pop_module_frame();
+        }
         self.current_realm_id = saved_realm;
         completion
     }

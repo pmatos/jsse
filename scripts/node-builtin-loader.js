@@ -15,8 +15,10 @@
 
   var hostSource = __host_builtin_source;
   var mainKind = __host_main_kind();
+  var exposeInternals = __host_expose_internals();
   delete globalThis.__host_builtin_source;
   delete globalThis.__host_main_kind;
+  delete globalThis.__host_expose_internals;
 
   // Preludes that register a public module put it in one of these; both are
   // taken private here.
@@ -210,8 +212,13 @@
   };
   // The CommonJS loader names each module's source for stack frames (#1228).
   cache["internal/host/stack"] = {
-    exports: { nameSource: takeHost("__host_stack_name_source") },
+    exports: {
+      nameSource: takeHost("__host_stack_name_source"),
+      throwSite: takeHost("__host_stack_throw_site"),
+      evalSource: takeHost("__host_stack_eval_source"),
+    },
   };
+  cache["internal/host/vm"] = { exports: takeHost("__host_vm") };
   // The native `os` binding (#1222) is private to node-lib/os.js.
   var hostOs = globalThis.__host_os;
   delete globalThis.__host_os;
@@ -284,6 +291,7 @@
         source +
         "\n})"
     );
+    cache["internal/host/stack"].exports.nameSource(fn, "node:" + id, 0);
     var module = { exports: {}, id: id };
     cache[id] = module;
     try {
@@ -303,7 +311,8 @@
     if (id in requirable) return true;
     var found =
       id in registered ||
-      (strSlice(id, 0, 9) !== "internal/" && hostSource(id) !== undefined);
+      ((exposeInternals || strSlice(id, 0, 9) !== "internal/") &&
+        hostSource(id) !== undefined);
     if (found) requirable[id] = true;
     return found;
   }
@@ -375,6 +384,22 @@
     });
   }
 
+  // The fatal-error report (#1229) is built by node-lib/internal/process/fatal.js.
+  var fatalKey = Symbol.for("jsse.node.fatal.handoff");
+  var handoff = globalThis[fatalKey];
+  delete globalThis[fatalKey];
+  if (handoff !== undefined) {
+    handoff.report = function (error, rejected) {
+      return requireBuiltin("internal/process/fatal").report(error, rejected);
+    };
+    handoff.decorate = function (error) {
+      return requireBuiltin("internal/process/fatal").decorate(error);
+    };
+    handoff.rejectionError = function (reason) {
+      return requireBuiltin("internal/process/fatal").unhandledRejectionError(reason);
+    };
+  }
+
   // `console` writes through the embedded util module (Node's inspect/format).
   requireBuiltin("internal/console/node");
   requireBuiltin("internal/process/stdio");
@@ -402,7 +427,12 @@
   });
 
   cache["internal/host/module"] = {
-    exports: { tagFunction: takeHost("__host_tag_function") },
+    exports: {
+      tagFunction: takeHost("__host_tag_function"),
+      esmRequire: takeHost("__host_esm_require"),
+      esmFacade: takeHost("__host_esm_facade"),
+      cjsLex: takeHost("__host_cjs_lex"),
+    },
   };
   takeHost("__host_esm_install")(function (op, a, b, c) {
     return requireBuiltin("internal/modules/esm/host").host(op, a, b, c);
@@ -410,6 +440,16 @@
 
   function cjsLoader() {
     return requireBuiltin("internal/modules/cjs/loader");
+  }
+
+  // A forked child opens the IPC channel it inherited before its main program
+  // runs (#1237), as Node's setupChildProcessIpcChannel does.
+  if (childBinding !== undefined && proc.env.NODE_CHANNEL_FD !== undefined) {
+    var channelFd = parseInt(proc.env.NODE_CHANNEL_FD, 10);
+    var channelMode = proc.env.NODE_CHANNEL_SERIALIZATION_MODE || "json";
+    delete proc.env.NODE_CHANNEL_FD;
+    delete proc.env.NODE_CHANNEL_SERIALIZATION_MODE;
+    if (channelFd >= 0) requireBuiltin("child_process")._forkChild(channelFd, channelMode);
   }
 
   if (mainKind === "cjs") {
@@ -459,3 +499,4 @@
     });
   });
 })();
+//# sourceURL=node:internal/bootstrap/realm

@@ -1,0 +1,61 @@
+eqeq ["a","b"]
+ws ["br","mod","spaced"]
+comments ["cm","cm2","cm3"]
+nested threw ReferenceError undefined
+template ["afterTpl","inTpl","nest"]
+regex threw ReferenceError undefined
+division threw ReferenceError undefined
+braces threw ReferenceError undefined
+reserved ["__esModule","class","constructor"]
+unicode ["$dollar","_u","café","ünï"]
+stringkeys ["a b","escA","q\"uote"]
+litkeys ["a-b","d","f"]
+litnest []
+litget ["x"]
+litgetcall ["get","y"]
+litgetstr ["get"]
+reexnoext ["inner"]
+reextxt ["inner2"]
+getorder ["p1","p2","p3","p4","p5","p6","p7","p8"]
+litcomma ["a","b"]
+litspace ["a"]
+litspread ["b"]
+litrequire ["a","b","c","d-e","f","g","z"]
+litcomment ["a","b"]
+exportsAssign []
+modAlias ["direct"]
+defprop_computed ["lit"]
+defprop_enum_false []
+defprop_getter_arrow []
+defprop_getter_unsafe_then_assign ["u","v"]
+defprop_two ["one","two"]
+defprop_getter_semis ["sg"]
+defprop_getter_named ["ng"]
+reexport_nested ["a","b","c","d-e","f","g"]
+reexport_after_assign ["a","b","c","d-e","f","first","g","second"]
+reexport_two ["__esModule","a","b","c","d-e","enumVal","f","g","getFn","getIndex","getShort","plainGet","val","viaModule"]
+reexport_missing threw Error MODULE_NOT_FOUND
+reexport_builtin []
+reexport_dq ["a","b","c","d-e","f","g"]
+reexport_space ["a","b","c","d-e","f","g"]
+exportstar_member threw TypeError undefined
+export_fn ["a","b","c","d-e","f","g"]
+babel_wildcard ["a","b","c","d-e","f","g"]
+babel_not_default []
+babel_hasown ["a","b","c","d-e","f","g"]
+babel_nested []
+shebang ["afterShebang"]
+bom ["afterBom"]
+asi ["a","b","c"]
+chain ["x","y","z"]
+afterUnterminated threw SyntaxError undefined
+objkeys_other threw ReferenceError undefined
+trailing_dot threw ReferenceError undefined
+classbody ["A"]
+jsonish ["a","c"]
+numeric ["num"]
+spreadid []
+defprop_module_getter ["mg"]
+spacedkw ["sp"]
+lateModule threw ReferenceError undefined
+order p1,p2,p3,p4,p5,p6,p7,p8

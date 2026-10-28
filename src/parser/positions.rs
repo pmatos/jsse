@@ -21,4 +21,14 @@ impl Parser<'_> {
             CallSiteId::at(self.current_token_start)
         }
     }
+
+    /// The source every function of this parse shares as its `SourceText` origin.
+    pub(crate) fn source_origin(&self) -> Rc<str> {
+        self.source_text_source.clone()
+    }
+
+    /// Byte span of the token the parser stopped at (meaningful after an error).
+    pub(crate) fn failure_span(&self) -> (usize, usize) {
+        (self.current_token_start, self.current_token_end)
+    }
 }

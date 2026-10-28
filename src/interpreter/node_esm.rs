@@ -9,6 +9,10 @@
 
 use super::*;
 
+mod meta;
+mod require;
+pub(super) use require::virtual_source;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum EsmFormat {
     Module,
@@ -43,9 +47,10 @@ pub(crate) struct NodeEsm {
     host: Option<JsValue>,
     resolved: HashMap<(Option<PathBuf>, String), ModuleKey>,
     targets: HashMap<ModuleKey, (EsmFormat, String)>,
+    cjs_order: HashMap<ModuleKey, Vec<String>>,
     checked: HashSet<(ModuleKey, Option<ImportModuleType>)>,
     main: Option<ModuleKey>,
-    main_ready: bool,
+    entry_reported: bool,
 }
 
 impl NodeEsm {
@@ -55,6 +60,16 @@ impl NodeEsm {
 
     pub(crate) fn is_active(&self) -> bool {
         self.host.is_some()
+    }
+
+    pub(crate) fn has_main(&self) -> bool {
+        self.main.is_some()
+    }
+
+    /// Whether the entry point's failure was already delivered through the
+    /// module graph, so the throw `run_module` returns is not delivered again.
+    pub(crate) fn entry_reported(&self) -> bool {
+        self.entry_reported
     }
 
     pub(crate) fn lookup(&self, specifier: &str, referrer: Option<&Path>) -> Option<ModuleKey> {
@@ -208,6 +223,29 @@ impl Interpreter {
         Ok(())
     }
 
+    /// The names a CommonJS module exports to `import`: those its source
+    /// assigns to `exports` (the host follows re-exports), then `default` and
+    /// `module.exports`.
+    fn node_esm_cjs_names(&mut self, target: &str) -> Result<Vec<(String, JsValue)>, JsValue> {
+        let list = self.node_esm_call(&[js_str("names"), js_str(target)])?;
+        let mut names = Vec::new();
+        if let Some(id) = list.as_object_id() {
+            let length = self.get_property_on_id(id, "length");
+            for index in 0..length.as_number().unwrap_or(0.0) as usize {
+                let item = self.get_property_on_id(id, &index.to_string());
+                if item.is_string() {
+                    names.push(self.to_string_lossy(&item)?);
+                }
+            }
+        }
+        for fixed in ["default", "module.exports"] {
+            if !names.iter().any(|n| n == fixed) {
+                names.push(fixed.to_string());
+            }
+        }
+        Ok(names.into_iter().map(|n| (n, JsValue::UNDEFINED)).collect())
+    }
+
     fn node_esm_synthetic(
         &mut self,
         key: &ModuleKey,
@@ -221,12 +259,13 @@ impl Interpreter {
         let names = if evaluated {
             self.node_esm_builtin_names(target)?
         } else {
-            vec![
-                ("default".to_string(), JsValue::UNDEFINED),
-                ("module.exports".to_string(), JsValue::UNDEFINED),
-            ]
+            self.node_esm_cjs_names(target)?
         };
 
+        if !evaluated {
+            let order = names.iter().map(|(name, _)| name.clone()).collect();
+            self.node_host.esm.cjs_order.insert(key.clone(), order);
+        }
         let env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         env.borrow_mut().strict = true;
         let mut exports = HashMap::new();
@@ -290,15 +329,44 @@ impl Interpreter {
             }
         };
         let env = module.borrow().env.clone();
-        for name in ["default", "module.exports"] {
+        let named = self
+            .node_host
+            .esm
+            .cjs_order
+            .get(key)
+            .cloned()
+            .unwrap_or_default();
+        let frame = self.gc_root_frame();
+        self.gc_root_value(&value);
+        for name in named {
+            let item = match name.as_str() {
+                "default" | "module.exports" => value.clone(),
+                _ => self.node_esm_cjs_named(&value, &name),
+            };
+            self.gc_root_value(&item);
             env.borrow_mut()
-                .initialize_binding(&format!("*esm:{name}*"), value.clone());
-            module
-                .borrow_mut()
-                .exports
-                .insert(name.to_string(), value.clone());
+                .initialize_binding(&format!("*esm:{name}*"), item.clone());
+            module.borrow_mut().exports.insert(name, item);
         }
+        self.gc_unroot_frame(frame);
         Some(Ok(()))
+    }
+
+    /// `exports[name]` when it is an own property, swallowing a throwing
+    /// getter, else `undefined`.
+    fn node_esm_cjs_named(&mut self, exports: &JsValue, name: &str) -> JsValue {
+        let Some(id) = exports.as_object_id() else {
+            return JsValue::UNDEFINED;
+        };
+        match self.proxy_get_own_property_descriptor(id, name) {
+            Ok(descriptor) if !descriptor.is_undefined() => {
+                match self.get_object_property(id, name, exports) {
+                    Completion::Normal(value) => value,
+                    _ => JsValue::UNDEFINED,
+                }
+            }
+            _ => JsValue::UNDEFINED,
+        }
     }
 
     pub(super) fn import_referrer(&self, env: &EnvRef) -> Option<ModuleKey> {
@@ -331,24 +399,38 @@ impl Interpreter {
         result
     }
 
+    /// `key` is the program entry: the ES main the launcher ran, or the script
+    /// file a CommonJS main detected as an ES module and handed to the loader.
+    fn node_esm_is_main(&self, key: &ModuleKey) -> bool {
+        let key = key.canonicalize();
+        let script = self
+            .node_host
+            .argv
+            .as_ref()
+            .and_then(|argv| argv.script.clone())
+            .map(ModuleKey::for_file);
+        self.node_host.esm.main.as_ref() == Some(&key) || script == Some(key)
+    }
+
     pub(super) fn node_esm_enter_main(&mut self, key: &ModuleKey) {
         if self.node_host.esm.is_active() {
             self.node_host.esm.main = Some(key.clone());
         }
     }
 
-    /// The main module has finished its first run; later failures of its
-    /// top-level await are uncaught exceptions.
-    pub(crate) fn node_esm_main_ready(&mut self) {
-        self.node_host.esm.main_ready = true;
-    }
-
-    /// A top-level await of the main module rejected after the first run.
+    /// The main module (or a dependency's top-level await) failed. Node
+    /// delivers it one microtask turn later when the main module is itself
+    /// async.
     pub(super) fn node_esm_main_rejected(&mut self, key: &ModuleKey, error: &JsValue) {
-        let esm = &self.node_host.esm;
-        if esm.main_ready && esm.main.as_ref() == Some(key) {
-            self.node_uncaught(error.clone());
+        if self.node_host.esm.main.as_ref() != Some(key) || self.node_host.esm.entry_reported {
+            return;
         }
+        let async_main = self
+            .module_registry_get(key)
+            .is_some_and(|module| module.borrow().has_tla);
+        self.node_host.esm.entry_reported = true;
+        let hops = event_loop::node_event_loop::ESM_ENTRY_HOPS + u32::from(async_main);
+        self.node_uncaught_entry(error.clone(), hops);
     }
 
     /// Node exits 13 when the event loop empties while the main module's

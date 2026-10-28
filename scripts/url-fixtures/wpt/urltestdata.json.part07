@@ -1,0 +1,954 @@
+    "pathname": "%EF%BF%BF",
+    "search": "",
+    "hash": ""
+  },
+  "Forbidden host code points",
+  {
+    "input": "sc://a\u0000b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a<b",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a>b",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a[b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a\\b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a]b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a^b",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "sc://a|b/",
+    "base": null,
+    "failure": true
+  },
+  "Forbidden host codepoints: tabs and newlines are removed during preprocessing",
+  {
+    "input": "foo://ho\u0009st/",
+    "base": null,
+    "hash": "",
+    "host": "host",
+    "hostname": "host",
+    "href":"foo://host/",
+    "password": "",
+    "pathname": "/",
+    "port":"",
+    "protocol": "foo:",
+    "search": "",
+    "username": ""
+  },
+  {
+    "input": "foo://ho\u000Ast/",
+    "base": null,
+    "hash": "",
+    "host": "host",
+    "hostname": "host",
+    "href":"foo://host/",
+    "password": "",
+    "pathname": "/",
+    "port":"",
+    "protocol": "foo:",
+    "search": "",
+    "username": ""
+  },
+  {
+    "input": "foo://ho\u000Dst/",
+    "base": null,
+    "hash": "",
+    "host": "host",
+    "hostname": "host",
+    "href":"foo://host/",
+    "password": "",
+    "pathname": "/",
+    "port":"",
+    "protocol": "foo:",
+    "search": "",
+    "username": ""
+  },
+  "Forbidden domain code-points",
+  {
+    "input": "http://a\u0000b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0001b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0002b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0003b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0004b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0005b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0006b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0007b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0008b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u000Bb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u000Cb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u000Eb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u000Fb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0010b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0011b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0012b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0013b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0014b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0015b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0016b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0017b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0018b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u0019b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u001Ab/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u001Bb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u001Cb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u001Db/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u001Eb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u001Fb/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a%b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a<b",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a>b",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a[b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a]b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a^b",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a|b/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://a\u007Fb/",
+    "base": null,
+    "failure": true
+  },
+  "Forbidden domain codepoints: tabs and newlines are removed during preprocessing",
+  {
+    "input": "http://ho\u0009st/",
+    "base": null,
+    "hash": "",
+    "host": "host",
+    "hostname": "host",
+    "href":"http://host/",
+    "password": "",
+    "pathname": "/",
+    "port":"",
+    "protocol": "http:",
+    "search": "",
+    "username": ""
+  },
+  {
+    "input": "http://ho\u000Ast/",
+    "base": null,
+    "hash": "",
+    "host": "host",
+    "hostname": "host",
+    "href":"http://host/",
+    "password": "",
+    "pathname": "/",
+    "port":"",
+    "protocol": "http:",
+    "search": "",
+    "username": ""
+  },
+  {
+    "input": "http://ho\u000Dst/",
+    "base": null,
+    "hash": "",
+    "host": "host",
+    "hostname": "host",
+    "href":"http://host/",
+    "password": "",
+    "pathname": "/",
+    "port":"",
+    "protocol": "http:",
+    "search": "",
+    "username": ""
+  },
+  "Encoded forbidden domain codepoints in special URLs",
+  {
+    "input": "http://ho%00st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%01st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%02st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%03st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%04st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%05st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%06st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%07st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%08st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%09st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%0Ast/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%0Bst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%0Cst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%0Dst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%0Est/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%0Fst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%10st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%11st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%12st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%13st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%14st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%15st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%16st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%17st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%18st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%19st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%1Ast/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%1Bst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%1Cst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%1Dst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%1Est/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%1Fst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%20st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%23st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%25st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%2Fst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%3Ast/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%3Cst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%3Est/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%3Fst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%40st/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%5Bst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%5Cst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%5Dst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%7Cst/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "http://ho%7Fst/",
+    "base": null,
+    "failure": true
+  },
+  "Allowed host/domain code points",
+  {
+    "input": "http://!\"$&'()*+,-.;=_`{}~/",
+    "base": null,
+    "href": "http://!\"$&'()*+,-.;=_`{}~/",
+    "origin": "http://!\"$&'()*+,-.;=_`{}~",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "!\"$&'()*+,-.;=_`{}~",
+    "hostname": "!\"$&'()*+,-.;=_`{}~",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "sc://\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u000B\u000C\u000E\u000F\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001A\u001B\u001C\u001D\u001E\u001F\u007F!\"$%&'()*+,-.;=_`{}~/",
+    "base": null,
+    "href": "sc://%01%02%03%04%05%06%07%08%0B%0C%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F%7F!\"$%&'()*+,-.;=_`{}~/",
+    "origin": "null",
+    "protocol": "sc:",
+    "username": "",
+    "password": "",
+    "host": "%01%02%03%04%05%06%07%08%0B%0C%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F%7F!\"$%&'()*+,-.;=_`{}~",
+    "hostname": "%01%02%03%04%05%06%07%08%0B%0C%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F%7F!\"$%&'()*+,-.;=_`{}~",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  "# Hosts and percent-encoding",
+  {
+    "input": "ftp://example.com%80/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "ftp://example.com%A0/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "https://example.com%80/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "https://example.com%A0/",
+    "base": null,
+    "failure": true
+  },
+  {
+    "input": "ftp://%e2%98%83",
+    "base": null,
+    "href": "ftp://xn--n3h/",
+    "origin": "ftp://xn--n3h",
+    "protocol": "ftp:",
+    "username": "",
+    "password": "",
+    "host": "xn--n3h",
+    "hostname": "xn--n3h",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "https://%e2%98%83",
+    "base": null,
+    "href": "https://xn--n3h/",
+    "origin": "https://xn--n3h",
+    "protocol": "https:",
+    "username": "",
+    "password": "",
+    "host": "xn--n3h",
+    "hostname": "xn--n3h",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  "# tests from jsdom/whatwg-url designed for code coverage",
+  {
+    "input": "http://127.0.0.1:10100/relative_import.html",
+    "base": null,
+    "href": "http://127.0.0.1:10100/relative_import.html",
+    "origin": "http://127.0.0.1:10100",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "127.0.0.1:10100",
+    "hostname": "127.0.0.1",
+    "port": "10100",
+    "pathname": "/relative_import.html",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://facebook.com/?foo=%7B%22abc%22",
+    "base": null,
+    "href": "http://facebook.com/?foo=%7B%22abc%22",
+    "origin": "http://facebook.com",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "facebook.com",
+    "hostname": "facebook.com",
+    "port": "",
+    "pathname": "/",
+    "search": "?foo=%7B%22abc%22",
+    "hash": ""
+  },
+  {
+    "input": "https://localhost:3000/jqueryui@1.2.3",
+    "base": null,
+    "href": "https://localhost:3000/jqueryui@1.2.3",
+    "origin": "https://localhost:3000",
+    "protocol": "https:",
+    "username": "",
+    "password": "",
+    "host": "localhost:3000",
+    "hostname": "localhost",
+    "port": "3000",
+    "pathname": "/jqueryui@1.2.3",
+    "search": "",
+    "hash": ""
+  },
+  "# tab/LF/CR",
+  {
+    "input": "h\tt\nt\rp://h\to\ns\rt:9\t0\n0\r0/p\ta\nt\rh?q\tu\ne\rry#f\tr\na\rg",
+    "base": null,
+    "href": "http://host:9000/path?query#frag",
+    "origin": "http://host:9000",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "host:9000",
+    "hostname": "host",
+    "port": "9000",
+    "pathname": "/path",
+    "search": "?query",
+    "hash": "#frag"
+  },
+  "# Stringification of URL.searchParams",
+  {
+    "input": "?a=b&c=d",
+    "base": "http://example.org/foo/bar",
+    "href": "http://example.org/foo/bar?a=b&c=d",
+    "origin": "http://example.org",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "example.org",
+    "hostname": "example.org",
+    "port": "",
+    "pathname": "/foo/bar",
+    "search": "?a=b&c=d",
+    "searchParams": "a=b&c=d",
+    "hash": ""
+  },
+  {
+    "input": "??a=b&c=d",
+    "base": "http://example.org/foo/bar",
+    "href": "http://example.org/foo/bar??a=b&c=d",
+    "origin": "http://example.org",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "example.org",
+    "hostname": "example.org",
+    "port": "",
+    "pathname": "/foo/bar",
+    "search": "??a=b&c=d",
+    "searchParams": "%3Fa=b&c=d",
+    "hash": ""
+  },
+  "# Scheme only",
+  {
+    "input": "http:",
+    "base": "http://example.org/foo/bar",
+    "href": "http://example.org/foo/bar",
+    "origin": "http://example.org",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "example.org",
+    "hostname": "example.org",
+    "port": "",
+    "pathname": "/foo/bar",
+    "search": "",
+    "searchParams": "",
+    "hash": ""
+  },
+  {
+    "input": "http:",
+    "base": "https://example.org/foo/bar",
+    "failure": true
+  },
+  {
+    "input": "sc:",
+    "base": "https://example.org/foo/bar",
+    "href": "sc:",
+    "origin": "null",
+    "protocol": "sc:",
+    "username": "",
+    "password": "",
+    "host": "",
+    "hostname": "",
+    "port": "",
+    "pathname": "",
+    "search": "",
+    "searchParams": "",
+    "hash": ""
+  },
+  "# Percent encoding of fragments",
+  {
+    "input": "http://foo.bar/baz?qux#foo\bbar",
+    "base": null,
+    "href": "http://foo.bar/baz?qux#foo%08bar",
+    "origin": "http://foo.bar",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "foo.bar",
+    "hostname": "foo.bar",
+    "port": "",
+    "pathname": "/baz",
+    "search": "?qux",
+    "searchParams": "qux=",
+    "hash": "#foo%08bar"
+  },
+  {
+    "input": "http://foo.bar/baz?qux#foo\"bar",
+    "base": null,
+    "href": "http://foo.bar/baz?qux#foo%22bar",
+    "origin": "http://foo.bar",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "foo.bar",
+    "hostname": "foo.bar",
+    "port": "",
+    "pathname": "/baz",
+    "search": "?qux",
+    "searchParams": "qux=",
+    "hash": "#foo%22bar"
+  },
+  {
+    "input": "http://foo.bar/baz?qux#foo<bar",
+    "base": null,
+    "href": "http://foo.bar/baz?qux#foo%3Cbar",
+    "origin": "http://foo.bar",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "foo.bar",
+    "hostname": "foo.bar",
+    "port": "",
+    "pathname": "/baz",
+    "search": "?qux",
+    "searchParams": "qux=",
+    "hash": "#foo%3Cbar"
+  },
+  {
+    "input": "http://foo.bar/baz?qux#foo>bar",
+    "base": null,
+    "href": "http://foo.bar/baz?qux#foo%3Ebar",
+    "origin": "http://foo.bar",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "foo.bar",
+    "hostname": "foo.bar",
+    "port": "",
+    "pathname": "/baz",
+    "search": "?qux",
+    "searchParams": "qux=",
+    "hash": "#foo%3Ebar"
+  },
+  {
+    "input": "http://foo.bar/baz?qux#foo`bar",
+    "base": null,
+    "href": "http://foo.bar/baz?qux#foo%60bar",
+    "origin": "http://foo.bar",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "foo.bar",
+    "hostname": "foo.bar",
+    "port": "",
+    "pathname": "/baz",
+    "search": "?qux",
+    "searchParams": "qux=",
+    "hash": "#foo%60bar"
+  },
+  "# IPv4 parsing (via https://github.com/nodejs/node/pull/10317)",
+  {
+    "input": "http://1.2.3.4/",
+    "base": "http://other.com/",
+    "href": "http://1.2.3.4/",
+    "origin": "http://1.2.3.4",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "1.2.3.4",
+    "hostname": "1.2.3.4",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://1.2.3.4./",
+    "base": "http://other.com/",
+    "href": "http://1.2.3.4/",
+    "origin": "http://1.2.3.4",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "1.2.3.4",
+    "hostname": "1.2.3.4",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://192.168.257",
+    "base": "http://other.com/",
+    "href": "http://192.168.1.1/",
+    "origin": "http://192.168.1.1",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "192.168.1.1",
+    "hostname": "192.168.1.1",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://192.168.257.",
+    "base": "http://other.com/",
+    "href": "http://192.168.1.1/",
+    "origin": "http://192.168.1.1",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "192.168.1.1",
+    "hostname": "192.168.1.1",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://192.168.257.com",
+    "base": "http://other.com/",
+    "href": "http://192.168.257.com/",
+    "origin": "http://192.168.257.com",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "192.168.257.com",
+    "hostname": "192.168.257.com",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://256",
+    "base": "http://other.com/",
+    "href": "http://0.0.1.0/",
+    "origin": "http://0.0.1.0",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "0.0.1.0",
+    "hostname": "0.0.1.0",
+    "port": "",
+    "pathname": "/",
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://256.com",
+    "base": "http://other.com/",
+    "href": "http://256.com/",
+    "origin": "http://256.com",
+    "protocol": "http:",
+    "username": "",
+    "password": "",
+    "host": "256.com",

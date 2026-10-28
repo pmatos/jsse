@@ -1,0 +1,9 @@
+[eval]:3
+throw new Error('eval boom');
+^
+
+Error: eval boom
+    at [eval]:3:7
+    at [eval]-wrapper:6:24
+
+Node.js <version>

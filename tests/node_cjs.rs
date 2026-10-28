@@ -229,7 +229,7 @@ fn errors_thrown_by_the_main_module_exit_1() {
 }
 
 #[test]
-fn es_modules_keep_running_as_modules_and_cannot_be_required() {
+fn es_modules_keep_running_as_modules_and_are_required_synchronously() {
     let dir = scratch("esm");
     let script = dir.0.join("m.mjs");
     std::fs::write(
@@ -247,13 +247,13 @@ fn es_modules_keep_running_as_modules_and_cannot_be_required() {
     std::fs::write(dir.0.join("pkg/esm.js"), "export default 1;").unwrap();
     let probe = r#"
       for (const id of ["./lib.mjs", "./pkg/esm.js"]) {
-        try { require(id); } catch (e) { print(id, e.code); }
+        print(id, Object.keys(require(id)).join());
       }
     "#;
     let out = jsse(&["--node", "-e", probe], &dir.0, None);
     assert_eq!(
         stdout(&out),
-        "./lib.mjs ERR_REQUIRE_ESM\n./pkg/esm.js ERR_REQUIRE_ESM"
+        "./lib.mjs __esModule,default\n./pkg/esm.js __esModule,default"
     );
 }
 
@@ -339,7 +339,7 @@ fn a_main_script_in_a_type_module_package_runs_as_an_es_module() {
 }
 
 #[test]
-fn the_module_sync_condition_is_skipped_until_require_of_esm_exists() {
+fn the_module_sync_condition_selects_an_es_module_for_require() {
     let dir = scratch("modulesync");
     let pkg = dir.0.join("node_modules/ms");
     std::fs::create_dir_all(&pkg).unwrap();
@@ -350,9 +350,13 @@ fn the_module_sync_condition_is_skipped_until_require_of_esm_exists() {
     .unwrap();
     std::fs::write(pkg.join("a.mjs"), "export default 'esm';").unwrap();
     std::fs::write(pkg.join("b.js"), "module.exports = 'cjs';").unwrap();
-    let out = jsse(&["--node", "-e", "print(require('ms'))"], &dir.0, None);
+    let out = jsse(
+        &["--node", "-e", "print(require('ms').default)"],
+        &dir.0,
+        None,
+    );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "cjs");
+    assert_eq!(stdout(&out), "esm");
 }
 
 #[test]

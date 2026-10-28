@@ -36,11 +36,12 @@ fn node(source: &str) -> String {
 #[test]
 fn surface_is_absent_without_node() {
     let source = "print([typeof __host_cp_spawn, typeof __host_cp_spawn_sync, typeof __host_kill, \
-                  typeof __host_signal_watch, typeof __host_getpid, typeof require].join(' '))";
+                  typeof __host_signal_watch, typeof __host_getpid, typeof __host_cp_adopt, \
+                  typeof __host_cp_ipc_read, typeof __host_cp_ipc_write, typeof require].join(' '))";
     let out = run(&["-e", source], None);
     assert_eq!(
         stdout(&out),
-        "undefined undefined undefined undefined undefined undefined"
+        "undefined undefined undefined undefined undefined undefined undefined undefined undefined"
     );
 }
 
@@ -48,13 +49,14 @@ fn surface_is_absent_without_node() {
 fn floor_is_private_under_node() {
     let source = r#"
       print([typeof __host_cp_spawn, typeof __host_kill, typeof __host_cp_start,
+             typeof __host_cp_adopt, typeof __host_cp_ipc_read, typeof __host_cp_ipc_write,
              typeof globalThis[Symbol.for("jsse.node.child")],
              typeof require("child_process").spawn].join(" "));
       try { require("internal/child_process"); } catch (e) { print(e.code); }
     "#;
     assert_eq!(
         node(source),
-        "undefined undefined undefined undefined function\nMODULE_NOT_FOUND"
+        "undefined undefined undefined undefined undefined undefined undefined function\nMODULE_NOT_FOUND"
     );
 }
 
@@ -250,8 +252,6 @@ fn spawn_failures_and_errors() {
       const missing = cp.spawn("no-such-command-xyz", ["a"]);
       missing.on("error", (e) => print(e.code, e.errno, e.syscall, e.path, JSON.stringify(e.spawnargs)));
       missing.on("close", (code) => print("close", code, missing.exitCode, missing.pid));
-      try { cp.spawn("x", [], { stdio: ["pipe", "pipe", "pipe", "ipc"] }); }
-      catch (e) { print(e.code); }
       try { process.kill(process.pid, "SIGNOPE"); } catch (e) { print(e.code); }
       try { process.kill(2 ** 22, 0); } catch (e) { print(e.code); }
       try { process.on("SIGKILL", () => {}); } catch (e) { print(e.syscall, e.code); }
@@ -260,17 +260,11 @@ fn spawn_failures_and_errors() {
     let got = node(source);
     let lines: Vec<&str> = got.lines().collect();
     assert_eq!(
-        lines[..5],
-        [
-            "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM",
-            "ERR_UNKNOWN_SIGNAL",
-            "ESRCH",
-            "uv_signal_start EINVAL",
-            "0"
-        ]
+        lines[..4],
+        ["ERR_UNKNOWN_SIGNAL", "ESRCH", "uv_signal_start EINVAL", "0"]
     );
     assert_eq!(
-        lines[5..],
+        lines[4..],
         [
             r#"ENOENT -2 spawn no-such-command-xyz no-such-command-xyz ["a"]"#,
             "close -2 -2 undefined"

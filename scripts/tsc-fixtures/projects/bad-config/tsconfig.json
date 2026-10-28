@@ -1,0 +1,11 @@
+{
+    "compilerOptions": {
+        "target": "es2077",
+        "module": "nope",
+        "strict": "yes",
+        "noSuchOption": true,
+        "outDir": 5
+    },
+    "include": ["missing/**/*.ts"],
+    "files": ["src/ghost.ts"]
+}

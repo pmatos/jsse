@@ -38,6 +38,7 @@
   var slice = Array.prototype.slice;
   var promiseThen = Promise.prototype.then;
   var resolved = Promise.resolve();
+  var noop = function () {};
 
   function describeReceived(v) {
     if (v === undefined || v === null) return " Received " + v;
@@ -196,6 +197,12 @@
     delete proc[name];
   });
   Object.setPrototypeOf(proc, emitterProto);
+  Object.defineProperty(emitterProto, "constructor", {
+    value: function process() {},
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
 
   // ---- uncaught exceptions --------------------------------------------------
   var exiting = false;
@@ -204,7 +211,7 @@
     return (
       typeof value === "object" &&
       value !== null &&
-      (value instanceof Error || Object.prototype.hasOwnProperty.call(value, "stack"))
+      Object.prototype.hasOwnProperty.call(value, "stack")
     );
   }
 
@@ -216,18 +223,22 @@
     }
   }
 
-  function printUncaught(error) {
+  var handoff = { report: undefined, rejectionError: undefined, decorate: undefined };
+
+  function printUncaught(error, rejected) {
     var text;
-    if (isErrorLike(error)) {
-      text =
-        typeof error.stack === "string" && error.stack !== ""
+    try {
+      text = handoff.report(error, rejected);
+    } catch (e) {
+      try {
+        text = isErrorLike(error) && typeof error.stack === "string"
           ? error.stack
-          : error.name + ": " + error.message;
-    } else {
-      var inspect = globalThis.util && globalThis.util.inspect;
-      text = "Uncaught " + (inspect ? inspect(error) : String(error));
+          : String(error);
+      } catch (ignored) {
+        text = "Uncaught exception";
+      }
     }
-    stderrWrite("\n" + text + "\n\nNode.js " + proc.version + "\n");
+    stderrWrite(text + "\n\nNode.js " + proc.version + "\n");
   }
 
   function emitExit(code) {
@@ -237,27 +248,53 @@
     proc.emit("exit", code);
   }
 
-  function fatal(error, code) {
-    printUncaught(error);
+  function fatal(error, code, rejected) {
     if (code === 1) {
       try {
         proc.exitCode = 1;
         emitExit(1);
       } catch (ignored) {}
     }
+    printUncaught(error, rejected);
     hostExit(code === 1 && proc.exitCode !== undefined ? proc.exitCode : code);
   }
 
-  function triggerUncaught(error, origin) {
+  // `entry` is set for an error that ended the ES module entry point: Node
+  // delivers it as a rejection after that many microtask turns (and reports a
+  // non-error value with the loader's own header). `entry` is -1 for a throw
+  // of the `-e` program itself, whose non-error objects Node lays out apart.
+  function triggerUncaught(error, origin, entry) {
+    if (entry > 0) {
+      var turns = resolved;
+      for (var i = 1; i < entry; i++) turns = promiseThen.call(turns, noop);
+      promiseThen.call(turns, function () {
+        triggerUncaught(error, origin, 0);
+      });
+      return;
+    }
+    var type = origin || "uncaughtException";
+    if (entry === -1) {
+      try {
+        handoff.decorate(error);
+      } catch (ignored) {}
+    }
+    try {
+      proc.emit("uncaughtExceptionMonitor", error, type);
+    } catch (ignored) {}
     if (proc.listenerCount("uncaughtException") === 0) {
-      fatal(error, 1);
+      var mode = entry === 0 ? "entry" : entry === -1 ? "eval" : type === "unhandledRejection";
+      fatal(error, 1, mode);
       return;
     }
     try {
-      proc.emit("uncaughtException", error, origin || "uncaughtException");
+      proc.emit("uncaughtException", error, type);
     } catch (inHandler) {
       fatal(inHandler, 7);
+      return;
     }
+    // A handled throw abandons the tick checkpoint; Node makes sure the
+    // remaining ticks run by keeping the next check phase non-empty.
+    if (handoff.afterHandledUncaught !== undefined) handoff.afterHandledUncaught();
   }
 
   // ---- nextTick -------------------------------------------------------------
@@ -284,8 +321,9 @@
       while (tickHead < tickQueue.length) {
         var tock = tickQueue[tickHead];
         tickQueue[tickHead++] = undefined;
-        if (tock.args === undefined) tock.callback();
-        else tock.callback.apply(undefined, tock.args);
+        var callback = tock.callback;
+        if (tock.args === undefined) callback();
+        else callback.apply(undefined, tock.args);
       }
       tickQueue = [];
       tickHead = 0;
@@ -308,22 +346,7 @@
 
   // ---- unhandled rejections -------------------------------------------------
   function unhandledRejectionError(reason) {
-    var shown;
-    try {
-      shown = typeof reason === "string" ? reason : String(reason);
-    } catch (e) {
-      shown = "[object]";
-    }
-    var e = new Error(
-      "This error originated either by throwing inside of an async function " +
-        "without a catch block, or by rejecting a promise which was not handled " +
-        'with .catch(). The promise rejected with the reason "' +
-        shown +
-        '".'
-    );
-    e.name = "UnhandledPromiseRejection";
-    e.code = "ERR_UNHANDLED_REJECTION";
-    return e;
+    return handoff.rejectionError(reason);
   }
 
   function processRejections(list) {
@@ -412,17 +435,21 @@
 
   hostInstall(processTicks, triggerUncaught, processRejections, lifecycle);
 
+  handoff.hostSetImmediate = hostSetImmediate;
+  handoff.hostImmediateInfo = hostImmediateInfo;
+  handoff.hostTimerRef = hostTimerRef;
+  handoff.hostCheckpoint = hostCheckpoint;
+  handoff.triggerUncaught = triggerUncaught;
+  handoff.validateFunction = validateFunction;
+  handoff.invalidArgType = invalidArgType;
+  handoff.emitWarning = emitWarning;
   Object.defineProperty(globalThis, Symbol.for("jsse.node.loop.handoff"), {
-    value: {
-      hostSetImmediate: hostSetImmediate,
-      hostImmediateInfo: hostImmediateInfo,
-      hostTimerRef: hostTimerRef,
-      hostCheckpoint: hostCheckpoint,
-      triggerUncaught: triggerUncaught,
-      validateFunction: validateFunction,
-      invalidArgType: invalidArgType,
-      emitWarning: emitWarning,
-    },
+    value: handoff,
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, Symbol.for("jsse.node.fatal.handoff"), {
+    value: handoff,
     configurable: true,
   });
 })();
+//# sourceURL=node:internal/process/task_queues

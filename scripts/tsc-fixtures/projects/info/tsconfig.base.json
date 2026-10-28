@@ -1,0 +1,11 @@
+{
+  // shared options, with a comment and a trailing comma
+  "compilerOptions": {
+    "noLib": true,
+    "target": "es2020",
+    "module": "commonjs",
+    "strict": true,
+    "rootDir": ".",
+  },
+  "exclude": ["node_modules", "out", "dist"],
+}

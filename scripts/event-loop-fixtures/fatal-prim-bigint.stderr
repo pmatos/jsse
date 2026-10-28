@@ -1,0 +1,8 @@
+
+<dir>/fatal-prim-bigint.fixture.js:2
+throw 12345678901234567890n;
+^
+12345678901234567890
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

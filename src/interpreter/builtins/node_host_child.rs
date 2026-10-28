@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::node_host_child_spawn::{decode_spec, reap, signal_unless_exited, spawn_process};
-use super::node_host_fs_args::{arg, int, last_errno, uint8array_from_vec, view_of};
+use super::node_host_fs_args::{arg, int, js_str, last_errno, uint8array_from_vec, view_of};
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -45,17 +45,35 @@ pub(crate) enum ChildEvent {
         errno: i32,
     },
     Signal(i32),
+    /// Whole IPC messages (JSON lines or length frames) read from one chunk.
+    Messages {
+        id: u64,
+        index: usize,
+        items: Vec<String>,
+    },
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Watch {
+        wd: i32,
+        events: u32,
+        name: Vec<u8>,
+    },
 }
 
-const CHUNK: usize = 64 * 1024;
+pub(super) const CHUNK: usize = 64 * 1024;
 
 /// One-chunk-at-a-time flow control for a read pipe: the reader thread takes a
 /// token before each `read`, and JS adds one per `_read`, so an unconsumed
 /// stream applies back-pressure to the child instead of buffering without bound.
 #[derive(Default)]
-struct Flow {
+pub(super) struct Flow {
     state: Mutex<(u32, bool)>,
     wake: Condvar,
+}
+
+impl Flow {
+    pub(super) fn is_closed(&self) -> bool {
+        self.state.lock().unwrap().1
+    }
 }
 
 enum WriteMsg {
@@ -63,25 +81,38 @@ enum WriteMsg {
     End,
 }
 
-struct Endpoint {
-    fd: Arc<OwnedFd>,
-    flow: Arc<Flow>,
-    reading: bool,
+pub(super) struct Endpoint {
+    pub(super) fd: Arc<OwnedFd>,
+    pub(super) flow: Arc<Flow>,
+    pub(super) reading: bool,
     writer: Option<Sender<WriteMsg>>,
-    queued: Arc<AtomicUsize>,
-    open: bool,
+    pub(super) queued: Arc<AtomicUsize>,
+    pub(super) open: bool,
 }
 
-struct ChildCtl {
-    pid: i32,
-    exited: Arc<Mutex<bool>>,
-    endpoints: Vec<Option<Endpoint>>,
+impl Endpoint {
+    pub(super) fn new(fd: Arc<OwnedFd>) -> Self {
+        Endpoint {
+            fd,
+            flow: Arc::new(Flow::default()),
+            reading: false,
+            writer: None,
+            queued: Arc::new(AtomicUsize::new(0)),
+            open: true,
+        }
+    }
+}
+
+pub(super) struct ChildCtl {
+    pub(super) pid: i32,
+    pub(super) exited: Arc<Mutex<bool>>,
+    pub(super) endpoints: Vec<Option<Endpoint>>,
 }
 
 #[derive(Default)]
 pub(crate) struct ChildState {
-    next_id: u64,
-    children: HashMap<u64, ChildCtl>,
+    pub(super) next_id: u64,
+    pub(super) children: HashMap<u64, ChildCtl>,
     inbox: VecDeque<ChildEvent>,
 }
 
@@ -240,6 +271,51 @@ fn spawn_writer(
     });
 }
 
+/// Write `bytes` to a pipe now or queue them; `Written` follows, except that a
+/// `sync` write the pipe took whole returns 0 and posts nothing (the IPC
+/// channel's `kLastWriteWasAsync`). `false` means the pipe is gone.
+pub(super) fn write_endpoint(
+    interp: &mut Interpreter,
+    id: u64,
+    index: usize,
+    mut bytes: Vec<u8>,
+    sync: bool,
+) -> JsValue {
+    let queue = interp.agent_async_completions.clone();
+    let Some(end) = interp.child_endpoint(id, index) else {
+        return JsValue::FALSE;
+    };
+    if !end.open {
+        return JsValue::FALSE;
+    }
+    if end.queued.load(Ordering::SeqCst) == 0 {
+        let errno = match write_now(end.fd.as_raw_fd(), &bytes) {
+            Attempt::Done => 0,
+            Attempt::Failed(errno) => errno,
+            Attempt::Partial(done) => {
+                bytes.drain(..done);
+                -1
+            }
+        };
+        if errno == 0 && sync {
+            return JsValue::number(0.0);
+        }
+        if errno >= 0 {
+            let event = ChildEvent::Written { id, index, errno };
+            interp.node_host.child.inbox.push_back(event);
+            return JsValue::TRUE;
+        }
+    }
+    let queued = end.queued.clone();
+    let sender = end.writer.get_or_insert_with(|| {
+        let (tx, rx) = channel();
+        spawn_writer(queue, id, index, end.fd.clone(), rx, queued.clone());
+        tx
+    });
+    queued.fetch_add(1, Ordering::SeqCst);
+    JsValue::boolean(sender.send(WriteMsg::Data(bytes)).is_ok())
+}
+
 impl Interpreter {
     /// Deliver the events that were waiting when the poll phase began. They are
     /// stashed by the completion closures (which any microtask drain runs) and
@@ -282,12 +358,25 @@ impl Interpreter {
                 JsValue::number(index as f64),
                 JsValue::number(f64::from(errno)),
             ),
+            ChildEvent::Messages { id, index, items } => {
+                let items = items.iter().map(|text| js_str(text)).collect();
+                (
+                    7.0,
+                    id,
+                    JsValue::number(index as f64),
+                    self.create_array(items),
+                )
+            }
             ChildEvent::Signal(signum) => (
                 5.0,
                 0,
                 JsValue::number(f64::from(signum)),
                 JsValue::UNDEFINED,
             ),
+            ChildEvent::Watch { wd, events, name } => {
+                self.watch_deliver(wd, events, name);
+                return;
+            }
         };
         let args = [JsValue::number(kind), JsValue::number(id as f64), x, y];
         let result = self.node_call(&dispatch, &args);
@@ -295,7 +384,7 @@ impl Interpreter {
         self.node_checkpoint();
     }
 
-    fn child_endpoint(&mut self, id: u64, index: usize) -> Option<&mut Endpoint> {
+    pub(super) fn child_endpoint(&mut self, id: u64, index: usize) -> Option<&mut Endpoint> {
         self.node_host
             .child
             .children
@@ -328,16 +417,7 @@ impl Interpreter {
             let endpoints = spawned
                 .parents
                 .into_iter()
-                .map(|parent| {
-                    parent.map(|fd| Endpoint {
-                        fd: Arc::new(fd),
-                        flow: Arc::new(Flow::default()),
-                        reading: false,
-                        writer: None,
-                        queued: Arc::new(AtomicUsize::new(0)),
-                        open: true,
-                    })
-                })
+                .map(|parent| parent.map(|fd| Endpoint::new(Arc::new(fd))))
                 .collect();
             spawn_waiter(queue, id, exited.clone(), spawned.child);
             interp.node_host.child.children.insert(
@@ -389,37 +469,7 @@ impl Interpreter {
                         .map(<[u8]>::to_vec)
                 })
                 .unwrap_or_default();
-            let queue = interp.agent_async_completions.clone();
-            let Some(end) = interp.child_endpoint(id, index) else {
-                return Ok(JsValue::FALSE);
-            };
-            if !end.open {
-                return Ok(JsValue::FALSE);
-            }
-            let mut bytes = bytes;
-            if end.queued.load(Ordering::SeqCst) == 0 {
-                let errno = match write_now(end.fd.as_raw_fd(), &bytes) {
-                    Attempt::Done => 0,
-                    Attempt::Failed(errno) => errno,
-                    Attempt::Partial(done) => {
-                        bytes.drain(..done);
-                        -1
-                    }
-                };
-                if errno >= 0 {
-                    let event = ChildEvent::Written { id, index, errno };
-                    interp.node_host.child.inbox.push_back(event);
-                    return Ok(JsValue::TRUE);
-                }
-            }
-            let queued = end.queued.clone();
-            let sender = end.writer.get_or_insert_with(|| {
-                let (tx, rx) = channel();
-                spawn_writer(queue, id, index, end.fd.clone(), rx, queued.clone());
-                tx
-            });
-            queued.fetch_add(1, Ordering::SeqCst);
-            Ok(JsValue::boolean(sender.send(WriteMsg::Data(bytes)).is_ok()))
+            Ok(write_endpoint(interp, id, index, bytes, false))
         });
 
         // __host_cp_shutdown(id, index): no more writes; the child sees EOF

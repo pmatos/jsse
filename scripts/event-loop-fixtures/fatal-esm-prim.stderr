@@ -1,0 +1,8 @@
+
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+plain string
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

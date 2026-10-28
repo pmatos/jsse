@@ -1,0 +1,8 @@
+
+<dir>/fatal-prim-symbol.fixture.js:2
+throw Symbol("tag");
+^
+
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

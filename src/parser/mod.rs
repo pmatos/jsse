@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 mod declarations;
 mod expressions;
+pub(crate) mod inferred_names;
 mod modules;
 mod positions;
 mod statements;
@@ -1285,7 +1286,7 @@ impl<'a> Parser<'a> {
                             ImportSpecifier::DeferredNamespace(n) => n,
                             ImportSpecifier::SourcePhase(n) => n,
                         };
-                        // §13.1.1: import binding cannot be "arguments" or "eval" (strict mode)
+                        // §13.1.1: import binding cannot be "arguments" or "eval"
                         if name == "arguments" || name == "eval" {
                             return Err(self.error(format!(
                                 "'{name}' cannot be used as an import binding in module code"
@@ -1308,7 +1309,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Check: ExportedBindings must all be in VarDeclaredNames ∪ LexicallyDeclaredNames
+        // ExportedBindings must all be in VarDeclaredNames ∪ LexicallyDeclaredNames
         for name in &exported_bindings {
             if !var_names.contains(name) && !lex_names.contains(name) {
                 return Err(self.error(format!("Export '{name}' is not defined")));
@@ -1426,7 +1427,7 @@ impl<'a> Parser<'a> {
     fn parse_module_item(&mut self) -> Result<ModuleItem, ParseError> {
         match &self.current {
             Token::Keyword(Keyword::Import) => {
-                // Check if it's dynamic import or import.meta (expressions), not declaration
+                // Dynamic import or import.meta (expressions), not a declaration
                 if self.is_import_expression() {
                     let stmt = self.parse_statement_or_declaration()?;
                     return Ok(ModuleItem::Statement(stmt));

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "paths": { "@app/*": ["./src/*"] },
+    "resolveJsonModule": true,
+    "declaration": true,
+    "outDir": "dist",
+    "types": ["ambient"]
+  },
+  "files": ["globals.d.ts"],
+  "include": ["src/**/*.ts", "src/*.json"],
+  "exclude": ["src/deep"]
+}

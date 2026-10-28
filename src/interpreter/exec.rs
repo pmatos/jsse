@@ -104,12 +104,9 @@ impl Interpreter {
     /// separate entry point rather than a synthetic function dispatch.
     pub(crate) fn exec_script_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
         if self.bytecode_enabled {
-            // Compiled once and matched on, so the counter build does not pay a
-            // second compile. Both outcomes are recorded — a script-only
-            // workload previously reported compile_ok and BAIL as zero however
-            // the compile went. The execution counts as a non-function body,
-            // never in `body_compiled`, which is the published count of
-            // function invocations (#537 review, third pass).
+            // Compiled once and matched on, so the counter build pays no second
+            // compile; both outcomes are recorded. The run counts as a
+            // non-function body, never in `body_compiled` (#537 review).
             match crate::interpreter::bytecode::compiler::compile_script_body(body.as_slice()) {
                 Ok(chunk) => {
                     #[cfg(feature = "perf-counters")]
@@ -1106,7 +1103,7 @@ impl Interpreter {
             Statement::ForOf(fo) => self.exec_for_of(fo, env, None),
             Statement::Return(expr) => {
                 let val = if let Some(e) = expr {
-                    let can_tco = env.borrow().strict
+                    let can_tco = self.tco_on(env)
                         && self.generator_context.is_none()
                         && !self.in_state_machine
                         && self.tco_suppress_depth == 0
@@ -1128,11 +1125,12 @@ impl Interpreter {
             }
             Statement::Break(label) => Completion::Break(label.clone(), None),
             Statement::Continue(label) => Completion::Continue(label.clone(), None),
-            Statement::Throw(expr) => {
+            Statement::Throw(expr, at) => {
                 let val = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                self.node_note_throw(&val, *at);
                 Completion::Throw(val)
             }
             Statement::Try(t) => self.exec_try(t, env),

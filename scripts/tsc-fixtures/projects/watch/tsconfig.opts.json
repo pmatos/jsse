@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "watchOptions": {
+    "watchFile": "fixedPollingInterval",
+    "watchDirectory": "fixedPollingInterval",
+    "excludeDirectories": ["vendor"],
+    "excludeFiles": ["src/lib/skipped.ts"]
+  }
+}

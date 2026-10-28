@@ -1,0 +1,613 @@
+            "comment": "Non-special scheme",
+            "href": "sc://x/",
+            "new_value": "\u0000",
+            "expected": {
+                "href": "sc://x/",
+                "host": "x",
+                "hostname": "x"
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "\u0009",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "\u000A",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "\u000D",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": " ",
+            "expected": {
+                "href": "sc://x/",
+                "host": "x",
+                "hostname": "x"
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "#",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "/",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "?",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "sc://x/",
+            "new_value": "@",
+            "expected": {
+                "href": "sc://x/",
+                "host": "x",
+                "hostname": "x"
+            }
+        },
+        {
+            "comment": "Cannot-be-a-base means no host",
+            "href": "mailto:me@example.net",
+            "new_value": "example.com",
+            "expected": {
+                "href": "mailto:me@example.net",
+                "host": ""
+            }
+        },
+        {
+            "comment": "Cannot-be-a-base means no host",
+            "href": "data:text/plain,Stuff",
+            "new_value": "example.net",
+            "expected": {
+                "href": "data:text/plain,Stuff",
+                "host": ""
+            }
+        },
+        {
+            "href": "http://example.net:8080",
+            "new_value": "example.com",
+            "expected": {
+                "href": "http://example.com:8080/",
+                "host": "example.com:8080",
+                "hostname": "example.com",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "The empty host is not valid for special schemes",
+            "href": "http://example.net",
+            "new_value": "",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net"
+            }
+        },
+        {
+            "comment": "The empty host is OK for non-special schemes",
+            "href": "view-source+http://example.net/foo",
+            "new_value": "",
+            "expected": {
+                "href": "view-source+http:///foo",
+                "host": ""
+            }
+        },
+        {
+            "comment": "Path-only URLs can gain a host",
+            "href": "a:/foo",
+            "new_value": "example.net",
+            "expected": {
+                "href": "a://example.net/foo",
+                "host": "example.net"
+            }
+        },
+        {
+            "comment": "IPv4 address syntax is normalized",
+            "href": "http://example.net:8080",
+            "new_value": "0x7F000001",
+            "expected": {
+                "href": "http://127.0.0.1:8080/",
+                "host": "127.0.0.1:8080",
+                "hostname": "127.0.0.1",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "IPv6 address syntax is normalized",
+            "href": "http://example.net",
+            "new_value": "[::0:01]",
+            "expected": {
+                "href": "http://[::1]/",
+                "host": "[::1]",
+                "hostname": "[::1]",
+                "port": ""
+            }
+        },
+        {
+            "comment": ": delimiter invalidates entire value",
+            "href": "http://example.net/path",
+            "new_value": "example.com:8080",
+            "expected": {
+                "href": "http://example.net/path",
+                "host": "example.net",
+                "hostname": "example.net",
+                "port": ""
+            }
+        },
+        {
+            "comment": ": delimiter invalidates entire value",
+            "href": "http://example.net:8080/path",
+            "new_value": "example.com:",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Stuff after a / delimiter is ignored",
+            "href": "http://example.net/path",
+            "new_value": "example.com/stuff",
+            "expected": {
+                "href": "http://example.com/path",
+                "host": "example.com",
+                "hostname": "example.com",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Stuff after a ? delimiter is ignored",
+            "href": "http://example.net/path",
+            "new_value": "example.com?stuff",
+            "expected": {
+                "href": "http://example.com/path",
+                "host": "example.com",
+                "hostname": "example.com",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Stuff after a # delimiter is ignored",
+            "href": "http://example.net/path",
+            "new_value": "example.com#stuff",
+            "expected": {
+                "href": "http://example.com/path",
+                "host": "example.com",
+                "hostname": "example.com",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Stuff after a \\ delimiter is ignored for special schemes",
+            "href": "http://example.net/path",
+            "new_value": "example.com\\stuff",
+            "expected": {
+                "href": "http://example.com/path",
+                "host": "example.com",
+                "hostname": "example.com",
+                "port": ""
+            }
+        },
+        {
+            "comment": "\\ is not a delimiter for non-special schemes, but still forbidden in hosts",
+            "href": "view-source+http://example.net/path",
+            "new_value": "example.com\\stuff",
+            "expected": {
+                "href": "view-source+http://example.net/path",
+                "host": "example.net",
+                "hostname": "example.net",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Broken IPv6",
+            "href": "http://example.net/",
+            "new_value": "[google.com]",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net"
+            }
+        },
+        {
+            "href": "http://example.net/",
+            "new_value": "[::1.2.3.4x]",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net"
+            }
+        },
+        {
+            "href": "http://example.net/",
+            "new_value": "[::1.2.3.]",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net"
+            }
+        },
+        {
+            "href": "http://example.net/",
+            "new_value": "[::1.2.]",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net"
+            }
+        },
+        {
+            "href": "http://example.net/",
+            "new_value": "[::1.]",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net"
+            }
+        },
+        {
+            "href": "file://y/",
+            "new_value": "x:123",
+            "expected": {
+                "href": "file://y/",
+                "host": "y",
+                "hostname": "y",
+                "port": ""
+            }
+        },
+        {
+            "href": "file://y/",
+            "new_value": "loc%41lhost",
+            "expected": {
+                "href": "file:///",
+                "host": "",
+                "hostname": "",
+                "port": ""
+            }
+        },
+        {
+            "href": "file://hi/x",
+            "new_value": "",
+            "expected": {
+                "href": "file:///x",
+                "host": "",
+                "hostname": "",
+                "port": ""
+            }
+        },
+        {
+            "href": "sc://test@test/",
+            "new_value": "",
+            "expected": {
+                "href": "sc://test@test/",
+                "host": "test",
+                "hostname": "test",
+                "username": "test"
+            }
+        },
+        {
+            "href": "sc://test:12/",
+            "new_value": "",
+            "expected": {
+                "href": "sc://test:12/",
+                "host": "test:12",
+                "hostname": "test",
+                "port": "12"
+            }
+        },
+        {
+            "comment": "Drop /. from path",
+            "href": "non-spec:/.//p",
+            "new_value": "h",
+            "expected": {
+                "href": "non-spec://h//p",
+                "host": "h",
+                "hostname": "h",
+                "pathname": "//p"
+            }
+        },
+        {
+            "href": "non-spec:/.//p",
+            "new_value": "",
+            "expected": {
+                "href": "non-spec:////p",
+                "host": "",
+                "hostname": "",
+                "pathname": "//p"
+            }
+        },
+        {
+            "comment": "Leading / is not stripped",
+            "href": "http://example.com/",
+            "new_value": "///bad.com",
+            "expected": {
+                "href": "http://example.com/",
+                "host": "example.com",
+                "hostname": "example.com"
+            }
+        },
+        {
+            "comment": "Leading / is not stripped",
+            "href": "sc://example.com/",
+            "new_value": "///bad.com",
+            "expected": {
+                "href": "sc:///",
+                "host": "",
+                "hostname": ""
+            }
+        },
+        {
+            "href": "https://example.com/",
+            "new_value": "a%C2%ADb",
+            "expected": {
+                "href": "https://ab/",
+                "host": "ab",
+                "hostname": "ab"
+            }
+        },
+        {
+            "href": "https://example.com/",
+            "new_value": "\u00AD",
+            "expected": {
+                "href": "https://example.com/",
+                "host": "example.com",
+                "hostname": "example.com"
+            }
+        },
+        {
+            "href": "https://example.com/",
+            "new_value": "%C2%AD",
+            "expected": {
+                "href": "https://example.com/",
+                "host": "example.com",
+                "hostname": "example.com"
+            }
+        },
+        {
+            "href": "https://example.com/",
+            "new_value": "xn--",
+            "expected": {
+                "href": "https://xn--/",
+                "host": "xn--",
+                "hostname": "xn--"
+            }
+        },
+        {
+            "href": "https://test.invalid/",
+            "new_value": "*",
+            "expected": {
+                "href": "https://*/",
+                "host": "*",
+                "hostname": "*"
+            }
+        },
+        {
+            "href": "https://test.invalid/",
+            "new_value": "x@x",
+            "expected": {
+                "href": "https://test.invalid/",
+                "host": "test.invalid",
+                "hostname": "test.invalid"
+            }
+        },
+        {
+            "href": "https://test.invalid/",
+            "new_value": "foo\t\r\nbar",
+            "expected": {
+                "href": "https://foobar/",
+                "host": "foobar",
+                "hostname": "foobar"
+            }
+        },
+        {
+            "href": "https://test.invalid/",
+            "new_value": "><",
+            "expected": {
+                "href": "https://test.invalid/",
+                "host": "test.invalid",
+                "hostname": "test.invalid"
+            }
+        },
+        {
+            "href": "https://test.invalid/",
+            "new_value": "test/@aaa",
+            "expected": {
+                "href": "https://test/",
+                "host": "test",
+                "hostname": "test"
+            }
+        },
+        {
+            "href": "https://test.invalid/",
+            "new_value": "test/:aaa",
+            "expected": {
+                "href": "https://test/",
+                "host": "test",
+                "hostname": "test"
+            }
+        }
+    ],
+    "port": [
+        {
+            "href": "http://example.net",
+            "new_value": "8080",
+            "expected": {
+                "href": "http://example.net:8080/",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Port number is removed if empty is the new value",
+            "href": "http://example.net:8080",
+            "new_value": "",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Default port number is removed",
+            "href": "http://example.net:8080",
+            "new_value": "80",
+            "expected": {
+                "href": "http://example.net/",
+                "host": "example.net",
+                "hostname": "example.net",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Default port number is removed",
+            "href": "https://example.net:4433",
+            "new_value": "443",
+            "expected": {
+                "href": "https://example.net/",
+                "host": "example.net",
+                "hostname": "example.net",
+                "port": ""
+            }
+        },
+        {
+            "comment": "Default port number is only removed for the relevant scheme",
+            "href": "https://example.net",
+            "new_value": "80",
+            "expected": {
+                "href": "https://example.net:80/",
+                "host": "example.net:80",
+                "hostname": "example.net",
+                "port": "80"
+            }
+        },
+        {
+            "comment": "Stuff after a / delimiter is ignored",
+            "href": "http://example.net/path",
+            "new_value": "8080/stuff",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Stuff after a ? delimiter is ignored",
+            "href": "http://example.net/path",
+            "new_value": "8080?stuff",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Stuff after a # delimiter is ignored",
+            "href": "http://example.net/path",
+            "new_value": "8080#stuff",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Stuff after a \\ delimiter is ignored for special schemes",
+            "href": "http://example.net/path",
+            "new_value": "8080\\stuff",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Anything other than ASCII digit stops the port parser in a setter but is not an error",
+            "href": "view-source+http://example.net/path",
+            "new_value": "8080stuff2",
+            "expected": {
+                "href": "view-source+http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Anything other than ASCII digit stops the port parser in a setter but is not an error",
+            "href": "http://example.net/path",
+            "new_value": "8080stuff2",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Anything other than ASCII digit stops the port parser in a setter but is not an error",
+            "href": "http://example.net/path",
+            "new_value": "8080+2",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",
+                "hostname": "example.net",
+                "port": "8080"
+            }
+        },
+        {
+            "comment": "Port numbers are 16 bit integers",
+            "href": "http://example.net/path",
+            "new_value": "65535",
+            "expected": {
+                "href": "http://example.net:65535/path",
+                "host": "example.net:65535",
+                "hostname": "example.net",
+                "port": "65535"
+            }
+        },
+        {
+            "comment": "Port numbers are 16 bit integers, overflowing is an error",
+            "href": "http://example.net:8080/path",
+            "new_value": "65536",
+            "expected": {
+                "href": "http://example.net:8080/path",
+                "host": "example.net:8080",

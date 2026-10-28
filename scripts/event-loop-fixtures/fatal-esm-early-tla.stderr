@@ -1,0 +1,14 @@
+tick 1
+tick 2
+tick 3
+tick 4
+tick 5
+exit
+file://<dir>/fatal-esm-early-tla.fixture.mjs:7
+if (chain) throw new Error("early");
+                 ^
+
+Error: early
+    at file://<dir>/fatal-esm-early-tla.fixture.mjs:7:18
+
+Node.js <version>

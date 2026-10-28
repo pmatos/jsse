@@ -384,6 +384,8 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
   return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
 });
 
+require('internal/errors/require_esm')(E);
+
 E('ERR_MODULE_NOT_FOUND', Error, function(path, base, exactUrl) {
   if (exactUrl) this.url = `${exactUrl}`;
   return `Cannot find ${exactUrl ? 'module' : 'package'} '${path}' imported from ${base}`;
@@ -441,6 +443,11 @@ E('ERR_INVALID_SYNC_FORK_INPUT', TypeError,
   (value) => `Asynchronous forks do not support Buffer, TypedArray, DataView or string input: ${value}`);
 E('ERR_IPC_ONE_PIPE', Error, 'Child process can have only one IPC pipe');
 E('ERR_IPC_SYNC_FORK', Error, 'IPC cannot be used with synchronous forks');
+E('ERR_IPC_CHANNEL_CLOSED', Error, 'Channel closed');
+E('ERR_IPC_DISCONNECTED', Error, 'IPC channel is already disconnected');
+E('ERR_INVALID_HANDLE_TYPE', TypeError, 'This handle type cannot be sent');
+E('ERR_CHILD_PROCESS_IPC_REQUIRED', Error,
+  (name) => `Forked processes must have an IPC channel, missing value 'ipc' in ${name}`);
 E('ERR_FEATURE_UNAVAILABLE_ON_PLATFORM', TypeError,
   (x) => `The feature ${x} is unavailable on the current platform, which is being used to run Node.js`);
 E('ERR_INVALID_FD', RangeError, (value) => format('"fd" must be a positive integer: %s', value));

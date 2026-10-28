@@ -1,0 +1,26 @@
+# name | project | expected exit code per invocation | arguments; ` ;; ` starts another invocation in the same tree
+# Informational flags and tracing (#1247): --listFiles, --listFilesOnly, --listEmittedFiles, --explainFiles, --showConfig, --init, --traceResolution, --extendedDiagnostics, --diagnostics, --generateTrace, --generateCpuProfile. @stats normalises the moving numbers of the statistics block.
+info-listfiles | info | 0 0 0 | --listFiles --noEmit ;; --listFilesOnly ;; -p tsconfig.ext.json --listFiles --noEmit
+info-listfiles-errors | info | 2 0 | --ignoreConfig --noLib --listFiles --noEmit globals.d.ts bad.ts ;; --ignoreConfig --pretty --noLib --listFilesOnly globals.d.ts bad.ts
+info-ignoreconfig | info | 1 | --listFiles --noEmit globals.d.ts bad.ts
+info-listemitted | info | 0 0 0 0 | --listEmittedFiles ;; --listEmittedFiles --noEmit ;; -p tsconfig.ext.json --listEmittedFiles ;; --listEmittedFiles --declaration --sourceMap --outDir out2
+info-explain | info | 0 0 0 | --explainFiles --noEmit ;; -p tsconfig.ext.json --explainFiles --noEmit ;; --explainFiles --listFilesOnly --pretty
+info-explain-node16 | info | 2 | -p tsconfig.node16.json --explainFiles
+info-showconfig | info | 0 0 0 0 0 | --showConfig ;; -p tsconfig.ext.json --showConfig ;; --showConfig --strict false --target es2022 ;; -p tsconfig.node16.json --showConfig ;; --showConfig --noEmit --lib es2020,dom --types ambient,pkg
+info-showconfig-errors | info | 1 1 0 | --showConfig bad.ts ;; -p tsconfig.missing.json --showConfig ;; --showConfig --pretty
+info-init | info-init | 1 0 0 0 | --showConfig ;; --init ;; --showConfig ;; --init
+info-init-options | info-init | 0 | --init --target es2020 --module commonjs --strict false --outDir dist --lib es2020,dom --jsx react --declaration --noEmit --types node
+info-init-bad | info-init | 1 0 | --init --target nope ;; --init x.ts
+info-init-existing | info | 0 | --init
+info-trace | info | 0 0 | --traceResolution --noEmit ;; --traceResolution --listFilesOnly --pretty
+info-trace-ext | info | 0 | -p tsconfig.ext.json --traceResolution --noEmit
+info-trace-node16 | info | 2 2 | -p tsconfig.node16.json --traceResolution ;; -p tsconfig.node16.json --traceResolution --moduleResolution bundler --module esnext
+info-trace-classic | info | 2 | --ignoreConfig --noLib --noEmit --moduleResolution classic --module amd --traceResolution globals.d.ts src/main.ts
+info-diagnostics | info | 0 0 | @stats --diagnostics --noEmit ;; @stats --diagnostics
+info-extended | info | 0 0 0 | @stats --extendedDiagnostics --noEmit ;; @stats --extendedDiagnostics ;; @stats -p tsconfig.ext.json --extendedDiagnostics
+info-extended-errors | info | 2 2 | @stats --extendedDiagnostics --ignoreConfig --noLib --noEmit globals.d.ts bad.ts ;; @stats --diagnostics --pretty --ignoreConfig --noLib --noEmit globals.d.ts bad.ts
+info-extended-lib | info | 0 | @stats --extendedDiagnostics --noEmit --ignoreConfig --lib es5 src/util.ts
+info-trace-file | info | 0 0 | --generateTrace trace-out --noEmit ;; -p tsconfig.ext.json --generateTrace deep/er/trace-ext --noEmit
+info-cpuprofile | info | 0 0 | --generateCpuProfile prof.cpuprofile --noEmit ;; -p tsconfig.ext.json --generateCpuProfile out/prof-ext.cpuprofile --noEmit
+info-cpuprofile-stats | info | 0 | @stats --generateCpuProfile prof.cpuprofile --extendedDiagnostics --noEmit
+info-cpuprofile-errors | info | 2 | --generateCpuProfile prof.cpuprofile --ignoreConfig --noLib --noEmit globals.d.ts bad.ts

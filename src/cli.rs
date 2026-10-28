@@ -42,6 +42,12 @@ struct Cli {
     #[arg(long = "node")]
     node: bool,
 
+    /// With `--node`, let user code `require('internal/...')` the embedded
+    /// builtin modules (Node's `--expose-internals`). Accepted and ignored
+    /// without `--node`.
+    #[arg(long = "expose-internals")]
+    expose_internals: bool,
+
     /// Stop the run, uncatchably, after N counted steps (statement boundaries,
     /// loop back-edges, microtask jobs, timer callbacks); exits with status 124.
     #[arg(long = "step-budget", value_name = "N")]
@@ -134,6 +140,7 @@ struct NodeLaunch {
     script: Option<PathBuf>,
     args: Vec<String>,
     main_kind: NodeMainKind,
+    expose_internals: bool,
 }
 
 /// The program to run for the script `path`. Under `--node` a script file is
@@ -164,6 +171,7 @@ fn run_source_with_interp(
     source: &str,
     is_module: bool,
     path: Option<&Path>,
+    eval_main: bool,
 ) -> Result<(), EngineError> {
     let mut p = parser::Parser::new(source).map_err(|e| EngineError::Parse(format!("{e:?}")))?;
     let program = if is_module {
@@ -173,8 +181,15 @@ fn run_source_with_interp(
         p.parse_program()
             .map_err(|e| EngineError::Parse(format!("{e:?}")))?
     };
+    let origin = p.source_origin();
+    if eval_main && !is_module {
+        interp.node_note_eval_origin(origin.clone());
+    }
     let result = if let Some(p) = path {
-        interp.note_script_source(p, source);
+        interp.note_script_source(p, source, is_module);
+        if is_module {
+            interp.node_note_main_module_origin(p, origin);
+        }
         interp.run_with_path(&program, p)
     } else {
         interp.run(&program)
@@ -270,6 +285,7 @@ fn new_interp(
             .map_or_else(|_| argv0.clone(), |p| p.to_string_lossy().into_owned());
         interp.set_node_host_argv(argv0, exec_path, launch.script.clone(), launch.args.clone());
         interp.set_node_host_main_kind(launch.main_kind);
+        interp.set_node_host_expose_internals(launch.expose_internals);
         if let Err(msg) = interp.load_node_prelude() {
             eprintln!("jsse: internal error: {msg}");
             std::process::exit(70);
@@ -289,7 +305,7 @@ fn execute_code(
     step_budget: Option<u64>,
 ) -> ExitCode {
     let mut interp = new_interp(can_block, bytecode, node, step_budget);
-    let result = run_source_with_interp(&mut interp, code, is_module, path);
+    let result = run_source_with_interp(&mut interp, code, is_module, path, path.is_none());
     interp.node_host_finish();
     let exit = exit_code_from_result(&interp, result);
     retire_interpreter(interp);
@@ -355,7 +371,7 @@ fn run_repl(interp: &mut interpreter::Interpreter) -> ExitCode {
             Ok(_) => {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
-                    let repl_result = run_source_with_interp(interp, trimmed, false, None);
+                    let repl_result = run_source_with_interp(interp, trimmed, false, None, false);
                     // A `__host_exit` (issue #229) surfaces as a sentinel
                     // Runtime error; honor the exit code before reporting it,
                     // matching the file/eval paths' `exit_code_from_result`.
@@ -388,6 +404,7 @@ pub(crate) fn run_main() -> ExitCode {
     let launch = cli.node.then(|| NodeLaunch {
         main_kind: NodeMainKind::for_launch(cli.file.as_deref(), cli.eval.is_some(), cli.module),
         script: cli.file.clone(),
+        expose_internals: cli.expose_internals,
         args: cli
             .script_args
             .iter()
@@ -449,7 +466,7 @@ fn run_with_preludes(
                 return exit_after_execution(interp, 1);
             }
         };
-        let prelude_result = run_source_with_interp(interp, &source, false, None);
+        let prelude_result = run_source_with_interp(interp, &source, false, None, false);
         // A prelude that called `__host_exit` is a clean exit, not an error.
         if interp.pending_exit.is_some() {
             return exit_code_from_result(interp, prelude_result);
@@ -470,7 +487,7 @@ fn run_with_preludes(
 
     // Now run the main input.
     if let Some(code) = &cli.eval {
-        let result = run_source_with_interp(interp, code, cli.module, None);
+        let result = run_source_with_interp(interp, code, cli.module, None, true);
         interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else if let Some(path) = &cli.file {
@@ -483,7 +500,7 @@ fn run_with_preludes(
         };
         let is_module = is_module_main(path, cli.module, node);
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path));
+        let result = run_source_with_interp(interp, &source, is_module, Some(&abs_path), false);
         interp.node_host_finish();
         exit_code_from_result(interp, result)
     } else {

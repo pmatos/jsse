@@ -14,9 +14,9 @@ pub(crate) use super::node_host_stack_sources::NodeStackState;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const HOOK_ERROR: PrivateId = PrivateId(u64::MAX - 2);
-const HOOK_GETTER: PrivateId = PrivateId(u64::MAX - 3);
-const HOOK_SETTER: PrivateId = PrivateId(u64::MAX - 4);
+pub(super) const HOOK_ERROR: PrivateId = PrivateId(u64::MAX - 2);
+pub(super) const HOOK_GETTER: PrivateId = PrivateId(u64::MAX - 3);
+pub(super) const HOOK_SETTER: PrivateId = PrivateId(u64::MAX - 4);
 const FRAMES: PrivateId = PrivateId(u64::MAX - 5);
 
 const FLAG_CONSTRUCTOR: f64 = 1.0;
@@ -45,6 +45,7 @@ struct RawFrame {
     pos: u32,
     receiver: Option<JsValue>,
     constructor: bool,
+    called_with: bool,
 }
 
 fn string_value(text: &str) -> JsValue {
@@ -53,10 +54,14 @@ fn string_value(text: &str) -> JsValue {
 
 impl Interpreter {
     /// Called by the CLI for the main script, so its frames carry its path.
-    /// The CommonJS bootstrap stub stands in for the file and stays unnamed.
-    pub fn note_script_source(&mut self, path: &std::path::Path, source: &str) {
+    pub fn note_script_source(&mut self, path: &std::path::Path, source: &str, module: bool) {
         if self.node_host.stack.installed && source != Self::node_main_bootstrap() {
-            let name: Rc<str> = Rc::from(path.to_string_lossy().as_ref());
+            let path = path.to_string_lossy();
+            let name: Rc<str> = Rc::from(if module {
+                super::node_host_stack_sources::file_url(&path)
+            } else {
+                path.into_owned()
+            });
             self.node_host
                 .stack
                 .scripts
@@ -64,46 +69,10 @@ impl Interpreter {
         }
     }
 
-    fn own_data_string(&self, id: u64, key: &str) -> Option<String> {
+    pub(super) fn own_data_string(&self, id: u64, key: &str) -> Option<String> {
         let obj = self.get_object(id)?;
         let value = obj.borrow().get_own_property(key)?.value?;
         value.as_string().map(|s| s.to_string())
-    }
-
-    fn receiver_type_name(&self, receiver: &JsValue) -> Option<String> {
-        let mut id = receiver.as_object_id()?;
-        if self.realm().global_object == Some(id) {
-            return None;
-        }
-        if self.is_callable(receiver) {
-            return Some(
-                self.own_data_string(id, "name")
-                    .filter(|n| !n.is_empty())
-                    .unwrap_or_else(|| "Function".to_string()),
-            );
-        }
-        for _ in 0..64 {
-            let obj = self.get_object(id)?;
-            let (ctor, proto) = {
-                let b = obj.borrow();
-                if b.is_proxy() {
-                    break;
-                }
-                let ctor = b
-                    .get_own_property("constructor")
-                    .and_then(|d| d.value)
-                    .and_then(|v| v.as_object_id());
-                (ctor, b.prototype_id)
-            };
-            if let Some(ctor) = ctor {
-                if let Some(name) = self.own_data_string(ctor, "name").filter(|n| !n.is_empty()) {
-                    return Some(name);
-                }
-                break;
-            }
-            id = proto?;
-        }
-        Some("Object".to_string())
     }
 
     /// How many frames, counted from the first one after `skip_top`, end with
@@ -145,14 +114,18 @@ impl Interpreter {
             if out.len() >= limit {
                 break;
             }
-            if frame.func_obj_id == 0 {
+            let id = frame.func_obj_id;
+            if id == 0 || self.node_host.stack.hidden_frames.iter().any(|h| h.0 == id) {
                 continue;
             }
             let pos = match frames.get(i + 1) {
                 Some(callee) => callee.caller_pos,
                 None => self.node_host.call_pos,
             };
+            let arrow_this = self.node_arrow_receiver(i);
+            let called_with = arrow_this.is_some();
             let (receiver, constructor) = match self.call_stack_envs.get(frame.env_index) {
+                Some(_) if called_with => (arrow_this, false),
                 Some(env) if !frame.is_eval => {
                     let env = env.borrow();
                     (env.get_this(), env.get_new_target().is_object())
@@ -164,6 +137,7 @@ impl Interpreter {
                 pos,
                 receiver,
                 constructor,
+                called_with,
             });
         }
         out
@@ -173,28 +147,56 @@ impl Interpreter {
         let mut name = None;
         let mut origin = None;
         let mut arrow = false;
+        let mut module_file = None;
+        let mut inferred = None;
         if let Some(obj) = self.get_object(raw.func)
             && let Some(JsFunction::User {
                 name: declared,
                 source_text,
                 is_arrow,
+                closure,
                 ..
             }) = obj.borrow().callable.as_deref()
         {
             name = declared.clone();
             arrow = *is_arrow;
+            inferred = source_text
+                .as_ref()
+                .and_then(crate::parser::inferred_names::inferred_name)
+                .map(|name| name.to_string());
             origin = source_text.as_ref().map(|t| {
                 let (source, start) = t.origin();
                 (source.clone(), start)
             });
+            if self.node_host.esm.is_active() {
+                module_file = Environment::find_module_path(closure)
+                    .and_then(|key| key.file_path().map(|p| p.to_string_lossy().into_owned()));
+            }
+        }
+        if let (Some(file), Some((source, _))) = (&module_file, &origin) {
+            self.node_host.stack.name_module_source(source, file);
+        }
+        if origin.is_none()
+            && let Some(source) = self.node_host.stack.script_frame_source(raw.func)
+        {
+            origin = Some((source, 0));
         }
         if let Some(own) = self.own_data_string(raw.func, "name") {
             name = Some(own);
         }
-        let type_name = match (&raw.receiver, arrow) {
+        if name.as_deref().is_none_or(str::is_empty) {
+            name = inferred;
+        }
+        let type_name = match (&raw.receiver, arrow && !raw.called_with) {
             (Some(receiver), false) => self.receiver_type_name(receiver),
             _ => None,
         };
+        if (!arrow || raw.called_with)
+            && name.as_deref().is_none_or(str::is_empty)
+            && let Some(receiver) = &raw.receiver
+        {
+            name = self.method_name_of(receiver, raw.func);
+        }
         let (source_id, pos) = match origin {
             Some((source, start)) => {
                 let id = self.node_host.stack.source_id(&source);
@@ -246,12 +248,15 @@ impl Interpreter {
     /// accessor. `skip_top` drops the innermost prelude frames, `until` drops
     /// everything up to and including that function (`captureStackTrace`'s
     /// constructor argument). Does nothing before the prelude installed the
-    /// hooks or when `Error.stackTraceLimit` is not a number.
+    /// hooks or when `Error.stackTraceLimit` is not a number. `stack_first`
+    /// puts the accessor before the error's other own keys, as V8 does for
+    /// an error it constructs (`captureStackTrace` appends it).
     pub(crate) fn node_capture_stack(
         &mut self,
         target: u64,
         skip_top: usize,
         until: Option<Until>,
+        stack_first: bool,
     ) {
         if !self.node_host.stack.installed {
             return;
@@ -285,6 +290,17 @@ impl Interpreter {
         {
             let mut b = handle.borrow_mut();
             b.set_hidden_slot(FRAMES, frames.clone());
+            let earlier = if stack_first && b.get_own_property("stack").is_none() {
+                b.properties
+                    .iter()
+                    .map(|(key, record)| (key.clone(), record.to_descriptor()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            for (key, _) in &earlier {
+                b.remove_property(key);
+            }
             b.insert_property(
                 "stack".to_string(),
                 PropertyDescriptor::accessor(
@@ -294,6 +310,9 @@ impl Interpreter {
                     true,
                 ),
             );
+            for (key, descriptor) in earlier {
+                b.insert_property(key, descriptor);
+            }
         }
         for value in [&frames, &getter, &setter] {
             self.gc_write_barrier_value(&handle, value);
@@ -318,6 +337,7 @@ impl Interpreter {
                 }
                 interp.node_host.stack.installed = true;
                 CALL_POSITIONS.store(true, Ordering::Relaxed);
+                crate::parser::inferred_names::enable();
                 Completion::Normal(JsValue::UNDEFINED)
             },
         ));
@@ -329,7 +349,7 @@ impl Interpreter {
             |interp, _this, args| {
                 let until = args.get(1).and_then(JsValue::as_object_id).map(Until::Seen);
                 if let Some(target) = args.first().and_then(JsValue::as_object_id) {
-                    interp.node_capture_stack(target, 1, until);
+                    interp.node_capture_stack(target, 1, until, false);
                 }
                 Completion::Normal(JsValue::UNDEFINED)
             },
@@ -440,7 +460,8 @@ const ERROR_CONSTRUCTORS: [&str; 9] = [
 impl Interpreter {
     /// Capture a stack on an error the engine just created, and return it.
     pub(crate) fn node_capture_error(&mut self, id: u64) -> JsValue {
-        self.node_capture_stack(id, 0, None);
+        self.node_inherit_error_name(id);
+        self.node_capture_stack(id, 0, None, true);
         JsValue::object(id)
     }
 
@@ -468,7 +489,7 @@ impl Interpreter {
                     && let Some(error) = value.as_object_id()
                 {
                     let until = until.filter(|&n| n != ctor).map(Until::Constructor);
-                    interp.node_capture_stack(error, 0, until);
+                    interp.node_capture_stack(error, 0, until, true);
                 }
                 result
             });
@@ -477,9 +498,8 @@ impl Interpreter {
 }
 
 impl Interpreter {
-    /// Gives a hosted async body its own frame, so `--node` stack traces show
-    /// it; the frame is visible only once the prelude installed the hooks.
-    /// The body's environment is the innermost one on `call_stack_envs`.
+    /// Gives a hosted async body its own frame once the hooks are installed.
+    /// Its environment is the innermost one on `call_stack_envs`.
     pub(crate) fn push_async_stack_frame(&mut self, func_obj_id: u64) -> bool {
         if !self.node_host.stack.installed {
             return false;
