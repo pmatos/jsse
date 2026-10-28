@@ -231,7 +231,9 @@ impl<'a> Parser<'a> {
             } else if is_binding {
                 imported.clone()
             } else {
-                return Err(self.error("Expected 'as' after a non-identifier import name"));
+                return Err(self.error(
+                    "An imported name that is not a valid binding identifier requires 'as'",
+                ));
             };
 
             specifiers.push(ImportSpecifier::Named { imported, local });

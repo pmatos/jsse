@@ -12,7 +12,7 @@ impl<'a> Parser<'a> {
             return Ok(s);
         }
         // Accept any identifier name (including keywords)
-        if let Some(name) = self.current_identifier_name_including_keywords() {
+        if let Some(name) = self.export_name_text() {
             self.advance()?;
             return Ok(name);
         }
@@ -38,58 +38,13 @@ impl<'a> Parser<'a> {
         false
     }
 
-    pub(super) fn current_identifier_name_including_keywords(&self) -> Option<String> {
+    fn export_name_text(&self) -> Option<String> {
         match &self.current {
             Token::Identifier(name) | Token::IdentifierWithEscape(name) => Some(name.clone()),
-            Token::Keyword(kw) => Some(keyword_to_string(kw)),
+            Token::Keyword(kw) => Some(kw.to_string()),
             Token::NullLiteral => Some("null".to_string()),
             Token::BooleanLiteral(b) => Some(b.to_string()),
             _ => None,
         }
     }
-}
-
-fn keyword_to_string(kw: &Keyword) -> String {
-    match kw {
-        Keyword::Async => "async",
-        Keyword::Await => "await",
-        Keyword::Break => "break",
-        Keyword::Case => "case",
-        Keyword::Catch => "catch",
-        Keyword::Class => "class",
-        Keyword::Const => "const",
-        Keyword::Continue => "continue",
-        Keyword::Debugger => "debugger",
-        Keyword::Default => "default",
-        Keyword::Delete => "delete",
-        Keyword::Do => "do",
-        Keyword::Else => "else",
-        Keyword::Enum => "enum",
-        Keyword::Export => "export",
-        Keyword::Extends => "extends",
-        Keyword::Finally => "finally",
-        Keyword::For => "for",
-        Keyword::Function => "function",
-        Keyword::If => "if",
-        Keyword::Import => "import",
-        Keyword::In => "in",
-        Keyword::Instanceof => "instanceof",
-        Keyword::Let => "let",
-        Keyword::New => "new",
-        Keyword::Of => "of",
-        Keyword::Return => "return",
-        Keyword::Static => "static",
-        Keyword::Super => "super",
-        Keyword::Switch => "switch",
-        Keyword::This => "this",
-        Keyword::Throw => "throw",
-        Keyword::Try => "try",
-        Keyword::Typeof => "typeof",
-        Keyword::Var => "var",
-        Keyword::Void => "void",
-        Keyword::While => "while",
-        Keyword::With => "with",
-        Keyword::Yield => "yield",
-    }
-    .to_string()
 }
