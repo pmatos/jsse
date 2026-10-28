@@ -269,8 +269,7 @@ fn params(interp: &mut Interpreter, _t: &JsValue, args: &[JsValue]) -> Completio
             let err = ctx.set_params(level, strategy);
             error_value(interp, err)
         }
-        Some(Codec::Brotli(_)) => Completion::Normal(JsValue::UNDEFINED),
-        None => stale(interp),
+        _ => stale(interp),
     }
 }
 
@@ -326,7 +325,7 @@ impl Interpreter {
         let functions: [(&str, usize, Native); 8] = [
             ("create", 1, create),
             ("init", 7, init),
-            ("brotliInit", 2, brotli_init),
+            ("brotliInit", 3, brotli_init),
             ("write", 9, write),
             ("params", 3, params),
             ("reset", 1, reset),

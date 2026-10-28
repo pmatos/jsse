@@ -244,7 +244,7 @@ impl BrotliCtx {
             BrotliCtx::Decode { error, .. } if *error != 0 => Some(ZError {
                 message: "Decompression failed".into(),
                 errno: *error,
-                code: decoder_error_code(*error),
+                code: decoder_error_code(*error).into(),
             }),
             BrotliCtx::Decode { flush, last, .. }
                 if *flush == 2 && *last == LastResult::NeedsMoreInput =>
@@ -262,17 +262,26 @@ impl BrotliCtx {
 
 /// The decoder's error code as libbrotli numbers it. This crate classifies two
 /// failures differently, and the state it failed in tells them apart (its state
-/// enum is not exported to name, so it is matched by its `Debug` name):
+/// enum is not exported to name, so it is matched by its `Debug` name; the
+/// unit tests and the oracle's mutation fuzz pin the cases below):
 /// nonzero padding before a metadata or uncompressed block is PADDING_1 (-14)
 /// there but PADDING_2 (-15) here, and a copy running past the end of its
 /// metablock is BLOCK_LENGTH_2 (-10) there, found before the padding check or
 /// the ring-buffer write that report -15 and BLOCK_LENGTH_1 (-9) here.
 fn decoder_errno(state: &Decoder) -> i32 {
     let errno = state.error_code as i32;
+    if errno != -15 && errno != -9 {
+        return errno;
+    }
     let overran = state.meta_block_remaining_len < 0;
     match (errno, format!("{:?}", state.state).as_str()) {
         (-15, "BROTLI_STATE_METABLOCK_HEADER") => -14,
-        (-15, "BROTLI_STATE_METABLOCK_DONE") | (-9, "BROTLI_STATE_DONE") if overran => -10,
+        (-15, "BROTLI_STATE_METABLOCK_DONE")
+        | (-9, "BROTLI_STATE_DONE" | "BROTLI_STATE_COMMAND_POST_WRITE_2")
+            if overran =>
+        {
+            -10
+        }
         _ => errno,
     }
 }
@@ -304,7 +313,6 @@ fn decoder_error_code(errno: i32) -> String {
         -26 => "_ERROR_ALLOC_RING_BUFFER_1",
         -27 => "_ERROR_ALLOC_RING_BUFFER_2",
         -30 => "_ERROR_ALLOC_BLOCK_TYPE_TREES",
-        -31 => "_ERROR_UNREACHABLE",
         _ => "_ERROR_UNREACHABLE",
     };
     format!("ERR_{name}")
@@ -348,7 +356,7 @@ mod tests {
         run(&mut dec, 2, &packed[..5]);
         let err = dec.error_info().expect("error");
         assert_eq!(
-            (err.message.as_str(), err.code.as_str(), err.errno),
+            (err.message.as_str(), &*err.code, err.errno),
             ("unexpected end of file", "Z_BUF_ERROR", -5)
         );
     }
@@ -359,9 +367,38 @@ mod tests {
         run(&mut dec, 2, b"hello world, not brotli");
         let err = dec.error_info().expect("error");
         assert_eq!(
-            (err.message.as_str(), err.code.as_str(), err.errno),
+            (err.message.as_str(), &*err.code, err.errno),
             ("Decompression failed", "ERR__ERROR_FORMAT_CL_SPACE", -6)
         );
+    }
+
+    fn decode_error(input: &[u8]) -> (i32, String) {
+        let mut dec = BrotliCtx::new(true);
+        run(&mut dec, 2, input);
+        let err = dec.error_info().expect("error");
+        (err.errno, err.code.into_owned())
+    }
+
+    #[test]
+    fn crate_error_numbers_are_mapped_to_libbrotlis() {
+        assert_eq!(
+            decode_error(b"this is not brotli data at all"),
+            (-14, "ERR__ERROR_FORMAT_PADDING_1".to_string())
+        );
+        let packed = [
+            0x1b, 0x8c, 0x00, 0x00, 0x24, 0x40, 0x7a, 0x90, 0x45, 0x9a, 0x01, 0x4c, 0x2f, 0xd3,
+            0xe5, 0xe1, 0x69, 0xad, 0x32, 0x4e, 0x00,
+        ];
+        assert_eq!(decode_error(&packed_with_flip(&packed, 1, 0)).0, -10);
+        assert_eq!(decode_error(&packed_with_flip(&packed, 1, 7)).0, -10);
+        assert_eq!(decode_error(&packed_with_flip(&packed, 10, 5)).0, -10);
+        assert_eq!(decode_error(&packed_with_flip(&packed, 19, 3)).0, -15);
+    }
+
+    fn packed_with_flip(packed: &[u8], at: usize, bit: u32) -> Vec<u8> {
+        let mut bad = packed.to_vec();
+        bad[at] ^= 1 << bit;
+        bad
     }
 
     #[test]
