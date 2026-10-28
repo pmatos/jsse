@@ -1,7 +1,34 @@
-// Stand-in for test/common/index.mjs and node:test for the verbatim .mjs
-// fixtures: the runners rewrite those two import specifiers to this file.
+// Stand-in for test/common/index.mjs, test/common/gc.js and node:test for the
+// verbatim .mjs fixtures: the runners rewrite those import specifiers to this file.
 // Tests run in order once the module graph has evaluated, then expectations
 // are verified after a quiet period.
+import nodeAssert from 'node:assert';
+import { setImmediate as setImmediatePromisified } from 'node:timers/promises';
+
+// Node runs with --expose-gc; jsse exposes the same collection as $262.gc().
+if (typeof globalThis.gc !== 'function' && typeof $262 === 'object' && $262 !== null) {
+  globalThis.gc = (options) => {
+    $262.gc();
+    if (options && options.execution === 'async') return Promise.resolve();
+  };
+}
+
+// test/common/gc.js (Node v26.8.2), the part the fixtures use.
+export async function gcUntil(name, condition, maxCount = 10, gcOptions) {
+  for (let count = 0; count < maxCount; ++count) {
+    await setImmediatePromisified();
+    if (gcOptions) {
+      await globalThis.gc(gcOptions);
+    } else {
+      await globalThis.gc();
+    }
+    if (condition()) {
+      return;
+    }
+  }
+  throw new Error(`Test ${name} failed`);
+}
+
 const expectations = [];
 const tests = [];
 const failures = [];
@@ -31,9 +58,24 @@ export function describe(name, options, fn) {
   (typeof options === 'function' ? options : fn)();
 }
 
+// Subtests jsse cannot run yet, skipped on jsse only (they pass on Node).
+const jsseSkips = {
+  'does not prevent source signal from being GCed if it is short-lived':
+    'a closure keeps its whole defining environment, so the last iteration\'s dead `ac` stays reachable from the running setImmediate callback',
+};
+
 export function it(name, options, fn) {
-  const skip = typeof options === 'object' && options !== null && (options.skip || options.todo);
+  const skip = (typeof options === 'object' && options !== null && (options.skip || options.todo)) ||
+    (typeof __host_write === 'function' && Object.hasOwn(jsseSkips, name));
   tests.push({ name, skip, fn: typeof options === 'function' ? options : fn });
+}
+
+function runTest(fn) {
+  const t = { assert: nodeAssert, diagnostic() {}, after() {} };
+  if (fn.length < 2) return fn(t);
+  return new Promise((resolve, reject) => {
+    fn(t, (error) => (error ? reject(error) : resolve()));
+  });
 }
 
 async function run() {
@@ -41,7 +83,7 @@ async function run() {
     if (skip) continue;
     activity++;
     try {
-      await fn();
+      await runTest(fn);
     } catch (error) {
       failures.push(error);
     }

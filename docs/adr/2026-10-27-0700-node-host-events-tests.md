@@ -91,3 +91,22 @@ Addendum (#1317): `$262.gc()` now collects `WeakRef` targets, so the three
 `gc` subtests, `A weak event listener should not prevent gc` and the
 `~test-eventtarget` patched block above are gone; those tests run verbatim
 (ADR-2026-10-28-0200).
+
+Addendum (#1223, third step): two more tests are vendored, 47 in all (45 before).
+`test-abortsignal-drop-settled-signals.mjs` imports
+`../common/gc.js`: `esm-shim.mjs` now stands in for it too (`gcUntil` copied from
+Node's `test/common/gc.js`; `onGC` needs `async_hooks` and no fixture here uses it),
+installs `globalThis.gc` from `$262.gc` when the host has none (an `{ execution:
+'async' }` call returns a promise), and runs `it(name, (t, done) => ...)` with a
+`t.assert` and a callback `done` as `node:test` does. One subtest is skipped on
+jsse by name (`jsseSkips` in the shim): `does not prevent source signal from being
+GCed if it is short-lived`, because a closure keeps its whole defining environment
+and the last loop iteration's dead `ac` is reachable from the running
+`setImmediate` callback (V8 allocates only captured variables; the spec lets an
+engine keep it alive). `test-eventtarget-memoryleakwarning` runs with two
+jsse-only patches that swap the two `MessageChannel` ports for a plain
+`EventTarget` (and the expected `[MessagePort [EventTarget]]` text for
+`EventTarget`); Node runs the text verbatim. Still not vendored, the host having
+no `MessageChannel`, `async_hooks` or `domain`: `test-abortsignal-cloneable`,
+`test-eventemitter-asyncresource`,
+`test-event-emitter-no-error-provided-to-error-event`.
