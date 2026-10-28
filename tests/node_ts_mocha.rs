@@ -103,6 +103,7 @@ fn mocha_matches_node_when_a_typescript_checkout_is_given() {
             "par-run-project",
             "par-crash-exit",
             "par-crash-kill",
+            "eslint-*",
         ])
         .output()
         .expect("run python3");

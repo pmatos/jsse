@@ -9,6 +9,7 @@ use libz_rs_sys::{
     deflateParams, deflateReset, deflateSetDictionary, inflate, inflateEnd, inflateInit2_,
     inflateReset, inflateSetDictionary, z_stream, zlibVersion,
 };
+use std::borrow::Cow;
 use std::ffi::CStr;
 use std::os::raw::c_int;
 
@@ -53,7 +54,7 @@ impl Mode {
 pub(super) struct ZError {
     pub(super) message: String,
     pub(super) errno: c_int,
-    pub(super) code: &'static str,
+    pub(super) code: Cow<'static, str>,
 }
 
 fn strerror(err: c_int) -> &'static str {
@@ -147,7 +148,7 @@ impl ZCtx {
         ZError {
             message,
             errno: self.err,
-            code: strerror(self.err),
+            code: Cow::Borrowed(strerror(self.err)),
         }
     }
 
@@ -448,7 +449,7 @@ mod tests {
         ctx.work(Z_FINISH, &zlib[..zlib.len() - 3], &mut out);
         let err = ctx.error_info().expect("error");
         assert_eq!(
-            (err.message.as_str(), err.code),
+            (err.message.as_str(), &*err.code),
             ("unexpected end of file", "Z_BUF_ERROR")
         );
         assert_eq!(err.errno, -5);
@@ -462,7 +463,7 @@ mod tests {
         ctx.work(Z_FINISH, b"not zlib data", &mut out);
         let err = ctx.error_info().expect("error");
         assert_eq!(
-            (err.message.as_str(), err.code),
+            (err.message.as_str(), &*err.code),
             ("incorrect header check", "Z_DATA_ERROR")
         );
     }

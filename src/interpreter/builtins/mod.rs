@@ -1,5 +1,6 @@
 pub(crate) mod array;
 pub(crate) mod array_dense;
+mod array_transform;
 mod atomics;
 pub(crate) mod bigint;
 mod collections;
@@ -20,6 +21,7 @@ mod json;
 mod math;
 mod merge_sort;
 pub(crate) mod node_host;
+mod node_host_brotli_ctx;
 mod node_host_builtins;
 #[cfg(unix)]
 mod node_host_child;

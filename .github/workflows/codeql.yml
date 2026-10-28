@@ -21,7 +21,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze (Rust)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       security-events: write # upload SARIF results to the Security tab

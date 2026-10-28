@@ -9,7 +9,8 @@ mocha's CLI (node_modules/mocha/bin/_mocha, the way `hereby runtests` does) with
 scripts/ts-mocha-fixtures (passing, failing, timing-out, uncaught and late errors, hooks, exit hooks) and on
 the TypeScript runner built/local/run.js, whose test.config selects one trivial unit-test suite. Stdout, stderr,
 the exit code and the files the run leaves behind (.failed-tests, TEST-results.xml) must be identical after
-normalising paths, durations and the stack frames jsse does not have (see normalise()). Never builds anything.
+normalising paths, durations and the stack frames jsse does not have (see normalise()). The `eslint-*` cases
+(scripts/ts_eslint_cases.py, issue #1294) run `hereby run-eslint-rules-tests` itself. Never builds anything.
 Exits 1 on any difference.
 
 Each run gets its own working directory of symlinks into the checkout (built, node_modules, scripts, src, the test
@@ -49,12 +50,14 @@ LINKS = ("built", "node_modules", "scripts", "lib", "src", "package.json")
 TEST_INPUTS = ("cases", "lib")
 COMMON = ["--no-colors", "-t", "40000"]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ts_eslint_cases as eslint  # noqa: E402
 import ts_runner_cli_cases as cli  # noqa: E402
 import ts_runner_parallel_cases as parallel  # noqa: E402
 from ts_mocha_cases import CASES  # noqa: E402
 
 CASES.extend(cli.cli_cases())
 CASES.extend(parallel.parallel_cases())
+CASES.extend(eslint.eslint_cases())
 
 EXEC_LINE = re.compile(r"^> \S+ ", re.M)
 HEREBY_TIME = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m)\b")
@@ -70,6 +73,10 @@ ARROW = r"(?:[\w$]+\.(?:<anonymous>|&#x3C;anonymous&#x3E;)|Timeout\._onTimeout|I
 RECEIVER_FRAME = re.compile(r"^(\s+at )" + ARROW + r" \((.*:\d+:\d+)\)")
 PID = re.compile(r"\(node:\d+\)")
 SLOW_MARK = re.compile(r"^(\s*✔ .*?) \(<T>\)$", re.M)
+SLOW_TITLE = re.compile(
+    r" \(<T>\)$", re.M
+)  # a multi-line test title ends on the line the mark lands on
+NATIVE_FRAME = re.compile(r"^ +at [^\n(]*\(<anonymous>\)\n", re.M)  # `at Array.forEach`
 
 
 def normalise(text, work, ts_dir):
@@ -108,7 +115,7 @@ def normalise(text, work, ts_dir):
 TIME_KEYS = ("duration", "start", "end")
 
 
-def normalise_json(text, work, ts_dir, stream=False):
+def normalise_json(text, work, ts_dir, stream=False, time_keys=TIME_KEYS):
     """The json and json-stream reporters embed stacks in strings and list error keys in own-property order
     (V8 puts `stack` first, jsse after `message`): normalise the stacks line by line, sort the keys and blank
     the timestamps. Text a test printed before or after the report goes through normalise(); json-stream
@@ -120,7 +127,7 @@ def normalise_json(text, work, ts_dir, stream=False):
         if isinstance(v, list):
             return [walk(x) for x in v]
         if isinstance(v, dict):
-            return {k: "<T>" if k in TIME_KEYS else walk(x) for k, x in v.items()}
+            return {k: "<T>" if k in time_keys else walk(x) for k, x in v.items()}
         return v
 
     def dump(doc):
@@ -156,15 +163,18 @@ def prepare(work, engine, c, ts_dir):
         os.symlink(
             os.path.join(ts_dir, "tests", link), os.path.join(cwd, "tests", link)
         )
-    if c.kind == "accept":
+    if c.kind in ("accept", "eslint"):
         shutil.copy(os.path.join(ts_dir, "Herebyfile.mjs"), cwd)
+    if c.kind == "accept":
         cli.seed_baselines(cwd)
+    elif c.kind == "eslint":
+        eslint.link_scripts(cwd, ts_dir, c.specs)
     else:
         os.symlink(
             os.path.join(ts_dir, "tests", "baselines", "reference"),
             os.path.join(cwd, "tests", "baselines", "reference"),
         )
-    for spec in c.specs:
+    for spec in () if c.kind == "eslint" else c.specs:
         if spec != "RUN" and os.path.exists(os.path.join(FIX, spec)):
             shutil.copy(os.path.join(FIX, spec), cwd)
     if c.mocharc:
@@ -198,6 +208,8 @@ def command(engine, exe, cwd, c, flags):
         return (
             [exe] + node_flag + ["node_modules/hereby/bin/hereby.js", "baseline-accept"]
         )
+    if c.kind == "eslint":
+        return [exe] + node_flag + ["node_modules/hereby/bin/hereby.js"] + flags
     if c.kind == "runtests":
         return [exe] + node_flag + ["runtests.mjs"] + flags
     mocha = os.path.join(cwd, "node_modules", "mocha", "bin", "_mocha")
@@ -240,14 +252,20 @@ def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix
     wd = os.path.join(work, engine)
     stream = "json-stream" in flags
 
+    keys = TIME_KEYS + ("speed",) if c.kind == "eslint" else TIME_KEYS
+
     def norm(raw, as_json=False, ndjson=False):
         text = raw.decode("utf-8", "replace")
         if as_json:
-            text = normalise_json(text, cwd, ts_dir, ndjson)
+            text = normalise_json(text, cwd, ts_dir, ndjson, keys)
         text = normalise(text, cwd, ts_dir).replace(wd, "<WORK>")
+        if c.kind in ("runtests", "eslint"):
+            text = EXEC_LINE.sub("> <EXEC> ", text)
         if c.kind == "runtests":
-            text = DISCOVERED.sub("<T>", EXEC_LINE.sub("> <EXEC> ", text))
-        return HEREBY_TIME.sub("<T>", text) if c.kind == "accept" else text
+            text = DISCOVERED.sub("<T>", text)
+        if c.kind == "eslint":
+            text = NATIVE_FRAME.sub("", SLOW_TITLE.sub("", text))
+        return HEREBY_TIME.sub("<T>", text) if c.kind in ("accept", "eslint") else text
 
     result = {
         prefix + "exit": code,
