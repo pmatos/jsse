@@ -1,9 +1,11 @@
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -14,7 +16,9 @@ FIXTURES = SCRIPTS_DIR / "ts-mocha-fixtures"
 spec = importlib.util.spec_from_file_location("run_ts_mocha_oracle", ORACLE)
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
+procs = sys.modules["oracle_procs"]
 cli = oracle.cli
+parallel = oracle.parallel
 
 
 class NormaliseTest(unittest.TestCase):
@@ -282,6 +286,52 @@ class CliCasesTest(unittest.TestCase):
         )
 
 
+class ParallelCasesTest(unittest.TestCase):
+    def cases(self):
+        return [c for c in oracle.CASES if c.name.startswith("par-")]
+
+    def test_parallel_cases_set_the_flag_and_ask_for_several_workers(self):
+        for c in self.cases():
+            self.assertEqual(
+                c.env.get("TS_PARALLEL") == "1", "par-serial" not in c.name
+            )
+            self.assertTrue(c.kind == "runtests" and c.mocharc is None, c.name)
+            if "par-serial" not in c.name:
+                workers = [a for a in c.args if a.startswith("--workers=")]
+                workers += [c.args[i + 1] for i, a in enumerate(c.args) if a == "-w"]
+                self.assertGreaterEqual(int(workers[0].split("=")[-1]), 2, c.name)
+
+    def test_crash_cases_use_the_wrapper_and_expect_an_exit_status(self):
+        crash = [c for c in self.cases() if c.name.startswith("par-crash-")]
+        self.assertGreaterEqual(len(crash), 3)
+        for c in crash:
+            self.assertEqual(c.specs, ["runtests.mjs", "par-crash.js"], c.name)
+            self.assertTrue(any(k == "exit" for k, _ in c.must), c.name)
+
+    def test_counts_read_the_reporter_summary(self):
+        out = "x\n\n  54 passing (<T>)\n  2 failing\n"
+        self.assertEqual(parallel.counts(out), {"passing": 54, "failing": 2})
+
+    def test_a_parallel_run_has_to_agree_with_the_serial_run(self):
+        def res(name, node, jsse):
+            c = cli.Case(name, [], [])
+            return (c, {"stdout": node}, {"stdout": jsse}, {})
+
+        ok = "  %d passing (1s)\n"
+        good = [
+            res("par-serial-compiler", ok % 55, ok % 55),
+            res("par-run-compiler", ok % 54, ok % 54),
+        ]
+        self.assertEqual(parallel.serial_problems(good), [])
+        lost = [good[0], res("par-run-compiler", ok % 54, ok % 50)]
+        self.assertEqual(len(parallel.serial_problems(lost)), 1)
+        same = [good[0], res("par-run-compiler", ok % 55, ok % 55)]
+        self.assertEqual(len(parallel.serial_problems(same)), 1)
+        failing = [good[0], res("par-run-compiler", ok % 54, ok % 54 + "  1 failing\n")]
+        self.assertEqual(len(parallel.serial_problems(failing)), 1)
+        self.assertEqual(parallel.serial_problems(good[:1]), [])
+
+
 class SkipTest(unittest.TestCase):
     def run_oracle(self, env_extra, *args):
         env = {k: v for k, v in os.environ.items() if k != "TS_SRC_DIR"}
@@ -348,6 +398,73 @@ class SkipTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("pass-spec", r.stdout)
         self.assertNotIn("fail-spec", r.stdout)
+
+
+TREE = (
+    "import os, subprocess, sys, time\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "open(sys.argv[1], 'w').write(str(g.pid))\n"
+    "time.sleep(%s)\n"
+)
+
+
+def gone(pid, wait=5.0):
+    end = time.monotonic() + wait
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        time.sleep(0.05)
+    return False
+
+
+class ProcessGroupTest(unittest.TestCase):
+    """A case's whole process tree dies with it, as `hereby runtests-parallel`'s forked workers must."""
+
+    def tree(self, sleep):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        pidfile = os.path.join(d, "pid")
+        return [sys.executable, "-c", TREE % sleep, pidfile], pidfile
+
+    def grandchild(self, pidfile):
+        with open(pidfile) as f:
+            pid = int(f.read())
+        self.addCleanup(lambda: os.path.exists(f"/proc/{pid}") and os.kill(pid, 9))
+        return pid
+
+    def test_a_timeout_kills_the_grandchildren(self):
+        cmd, pidfile = self.tree(60)
+        code, _, _ = procs.run_group(cmd, None, os.environ, 1)
+        self.assertEqual(code, "timeout")
+        self.assertTrue(gone(self.grandchild(pidfile)))
+
+    def test_a_normal_exit_kills_the_stragglers_too(self):
+        cmd, pidfile = self.tree(0.5)
+        code, _, _ = procs.run_group(cmd, None, os.environ, 30)
+        self.assertEqual(code, "0")
+        self.assertTrue(gone(self.grandchild(pidfile)))
+
+    def test_sigterm_to_the_driver_kills_the_tree(self):
+        cmd, pidfile = self.tree(60)
+        driver = (
+            "import sys; sys.path.insert(0, %r); import oracle_procs as p\n"
+            "p.install_cleanup(); p.run_group(%r, None, None, 60)\n"
+        ) % (str(SCRIPTS_DIR), cmd)
+        d = subprocess.Popen([sys.executable, "-c", driver])
+        end = time.monotonic() + 10
+        while not os.path.exists(pidfile) and time.monotonic() < end:
+            time.sleep(0.05)
+        time.sleep(0.2)
+        pid = self.grandchild(pidfile)
+        d.terminate()
+        d.wait(10)
+        self.assertTrue(gone(pid))
 
 
 if __name__ == "__main__":

@@ -122,6 +122,37 @@ fn child_exit_code_and_signal_reach_the_parent() {
 }
 
 #[test]
+fn an_aborted_child_and_a_signalled_worker_report_their_signal() {
+    let source = r#"
+      const { spawn, fork } = require("child_process");
+      const done = [];
+      const finish = (line) => { done.push(line); if (done.length === 2) print(done.sort().join(" | ")); };
+      const abort = spawn(process.execPath, ["-e", "process.abort()"]);
+      abort.on("exit", (code, signal) => finish("abort " + code + " " + signal));
+      const worker = fork(CHILD, ["hold"]);
+      worker.on("message", () => { worker.send("work"); setTimeout(() => worker.kill("SIGABRT"), 50); });
+      let disconnected = false;
+      worker.on("disconnect", () => { disconnected = true; });
+      worker.on("exit", (code, signal) => finish("worker " + code + " " + signal + " " + disconnected));
+    "#;
+    let source = source.replace("CHILD", &format!("{:?}", fixture("fork-child.js")));
+    let out = Command::new("sh")
+        .args(["-c", r#"ulimit -c 0; exec "$0" --node -e "$1""#])
+        .args([env!("CARGO_BIN_EXE_jsse"), &source])
+        .output()
+        .expect("run jsse");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "abort null SIGABRT | worker null SIGABRT true"
+    );
+}
+
+#[test]
 fn child_sees_disconnect_when_the_parent_dies() {
     let source = r#"
       const { fork } = require("child_process");

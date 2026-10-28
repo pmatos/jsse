@@ -139,5 +139,31 @@ stderr, exit status, `.failed-tests` and the baselines the run wrote.
   is `ENOENT` on both. `--timeout=60` against a 250 ms test fails with mocha's timeout error.
 - `hereby baseline-accept` copies seeded local baselines (nested, changed, `.delete` markers) into a private
   reference tree, never the checkout's.
-- Not covered here: the parallel host (`--workers`, #1258) and `hereby runtests-watch`. The `--inspect` flags and
+- Not covered here: `hereby runtests-watch`. The `--inspect` flags and
   coverage need a debugger or `c8`.
+
+## The parallel host, `hereby runtests-parallel` (issue #1258)
+
+`runConsoleTests(runJs, reporter, true)` writes `test.config` (`workerCount` from `--workers/-w`,
+`taskConfigsFolder` under `os.tmpdir()`) and runs `process.execPath built/local/run.js`. run.js then is the host
+(`src/testRunner/parallel/host.ts`): it lists the runners' files, `fork`s `process.argv[1]` once per worker with
+`stdio: ["pipe","pipe","pipe","ipc"]` and `--config=<task-config<i>.json>`, sends `test`/`batch` messages, takes
+`progress`/`result`/`timeout`/`error` back, then replays the collected results into mocha's `Base` reporter and
+writes `.failed-tests` and `.parallelperf.json`. Both processes are `jsse --node`: spawning `process.execPath` and
+`fork` prepend `--node` (fork-ipc ADR, item 8). No engine change was needed for the happy path; the oracle's
+`par-*` cases (`scripts/ts_runner_parallel_cases.py`, fixtures `runtests.mjs` with `TS_PARALLEL=1`, `par-crash.js`)
+diff the whole run with Node.
+
+- Same results as serial: `par-serial-*` and `par-run-*` run the same sample of the compiler, conformance and
+  fourslash runners serially and with 3 workers (also 8); the parallel pass count must equal the serial one minus
+  the one unit test the runner leaks into serial runs, the same on both engines, with no failures
+  (`serial_problems`). The project runner is run in parallel only (its serial and parallel file lists differ).
+  A sample with fewer files than workers hangs on Node too (the host sends `undefined`); the cases avoid it.
+  Samples run with `--timeout=600000`: each worker parses the libs for its first test, tens of seconds on jsse.
+- Worker crash: `par-crash-exit` (`process.exit(3)`) and `par-crash-kill` (SIGKILL) make worker 0 die on its first
+  task: the host prints `Test worker process exited with nonzero exit code! Output:` with the worker's output and
+  exits 2, as Node does (no hang); `par-crash-reject` does the same through the worker's own `error` message, and `par-crash-throw` fails inside the worker, which reports it itself
+  (an `Uncaught error outside test suite` failure; the run completes, status 1).
+- Gap found: `process.abort()` was missing (a `TypeError` in the worker). It is now `abort(3)` through
+  `__host_abort`; `tests/node_child_ipc.rs` checks the parent sees `null SIGABRT` for it. The oracle does not run
+  it: Node prints a native stack trace.

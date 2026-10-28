@@ -36,6 +36,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,12 +45,19 @@ KNOWN_FAILURES = os.path.join(ROOT, "ts-suite", "unittests-core-known-failures.t
 MAX_JOBS = 4
 sys.path.insert(0, SCRIPTS)
 import ts_unittests_groups as groups  # noqa: E402
+from oracle_procs import install_cleanup, run_group  # noqa: E402
 
+import ts_mocha_cases  # noqa: E402
+
+_cases = len(ts_mocha_cases.CASES)
 _spec = importlib.util.spec_from_file_location(
     "run_ts_mocha_oracle", os.path.join(SCRIPTS, "run-ts-mocha-oracle.py")
 )
 mocha = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mocha)
+del ts_mocha_cases.CASES[
+    _cases:
+]  # importing the mocha oracle appends its cli and eslint cases to the shared table
 
 
 def unescape(line):
@@ -161,7 +169,9 @@ def run_batch(members, engine, exe, extra, ts_dir, work, o):
             "built/local/run.js",
         ]
     )
-    code, out, err, secs = mocha.launch(cmd, cwd, env, o.timeout)
+    start = time.monotonic()
+    code, out, err = run_group(cmd, cwd, env, o.timeout)
+    secs = time.monotonic() - start
     report = os.path.join(cwd, "report.json")
     parsed = None
     if os.path.isfile(report):
@@ -243,6 +253,7 @@ def main():
         f"{o.jobs} jobs, {'full' if o.no_light else 'light'} mode)",
         flush=True,
     )
+    install_cleanup()
     work = os.path.realpath(tempfile.mkdtemp(prefix="ts-unittests-oracle-"))
 
     def one(members):
