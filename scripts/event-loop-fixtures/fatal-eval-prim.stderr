@@ -1,0 +1,8 @@
+
+[eval]:3
+throw 5;
+^
+5
+(Use `node --trace-uncaught ...` to show where the exception was thrown)
+
+Node.js <version>

@@ -391,6 +391,12 @@ impl Interpreter {
                     self.node_uncaught_entry(error.clone(), ESM_ENTRY_HOPS);
                     self.drain_microtasks();
                 }
+            } else if self.node_host.stack.eval_origin.is_some() {
+                self.node_report_uncaught(
+                    error.clone(),
+                    "uncaughtException",
+                    &[JsValue::number(-1.0)],
+                );
             } else {
                 self.node_uncaught(error.clone());
             }

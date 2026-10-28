@@ -1,0 +1,7 @@
+
+<dir>/fatal-color-obj.fixture.js:5
+throw { a: 1, b: 'x', c: [null, true, undefined] };
+^
+{ a: [33m1[39m, b: [32m'x'[39m, c: [ [1mnull[22m, [33mtrue[39m, [90mundefined[39m ] }
+
+Node.js <version>

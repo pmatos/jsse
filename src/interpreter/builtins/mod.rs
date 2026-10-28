@@ -33,6 +33,7 @@ mod node_host_cjs_lexer;
 mod node_host_cjs_patterns;
 mod node_host_crypto;
 mod node_host_esm;
+mod node_host_eval_frame;
 #[cfg(unix)]
 mod node_host_fs;
 #[cfg(unix)]
@@ -57,6 +58,7 @@ mod node_host_os_constants;
 mod node_host_os_sys;
 mod node_host_process;
 mod node_host_process_metrics;
+mod node_host_receiver;
 #[cfg(unix)]
 mod node_host_signal;
 pub(crate) mod node_host_stack;

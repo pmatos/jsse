@@ -45,6 +45,7 @@ struct RawFrame {
     pos: u32,
     receiver: Option<JsValue>,
     constructor: bool,
+    called_with: bool,
 }
 
 fn string_value(text: &str) -> JsValue {
@@ -68,49 +69,10 @@ impl Interpreter {
         }
     }
 
-    fn own_data_string(&self, id: u64, key: &str) -> Option<String> {
+    pub(super) fn own_data_string(&self, id: u64, key: &str) -> Option<String> {
         let obj = self.get_object(id)?;
         let value = obj.borrow().get_own_property(key)?.value?;
         value.as_string().map(|s| s.to_string())
-    }
-
-    fn receiver_type_name(&self, receiver: &JsValue) -> Option<String> {
-        let mut id = receiver.as_object_id()?;
-        if self.node_host.vm.is_context_global(id)
-            || self.realm().global_object == Some(id)
-            || self.realms[0].global_object == Some(id)
-        {
-            return None;
-        }
-        if self.is_callable(receiver) {
-            return Some(
-                self.own_data_string(id, "name")
-                    .filter(|n| !n.is_empty())
-                    .unwrap_or_else(|| "Function".to_string()),
-            );
-        }
-        for _ in 0..64 {
-            let obj = self.get_object(id)?;
-            let (ctor, proto) = {
-                let b = obj.borrow();
-                if b.is_proxy() {
-                    break;
-                }
-                let ctor = b
-                    .get_own_property("constructor")
-                    .and_then(|d| d.value)
-                    .and_then(|v| v.as_object_id());
-                (ctor, b.prototype_id)
-            };
-            if let Some(ctor) = ctor {
-                if let Some(name) = self.own_data_string(ctor, "name").filter(|n| !n.is_empty()) {
-                    return Some(name);
-                }
-                break;
-            }
-            id = proto?;
-        }
-        Some("Object".to_string())
     }
 
     /// How many frames, counted from the first one after `skip_top`, end with
@@ -160,7 +122,10 @@ impl Interpreter {
                 Some(callee) => callee.caller_pos,
                 None => self.node_host.call_pos,
             };
+            let arrow_this = self.node_arrow_receiver(i);
+            let called_with = arrow_this.is_some();
             let (receiver, constructor) = match self.call_stack_envs.get(frame.env_index) {
+                Some(_) if called_with => (arrow_this, false),
                 Some(env) if !frame.is_eval => {
                     let env = env.borrow();
                     (env.get_this(), env.get_new_target().is_object())
@@ -172,6 +137,7 @@ impl Interpreter {
                 pos,
                 receiver,
                 constructor,
+                called_with,
             });
         }
         out
@@ -213,11 +179,11 @@ impl Interpreter {
         if let Some(own) = self.own_data_string(raw.func, "name") {
             name = Some(own);
         }
-        let type_name = match (&raw.receiver, arrow) {
+        let type_name = match (&raw.receiver, arrow && !raw.called_with) {
             (Some(receiver), false) => self.receiver_type_name(receiver),
             _ => None,
         };
-        if !arrow
+        if (!arrow || raw.called_with)
             && name.as_deref().is_none_or(str::is_empty)
             && let Some(receiver) = &raw.receiver
         {

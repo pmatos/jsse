@@ -1,0 +1,10 @@
+<dir>/fatal-color-off.fixture.js:7
+throw error;
+^
+
+Error: plain
+    at Object.<anonymous> (<dir>/fatal-color-off.fixture.js:5:15)
+  code: 'E_PLAIN'
+}
+
+Node.js <version>

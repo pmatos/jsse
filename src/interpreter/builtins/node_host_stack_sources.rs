@@ -26,7 +26,7 @@ struct PendingName {
 
 #[derive(Default)]
 pub(crate) struct NodeStackState {
-    pub(super) installed: bool,
+    pub(crate) installed: bool,
     pub(super) sources: Vec<SourceEntry>,
     pub(super) scripts: Vec<(Rc<str>, String)>,
     /// Keyed by the address of the source's allocation; an entry whose source
@@ -46,6 +46,13 @@ pub(crate) struct NodeStackState {
     pub(crate) throws: Vec<(JsValue, usize, u32)>,
     /// The source of the last noted throw, its id and whether it is a `node:` one.
     pub(super) throw_source: Option<(Rc<str>, usize, bool)>,
+    /// The `-e` source, and whether its program has yet to run under the
+    /// `[eval]` stand-in frames.
+    pub(crate) eval_origin: Option<Rc<str>>,
+    pub(super) eval_armed: bool,
+    /// The receiver each running arrow function was called with, by frame
+    /// index: V8 names an arrow's frame after it (`Timeout._onTimeout`).
+    pub(crate) arrow_receivers: Vec<(usize, JsValue)>,
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a

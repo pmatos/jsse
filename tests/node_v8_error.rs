@@ -170,7 +170,7 @@ print(construct().stack.split('\\n').length);";
         args.extend(["-e", source]);
         let out = jsse(&args, None);
         assert!(out.status.success(), "{}", stderr(&out));
-        assert_eq!(stdout(&out), "(<anonymous>:2:36)\n3", "mode {mode:?}");
+        assert_eq!(stdout(&out), "([eval]:2:36)\n11", "mode {mode:?}");
     }
 }
 
@@ -236,7 +236,7 @@ print(churn().split(",").length, churn().slice(0, 16));"#;
     for stress in [None, Some("3")] {
         let out = jsse(&["--node", "-e", source], stress);
         assert!(out.status.success(), "{}", stderr(&out));
-        assert_eq!(stdout(&out), "20 prepared:1:100:e", "stress {stress:?}");
+        assert_eq!(stdout(&out), "20 prepared:9:100:e", "stress {stress:?}");
     }
 }
 
@@ -253,7 +253,7 @@ fn uncaught_error_prints_its_stack() {
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
-        err.contains("Error: fatal\n    at boom (<anonymous>:1:"),
+        err.contains("Error: fatal\n    at boom ([eval]:1:"),
         "{err}"
     );
 }
