@@ -60,6 +60,5 @@ test-events-add-abort-listener.mjs
 !test-abortsignal-cloneable: needs MessageChannel (worker message ports are not in the host)
 !test-eventemitter-asyncresource: needs the async_hooks module (not in the host)
 !test-event-emitter-no-error-provided-to-error-event: needs the domain module (deprecated, not in the host)
-!test-abortsignal-drop-settled-signals.mjs: needs test/common/gc.js (gcUntil) and WeakRef collection ($262.gc, #1317)
-!test-eventtarget-memoryleakwarning: needs MessageChannel (the warning text names [MessagePort [EventTarget]]) and WeakRef collection ($262.gc, #1317)
-~test-eventtarget|s#et.addEventListener('foo', common.mustNotCall(), { [kWeakHandler]: {} });#et.addEventListener('foo', () => {}, { [kWeakHandler]: {} });#|$262.gc() never collects WeakRef targets (#1317): the weakly held listener is still called
+!test-abortsignal-drop-settled-signals.mjs: needs test/common/gc.js (gcUntil), not vendored
+!test-eventtarget-memoryleakwarning: needs MessageChannel (the warning text names [MessagePort [EventTarget]])

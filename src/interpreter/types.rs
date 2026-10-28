@@ -9,6 +9,7 @@ use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
 use crate::interpreter::keyed_entries::KeyedEntries;
 use crate::interpreter::property_map::PropertyRecord;
+pub(crate) use crate::interpreter::weak_slots::FinalizationRegistryData;
 use crate::interpreter::{ElementVec, PropertyMap};
 use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
@@ -2658,6 +2659,9 @@ pub(crate) enum ObjectKind {
     ///   `cells[i]`  = Some((target, heldValue)) or None (tombstone)
     ///   `tokens[i]` = Some(unregisterToken) or None
     FinalizationRegistry(Box<FinalizationRegistryData>),
+    /// [[WeakRefTarget]]. Held strongly by minor collections and cleared to
+    /// `undefined` by the major collection that finds it unreachable.
+    WeakRef(JsValue),
     Iterator(Box<IteratorState>),
     /// `parameter_map` for an Arguments exotic object.
     #[allow(clippy::box_collection)] // keeps `ObjectKind` small
@@ -2775,6 +2779,7 @@ impl ObjectKind {
             | ObjectKind::Map(_)
             | ObjectKind::Set(_)
             | ObjectKind::FinalizationRegistry(_)
+            | ObjectKind::WeakRef(_)
             | ObjectKind::Iterator(_)
             | ObjectKind::Array(_)
             | ObjectKind::PrimitiveWrapper(_)
@@ -2798,13 +2803,6 @@ pub(crate) enum NamedStore {
     Stored,
     Absent,
     Bail,
-}
-
-/// See [`ObjectKind::FinalizationRegistry`].
-#[derive(Clone, Default)]
-pub(crate) struct FinalizationRegistryData {
-    pub(crate) cells: Vec<Option<(JsValue, JsValue)>>,
-    pub(crate) tokens: Vec<Option<JsValue>>,
 }
 
 /// Iterator-helper or wrap-delegation slot data. The two cases are mutually
@@ -3549,32 +3547,6 @@ impl JsObjectData {
     pub(crate) fn intl_data(&self) -> Option<&IntlData> {
         if let ObjectKind::Intl(ref i) = self.kind {
             Some(i.as_ref())
-        } else {
-            None
-        }
-    }
-
-    /// FinalizationRegistry cells (target+heldValue) + tokens (unregister keys).
-    pub(crate) fn finalization_registry(
-        &self,
-    ) -> Option<(&Vec<Option<(JsValue, JsValue)>>, &Vec<Option<JsValue>>)> {
-        if let ObjectKind::FinalizationRegistry(ref data) = self.kind {
-            Some((&data.cells, &data.tokens))
-        } else {
-            None
-        }
-    }
-
-    /// FinalizationRegistry cells + tokens — mutable view.
-    pub(crate) fn finalization_registry_mut(
-        &mut self,
-    ) -> Option<(
-        &mut Vec<Option<(JsValue, JsValue)>>,
-        &mut Vec<Option<JsValue>>,
-    )> {
-        if let ObjectKind::FinalizationRegistry(ref mut data) = self.kind {
-            let data = &mut **data;
-            Some((&mut data.cells, &mut data.tokens))
         } else {
             None
         }
