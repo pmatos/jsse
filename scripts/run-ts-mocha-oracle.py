@@ -15,7 +15,7 @@ Exits 1 on any difference.
 Each run gets its own working directory of symlinks into the checkout (built, node_modules, scripts, src, the test
 inputs), so runs neither write into the checkout nor see each other's test.config.
 
-Options: --jobs N (default 4), --timeout SECONDS (default 600), --ci, --list, --require,
+Options: --jobs N (default 4), --timeout SECONDS (default 1800), --ci, --list, --require,
 --jsse PATH (else $JSSE, else target/release/jsse).
 """
 
@@ -33,6 +33,9 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ts_runner_cli_cases as cli  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIX = os.path.join(ROOT, "scripts", "ts-mocha-fixtures")
 DROP_ENV = (
@@ -49,12 +52,13 @@ COMMON = ["--no-colors", "-t", "40000"]
 UNIT_CONFIG = {"test": ["unittests:: semver"], "runners": ["unittest"], "light": False}
 FAILED_TESTS = "scripts/failed-tests.cjs"
 
-# name, test.config (None = none), mocha arguments, spec files (fixtures or "RUN" for built/local/run.js), env
+# mocha cases: name, mocha arguments, spec files (fixtures or "RUN" for built/local/run.js), test.config (None =
+# none), env. The `runtests` and `accept` cases come from ts_runner_cli_cases.py (issue #1257).
 CASES = []
 
 
 def case(name, args, specs, config=None, env=None):
-    CASES.append((name, args, specs, config, env or {}))
+    CASES.append(cli.Case(name, args, specs, config, env or {}))
 
 
 for reporter in (
@@ -150,6 +154,10 @@ case(
     {"test": ["unittests:: semver"], "runners": ["conformance"]},
 )
 
+CASES.extend(cli.cli_cases())
+
+EXEC_LINE = re.compile(r"^> \S+ ", re.M)
+HEREBY_TIME = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m)\b")
 DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s|m)\)|(?<=: )\d+(?:\.\d+)?ms$", re.M)
 JSON_TIME = re.compile(r'("(?:duration|start|end)": )(?:"[^"]*"|\d+)')
 XML_TIME = re.compile(r' (time|timestamp)="[^"]*"')
@@ -213,52 +221,64 @@ def normalise_json(text, work, ts_dir):
     return json.dumps(walk(doc), indent=1, sort_keys=True) + "\n"
 
 
-def prepare(work, engine, name, ts_dir, specs):
-    cwd = os.path.join(work, engine, name)
+def prepare(work, engine, c, ts_dir):
+    cwd = os.path.join(work, engine, c.name)
     os.makedirs(os.path.join(cwd, "tests", "baselines", "local"))
     for link in LINKS:
         os.symlink(os.path.join(ts_dir, link), os.path.join(cwd, link))
+    if c.kind == "accept":
+        shutil.copy(os.path.join(ts_dir, "Herebyfile.mjs"), cwd)
     for link in TEST_INPUTS:
         os.symlink(
             os.path.join(ts_dir, "tests", link), os.path.join(cwd, "tests", link)
         )
-    os.symlink(
-        os.path.join(ts_dir, "tests", "baselines", "reference"),
-        os.path.join(cwd, "tests", "baselines", "reference"),
-    )
-    for spec in specs:
+    reference = os.path.join(cwd, "tests", "baselines", "reference")
+    if c.kind == "accept":
+        cli.seed_baselines(cwd)
+    else:
+        os.symlink(os.path.join(ts_dir, "tests", "baselines", "reference"), reference)
+    for spec in c.specs:
         if spec != "RUN" and os.path.exists(os.path.join(FIX, spec)):
             shutil.copy(os.path.join(FIX, spec), cwd)
+    if c.mocharc:
+        with open(os.path.join(cwd, ".mocharc.json"), "w") as f:
+            json.dump(c.mocharc, f)
+    os.makedirs(os.path.join(cwd, "tmp"))
     return cwd
 
 
-def collect_files(cwd):
+def collect_files(cwd, c):
     found = {}
     for name in (".failed-tests", "TEST-results.xml"):
         path = os.path.join(cwd, name)
         if os.path.isfile(path):
             with open(path, encoding="utf-8", errors="replace") as f:
                 found[name] = f.read()
+    if c.kind == "runtests":
+        found["tree baselines"] = cli.tree(
+            os.path.join(cwd, "tests", "baselines", "local")
+        )
+    if c.kind == "accept":
+        found["tree reference"] = cli.tree(
+            os.path.join(cwd, "tests", "baselines", "reference"), content=True
+        )
     return found
 
 
-def execute(engine, exe, cwd, args, specs, config, env_extra, timeout, ts_dir, work):
-    env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
-    env["NODE_ENV"] = "development"
-    env.update(env_extra)
+def command(engine, exe, cwd, c, flags):
+    node_flag = ["--node"] if engine == "jsse" else []
+    if c.kind == "accept":
+        return (
+            [exe] + node_flag + ["node_modules/hereby/bin/hereby.js", "baseline-accept"]
+        )
+    if c.kind == "runtests":
+        return [exe] + node_flag + ["runtests.mjs"] + flags
     mocha = os.path.join(cwd, "node_modules", "mocha", "bin", "_mocha")
-    files = ["built/local/run.js" if s == "RUN" else s for s in specs]
-    if config is not None:
-        with open(os.path.join(cwd, "test.config"), "w") as f:
-            json.dump(config, f)
-    cmd = (
-        [exe]
-        + (["--node"] if engine == "jsse" else [])
-        + [mocha]
-        + COMMON
-        + args
-        + files
-    )
+    files = ["built/local/run.js" if s == "RUN" else s for s in c.specs]
+    return [exe] + node_flag + [mocha] + COMMON + flags + files
+
+
+def launch(cmd, cwd, env, timeout):
     start = time.monotonic()
     child = subprocess.Popen(
         cmd,
@@ -275,31 +295,54 @@ def execute(engine, exe, cwd, args, specs, config, env_extra, timeout, ts_dir, w
         os.killpg(child.pid, signal.SIGKILL)
         out, err = child.communicate()
         code = "timeout"
+    return code, out, err, time.monotonic() - start
+
+
+def execute(engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, prefix=""):
+    env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
+    env["NODE_ENV"] = "development"
+    env["TMPDIR"] = os.path.join(cwd, "tmp")
+    env.update(c.env)
+    env.update(env_extra)
+    if c.config is not None:
+        with open(os.path.join(cwd, "test.config"), "w") as f:
+            json.dump(c.config, f)
+    code, out, err, secs = launch(
+        command(engine, exe, cwd, c, flags), cwd, env, timeout
+    )
     wd = os.path.join(work, engine)
 
     def norm(raw):
         text = raw.decode("utf-8", "replace")
-        if "json" in args:
+        if "json" in flags:
             text = normalise_json(text, cwd, ts_dir)
-        return normalise(text, cwd, ts_dir).replace(wd, "<WORK>")
+        text = normalise(text, cwd, ts_dir).replace(wd, "<WORK>")
+        if c.kind == "runtests":
+            text = EXEC_LINE.sub("> <EXEC> ", text)
+        return HEREBY_TIME.sub("<T>", text) if c.kind == "accept" else text
 
     result = {
-        "exit": code,
-        "stdout": norm(out),
-        "stderr": norm(err),
-        "secs": time.monotonic() - start,
+        prefix + "exit": code,
+        prefix + "stdout": norm(out),
+        prefix + "stderr": norm(err),
     }
-    for name, text in collect_files(cwd).items():
-        result["file " + name] = normalise(text, cwd, ts_dir)
-    return result
+    for name, text in collect_files(cwd, c).items():
+        result[prefix + "file " + name] = norm(text.encode())
+    return result, secs
 
 
 def run_case(c, engine, exe, ts_dir, work, timeout):
-    name, args, specs, config, env_extra = c
-    cwd = prepare(work, engine, name, ts_dir, specs)
-    return execute(
-        engine, exe, cwd, args, specs, config, env_extra, timeout, ts_dir, work
-    )
+    cwd = prepare(work, engine, c, ts_dir)
+    result, secs = execute(engine, exe, cwd, c, c.args, {}, timeout, ts_dir, work)
+    if c.then:
+        flags, env_extra = c.then
+        more, more_secs = execute(
+            engine, exe, cwd, c, flags, env_extra, timeout, ts_dir, work, "then "
+        )
+        result.update(more)
+        secs += more_secs
+    result["secs"] = secs
+    return result
 
 
 def diff_parts(a, b):
@@ -348,7 +391,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cases", nargs="*")
     ap.add_argument("--jobs", type=int, default=4)
-    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--ci", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--require", action="store_true")
@@ -402,6 +445,12 @@ def main():
         ref = run_case(c, "node", node, ts_dir, work, o.timeout)
         got = run_case(c, "jsse", jsse, ts_dir, work, o.timeout)
         bad = diff_parts(ref, got)
+        for key, pattern in c.must:
+            if not re.search(pattern, ref.get(key, ""), re.M):
+                bad[f"expectation {key}"] = (
+                    f"matches /{pattern}/\n",
+                    "Node's own result does not\n",
+                )
         if not o.ci:
             print(f"{'ok  ' if not bad else 'FAIL'} {c[0]}", flush=True)
         return c, ref, got, bad
@@ -424,8 +473,13 @@ def main():
                     print(
                         f"::error title=mocha oracle::{c[0]} differs between node and jsse: {', '.join(bad)}"
                     )
+        problems = cli.partition_problems(results)
+        for problem in problems:
+            print(f"\nshards: {problem}")
+            if o.ci:
+                print(f"::error title=mocha oracle::{problem}")
         print(f"\nmocha oracle: {len(results) - failed}/{len(results)} passed")
-        return 1 if failed else 0
+        return 1 if failed or problems else 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -72,3 +72,33 @@ On a quiet host the 692 tests take 0.4 s on Node. On jsse the 13 MB bundle takes
 register its 327 suites before any test runs (about 50 s user time in the release build with LTO off, on a host
 at load 60), then 16 s for the tests themselves. Startup of the runner is not part of this ticket's criteria;
 the parallel host (#1258) and the full-suite tickets will want it down.
+
+## Runner flags, sharding and `.failed-tests` (issue #1257)
+
+`hereby runtests` is `runConsoleTests` in `scripts/build/tests.mjs` after its build tasks: minimist parses
+`--runner/--ru`, `--tests/-t`, `--shards`, `--shardId`, `--light` (on by default, `--no-light`), `--failed`,
+`--keepFailed`, `--colors/--no-color`, `--timeout`, `--skipSysTests`, `--stackTraceLimit`; it writes `test.config`
+and starts `_mocha -R scripts/failed-tests.cjs -O reporter=<r>[,keepFailed=true] [-g <tests>] [--config
+$TMPDIR/.failed-tests.json] -t <ms> built/local/run.js`; `--failed` turns `.failed-tests` into an escaped
+`grep` alternation, and the reporter rewrites `.failed-tests` after the run. No engine change was needed: the
+oracle's `cli-*` cases (`scripts/ts_runner_cli_cases.py`, fixtures `runtests.mjs`, `rerun.spec.js`,
+`timeout.spec.js`) call that function in a work directory, on Node and on `jsse --node`, and diff stdout,
+stderr, exit status, `.failed-tests` and the baselines the run wrote.
+
+- Test lists: a `.mocharc.json` with `dry-run` makes mocha print the title of every test the selected runners
+  register, so a runner (`conformance`, `compiler`, `project`, `fourslash`, `fourslash-server`,
+  `fourslash-generated`, `transpile`, `unittest`), several runners, a `--tests` filter (also one matching
+  nothing) and a shard give the same list as Node, line for line (90k titles for `compiler`, 106k for `unittest`).
+  Shards are `idx % shards == shardId - 1` over the file list; the oracle also checks that the three shards of
+  conformance, project and fourslash together are exactly the whole list.
+- Real runs: `--shards` with a large count picks a few files per runner (`cli-run-*`), with `--light` and
+  `--no-light` (light skips `shouldAssertInvariants`); real baselines are compared with `tests/baselines/reference`
+  and the baselines written to `tests/baselines/local` are diffed between engines.
+- Failed tests: a fixture spec that fails until `RERUN_FIXED` is set (test names with regexp metacharacters, a
+  failing `before` hook that is recorded as its suite) shows that `--failed` re-runs exactly the recorded tests
+  and that `.failed-tests` is deleted when they pass, kept by `--keepFailed`, and that `--failed` without the file
+  is `ENOENT` on both. `--timeout=60` against a 250 ms test fails with mocha's timeout error.
+- `hereby baseline-accept` copies seeded local baselines (nested, changed, `.delete` markers) into a private
+  reference tree, never the checkout's.
+- Not covered here: the parallel host (`--workers`, #1258) and `hereby runtests-watch`. The `--inspect` flags and
+  coverage need a debugger or `c8`.
