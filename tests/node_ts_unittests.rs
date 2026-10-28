@@ -1,10 +1,11 @@
-//! TypeScript's top-level and services unit tests (`src/testRunner/unittests/*.ts`, issue #1259; `services/`,
-//! #1261) on `jsse --node` against Node, test by test: `scripts/run-ts-unittests-oracle.py` runs mocha on
-//! `built/local/run.js` per group of files and fails on a test that passes on Node and not on jsse unless
+//! TypeScript's top-level, services, evaluation and tsbuild unit tests (`src/testRunner/unittests/*.ts`, issue #1259;
+//! `services/`, #1261; `evaluation/`, #1262; `tsbuild/`, #1264) on `jsse --node` against Node, test by test:
+//! `scripts/run-ts-unittests-oracle.py` runs mocha on `built/local/run.js` per group of files and fails on a test
+//! that passes on Node and not on jsse unless
 //! `ts-suite/unittests-core-known-failures.txt` lists it. The cases below run a few small groups when TS_SRC_DIR
 //! points at a built TypeScript 6.0.3 checkout, one at a time (each oracle run already uses up to four processes
-//! per engine); the whole set (42 groups, 73 with the 31 `tsbuild-*` groups of #1264) is run by hand (the
-//! nightly TypeScript-suite job is #1298).
+//! per engine); the whole set (93 groups) takes about twenty-five
+//! minutes and is run by hand (the nightly TypeScript-suite job is #1298).
 
 use std::path::Path;
 use std::process::Command;
@@ -65,6 +66,11 @@ fn small_services_groups_match_node_when_a_typescript_checkout_is_given() {
         "services-preProcessFile",
         "services-utilities",
     ]);
+}
+
+#[test]
+fn evaluation_groups_match_node_when_a_typescript_checkout_is_given() {
+    run_groups(&["evaluation-*"]);
 }
 
 #[test]

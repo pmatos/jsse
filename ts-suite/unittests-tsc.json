@@ -1,0 +1,22 @@
+{
+ "counts": {
+  "tsc-cancellationToken": {"passing": 2, "failing": 0, "pending": 0},
+  "tsc-commandLine": {"passing": 8, "failing": 0, "pending": 0},
+  "tsc-composite": {"passing": 8, "failing": 0, "pending": 0},
+  "tsc-declarationEmit": {"passing": 15, "failing": 0, "pending": 0},
+  "tsc-extends": {"passing": 4, "failing": 0, "pending": 0},
+  "tsc-forceConsistentCasingInFileNames": {"passing": 3, "failing": 0, "pending": 0},
+  "tsc-ignoreConfig": {"passing": 16, "failing": 0, "pending": 0},
+  "tsc-incremental": {"passing": 50, "failing": 0, "pending": 0},
+  "tsc-libraryResolution": {"passing": 7, "failing": 0, "pending": 0},
+  "tsc-listFilesOnly": {"passing": 3, "failing": 0, "pending": 0},
+  "tsc-moduleResolution": {"passing": 5, "failing": 0, "pending": 0},
+  "tsc-noCheck": {"passing": 24, "failing": 0, "pending": 0},
+  "tsc-noEmit": {"passing": 78, "failing": 0, "pending": 0},
+  "tsc-noEmitOnError": {"passing": 56, "failing": 0, "pending": 0},
+  "tsc-projectReferences": {"passing": 6, "failing": 0, "pending": 0},
+  "tsc-projectReferencesConfig": {"passing": 11, "failing": 0, "pending": 0},
+  "tsc-redirect": {"passing": 1, "failing": 0, "pending": 0}
+ },
+ "known_failures": {}
+}

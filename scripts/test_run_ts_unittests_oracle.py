@@ -153,6 +153,7 @@ class GroupsTest(unittest.TestCase):
             base = Path(d, "src", "testRunner", "unittests", "services")
             (base / "extract").mkdir(parents=True)
             (base.parent / "tsbuild").mkdir()
+            Path(d, "src", "testRunner", "unittests", "evaluation").mkdir()
             (base / "textChanges.ts").write_text(
                 'describe("unittests:: services:: textChanges", () => {});\n'
             )
@@ -174,13 +175,14 @@ class GroupsTest(unittest.TestCase):
                 ],
             )
 
-    def test_check_groups_flags_a_missing_services_directory(self):
+    def test_check_groups_flags_a_missing_owned_directory(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "src", "testRunner", "unittests").mkdir(parents=True)
             self.assertEqual(
                 groups.check_groups(d),
                 [
                     "unittests/services is missing: its groups select nothing",
+                    "unittests/evaluation is missing: its groups select nothing",
                     "unittests/tsbuild is missing: its groups select nothing",
                 ],
             )
@@ -189,6 +191,7 @@ class GroupsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d, "src", "testRunner", "unittests")
             (base / "services").mkdir(parents=True)
+            (base / "evaluation").mkdir()
             (base / "tsbuild").mkdir()
             (base / "tsbuild" / "sample.ts").write_text(
                 "describe(\"unittests:: tsbuild:: on 'sample1' project\", () => {});\n"
@@ -208,11 +211,35 @@ class GroupsTest(unittest.TestCase):
                 ],
             )
 
+    def test_check_groups_covers_the_evaluation_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d, "src", "testRunner", "unittests")
+            Path(base, "services").mkdir(parents=True)
+            Path(base, "tsbuild").mkdir()
+            Path(base, "evaluation").mkdir()
+            (base / "evaluation" / "forOf.ts").write_text(
+                'describe("unittests:: evaluation:: forOfEvaluation", () => {});\n'
+                'describe("unittests:: evaluation:: brandNew", () => {});\n'
+            )
+            self.assertEqual(
+                groups.check_groups(d),
+                [
+                    "evaluation/forOf.ts: describe("
+                    "'unittests:: evaluation:: brandNew') matches groups none"
+                ],
+            )
+
     def assert_counts_equal_the_pinned_suite(self, suite):
         pins = json.loads(Path(oracle.ROOT, "ts-suite", "oracle.json").read_text())
         pinned = pins["runners"]["unittests"]["suites"][suite]["passed"]
         got = sum(g.tests for g in groups.GROUPS if g.name.startswith(suite + "-"))
         self.assertEqual(got, pinned, suite)
+
+    def test_the_evaluation_counts_equal_the_pinned_suite_count(self):
+        self.assert_counts_equal_the_pinned_suite("evaluation")
+
+    def test_the_services_counts_equal_the_pinned_suite_count(self):
+        self.assert_counts_equal_the_pinned_suite("services")
 
     def test_the_tsbuild_counts_equal_the_pinned_suite_count(self):
         self.assert_counts_equal_the_pinned_suite("tsbuild")
@@ -229,9 +256,6 @@ class GroupsTest(unittest.TestCase):
             hit("unittests:: tsbuild:: outFile:: x y"), ["tsbuild-outFile"]
         )
         self.assertEqual(hit("unittests:: tsbuildWatch:: on sample x"), [])
-
-    def test_the_services_counts_equal_the_pinned_suite_count(self):
-        self.assert_counts_equal_the_pinned_suite("services")
 
     def test_check_groups_flags_an_unmatched_suite(self):
         with tempfile.TemporaryDirectory() as d:
@@ -253,6 +277,7 @@ class GroupsTest(unittest.TestCase):
                 '    describe("unittests:: indented", () => {});\n'
             )
             Path(base, "services").mkdir()
+            Path(base, "evaluation").mkdir()
             Path(base, "tsbuild").mkdir()
             problems = groups.check_groups(d)
         self.assertEqual(

@@ -41,6 +41,7 @@ from ts_unittest_groups import GROUPS  # noqa: E402
 BASELINE = os.path.join(ROOT, "ts-suite", "unittests-config-sys.json")
 SUITES = os.path.join(ROOT, "ts-suite", "oracle.json")
 SUITE_OF = {"config": "config-", "sys": "sys-", "debugDeprecation": "debugDeprecation"}
+UNPINNED_GROUPS = ()  # groups whose tests the pin does not count under their suite
 DROP_ENV = (
     "NODE_OPTIONS",
     "FORCE_COLOR",
@@ -207,7 +208,11 @@ def pinned_suite_problems(new_counts):
         return []
     problems = []
     for suite, prefix in SUITE_OF.items():
-        got = sum(c["passing"] for n, c in new_counts.items() if n.startswith(prefix))
+        got = sum(
+            c["passing"]
+            for n, c in new_counts.items()
+            if n.startswith(prefix) and n not in UNPINNED_GROUPS
+        )
         want = suites.get(suite, {}).get("passed")
         if want != got:
             problems.append(
