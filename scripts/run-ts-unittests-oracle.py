@@ -252,25 +252,20 @@ def main():
         )
         rows = []
         for g in members:
+            r = split(ref, g) if ref else None
+            j = split(got, g) if got else None
             problems = []
-            if ref is None:
+            if r is None:
                 problems.append(
                     f"Node produced no report (exit {rcode}): {' | '.join(rtail)}"
                 )
-            if got is None:
+            if j is None:
                 problems.append(
                     f"jsse produced no report (exit {gcode}): {' | '.join(gtail)}"
                 )
-            if ref is not None and got is not None:
-                problems += compare(g, split(ref, g), split(got, g), known)
-            rows.append(
-                (
-                    g,
-                    split(ref, g) if ref else None,
-                    split(got, g) if got else None,
-                    problems,
-                )
-            )
+            if r and j:
+                problems += compare(g, r, j, known)
+            rows.append((g, r, j, problems))
         extra = [
             f"{e}: test selected by several groups: {t}"
             for e, rep in (("Node", ref), ("jsse", got))
