@@ -21,8 +21,8 @@ mode and in full mode, with the default bytecode VM. There is no defect to fix a
 ## Oracle
 
 The groups are rows of `scripts/ts_unittests_groups.py` (batches 4 to 7, balanced from a measured run: the
-`convertToAsyncFunction` and `extract*` batches take about 9 minutes of jsse time in light mode, the other two about
-3), run by the same `scripts/run-ts-unittests-oracle.py` with the same per-test comparison, ratchet and 600 s
+`convertToAsyncFunction` and `extract*` batches take about 9 minutes (full mode: 10 and 13) of jsse time, the other two 2 to 4
+minutes, run by the same `scripts/run-ts-unittests-oracle.py` with the same per-test comparison, ratchet and 600 s
 mocha `-t`. `check_groups` now walks `unittests/`, `unittests/services/` and `unittests/services/extract/`, so a new
 or renamed services suite that no group selects fails the run. The other subdirectories keep their own oracles
 (`config`, `sys`: `run-ts-unittests-config-sys-oracle.py`).
