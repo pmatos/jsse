@@ -91,8 +91,9 @@ def ts_files(ts_dir):
     check_groups() reports it."""
     base = os.path.join(ts_dir, "src", "testRunner", "unittests")
     for name in sorted(os.listdir(base)):
-        if name.endswith(".ts") and os.path.isfile(os.path.join(base, name)):
-            yield name, os.path.join(base, name)
+        path = os.path.join(base, name)
+        if name.endswith(".ts") and os.path.isfile(path):
+            yield name, path
     for root, dirs, files in os.walk(os.path.join(base, "services")):
         dirs.sort()
         for name in sorted(files):
