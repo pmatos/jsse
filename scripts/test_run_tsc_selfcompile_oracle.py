@@ -97,6 +97,14 @@ class BudgetTest(unittest.TestCase):
         for cfg in budget.values():
             self.assertTrue(set(cfg) <= keys)
 
+    def test_shipped_budget_is_an_rss_ratio_cap_with_no_wall_time_cap(self):
+        budget = oracle.load_budget(oracle.BUDGET)
+        self.assertEqual(set(budget), set(oracle.CASES))
+        for name, cfg in budget.items():
+            self.assertEqual(cfg.get("max_rss_ratio"), 6, name)
+            for key in ("jsse_max_seconds", "jsse_max_rss_mb", "max_time_ratio"):
+                self.assertIsNone(cfg.get(key), f"{name}.{key}")
+
 
 class GeneratorTest(unittest.TestCase):
     def test_program_is_deterministic_and_sized(self):
