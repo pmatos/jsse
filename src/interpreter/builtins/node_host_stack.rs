@@ -188,7 +188,7 @@ impl Interpreter {
             name = inferred;
         }
         let type_name = match (&raw.receiver, arrow && !raw.called_with) {
-            (Some(receiver), false) => self.receiver_type_name(receiver),
+            (Some(receiver), false) => self.receiver_type_name(receiver, &name),
             _ => None,
         };
         if (!arrow || raw.called_with)

@@ -100,6 +100,7 @@ fn mocha_matches_node_when_a_typescript_checkout_is_given() {
             "cli-failed-*",
             "cli-timeout-*",
             "cli-baseline-accept",
+            "eslint-*",
         ])
         .output()
         .expect("run python3");

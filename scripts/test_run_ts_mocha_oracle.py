@@ -77,6 +77,59 @@ class NormaliseTest(unittest.TestCase):
         self.assertEqual(one, two)
 
 
+class EslintCasesTest(unittest.TestCase):
+    def test_builtin_anonymous_frames_are_dropped(self):
+        text = "Error: x\n    at k (/w/a.js:1:1)\n    at Array.forEach (<anonymous>)\n"
+        self.assertEqual(
+            oracle.normalise(text, "/w", "/ts"), "Error: x\n    at k (a.js:1:1)\n"
+        )
+
+    def test_speed_can_be_blurred_per_run(self):
+        text = '{"tests": [{"duration": 3, "speed": "fast"}]}'
+        keys = oracle.TIME_KEYS + ("speed",)
+        blurred = oracle.normalise_json(text, "/w", "/ts", time_keys=keys)
+        self.assertIn('"speed": "<T>"', blurred)
+
+    def test_a_multi_line_title_loses_its_slow_mark(self):
+        self.assertEqual(
+            oracle.SLOW_TITLE.sub("", "      ✔ a\nb (<T>)\n"), "      ✔ a\nb\n"
+        )
+
+    def test_every_case_runs_the_task_on_existing_fixtures(self):
+        cases = oracle.eslint.eslint_cases()
+        self.assertGreaterEqual(len(cases), 15)
+        for c in cases:
+            self.assertEqual(c.kind, "eslint")
+            self.assertEqual(c.args[0], oracle.eslint.TASK)
+            for spec_file in c.specs:
+                self.assertTrue(
+                    os.path.isfile(os.path.join(oracle.eslint.FIXTURES, spec_file)),
+                    c.name,
+                )
+
+    def test_link_scripts_adds_fixtures_beside_the_checkouts_tests(self):
+        with tempfile.TemporaryDirectory() as d:
+            ts, cwd = Path(d, "ts"), Path(d, "cwd")
+            (ts / "scripts" / "eslint" / "tests" / "support").mkdir(parents=True)
+            (ts / "scripts" / "eslint" / "rules").mkdir()
+            (ts / "scripts" / "eslint" / "tests" / "a.test.cjs").write_text("")
+            (ts / "scripts" / "build").mkdir()
+            cwd.mkdir()
+            os.symlink(ts / "scripts", cwd / "scripts")
+            oracle.eslint.link_scripts(str(cwd), str(ts), ["broken.test.cjs"])
+            tests = cwd / "scripts" / "eslint" / "tests"
+            self.assertTrue(
+                (tests / "broken.test.cjs").is_file()
+                and not (tests / "broken.test.cjs").is_symlink()
+            )
+            self.assertTrue((tests / "a.test.cjs").is_symlink())
+            self.assertTrue((cwd / "scripts" / "build").is_symlink())
+            self.assertTrue((cwd / "scripts" / "eslint" / "rules").is_symlink())
+            self.assertFalse(
+                (ts / "scripts" / "eslint" / "tests" / "broken.test.cjs").exists()
+            )
+
+
 class TrailingBraceAfterFrameTest(unittest.TestCase):
     def test_a_brace_after_a_dropped_frame_reads_like_one_after_another(self):
         node = "Error: x\n    at k (/w/a.js:1:1)\n    at async y (/ts/z.js:2:2) {\n  code: 'E'\n}\n"
@@ -121,9 +174,13 @@ class CaseTableTest(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
 
     def test_every_fixture_exists(self):
-        for name, _, specs, *_ in oracle.CASES:
+        for name, _, specs, _, _, kind, *_ in oracle.CASES:
             for spec_file in specs:
-                if spec_file not in ("RUN", "absent.spec.js"):
+                if kind == "eslint":
+                    self.assertTrue(
+                        (Path(oracle.eslint.FIXTURES) / spec_file).is_file(), name
+                    )
+                elif spec_file not in ("RUN", "absent.spec.js"):
                     self.assertTrue((FIXTURES / spec_file).is_file(), name)
 
     def test_the_timing_and_failure_output_cases_exist(self):
@@ -163,7 +220,7 @@ class CliCasesTest(unittest.TestCase):
                 self.assertIsNone(c.mocharc, c.name)
 
     def test_expectations_name_keys_a_result_can_have(self):
-        keys = re.compile(r"^(then )?(stdout|stderr|file [\w. -]+)$")
+        keys = re.compile(r"^(then )?(exit|stdout|stderr|file [\w. -]+)$")
         for c in oracle.CASES:
             for key, pattern in c.must:
                 self.assertRegex(key, keys, c.name)
