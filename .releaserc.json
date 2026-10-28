@@ -1,5 +1,6 @@
 {
   "branches": ["main"],
+  "repositoryUrl": "git@github.com:pmatos/jsse.git",
   "tagFormat": "v${version}",
   "plugins": [
     "@semantic-release/commit-analyzer",
