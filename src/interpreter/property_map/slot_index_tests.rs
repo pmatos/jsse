@@ -67,13 +67,53 @@ fn tag_index_tracks_removals_compaction_and_reinsertion() {
         map.remove(&format!("k{n}"));
     }
     let live = [0, 1, 2, 4, 5, 6, 48, 49];
+    assert!(matches!(index_of(&map), SlotIndex::Tags(_)));
     for n in live {
         assert_eq!(number_of(&map, n), Some(n as f64));
     }
     assert_eq!(map.len(), live.len());
     map.insert(key(3), desc(300));
+    assert!(matches!(index_of(&map), SlotIndex::Tags(_)));
     assert_eq!(map.keys().last().unwrap().as_bytes(), b"k3");
     assert_eq!(number_of(&map, 3), Some(300.0));
+}
+
+#[test]
+fn deleted_slots_do_not_push_a_small_map_onto_the_hash_table() {
+    let mut map = PropertyMap::new();
+    for n in 0..TAG_MAX {
+        map.insert(key(n), desc(n));
+    }
+    for n in (0..TAG_MAX).step_by(2) {
+        map.remove(&format!("k{n}"));
+    }
+    map.insert(key(1000), desc(1000));
+    assert!(matches!(index_of(&map), SlotIndex::Tags(_)));
+    assert_eq!(number_of(&map, 1000), Some(1000.0));
+    for n in (1..TAG_MAX).step_by(2) {
+        assert_eq!(number_of(&map, n), Some(n as f64));
+    }
+}
+
+#[test]
+fn reserve_past_tag_max_starts_on_the_hash_table() {
+    let mut map = PropertyMap::new();
+    for n in 0..10 {
+        map.insert(key(n), desc(n));
+    }
+    map.reserve(TAG_MAX);
+    assert!(matches!(index_of(&map), SlotIndex::Hashed(_)));
+    for n in 0..10 {
+        assert_eq!(number_of(&map, n), Some(n as f64));
+    }
+}
+
+#[test]
+fn long_keys_that_differ_only_in_the_middle_get_distinct_tags() {
+    let tags: std::collections::HashSet<u8> = (0..40)
+        .map(|n| tag_of(format!("node_modules/pkg{n:02}/package.json").as_bytes()))
+        .collect();
+    assert!(tags.len() >= 20, "{} distinct tags for 40 keys", tags.len());
 }
 
 #[test]

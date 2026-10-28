@@ -524,7 +524,7 @@ impl PropertyMap {
             }
             PropertyMapInner::Spilled { entries, index, .. } => {
                 entries.reserve(additional);
-                index.reserve(additional);
+                index.reserve(entries, additional);
             }
         }
     }
@@ -565,8 +565,7 @@ impl PropertyMap {
                 index,
                 live,
             } => {
-                let slot = index.find(entries, key.as_property_key_bytes())?;
-                index.forget(key.as_property_key_bytes());
+                let slot = index.remove(entries, key.as_property_key_bytes())?;
                 let (_, removed) = entries[slot].take()?;
                 *live -= 1;
                 if slot + 1 == entries.len() {

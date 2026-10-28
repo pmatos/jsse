@@ -31,7 +31,16 @@ pub(super) enum SlotIndex {
 #[inline]
 pub(super) fn tag_of(key: &[u8]) -> u8 {
     let n = key.len();
-    let bits = if n >= 8 {
+    let bits = if n > 16 {
+        // Keys such as paths or qualified names often differ only in the middle.
+        let mut h = u64::from_le_bytes(key[n - 8..].try_into().unwrap());
+        for chunk in key.as_chunks::<8>().0 {
+            h = (h ^ u64::from_le_bytes(*chunk))
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .rotate_left(23);
+        }
+        h
+    } else if n >= 8 {
         let lo = u64::from_le_bytes(key[..8].try_into().unwrap());
         let hi = u64::from_le_bytes(key[n - 8..].try_into().unwrap());
         lo ^ hi.rotate_left(29)
@@ -54,7 +63,7 @@ fn holds(entries: &[Option<Entry>], slot: usize, key: &[u8]) -> bool {
 
 #[inline]
 fn set_tag(words: &mut Vec<u64>, slot: usize, tag: u8) {
-    if slot % 8 == 0 {
+    if slot.is_multiple_of(8) {
         words.push(0);
     }
     let shift = (slot % 8) * 8;
@@ -123,6 +132,12 @@ impl SlotIndex {
                 set_tag(words, slot, tag_of(key.as_bytes()));
                 entries.push(Some((key, value)));
             }
+            Self::Tags(_) if entries.iter().any(Option::is_none) => {
+                // Deleted slots alone must not push a small map onto the hash table.
+                entries.retain(Option::is_some);
+                *self = Self::build(entries, entries.len() + 1);
+                self.push(entries, key, value);
+            }
             Self::Tags(_) => {
                 entries.push(Some((key, value)));
                 *self = Self::build(entries, slot + 1);
@@ -134,11 +149,12 @@ impl SlotIndex {
         }
     }
 
-    /// The entry holding `key` is being deleted.
+    /// Slot of `key`, which is being deleted: the index stops naming it.
     #[inline]
-    pub(super) fn forget(&mut self, key: &[u8]) {
-        if let Self::Hashed(map) = self {
-            map.remove(key);
+    pub(super) fn remove(&mut self, entries: &[Option<Entry>], key: &[u8]) -> Option<usize> {
+        match self {
+            Self::Hashed(map) => map.remove(key).map(|slot| slot as usize),
+            Self::Tags(_) => self.find(entries, key),
         }
     }
 
@@ -150,8 +166,13 @@ impl SlotIndex {
         }
     }
 
-    pub(super) fn reserve(&mut self, additional: usize) {
+    /// Room for `additional` more slots in `entries`; a bulk copy that will
+    /// outgrow the tag index starts on a right-sized hash table instead.
+    pub(super) fn reserve(&mut self, entries: &[Option<Entry>], additional: usize) {
         match self {
+            Self::Tags(_) if entries.len() + additional > TAG_MAX => {
+                *self = Self::build(entries, entries.len() + additional);
+            }
             Self::Tags(words) => words.reserve(additional.div_ceil(8)),
             Self::Hashed(map) => map.reserve(additional),
         }
@@ -160,9 +181,12 @@ impl SlotIndex {
     /// Drop the deleted slots of `entries` and renumber what the index names.
     pub(super) fn compact(&mut self, entries: &mut Vec<Option<Entry>>) {
         match self {
-            Self::Tags(_) => {
+            Self::Tags(words) => {
                 entries.retain(Option::is_some);
-                *self = Self::build(entries, entries.len());
+                words.clear();
+                for (slot, (k, _)) in entries.iter().flatten().enumerate() {
+                    set_tag(words, slot, tag_of(k.as_bytes()));
+                }
             }
             Self::Hashed(map) => {
                 let mut remap = Vec::with_capacity(entries.len());
