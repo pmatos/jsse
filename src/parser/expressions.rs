@@ -1,34 +1,9 @@
 use super::*;
 
 mod arguments;
+mod regexp;
 
-fn validate_regexp_literal(pattern: &[u16], flags: &str) -> Result<(), ParseError> {
-    let valid_flags = "dgimsuyv";
-    for c in flags.chars() {
-        if !valid_flags.contains(c) {
-            return Err(ParseError {
-                message: format!("Invalid regular expression flags '{}'", flags),
-            });
-        }
-    }
-    let mut seen = HashSet::new();
-    for c in flags.chars() {
-        if !seen.insert(c) {
-            return Err(ParseError {
-                message: format!("Invalid regular expression flags '{}'", flags),
-            });
-        }
-    }
-    if flags.contains('u') && flags.contains('v') {
-        return Err(ParseError {
-            message: format!("Invalid regular expression flags '{}'", flags),
-        });
-    }
-    if let Err(msg) = crate::interpreter::validate_js_pattern_units(pattern, flags) {
-        return Err(ParseError { message: msg });
-    }
-    Ok(())
-}
+use regexp::validate_regexp_literal;
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_expression(&mut self) -> Result<Expression, ParseError> {
@@ -259,8 +234,16 @@ impl<'a> Parser<'a> {
         }
 
         let left = self.parse_conditional_expression()?;
+        let arrow_ended = match self.arrow_held_token.take() {
+            Some(held) => {
+                self.current = held;
+                true
+            }
+            None => false,
+        };
 
         let op = match &self.current {
+            _ if arrow_ended => None,
             Token::Assign => Some(AssignOp::Assign),
             Token::PlusAssign => Some(AssignOp::AddAssign),
             Token::MinusAssign => Some(AssignOp::SubAssign),
@@ -703,7 +686,12 @@ impl<'a> Parser<'a> {
         };
 
         // §13.3: an unparenthesized ArrowFunction is not a LeftHandSideExpression.
+        // An ArrowFunction is a whole AssignmentExpression, so no operator may
+        // continue it: hide the next token from the binary/conditional levels
+        // above (parse_assignment_expression restores it). Otherwise `/` after
+        // `() => {}` and a newline would lex as division, not a RegExp (§12.9.4).
         if matches!(expr, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
+            self.arrow_held_token = Some(std::mem::replace(&mut self.current, Token::Eof));
             return Ok(expr);
         }
 

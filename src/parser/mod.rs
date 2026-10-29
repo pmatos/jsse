@@ -10,6 +10,7 @@ pub(crate) mod inferred_names;
 mod modules;
 mod positions;
 mod statements;
+mod yield_scan;
 
 #[derive(Clone, Copy, PartialEq)]
 enum PrivateNameKind {
@@ -163,6 +164,9 @@ pub(crate) struct Parser<'a> {
     in_static_block: bool,
     function_param_names: Option<HashSet<String>>,
     last_expr_parenthesized: bool,
+    /// Token held back after an unparenthesized ArrowFunction (see
+    /// `parse_left_hand_side_expression`); `current` is `Token::Eof` meanwhile.
+    arrow_held_token: Option<Token>,
     last_obj_had_proto_dup: bool,
     /// Current recursive-descent nesting depth (expressions + statements).
     /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
@@ -261,6 +265,7 @@ impl<'a> Parser<'a> {
             in_static_block: false,
             function_param_names: None,
             last_expr_parenthesized: false,
+            arrow_held_token: None,
             last_obj_had_proto_dup: false,
             parse_depth: 0,
             lone_surrogate_stand_ins: false,
@@ -980,98 +985,6 @@ impl<'a> Parser<'a> {
             }
             Pattern::Rest(p) => Self::pattern_contains_await_expression(p),
             Pattern::MemberExpression(e) => Self::expr_contains_await_expression(e),
-        }
-    }
-
-    pub(super) fn expr_contains_yield_expression(expr: &Expression) -> bool {
-        use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
-        match expr {
-            Expression::Yield(_, _) => true,
-            Expression::Array(elems, _) => elems
-                .iter()
-                .any(|e| e.as_ref().is_some_and(Self::expr_contains_yield_expression)),
-            Expression::Object(props, _) => props.iter().any(|p: &Property| {
-                Self::expr_contains_yield_expression(&p.value)
-                    || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_yield_expression(e))
-            }),
-            Expression::Member(object, property, _) => {
-                Self::expr_contains_yield_expression(object)
-                    || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_yield_expression(e))
-            }
-            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-                Self::expr_contains_yield_expression(callee)
-                    || args.iter().any(Self::expr_contains_yield_expression)
-            }
-            Expression::Binary(_, left, right)
-            | Expression::Logical(_, left, right)
-            | Expression::Assign(_, left, right) => {
-                Self::expr_contains_yield_expression(left) || Self::expr_contains_yield_expression(right)
-            }
-            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
-                Self::expr_contains_yield_expression(operand)
-            }
-            Expression::Conditional(test, consequent, alternate) => {
-                Self::expr_contains_yield_expression(test)
-                    || Self::expr_contains_yield_expression(consequent)
-                    || Self::expr_contains_yield_expression(alternate)
-            }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(Self::expr_contains_yield_expression)
-            }
-            Expression::Spread(inner) => Self::expr_contains_yield_expression(inner),
-            Expression::Await(inner, _) => Self::expr_contains_yield_expression(inner),
-            Expression::ArrowFunction(af) => {
-                af.params.iter().any(Self::pattern_contains_yield_expression)
-                    || match &af.body {
-                                            ArrowBody::Expression(body) => {
-                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
-                                                    Self::expr_contains_yield_expression(e)
-                                                } else {
-                                                    false
-                                                }
-                                            }
-                                            ArrowBody::Block(_) => false,
-                                        }
-            }
-            Expression::Template(tl) => {
-                tl.expressions.iter().any(Self::expr_contains_yield_expression)
-            }
-            Expression::TaggedTemplate(tag, tl) => {
-                Self::expr_contains_yield_expression(tag)
-                    || tl.expressions.iter().any(Self::expr_contains_yield_expression)
-            }
-            Expression::Typeof(e) | Expression::Void(e) | Expression::Delete(e) => {
-                Self::expr_contains_yield_expression(e)
-            }
-            Expression::OptionalChain(object, chain) => {
-                Self::expr_contains_yield_expression(object) || Self::expr_contains_yield_expression(chain)
-            }
-            _ => false,
-        }
-    }
-
-    fn pattern_contains_yield_expression(pat: &Pattern) -> bool {
-        match pat {
-            Pattern::Identifier(_) => false,
-            Pattern::Array(elems) => elems.iter().any(|e| {
-                e.as_ref().is_some_and(|elem| match elem {
-                    ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                        Self::pattern_contains_yield_expression(p)
-                    }
-                })
-            }),
-            Pattern::Object(props) => props.iter().any(|prop| match prop {
-                ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
-                    Self::pattern_contains_yield_expression(p)
-                }
-                ObjectPatternProperty::Shorthand(_) => false,
-            }),
-            Pattern::Assign(p, default) => {
-                Self::pattern_contains_yield_expression(p)
-                    || Self::expr_contains_yield_expression(default)
-            }
-            Pattern::Rest(p) => Self::pattern_contains_yield_expression(p),
-            Pattern::MemberExpression(e) => Self::expr_contains_yield_expression(e),
         }
     }
 
