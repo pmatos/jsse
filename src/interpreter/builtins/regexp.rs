@@ -10536,7 +10536,7 @@ impl Interpreter {
                     );
                 }
 
-                let regex_input = regex_input_for_subject(interp, string.clone());
+                let regex_input = regex_input_for_subject(interp, string);
 
                 let result = regexp_exec_abstract(interp, mid, &regex_input);
                 let result_val = match result {
