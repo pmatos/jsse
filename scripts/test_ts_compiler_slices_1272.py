@@ -37,6 +37,16 @@ class Slice1272Test(unittest.TestCase):
         picked = [s.base for s in slices.select("issue1272", all_suites, table)]
         self.assertEqual(picked, ["mapped.ts", "Nn.tsx", "q.ts", "ReturnX.ts"])
 
+    def test_row_is_pinned_to_the_oracle_json_count(self):
+        spec = importlib.util.spec_from_file_location(
+            "oracle", SCRIPTS_DIR / "run-ts-compiler-oracle.py"
+        )
+        oracle = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(oracle)
+        table = dict(slices.SLICES)
+        table.update(mine.SLICES)
+        self.assertEqual(oracle.pinned_expected("issue1272", table), 9048)
+
     def test_known_failures_file_is_wellformed(self):
         spec = importlib.util.spec_from_file_location(
             "oracle", SCRIPTS_DIR / "run-ts-compiler-oracle.py"
