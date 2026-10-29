@@ -9,6 +9,7 @@ mod expressions;
 pub(crate) mod inferred_names;
 mod modules;
 mod positions;
+mod prologue;
 mod statements;
 mod yield_scan;
 
@@ -167,6 +168,9 @@ pub(crate) struct Parser<'a> {
     /// Token held back after an unparenthesized ArrowFunction (see
     /// `parse_left_hand_side_expression`); `current` is `Token::Eof` meanwhile.
     arrow_held_token: Option<Token>,
+    /// Set by a `( ArrowFunction )` primary so the enclosing
+    /// `parse_primary_expression` keeps `last_expr_parenthesized` for it.
+    parenthesized_arrow: bool,
     last_obj_had_proto_dup: bool,
     /// Current recursive-descent nesting depth (expressions + statements).
     /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
@@ -266,6 +270,7 @@ impl<'a> Parser<'a> {
             function_param_names: None,
             last_expr_parenthesized: false,
             arrow_held_token: None,
+            parenthesized_arrow: false,
             last_obj_had_proto_dup: false,
             parse_depth: 0,
             lone_surrogate_stand_ins: false,
@@ -986,26 +991,6 @@ impl<'a> Parser<'a> {
             Pattern::Rest(p) => Self::pattern_contains_await_expression(p),
             Pattern::MemberExpression(e) => Self::expr_contains_await_expression(e),
         }
-    }
-
-    fn is_directive_prologue(&self, stmt: &Statement) -> Option<String> {
-        match stmt {
-            Statement::Expression(Expression::Literal(Literal::String(s))) => {
-                if self.last_string_literal_has_escape {
-                    None
-                } else {
-                    Some(String::from_utf16_lossy(s))
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn is_string_literal_statement(stmt: &Statement) -> bool {
-        matches!(
-            stmt,
-            Statement::Expression(Expression::Literal(Literal::String(_)))
-        )
     }
 
     pub(crate) fn parse_program(&mut self) -> Result<Program, ParseError> {

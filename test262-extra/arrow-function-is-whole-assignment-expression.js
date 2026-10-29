@@ -29,6 +29,12 @@ var sources = [
   "var f = () => { }\n.x",
   "var f = x => { } ** 2",
   "var f = async () => { } & 1",
+  "var f = () => { (1) } / 2",
+  "var f = () => { (a) }\n? 1 : 2",
+  "var f = x => { return (x) }\n.x",
+  "var f = (a = (1)) => { } / 2",
+  "var f = () => { (1) } in {}",
+  "class A extends () => { (1) } {}",
 ];
 
 sources.forEach(function(src) {

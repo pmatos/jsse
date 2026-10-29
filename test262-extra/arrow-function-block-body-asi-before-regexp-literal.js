@@ -75,3 +75,27 @@ assert.sameValue(
   "number",
   "a parenthesized arrow is a primary expression: '/' is division"
 );
+
+assert.sameValue(
+  eval("var v = () => { (1) }\n/a/.test('a'); typeof v"),
+  "function",
+  "a parenthesized expression in the body does not hide the arrow"
+);
+
+assert.sameValue(
+  eval("var w = (a = (1)) => { }\n/a/.test('a'); typeof w"),
+  "function",
+  "a parenthesized default does not hide the arrow"
+);
+
+assert.sameValue(
+  eval("var y = x => { return (x) }\n/a/g; typeof y"),
+  "function",
+  "a parenthesized return value does not hide the arrow"
+);
+
+assert.sameValue(
+  eval("var z = (() => { (1) })\n/1/1; typeof z"),
+  "number",
+  "a parenthesized arrow stays a primary expression"
+);
