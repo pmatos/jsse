@@ -64,7 +64,6 @@ def tests_from_titles(entries):
 
 select = base.select
 flat_terms = base.flat_terms
-char_ranges = base.char_ranges
 
 
 def batches_by_tests(tests, size):
