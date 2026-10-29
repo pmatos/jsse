@@ -1,0 +1,44 @@
+name: SonarCloud
+
+# CI-based SonarQube Cloud analysis. Automatic Analysis cannot analyze Rust
+# and never produced a main-branch analysis for this project, so the scanner
+# runs here instead; it needs Automatic Analysis turned off in the project's
+# Administration > Analysis Method page, or the scan step fails.
+# Settings live in sonar-project.properties.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sonarcloud:
+    name: SonarCloud analysis
+    # SONAR_TOKEN is unavailable to fork PRs; skip instead of failing.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    steps:
+      # Full history for blame/new-code detection. No submodules: the
+      # test262/spec test data is not analyzed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # The Rust analyzer needs cargo on PATH.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - name: SonarQube Cloud scan
+        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
