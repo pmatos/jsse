@@ -73,6 +73,7 @@ def select(spec, cases, table=None):
     """Cases of `cases` chosen by `spec`, in enumeration order, without duplicates."""
     table = SLICES if table is None else table
     chosen = set()
+    position = {id(c): i for i, c in enumerate(cases)}
     for term in base.flat_terms(spec, table):
         kind, _, arg = term.partition(":")
         if kind in ("startswith", "except"):
@@ -81,13 +82,11 @@ def select(spec, cases, table=None):
                 i for i, c in enumerate(cases) if ok(c.base) == (kind == "startswith")
             )
         else:
-            for c in base.select(term, cases, {}):
-                chosen.add(cases.index(c))
+            chosen.update(position[id(c)] for c in base.select(term, cases, {}))
     return [cases[i] for i in sorted(chosen)]
 
 
 batches = base.batches
-flat_terms = base.flat_terms
 
 
 def grep_for(batch):
