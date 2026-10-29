@@ -7,7 +7,8 @@ The chunks are the rows of scripts/ts_compiler_slices_df.py (d1..d6, e1..e6, f; 
 one oracle run (Node and jsse --node, per-test outcome, error message and local-baseline comparison, corrupted-reference
 control, known-failure ratchet) with the known failures of ts-suite/compiler-known-failures-d-f.txt, so a long run
 reports per chunk and a failing chunk is repeated alone. Options after `--` go to the oracle (--jobs N at most 4,
---batch-size N, --jsse PATH, --record, --no-control, --verbose, --require). The exit status is 1 if any chunk failed.
+--batch-size N, --jsse PATH, --record, --no-control, --verbose); --require is always passed, so a missing or
+unusable TS_SRC_DIR fails instead of skipping. The exit status is 1 if any chunk failed.
 
 --check-partition lists the suites of every chunk and of `d-f` and fails unless the chunks cover `d-f` exactly once
 (needs only Node and TS_SRC_DIR).
@@ -24,7 +25,7 @@ import ts_compiler_slices_df as df  # noqa: E402
 
 ORACLE = os.path.join(ROOT, "scripts", "run-ts-compiler-oracle.py")
 KNOWN = os.path.join(ROOT, "ts-suite", "compiler-known-failures-d-f.txt")
-BASE = [sys.executable, ORACLE, "--slices-module", "ts_compiler_slices_df"]
+BASE = [sys.executable, ORACLE, "--require", "--slices-module", "ts_compiler_slices_df"]
 
 
 def run(args):
@@ -67,7 +68,10 @@ def check_partition():
                 bad.append(f"{suite!r} is in {seen[suite]} and {name}")
             seen[suite] = name
     bad += [f"not in any chunk: {s!r}" for s in whole if s not in seen]
-    bad += [f"outside d-f: {s!r}" for s in seen if s not in set(whole)]
+    in_whole = set(whole)
+    bad += [f"outside d-f: {s!r}" for s in seen if s not in in_whole]
+    if not whole:
+        bad.append("d-f lists no suites")
     print(f"chunks cover {len(seen)} of {len(whole)} suites of d-f")
     print("\n".join(bad) or "partition OK")
     return 1 if bad else 0
