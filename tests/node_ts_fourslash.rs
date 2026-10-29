@@ -35,6 +35,24 @@ fn fourslash_tests_match_node_when_a_typescript_checkout_is_given() {
     let (ok, text) = oracle(&["first:3"]);
     assert!(ok, "{text}");
     assert!(text.contains("fourslash oracle: PASS"), "{text}");
+    let known_s_z = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("ts-suite/fourslash-known-failures-s-z.txt")
+        .display()
+        .to_string();
+    let (ok, text) = oracle(&[
+        "--no-control",
+        "--known",
+        &known_s_z,
+        "files:satisfiesOperatorCompletion.ts",
+    ]);
+    assert!(ok, "{text}");
+    assert!(text.contains("fourslash oracle: PASS"), "{text}");
+    let (ok, text) = oracle(&["--list", "s-z"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("fourslash s-z: 616 of"), "{text}");
+    let (ok, text) = oracle(&["--runner", "fourslash-server", "--list", "all"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("488 tests"), "{text}");
     let (ok, text) = oracle(&["--runner", "fourslash-server", "--no-control", "first:2"]);
     assert!(ok, "{text}");
     assert!(text.contains("fourslash oracle: PASS"), "{text}");

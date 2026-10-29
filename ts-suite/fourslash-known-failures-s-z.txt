@@ -1,0 +1,5 @@
+# Tests that pass on Node and fail on jsse --node (run-ts-fourslash-oracle.py): full test title, TAB, issue.
+# Slice s-z (#1293): tests/cases/fourslash files whose name starts with s-z, and the whole tests/cases/fourslash/server directory.
+# Use with: run-ts-fourslash-oracle.py --known ts-suite/fourslash-known-failures-s-z.txt s-z
+#           run-ts-fourslash-oracle.py --runner fourslash-server --known ts-suite/fourslash-known-failures-s-z.txt all
+# Maintained with --record; a listed test that passes makes the oracle fail.
