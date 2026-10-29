@@ -15,6 +15,8 @@ impl<'a> Parser<'a> {
         stmts: &[Statement],
         param_names: Option<&HashSet<String>>,
     ) -> Result<(), ParseError> {
+        let redeclared =
+            |name: &str| self.error(format!("Identifier '{name}' has already been declared"));
         let mut lexical: HashSet<String> = HashSet::new();
         for stmt in stmts {
             let names = match stmt {
@@ -25,12 +27,10 @@ impl<'a> Parser<'a> {
                 _ => continue,
             };
             for name in names {
-                let in_params = param_names.is_some_and(|p| p.contains(&name));
-                if in_params || !lexical.insert(name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{name}' has already been declared"))
-                    );
+                if param_names.is_some_and(|p| p.contains(&name)) || lexical.contains(&name) {
+                    return Err(redeclared(&name));
                 }
+                lexical.insert(name);
             }
         }
         if lexical.is_empty() {
@@ -40,8 +40,8 @@ impl<'a> Parser<'a> {
         for stmt in stmts {
             Self::collect_top_level_var_declared_names(stmt, &mut var_names);
         }
-        match var_names.into_iter().find(|n| lexical.contains(n)) {
-            Some(name) => Err(self.error(format!("Identifier '{name}' has already been declared"))),
+        match var_names.iter().find(|n| lexical.contains(*n)) {
+            Some(name) => Err(redeclared(name)),
             None => Ok(()),
         }
     }
