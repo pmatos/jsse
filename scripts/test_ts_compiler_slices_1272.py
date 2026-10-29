@@ -11,6 +11,16 @@ import ts_compiler_slices as slices  # noqa: E402
 import ts_compiler_slices_1272 as mine  # noqa: E402
 
 ITS = slices.IT_TITLES
+TABLE = {**slices.SLICES, **mine.SLICES}
+
+
+def load_oracle():
+    spec = importlib.util.spec_from_file_location(
+        "oracle", SCRIPTS_DIR / "run-ts-compiler-oracle.py"
+    )
+    oracle = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(oracle)
+    return oracle
 
 
 def suites(*files):
@@ -32,27 +42,15 @@ class Slice1272Test(unittest.TestCase):
             "ReturnX.ts",
             "s.ts",
         )
-        table = dict(slices.SLICES)
-        table.update(mine.SLICES)
-        picked = [s.base for s in slices.select("issue1272", all_suites, table)]
+        picked = [s.base for s in slices.select("issue1272", all_suites, TABLE)]
         self.assertEqual(picked, ["mapped.ts", "Nn.tsx", "q.ts", "ReturnX.ts"])
 
     def test_row_is_pinned_to_the_oracle_json_count(self):
-        spec = importlib.util.spec_from_file_location(
-            "oracle", SCRIPTS_DIR / "run-ts-compiler-oracle.py"
-        )
-        oracle = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(oracle)
-        table = dict(slices.SLICES)
-        table.update(mine.SLICES)
-        self.assertEqual(oracle.pinned_expected("issue1272", table), 9048)
+        oracle = load_oracle()
+        self.assertEqual(oracle.pinned_expected("issue1272", TABLE), 9048)
 
     def test_known_failures_file_is_wellformed(self):
-        spec = importlib.util.spec_from_file_location(
-            "oracle", SCRIPTS_DIR / "run-ts-compiler-oracle.py"
-        )
-        oracle = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(oracle)
+        oracle = load_oracle()
         known = oracle.load_known(
             str(ROOT / "ts-suite" / "compiler-known-failures-m-r.txt")
         )
