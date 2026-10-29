@@ -1,0 +1,32 @@
+{
+ "counts": {
+  "tsserver-apply-autoImport-auxiliary": {"passing": 21, "failing": 0, "pending": 0},
+  "tsserver-cachingFileSystemInformation": {"passing": 11, "failing": 0, "pending": 0},
+  "tsserver-cancellation-codeFix-completions": {"passing": 19, "failing": 0, "pending": 0},
+  "tsserver-compileOnSave": {"passing": 37, "failing": 0, "pending": 0},
+  "tsserver-configFileSearch-configuredProjects": {"passing": 50, "failing": 0, "pending": 0},
+  "tsserver-declarationFileMaps": {"passing": 21, "failing": 0, "pending": 0},
+  "tsserver-documentRegistry-duplicate-dynamic": {"passing": 16, "failing": 0, "pending": 0},
+  "tsserver-events-projectUpdatedInBackground": {"passing": 51, "failing": 0, "pending": 0},
+  "tsserver-events-other": {"passing": 25, "failing": 0, "pending": 0},
+  "tsserver-exportMapCache-extends": {"passing": 13, "failing": 0, "pending": 0},
+  "tsserver-externalProjects": {"passing": 24, "failing": 0, "pending": 0},
+  "tsserver-forceConsistentCasingInFileNames": {"passing": 44, "failing": 0, "pending": 0},
+  "tsserver-get-and-services": {"passing": 32, "failing": 0, "pending": 0},
+  "tsserver-import-inferred-jsdoc": {"passing": 34, "failing": 0, "pending": 0},
+  "tsserver-language-library-module": {"passing": 23, "failing": 0, "pending": 0},
+  "tsserver-navTo-openFile-packageJsonInfo": {"passing": 30, "failing": 0, "pending": 0},
+  "tsserver-plugins-projectErrors": {"passing": 46, "failing": 0, "pending": 0},
+  "tsserver-projectReferenceCompileOnSave": {"passing": 46, "failing": 0, "pending": 0},
+  "tsserver-projectReferenceErrors-projectRootFiles": {"passing": 71, "failing": 0, "pending": 0},
+  "tsserver-projectReferences": {"passing": 77, "failing": 0, "pending": 0},
+  "tsserver-projectReferencesSourcemap": {"passing": 273, "failing": 0, "pending": 0},
+  "tsserver-refactors-reload-rename": {"passing": 24, "failing": 0, "pending": 0},
+  "tsserver-resolutionCache-session": {"passing": 50, "failing": 0, "pending": 0},
+  "tsserver-skipLibCheck-symlinks-syntax": {"passing": 43, "failing": 0, "pending": 0},
+  "tsserver-telemetry-typings": {"passing": 64, "failing": 0, "pending": 0},
+  "tsserver-typingsInstaller": {"passing": 66, "failing": 0, "pending": 0},
+  "tsserver-watchEnvironment": {"passing": 29, "failing": 0, "pending": 0}
+ },
+ "known_failures": {}
+}
