@@ -6680,92 +6680,6 @@ fn build_quantified_parent_map(source: &str) -> QuantifierResets {
     )
 }
 
-fn lookbehind_needs_custom_rtl(source: &str) -> bool {
-    let chars: Vec<char> = source.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-    let mut in_cc = false;
-
-    while i < len {
-        if chars[i] == '[' && !in_cc {
-            in_cc = true;
-            i += 1;
-            continue;
-        }
-        if chars[i] == ']' && in_cc {
-            in_cc = false;
-            i += 1;
-            continue;
-        }
-        if chars[i] == '\\' && i + 1 < len {
-            i += 2;
-            continue;
-        }
-
-        // Detect lookbehind
-        if !in_cc
-            && chars[i] == '('
-            && i + 3 < len
-            && chars[i + 1] == '?'
-            && chars[i + 2] == '<'
-            && (chars[i + 3] == '=' || chars[i + 3] == '!')
-        {
-            let content_start = i + 4;
-            let mut depth = 1;
-            let mut j = content_start;
-            let mut has_backref = false;
-            let mut has_quantified_capture = false;
-            let mut in_cc2 = false;
-            let mut capturing_stack: Vec<bool> = Vec::new();
-            while j < len && depth > 0 {
-                if chars[j] == '[' && !in_cc2 {
-                    in_cc2 = true;
-                } else if chars[j] == ']' && in_cc2 {
-                    in_cc2 = false;
-                } else if chars[j] == '\\' && j + 1 < len {
-                    j += 1;
-                    if chars[j].is_ascii_digit() && chars[j] != '0' {
-                        has_backref = true;
-                    }
-                } else if chars[j] == '(' && !in_cc2 {
-                    depth += 1;
-                    let is_cap = if j + 1 < len && chars[j + 1] == '?' {
-                        j + 2 < len
-                            && chars[j + 2] == '<'
-                            && j + 3 < len
-                            && chars[j + 3] != '='
-                            && chars[j + 3] != '!'
-                    } else {
-                        true
-                    };
-                    capturing_stack.push(is_cap);
-                } else if chars[j] == ')' && !in_cc2 {
-                    depth -= 1;
-                    if depth > 0 {
-                        let was_cap = capturing_stack.pop().unwrap_or(false);
-                        if was_cap && j + 1 < len {
-                            // Only flag variable-width quantifiers (+ and *).
-                            // Fixed-count {n} and optional ? are handled correctly by fancy-regex.
-                            if matches!(chars[j + 1], '+' | '*') {
-                                has_quantified_capture = true;
-                            }
-                        }
-                    }
-                }
-                if depth > 0 {
-                    j += 1;
-                }
-            }
-
-            if has_backref || has_quantified_capture {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
 /// Detect patterns where lookbehind captures are referenced by backrefs outside
 /// the lookbehind; `None` if there are none.
 pub(super) fn lookbehind_captures_with_external_backrefs(
@@ -8269,7 +8183,7 @@ fn build_regex_ex_with_nullable_state(
         return build_regex_ex_with_nullable_state(original_source, flags, base, false);
     }
     let retry_without_sentinels = stateful_positive_minimum && !rewrite.sentinel_names.is_empty();
-    let source = rewrite.source;
+    let source = super::regexp_lookbehind_route::named_backrefs_to_numeric(&rewrite.source);
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
 
@@ -8279,8 +8193,7 @@ fn build_regex_ex_with_nullable_state(
             .ok_or_else(|| meta_build_error(&tr.pattern, true));
     }
 
-    if (lookbehind_needs_custom_rtl(&source)
-        || super::regexp_lookbehind_route::unbounded_capture_read_outside(&source))
+    if super::regexp_lookbehind_route::needs_custom_rtl(&source, flags)
         && let Some(result) =
             try_build_custom_lookbehind(&source, flags, base, dup_map.clone(), name_order.clone())
     {
