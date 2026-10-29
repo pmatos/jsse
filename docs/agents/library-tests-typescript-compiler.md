@@ -15,3 +15,9 @@ Split from [library-tests-typescript.md](library-tests-typescript.md) to keep ea
 **Cost.** Suites are cut into batches (`--batch-size`, default 40) and each batch is one mocha process per engine, at most 4 processes at once over both engines: the 13 MB runner bundle takes about 80 s to load on jsse and the first `Program` (lib.d.ts) 25 to 75 s, so batch many suites per process; `--test-timeout` (mocha `-t`) defaults to 600000 ms. A jsse process of 50 suites takes 2 to 4.5 minutes and about 1.6 GB.
 
 **Measured** (first 200 suites, 1200 tests, 4 batches of 50 plus the control, 4 jobs, `CARGO_PROFILE_RELEASE_LTO=off` build): Node 1200/1200 passing in 13 s of process time, jsse 1200/1200 passing in 570 to 690 s of process time over three runs (about 4.5 minutes of wall time); control: 7 corrupted suites fail identically on both engines with identical local baselines. The known-failure list is empty.
+
+## Slice M-R (#1272)
+
+`TS_SRC_DIR=... scripts/run-ts-compiler-m-r-oracle.sh [oracle options]` runs the 1508 suites (9048 tests) of the test files starting with M-R through the oracle: slice row `issue1272` in `scripts/ts_compiler_slices_1272.py` (`--slices-module`), known failures in `ts-suite/compiler-known-failures-m-r.txt` (its own file, so the ranges of #1269-#1273 do not collide), 4 jobs, 40 suites per batch (38 batches). Guard for the wiring: `scripts/test_ts_compiler_slices_1272.py`.
+
+**Measured** (`CARGO_PROFILE_RELEASE_LTO=off` build, 24-core host shared with other agents): Node 9048/9048 passing in 131 s of process time; jsse 9048/9048 passing in 7241 s of process time, about 32 minutes of wall time including the 7-suite corrupted-reference control, which fails the same tests with the same messages and local baselines on both engines. Per-test outcomes agree and no `tests/baselines/local` file is written by either engine, so the known-failure list is empty and no engine or host change was needed.
