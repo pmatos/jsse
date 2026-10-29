@@ -79,6 +79,19 @@ assert.sameValue(Function("a //", "return a;")(5), 5, "trailing line comment in 
 assert.sameValue(Function("return 7; // trailing")(), 7, "trailing line comment in body");
 assert.sameValue(Function("return new.target === undefined;")(), true, "new.target in the body");
 
+var gen = GeneratorFunction("a = 1", "yield a; yield* [2];");
+assert.sameValue(gen().next().value, 1, "yield in a GeneratorFunction body");
+assert.sameValue(typeof AsyncFunction("a", "return await a;"), "function", "await in an AsyncFunction body");
+assert.sameValue(typeof AsyncGeneratorFunction("a", "yield await a;"), "function", "yield and await in an AsyncGeneratorFunction body");
+
+assert.throws(SyntaxError, function () {
+  GeneratorFunction("a = yield", "");
+}, "yield expression in GeneratorFunction parameters");
+
+assert.throws(SyntaxError, function () {
+  AsyncFunction("a = await 1", "");
+}, "await expression in AsyncFunction parameters");
+
 assert.throws(SyntaxError, function () {
   Function("super.x;");
 }, "super property is not allowed in the body");

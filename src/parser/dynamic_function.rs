@@ -30,7 +30,7 @@ impl Parser<'_> {
         if self.current == Token::Eof {
             Ok(())
         } else {
-            Err(self.error(format!("Unexpected token after {what}")))
+            Err(self.error(format!("Unexpected token {:?} after {what}", self.current)))
         }
     }
 }
