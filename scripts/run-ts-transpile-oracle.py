@@ -89,6 +89,7 @@ def checkout_problem(ts_dir):
     needed = (
         "node_modules/mocha/bin/_mocha",
         "built/local/run.js",
+        "built/local/typescript.js",
         ts_slices.CASES,
         ts_slices.REFERENCE,
     )
@@ -127,6 +128,15 @@ def parse_args():
 
 def main():
     o = parse_args()
+    if o.corpus is not None:
+        if o.no_jsse:
+            sys.exit(
+                "--corpus compares the engines; it cannot be combined with --no-jsse"
+            )
+        try:
+            corpus.parse_count(o.corpus)
+        except ValueError as e:
+            sys.exit(str(e))
     table = dict(ts_slices.SLICES)
     if o.slices_module:
         table.update(importlib.import_module(o.slices_module).SLICES)
@@ -241,7 +251,14 @@ def main():
                 engine, tag, c = t
                 exe = node if engine == "node" else jsse
                 return corpus.run_chunk(
-                    engine, exe, ts_dir, c, work, f"{engine}-{tag}", o.timeout
+                    engine,
+                    exe,
+                    ts_dir,
+                    c,
+                    work,
+                    f"{engine}-{tag}",
+                    o.timeout,
+                    compiler.DROP_ENV,
                 )
 
             with ThreadPoolExecutor(jobs) as pool:

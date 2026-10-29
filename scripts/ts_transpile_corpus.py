@@ -39,16 +39,15 @@ def chunks(files, size=CHUNK):
     return [files[i : i + size] for i in range(0, len(files), size)]
 
 
-def run_chunk(engine, exe, ts_dir, files, work, tag, timeout):
+def run_chunk(engine, exe, ts_dir, files, work, tag, timeout, drop=()):
     """Run the driver on `files`; returns ({(file, option set): 'digest<TAB>length'}, error text or None)."""
     listing = os.path.join(work, f"{tag}.list")
     with open(listing, "w", encoding="utf-8") as f:
         f.write("\n".join(files) + "\n")
     cmd = [exe] + (["--node"] if engine == "jsse" else [])
     cmd += [DRIVER, ts_dir, listing]
-    env = {
-        k: v for k, v in os.environ.items() if k not in ("NODE_OPTIONS", "FORCE_COLOR")
-    }
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env["TMPDIR"] = work
     code, out, err = oracle_procs.run_group(cmd, work, env, timeout)
     got = {}
     for line in out.decode("utf-8", "replace").splitlines():
@@ -65,19 +64,21 @@ def run_chunk(engine, exe, ts_dir, files, work, tag, timeout):
 
 
 STACK = "throws RangeError: Maximum call stack size exceeded"
+DEEP_FILES = ("binderBinaryExpressionStress.ts", "binderBinaryExpressionStressJs.ts")
 
 
 def stack_limited(node, jsse):
     """Cases where an engine ran out of stack and the other did not: the depth limit is implementation-defined.
 
     V8's limit is in bytes, so the same case throws in a cold Node process and succeeds in one whose functions are
-    already optimised (binderBinaryExpressionStress.ts, a 5000-deep binary expression); such cases are reported and
-    not compared.
+    already optimised (DEEP_FILES, 5000-deep binary expressions); such cases are reported and not compared. A stack
+    overflow on any other file is a difference.
     """
     return sorted(
         k
         for k in set(node) | set(jsse)
         if node.get(k) != jsse.get(k)
+        and os.path.basename(k[0]) in DEEP_FILES
         and any((v or "").startswith(STACK) for v in (node.get(k), jsse.get(k)))
     )
 
@@ -103,4 +104,9 @@ def compare(node, jsse, limit=20):
 
 
 def parse_count(text):
-    return None if text == "all" else int(text)
+    """None for 'all', else the number of files (the value of --corpus)."""
+    if text == "all":
+        return None
+    if not text.isdigit():
+        raise ValueError(f"--corpus takes a number or 'all', not {text!r}")
+    return int(text)

@@ -140,7 +140,7 @@ class ControlTest(unittest.TestCase):
                 done[:3], ["a.js: append", "b.js: replace", "c.js: remove"]
             )
             self.assertIn("export const corrupted", done[3])
-            self.assertIn("export declare function corrupted", done[4])
+            self.assertIn("export function corrupted", done[4])
             r = Path(rdir, "transpile")
             self.assertTrue((r / "a.js").read_text().endswith("corrupted reference\n"))
             self.assertEqual((r / "a.d.ts").read_text(), "ref d.ts\n")
@@ -214,16 +214,23 @@ class CorpusTest(unittest.TestCase):
         many = {(str(i), "s"): "x" for i in range(30)}
         self.assertEqual(len(corpus.compare(many, {})), 21)
 
-    def test_stack_depth_differences_are_reported_not_compared(self):
+    def test_stack_depth_differences_are_exempt_only_for_the_known_deep_files(self):
         deep = "throws RangeError: Maximum call stack size exceeded\t0"
-        a = {("f", "s"): "x\t1", ("g", "s"): "y\t1"}
-        b = {("f", "s"): deep, ("g", "s"): "other\t1"}
-        self.assertEqual(corpus.stack_limited(a, b), [("f", "s")])
-        self.assertEqual(corpus.stack_limited(b, a), [("f", "s")])
+        known = ("tests/cases/compiler/binderBinaryExpressionStress.ts", "declaration")
+        other = ("tests/cases/compiler/other.ts", "declaration")
+        a = {known: "x\t1", other: "y\t1", ("g", "s"): "y\t1"}
+        b = {known: deep, other: deep, ("g", "s"): "other\t1"}
+        self.assertEqual(corpus.stack_limited(a, b), [known])
+        self.assertEqual(corpus.stack_limited(b, a), [known])
         self.assertEqual(corpus.stack_limited(b, b), [])
         got = corpus.compare(a, b)
-        self.assertEqual(len(got), 1)
+        self.assertEqual(len(got), 2)
         self.assertIn("g [s] differs", got[0])
+        self.assertIn("other.ts [declaration] differs", got[1])
+
+    def test_count_validation(self):
+        with self.assertRaises(ValueError):
+            corpus.parse_count("abc")
 
     def test_the_driver_exists_next_to_the_module(self):
         self.assertTrue(os.path.isfile(corpus.DRIVER))

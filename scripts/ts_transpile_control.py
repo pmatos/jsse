@@ -6,8 +6,9 @@ the same tests with the same messages and write the same local baselines:
 
   * the reference baseline of a test (`tests/baselines/reference/transpile/<name>.js` or `.d.ts`) appended to,
     rewritten or removed: the baseline diff, the `New baseline created` error and the local file;
-  * a test file with a declaration appended (`export const corrupted = 12345;`, `export declare function corrupted():
-    void;`): the transpiled output no longer equals the reference, which checks that the transpile itself runs.
+  * a test file with a statement appended (`export const corrupted = 12345;`, `export function corrupted() {
+    return 1; }`): the transpiled JS and declaration output no longer equal the reference, which checks that the
+    transpile itself runs.
 """
 
 import os
@@ -19,7 +20,7 @@ CONTROL_TESTS = 5
 BASELINE_MODES = ("append", "replace", "remove")
 APPENDED = (
     "export const corrupted = 12345;",
-    "export declare function corrupted(): void;",
+    "export function corrupted() { return 1; }",
 )
 
 
@@ -31,7 +32,7 @@ def make_control(ts_dir, chosen, rest, work):
     first one of each baseline-mode file corrupted); the private cases dir holds `transpile/` with the picked files,
     the edit-mode ones changed.
     """
-    ref_src = os.path.join(ts_dir, ts.REFERENCE, os.pardir)
+    ref_src = os.path.join(ts_dir, ts.REFERENCE)
     ref = os.path.join(work, "ref", "transpile")
     cases = os.path.join(work, "cases")
     os.makedirs(ref)
@@ -46,13 +47,11 @@ def make_control(ts_dir, chosen, rest, work):
             for n in map(ts.reference_names, (x.split(" ", 3)[3] for x in t.tests))
             if n
         ]
-        names = [
-            n for n in names if os.path.isfile(os.path.join(ref_src, "transpile", n))
-        ]
+        names = [n for n in names if os.path.isfile(os.path.join(ref_src, n))]
         if not names:
             continue
         for n in names:
-            shutil.copy(os.path.join(ref_src, "transpile", n), os.path.join(ref, n))
+            shutil.copy(os.path.join(ref_src, n), os.path.join(ref, n))
         with open(os.path.join(ts_dir, t.file), encoding="utf-8", newline="") as f:
             text = f.read()
         dest = ts.case_path(cases, t)
