@@ -97,10 +97,7 @@ impl Interpreter {
                         );
                     }
                 };
-                let old_realm = interp.current_realm_id;
-                interp.current_realm_id = eval_realm_id;
-                let result = interp.run(&program);
-                interp.current_realm_id = old_realm;
+                let result = interp.with_realm(Some(eval_realm_id), |interp| interp.run(&program));
                 match result {
                     Completion::Normal(v) => Completion::Normal(v),
                     Completion::Empty => Completion::Normal(JsValue::UNDEFINED),

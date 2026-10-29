@@ -184,59 +184,58 @@ impl Interpreter {
         resume: Option<Resume>,
         id: Option<u64>,
     ) -> Completion {
-        let caller_realm = std::mem::replace(&mut self.current_realm_id, activation.realm_id);
-        // The result promise is reachable only from the activation, which the
-        // Rust stack holds while the body runs.
-        let gc_frame = self.gc_root_frame();
-        activation
-            .resolvers
-            .for_each_value(|value| self.gc_root_value(value));
-        self.call_stack_envs.push(activation.env.clone());
-        let stack_frame = self.push_async_stack_frame(activation.func_obj_id);
-        let noted = match &activation.receiver {
-            Some(receiver) if stack_frame => {
-                self.node_note_arrow_receiver(receiver);
-                true
+        let (result, await_pos, gc_frame) = self.with_realm(Some(activation.realm_id), |interp| {
+            // The result promise lives only in this stack-held activation.
+            let gc_frame = interp.gc_root_frame();
+            activation
+                .resolvers
+                .for_each_value(|value| interp.gc_root_value(value));
+            interp.call_stack_envs.push(activation.env.clone());
+            let stack_frame = interp.push_async_stack_frame(activation.func_obj_id);
+            let noted = match &activation.receiver {
+                Some(receiver) if stack_frame => {
+                    interp.node_note_arrow_receiver(receiver);
+                    true
+                }
+                _ => false,
+            };
+            #[cfg(feature = "perf-counters")]
+            {
+                interp.perf.body_non_function += 1;
+                if !activation.chunk.ast.is_empty() {
+                    let (name, key) = activation.perf_key.clone();
+                    interp.perf.enter_ast_body(name, key, false);
+                }
             }
-            _ => false,
-        };
-        #[cfg(feature = "perf-counters")]
-        {
-            self.perf.body_non_function += 1;
+            // Hand-offs cannot tail-call: this driver does not trampoline.
+            let saved_tco = interp.tco_suppress_depth;
+            interp.tco_suppress_depth = saved_tco + 1;
+            let result =
+                interp.with_ic_body_in_frame(&activation.body, &activation.frame_info, |interp| {
+                    vm::run_generator_chunk(
+                        interp,
+                        &activation.chunk,
+                        &activation.env,
+                        &mut activation.frame,
+                        resume,
+                    )
+                });
+            interp.tco_suppress_depth = saved_tco;
+            let await_pos = interp.node_host.call_pos;
+            #[cfg(feature = "perf-counters")]
             if !activation.chunk.ast.is_empty() {
-                let (name, key) = activation.perf_key.clone();
-                self.perf.enter_ast_body(name, key, false);
+                let exclusive = interp.perf.leave_ast_body();
+                interp.perf.ast_units_in_fallbacks += exclusive;
             }
-        }
-        // Tree-walked hand-offs inside the chunk must not return a tail call
-        // to a driver that cannot trampoline it.
-        let saved_tco = self.tco_suppress_depth;
-        self.tco_suppress_depth = saved_tco + 1;
-        let result =
-            self.with_ic_body_in_frame(&activation.body, &activation.frame_info, |interp| {
-                vm::run_generator_chunk(
-                    interp,
-                    &activation.chunk,
-                    &activation.env,
-                    &mut activation.frame,
-                    resume,
-                )
-            });
-        self.tco_suppress_depth = saved_tco;
-        let await_pos = self.node_host.call_pos;
-        #[cfg(feature = "perf-counters")]
-        if !activation.chunk.ast.is_empty() {
-            let exclusive = self.perf.leave_ast_body();
-            self.perf.ast_units_in_fallbacks += exclusive;
-        }
-        if noted {
-            self.node_host.stack.arrow_receivers.pop();
-        }
-        if stack_frame {
-            self.pop_call_frame();
-        }
-        self.call_stack_envs.pop();
-        self.current_realm_id = caller_realm;
+            if noted {
+                interp.node_host.stack.arrow_receivers.pop();
+            }
+            if stack_frame {
+                interp.pop_call_frame();
+            }
+            interp.call_stack_envs.pop();
+            (result, await_pos, gc_frame)
+        });
         let completion = match result {
             Completion::Yield(awaited) => {
                 self.gc_unroot_frame(gc_frame);

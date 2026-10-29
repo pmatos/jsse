@@ -304,18 +304,14 @@ impl Interpreter {
             resume_kind: GeneratorResumeKind::Next,
         });
 
-        let caller_realm = self.current_realm_id;
-        if let Some(gen_realm) = obj_rc.borrow().generator_realm_id() {
-            self.current_realm_id = gen_realm;
-        }
-
-        func_env.borrow_mut().strict = is_strict;
-        self.call_stack_envs.push(func_env.clone());
-        let result = self.exec_body(&body, &func_env);
-        self.call_stack_envs.pop();
-        let _ctx = self.generator_context.take();
-
-        self.current_realm_id = caller_realm;
+        let result = self.with_generator_realm(o.id, |interp| {
+            func_env.borrow_mut().strict = is_strict;
+            interp.call_stack_envs.push(func_env.clone());
+            let result = interp.exec_body(&body, &func_env);
+            interp.call_stack_envs.pop();
+            interp.generator_context.take();
+            result
+        });
         match result {
             Completion::Yield(v) => {
                 obj_rc
@@ -476,18 +472,14 @@ impl Interpreter {
                     resume_kind: GeneratorResumeKind::Return(value.clone()),
                 });
 
-                let caller_realm = self.current_realm_id;
-                if let Some(gen_realm) = obj_rc.borrow().generator_realm_id() {
-                    self.current_realm_id = gen_realm;
-                }
-
-                func_env.borrow_mut().strict = is_strict;
-                self.call_stack_envs.push(func_env.clone());
-                let result = self.exec_body(&body, &func_env);
-                self.call_stack_envs.pop();
-                let _ctx = self.generator_context.take();
-
-                self.current_realm_id = caller_realm;
+                let result = self.with_generator_realm(o.id, |interp| {
+                    func_env.borrow_mut().strict = is_strict;
+                    interp.call_stack_envs.push(func_env.clone());
+                    let result = interp.exec_body(&body, &func_env);
+                    interp.call_stack_envs.pop();
+                    interp.generator_context.take();
+                    result
+                });
                 match result {
                     Completion::Yield(v) => {
                         // A yield in a finally block suspends the generator
@@ -612,18 +604,14 @@ impl Interpreter {
                     resume_kind: GeneratorResumeKind::Throw(exception),
                 });
 
-                let caller_realm = self.current_realm_id;
-                if let Some(gen_realm) = obj_rc.borrow().generator_realm_id() {
-                    self.current_realm_id = gen_realm;
-                }
-
-                func_env.borrow_mut().strict = is_strict;
-                self.call_stack_envs.push(func_env.clone());
-                let result = self.exec_body(&body, &func_env);
-                self.call_stack_envs.pop();
-                let _ctx = self.generator_context.take();
-
-                self.current_realm_id = caller_realm;
+                let result = self.with_generator_realm(o.id, |interp| {
+                    func_env.borrow_mut().strict = is_strict;
+                    interp.call_stack_envs.push(func_env.clone());
+                    let result = interp.exec_body(&body, &func_env);
+                    interp.call_stack_envs.pop();
+                    interp.generator_context.take();
+                    result
+                });
                 match result {
                     Completion::Yield(v) => {
                         let new_yield_index = inject_at + 1;
@@ -811,32 +799,30 @@ impl Interpreter {
                 realm,
             } => (code, frame, resume, realm),
         };
-        let caller_realm = self.current_realm_id;
-        if let Some(realm) = realm {
-            self.current_realm_id = realm;
-        }
-        self.call_stack_envs.push(code.func_env.clone());
-        // Resumptions are executions of the body, not invocations (see
-        // `exec_state_machine_body`); tree-walker hand-offs inside are
-        // credited to the function that owns the chunk.
-        #[cfg(feature = "perf-counters")]
-        {
-            self.perf.body_non_function += 1;
-            if !code.chunk.ast.is_empty() {
-                let (name, id) = code.perf_key.clone();
-                self.perf.enter_ast_body(name, id, false);
+        let result = self.with_realm(realm, |interp| {
+            interp.call_stack_envs.push(code.func_env.clone());
+            // Resumptions are executions of the body, not invocations (see
+            // `exec_state_machine_body`); tree-walker hand-offs inside are
+            // credited to the function that owns the chunk.
+            #[cfg(feature = "perf-counters")]
+            {
+                interp.perf.body_non_function += 1;
+                if !code.chunk.ast.is_empty() {
+                    let (name, id) = code.perf_key.clone();
+                    interp.perf.enter_ast_body(name, id, false);
+                }
             }
-        }
-        let result = self.with_ic_body_in_frame(&code.body, &code.frame, |interp| {
-            vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
+            let result = interp.with_ic_body_in_frame(&code.body, &code.frame, |interp| {
+                vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
+            });
+            #[cfg(feature = "perf-counters")]
+            if !code.chunk.ast.is_empty() {
+                let exclusive = interp.perf.leave_ast_body();
+                interp.perf.ast_units_in_fallbacks += exclusive;
+            }
+            interp.call_stack_envs.pop();
+            result
         });
-        #[cfg(feature = "perf-counters")]
-        if !code.chunk.ast.is_empty() {
-            let exclusive = self.perf.leave_ast_body();
-            self.perf.ast_units_in_fallbacks += exclusive;
-        }
-        self.call_stack_envs.pop();
-        self.current_realm_id = caller_realm;
         let finish = |frame: Option<Box<GeneratorFrame>>| {
             if let Some(IteratorState::BytecodeGenerator(generator)) =
                 cell.borrow_mut().iterator_state_mut()
@@ -5967,16 +5953,10 @@ impl Interpreter {
         gen_id: u64,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        let caller_realm = self.current_realm_id;
-        if let Some(realm_id) = self
+        let realm = self
             .get_object_cell(gen_id)
-            .and_then(|cell| cell.borrow().generator_realm_id())
-        {
-            self.current_realm_id = realm_id;
-        }
-        let result = f(self);
-        self.current_realm_id = caller_realm;
-        result
+            .and_then(|cell| cell.borrow().generator_realm_id());
+        self.with_realm(realm, f)
     }
 
     /// The settlement of what a request of async generator `gen_id` was

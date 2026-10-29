@@ -593,11 +593,9 @@ impl Interpreter {
         error_type: &str,
         msg: &str,
     ) -> JsValue {
-        let old_realm = self.current_realm_id;
-        self.current_realm_id = realm_id;
-        let err = self.create_error(error_type, msg);
-        self.current_realm_id = old_realm;
-        err
+        self.with_realm(Some(realm_id), |interp| {
+            interp.create_error(error_type, msg)
+        })
     }
 
     pub(crate) fn get_wrapped_value(
@@ -623,14 +621,10 @@ impl Interpreter {
         caller_realm_id: usize,
         target_func: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        let old_realm = self.current_realm_id;
-        self.current_realm_id = caller_realm_id;
-
-        let func_obj_id = self.create_object_id();
-        let func_id = func_obj_id;
-        let fp_id = self.realms[caller_realm_id].function_prototype;
-        {
-            let mut o = self.get_object_cell_expect(func_obj_id).borrow_mut();
+        let func_id = self.with_realm(Some(caller_realm_id), |interp| {
+            let func_id = interp.create_object_id();
+            let fp_id = interp.realms[caller_realm_id].function_prototype;
+            let mut o = interp.get_object_cell_expect(func_id).borrow_mut();
             o.prototype_id = fp_id;
             o.class_name = "Function";
             o.set_function_realm(caller_realm_id);
@@ -650,9 +644,8 @@ impl Interpreter {
                     },
                 );
             }
-        }
-
-        self.current_realm_id = old_realm;
+            func_id
+        });
 
         // CopyNameAndLength (spec §10.4.2.4) — any error becomes TypeError from callerRealm
         let length_val = if let Some(tf) = (target_func)
@@ -786,10 +779,9 @@ impl Interpreter {
         }
 
         // Call target in its realm
-        let old_realm = self.current_realm_id;
-        self.current_realm_id = target_realm_id;
-        let result = self.call_function(&target, &JsValue::UNDEFINED, &wrapped_args);
-        self.current_realm_id = old_realm;
+        let result = self.with_realm(Some(target_realm_id), |interp| {
+            interp.call_function(&target, &JsValue::UNDEFINED, &wrapped_args)
+        });
 
         let result_val = match result {
             Completion::Normal(v) => v,
@@ -845,42 +837,38 @@ impl Interpreter {
         // Without this the program's site ids would index the caller's IC store.
         crate::ast::assign_ic_sites(&mut program.body);
 
-        let old_realm = self.current_realm_id;
-        self.current_realm_id = eval_realm_id;
-        let is_strict = program.body_is_strict;
-        // Per spec §B.3.6.2 PerformShadowRealmEval:
-        // Strict: both var and lex are new strict envs (isolates everything)
-        // Non-strict: var goes to global, lex is fresh child of global (isolates let/const)
-        let global = self.realm().global_env.clone();
-        let (var_env, lex_env) = if is_strict {
-            let new_env = Environment::new_function_scope(Some(global));
-            new_env.borrow_mut().strict = true;
-            (new_env.clone(), new_env)
-        } else {
-            let lex_env = Environment::new(Some(global.clone()));
-            (global, lex_env)
+        let result = self.with_realm(Some(eval_realm_id), |interp| {
+            let is_strict = program.body_is_strict;
+            // §B.3.6.2: strict var/lex environments are fresh; non-strict
+            // var declarations reach the global, while lexicals stay isolated.
+            let global = interp.realm().global_env.clone();
+            let (var_env, lex_env) = if is_strict {
+                let new_env = Environment::new_function_scope(Some(global));
+                new_env.borrow_mut().strict = true;
+                (new_env.clone(), new_env)
+            } else {
+                let lex_env = Environment::new(Some(global.clone()));
+                (global, lex_env)
+            };
+            interp.eval_declaration_instantiation(
+                program.body.as_slice(),
+                &var_env,
+                &lex_env,
+                is_strict,
+                false,
+                &lex_env,
+            )?;
+            // exec_eval_body enters this Body's IC store without re-hoisting.
+            interp.call_stack_envs.push(lex_env.clone());
+            let result = interp.exec_eval_body(&program.body, &lex_env);
+            interp.call_stack_envs.pop();
+            interp.drain_microtasks();
+            Ok(result)
+        });
+        let result = match result {
+            Ok(result) => result,
+            Err(e) => return Completion::Throw(e),
         };
-        // Hoist var/function declarations to var_env
-        if let Err(e) = self.eval_declaration_instantiation(
-            program.body.as_slice(),
-            &var_env,
-            &lex_env,
-            is_strict,
-            false,
-            &lex_env,
-        ) {
-            self.current_realm_id = old_realm;
-            return Completion::Throw(e);
-        }
-        // Execute body in lex_env via exec_eval_body: it switches current_ic
-        // to this program's own IC store (keeping the seam invariant that every
-        // executed body switches the handle) without re-running the hoisting pass,
-        // since eval_declaration_instantiation above already performed it.
-        self.call_stack_envs.push(lex_env.clone());
-        let result = self.exec_eval_body(&program.body, &lex_env);
-        self.call_stack_envs.pop();
-        self.drain_microtasks();
-        self.current_realm_id = old_realm;
 
         let result_val = match result {
             Completion::Normal(v) => v,
