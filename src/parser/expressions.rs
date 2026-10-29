@@ -1,34 +1,10 @@
 use super::*;
 
 mod arguments;
+mod regexp;
+mod targets;
 
-fn validate_regexp_literal(pattern: &[u16], flags: &str) -> Result<(), ParseError> {
-    let valid_flags = "dgimsuyv";
-    for c in flags.chars() {
-        if !valid_flags.contains(c) {
-            return Err(ParseError {
-                message: format!("Invalid regular expression flags '{}'", flags),
-            });
-        }
-    }
-    let mut seen = HashSet::new();
-    for c in flags.chars() {
-        if !seen.insert(c) {
-            return Err(ParseError {
-                message: format!("Invalid regular expression flags '{}'", flags),
-            });
-        }
-    }
-    if flags.contains('u') && flags.contains('v') {
-        return Err(ParseError {
-            message: format!("Invalid regular expression flags '{}'", flags),
-        });
-    }
-    if let Err(msg) = crate::interpreter::validate_js_pattern_units(pattern, flags) {
-        return Err(ParseError { message: msg });
-    }
-    Ok(())
-}
+use regexp::validate_regexp_literal;
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_expression(&mut self) -> Result<Expression, ParseError> {
@@ -71,171 +47,6 @@ impl<'a> Parser<'a> {
         Ok(Expression::Yield(Some(ExprBox::new(expr)), delegate))
     }
 
-    fn is_simple_assignment_target(expr: &Expression) -> bool {
-        matches!(
-            expr,
-            Expression::Identifier(_) | Expression::Member(_, _, _)
-        )
-    }
-
-    fn validate_assignment_target(
-        &self,
-        expr: &Expression,
-        simple_only: bool,
-        allow_call: bool,
-    ) -> Result<(), ParseError> {
-        if !simple_only && matches!(expr, Expression::Array(..) | Expression::Object(..)) {
-            if self.last_expr_parenthesized {
-                return Err(self.error("Invalid left-hand side in assignment"));
-            }
-            self.validate_destructuring_pattern(expr)?;
-            return Ok(());
-        }
-        if Self::is_simple_assignment_target(expr) {
-            if self.strict
-                && let Expression::Identifier(name) = expr
-                && (name == "eval" || name == "arguments")
-            {
-                return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
-            }
-            return Ok(());
-        }
-        if allow_call && !self.strict && matches!(expr, Expression::Call(_, _, _)) {
-            return Ok(());
-        }
-        Err(self.error("Invalid left-hand side in assignment"))
-    }
-
-    fn validate_destructuring_pattern(&self, expr: &Expression) -> Result<(), ParseError> {
-        match expr {
-            Expression::Array(elements, trailing_comma_after_spread) => {
-                let mut saw_rest = false;
-                for elem in elements {
-                    if let Some(e) = elem {
-                        if saw_rest {
-                            return Err(self.error(
-                                "Rest element must be last element in array destructuring pattern",
-                            ));
-                        }
-                        if let Expression::Spread(inner) = e {
-                            saw_rest = true;
-                            // Rest element cannot have initializer: [...x = 1]
-                            if matches!(inner.as_ref(), Expression::Assign(AssignOp::Assign, _, _))
-                            {
-                                return Err(
-                                    self.error("Rest element may not have a default initializer")
-                                );
-                            }
-                            self.validate_destructuring_target(inner)?;
-                        } else if let Expression::Assign(AssignOp::Assign, target, _) = e {
-                            self.validate_destructuring_target(target)?;
-                        } else {
-                            self.validate_destructuring_target(e)?;
-                        }
-                    } else {
-                        // Elision after rest is also invalid
-                        if saw_rest {
-                            return Err(self.error(
-                                "Rest element must be last element in array destructuring pattern",
-                            ));
-                        }
-                    }
-                }
-                if saw_rest && *trailing_comma_after_spread {
-                    return Err(self.error(
-                        "Rest element must be last element in array destructuring pattern",
-                    ));
-                }
-                Ok(())
-            }
-            Expression::Object(props, trailing_comma_after_spread) => {
-                let mut saw_rest = false;
-                for prop in props {
-                    if saw_rest {
-                        return Err(self.error(
-                            "Rest element must be last element in object destructuring pattern",
-                        ));
-                    }
-                    if let Expression::Spread(_) = &prop.value {
-                        saw_rest = true;
-                    }
-                    match prop.kind {
-                        PropertyKind::Get | PropertyKind::Set => {
-                            return Err(self.error("Invalid destructuring assignment target"));
-                        }
-                        PropertyKind::Init => {
-                            if let Expression::Assign(AssignOp::Assign, target, _) = &prop.value {
-                                self.validate_destructuring_target(target)?;
-                            } else if prop.shorthand {
-                                // Shorthand { eval }/{ arguments } invalid in strict
-                                if let Expression::Identifier(name) = &prop.value {
-                                    if self.strict && (name == "eval" || name == "arguments") {
-                                        return Err(self.error(
-                                            "Assignment to 'eval' or 'arguments' in strict mode",
-                                        ));
-                                    }
-                                    if self.in_generator && name == "yield" {
-                                        return Err(self.error(
-                                            "'yield' is not allowed as an identifier in this context",
-                                        ));
-                                    }
-                                }
-                            } else {
-                                self.validate_destructuring_target(&prop.value)?;
-                            }
-                        }
-                    }
-                }
-                if saw_rest && *trailing_comma_after_spread {
-                    return Err(self.error(
-                        "Rest element must be last element in object destructuring pattern",
-                    ));
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn validate_destructuring_target(&self, expr: &Expression) -> Result<(), ParseError> {
-        match expr {
-            Expression::Array(..) | Expression::Object(..) => {
-                self.validate_destructuring_pattern(expr)
-            }
-            Expression::Spread(inner) => self.validate_destructuring_target(inner),
-            // Single-element Sequence is a parenthesization marker
-            Expression::Sequence(exprs) if exprs.len() == 1 => {
-                match &exprs[0] {
-                    // Parenthesized Object/Array patterns are not destructuring targets
-                    Expression::Object(..) | Expression::Array(..) => {
-                        Err(self.error("Invalid destructuring assignment target"))
-                    }
-                    other => self.validate_destructuring_target(other),
-                }
-            }
-            Expression::Sequence(_) | Expression::Comma(_) => {
-                Err(self.error("Invalid destructuring assignment target"))
-            }
-            _ => {
-                // §13.15.5.1: DestructuringAssignmentTarget must have
-                // AssignmentTargetType == simple (identifier or member expression)
-                if Self::is_simple_assignment_target(expr) {
-                    if self.strict
-                        && let Expression::Identifier(name) = expr
-                        && (name == "eval" || name == "arguments")
-                    {
-                        return Err(
-                            self.error("Assignment to 'eval' or 'arguments' in strict mode")
-                        );
-                    }
-                    Ok(())
-                } else {
-                    Err(self.error("Invalid destructuring assignment target"))
-                }
-            }
-        }
-    }
-
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
         // Depth guard: every nested sub-expression funnels through here, so
         // bounding this bounds recursive-descent native recursion.
@@ -259,6 +70,13 @@ impl<'a> Parser<'a> {
         }
 
         let left = self.parse_conditional_expression()?;
+        let arrow_ended = match self.arrow_held_token.take() {
+            Some(held) => {
+                self.current = held;
+                true
+            }
+            None => false,
+        };
 
         let op = match &self.current {
             Token::Assign => Some(AssignOp::Assign),
@@ -279,6 +97,8 @@ impl<'a> Parser<'a> {
             Token::NullishAssign => Some(AssignOp::NullishAssign),
             _ => None,
         };
+        // An unparenthesized ArrowFunction cannot be the target of an operator.
+        let op = op.filter(|_| !arrow_ended);
 
         if let Some(op) = op {
             let simple_only = op != AssignOp::Assign;
@@ -703,7 +523,12 @@ impl<'a> Parser<'a> {
         };
 
         // §13.3: an unparenthesized ArrowFunction is not a LeftHandSideExpression.
+        // An ArrowFunction is a whole AssignmentExpression, so no operator may
+        // continue it: hide the next token from the binary/conditional levels
+        // above (parse_assignment_expression restores it). Otherwise `/` after
+        // `() => {}` and a newline would lex as division, not a RegExp (§12.9.4).
         if matches!(expr, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
+            self.arrow_held_token = Some(std::mem::replace(&mut self.current, Token::Eof));
             return Ok(expr);
         }
 
@@ -926,6 +751,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
+        let result = self.parse_primary_expression_inner();
+        // An arrow body or parameter list can leave `last_expr_parenthesized`
+        // stale; only a `( ArrowFunction )` primary is genuinely parenthesized.
+        let parenthesized_arrow = std::mem::take(&mut self.parenthesized_arrow);
+        if matches!(result, Ok(Expression::ArrowFunction(_))) {
+            self.last_expr_parenthesized = parenthesized_arrow;
+        }
+        result
+    }
+
+    fn parse_primary_expression_inner(&mut self) -> Result<Expression, ParseError> {
         self.last_expr_parenthesized = false;
         match &self.current {
             Token::Keyword(Keyword::This) => {
@@ -1485,6 +1321,7 @@ impl<'a> Parser<'a> {
                             return Err(self.error("Invalid shorthand property initializer"));
                         }
                         self.last_expr_parenthesized = true;
+                        self.parenthesized_arrow = matches!(e, Expression::ArrowFunction(_));
                         // Wrap parenthesized Object/Array/Assign in Sequence marker
                         // so validate_destructuring_target can reject them
                         if matches!(
