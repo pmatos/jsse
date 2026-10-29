@@ -34,6 +34,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -135,8 +136,12 @@ def report_control(by, ctl, ref_dir, done, verbose):
     ]
     cp += [f"control: {p}" for p in local_problems(cn, cj, ref_dir)]
     cp += [f"control: {b}" for b in cn["bad"] + cj["bad"]]
-    if counts(cn)["failing"] < len(ctl):
-        cp.append("control: a control test passed on Node (the control checks nothing)")
+    failed = {t for (t, k) in cn["outcomes"] if k == "failing"}
+    cp += [
+        f"control: no test of {s.key} failed on Node (the corrupted reference was not noticed)"
+        for s in ctl
+        if not failed.intersection(s.tests)
+    ]
     return cp
 
 
@@ -187,7 +192,7 @@ def main():
         )
         try:
             chosen = ps.select(spec, everything, table)
-        except ValueError as e:
+        except (ValueError, re.error) as e:
             sys.exit(str(e))
         total = sum(len(s.tests) for s in chosen)
         files = len({s.file for s in chosen})
@@ -198,7 +203,7 @@ def main():
         if o.list:
             print("\n".join(s.key for s in chosen))
             return 0
-        bs = ps.batches(chosen, o.batch_size)
+        bs = ps.batches(chosen, max(1, o.batch_size))
         print(
             f"{len(bs)} batches of up to {o.batch_size} suites, {jobs} jobs, jsse: {jsse}",
             flush=True,
