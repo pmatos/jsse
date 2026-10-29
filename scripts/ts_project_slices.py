@@ -27,7 +27,7 @@ SLICES = {
     "core": f"except:{MATRIX_STARTS}",  # #1285
     "matrix": f"startswith:{MATRIX_STARTS}",  # #1286
     "first20": "first:20",
-    "all": "prefix:0-9,A-Z",
+    "all": "match:.",
 }
 
 TITLE_RE = re.compile(
@@ -36,12 +36,12 @@ TITLE_RE = re.compile(
 
 
 class Case:
-    """One JSON test case of the project runner; `key` is its path, `tests` the full titles of its tests."""
+    """One JSON test case of the project runner; `key` (what `match:` searches) is its file name, `tests` the full titles."""
 
     def __init__(self, file, describes):
-        self.key = file
         self.file = file
         self.base = file.rsplit("/", 1)[-1]
+        self.key = self.base
         self.describes = describes
         self.tests = [t for d in describes.values() for t in d]
 

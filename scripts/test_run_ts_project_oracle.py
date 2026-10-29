@@ -74,6 +74,7 @@ class SelectTest(unittest.TestCase):
         )
         self.assertEqual(self.names("shard:2/3"), ["outSimple.json", "SourcemapB.json"])
         self.assertEqual(self.names("prefix:S-Z"), ["SourcemapB.json", "z.json"])
+        self.assertEqual(self.names("match:^(baseline|z)"), ["baseline.json", "z.json"])
 
     def test_extra_rows_and_bad_specs(self):
         table = dict(ps.SLICES, mine="startswith:z+first:1")

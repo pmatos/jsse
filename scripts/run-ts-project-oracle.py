@@ -98,7 +98,7 @@ def checkout_problem(ts_dir):
 
 
 def pinned_total():
-    """(passing tests, test files) ts-suite/oracle.json pins for the whole project runner, or None."""
+    """Passing tests ts-suite/oracle.json pins for the whole project runner, or None."""
     try:
         with open(SUITES, encoding="utf-8") as f:
             pin = json.load(f)["runners"][RUNNER]
@@ -183,6 +183,9 @@ def main():
             f"project {spec}: {len(chosen)} of {len(everything)} cases ({total} tests)",
             flush=True,
         )
+        if not chosen:
+            print(f"project oracle: FAIL (slice {spec!r} selects no case)")
+            return 1
         if o.list:
             print("\n".join(c.file for c in chosen))
             return 0
@@ -211,7 +214,8 @@ def main():
             ctl, ref_dir, cases_dir, done, expect = control.make_control(
                 ts_dir, chosen, [c for c in everything if c not in chosen], cdir
             )
-            tasks += [(e, "ctl", ctl, ref_dir, cases_dir) for e in engines]
+            if ctl:
+                tasks += [(e, "ctl", ctl, ref_dir, cases_dir) for e in engines]
         with ThreadPoolExecutor(jobs) as pool:
             res = list(pool.map(one, tasks))
         by = {(t[0], t[1]): r for t, r in zip(tasks, res)}
@@ -232,6 +236,13 @@ def main():
         problems = [f"Node: {b}" for b in node_res["bad"]]
         if sum(nc.values()) != total:
             problems.append(f"Node ran {sum(nc.values())} tests, the slice has {total}")
+        if jsse_res is None:
+            problems += [
+                f"fails on Node itself: {t}"
+                for t in sorted(
+                    {t for (t, k) in node_res["outcomes"] if k == "failing"}
+                )
+            ]
         if len(chosen) == len(everything) and nc["passing"] != pinned_total():
             problems.append(
                 f"ts-suite/oracle.json pins {pinned_total()} passing project tests, Node ran {nc['passing']}"
