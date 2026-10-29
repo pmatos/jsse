@@ -1,0 +1,4 @@
+# Tests that pass on Node and fail on jsse --node (run-ts-fourslash-oracle.py): full test title, TAB, issue.
+# Slice h-m (#1291): tests/cases/fourslash files whose name starts with h-m, 831 tests. Empty: all of them pass on both engines.
+# Use with: run-ts-fourslash-oracle.py --known ts-suite/fourslash-known-failures-h-m.txt h-m
+# Maintained with --record; a listed test that passes makes the oracle fail.

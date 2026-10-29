@@ -35,6 +35,14 @@ fn fourslash_tests_match_node_when_a_typescript_checkout_is_given() {
     let (ok, text) = oracle(&["first:3"]);
     assert!(ok, "{text}");
     assert!(text.contains("fourslash oracle: PASS"), "{text}");
+    let (ok, text) = oracle(&[
+        "--no-control",
+        "--known",
+        "ts-suite/fourslash-known-failures-h-m.txt",
+        "files:hoverOverComment.ts,importStatementCompletions3.ts",
+    ]);
+    assert!(ok, "{text}");
+    assert!(text.contains("fourslash oracle: PASS"), "{text}");
     let (ok, text) = oracle(&["--runner", "fourslash-server", "--no-control", "first:2"]);
     assert!(ok, "{text}");
     assert!(text.contains("fourslash oracle: PASS"), "{text}");
