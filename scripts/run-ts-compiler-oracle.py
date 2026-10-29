@@ -76,7 +76,7 @@ REF = os.path.join("tests", "baselines", "reference")
 SUITE_GREP = "^compiler tests compiler tests for "
 
 
-def prepare(work, tag, ts_dir, ref_dir=None):
+def prepare(work, tag, ts_dir, ref_dir=None, config=None):
     cwd = os.path.join(work, tag)
     os.makedirs(os.path.join(cwd, LOCAL))
     os.makedirs(os.path.join(cwd, "tmp"))
@@ -88,7 +88,7 @@ def prepare(work, tag, ts_dir, ref_dir=None):
         )
     os.symlink(ref_dir or os.path.join(ts_dir, REF), os.path.join(cwd, REF))
     with open(os.path.join(cwd, "test.config"), "w") as f:
-        json.dump(CONFIG, f)
+        json.dump(config or CONFIG, f)
     return cwd
 
 
@@ -124,14 +124,14 @@ def mocha_run(engine, exe, cwd, grep, test_timeout, timeout, dry=False):
     return res
 
 
-def pinned_expected(spec, table):
+def pinned_expected(spec, table, runner="compiler"):
     """Passing tests ts-suite/oracle.json pins for a spec of prefix terms only, else None."""
     terms = slices.flat_terms(spec, table)
     if not terms or not all(t.startswith("prefix:") for t in terms):
         return None
     try:
         with open(SUITES, encoding="utf-8") as f:
-            buckets = json.load(f)["runners"]["compiler"]["buckets"]
+            buckets = json.load(f)["runners"][runner]["buckets"]
     except (OSError, ValueError, KeyError):
         return None
     preds = [slices.char_ranges(t[7:]) for t in terms]
