@@ -15,9 +15,13 @@ compare text with `tests/baselines/reference` and write `tests/baselines/local` 
 ## Result
 
 The first 200 tests (`addAllMissingImportsNoCrash.ts` onwards, the runner's sorted enumeration) pass on both
-engines, 200/200. No engine or host source changed, so the default (non-`--node`) global environment and the test262
-baseline are untouched; there is no divergence to root-cause, and `ts-suite/fourslash-known-failures.txt` is empty.
-The failing path is exercised by a control run (five tests against corrupted references and edited test files, the
+engines, 200/200. The one engine change is in `merge_sort_by` (`src/interpreter/builtins/merge_sort.rs`): the
+fourslash harness sorts tooltips with `(x, y) => x.pos > y.pos ? -1 : 1`, which answers 1 for equal keys. The order
+such an inconsistent comparator produces is implementation-defined (ECMA-262 SortCompare, `SortIndexedProperties`),
+but V8 asks `cmp(later, earlier)` and moves an element before another only on `Less`, and the harness' output
+depends on it. The sort now compares in V8's argument order; for a consistent comparator the result is the same
+sort as before (still stable, same run reversal), so test262 is unchanged and the default global environment is
+untouched. `ts-suite/fourslash-known-failures.txt` is empty. The failing path is exercised by a control run (five tests against corrupted references and edited test files, the
 engines must fail them identically).
 
 ## Oracle

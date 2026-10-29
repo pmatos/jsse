@@ -14,4 +14,6 @@ Split from [library-tests-typescript.md](library-tests-typescript.md) to keep ea
 
 **Cost.** Batches (`--batch-size`, default 100 tests) are one mocha process per engine, at most 4 processes at once over both engines. A test is cheap once the process is up (the lib files are cached): the first 200 tests took 70 s and 125 s of jsse process time for the two batches, Node 3 s each; jsse peaks near 1 GB per process.
 
+**Engine note.** `merge_sort_by` compares `cmp(later, earlier)` like V8 (the harness sorts with a comparator that answers 1 for equal keys); see the ADR.
+
 **Measured** (first 200 tests, `CARGO_PROFILE_RELEASE_LTO=off`, 4 jobs): Node 200/200 passing, jsse 200/200 passing, 196 s of jsse process time; control: 5 of 5 fail identically on both engines. The known-failure list is empty.
