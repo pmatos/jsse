@@ -15,21 +15,22 @@ import re
 import ts_compiler_slices as base
 
 # the file-name families of the #1286 matrix: out*, sourcemap*, mapRoot*/maprootUrl*, sourceRoot*/sourcerootUrl*
-MATRIX = (
-    r"(?i)testcase tests/cases/project/(?:out|sourcemap|maproot|sourceroot)\w*\.json "
-)
+FAMILIES = ("out", "sourcemap", "maproot", "sourceroot")
+
+
+def family(names):
+    return (
+        "match:(?i)testcase tests/cases/project/(?:" + "|".join(names) + r")\w*\.json "
+    )
+
 
 SLICES = {
     "first20": "first:20",
-    "matrix": "match:" + MATRIX,  # #1286: 228 files, 456 suites, 1824 tests
-    "out": r"match:(?i)testcase tests/cases/project/out\w*\.json ",
-    "sourcemap": r"match:(?i)testcase tests/cases/project/sourcemap\w*\.json ",
-    "maproot": r"match:(?i)testcase tests/cases/project/maproot\w*\.json ",
-    "sourceroot": r"match:(?i)testcase tests/cases/project/sourceroot\w*\.json ",
+    "matrix": family(FAMILIES),  # #1286: 228 files, 456 suites, 1824 tests
+    **{name: family([name]) for name in FAMILIES},
     "all": "match:.",
 }
 
-PREFIX = "projects tests Compiling project for "
 SUITE_RE = re.compile(
     r"^projects tests Compiling project for .*: testcase (tests/cases/project/\S+?\.json) \((@module: \w+)\)$"
 )
@@ -67,8 +68,6 @@ def suites_from_titles(entries):
 
 select = base.select
 batches = base.batches
-flat_terms = base.flat_terms
-char_ranges = base.char_ranges
 
 
 def grep_for(batch):
