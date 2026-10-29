@@ -10,18 +10,19 @@ per local baseline file between Node and `jsse --node`; this issue runs that ran
 
 ## Result
 
-Node passes 7848/7848. jsse passes 7847 at first run; the one failure is `largeControlFlowGraph.ts`
-(`"before all" hook ... Maximum call stack size exceeded`). Per letter, jsse process time in the first full runs
-(3 to 4 jobs, `CARGO_PROFILE_RELEASE_LTO=off`, host shared with other agents):
+Node passes 7848/7848. At the first run (a `CARGO_PROFILE_RELEASE_LTO=off` build, 3 to 4 jobs, host shared with other
+agents) jsse passed 7847; the one failure is `largeControlFlowGraph.ts` (`"before all" hook ... Maximum call stack
+size exceeded`), fixed below. Final run on the fat-LTO release build with the fix, 4 jobs, all six letters through
+`scripts/run-ts-compiler-gl-oracle.py` (control included): 7848/7848 on both engines, 27.5 minutes of wall time.
 
-| letter | tests | wall   | jsse process time |
-|--------|------:|-------:|------------------:|
-| G      |  1332 | 1083 s |            2538 s |
-| H      |    54 |  367 s |             365 s |
-| I      |  4290 | 1591 s |            4397 s |
-| J      |  1500 | 1301 s |            3454 s |
-| K      |    90 |  142 s |             140 s |
-| L      |   582 |  498 s |            1282 s |
+| letter | tests | wall  | jsse process time | first run (LTO off), wall |
+|--------|------:|------:|------------------:|--------------------------:|
+| G      |  1332 | 226 s |             697 s |                    1083 s |
+| H      |    54 | 216 s |             214 s |                     367 s |
+| I      |  4290 | 537 s |            1861 s |                    1591 s |
+| J      |  1500 | 318 s |             983 s |                    1301 s |
+| K      |    90 |  82 s |              80 s |                     142 s |
+| L      |   582 | 271 s |             519 s |                     498 s (1 failure) |
 
 ## Root cause and fix: the call-depth limit
 
@@ -45,14 +46,14 @@ build, both default (bytecode) and `--no-bytecode`, at most 87 MiB resident exce
 quadratically (860 MiB at 10000; 1.4 GiB at a trial limit of 15000, which is why the limit stops at 10000). A recursive
 `return super.m()` loops forever instead of overflowing because class code is strict and its calls are proper tail
 calls, as before.
-`tests/recursion-depth-reachable.js` pins the floor (plain 7000, through `map` 2000, constructor plus getter 2500);
+`tests/recursion-limit-reachable.js` pins the floor (plain 7000, through `map` 2000, constructor plus getter 2500);
 `tests/recursion-limit-interpreter.js` keeps pinning the overflow (its Proxy case now recurses 20000 deep, above the
 new hard limit). Full test262: 99911/99911 scenarios pass, no regression against the baseline; `test262-extra/`:
 1646/1646.
 
-With the new limit `largeControlFlowGraph.ts` passes on jsse (6/6, about 830 s for the one process against 5 s on
+With the new limit `largeControlFlowGraph.ts` passes on jsse (6/6; one process takes about 830 s on the LTO-off build, under 270 s on the LTO build, 5 s on
 Node), so its mocha timeout needs more than the oracle's 600 s default: `scripts/run-ts-compiler-gl-oracle.py` passes
-`--test-timeout 2400000 --timeout 7200`.
+`--test-timeout 2400000 --timeout 7200` for letter L.
 
 ## Runnable
 

@@ -548,6 +548,8 @@ pub(crate) struct Interpreter {
 /// recursive getter, a `Proxy` `apply`-trap forwarding to `target.apply`):
 /// debug's native call capacity is ~1,020 for the `Proxy` shape (the
 /// hungriest measured) vs. release's own ~30,300 for plain recursion.
+/// Release limits bound memory too: `f(...a, 1)` recursion holds ~860 MiB
+/// at 10,000 deep, so do not raise them without a heap bound (jsse#1271).
 /// `cfg!(debug_assertions)` is a proxy for frame size, not the real variable
 /// — a custom profile built with `opt-level = 0, debug-assertions = false`
 /// still gets the release numbers below and could still abort; #606 accepted
@@ -600,10 +602,7 @@ pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = if cfg!(debug_assertions) {
 /// eval frames per level), so this limit never interferes with normal
 /// recursion — see the compile-time assertion below for the exact coupling.
 ///
-/// Profile-aware for the same reason as `CALL_DEPTH_HARD_LIMIT` above: debug
-/// frames are several times larger than release's, so a single
-/// release-sized limit sat above debug's native capacity — jsse#607.
-/// Measured by disabling the guard and binary-searching the abort point over
+/// Profile-aware as above (jsse#607). Measured by disabling the guard and binary-searching the abort point over
 /// the stack-hungriest expression shapes (a flat `1+1+1+…` chain, a
 /// self-referential member chain `a.b.b.b…`): debug's native capacity is
 /// ~6,990 for the member-chain shape (the hungriest measured) vs. release's

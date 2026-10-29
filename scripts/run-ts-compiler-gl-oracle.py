@@ -5,11 +5,13 @@
 
 Runs scripts/run-ts-compiler-oracle.py once per letter (the rows of scripts/ts_compiler_slices_gl.py), one after the
 other, against the known failures in ts-suite/compiler-known-failures-g-l.txt; a letter per run keeps a crashed or
-interrupted run from losing the others, and prints the wall time of each. Options after `--letters` go to the oracle
+interrupted run from losing the others, and prints the wall time of each. Other options go to the oracle
 (--jobs, --batch-size, --jsse, --record, --verbose, ...). Exit status is 0 iff every letter passes (or the run is
-skipped for want of TS_SRC_DIR).
+skipped for want of TS_SRC_DIR). A letter's output is printed when its run ends (it can take 30 minutes); to watch
+one live run scripts/run-ts-compiler-oracle.py directly with `--slices-module ts_compiler_slices_gl`.
 """
 
+import argparse
 import os
 import sys
 import time
@@ -21,17 +23,16 @@ import ts_compiler_slices_gl as gl  # noqa: E402
 
 ORACLE = os.path.join(ROOT, "scripts", "run-ts-compiler-oracle.py")
 KNOWN = os.path.join(ROOT, "ts-suite", "compiler-known-failures-g-l.txt")
-# largeControlFlowGraph.ts (L) compiles a 10000-statement flow graph: about 830 s on jsse, so the oracle's
-# 600 s mocha timeout would fail it.
-SLOW_TEST_DEFAULTS = ("--test-timeout", "2400000", "--timeout", "7200")
+# largeControlFlowGraph.ts (letter L) compiles a 10000-statement flow graph: about 830 s on a LTO-off jsse (under 270 s with LTO), so the oracle's
+# 600 s mocha timeout would fail it. The other letters keep the oracle's defaults so a hang surfaces in 10 minutes.
+SLOW_TEST_DEFAULTS = {"l": ("--test-timeout", "2400000", "--timeout", "7200")}
 
 
 def main(argv):
-    letters = list(gl.LETTERS)
-    rest = list(argv)
-    if rest[:1] == ["--letters"] and len(rest) > 1:
-        letters = [x.strip().lower() for x in rest[1].split(",") if x.strip()]
-        rest = rest[2:]
+    ap = argparse.ArgumentParser(description="G to L compiler oracle")
+    ap.add_argument("--letters", default=",".join(gl.LETTERS))
+    opts, rest = ap.parse_known_args(argv)
+    letters = [x.strip().lower() for x in opts.letters.split(",") if x.strip()]
     bad = [x for x in letters if x not in gl.LETTERS]
     if bad:
         print(
@@ -49,7 +50,7 @@ def main(argv):
             "ts_compiler_slices_gl",
             "--known",
             KNOWN,
-            *SLOW_TEST_DEFAULTS,
+            *SLOW_TEST_DEFAULTS.get(letter, ()),
             *rest,
             letter,
         ]
