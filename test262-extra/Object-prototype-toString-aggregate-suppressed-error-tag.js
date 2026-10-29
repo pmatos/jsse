@@ -16,7 +16,9 @@ info: |
 
   20.5.8.1.1 SuppressedError ( error, suppressed, message )
     3. Let O be ? OrdinaryCreateFromConstructor(newTarget, "%SuppressedError.prototype%", « [[ErrorData]] »).
-features: [AggregateError, explicit-resource-management, Symbol.toStringTag, class]
+flags: [async]
+includes: [asyncHelpers.js]
+features: [AggregateError, explicit-resource-management, Symbol.toStringTag, class, Promise.any]
 ---*/
 
 var toString = Object.prototype.toString;
@@ -47,3 +49,34 @@ assert.sameValue(toString.call(agg), "[object Custom]", "@@toStringTag overrides
 var sup = new SuppressedError(1, 2);
 Object.defineProperty(sup, Symbol.toStringTag, { value: 1 });
 assert.sameValue(toString.call(sup), "[object Error]", "non-string @@toStringTag is ignored");
+
+var disposed;
+(function () {
+  function r(msg) {
+    return { [Symbol.dispose]() { throw new Error(msg); } };
+  }
+  try {
+    using a = r("a");
+    using b = r("b");
+    throw new Error("body");
+  } catch (e) {
+    disposed = e;
+  }
+})();
+assert.sameValue(
+  toString.call(disposed),
+  "[object Error]",
+  "SuppressedError created by disposal"
+);
+assert.sameValue(disposed.constructor, SuppressedError, "disposal error is a SuppressedError");
+
+asyncTest(async function () {
+  var rejection;
+  try {
+    await Promise.any([Promise.reject(1)]);
+  } catch (e) {
+    rejection = e;
+  }
+  assert.sameValue(rejection.constructor, AggregateError, "Promise.any rejects with AggregateError");
+  assert.sameValue(toString.call(rejection), "[object Error]", "AggregateError from Promise.any");
+});
