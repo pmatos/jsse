@@ -64,12 +64,31 @@ def run_chunk(engine, exe, ts_dir, files, work, tag, timeout):
     return got, problem
 
 
+STACK = "throws RangeError: Maximum call stack size exceeded"
+
+
+def stack_limited(node, jsse):
+    """Cases where an engine ran out of stack and the other did not: the depth limit is implementation-defined.
+
+    V8's limit is in bytes, so the same case throws in a cold Node process and succeeds in one whose functions are
+    already optimised (binderBinaryExpressionStress.ts, a 5000-deep binary expression); such cases are reported and
+    not compared.
+    """
+    return sorted(
+        k
+        for k in set(node) | set(jsse)
+        if node.get(k) != jsse.get(k)
+        and any((v or "").startswith(STACK) for v in (node.get(k), jsse.get(k)))
+    )
+
+
 def compare(node, jsse, limit=20):
-    """Problem lines for the two result maps of the whole corpus."""
+    """Problem lines for the two result maps of the whole corpus (stack-limited cases excepted)."""
     lines = []
+    limited = set(stack_limited(node, jsse))
     for key in sorted(set(node) | set(jsse)):
         a, b = node.get(key), jsse.get(key)
-        if a != b:
+        if a != b and key not in limited:
             what = (
                 "missing on jsse"
                 if b is None

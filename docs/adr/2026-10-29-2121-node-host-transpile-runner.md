@@ -26,7 +26,11 @@ baseline-writing path.
 
 Because 22 inputs say little about the isolated path, `--corpus` runs `transpileModule` and `transpileDeclaration`
 over the test files of `tests/cases/{transpile,compiler,conformance}` with seven option sets and compares the digest
-of text, source map and diagnostics per case between the engines; see the guide for the numbers.
+of text, source map and diagnostics per case between the engines. Over all 12,466 files (87,262 cases) the engines agree, with one class of exception:
+`binderBinaryExpressionStress.ts` (and its `Js` twin) overflow the native stack in `transpileDeclaration` on jsse and
+in a cold Node process, but not in a Node process that has already optimised the visitor. The stack depth limit is
+implementation-defined (V8's is in bytes), so such cases are reported and not compared; they are not an engine bug
+to file. The tree-walker (`--no-bytecode`) agrees on a 1,500-file corpus run.
 
 ## Oracle
 

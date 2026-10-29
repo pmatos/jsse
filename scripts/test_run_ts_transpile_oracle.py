@@ -214,6 +214,17 @@ class CorpusTest(unittest.TestCase):
         many = {(str(i), "s"): "x" for i in range(30)}
         self.assertEqual(len(corpus.compare(many, {})), 21)
 
+    def test_stack_depth_differences_are_reported_not_compared(self):
+        deep = "throws RangeError: Maximum call stack size exceeded\t0"
+        a = {("f", "s"): "x\t1", ("g", "s"): "y\t1"}
+        b = {("f", "s"): deep, ("g", "s"): "other\t1"}
+        self.assertEqual(corpus.stack_limited(a, b), [("f", "s")])
+        self.assertEqual(corpus.stack_limited(b, a), [("f", "s")])
+        self.assertEqual(corpus.stack_limited(b, b), [])
+        got = corpus.compare(a, b)
+        self.assertEqual(len(got), 1)
+        self.assertIn("g [s] differs", got[0])
+
     def test_the_driver_exists_next_to_the_module(self):
         self.assertTrue(os.path.isfile(corpus.DRIVER))
 

@@ -254,8 +254,11 @@ def main():
             corpus_problems += corpus.compare(maps["node"], maps["jsse"])
             if not maps["node"]:
                 corpus_problems.append("corpus: Node produced no cases")
+            limited = corpus.stack_limited(maps["node"], maps["jsse"])
             print(
-                f"corpus: {len(files)} files, {len(maps['node'])} cases, {len(corpus_problems)} problems",
+                f"corpus: {len(files)} files, {len(maps['node'])} cases, {len(corpus_problems)} problems, "
+                f"{len(limited)} not compared (stack depth limit): "
+                + ", ".join(f"{os.path.basename(f)} [{c}]" for f, c in limited),
                 flush=True,
             )
 
