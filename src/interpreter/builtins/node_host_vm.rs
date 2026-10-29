@@ -327,20 +327,20 @@ fn run(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completio
     let Some(realm) = realm_of(interp, args.first().unwrap_or(JsValue::undefined_ref())) else {
         return type_error(interp, "vm: not the global object of a context");
     };
-    let caller_realm = interp.current_realm_id;
-    interp.current_realm_id = realm;
-    let env = interp.realm().global_env.clone();
-    let strict = std::mem::replace(
-        &mut env.borrow_mut().strict,
-        compiled.program.body_is_strict,
-    );
-    let framed = interp.push_script_frame(&compiled.origin, &env);
-    let result = interp.exec_script_body(&compiled.program.body, &env);
-    if framed {
-        interp.pop_script_frame();
-    }
-    env.borrow_mut().strict = strict;
-    interp.current_realm_id = caller_realm;
+    let result = interp.with_realm(Some(realm), |interp| {
+        let env = interp.realm().global_env.clone();
+        let strict = std::mem::replace(
+            &mut env.borrow_mut().strict,
+            compiled.program.body_is_strict,
+        );
+        let framed = interp.push_script_frame(&compiled.origin, &env);
+        let result = interp.exec_script_body(&compiled.program.body, &env);
+        if framed {
+            interp.pop_script_frame();
+        }
+        env.borrow_mut().strict = strict;
+        result
+    });
     match result {
         Completion::Empty => done(JsValue::UNDEFINED),
         other => other,
@@ -388,17 +388,15 @@ fn compile_function(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue])
         column_offset,
         1,
     );
-    let caller_realm = interp.current_realm_id;
-    interp.current_realm_id = realm;
-    let mut env = interp.realm().global_env.clone();
-    for extension in args.iter().skip(5) {
-        if let Some(id) = extension.as_object_id() {
-            env = Environment::new_with_object(env, id);
+    interp.with_realm(Some(realm), |interp| {
+        let mut env = interp.realm().global_env.clone();
+        for extension in args.iter().skip(5) {
+            if let Some(id) = extension.as_object_id() {
+                env = Environment::new_with_object(env, id);
+            }
         }
-    }
-    let result = interp.eval_expr(expr, &env);
-    interp.current_realm_id = caller_realm;
-    result
+        interp.eval_expr(expr, &env)
+    })
 }
 
 impl Interpreter {

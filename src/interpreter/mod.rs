@@ -952,10 +952,7 @@ impl Interpreter {
         self.realms.push(realm);
         self.seed_new_realm_random(new_id);
 
-        let old_realm = self.current_realm_id;
-        self.current_realm_id = new_id;
-        self.setup_globals();
-        self.current_realm_id = old_realm;
+        self.with_realm(Some(new_id), |interp| interp.setup_globals());
         new_id
     }
 
