@@ -30,6 +30,15 @@ assert.sameValue(uit.next().value.index, 2, "unicode advance skips the surrogate
 assert.sameValue(uit.next().done, true, "done");
 assert.compareArray(Reflect.ownKeys(uit), [], "ownKeys after iteration");
 
+var vit = new RegExp("", "gv")[Symbol.matchAll]("\u{1F600}");
+assert.sameValue(vit.next().value.index, 0, "v flag: first");
+assert.sameValue(vit.next().value.index, 2, "v flag advances by code point");
+
+var own = /(?:)/gu[Symbol.matchAll]("\u{1F600}");
+Object.defineProperty(own, "__full_unicode__", { value: false, configurable: true });
+own.next();
+assert.sameValue(own.next().value.index, 2, "own __full_unicode__ is ignored");
+
 Object.defineProperty(Object.prototype, "__full_unicode__", { value: true, configurable: true });
 try {
   var nit = /(?:)/g[Symbol.matchAll]("\u{1F600}");

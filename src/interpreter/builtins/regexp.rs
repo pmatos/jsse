@@ -10514,19 +10514,16 @@ impl Interpreter {
                         ));
                     }
                 };
-                let state = obj.borrow().iterator_state().cloned();
-
                 let (string, global, full_unicode, done, mid) =
                     if let Some(IteratorState::RegExpStringIterator {
-                        ref string,
+                        string,
                         global,
                         full_unicode,
                         done,
                         matcher_id,
-                        ..
-                    }) = state
+                    }) = obj.borrow().iterator_state()
                     {
-                        (string.clone(), global, full_unicode, done, matcher_id)
+                        (string.clone(), *global, *full_unicode, *done, *matcher_id)
                     } else {
                         return Completion::Throw(interp.create_type_error(
                             "%RegExpStringIteratorPrototype%.next requires that 'this' be a RegExp String Iterator",
@@ -10608,7 +10605,6 @@ impl Interpreter {
                     }
                 }
 
-                set_rsi_done(interp, o_id, false);
                 Completion::Normal(
                     interp.create_iter_result_object(result_val, false),
                 )
