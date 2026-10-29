@@ -28,9 +28,9 @@ Node passes 7848/7848. jsse passes 7847 at first run; the one failure is `largeC
 `largeControlFlowGraph.ts` is a 10000-statement block of `data[0] = 0;`. TypeScript's `getTypeAtFlowNode` recurses
 up to `flowDepth === 2000` and then reports TS2563 ("The containing function or module body is too large for control
 flow analysis"), the reference baseline. Reaching that depth takes more than 4000 nested JS calls (it overflowed at a
-hard limit of 5000 and completes at 10000). jsse's release soft limit was
-4000 (`CALL_DEPTH_SOFT_LIMIT_RELEASE`, hard 5000), below Node's ~10,800 frames for a plain function, so the engine threw
-`RangeError: Maximum call stack size exceeded` first.
+hard limit of 5000 and completes at 10000). jsse's release soft limit was 4000
+(`CALL_DEPTH_SOFT_LIMIT_RELEASE`, hard 5000), below Node's 12,523 frames for a plain function (3,296 levels through
+`Array.prototype.map`) on this host, so the engine threw `RangeError: Maximum call stack size exceeded` first.
 
 ECMA-262 leaves recursion depth implementation-defined, so this is a capacity choice, not a semantics change. The
 release limits are now soft 8000, hard 10000, rearm 6000 (the ratios of the old numbers), and `EVAL_DEPTH_LIMIT_RELEASE`
@@ -38,13 +38,17 @@ is 60000 so that the compile-time `EVAL_DEPTH_LIMIT > HARD * 5` coupling holds. 
 Calibration: the 128 MiB engine stack held 30,300 plain frames at the old measurement, and the guard unit tests
 (`deep_call_recursion_raises_error_before_native_overflow`, `deep_expression_nesting_raises_error_before_native_overflow`,
 each driving the Proxy apply-trap forwarding shape and the member chain, the stack-hungriest ones, to twice the limit)
-pass under `--profile release-nolto`. Sixteen further recursion shapes (getter, `map`, `toJSON`, `replace`
-callback, `Symbol.toPrimitive`, `bind`/`call`, `Reflect.apply`, constructors, generators, `eval`, `Function`, Proxy
-`get`, `Array.from`, `spread`) end in a catchable RangeError at the trial limit of 15000 with at most 130 MiB resident,
-except `spread`, whose argument lists grow quadratically (1.4 GiB at 15000, which is why the limit stops at 10000).
+pass under `--profile release-nolto`. Sixteen further shapes (plain, Proxy apply and `get`, getter, `map`, `toJSON`,
+`replace` callback, `Symbol.toPrimitive`, `bind`/`call`, `Reflect.apply`, constructors, generators, `eval`,
+`Function`, `Array.from`, `spread`) end in a catchable RangeError with the final limits on the shipped fat-LTO release
+build, both default (bytecode) and `--no-bytecode`, at most 87 MiB resident except `spread`, whose argument lists grow
+quadratically (860 MiB at 10000; 1.4 GiB at a trial limit of 15000, which is why the limit stops at 10000). A recursive
+`return super.m()` loops forever instead of overflowing because class code is strict and its calls are proper tail
+calls, as before.
 `tests/recursion-depth-reachable.js` pins the floor (plain 7000, through `map` 2000, constructor plus getter 2500);
 `tests/recursion-limit-interpreter.js` keeps pinning the overflow (its Proxy case now recurses 20000 deep, above the
-new hard limit).
+new hard limit). Full test262: 99911/99911 scenarios pass, no regression against the baseline; `test262-extra/`:
+1646/1646.
 
 With the new limit `largeControlFlowGraph.ts` passes on jsse (6/6, about 830 s for the one process against 5 s on
 Node), so its mocha timeout needs more than the oracle's 600 s default: `scripts/run-ts-compiler-gl-oracle.py` passes
