@@ -6,14 +6,7 @@
 `scripts/run-ts-compiler-gl-oracle.py` wraps that and runs the letters one after the other.
 """
 
-SLICES = {
-    "g": "prefix:G",
-    "h": "prefix:H",
-    "i": "prefix:I",
-    "j": "prefix:J",
-    "k": "prefix:K",
-    "l": "prefix:L",
-    "g-l": "prefix:G-L",
-}
-
 LETTERS = ("g", "h", "i", "j", "k", "l")
+
+SLICES = {letter: f"prefix:{letter.upper()}" for letter in LETTERS}
+SLICES["g-l"] = "prefix:G-L"

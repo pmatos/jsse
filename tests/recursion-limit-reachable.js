@@ -1,6 +1,6 @@
 // JS call recursion that Node completes must complete here too (jsse#1271). TypeScript's checker reaches a
-// flow-analysis depth of 2000 nested getTypeAtFlowNode calls (largeControlFlowGraph.ts), several JS calls per
-// level, before it reports TS2563 instead of overflowing; a call-depth limit of 4,000 turned that into a
+// flow-analysis depth of 2000 nested getTypeAtFlowNode calls (largeControlFlowGraph.ts), more than 4,000 JS calls in
+// all, before it reports TS2563 instead of overflowing; a call-depth limit of 4,000 turned that into a
 // RangeError. The depth limit is implementation-defined (ECMA-262 does not bound recursion), so this is a floor
 // on the engine's capacity, not a semantics change: the limit-hit behaviour stays in
 // recursion-limit-interpreter.js.
@@ -19,14 +19,14 @@ if (viaMap(2000) !== 2000) {
   throw new Error("recursion through Array.prototype.map to depth 2000 did not complete");
 }
 
-class Node1 {
+class Chain {
   constructor(depth) {
-    this.child = depth > 0 ? new Node1(depth - 1) : null;
+    this.child = depth > 0 ? new Chain(depth - 1) : null;
   }
   get size() {
     return 1 + (this.child ? this.child.size : 0);
   }
 }
-if (new Node1(2500).size !== 2501) {
+if (new Chain(2500).size !== 2501) {
   throw new Error("nested constructor/getter recursion to depth 2500 did not complete");
 }
