@@ -85,7 +85,7 @@ var proxyApplyForward = new Proxy(proxyApplyRecurse, {
   },
 });
 callMustRangeError("Proxy apply-trap forwarding recursion", function () {
-  proxyApplyForward(10000);
+  proxyApplyForward(20000);
 });
 
 // ---------------------------------------------------------------------------
