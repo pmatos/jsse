@@ -28,7 +28,7 @@ KNOWN = os.path.join(ROOT, "ts-suite", "compiler-known-failures-d-f.txt")
 BASE = [sys.executable, ORACLE, "--require", "--slices-module", "ts_compiler_slices_df"]
 
 
-def run(args):
+def run(args, echo=True):
     """Run the oracle in its own process group, stream its output, kill the group on SIGINT/SIGTERM."""
     proc = subprocess.Popen(
         BASE + args, stdout=subprocess.PIPE, text=True, start_new_session=True
@@ -46,13 +46,14 @@ def run(args):
     lines = []
     for line in proc.stdout:
         lines.append(line)
-        print(line, end="", flush=True)
+        if echo:
+            print(line, end="", flush=True)
     proc.wait()
     return proc.returncode, "".join(lines)
 
 
 def listing(spec):
-    code, out = run(["--list", spec])
+    code, out = run(["--list", spec], echo=False)
     if code != 0:
         sys.exit(f"cannot list {spec}:\n{out}")
     return out.splitlines()[1:]
