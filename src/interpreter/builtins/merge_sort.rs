@@ -11,6 +11,13 @@ use std::cmp::Ordering;
 // stay as they are and strictly descending runs (each element `Greater` than
 // its successor, so reversing cannot reorder equal elements) are reversed in
 // place. Sorted or reverse-sorted input then costs n-1 comparefn calls.
+//
+// Like V8's TimSort, every comparison is `cmp(later, earlier)` and an element
+// moves before another only on `Less`. For a consistent comparator this is the
+// same order as asking `cmp(earlier, later) == Greater`; for an inconsistent
+// one (e.g. `(a, b) => a.pos > b.pos ? -1 : 1`, which says 1 for equal keys)
+// the result is implementation-defined, and matching V8 keeps such code (the
+// TypeScript fourslash harness' tooltip ordering) producing the same output.
 pub(super) fn merge_sort_by<E>(
     items: &mut Vec<JsValue>,
     mut cmp: impl FnMut(&JsValue, &JsValue) -> Result<Ordering, E>,
@@ -49,7 +56,8 @@ fn sort_runs<E>(
     Ok(())
 }
 
-// Splits `src` into maximal runs, reversing each strictly descending one, and
+// Splits `src` into maximal runs, reversing each strictly descending one (each
+// element `Less` than its predecessor), and
 // returns the run boundaries (`0 ..= src.len()`). A run is reversed only after
 // it is fully scanned, so an `Err` leaves `src` a permutation of its input.
 fn find_runs<E>(
@@ -63,9 +71,9 @@ fn find_runs<E>(
     while lo < n {
         let mut hi = lo + 1;
         if hi < n {
-            let descending = cmp(&src[lo], &src[hi])? == Ordering::Greater;
+            let descending = cmp(&src[hi], &src[lo])? == Ordering::Less;
             hi += 1;
-            while hi < n && (cmp(&src[hi - 1], &src[hi])? == Ordering::Greater) == descending {
+            while hi < n && (cmp(&src[hi], &src[hi - 1])? == Ordering::Less) == descending {
                 hi += 1;
             }
             if descending {
@@ -105,13 +113,13 @@ fn merge_runs<E>(
     cmp: &mut impl FnMut(&JsValue, &JsValue) -> Result<Ordering, E>,
 ) -> Result<(), E> {
     // Already in order: one comparison instead of a full merge.
-    if cmp(&src[mid - 1], &src[mid])? != Ordering::Greater {
+    if cmp(&src[mid], &src[mid - 1])? != Ordering::Less {
         dst.extend_from_slice(&src[lo..hi]);
         return Ok(());
     }
     let (mut i, mut j) = (lo, mid);
     while i < mid && j < hi {
-        if cmp(&src[i], &src[j])? == Ordering::Greater {
+        if cmp(&src[j], &src[i])? == Ordering::Less {
             dst.push(src[j].clone());
             j += 1;
         } else {
@@ -199,6 +207,17 @@ mod merge_sort_tests {
         .unwrap();
         let expected: Vec<f64> = (0..200).map(|n| f64::from(n % 17)).collect();
         assert_eq!(sorted(values(&items)), sorted(expected));
+    }
+
+    #[test]
+    fn a_comparator_answering_one_for_equal_keys_keeps_input_order() {
+        // `(x, y) => x.pos > y.pos ? -1 : 1` as the TypeScript fourslash harness sorts tooltips.
+        for n in [2, 3, 4, 5, 40] {
+            let mut items: Vec<JsValue> = (0..n).map(|i| JsValue::number(f64::from(i))).collect();
+            merge_sort_by(&mut items, |_, _| Ok::<_, ()>(Ordering::Greater)).unwrap();
+            let expected: Vec<f64> = (0..n).map(f64::from).collect();
+            assert_eq!(values(&items), expected, "n = {n}");
+        }
     }
 
     #[test]
