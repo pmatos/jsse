@@ -1,5 +1,7 @@
 use super::*;
 
+mod block_body;
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_statement_or_declaration(&mut self) -> Result<Statement, ParseError> {
         if matches!(&self.current, Token::Identifier(n) if n == "using")
@@ -192,46 +194,9 @@ impl<'a> Parser<'a> {
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
         let stmts =
-            self.with_block_scope(Self::enter_block_scope, |p| p.parse_block_statement_body())?;
+            self.with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(true))?;
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Block(stmts))
-    }
-
-    /// The `Block` statement list plus its §14.2.1 early-error check, run
-    /// under the re-scoped `in_block_or_function`/`in_switch_case` flags.
-    /// Kept separate from the plain brace-delimited loop the `try` bodies
-    /// share, since lexical-name bookkeeping is interleaved per statement
-    /// here and must stay that way to report redeclaration errors before a
-    /// later syntax error in the same block.
-    fn parse_block_statement_body(&mut self) -> Result<Vec<Statement>, ParseError> {
-        let mut stmts = Vec::new();
-        let mut lexical_names: Vec<String> = Vec::new();
-        let mut func_decl_names: Vec<String> = Vec::new();
-        while self.current != Token::RightBrace && self.current != Token::Eof {
-            let stmt = self.parse_statement_or_declaration()?;
-            Self::collect_lexical_names_with_func_names(
-                &stmt,
-                &mut lexical_names,
-                &mut Some(&mut func_decl_names),
-                self.strict,
-            )?;
-            stmts.push(stmt);
-        }
-        // §14.2.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames
-        if !lexical_names.is_empty() {
-            let mut var_names = Vec::new();
-            for stmt in &stmts {
-                Self::collect_var_declared_names(stmt, &mut var_names);
-            }
-            for name in &var_names {
-                if lexical_names.contains(name) {
-                    return Err(ParseError {
-                        message: format!("Identifier '{name}' has already been declared"),
-                    });
-                }
-            }
-        }
-        Ok(stmts)
     }
 
     pub(super) fn collect_lexical_names(
@@ -1251,26 +1216,11 @@ impl<'a> Parser<'a> {
         Ok(Statement::Throw(expr, at))
     }
 
-    /// The plain brace-delimited statement list shared by the `try`, `catch`,
-    /// and `finally` bodies: no interleaved lexical-name bookkeeping, and
-    /// deliberately no `Eof` check (unlike `parse_block_statement_body`'s
-    /// loop) — an unterminated body must fail inside
-    /// `parse_statement_or_declaration` with its own error, not silently stop
-    /// at `Eof` here.
-    fn parse_statement_list_until_brace(&mut self) -> Result<Vec<Statement>, ParseError> {
-        let mut stmts = Vec::new();
-        while self.current != Token::RightBrace {
-            stmts.push(self.parse_statement_or_declaration()?);
-        }
-        Ok(stmts)
-    }
-
     fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // try
         self.eat(&Token::LeftBrace)?;
-        let block = self.with_block_scope(Self::enter_block_scope, |p| {
-            p.parse_statement_list_until_brace()
-        })?;
+        let block =
+            self.with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
         self.eat(&Token::RightBrace)?;
 
         let handler = if self.current == Token::Keyword(Keyword::Catch) {
@@ -1297,9 +1247,8 @@ impl<'a> Parser<'a> {
                 }
             }
             self.eat(&Token::LeftBrace)?;
-            let body = self.with_block_scope(Self::enter_block_scope, |p| {
-                p.parse_statement_list_until_brace()
-            })?;
+            let body = self
+                .with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
             self.eat(&Token::RightBrace)?;
             // §13.15.1: BoundNames of CatchParameter must not overlap
             // LexicallyDeclaredNames of Block
@@ -1327,9 +1276,8 @@ impl<'a> Parser<'a> {
         let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
             self.advance()?;
             self.eat(&Token::LeftBrace)?;
-            let body = self.with_block_scope(Self::enter_block_scope, |p| {
-                p.parse_statement_list_until_brace()
-            })?;
+            let body = self
+                .with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
             self.eat(&Token::RightBrace)?;
             Some(body)
         } else {
