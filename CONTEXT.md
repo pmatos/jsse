@@ -37,8 +37,17 @@ The canonical host identity of a resolved ECMAScript module, whether it is backe
 _Avoid_: module path, registry path
 
 **Module Key Scope**:
-The synchronous interpreter context in which relative module requests resolve under a selected Module Key. `with_module_key` installs that key (or deliberately clears it), runs the caller's work including any required microtask drain, then restores the prior key on every returned completion. Module async continuations carry their identity in `AsyncFunctionState`; a scope never spans a suspension.
+`with_module_key` selects or clears a Module Key for synchronous relative
+resolution and any required microtask drain, restoring the prior key on every
+completion. `AsyncFunctionState` carries identity across suspension.
 _Avoid_: saved module path, manual path restoration.
+
+**Realm Execution Scope**:
+`with_realm` (`eval/activation.rs`) runs synchronously in a Realm (`None`:
+current), then restores the caller on every completion. Callers own selection,
+roots, routing and cleanup. A suspension ends the scope; continuations
+reselect their Realm.
+_Avoid_: manual realm restoration.
 
 **Seam**:
 A place where one module's interface ends and another's begins. In JSSE, the seams between the AST, the inline-cache system, and the interpreter are intentionally narrow: the AST carries site identifiers, the runtime carries slot values, and the interpreter maps one to the other.
@@ -187,18 +196,16 @@ _Avoid_: leaked try context, unpaired pop.
 ## Memory
 
 **Temp-Root Frame**:
-A saved `gc_temp_roots` depth for one native operation's temporary `JsValue`
-roots. `RootStack` permits only LIFO push/pop/truncate, via `gc_root_id`,
-`gc_unroot_id` and frame helpers. `gc_root_frame` saves the depth;
-`gc_unroot_frame` truncates to it. Values outliving the call belong in a
-Pinned Native Root or Rooted Slot.
+A saved `gc_temp_roots` depth. `RootStack` permits LIFO push/pop/truncate through
+`gc_root_id`, `gc_unroot_id` and frame helpers: `gc_root_frame` saves depth,
+`gc_unroot_frame` truncates. Longer-lived values use a Pinned Native Root or
+Rooted Slot.
 _Avoid_: root scope marker, gc stack pointer.
 
 **GC Root Scope**:
-`with_gc_root_scope(|interp| …)` captures a Temp-Root Frame and truncates on
-all returned paths, including early `return` and `?`. Prefer it for lexical
-native roots; nested scopes compose. Raw primitives serve interleaved
-per-value releases, not ordinary nesting (ADR-2026-09-10-2014).
+`with_gc_root_scope` captures a Temp-Root Frame and truncates on every returned
+path, including early `return` and `?`. Nested scopes compose; raw primitives
+serve interleaved per-value releases (ADR-2026-09-10-2014).
 _Avoid_: root guard, unroot epilogue.
 
 **Pinned Native Root**:

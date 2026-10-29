@@ -61,12 +61,10 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     // Indirect eval uses the eval function's realm
-                    let old_realm = interp.current_realm_id;
-                    interp.current_realm_id = eval_realm_id;
-                    let global = interp.realm().global_env.clone();
-                    let result = interp.perform_eval(args, false, false, &global);
-                    interp.current_realm_id = old_realm;
-                    result
+                    interp.with_realm(Some(eval_realm_id), |interp| {
+                        let global = interp.realm().global_env.clone();
+                        interp.perform_eval(args, false, false, &global)
+                    })
                 },
             ));
             if let Some(eval_id) = eval_fn.as_object_id() {
@@ -149,10 +147,7 @@ impl Interpreter {
                     {
                         let is_strict = fe.body_is_strict;
                         // Use the realm of the Function constructor, not the caller's realm
-                        let old_realm = interp.current_realm_id;
-                        interp.current_realm_id = fn_ctor_realm_id;
-                        let global_env = interp.realm().global_env.clone();
-                        interp.current_realm_id = old_realm;
+                        let global_env = interp.realms[fn_ctor_realm_id].global_env.clone();
                         let dynamic_fn_env = Environment::new(Some(global_env));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
@@ -172,10 +167,9 @@ impl Interpreter {
                             has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
                         // Create function in the Function constructor's realm
-                        let old_realm = interp.current_realm_id;
-                        interp.current_realm_id = fn_ctor_realm_id;
-                        let result = interp.create_function(js_func);
-                        interp.current_realm_id = old_realm;
+                        let result = interp.with_realm(Some(fn_ctor_realm_id), |interp| {
+                            interp.create_function(js_func)
+                        });
                         // OrdinaryCreateFromConstructor — realm-aware prototype
                         let proto = match interp
                             .get_prototype_from_new_target_realm(|realm| realm.function_prototype)
