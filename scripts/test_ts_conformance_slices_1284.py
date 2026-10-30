@@ -187,6 +187,10 @@ REFS = [
     "b.js",
     "b.symbols",
     "b.types",
+    "b.d.ts",
+    "b.x.js",
+    "d(lib=es2015,dom,target=es5).js",
+    "d(lib=es2015,dom,target=es5).types",
 ]
 
 
@@ -224,6 +228,19 @@ class Control(unittest.TestCase):
         self.assertEqual(
             control.baselines_of(suite_of("b.ts", None), REFS),
             ["b.js", "b.symbols", "b.types"],
+        )
+
+    def test_an_unconfigured_suite_ignores_baselines_of_longer_stems(self):
+        self.assertEqual(
+            control.baselines_of(suite_of("b.ts", None), REFS),
+            ["b.js", "b.symbols", "b.types"],
+        )
+
+    def test_option_values_with_commas_match(self):
+        s = suite_of("d.ts", "@lib: es2015,dom, @target: es5")
+        self.assertEqual(
+            control.baselines_of(s, REFS),
+            ["d(lib=es2015,dom,target=es5).js", "d(lib=es2015,dom,target=es5).types"],
         )
 
     def test_the_corrupted_file_belongs_to_the_picked_suite(self):

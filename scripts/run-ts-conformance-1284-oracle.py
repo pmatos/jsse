@@ -37,7 +37,7 @@ import ts_conformance_slices_1284 as group  # noqa: E402
 KNOWN = os.path.join(ROOT, "ts-suite", "conformance-1284-known-failures.txt")
 MODULE = "ts_conformance_slices_1284"
 TESTS_PER_SUITE = 6
-LISTED = "conformance tests for "
+LISTED = conf.SUITE_PREFIX.removeprefix(conf.PREFIX)
 
 _spec = importlib.util.spec_from_file_location(
     "run_ts_conformance_expressions_oracle",

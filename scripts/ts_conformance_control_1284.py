@@ -16,6 +16,9 @@ CONTROL_SUITES = shared.CONTROL_SUITES
 CONTROL_MODES = shared.CONTROL_MODES
 
 _PAIR = re.compile(r"@(\w+):\s*([^@]*?)\s*(?:,\s*(?=@)|$)")
+_EXT = r"\.(?:js|types|symbols|errors\.txt|js\.map|sourcemap\.txt|trace\.json)"
+_PAREN = re.compile(r"\(([^)]*)\)(" + _EXT + ")$")
+_PLAIN = re.compile(_EXT + "$")
 
 
 def options(config):
@@ -32,11 +35,11 @@ def baselines_of(suite, listing):
         if not name.startswith(stem):
             continue
         rest = name[len(stem) :]
-        m = re.match(r"\(([^)]*)\)(\..*)$", rest)
+        m = _PAREN.match(rest)
         if m:
-            if want and set(m.group(1).lower().split(",")) == want:
+            if want and set(re.split(r",(?=\w+=)", m.group(1).lower())) == want:
                 out.append(name)
-        elif rest.startswith(".") and not want:
+        elif _PLAIN.match(rest) and not want:
             out.append(name)
     return sorted(out)
 
