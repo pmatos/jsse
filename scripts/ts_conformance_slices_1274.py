@@ -58,9 +58,8 @@ TYPES_DIRS = (
 
 SLICES = {"types": "dir:types"}
 SLICES.update({d: f"dir:types/{d}" for d in TYPES_DIRS})
-SLICES["first200"] = SLICES[
-    "types"
-]  # the oracle's default slice is the whole directory
+# the oracle's default slice name is first200; here it is the whole directory
+SLICES["first200"] = SLICES["types"]
 
 PREFIX = "conformance tests "
 SUITE_RE = re.compile(
