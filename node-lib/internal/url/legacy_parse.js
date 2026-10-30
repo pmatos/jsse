@@ -87,72 +87,8 @@ const hostPattern = /^\/\/[^@/]+@[^@/]+/;
 const simplePathPattern = /^(\/\/?(?!\/)[^?\s]*)(\?[^\s]*)?$/;
 
 const hostnameMaxLen = 255;
-const {
-  CHAR_SPACE,
-  CHAR_TAB,
-  CHAR_CARRIAGE_RETURN,
-  CHAR_LINE_FEED,
-  CHAR_NO_BREAK_SPACE,
-  CHAR_ZERO_WIDTH_NOBREAK_SPACE,
-  CHAR_HASH,
-  CHAR_FORWARD_SLASH,
-  CHAR_LEFT_SQUARE_BRACKET,
-  CHAR_RIGHT_SQUARE_BRACKET,
-  CHAR_LEFT_ANGLE_BRACKET,
-  CHAR_RIGHT_ANGLE_BRACKET,
-  CHAR_LEFT_CURLY_BRACKET,
-  CHAR_RIGHT_CURLY_BRACKET,
-  CHAR_QUESTION_MARK,
-  CHAR_DOUBLE_QUOTE,
-  CHAR_SINGLE_QUOTE,
-  CHAR_PERCENT,
-  CHAR_SEMICOLON,
-  CHAR_BACKWARD_SLASH,
-  CHAR_CIRCUMFLEX_ACCENT,
-  CHAR_GRAVE_ACCENT,
-  CHAR_VERTICAL_LINE,
-  CHAR_AT,
-  CHAR_COLON,
-} = require('internal/constants');
 
 let urlParseWarned = false;
-
-// Reference: RFC 3986, RFC 1808, RFC 2396
-
-const protocolPattern = /^[a-z0-9.+-]+:/i;
-const portPattern = /:[0-9]*$/;
-const hostPattern = /^\/\/[^@/]+@[^@/]+/;
-
-const simplePathPattern = /^(\/\/?(?!\/)[^?\s]*)(\?[^\s]*)?$/;
-
-const hostnameMaxLen = 255;
-const {
-  CHAR_SPACE,
-  CHAR_TAB,
-  CHAR_CARRIAGE_RETURN,
-  CHAR_LINE_FEED,
-  CHAR_NO_BREAK_SPACE,
-  CHAR_ZERO_WIDTH_NOBREAK_SPACE,
-  CHAR_HASH,
-  CHAR_FORWARD_SLASH,
-  CHAR_LEFT_SQUARE_BRACKET,
-  CHAR_RIGHT_SQUARE_BRACKET,
-  CHAR_LEFT_ANGLE_BRACKET,
-  CHAR_RIGHT_ANGLE_BRACKET,
-  CHAR_LEFT_CURLY_BRACKET,
-  CHAR_RIGHT_CURLY_BRACKET,
-  CHAR_QUESTION_MARK,
-  CHAR_DOUBLE_QUOTE,
-  CHAR_SINGLE_QUOTE,
-  CHAR_PERCENT,
-  CHAR_SEMICOLON,
-  CHAR_BACKWARD_SLASH,
-  CHAR_CIRCUMFLEX_ACCENT,
-  CHAR_GRAVE_ACCENT,
-  CHAR_VERTICAL_LINE,
-  CHAR_AT,
-  CHAR_COLON,
-} = require('internal/constants');
 
 function urlParse(url, parseQueryString, slashesDenoteHost) {
   if (url instanceof Url) return url;
