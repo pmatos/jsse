@@ -1,0 +1,80 @@
+name: Nightly TypeScript suite budget
+
+# Runs every case of scripts/run-ts-budget-oracle.py (#1297) on Node and on
+# `jsse --node` with the shipped release profile: selections of the compiler,
+# conformance, project, fourslash, fourslash-server, tsserver, tscWatch, tsbuild,
+# evaluation and services runners of TypeScript 6.0.3's own test suite, one mocha
+# process per engine and case. Every test passing on Node must pass on jsse and
+# jsse's peak RSS must stay within the max_rss_ratio of ts-suite/budget-1297.json.
+# Wall time is recorded in the step summary and the report artifact, never
+# enforced. Non-blocking by trigger only (schedule/workflow_dispatch never gate
+# pull_request/push). The smoke subset runs on pull requests in
+# ts-suite-budget-smoke.yml.
+
+on:
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      - name: Fetch and build the pinned TypeScript tree
+        run: uv run python scripts/run-ts-suite-oracle.py --dir "$RUNNER_TEMP/ts-suite" fetch install build
+
+      - name: Budget (all cases)
+        env:
+          TS_SRC_DIR: ${{ runner.temp }}/ts-suite/ts-src
+        run: |
+          set -o pipefail
+          uv run python scripts/run-ts-budget-oracle.py --require --jobs 2 --jsse ./target/release/jsse --timeout 10800 --report "$RUNNER_TEMP/ts-budget-report.json" | tee "$RUNNER_TEMP/ts-budget.log"
+
+      - name: Summarise
+        if: ${{ always() }}
+        run: |
+          {
+            echo '```'
+            tail -n 24 "$RUNNER_TEMP/ts-budget.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ts-suite-budget-report
+          path: |
+            ${{ runner.temp }}/ts-budget-report.json
+            ${{ runner.temp }}/ts-budget.log
+          if-no-files-found: ignore

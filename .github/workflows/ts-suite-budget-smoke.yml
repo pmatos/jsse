@@ -1,0 +1,88 @@
+name: TypeScript suite budget smoke
+
+# Runs the smoke cases of scripts/run-ts-budget-oracle.py (#1297) on Node and on
+# `jsse --node`: the load of the 13 MB test-runner bundle, the transpile runner
+# and ten compiler suites, in one mocha process per engine. Every test passing on
+# Node must pass on jsse and jsse's peak RSS must stay within the max_rss_ratio
+# (6x Node) of ts-suite/budget-1297.json; wall time is printed, never capped.
+# About 5 minutes of jsse. Deliberately a separate workflow from ci.yml: it needs
+# a clone and an npm install, so it must never gate the required `build` check.
+# The remaining cases run nightly in nightly-ts-suite-budget.yml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "node-lib/**"
+      - "scripts/node-*.js"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/run-ts-budget-oracle.py"
+      - "scripts/ts_budget_*.py"
+      - "ts-suite/budget-1297*"
+      - ".github/workflows/ts-suite-budget-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "node-lib/**"
+      - "scripts/node-*.js"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/run-ts-budget-oracle.py"
+      - "scripts/ts_budget_*.py"
+      - "ts-suite/budget-1297*"
+      - ".github/workflows/ts-suite-budget-smoke.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+# Only PR pushes cancel each other; every commit on main keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # The smoke cases peak far below the 6x cap and wall time is not enforced,
+      # so the slow fat-LTO link buys nothing here (the nightly job uses the shipped profile).
+      - name: Build
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: cargo build --release
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      - name: Check the budget file
+        run: uv run python scripts/run-ts-budget-oracle.py --check-budget
+
+      - name: Fetch and build the pinned TypeScript tree
+        run: uv run python scripts/run-ts-suite-oracle.py --dir "$RUNNER_TEMP/ts-suite" fetch install build
+
+      - name: Budget smoke cases
+        env:
+          TS_SRC_DIR: ${{ runner.temp }}/ts-suite/ts-src
+        run: uv run python scripts/run-ts-budget-oracle.py --smoke --require --jsse ./target/release/jsse --timeout 2400
