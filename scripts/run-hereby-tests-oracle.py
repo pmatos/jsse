@@ -197,27 +197,22 @@ def compare_listings(name, engines, trees, runners, timeout):
     exes = dict(engines)
     # (bundle built on, engine that lists it); the first is the reference
     combos = [("node", "node"), ("jsse", "node"), ("jsse", "jsse")]
-    tasks = [(b, e, r) for r in runners for b, e in combos]
-
-    def one(task):
-        built_on, listed_on, runner = task
-        return task, list_tests(
-            listed_on, exes[listed_on], trees[built_on], runner, timeout
-        )
-
-    # test.config is per tree, so listings of one tree must not overlap
-    results = {}
-    by_tree = {}
-    for t in tasks:
-        by_tree.setdefault(t[0], []).append(t)
 
     def run_tree(built_on):
-        return [one(t) for t in by_tree[built_on]]
+        # test.config is per tree, so listings of one tree must not overlap
+        return {
+            (built_on, listed_on, r): list_tests(
+                listed_on, exes[listed_on], trees[built_on], r, timeout
+            )
+            for r in runners
+            for b, listed_on in combos
+            if b == built_on
+        }
 
-    with ThreadPoolExecutor(max_workers=len(by_tree)) as pool:
-        for batch in pool.map(run_tree, list(by_tree)):
-            for task, res in batch:
-                results[task] = res
+    results = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for batch in pool.map(run_tree, ("node", "jsse")):
+            results.update(batch)
 
     problems, rows = [], []
     for r in runners:
