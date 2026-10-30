@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "v${TYPESCRIPT_VERSION}" https://github.com/microsoft/TypeScript.git "$RUNNER_TEMP/TypeScript"
-          (cd "$RUNNER_TEMP/TypeScript" && npm ci --ignore-scripts --no-audit --no-fund)
+          (cd "$RUNNER_TEMP/TypeScript" && npm ci --ignore-scripts --no-audit --no-fund && ./node_modules/.bin/hereby generate-diagnostics)
           npm install --prefix "$RUNNER_TEMP/tsc" "typescript@${TYPESCRIPT_VERSION}" --ignore-scripts --no-audit --no-fund
 
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2

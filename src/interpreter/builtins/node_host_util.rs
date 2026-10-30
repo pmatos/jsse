@@ -85,8 +85,7 @@ fn object_kind(o: &JsObjectData) -> &'static str {
         },
         _ => match o.class_name {
             "Arguments" => "Arguments",
-            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
-            | "URIError" | "EvalError" | "AggregateError" | "SuppressedError" => "Error",
+            name if super::error_data::has_error_data_slot(name) => "Error",
             _ => wrapper_kind(o),
         },
     }
