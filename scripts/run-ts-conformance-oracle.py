@@ -19,7 +19,9 @@ four directories select disjoint suites that add up to `issue1276`.
 """
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -80,9 +82,6 @@ def oracle(args):
 
 def check_partition():
     """The four directories select disjoint suites that add up to `issue1276` (one dry run lists the runner)."""
-    import contextlib
-    import io
-
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         code = oracle(["--list", "prefix:0-9,A-Z"])
