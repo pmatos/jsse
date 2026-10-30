@@ -2,7 +2,8 @@
 //! message and per local baseline file by `scripts/run-ts-fourslash-oracle.py`. The case below runs the first
 //! few tests of tests/cases/fourslash plus the corrupted-input control, and the first server tests, when
 //! TS_SRC_DIR points at a built TypeScript 6.0.3 checkout; the first 200 tests are
-//! `uv run python scripts/run-ts-fourslash-oracle.py first200`.
+//! `uv run python scripts/run-ts-fourslash-oracle.py first200`. It also checks the `h-m` row selects its 831
+//! tests (#1291) and runs two of them with the slice's known-failures list.
 
 use std::path::Path;
 use std::process::Command;
@@ -35,6 +36,21 @@ fn fourslash_tests_match_node_when_a_typescript_checkout_is_given() {
     let (ok, text) = oracle(&["first:3"]);
     assert!(ok, "{text}");
     assert!(text.contains("fourslash oracle: PASS"), "{text}");
+    let known_h_m = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("ts-suite/fourslash-known-failures-h-m.txt")
+        .display()
+        .to_string();
+    let (ok, text) = oracle(&[
+        "--no-control",
+        "--known",
+        &known_h_m,
+        "files:hoverOverComment.ts,importStatementCompletions3.ts",
+    ]);
+    assert!(ok, "{text}");
+    assert!(text.contains("fourslash oracle: PASS"), "{text}");
+    let (ok, text) = oracle(&["--list", "h-m"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("fourslash h-m: 831 of"), "{text}");
     let (ok, text) = oracle(&["--runner", "fourslash-server", "--no-control", "first:2"]);
     assert!(ok, "{text}");
     assert!(text.contains("fourslash oracle: PASS"), "{text}");

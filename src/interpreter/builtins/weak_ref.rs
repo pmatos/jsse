@@ -315,19 +315,6 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn begin_job(&mut self) {
-        self.job_depth += 1;
-    }
-
-    /// ClearKeptObjects, once the outermost running job has finished.
-    pub(crate) fn finish_job(&mut self) {
-        debug_assert!(self.job_depth > 0);
-        self.job_depth -= 1;
-        if self.job_depth == 0 {
-            self.kept_alive.clear();
-        }
-    }
-
     /// HostEnqueueFinalizationRegistryCleanupJob: run the registry's cleanup
     /// callback for its cells with an empty target as a job of its own.
     pub(crate) fn enqueue_finalization_cleanup(&mut self, registry_id: u64) {
