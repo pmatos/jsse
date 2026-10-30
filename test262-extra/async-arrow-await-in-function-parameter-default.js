@@ -27,6 +27,7 @@ var arrow = (a = async () => await 6) => a;
 var obj = { m(a = async () => await 7) { return a; } };
 class C { m(a = async () => await 8) { return a; } }
 var nested = (a = async () => (await 9) + (await 10)) => a;
+var asyncArrowParam = async (a = async () => await 12) => a;
 
 assert.sameValue(typeof ordinary(), "function");
 
@@ -41,9 +42,10 @@ Promise.all([
   arrow()(),
   obj.m()(),
   new C().m()(),
-  nested()()
+  nested()(),
+  asyncArrowParam().then(function(f) { return f(); })
 ]).then(function(values) {
-  assert.sameValue(values.join(), "1,11,12,2,3,4,5,6,7,8,19");
+  assert.sameValue(values.join(), "1,11,12,2,3,4,5,6,7,8,19,12");
 }).then($DONE, $DONE);
 
 var rejected = [
@@ -52,7 +54,10 @@ var rejected = [
   "(async function(a = await 1) {})",
   "async (a = await 1) => {}",
   "function f(a = async (b = await 1) => {}) {}",
-  "async function f(a = (b = await 1) => {}) {}"
+  "async function f(a = (b = await 1) => {}) {}",
+  "function* g(a = async () => yield 1) {}",
+  "function* g() { var h = async () => yield 1; }",
+  "async function* g(a = async () => yield 1) {}"
 ];
 
 rejected.forEach(function(src) {
