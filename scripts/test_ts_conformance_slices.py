@@ -41,6 +41,8 @@ SUITES = conf.suites_from_titles(
         "override/override1.ts",
         "classesX/other.ts",
         "types/t.ts",
+        "classes/c/script.js",
+        "classes/c/mod.mts",
     )
 )
 
@@ -59,7 +61,13 @@ class ConformanceSlicesTest(unittest.TestCase):
     def test_dir_term_selects_a_directory_not_a_name_prefix(self):
         self.assertEqual(
             self.files("dir:classes"),
-            ["classes/a/Class1.ts", "classes/a/Class1.ts", "classes/b/Class2.tsx"],
+            [
+                "classes/a/Class1.ts",
+                "classes/a/Class1.ts",
+                "classes/b/Class2.tsx",
+                "classes/c/script.js",
+                "classes/c/mod.mts",
+            ],
         )
         self.assertEqual(self.files("dir:classes/b"), ["classes/b/Class2.tsx"])
         self.assertEqual(
@@ -74,7 +82,13 @@ class ConformanceSlicesTest(unittest.TestCase):
         self.assertEqual(self.files("files:Class1.ts"), ["classes/a/Class1.ts"] * 2)
         self.assertEqual(
             self.files("dir:classes+files:Class1.ts+prefix:C"),
-            ["classes/a/Class1.ts", "classes/a/Class1.ts", "classes/b/Class2.tsx"],
+            [
+                "classes/a/Class1.ts",
+                "classes/a/Class1.ts",
+                "classes/b/Class2.tsx",
+                "classes/c/script.js",
+                "classes/c/mod.mts",
+            ],
         )
 
     def test_unknown_term_is_rejected(self):

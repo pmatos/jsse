@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run TypeScript's `conformance` runner on Node and on jsse --node and diff it per test (issue #1276).
 
-    TS_SRC_DIR=/path/to/TypeScript uv run python scripts/run-ts-conformance-oracle.py [--dirs d1,d2] [--check-partition] [-- oracle options] [slice ...]
+    TS_SRC_DIR=/path/to/TypeScript uv run python scripts/run-ts-conformance-oracle.py [--dirs d1,d2] [--check-partition] [slice ...] [-- oracle options]
 
 The `conformance` runner (tests/cases/conformance/**) is the compiler runner's `CompilerBaselineRunner` over another
 directory, so this is scripts/run-ts-compiler-oracle.py (private working directory of symlinks, own
@@ -68,34 +68,38 @@ def oracle(args):
     try:
         return compiler.main()
     except SystemExit as e:
-        return e.code if isinstance(e.code, int) else 1
+        if isinstance(e.code, str):
+            print(e.code, file=sys.stderr)
+            return 1
+        if isinstance(e.code, int) and e.code >= 128:
+            raise
+        return e.code or 0
     finally:
         sys.argv = saved
 
 
 def check_partition():
+    """The four directories select disjoint suites that add up to `issue1276` (one dry run lists the runner)."""
     import contextlib
     import io
 
-    def listing(spec):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = oracle(["--list", spec])
-        lines = out.getvalue().splitlines()
-        if code != 0:
-            sys.exit(f"cannot list {spec}:\n{out.getvalue()}")
-        return lines[1:]
-
-    whole = listing("issue1276")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = oracle(["--list", "prefix:0-9,A-Z"])
+    if code != 0:
+        sys.exit(f"cannot list the conformance suites:\n{out.getvalue()}")
+    everything = [
+        conf.Suite(conf.PREFIX + line, []) for line in out.getvalue().splitlines()[1:]
+    ]
+    whole = {s.key for s in conf.select("issue1276", everything)}
     seen, bad = {}, []
     for d in conf.GROUP_1276:
-        for suite in listing(d):
-            if suite in seen:
-                bad.append(f"{suite!r} is in {seen[suite]} and {d}")
-            seen[suite] = d
-    in_whole = set(whole)
-    bad += [f"not in any directory: {s!r}" for s in whole if s not in seen]
-    bad += [f"outside issue1276: {s!r}" for s in seen if s not in in_whole]
+        for suite in conf.select(d, everything):
+            if suite.key in seen:
+                bad.append(f"{suite.key!r} is in {seen[suite.key]} and {d}")
+            seen[suite.key] = d
+    bad += [f"not in any directory: {k!r}" for k in sorted(whole - set(seen))]
+    bad += [f"outside issue1276: {k!r}" for k in sorted(set(seen) - whole)]
     if not whole:
         bad.append("issue1276 lists no suites")
     print(f"directories cover {len(seen)} of {len(whole)} suites of issue1276")

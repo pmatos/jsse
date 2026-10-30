@@ -28,7 +28,7 @@ PREFIX = "conformance tests "
 SUITE_PREFIX = PREFIX + "conformance tests for "
 ROOT = "tests/cases/conformance/"
 SUITE_RE = re.compile(
-    r"^conformance tests for (" + re.escape(ROOT) + r"\S+?\.tsx?)(?: \((.*)\))?$"
+    r"^conformance tests for (" + re.escape(ROOT) + r"\S+?\.\w+)(?: \((.*)\))?$"
 )
 
 
