@@ -80,6 +80,36 @@ class NormaliseTest(unittest.TestCase):
         )
 
 
+class CacheTest(unittest.TestCase):
+    def cache(self, config_a, config_b, path="/w/ts/a.ts"):
+        entries = [
+            {path: "1", "/w/ts/b.ts": "2", "/w/ts/c.ts": "3"},
+            {"size": 1, "hashOfConfig": "4"},
+            {"size": 2, "hashOfConfig": "5"},
+            {"size": 3, "hashOfConfig": "4"},
+            config_a,
+            config_b,
+        ]
+        return oracle.json.dumps(entries)
+
+    def test_config_hashes_are_compared_as_a_partition_not_by_value(self):
+        one = oracle.normalise_cache(self.cache("aaa", "bbb"))
+        two = oracle.normalise_cache(self.cache("xyz", "qrs"))
+        self.assertEqual(one, two)
+
+    def test_files_that_stop_sharing_a_config_are_a_difference(self):
+        entries = oracle.json.loads(self.cache("aaa", "bbb"))
+        entries[3]["hashOfConfig"] = "5"
+        merged = oracle.json.dumps(entries)
+        self.assertNotEqual(
+            oracle.normalise_cache(merged),
+            oracle.normalise_cache(self.cache("aaa", "bbb")),
+        )
+
+    def test_text_that_is_not_json_is_left_alone(self):
+        self.assertEqual(oracle.normalise_cache("not json"), "not json")
+
+
 class CompareTest(unittest.TestCase):
     def test_identical_results_compare_equal(self):
         a = result("x\n", "1", {"f": "body"})

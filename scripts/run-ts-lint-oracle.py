@@ -80,6 +80,27 @@ def normalise(text, tree, exe):
     return "\n".join(out)
 
 
+def normalise_cache(text):
+    """ESLint's `.eslintcache` (a flatted JSON array) with each `hashOfConfig` made a number by first use.
+
+    The hash covers the config, which names the tree (`tsconfigRootDir`), so two trees never share one; what must
+    agree between engines is which files share a config.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    slots = {}
+    for entry in data:
+        if isinstance(entry, dict) and "hashOfConfig" in entry:
+            ref = entry["hashOfConfig"]
+            if isinstance(ref, str) and ref.isdigit() and int(ref) < len(data):
+                slots.setdefault(int(ref), len(slots))
+    for index, number in slots.items():
+        data[index] = f"config-{number}"
+    return json.dumps(data, separators=(",", ":"))
+
+
 def check_checkout(ts_dir):
     """None when ts_dir can run the oracle, else the reason it cannot."""
     pkg = os.path.join(ts_dir, "package.json")
@@ -188,7 +209,10 @@ def run_case(case, engine, exe, ts_dir, work, timeout):
             changed[rel] = None
             continue
         with open(os.path.join(tree, rel), "rb") as f:
-            changed[rel] = normalise(f.read().decode("utf-8", "replace"), tree, exe)
+            body = f.read().decode("utf-8", "replace")
+        if os.path.basename(rel) == ".eslintcache":
+            body = normalise_cache(body)
+        changed[rel] = normalise(body, tree, exe)
     return {"steps": steps, "changed": changed}
 
 

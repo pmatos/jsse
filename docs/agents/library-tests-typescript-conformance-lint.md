@@ -15,7 +15,7 @@ control files that break about thirty rules.
 Each case runs its steps in a private tree per engine (the light tree links `node_modules`, `tests`, `built`, `lib`;
 `full` copies the whole checkout; the checkout is never written) and compares Node and `jsse --node`: the exit
 status, stdout and stderr of every step (tree path, durations, the interpreter and the html formatter's wall-clock
-line normalised) and every file the steps create, change or remove (`--fix` rewrites, `-o` reports, `.eslintcache`).
+line normalised; in `.eslintcache` each `hashOfConfig`, which covers the tree path, is compared as a partition of the files) and every file the steps create, change or remove (`--fix` rewrites, `-o` reports, `.eslintcache`).
 Node must satisfy each case's own checks (`must`: exit status, rule ids in the output, the fixed file), so a control
 that reports nothing fails instead of comparing two empty outputs.
 
