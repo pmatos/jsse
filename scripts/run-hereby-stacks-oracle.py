@@ -46,6 +46,14 @@ CASES = [
 ]
 
 
+UNLAUNCHED = ("stack-default-limit",)
+LAUNCHER = (
+    "Error.stackTraceLimit = 200;\n"
+    "process.argv.splice(1, 1);\n"
+    "await import(process.argv[1]);\n"
+)
+
+
 def load_base():
     spec = importlib.util.spec_from_file_location(
         "run_hereby_oracle", os.path.join(ROOT, "scripts", "run-hereby-oracle.py")
@@ -53,14 +61,6 @@ def load_base():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-UNLAUNCHED = ("stack-default-limit",)
-LAUNCHER = (
-    "Error.stackTraceLimit = 200;\n"
-    "process.argv.splice(1, 1);\n"
-    "await import(process.argv[1]);\n"
-)
 
 
 def run_case(base, case, engine, exe, ts_dir, work, timeout):
