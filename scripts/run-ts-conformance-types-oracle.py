@@ -39,6 +39,9 @@ def load_oracle():
 
 
 def configure(oracle):
+    for name in ("slices", "CONFIG", "SUITE_GREP", "KNOWN", "pinned_expected"):
+        if not hasattr(oracle, name):
+            sys.exit(f"run-ts-compiler-oracle.py has no {name}: update this wrapper")
     oracle.slices = conf
     oracle.CONFIG = {"runners": ["conformance"], "light": False}
     oracle.SUITE_GREP = "^conformance tests conformance tests for "
@@ -64,7 +67,7 @@ def main(argv):
         ("--test-timeout", str(TEST_TIMEOUT_MS)),
         ("--timeout", str(PROCESS_TIMEOUT_S)),
     ):
-        if flag not in argv:
+        if not any(a == flag or a.startswith(flag + "=") for a in argv):
             argv += [flag, value]
     sys.argv = [sys.argv[0]] + argv
     return oracle.main()

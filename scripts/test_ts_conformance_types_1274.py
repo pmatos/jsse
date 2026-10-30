@@ -49,6 +49,7 @@ SUITES = conf.suites_from_titles(
         "types/union/w.ts|@target: es5",
         "types/union/w.ts|@target: es2015",
         "types/union/sub/x.ts",
+        "types/union/with space.ts",
         "types/unionish/y.ts",
         "types/tuple/t.ts",
         "types/any/z.ts",
@@ -65,7 +66,7 @@ class ConformanceTypesSlicesTest(unittest.TestCase):
         cfg = [s for s in SUITES if s.config]
         self.assertEqual([s.config for s in cfg], ["@target: es5", "@target: es2015"])
         self.assertEqual({s.base for s in cfg}, {"w.ts"})
-        self.assertEqual(len(SUITES), 9)
+        self.assertEqual(len(SUITES), 10)
         self.assertTrue(all(len(s.tests) == 6 for s in SUITES))
 
     def test_dir_term_takes_whole_path_components_only(self):
@@ -77,13 +78,14 @@ class ConformanceTypesSlicesTest(unittest.TestCase):
                 "types/union/w.ts",
                 "types/union/w.ts",
                 "types/union/sub/x.ts",
+                "types/union/with space.ts",
             ],
         )
         self.assertNotIn("types/unionish/y.ts", self.files("dir:types/union"))
 
     def test_types_row_is_the_default_slice_and_excludes_other_directories(self):
         self.assertEqual(conf.SLICES["first200"], conf.SLICES["types"])
-        self.assertEqual(len(self.files("types")), 8)
+        self.assertEqual(len(self.files("types")), 9)
         self.assertNotIn("classes/a.ts", self.files("types"))
 
     def test_subdirectory_rows_cover_the_types_directory_exactly(self):
@@ -129,10 +131,14 @@ class ConformanceTypesSlicesTest(unittest.TestCase):
         ):
             wrapper.main(["--jobs", "2"])
             wrapper.main(["--test-timeout", "5"])
-        first, second = seen
+            wrapper.main(["--test-timeout=7", "--known=x.txt"])
+        first, second, third = seen
         self.assertEqual(first[first.index("--test-timeout") + 1], "1800000")
         self.assertEqual(first[first.index("--timeout") + 1], "7200")
         self.assertEqual(second[second.index("--test-timeout") + 1], "5")
+        self.assertNotIn("--test-timeout", third)
+        self.assertNotIn("--known", third)
+        self.assertIn("--test-timeout=7", third)
 
     def test_known_failures_file_is_a_comment_header_plus_tab_separated_entries(self):
         for line in Path(wrapper.KNOWN).read_text(encoding="utf-8").splitlines():

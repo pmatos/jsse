@@ -64,9 +64,8 @@ SLICES["first200"] = SLICES[
 
 PREFIX = "conformance tests "
 SUITE_RE = re.compile(
-    r"^conformance tests for (tests/cases/conformance/\S+?\.\w+)(?: \((.*)\))?$"
+    r"^conformance tests for (tests/cases/conformance/.+?\.\w+)(?: \((.*)\))?$"
 )
-IT_TITLES = base.IT_TITLES
 
 
 class Suite(base.Suite):
@@ -126,8 +125,4 @@ batches = base.batches
 flat_terms = base.flat_terms
 char_ranges = base.char_ranges
 js_escape = base.js_escape
-
-
-def grep_for(batch):
-    """A mocha --grep regex selecting exactly the tests of the suites of `batch`."""
-    return "^(?:" + "|".join(js_escape(s.key) for s in batch) + ") Correct "
+grep_for = base.grep_for
