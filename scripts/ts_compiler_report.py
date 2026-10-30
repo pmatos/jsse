@@ -136,9 +136,9 @@ def load_known(path):
     return known
 
 
-def write_known(path, known):
+def write_known(path, known, tool="run-ts-compiler-oracle.py"):
     head = (
-        "# Tests that pass on Node and fail on jsse --node (run-ts-compiler-oracle.py): full test title, TAB, issue.\n"
+        f"# Tests that pass on Node and fail on jsse --node ({tool}): full test title, TAB, issue.\n"
         "# Maintained with --record; a listed test that passes makes the oracle fail.\n"
     )
     with open(path, "w", encoding="utf-8") as f:
