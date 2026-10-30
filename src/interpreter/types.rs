@@ -2024,11 +2024,9 @@ pub(crate) enum IteratorState {
         pending_return: Option<JsValue>,
     },
     RegExpStringIterator {
-        source: String,
-        flags: String,
         string: JsString,
         global: bool,
-        last_index: usize,
+        full_unicode: bool,
         done: bool,
         matcher_id: u64,
     },
