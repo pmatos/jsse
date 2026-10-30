@@ -37,7 +37,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tsc_oracle_norm import normalise_file, normalise_stats
+from tsc_oracle_norm import normalise_file, normalise_name, normalise_stats
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIX = os.path.join(ROOT, "scripts", "tsc-fixtures")
@@ -270,12 +270,16 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     def norm(b):
         t = b.decode("utf-8", "surrogateescape")
         t = t.replace(tree, "<DIR>").replace(tsc_dir, "<TSC>")
+        t = t.replace(os.path.relpath(tsc_dir, tree), "<TSC>")
+        t = re.sub(r"\(node:\d+\)", "(node:<PID>)", t)
         t = re.sub(re.escape(os.path.join(work, engine)) + r"(?!\w)", "<WORK>", t)
         t = t.replace(work, "<ROOT>")
         return CLOCK.sub("<TIME>", t)
 
     files = {
-        p: normalise_file(p, norm(c)) for p, c in after.items() if before.get(p) != c
+        normalise_name(p): normalise_file(p, norm(c))
+        for p, c in after.items()
+        if before.get(p) != c
     }
     files.update({p: "<deleted>" for p in before if p not in after})
 

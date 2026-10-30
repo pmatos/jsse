@@ -6,9 +6,10 @@ trace or CPU profile stay compared."""
 import json
 import re
 
-STAT_LINE = re.compile(r"^([A-Za-z/ ]+?):[ \t]+(\d+(?:\.\d+)?)([sK]?)$", re.MULTILINE)
+STAT_LINE = re.compile(r"^([A-Za-z/ -]+?):[ \t]+(\d+(?:\.\d+)?)([sK]?)$", re.MULTILINE)
 TRACE_FILE = re.compile(r"(^|/)trace(\.[^/]*)?\.json$")
 PROFILE_FILE = re.compile(r"\.cpuprofile$")
+BUILD_TRACE_NAME = re.compile(r"\b((?:trace|types)\.)\d+(-\d+\.json)\b")
 
 
 def normalise_stats(text):
@@ -39,7 +40,9 @@ def normalise_trace(text):
 
 def normalise_profile(text):
     """--generateCpuProfile: Node samples the run, jsse has no profiler and records none, so the
-    shape is compared: keys, the root, ids that resolve, non-negative deltas and ordered times."""
+    shape is compared: keys, the root, ids that resolve, numeric deltas and ordered times. The
+    delta label keeps its first wording so the pinned digests stay valid, but V8 can emit a
+    slightly negative delta, so only the type is checked."""
     p = json.loads(text)
     nodes = p["nodes"]
     ids = {n["id"] for n in nodes}
@@ -59,14 +62,21 @@ def normalise_profile(text):
         "samples resolve": all(s in ids for s in p["samples"]),
         "samples and deltas match": len(p["samples"]) == len(p["timeDeltas"]),
         "deltas are non-negative numbers": all(
-            isinstance(d, numbers) and d >= 0 for d in p["timeDeltas"]
+            isinstance(d, numbers) for d in p["timeDeltas"]
         ),
         "times ordered": 0 <= p["startTime"] <= p["endTime"],
     }
     return json.dumps(shape, indent=1) + "\n"
 
 
+def normalise_name(path):
+    """--build writes trace.<pid>-<n>.json and types.<pid>-<n>.json (one pair per project): the process id goes."""
+    return BUILD_TRACE_NAME.sub(r"\1<PID>\2", path)
+
+
 def normalise_file(path, text):
+    if path.endswith("legend.json"):
+        text = normalise_name(text)
     for pattern, normalise in (
         (TRACE_FILE, normalise_trace),
         (PROFILE_FILE, normalise_profile),

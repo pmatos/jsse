@@ -1,0 +1,12 @@
+{
+  "extends": ["shared-config/tsconfig.json", "../tsconfig.opts.json"],
+  "compilerOptions": {
+    "outDir": "${configDir}/dist",
+    "rootDir": "${configDir}/..",
+    "paths": { "@sub/*": ["${configDir}/src/*"] }
+  },
+  "compileOnSave": true,
+  "typeAcquisition": { "enable": false },
+  "include": ["${configDir}/src"],
+  "references": [{ "path": "../tsconfig.comp.json" }]
+}
