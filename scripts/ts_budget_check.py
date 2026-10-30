@@ -17,8 +17,8 @@ def run_measured(argv, cwd, env, timeout):
 
     The peak is the `ru_maxrss` that wait4 reports for the child and every descendant it reaped, so it is the
     largest single process of the tree. (Linux folds the high-water mark of the mm a vfork child borrowed, the
-    driver's, into the child's at exec; the driver stays far below the smallest measured process.) The whole group is killed when the run ends, times out, or the oracle
-    is interrupted (scripts/oracle_procs.py).
+    driver's, into the child's at exec; the driver stays far below the smallest measured process.) The whole
+    group is killed when the run ends, times out, or the oracle is interrupted (scripts/oracle_procs.py).
     """
     with tempfile.TemporaryFile() as out:
         with oracle_procs._lock:
