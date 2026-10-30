@@ -9,6 +9,7 @@ of scripts/ts_conformance_slices.py (#1276); this module only adds the rows of t
 
 import ts_conformance_slices as base
 
+TESTS_PER_SUITE = 6  # errors, module resolution trace, sourcemap record, JS, sourcemap, types and symbols
 GROUP_1282 = ("jsx", "jsdoc", "salsa", "typings")
 
 SLICES = {d: f"dir:{d}" for d in GROUP_1282}

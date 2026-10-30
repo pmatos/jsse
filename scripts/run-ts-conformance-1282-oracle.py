@@ -10,7 +10,7 @@ the rows of scripts/ts_conformance_slices_1282.py (`jsx`, `jsdoc`, `salsa`, `typ
 failures in ts-suite/conformance-1282-known-failures.txt. Without slices it runs the four directories one after the
 other, each as its own oracle run so that a crashed or interrupted one loses nothing, and prints the wall time of each;
 `--dirs` picks some. Options after `--` go to the oracle (--jobs at most 4, --batch-size, --jsse, --record, --verbose,
---list, ...). The exit status is 0 iff every run passes. --check-partition (Node only) fails unless the four directories
+--list, ...); --test-timeout and --timeout default to 1800000 ms and 7200 s. The exit status is 0 iff every run passes. --check-partition (Node only) fails unless the four directories
 select disjoint suites that add up to `issue1282`.
 """
 
@@ -28,12 +28,18 @@ sys.path.insert(0, SCRIPTS)
 import ts_conformance_slices_1282 as conf  # noqa: E402
 
 KNOWN = os.path.join(ROOT, "ts-suite", "conformance-1282-known-failures.txt")
+# jsse needs about 1500 s of process time for the jsx directory on a loaded host: past the compiler oracle's 600 s test and
+# 3600 s process defaults in a batch of 40 suites, so both limits are raised unless the caller passes its own.
+DEFAULTS = (("--test-timeout", "1800000"), ("--timeout", "7200"))
 
 _spec = importlib.util.spec_from_file_location(
     "run_ts_conformance_oracle", os.path.join(SCRIPTS, "run-ts-conformance-oracle.py")
 )
 wrapper = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(wrapper)
+for _name in ("conf", "KNOWN", "configure", "oracle"):
+    if not hasattr(wrapper, _name):
+        sys.exit(f"run-ts-conformance-oracle.py has no {_name}: update this wrapper")
 wrapper.conf = conf
 wrapper.KNOWN = KNOWN
 
@@ -59,6 +65,11 @@ def check_partition():
     bad += [f"outside issue1282: {k!r}" for k in sorted(set(seen) - whole)]
     if not whole:
         bad.append("issue1282 lists no suites")
+    pinned = wrapper.pinned_expected("issue1282", conf.SLICES)
+    if pinned is not None and len(whole) * conf.TESTS_PER_SUITE != pinned:
+        bad.append(
+            f"{len(whole)} suites of {conf.TESTS_PER_SUITE} tests differ from the {pinned} tests pinned in ts-suite/oracle.json"
+        )
     print(f"directories cover {len(seen)} of {len(whole)} suites of issue1282")
     print("\n".join(bad) or "partition OK")
     return 1 if bad else 0
@@ -74,12 +85,21 @@ def main(argv):
     ap.add_argument("--check-partition", action="store_true")
     ap.add_argument("slices", nargs="*")
     opts = ap.parse_args(mine)
+    for flag, value in DEFAULTS:
+        if not any(a == flag or a.startswith(flag + "=") for a in rest):
+            rest += [flag, value]
     wrapper.configure()
     if opts.check_partition:
         return check_partition()
+    if opts.slices and opts.dirs != ap.get_default("dirs"):
+        print("--dirs and slices are exclusive", file=sys.stderr)
+        return 2
     if opts.slices:
         return wrapper.oracle(["--known", KNOWN, *rest, *opts.slices])
-    dirs = [d.strip() for d in opts.dirs.split(",") if d.strip()]
+    dirs = list(dict.fromkeys(d.strip() for d in opts.dirs.split(",") if d.strip()))
+    if not dirs:
+        print("--dirs names no directory", file=sys.stderr)
+        return 2
     unknown = [d for d in dirs if d not in conf.GROUP_1282]
     if unknown:
         print(
