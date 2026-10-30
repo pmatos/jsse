@@ -270,18 +270,15 @@ class Control(unittest.TestCase):
             tempfile.TemporaryDirectory() as ref,
             tempfile.TemporaryDirectory() as dest,
         ):
-            for n in REFS:
+            extra = [f"c{i}{e}" for i in range(6) for e in (".js", ".types")]
+            for n in [*REFS, *extra]:
                 with open(os.path.join(ref, n), "w") as f:
                     f.write("x\n")
-            chosen = [suite_of("a.ts", "@target: es2015")] * 1
-            others = [suite_of(f"c{i}.ts", None) for i in range(6)]
-            for i in range(6):
-                for e in (".js", ".types"):
-                    with open(os.path.join(ref, f"c{i}{e}"), "w") as f:
-                        f.write("x\n")
-            picked, done = control.make_control(ref, chosen + others, dest)
+            chosen = [suite_of(f"c{i}.ts", None) for i in range(6)]
+            chosen.append(suite_of("a.ts", "@target: es2015"))
+            picked, done = control.make_control(ref, chosen, dest)
             self.assertEqual(len(picked), 7)
-            self.assertTrue(done[-1].endswith(".errors.txt: add"), done)
+            self.assertEqual(done[-1], "a(target=es2015).errors.txt: add")
 
 
 if __name__ == "__main__":
