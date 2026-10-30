@@ -127,8 +127,5 @@ def pinned_expected(spec, table, runner=RUNNER):
     return sum(buckets[d]["passed"] for d in set(names))
 
 
-flat_terms = base.flat_terms
-char_ranges = base.char_ranges
 grep_for = base.grep_for
 batches = base.batches
-js_escape = base.js_escape
