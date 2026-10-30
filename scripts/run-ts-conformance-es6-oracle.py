@@ -42,14 +42,14 @@ def listing(spec):
         code = base.oracle(["--list", *MODULE, spec])
     if code:
         sys.exit(f"cannot list {spec}:\n{out.getvalue()}")
-    return out.getvalue().splitlines()[1:]
+    return out.getvalue().splitlines()
 
 
 def check_partition():
-    whole = listing("es6")
+    head, *whole = listing("es6")
     seen, bad = {}, []
     for chunk in es6.CHUNKS:
-        for suite in listing(chunk):
+        for suite in listing(chunk)[1:]:
             if suite in seen:
                 bad.append(f"{suite!r} is in {seen[suite]} and {chunk}")
             seen[suite] = chunk
@@ -58,6 +58,11 @@ def check_partition():
     bad += [f"outside es6: {s!r}" for s in seen if s not in in_whole]
     if not whole:
         bad.append("es6 lists no suites")
+    want = base.pinned_expected("es6", es6.SLICES)
+    if want is not None and f"({want} tests)" not in head:
+        bad.append(
+            f"ts-suite/oracle.json pins {want} tests for es6, listing says: {head}"
+        )
     print(f"chunks cover {len(seen)} of {len(whole)} suites of es6")
     print("\n".join(bad) or "partition OK")
     return 1 if bad else 0
@@ -70,6 +75,8 @@ def main(argv):
     ap.add_argument("--chunks", default=",".join(es6.CHUNKS))
     ap.add_argument("--check-partition", action="store_true")
     opts = ap.parse_args(mine)
+    if opts.check_partition and (rest or opts.chunks != ap.get_default("chunks")):
+        ap.error("--check-partition takes no --chunks and no oracle options")
     chunks = [c.strip() for c in opts.chunks.split(",") if c.strip()]
     unknown = [c for c in chunks if c not in es6.CHUNKS]
     if unknown:
