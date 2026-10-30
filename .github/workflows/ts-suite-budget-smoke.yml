@@ -68,10 +68,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-
       - name: Check the budget file
-        run: uv run python scripts/run-ts-budget-oracle.py --check-budget
+        run: python3 scripts/run-ts-budget-oracle.py --check-budget
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
@@ -92,9 +90,9 @@ jobs:
           node-version: 24.11.0
 
       - name: Fetch and build the pinned TypeScript tree
-        run: uv run python scripts/run-ts-suite-oracle.py --dir "$RUNNER_TEMP/ts-suite" fetch install build
+        run: python3 scripts/run-ts-suite-oracle.py --dir "$RUNNER_TEMP/ts-suite" fetch install build
 
       - name: Budget smoke cases
         env:
           TS_SRC_DIR: ${{ runner.temp }}/ts-suite/ts-src
-        run: uv run python scripts/run-ts-budget-oracle.py --smoke --require --jsse ./target/release/jsse --timeout 2400
+        run: python3 scripts/run-ts-budget-oracle.py --smoke --require --jsse ./target/release/jsse --timeout 2400
