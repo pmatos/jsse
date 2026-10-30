@@ -25,6 +25,7 @@ import time
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)
 sys.path.insert(0, SCRIPTS)
+import ts_conformance_slices_1275 as conf  # noqa: E402
 import ts_conformance_slices_1279 as group  # noqa: E402
 
 KNOWN = os.path.join(ROOT, "ts-suite", "conformance-1279-known-failures.txt")
@@ -49,14 +50,14 @@ def listing(oracle, spec):
 
 def pinned_mismatches(whole, per_chunk):
     """Six tests per suite must add up to the passing counts ts-suite/oracle.json pins for the three directories."""
-    table = {**group.conf.SLICES, **group.SLICES}
+    table = {**conf.SLICES, **group.SLICES}
     counts = {
         "issue1279": len(whole),
         "statements": sum(len(per_chunk[c]) for c in ("st1", "st2", "st3")),
     }
     bad = []
     for name, suites in counts.items():
-        pin = group.conf.pinned_expected(name, table)
+        pin = conf.pinned_expected(name, table)
         if pin is None or suites * 6 != pin:
             bad.append(f"{name}: {suites} suites x 6 tests differ from the pin {pin}")
     return bad
