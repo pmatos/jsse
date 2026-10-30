@@ -43,7 +43,7 @@ fn node_errors_carry_their_code_in_the_stack_header() {
         r#"try { require("path").join(1); } catch (e) {
   console.log(e.stack.split("\n")[0]);
   console.log(Object.keys(e).join(), e.toString());
-  var s = Object.getOwnPropertySymbols(e).map((k) => k.description + ":" + Object.getOwnPropertyDescriptor(e, k).enumerable);
+  var s = Object.getOwnPropertySymbols(e).map((k) => k.description + ":" + Object.getOwnPropertyDescriptor(e, k).enumerable + ":" + Object.getOwnPropertyDescriptor(e, k).writable);
   console.log(s.join());
 }"#,
     ]);
@@ -55,7 +55,7 @@ fn node_errors_carry_their_code_in_the_stack_header() {
         "TypeError [ERR_INVALID_ARG_TYPE]: The \"path\" argument must be of type string. Received type number (1)"
     );
     assert_eq!(lines[1], format!("code {}", lines[0]));
-    assert_eq!(lines[2], "kIsNodeError:false");
+    assert_eq!(lines[2], "kIsNodeError:false:true");
 }
 
 #[test]
@@ -79,8 +79,7 @@ fn a_missing_module_names_its_code_in_the_header_and_the_user_frames() {
   return import("./nope.mjs");
 }
 try { await load(); } catch (e) {
-  const lines = e.stack.split("\n").filter((l) => !l.includes("node:"));
-  console.log(lines[0].replace(/'[^']*'/g, "'P'").replace(/imported from .*/, "imported from P"));
+  console.log(e.stack.split("\n")[0].replace(/'[^']*'/g, "'P'").replace(/imported from .*/, "imported from P"));
   console.log(e.code, e.name, e instanceof Error);
 }"#,
     )
@@ -102,11 +101,12 @@ fn hereby_stacks_match_node_when_a_typescript_checkout_is_given() {
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = Command::new("python3")
+    let out = Command::new("uv")
+        .args(["run", "python"])
         .arg(root.join("scripts/run-hereby-stacks-oracle.py"))
         .args(["--require", "--jsse", env!("CARGO_BIN_EXE_jsse")])
         .output()
-        .expect("run python3");
+        .expect("run uv");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),

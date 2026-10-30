@@ -40,7 +40,8 @@ function format(...args) {
 }
 
 const codes = {};
-const kIsNodeError = Symbol('kIsNodeError');
+// Registered so scripts/node-v8-error.js finds it for the stack header.
+const kIsNodeError = Symbol.for('kIsNodeError');
 
 function E(code, Base, message) {
   const proto = ObjectCreate(Base.prototype, {
@@ -57,7 +58,7 @@ function E(code, Base, message) {
     const error = new Base();
     ObjectSetPrototypeOf(error, proto);
     error.code = code;
-    ObjectDefineProperty(error, kIsNodeError, { value: true, configurable: true });
+    ObjectDefineProperty(error, kIsNodeError, { value: true, writable: true, configurable: true });
     ObjectDefineProperty(error, 'message', {
       value: typeof message === 'function' ? ReflectApply(message, error, args) : message,
       writable: true,
@@ -80,6 +81,7 @@ class SystemError extends Error {
     if (context.dest !== undefined) message += ` => ${context.dest}`;
     this.code = 'ERR_SYSTEM_ERROR';
     primordials.ObjectDefineProperties(this, {
+      [kIsNodeError]: { value: true, writable: true, configurable: true },
       name: { value: 'SystemError', enumerable: false, writable: true, configurable: true },
       message: { value: message, enumerable: false, writable: true, configurable: true },
       info: { value: context, enumerable: true, configurable: true, writable: false },
@@ -509,6 +511,6 @@ function isErrorStackTraceLimitWritable() {
   return desc.writable !== undefined ? desc.writable : desc.set !== undefined;
 }
 
-module.exports = { AbortError, codes, genericNodeError, isErrorStackTraceLimitWritable, isStackOverflowError };
+module.exports = { AbortError, codes, genericNodeError, isErrorStackTraceLimitWritable, isStackOverflowError, kIsNodeError };
 module.exports.aggregateTwoErrors = aggregateTwoErrors;
 module.exports.E = E;

@@ -17,9 +17,10 @@ that fails prints its message), so the fixtures fail at load:
 - `stack-tla`: after top-level `await` and a timer (`at async` chain).
 - `stack-cjs`: through `createRequire` into a CommonJS module (the `Module._compile` chain is `node:internal`).
 - `stack-cause`, `stack-bad-task` (hereby's own `TypeError`), `stack-not-error` (a thrown plain object),
-  `stack-pty`, `stack-colour`.
+  `stack-pty`, `stack-colour`, and `stack-default-limit` (the `stack-import-throws` fixture through the plain hereby CLI at
+  V8's default limit of 10, no launcher: a canary for what a real invocation prints).
 
-Every case runs through a launcher that sets `Error.stackTraceLimit = 200` and imports hereby, so the different
+Every case but `stack-default-limit` runs through a launcher that sets `Error.stackTraceLimit = 200` and imports hereby, so the different
 number of `node:internal` frames cannot push user frames over the default limit of 10 on one side only.
 
 `ts-suite/hereby-stacks-known-failures.json` maps the cases that still differ to the issue that tracks them. A
@@ -31,11 +32,11 @@ listed case that now agrees, a case that differs and is not listed, or a name th
 | `stack-missing-import`, `stack-missing-package` | the header now matches (`Error [ERR_MODULE_NOT_FOUND]`); an error created inside `import()` shows neither the caller's call position nor the calling async function's frame | #1483 |
 | `stack-syntax`, `stack-missing-export` | parser wording (`Unexpected token '='`) and the link error text and decorated source line | #1484 |
 
-Fixed here: errors made by `node-lib/internal/errors.js` (`E(...)`) now carry Node's `kIsNodeError` marker (an own
-non-enumerable symbol, as in Node) and `scripts/node-v8-error.js` prints their stack header as
+Fixed here: errors made by `node-lib/internal/errors.js` (`E(...)` and `SystemError`) now carry Node's `kIsNodeError` marker (an own
+non-enumerable, writable symbol, registered with `Symbol.for` so the prelude can test `kIsNodeError in error`) and `scripts/node-v8-error.js` prints their stack header as
 `Name [CODE]: message` like Node's `prepareStackTrace`. Errors built by the other host shims
 (`node-fs-support.js`, `node-process-shim.js`, `node-event-loop-shim.js` have their own `nodeError`) keep the plain header.
 
 Guards: `tests/node_hereby_stacks.rs` (header, plain errors, a missing module, and the oracle when `TS_SRC_DIR` is
-set), `scripts/test_run_hereby_stacks_oracle.py` (case table, ratchet, skip behaviour). Result: 14 cases, 9 identical
+set), `scripts/test_run_hereby_stacks_oracle.py` (case table, ratchet, skip behaviour). Result: 15 cases, 10 identical
 to Node v26.8.2 and 5 known failures; the 32 cases of the base hereby oracle still pass.

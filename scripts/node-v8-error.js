@@ -19,7 +19,7 @@
 
   var ErrorCtor = Error;
   var defineProperty = Object.defineProperty;
-  var getOwnPropertySymbols = Object.getOwnPropertySymbols;
+  var kIsNodeError = Symbol.for("kIsNodeError");
   var reflectApply = Reflect.apply;
   var stringCtor = String;
   var RECORD = 5;
@@ -150,11 +150,8 @@
       name = name === undefined ? "Error" : stringCtor(name);
       var message = object.message;
       message = message === undefined ? "" : stringCtor(message);
-      var symbols = getOwnPropertySymbols(object);
-      for (var k = 0; k < symbols.length; k++) {
-        if (symbols[k].description === "kIsNodeError") {
-          return name + " [" + stringCtor(object.code) + "]: " + message;
-        }
+      if (kIsNodeError in object) {
+        return name + " [" + stringCtor(object.code) + "]: " + message;
       }
       if (name === "") return message;
       return message === "" ? name : name + ": " + message;

@@ -37,6 +37,7 @@ CASES = [
     ("stack-not-error", "stack-not-error", [], {}, 0),
     ("stack-missing-import", "stack-missing-import", [], {}, 0),
     ("stack-missing-package", "stack-missing-package", [], {}, 0),
+    ("stack-default-limit", "stack-import-throws", [], {}, 0),
     ("stack-pty", "stack-import-throws", [], {}, 100),
     ("stack-colour", "stack-import-throws", [], {"FORCE_COLOR": "1"}, 0),
     ("stack-native", "stack-native", [], {}, 0),
@@ -54,6 +55,7 @@ def load_base():
     return mod
 
 
+UNLAUNCHED = ("stack-default-limit",)
 LAUNCHER = (
     "Error.stackTraceLimit = 200;\n"
     "process.argv.splice(1, 1);\n"
@@ -64,6 +66,8 @@ LAUNCHER = (
 def run_case(base, case, engine, exe, ts_dir, work, timeout):
     """base.run_case, but through a launcher that lifts Error.stackTraceLimit so that
     the different number of node:internal frames cannot cut user frames off one side."""
+    if case[0] in UNLAUNCHED:
+        return base.run_case(case, engine, exe, ts_dir, work, timeout)
     _, fixture, args, env_extra, cols = case
     cwd = base.prepare(work, engine, case[0], fixture, ts_dir)
     launcher = os.path.join(work, engine, case[0] + "-launcher.mjs")
