@@ -1,0 +1,2 @@
+# Tests of the compiler runner slice M-R (#1272) that pass on Node and fail on jsse --node: full test title, TAB, issue.
+# Maintained with --record (scripts/run-ts-compiler-m-r-oracle.sh --record); a listed test that passes makes the oracle fail.
