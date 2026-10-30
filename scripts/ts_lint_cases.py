@@ -13,6 +13,7 @@ files; node_modules and the rest symlinked) except for `full`, which copies the 
 """
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
 LINT_FLAGS = ["--report-unused-disable-directives", "--max-warnings", "0"]
 SRC = "src/compiler/lintControl.ts"
@@ -185,14 +186,8 @@ def select(names, table):
         elif n == "cheap":
             out += [c for c in table if c.cheap and c not in out]
         else:
-            hit = [c for c in table if c.name == n or _glob(n, c.name)]
+            hit = [c for c in table if c.name == n or fnmatchcase(c.name, n)]
             if not hit:
                 raise SystemExit(f"no case matches {n!r}")
             out += [c for c in hit if c not in out]
     return out
-
-
-def _glob(pattern, name):
-    from fnmatch import fnmatchcase
-
-    return fnmatchcase(name, pattern)

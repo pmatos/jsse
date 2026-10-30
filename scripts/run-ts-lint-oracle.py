@@ -29,6 +29,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import json
@@ -125,8 +126,6 @@ def check_checkout(ts_dir):
 
 
 def copy(src, dst):
-    import subprocess
-
     subprocess.run(["cp", "-a", "--reflink=auto", src, dst], check=True)
 
 
