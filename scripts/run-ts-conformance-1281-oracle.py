@@ -68,17 +68,25 @@ def main(argv):
     cut = argv.index("--") if "--" in argv else len(argv)
     mine, rest = argv[:cut], argv[cut + 1 :]
     ap = argparse.ArgumentParser(description="conformance runner oracle, issue 1281")
-    ap.add_argument("--dirs", default=",".join(conf.GROUP_1281))
+    ap.add_argument(
+        "--dirs", help="comma-separated subset of " + ",".join(conf.GROUP_1281)
+    )
     ap.add_argument("--check-partition", action="store_true")
     ap.add_argument("slices", nargs="*")
     opts = ap.parse_args(mine)
+    if opts.dirs is not None and opts.slices:
+        ap.error("--dirs and slices are mutually exclusive")
+    dirs = [d.strip() for d in (opts.dirs or ",".join(conf.GROUP_1281)).split(",")]
+    unknown = [d for d in dirs if d not in conf.GROUP_1281]
+    if unknown:
+        ap.error(f"unknown --dirs {unknown}; choose from {','.join(conf.GROUP_1281)}")
     if opts.check_partition:
         return check_partition()
     base.configure()
     if opts.slices:
         return base.oracle(["--known", KNOWN, *rest, *opts.slices])
     failed = []
-    for d in [d.strip() for d in opts.dirs.split(",") if d.strip()]:
+    for d in dirs:
         t0 = time.time()
         code = base.oracle(["--known", KNOWN, *rest, f"dir:{d}"])
         print(f"=== {d}: exit {code} in {time.time() - t0:.0f}s wall time", flush=True)
