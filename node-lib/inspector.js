@@ -119,8 +119,12 @@ class Session extends EventEmitter {
       error = e;
     }
     if (callback) {
-      if (error) callback(error);
-      else callback(null, result);
+      try {
+        if (error) callback(error);
+        else callback(null, result);
+      } catch (e) {
+        process.emitWarning(e);
+      }
     }
   }
 
