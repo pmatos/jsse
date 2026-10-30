@@ -54,6 +54,10 @@ def run_oracle(oracle, args):
     try:
         return oracle.main()
     except SystemExit as e:
+        if isinstance(e.code, int) and e.code >= 128:
+            raise
+        if isinstance(e.code, str):
+            print(e.code, file=sys.stderr)
         return e.code if isinstance(e.code, int) else 1
     finally:
         sys.argv = argv
