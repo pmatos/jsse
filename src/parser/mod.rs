@@ -5,6 +5,7 @@ use std::fmt;
 use std::rc::Rc;
 
 mod declarations;
+pub(crate) mod dynamic_function;
 mod expressions;
 pub(crate) mod inferred_names;
 mod modules;
@@ -352,13 +353,7 @@ impl<'a> Parser<'a> {
     }
 
     fn source_since(&self, start: usize) -> Option<SourceText> {
-        let end = self.prev_token_end;
-        if end <= start {
-            return Some(
-                SourceText::new(self.source_text_source.clone(), start, start)
-                    .with_pua_encoded(self.lone_surrogate_stand_ins),
-            );
-        }
+        let end = self.prev_token_end.max(start);
         Some(
             SourceText::new(self.source_text_source.clone(), start, end)
                 .with_pua_encoded(self.lone_surrogate_stand_ins),

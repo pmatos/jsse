@@ -49,6 +49,7 @@ local hook was bypassed.
   - `statements.rs` — Statement parsing
   - `declarations.rs` — Function, class, variable, destructuring parsing
   - `modules.rs` — Module-specific parsing
+  - `dynamic_function.rs` — CreateDynamicFunction's standalone FormalParameters/FunctionBody parse
 - `src/interpreter/` — Tree-walking interpreter
   - `mod.rs` — Interpreter struct, new(), run(), object arena, realm management
   - `types.rs` — Completion, Environment, JsFunction, PropertyDescriptor, JsObjectData, etc.
