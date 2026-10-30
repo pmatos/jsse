@@ -235,14 +235,7 @@ impl Interpreter {
                             "Arguments"
                         } else if ob.callable.is_some() {
                             "Function"
-                        } else if ob.class_name == "Error"
-                            || ob.class_name == "TypeError"
-                            || ob.class_name == "RangeError"
-                            || ob.class_name == "ReferenceError"
-                            || ob.class_name == "SyntaxError"
-                            || ob.class_name == "URIError"
-                            || ob.class_name == "EvalError"
-                        {
+                        } else if super::error_data::has_error_data_slot(ob.class_name) {
                             "Error"
                         } else if ob.class_name == "Boolean" && ob.primitive_value.is_some() {
                             "Boolean"

@@ -1,5 +1,6 @@
 use super::*;
 
+mod body_early_errors;
 mod declarator_list;
 mod patterns;
 
@@ -1115,35 +1116,7 @@ impl<'a> Parser<'a> {
             stmts.push(stmt);
         }
 
-        // §15.2.1: It is a SyntaxError if any BoundName of FormalParameters
-        // also occurs in the LexicallyDeclaredNames of FunctionBody.
-        if let Some(param_names) = saved_param_names {
-            for stmt in &stmts {
-                match stmt {
-                    Statement::Variable(vd)
-                        if matches!(
-                            vd.kind,
-                            crate::ast::VarKind::Let | crate::ast::VarKind::Const
-                        ) =>
-                    {
-                        let mut names = Vec::new();
-                        for decl in &vd.declarations {
-                            decl.pattern.bound_names(&mut names);
-                        }
-                        for name in &names {
-                            if param_names.contains(name) {
-                                return Err(ParseError {
-                                    message: format!(
-                                        "Identifier '{name}' has already been declared"
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        self.check_function_body_declarations(&stmts, saved_param_names)?;
 
         Ok((stmts, has_use_strict_directive))
     }
