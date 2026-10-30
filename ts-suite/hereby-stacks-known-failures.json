@@ -1,0 +1,10 @@
+{
+  "issue": 1251,
+  "known_failures": {
+    "stack-native": "#1482",
+    "stack-missing-import": "#1483",
+    "stack-missing-package": "#1483",
+    "stack-syntax": "#1484",
+    "stack-missing-export": "#1484"
+  }
+}

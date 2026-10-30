@@ -40,6 +40,7 @@ function format(...args) {
 }
 
 const codes = {};
+const kIsNodeError = Symbol('kIsNodeError');
 
 function E(code, Base, message) {
   const proto = ObjectCreate(Base.prototype, {
@@ -56,6 +57,7 @@ function E(code, Base, message) {
     const error = new Base();
     ObjectSetPrototypeOf(error, proto);
     error.code = code;
+    ObjectDefineProperty(error, kIsNodeError, { value: true, configurable: true });
     ObjectDefineProperty(error, 'message', {
       value: typeof message === 'function' ? ReflectApply(message, error, args) : message,
       writable: true,
