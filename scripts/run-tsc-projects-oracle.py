@@ -296,10 +296,13 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
     files.update({p: "<deleted>" for p in before if p not in after})
 
     def joined(parts, moving=(), warnings=False):
-        return "".join(
-            f"--- invocation {i + 1}\n{normalise_stats(norm(p, warnings)) if i < len(moving) and moving[i] else norm(p, warnings)}"
-            for i, p in enumerate(parts)
-        )
+        rows = []
+        for i, p in enumerate(parts):
+            text = norm(p, warnings)
+            if i < len(moving) and moving[i]:
+                text = normalise_stats(text)
+            rows.append(f"--- invocation {i + 1}\n{text}")
+        return "".join(rows)
 
     return {
         "exit": " ".join(codes),

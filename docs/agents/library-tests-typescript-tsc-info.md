@@ -10,10 +10,9 @@ where tsc's output is shaped by more machinery.
 runs the 46 `infm-*` cases of `scripts/tsc-fixtures/cases-info-more.txt` (pinned in `expected-info-more.txt`) on Node and
 `jsse --node` and compares stdout, stderr, exit status and every file the compiler wrote, exactly as for the other case files
 (nothing of the case loader changed: `cases-<topic>.txt` and `expected-<topic>.txt` are picked up by name). Skips without
-`TSC_DIR`. Guards: `tests/node_tsc_info_more.rs` (the case file against its pins, then the cases on jsse alone against the
-pinned Node digests; needs `TSC_DIR`; run it with `--profile release-nolto`),
-`scripts/test_tsc_oracle_norm_1247.py` (case file shape, the normalisers below),
-`tests/node_inspector_callback_throw.rs` (the engine fix below, no `TSC_DIR`).
+`TSC_DIR`. Guards: `tests/node_tsc_projects.rs` (already runs every `cases*.txt` case on jsse alone against the pins, these
+included; needs `TSC_DIR`; run it with `--profile release-nolto`), `scripts/test_tsc_oracle_norm_1247.py` (case file shape,
+the normalisers below), `tests/node_inspector_callback_throw.rs` (the engine fix below, no `TSC_DIR`).
 
 **Trees.** `scripts/tsc-fixtures/projects/info-more` is a bundler-resolution project: `package.json` with `type: module`,
 `imports` (`#internal/*`), `exports` (self reference `info-more/feature`), a package with `typesVersions` (`typed`), a
@@ -84,5 +83,5 @@ makes tsc's own directory-creation loop spin forever on Node and on jsse alike, 
 normalisers above); timing and memory lines match in shape (`@stats`); `tsc` is graceful with the minimal `inspector`
 (a profile is written, an unwritable path is a warning as on Node); the default environment is unchanged (`node-lib/inspector.js`
 is compiled into the binary but reachable only under `--node`, and the oracle edits are Python); the oracle is wired into a
-runnable script and a Rust guard. The contents of a CPU profile (samples) stay a gap by nature of #1373 (no sampling
+runnable script and guards. The contents of a CPU profile (samples) stay a gap by nature of #1373 (no sampling
 profiler) and are compared by shape.
