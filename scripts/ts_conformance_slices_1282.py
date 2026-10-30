@@ -16,7 +16,6 @@ SLICES = {d: f"dir:{d}" for d in GROUP_1282}
 SLICES["issue1282"] = "dir:" + ",".join(GROUP_1282)
 
 PREFIX = base.PREFIX
-SUITE_PREFIX = base.SUITE_PREFIX
 Suite = base.Suite
 suites_from_titles = base.suites_from_titles
 top_dirs = base.top_dirs
