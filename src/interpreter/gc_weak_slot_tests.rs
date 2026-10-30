@@ -78,6 +78,59 @@ fn nested_job_end_does_not_release_the_outer_jobs_kept_objects() {
 }
 
 #[test]
+fn job_scope_keeps_nested_targets_until_the_outermost_return() {
+    let mut interp = Interpreter::new();
+    let result = interp.with_job(|interp| {
+        let nested: Result<(), &str> = interp.with_job(|interp| {
+            run_source(interp, "var nested = new WeakRef({});");
+            Err("early error")?;
+            Ok(())
+        });
+        assert_eq!(nested, Err("early error"));
+        major_gc(interp);
+        run_source(interp, "if (nested.deref() === undefined) throw 1;");
+        37
+    });
+    assert_eq!(result, 37);
+    assert_eq!(interp.job_depth, 0);
+    major_gc(&mut interp);
+    run_source(&mut interp, "if (nested.deref() !== undefined) throw 2;");
+}
+
+#[test]
+fn job_scope_releases_targets_and_preserves_every_completion() {
+    let mut interp = Interpreter::new();
+    let value = JsValue::from_str("payload");
+    for completion in [
+        Completion::Normal(value.clone()),
+        Completion::Return(value.clone()),
+        Completion::Throw(value.clone()),
+        Completion::Break(Some("label".into()), Some(value.clone())),
+        Completion::Continue(None, Some(value.clone())),
+        Completion::Yield(value.clone()),
+        Completion::TailCall {
+            func: value.clone(),
+            this: JsValue::NULL,
+            args: vec![value.clone()],
+        },
+        Completion::Exit(23),
+        Completion::Empty,
+    ] {
+        let expected = format!("{completion:?}");
+        let result = interp.with_job(|interp| {
+            run_source(interp, "var ref = new WeakRef({});");
+            major_gc(interp);
+            run_source(interp, "if (ref.deref() === undefined) throw 1;");
+            completion
+        });
+        assert_eq!(format!("{result:?}"), expected);
+        assert_eq!(interp.job_depth, 0);
+        major_gc(&mut interp);
+        run_source(&mut interp, "if (ref.deref() !== undefined) throw 2;");
+    }
+}
+
+#[test]
 fn registry_runs_its_callback_once_with_the_held_value() {
     let mut interp = Interpreter::new();
     run_source(

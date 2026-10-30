@@ -60,6 +60,7 @@ pub(crate) use hoist_cache::{HoistAnalysis, HoistCache};
 mod hoisting;
 pub(crate) mod ic;
 pub(crate) mod ic_store;
+mod job;
 pub(crate) mod key_intern;
 mod keyed_entries;
 pub(crate) mod literal_frame;
@@ -341,7 +342,7 @@ pub(crate) struct Interpreter {
     // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
     gc_marks: Vec<bool>,
     /// [[KeptAlive]] (ECMA-262 §9.10.3): objects a WeakRef saw during the
-    /// running job; GC roots until `finish_job` ends the outermost one.
+    /// running job; GC roots until the outermost `with_job` returns.
     pub(crate) kept_alive: rustc_hash::FxHashSet<u64>,
     /// Running jobs (program run, promise job, timer or loop callback).
     pub(crate) job_depth: u32,
@@ -2027,44 +2028,6 @@ impl Interpreter {
         JsValue::string(exact_key.to_js_string())
     }
 
-    pub(crate) fn run(&mut self, program: &Program) -> Completion {
-        let depth = self.gc_root_frame();
-        let result = self.run_program(program);
-        self.gc_assert_root_depth(depth, "a program run");
-        result
-    }
-
-    fn run_program(&mut self, program: &Program) -> Completion {
-        self.gc_safepoint();
-        self.begin_job();
-        let result = match program.source_type {
-            SourceType::Script => {
-                let global = self.realm().global_env.clone();
-                if program.body_is_strict {
-                    global.borrow_mut().strict = true;
-                }
-                self.exec_framed(&program.body, &global)
-            }
-            SourceType::Module => self.run_module(program, None),
-        };
-        // A top-level `__host_exit` (issue #242) latches its code into the
-        // terminal `pending_exit` sink (read by `main`) and skips draining —
-        // `drain_microtasks_until_idle` early-returns while the sink is set.
-        if let Completion::Exit(code) = &result {
-            self.pending_exit = Some(*code);
-        }
-        self.finish_job();
-        self.drain_after_run(&result);
-        result
-    }
-
-    pub(crate) fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
-        let depth = self.gc_root_frame();
-        let result = self.run_program_with_path(program, path);
-        self.gc_assert_root_depth(depth, "a program run");
-        result
-    }
-
     /// Run synchronous work under a Module Key, restoring the caller's key on
     /// every returned completion. Queued jobs carry their own module identity;
     /// callers that drain jobs under this key keep the drain inside `body`.
@@ -2077,44 +2040,6 @@ impl Interpreter {
         let result = body(self);
         self.current_module_path = previous;
         result
-    }
-
-    fn run_program_with_path(&mut self, program: &Program, path: &Path) -> Completion {
-        self.gc_safepoint();
-        match program.source_type {
-            SourceType::Script => {
-                self.with_module_key(Some(ModuleKey::for_file(path.to_path_buf())), |interp| {
-                    let global = interp.realm().global_env.clone();
-                    if program.body_is_strict {
-                        global.borrow_mut().strict = true;
-                    }
-                    interp.begin_job();
-                    let r = interp.exec_script_body(&program.body, &global);
-                    // A top-level `__host_exit` (issue #242) latches its code (read
-                    // by `main`) so draining is skipped.
-                    if let Completion::Exit(code) = &r {
-                        interp.pending_exit = Some(*code);
-                    }
-                    interp.finish_job();
-                    // Async callbacks need the file's key for relative imports.
-                    interp.drain_after_run(&r);
-                    r
-                })
-            }
-            SourceType::Module => {
-                let module_key = ModuleKey::for_file(path.to_path_buf());
-                self.begin_job();
-                self.node_esm_enter_main(&module_key);
-                let r = self.run_module(program, Some(module_key.clone()));
-                if let Completion::Exit(code) = &r {
-                    self.pending_exit = Some(*code);
-                }
-                self.finish_job();
-                // Keep path set during microtask draining so async callbacks can use relative imports
-                self.with_module_key(Some(module_key), |interp| interp.drain_after_run(&r));
-                r
-            }
-        }
     }
 
     pub(crate) fn module_registry_get(&self, key: &ModuleKey) -> Option<Rc<RefCell<LoadedModule>>> {
@@ -4817,32 +4742,6 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         }
-    }
-
-    /// Runs one dequeued job with the values it keeps alive rooted for its
-    /// duration. Once off the queue the job's own values are reachable from
-    /// nowhere else.
-    pub(crate) fn run_microtask(&mut self, task: scheduler::Microtask) -> Completion {
-        use scheduler::Microtask;
-        let frame = self.gc_root_frame();
-        task.for_each_root(|value| self.gc_root_value(value));
-        let rooted_depth = self.gc_root_frame();
-        self.begin_job();
-        let result = match task {
-            Microtask::Closure { job, .. } => job(self),
-            Microtask::Reaction { reaction, argument } => {
-                self.node_run_reaction_job(reaction, argument)
-            }
-            Microtask::ResolveThenable {
-                promise_id,
-                thenable,
-                then_fn,
-            } => self.run_promise_resolve_thenable_job(promise_id, thenable, then_fn),
-        };
-        self.finish_job();
-        self.gc_assert_root_depth(rooted_depth, "a microtask job");
-        self.gc_unroot_frame(frame);
-        result
     }
 
     pub(crate) fn drain_microtasks(&mut self) {
