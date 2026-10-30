@@ -39,6 +39,24 @@ fn parse_dynamic_function_source(
     parser::Parser::for_source(source, pua).and_then(|mut p| p.parse_program())
 }
 
+fn check_dynamic_parts(
+    interp: &mut Interpreter,
+    params: &str,
+    body: &str,
+    pua: bool,
+    is_generator: bool,
+    is_async: bool,
+) -> Result<(), JsValue> {
+    parser::dynamic_function::check_dynamic_function_parts(
+        params,
+        body,
+        pua,
+        is_generator,
+        is_async,
+    )
+    .map_err(|e| interp.create_error("SyntaxError", &format!("{}", e)))
+}
+
 impl Interpreter {
     pub(super) fn setup_function_constructors(&mut self) {
         self.setup_eval();
@@ -104,27 +122,10 @@ impl Interpreter {
                     // Per spec §20.2.1.1: parse parameters and body independently
                     // to reject cases like Function("/*", "*/) {") where a comment
                     // spans the parameter/body boundary.
-                    if !params_str.is_empty() {
-                        let params_test = format!("(function({}\n) {{}})", params_str);
-                        match parse_dynamic_function_source(&params_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
-                    }
+                    if let Err(e) =
+                        check_dynamic_parts(interp, &params_str, &body_str, pua, false, false)
                     {
-                        let body_test = format!("(function() {{\n{}\n}})", body_str);
-                        match parse_dynamic_function_source(&body_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
+                        return Completion::Throw(e);
                     }
 
                     let fn_source_text =
@@ -651,27 +652,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    if !params_str.is_empty() {
-                        let params_test = format!("(async function({}\n) {{}})", params_str);
-                        match parse_dynamic_function_source(&params_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
-                    }
+                    if let Err(e) =
+                        check_dynamic_parts(interp, &params_str, &body_str, pua, false, true)
                     {
-                        let body_test = format!("(async function() {{\n{}\n}})", body_str);
-                        match parse_dynamic_function_source(&body_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
+                        return Completion::Throw(e);
                     }
 
                     let fn_source_text = format!(
@@ -783,27 +767,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    if !params_str.is_empty() {
-                        let params_test = format!("(function*({}\n) {{}})", params_str);
-                        match parse_dynamic_function_source(&params_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
-                    }
+                    if let Err(e) =
+                        check_dynamic_parts(interp, &params_str, &body_str, pua, true, false)
                     {
-                        let body_test = format!("(function*() {{\n{}\n}})", body_str);
-                        match parse_dynamic_function_source(&body_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
+                        return Completion::Throw(e);
                     }
 
                     let fn_source_text =
@@ -913,27 +880,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    if !params_str.is_empty() {
-                        let params_test = format!("(async function*({}\n) {{}})", params_str);
-                        match parse_dynamic_function_source(&params_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
-                    }
+                    if let Err(e) =
+                        check_dynamic_parts(interp, &params_str, &body_str, pua, true, true)
                     {
-                        let body_test = format!("(async function*() {{\n{}\n}})", body_str);
-                        match parse_dynamic_function_source(&body_test, pua) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Completion::Throw(
-                                    interp.create_error("SyntaxError", &format!("{}", e)),
-                                );
-                            }
-                        }
+                        return Completion::Throw(e);
                     }
 
                     let fn_source_text = format!(
