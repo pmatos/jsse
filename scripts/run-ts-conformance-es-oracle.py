@@ -55,7 +55,8 @@ def check_partition(oracle):
                 bad.append(f"{suite!r} is in {seen[suite]} and {chunk}")
             seen[suite] = chunk
     bad += [f"not in any chunk: {s!r}" for s in whole if s not in seen]
-    bad += [f"outside issue1278: {s!r}" for s in seen if s not in set(whole)]
+    in_whole = set(whole)
+    bad += [f"outside issue1278: {s!r}" for s in seen if s not in in_whole]
     if not whole:
         bad.append("issue1278 lists no suites")
     print(f"chunks cover {len(seen)} of {len(whole)} suites of issue1278")
