@@ -4,7 +4,7 @@ Part of the TypeScript-on-jsse epic (#1214); the other TypeScript oracles are li
 [library-tests-typescript.md](library-tests-typescript.md). Design and measurements:
 `docs/adr/2026-10-30-1000-node-host-hereby-lint.md`.
 
-`TS_SRC_DIR=<TypeScript v6.0.3 checkout, npm ci and generated diagnostics> uv run python scripts/run-ts-lint-oracle.py [--jobs N (at most 4)] [--jsse BIN] [--work DIR] [--list] [--require] [--ci] [case ...]`
+`TS_SRC_DIR=<TypeScript v6.0.3 checkout, npm ci and generated diagnostics> uv run python scripts/run-ts-lint-oracle.py [--jobs N (at most 4)] [--jsse BIN] [--work DIR] [--list] [--require] [case ...]`
 
 `hereby lint` is `node node_modules/eslint/bin/eslint --cache --cache-location ./.eslintcache
 --report-unused-disable-directives --max-warnings 0 .` (ESLint 10, typescript-eslint, the regexp plugin and the

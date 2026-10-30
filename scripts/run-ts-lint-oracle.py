@@ -19,7 +19,7 @@ and takes about 45 s on Node and over an hour on jsse; name it to run it. Node m
 ts-suite/lint-known-failures.txt (`case<TAB>issue`); a listed case that now matches fails the run.
 
 Options: --jobs N (default 4, at most 4), --timeout SECONDS (per step, default 7200), --jsse PATH (else $JSSE, else
-target/release/jsse), --known FILE, --work DIR (kept), --list, --require, --ci, --verbose, --no-jsse.
+target/release/jsse), --known FILE, --work DIR (kept), --list, --require, --verbose, --no-jsse.
 Cases: names, globs, `cheap`, `all`.
 """
 
@@ -51,7 +51,6 @@ DROP_ENV = (
     "CI",
 )
 LINKED = ("node_modules", "tests", "built", "lib", ".git")
-UNWATCHED = ("node_modules", "tests", "built", "lib", ".git")
 FIXED_MTIME = 1700000000
 DURATION = re.compile(r"(?<= in )\d[\d.]*(?:ms|s|m|h|d)(?: \d[\d.]*(?:ms|s|m|h|d))*")
 EXEC_LINE = re.compile(r"^> \S+ ")
@@ -70,6 +69,8 @@ def normalise(text, tree, exe):
     """Make the text of two engines comparable: tree paths, durations, the interpreter, cache mtimes."""
     for old in tree_spellings(tree):
         text = text.replace(old, "<TREE>")
+    for name in {exe, os.path.realpath(exe)}:
+        text = text.replace(name, "<EXEC>")
     out = []
     for line in text.splitlines():
         line = DURATION.sub("<T>", line)
@@ -133,9 +134,6 @@ def make_tree(ts_dir, tree, case):
     """The case's private tree: the whole checkout, or its sources with the heavy directories linked."""
     if case.full:
         copy(ts_dir, tree)
-        cache = os.path.join(tree, ".eslintcache")
-        if os.path.exists(cache):
-            os.remove(cache)
     else:
         os.makedirs(tree)
         for name in sorted(os.listdir(ts_dir)):
@@ -146,6 +144,9 @@ def make_tree(ts_dir, tree, case):
                 os.symlink(src, dst)
             else:
                 copy(src, dst)
+    cache = os.path.join(tree, ".eslintcache")
+    if os.path.exists(cache):
+        os.remove(cache)
     for rel in case.controls:
         dst = os.path.join(tree, rel)
         shutil.copyfile(os.path.join(FIXTURES, lc.FIXTURES[rel]), dst)
@@ -156,7 +157,7 @@ def snapshot(tree):
     """{relative path: sha256} of the tree's own files (linked or heavy directories left out)."""
     files = {}
     for dirpath, dirs, names in os.walk(tree):
-        dirs[:] = sorted(d for d in dirs if not (dirpath == tree and d in UNWATCHED))
+        dirs[:] = sorted(d for d in dirs if not (dirpath == tree and d in LINKED))
         for n in names:
             full = os.path.join(dirpath, n)
             if os.path.islink(full):
@@ -310,7 +311,6 @@ def main():
     ap.add_argument("--work")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--require", action="store_true")
-    ap.add_argument("--ci", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--no-jsse", action="store_true")
     o = ap.parse_args()
@@ -366,7 +366,10 @@ def main():
 
     def go(task):
         c, e, x = task
-        r = run_case(c, e, x, ts_dir, work, o.timeout)
+        try:
+            r = run_case(c, e, x, ts_dir, work, o.timeout)
+        except Exception as exc:
+            r = {"error": f"{type(exc).__name__}: {exc}"}
         if o.verbose:
             print(f"  done {c.name} on {e}", flush=True)
         return (c.name, e), r
@@ -375,7 +378,14 @@ def main():
         results = dict(pool.map(go, tasks))
     bad = 0
     for c in chosen:
-        if o.no_jsse:
+        errors = [
+            f"{e} run crashed: {results[(c.name, e)]['error']}"
+            for e, _ in engines
+            if "error" in results[(c.name, e)]
+        ]
+        if errors:
+            status, lines = "FAIL", errors
+        elif o.no_jsse:
             problems = check_must(c, results[(c.name, "node")])
             status, lines = ("FAIL", problems) if problems else ("PASS", [])
         else:
