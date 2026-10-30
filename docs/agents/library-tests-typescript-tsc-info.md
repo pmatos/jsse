@@ -56,13 +56,22 @@ trace and exit 1 on jsse. `node-lib/inspector.js` now does the same as Node; `in
 
 **Harness changes (added lines in `scripts/tsc_oracle_norm.py` and `scripts/run-tsc-projects-oracle.py`).**
 - `@stats` handled labels without a hyphen only; `Up-to-date check time:` of `--build --extendedDiagnostics` kept the width of
-  its padding, so it differed between engines. Hyphenated labels are normalised too (counts still compared).
+  its padding, so it differed between engines. Hyphens inside a label are normalised too (counts still compared; a line that
+  starts with a hyphen is not a statistic).
 - `tsc -b --generateTrace` writes `trace.<pid>-<n>.json`, `types.<pid>-<n>.json` and a `legend.json` naming them: the process
-  id in file names and in `legend.json` is `<PID>` (the project counter `<n>` stays).
-- `--explainFiles` and `--listFiles` print library files relative to the working directory, which depends on where `TSC_DIR`
-  is; that relative path is `<TSC>` like the absolute one, and `(node:NNN)` in a process warning is `(node:<PID>)`.
-- The CPU profile shape no longer requires non-negative `timeDeltas`: V8 emits a slightly negative delta now and then (seen
-  on Node in `infm-b-generate`), so Node itself was not stable against the check. They must still be numbers.
+  id in file names and in `legend.json` is `<PID>` (the project counter `<n>` stays). Two files that normalise to the same
+  name stop the run instead of one hiding the other.
+- `--explainFiles`, `--traceResolution` and `.tsbuildinfo` files print library paths relative to the directory they are written
+  for (the work tree, or a project below it), which depends on where `TSC_DIR` is. `../../<path below the common ancestor>` is
+  now `<TSC>` like the absolute path. Before, the pins of the cases that print such a path were valid only where they were made.
+- `(node:NNN)` in a process warning on stderr is `(node:<PID>)`.
+- The CPU profile shape requires `timeDeltas` to be numbers, no longer non-negative: V8 emits a slightly negative delta now
+  and then (seen on Node in `infm-b-generate`), so Node itself was not stable against the check. The shape label says "deltas
+  are numbers".
+- **21 existing pins** (`expected-build.txt` 13, `expected-emit-options.txt` 2, `expected-projects.txt` 3,
+  `expected-info.txt` 3: `build-*`, `incremental*`, `emit-composite`, `emit-incremental`, `explain-files`, `trace-resolution`,
+  `info-cpuprofile*`) changed digest with these normalisers and were re-pinned from Node (`--pin <names>`); all 413 cases
+  match the pins with Node standing in for jsse, with `TSC_DIR` at two different paths.
 
 **Known differences** (`scripts/tsc-fixtures/known-differences-1247.txt`, issue per row, no case exercises them):
 the profile has no samples (#1373), the top-level and `at-async` stack frames of an uncaught error (#1368, #1379), and, filed

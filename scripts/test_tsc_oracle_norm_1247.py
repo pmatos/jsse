@@ -38,6 +38,10 @@ class NormaliserTest(unittest.TestCase):
             norm.normalise_stats(a), norm.normalise_stats("Up-to-date checks: 4\n")
         )
 
+    def test_only_hyphens_inside_a_label_are_statistics(self):
+        for text in ("- foo: 3\n", "--flag:   12\n", "foo-: 3\n"):
+            self.assertEqual(norm.normalise_stats(text), text)
+
     def test_build_trace_names_lose_the_process_id(self):
         self.assertEqual(
             norm.normalise_name("tr/trace.2295619-1.json"), "tr/trace.<PID>-1.json"

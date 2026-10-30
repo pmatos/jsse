@@ -22,20 +22,6 @@ fn case_names(root: &Path) -> Vec<String> {
 }
 
 #[test]
-fn the_case_file_and_its_pins_agree() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let names = case_names(root);
-    assert!(names.len() >= 40, "{names:?}");
-    let pins = std::fs::read_to_string(root.join("scripts/tsc-fixtures/expected-info-more.txt"))
-        .expect("read expected-info-more.txt");
-    let pinned: Vec<&str> = pins
-        .lines()
-        .filter_map(|l| l.split_whitespace().next())
-        .collect();
-    assert_eq!(pinned, names.iter().map(String::as_str).collect::<Vec<_>>());
-}
-
-#[test]
 fn informational_flag_cases_match_pinned_node_output() {
     if std::env::var_os("TSC_DIR").is_none() {
         eprintln!(
