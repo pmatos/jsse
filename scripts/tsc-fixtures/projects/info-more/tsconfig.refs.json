@@ -1,0 +1,5 @@
+{
+  "compilerOptions": { "noLib": true, "module": "commonjs", "types": [] },
+  "files": ["globals.d.ts", "app/use.ts"],
+  "references": [{ "path": "./tsconfig.comp.json" }]
+}

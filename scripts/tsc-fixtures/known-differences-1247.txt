@@ -1,0 +1,5 @@
+# difference<TAB>issue<TAB>how the oracle treats it (#1247). Cases do not exercise these; a fix removes the row.
+--generateCpuProfile writes a profile without samples (jsse has no sampling profiler and no V8 inspector)	#1373	info-cpuprofile* and infm-cpuprofile-* compare the profile by shape (tsc_oracle_norm.normalise_profile)
+stack of an uncaught tsc error lacks the module top-level frame and at-async frames	#1368	no case reaches an uncaught error; see #1487 for the case that did
+stack frames lack arrow receiver names, inferred member names and V8 error key order	#1379	same
+uncaught error raised inside a node: builtin lacks Node's source-line header, and builtin frames print as <anonymous>:L:C	#1487	no case reaches an uncaught error; the infm-trace-file-exists case that did was dropped

@@ -138,7 +138,7 @@ class ProfileTest(unittest.TestCase):
         )
         for bad in (
             self.profile(samples=[9], deltas=[1]),
-            self.profile(samples=[2], deltas=[-1]),
+            self.profile(samples=[2], deltas=["1"]),
             self.profile({"children": [7]}),
             self.profile({"hitCount": "3"}),
         ):

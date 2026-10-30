@@ -1,0 +1,7 @@
+{
+  "name": "info-more",
+  "version": "1.0.0",
+  "type": "module",
+  "imports": { "#internal/*": "./src/internal/*.ts" },
+  "exports": { "./feature": "./src/feature.ts" }
+}

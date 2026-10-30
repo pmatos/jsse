@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "noLib": true,
+    "module": "amd",
+    "ignoreDeprecations": "6.0",
+    "rootDir": ".",
+    "outFile": "out/bundle.js",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "types": []
+  },
+  "files": ["globals.d.ts", "src/internal/helper.ts", "src/legacy.ts"]
+}
