@@ -19,7 +19,7 @@ engine, builds on Node and on `jsse --node`, then
 Without TS_SRC_DIR (or with another TypeScript version) it prints SKIP and exits 0 unless --require is given.
 Exits 1 on any difference. Options: --jsse PATH (else $JSSE, else target/release/jsse), --work DIR (kept),
 --timeout SECONDS per build (default 7200), --list-timeout SECONDS per listing (default 1800),
---variants typecheck,no-typecheck, --runners a,b, --jobs N (at most 4, listings in parallel), --skip-list, --require,
+--variants typecheck,no-typecheck, --runners a,b, --skip-list, --require,
 --ci.
 """
 
@@ -56,14 +56,16 @@ RUNNERS = (
     "fourslash-generated",
     "transpile",
 )
-MAX_JOBS = 4
 RUN_JS = os.path.join("built", "local", "run.js")
 
 
+def launch(engine, exe):
+    return [exe] + (["--node"] if engine == "jsse" else [])
+
+
 def hereby_argv(engine, exe, flags):
-    launch = [exe] + (["--node"] if engine == "jsse" else [])
     return (
-        launch
+        launch(engine, exe)
         + [
             os.path.join("node_modules", "hereby", "bin", "hereby.js"),
             "tests",
@@ -91,8 +93,7 @@ def hereby_tests(engine, exe, tree, flags, timeout):
 
 
 def list_argv(engine, exe):
-    launch = [exe] + (["--node"] if engine == "jsse" else [])
-    return launch + [
+    return launch(engine, exe) + [
         os.path.join("node_modules", "mocha", "bin", "_mocha"),
         "--dry-run",
         "--reporter=tap",
@@ -191,7 +192,7 @@ def compare_builds(name, engines, trees, results):
     return problems
 
 
-def compare_listings(name, engines, trees, runners, jobs, timeout):
+def compare_listings(name, engines, trees, runners, timeout):
     """List every runner's tests; return (problems, rows for the report)."""
     exes = dict(engines)
     # (bundle built on, engine that lists it); the first is the reference
@@ -213,7 +214,7 @@ def compare_listings(name, engines, trees, runners, jobs, timeout):
     def run_tree(built_on):
         return [one(t) for t in by_tree[built_on]]
 
-    with ThreadPoolExecutor(max_workers=min(jobs, len(by_tree))) as pool:
+    with ThreadPoolExecutor(max_workers=len(by_tree)) as pool:
         for batch in pool.map(run_tree, list(by_tree)):
             for task, res in batch:
                 results[task] = res
@@ -257,7 +258,6 @@ def main():
     ap.add_argument("--list-timeout", type=int, default=1800)
     ap.add_argument("--variants", default=",".join(VARIANTS))
     ap.add_argument("--runners", default=",".join(RUNNERS))
-    ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--skip-list", action="store_true")
     ap.add_argument("--require", action="store_true")
     ap.add_argument("--ci", action="store_true")
@@ -288,7 +288,6 @@ def main():
         if r not in RUNNERS:
             print(f"unknown runner {r}; one of {', '.join(RUNNERS)}", file=sys.stderr)
             return 1
-    jobs = max(1, min(o.jobs, MAX_JOBS))
     jsse = os.path.abspath(
         o.jsse
         or os.environ.get("JSSE")
@@ -324,11 +323,11 @@ def main():
         if found or o.skip_list:
             continue
         print(f"  [{name}] listing tests of {', '.join(runners)} ...", flush=True)
-        more, table = compare_listings(
-            name, engines, trees, runners, jobs, o.list_timeout
-        )
+        more, table = compare_listings(name, engines, trees, runners, o.list_timeout)
         problems += more
         rows += table
+        if not o.work and not found and not more:
+            shutil.rmtree(os.path.join(work, name), ignore_errors=True)
 
     print(f"\n{'variant':<14}{'node s':>10}{'jsse s':>10}")
     for name, a, b in times:
@@ -342,7 +341,11 @@ def main():
     if problems:
         for p in problems:
             print(
-                ("::error title=hereby tests oracle::" if o.ci else "") + p,
+                (
+                    "::error title=hereby tests oracle::" + p.replace("\n", "%0A")
+                    if o.ci
+                    else p
+                ),
                 file=sys.stderr,
             )
         print(
