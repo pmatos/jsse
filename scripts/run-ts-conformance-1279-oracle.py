@@ -47,6 +47,21 @@ def listing(oracle, spec):
     return buf.getvalue().splitlines()[1:]
 
 
+def pinned_mismatches(oracle, whole):
+    """Six tests per suite must add up to the passing counts ts-suite/oracle.json pins for the three directories."""
+    table = {**group.conf.SLICES, **group.SLICES}
+    counts = {
+        "issue1279": len(whole),
+        "statements": sum(len(listing(oracle, c)) for c in ("st1", "st2", "st3")),
+    }
+    bad = []
+    for name, suites in counts.items():
+        pin = group.conf.pinned_expected(name, table)
+        if pin is None or suites * 6 != pin:
+            bad.append(f"{name}: {suites} suites x 6 tests differ from the pin {pin}")
+    return bad
+
+
 def check_partition(oracle):
     whole = listing(oracle, "issue1279")
     seen, bad = {}, []
@@ -60,6 +75,7 @@ def check_partition(oracle):
     bad += [f"outside issue1279: {s!r}" for s in seen if s not in in_whole]
     if not whole:
         bad.append("issue1279 lists no suites")
+    bad += pinned_mismatches(oracle, whole)
     print(f"chunks cover {len(seen)} of {len(whole)} suites of issue1279")
     print("\n".join(bad) or "partition OK")
     return 1 if bad else 0
