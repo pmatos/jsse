@@ -1,0 +1,2 @@
+# Cases of scripts/run-ts-lint-oracle.py that differ between Node and jsse --node: case name, TAB, issue.
+# A listed case that matches Node fails the run (ratchet). Empty: every case matches.
