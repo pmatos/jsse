@@ -7,6 +7,8 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import ts_conformance_slices_1275 as conf  # noqa: E402
 import ts_conformance_slices_1278 as group  # noqa: E402
 
+TABLE = {**conf.SLICES, **group.SLICES}
+
 ITS = [
     "Correct errors",
     "Correct module resolution tracing",
@@ -44,9 +46,7 @@ def suites():
 
 
 def bases(spec):
-    return [
-        s.base for s in conf.select(spec, suites(), {**conf.SLICES, **group.SLICES})
-    ]
+    return [s.base for s in conf.select(spec, suites(), TABLE)]
 
 
 class Slices(unittest.TestCase):
@@ -66,16 +66,10 @@ class Slices(unittest.TestCase):
         )
 
     def test_chunks_partition_the_group(self):
-        whole = [
-            s.key
-            for s in conf.select("issue1278", suites(), {**conf.SLICES, **group.SLICES})
-        ]
+        whole = [s.key for s in conf.select("issue1278", suites(), TABLE)]
         seen = []
         for name in group.CHUNKS:
-            seen += [
-                s.key
-                for s in conf.select(name, suites(), {**conf.SLICES, **group.SLICES})
-            ]
+            seen += [s.key for s in conf.select(name, suites(), TABLE)]
         self.assertEqual(sorted(seen), sorted(whole))
         self.assertEqual(len(seen), len(set(seen)))
 
@@ -84,12 +78,11 @@ class Slices(unittest.TestCase):
         self.assertEqual(sorted(named), sorted(group.GROUP_1278))
 
     def test_pinned_counts_come_from_the_oracle_json(self):
-        table = {**conf.SLICES, **group.SLICES}
-        self.assertEqual(conf.pinned_expected("issue1278", table), 1356)
+        self.assertEqual(conf.pinned_expected("issue1278", TABLE), 1356)
         self.assertEqual(
-            [conf.pinned_expected(c, table) for c in group.CHUNKS], [414, 294, 444, 204]
+            [conf.pinned_expected(c, TABLE) for c in group.CHUNKS], [414, 294, 444, 204]
         )
-        self.assertEqual(conf.pinned_expected("es7", table), 402)
+        self.assertEqual(conf.pinned_expected("es7", TABLE), 402)
 
 
 if __name__ == "__main__":
