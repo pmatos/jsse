@@ -7,6 +7,7 @@ mod collections;
 mod date;
 mod disposable;
 mod dynamic_source;
+mod error_data;
 mod errors;
 mod find_via_predicate;
 mod function;

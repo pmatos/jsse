@@ -206,6 +206,26 @@ class OracleTest(unittest.TestCase):
         known = oracle.load_known(oracle.KNOWN)
         self.assertIsInstance(known, dict)
 
+    def test_the_a_c_slice_has_an_empty_known_failures_file(self):
+        path = os.path.join(oracle.ROOT, "ts-suite", "fourslash-known-failures-a-c.txt")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(oracle.load_known(path), {})
+
+    def test_the_d_g_slice_has_an_empty_known_failures_file(self):
+        path = os.path.join(oracle.ROOT, "ts-suite", "fourslash-known-failures-d-g.txt")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(oracle.load_known(path), {})
+
+    def test_the_h_m_slice_known_failures_file_exists_and_parses(self):
+        path = os.path.join(oracle.ROOT, "ts-suite", "fourslash-known-failures-h-m.txt")
+        self.assertTrue(os.path.exists(path))
+        self.assertIsInstance(oracle.load_known(path), dict)
+
+    def test_the_n_r_slice_has_an_empty_known_failures_file(self):
+        path = os.path.join(oracle.ROOT, "ts-suite", "fourslash-known-failures-n-r.txt")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(oracle.load_known(path), {})
+
     def test_the_s_z_slice_has_an_empty_known_failures_file(self):
         path = os.path.join(oracle.ROOT, "ts-suite", "fourslash-known-failures-s-z.txt")
         self.assertTrue(os.path.exists(path))
