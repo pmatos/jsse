@@ -211,6 +211,11 @@ class OracleTest(unittest.TestCase):
         self.assertTrue(os.path.exists(path))
         self.assertEqual(oracle.load_known(path), {})
 
+    def test_the_d_g_slice_has_an_empty_known_failures_file(self):
+        path = os.path.join(oracle.ROOT, "ts-suite", "fourslash-known-failures-d-g.txt")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(oracle.load_known(path), {})
+
     def test_checkout_problem_without_a_checkout(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertIn(
