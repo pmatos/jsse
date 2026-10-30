@@ -20,7 +20,7 @@ spec.loader.exec_module(oracle)
 
 def run(passed=("a", "b"), failed=(), secs=1.0, rss=100.0, local=()):
     return {
-        "exit": "0",
+        "exit": str(len(failed)),
         "seconds": secs,
         "rss_mb": rss,
         "summary": (list(passed), list(failed), 0),
@@ -50,6 +50,15 @@ class CompareTest(unittest.TestCase):
         self.assertTrue(check.compare("c", run(passed=()), run(passed=()), set()))
         self.assertTrue(check.compare("c", run(failed=("x",)), run(), set()))
         self.assertTrue(check.compare("c", run(local=("f",)), run(), set()))
+
+    def test_the_exit_status_must_match_the_failures_the_report_lists(self):
+        crashed = run()
+        crashed["exit"] = "134"
+        lines = check.compare("c", run(), crashed, set())
+        self.assertIn("jsse exited 134", lines[0])
+        timed_out = run(failed=("b",))
+        timed_out["exit"] = "timeout"
+        self.assertTrue(check.compare("c", run(), timed_out, {"b"}))
 
     def test_a_missing_report_is_reported_with_the_output(self):
         broken = run()
@@ -105,6 +114,15 @@ class ShippedBudgetTest(unittest.TestCase):
             re.compile(grep)
         self.assertTrue(cases.SMOKE)
         self.assertLess(len(cases.SMOKE), len(cases.CASES))
+
+    def test_smoke_and_named_cases_are_exclusive(self):
+        out = subprocess.run(
+            [sys.executable, str(ORACLE), "--smoke", "services"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("not both", out.stderr)
 
     def test_check_budget_flag_needs_no_checkout(self):
         out = subprocess.run(

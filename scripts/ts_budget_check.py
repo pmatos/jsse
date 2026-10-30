@@ -16,7 +16,8 @@ def run_measured(argv, cwd, env, timeout):
     """Run argv as the leader of its own session; return (exit code or 'timeout', output, seconds, peak RSS MiB).
 
     The peak is the `ru_maxrss` that wait4 reports for the child and every descendant it reaped, so it is the
-    largest single process of the tree. The whole group is killed when the run ends, times out, or the oracle
+    largest single process of the tree. (Linux folds the high-water mark of the mm a vfork child borrowed, the
+    driver's, into the child's at exec; the driver stays far below the smallest measured process.) The whole group is killed when the run ends, times out, or the oracle
     is interrupted (scripts/oracle_procs.py).
     """
     with tempfile.TemporaryFile() as out:
@@ -82,19 +83,25 @@ def compare(case, node, jsse, known):
         return lines
     n_pass, n_fail, _ = node["summary"]
     j_pass, j_fail, _ = jsse["summary"]
+    for label, run, failed in (("Node", node, n_fail), ("jsse", jsse, j_fail)):
+        if run["exit"] != str(min(len(failed), 255)):
+            lines.append(
+                f"{case}: {label} exited {run['exit']} with {len(failed)} failing test(s):\n{run['tail']}"
+            )
     if n_fail:
         lines.append(f"{case}: {len(n_fail)} test(s) fail on Node, e.g. {n_fail[0]}")
     if not n_pass:
         lines.append(
             f"{case}: Node ran no passing test (the selection matches nothing)"
         )
-    gone = sorted(set(n_pass) - set(j_pass))
+    j_set = set(j_pass)
+    gone = sorted(set(n_pass) - j_set)
     unexpected = [t for t in gone if t not in known]
     if unexpected:
         lines.append(
             f"{case}: {len(unexpected)} test(s) pass on Node and fail or do not run on jsse, e.g. {unexpected[0]}"
         )
-    fixed = sorted(t for t in known if t in set(j_pass))
+    fixed = sorted(known & j_set)
     if fixed:
         lines.append(f"{case}: known failure(s) now pass, remove them: {fixed[0]}")
     if node["local"]:

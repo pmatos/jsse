@@ -30,6 +30,7 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
@@ -147,7 +148,9 @@ def main():
         problems = check.validate_budget(budget, table)
         print("\n".join(problems) if problems else f"budget OK ({len(budget)} cases)")
         return 1 if problems else 0
-    names = list(cases_table.SMOKE) if o.smoke else o.cases or list(table)
+    if o.smoke and o.cases:
+        ap.error("--smoke runs the smoke cases; name cases or give --smoke, not both")
+    names = list(dict.fromkeys(cases_table.SMOKE if o.smoke else o.cases or table))
     unknown = [n for n in names if n not in table]
     if unknown:
         print(f"unknown case(s): {' '.join(unknown)}", file=sys.stderr)
@@ -189,9 +192,19 @@ def main():
     def one(name):
         runs = {}
         for engine, exe in (("node", node), ("jsse", jsse)):
-            runs[engine] = run_case(
-                engine, exe, name, ts_dir, work, o.test_timeout, o.timeout
-            )
+            try:
+                runs[engine] = run_case(
+                    engine, exe, name, ts_dir, work, o.test_timeout, o.timeout
+                )
+            except Exception:
+                runs[engine] = {
+                    "exit": "error",
+                    "seconds": 0.0,
+                    "rss_mb": 0.0,
+                    "summary": None,
+                    "local": [],
+                    "tail": traceback.format_exc(),
+                }
             r = runs[engine]
             print(
                 f"done {name} {engine} {r['seconds']:.0f}s {r['rss_mb']:.0f} MiB exit {r['exit']}",
