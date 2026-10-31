@@ -263,19 +263,21 @@ mod tests {
     use crate::parser::Parser;
 
     fn run_as(platform: &'static str, source: &str) {
-        let mut interp = Interpreter::new();
-        interp.enable_node_host();
-        interp.node_host.platform_override = Some(platform);
-        interp.set_node_host_argv("jsse".into(), "/bin/jsse".into(), None, Vec::new());
-        interp.load_node_prelude().expect("prelude loads");
-        let program = Parser::new(source)
-            .and_then(|mut p| p.parse_program())
-            .expect("parse");
-        let c = interp.run(&program);
-        assert!(
-            matches!(c, Completion::Normal(_) | Completion::Empty),
-            "{platform}: {c:?}"
-        );
+        crate::run_on_engine_stack(|| {
+            let mut interp = Interpreter::new();
+            interp.enable_node_host();
+            interp.node_host.platform_override = Some(platform);
+            interp.set_node_host_argv("jsse".into(), "/bin/jsse".into(), None, Vec::new());
+            interp.load_node_prelude().expect("prelude loads");
+            let program = Parser::new(source)
+                .and_then(|mut p| p.parse_program())
+                .expect("parse");
+            let c = interp.run(&program);
+            assert!(
+                matches!(c, Completion::Normal(_) | Completion::Empty),
+                "{platform}: {c:?}"
+            );
+        });
     }
 
     const CHECK: &str = r#"

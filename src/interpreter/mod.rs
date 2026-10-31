@@ -2195,7 +2195,7 @@ impl Interpreter {
             let loaded = self.load_module_for_type(&resolved, itype, ModuleLoadMode::Evaluate)?;
             for spec in &import.specifiers {
                 let (local, value) = match spec {
-                    ImportSpecifier::Default(local) => {
+                    ImportSpecifier::Default(local, _) => {
                         let val = loaded
                             .borrow()
                             .exports
@@ -2207,16 +2207,11 @@ impl Interpreter {
                     ImportSpecifier::Namespace(local) => {
                         (local, self.create_module_namespace(&loaded))
                     }
-                    ImportSpecifier::Named { imported, local } => {
+                    ImportSpecifier::Named {
+                        imported, local, ..
+                    } => {
                         let Some(val) = loaded.borrow().exports.get(imported).cloned() else {
-                            return Err(self.create_error(
-                                "SyntaxError",
-                                &format!(
-                                    "Module '{}' has no export named '{}'",
-                                    loaded.borrow().path.display(),
-                                    imported
-                                ),
-                            ));
+                            return Err(self.no_export_error(&loaded.borrow().path, imported));
                         };
                         (local, val)
                     }
@@ -2254,11 +2249,21 @@ impl Interpreter {
 
         for spec in &import.specifiers {
             match spec {
-                ImportSpecifier::Default(local) => {
-                    self.create_import_binding_for(local, "default", &loaded, &resolved, env)?;
+                ImportSpecifier::Default(local, at) => {
+                    let place = (*at, local.chars().count());
+                    self.with_import_name(&import.source, place, module_path.as_ref(), |s| {
+                        s.create_import_binding_for(local, "default", &loaded, &resolved, env)
+                    })?;
                 }
-                ImportSpecifier::Named { imported, local } => {
-                    self.create_import_binding_for(local, imported, &loaded, &resolved, env)?;
+                ImportSpecifier::Named {
+                    imported,
+                    local,
+                    at,
+                } => {
+                    let place = (*at, imported.chars().count());
+                    self.with_import_name(&import.source, place, module_path.as_ref(), |s| {
+                        s.create_import_binding_for(local, imported, &loaded, &resolved, env)
+                    })?;
                 }
                 ImportSpecifier::Namespace(local) => {
                     let ns = self.create_module_namespace(&loaded);
@@ -2400,14 +2405,7 @@ impl Interpreter {
                 Err(e) => return Err(e),
             }
         } else {
-            return Err(self.create_error(
-                "SyntaxError",
-                &format!(
-                    "Module '{}' has no export named '{}'",
-                    loaded.borrow().path.display(),
-                    imported
-                ),
-            ));
+            return Err(self.no_export_error(&loaded.borrow().path, imported));
         }
         Ok(())
     }
@@ -3512,7 +3510,7 @@ impl Interpreter {
             Expression::Yield(arg, _) => {
                 arg.as_ref().is_some_and(|a| Self::expr_has_await(a))
             }
-            Expression::Import(src, opts) | Expression::ImportDefer(src, opts) => {
+            Expression::Import(src, opts, _) | Expression::ImportDefer(src, opts) => {
                 Self::expr_has_await(src)
                     || opts.as_ref().is_some_and(|o| Self::expr_has_await(o))
             }
@@ -3656,14 +3654,7 @@ impl Interpreter {
                     )
                 };
                 let (Some(value), Some(source_binding)) = (value, source_binding) else {
-                    return Err(self.create_error(
-                        "SyntaxError",
-                        &format!(
-                            "Module '{}' has no export named '{}'",
-                            loaded_path.display(),
-                            spec.local
-                        ),
-                    ));
+                    return Err(self.no_export_error(&loaded_path, &spec.local));
                 };
 
                 // Keep a collision-safe internal binding, but make it indirect:
@@ -3816,14 +3807,7 @@ impl Interpreter {
             return self.resolve_export_binding(&resolved, &source_export, visited);
         }
 
-        Err(self.create_error(
-            "SyntaxError",
-            &format!(
-                "Module '{}' has no export named '{}'",
-                canon_path.display(),
-                export_name
-            ),
-        ))
+        Err(self.no_export_error(&canon_path, export_name))
     }
 
     fn resolve_export(
@@ -3895,14 +3879,7 @@ impl Interpreter {
 
         // A default export cannot be provided by `export *`.
         if export_name == "default" {
-            return Err(self.create_error(
-                "SyntaxError",
-                &format!(
-                    "Module '{}' has no export named '{}'",
-                    canon_path.display(),
-                    export_name
-                ),
-            ));
+            return Err(self.no_export_error(&canon_path, export_name));
         }
 
         // §16.2.1.6.3 step 8: check star re-exports
@@ -3959,14 +3936,7 @@ impl Interpreter {
         }
 
         // Export not found
-        Err(self.create_error(
-            "SyntaxError",
-            &format!(
-                "Module '{}' has no export named '{}'",
-                canon_path.display(),
-                export_name
-            ),
-        ))
+        Err(self.no_export_error(&canon_path, export_name))
     }
 
     fn collect_exports(

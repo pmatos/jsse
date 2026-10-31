@@ -10,7 +10,7 @@ impl<'a> Parser<'a> {
         match &self.current {
             Token::LeftBracket => self.parse_array_pattern(),
             Token::LeftBrace => self.parse_object_pattern(),
-            _ => Err(self.error(format!("Expected binding pattern, got {:?}", self.current))),
+            _ => Err(self.unexpected_token("Expected binding pattern, got ")),
         }
     }
 

@@ -25,7 +25,7 @@ callbacks, and invalid arguments throw from the call as in Node.
 
 | Item | Issue |
 | --- | --- |
-| `fs.cp` validates synchronously but still runs whole on a later turn; no async `filter` | #1503 |
+| ~~`fs.cp` runs whole on a later turn; no async `filter`~~ | #1503, fixed (ADR 2026-10-31-1500) |
 | `FileHandle.readableWebStream()` absent; `openAsBlob` copies the file eagerly | #1504 (needs #1360) |
 | `signal` on the FileHandle forms and aborts between write chunks | #1505 |
 
