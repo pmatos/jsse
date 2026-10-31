@@ -1,18 +1,9 @@
-"""Case lists of the scripted runners in the jsse pass list of the TypeScript suite (issue #1298).
+"""Case names of the scripted runners in the jsse pass list of the TypeScript suite (issue #1298).
 
-Standard library only: scripts/check_ts_pass_list_ratchet.py (the pre-commit hook and the CI check) imports it.
-
-A mocha runner's bucket is a fixed slice of the Node-pinned universe, so ts-suite/jsse-pass-1296.json can record it
-as [tests, digest of the ids] and the ratchet can demand that the record never changes. The scripted runners
-(tsc-projects, tsc-watch, hereby) list their cases from fixture files that grow, and a digest cannot show that a
-bigger set still contains the recorded one. ts-suite/jsse-pass-cases-1298.json therefore stores the case names of a
-scripted bucket, next to its unchanged [tests, digest] entry (which must hash the names). The rule, for scripted
-runners only: a recorded bucket may GROW when every previously recorded case is still listed (a removed or renamed
-case fails like a shrink); the mocha buckets keep the exact-equality rule of scripts/ts_passlist_store.py.
-
-A bucket recorded before the names existed is a digest only. Its first growth carries `added`, the names that were
-not in the old record: the case list minus `added` must hash to the old entry, which proves the old record is
-contained without anybody having kept its names. Once the names are on the base side `added` is no longer consulted.
+Standard library only: scripts/check_ts_pass_list_ratchet.py imports it. A scripted bucket (tsc-projects, tsc-watch,
+hereby) may grow while every recorded case stays; the names in ts-suite/jsse-pass-cases-1298.json let the ratchet
+check that, and must hash to the bucket's [tests, digest] entry. Design and recording:
+docs/agents/library-tests-typescript-conformance-scripted-growth-1298.md.
 """
 
 import json
@@ -39,7 +30,10 @@ def parse_cases(text):
     if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
         raise ValueError(f"{CASES}: schema is not {SCHEMA}")
     out = {}
-    for runner, table in (doc.get("buckets") or {}).items():
+    buckets = doc.get("buckets", {})
+    if not isinstance(buckets, dict):
+        raise ValueError(f"{CASES}: buckets must be an object")
+    for runner, table in buckets.items():
         if runner not in SCRIPTED_RUNNERS:
             raise ValueError(
                 f"{CASES}: {runner} is not a scripted runner; mocha buckets are recorded as digests only"
@@ -126,7 +120,8 @@ def growth(base, head):
             elif new != old:
                 if now is None:
                     continue
-                kept = [n for n in now["cases"] if n not in set(now["added"])]
+                added = set(now["added"])
+                kept = [n for n in now["cases"] if n not in added]
                 if entry_of(runner, kept) != old:
                     problems.append(
                         f"{runner}:{name}: the cases that are not in `added` do not hash to the old record "
@@ -241,10 +236,11 @@ def record_scripted(doc, cases, run, complete, known, jsse_rev):
                 f"{runner}:{name}: not grown, the recorded bucket has no case list (pass --legacy-cases {runner}=FILE)"
             )
             continue
+        grows = cur is not None and cur != entry
         bad = sorted(t.full for t in tests if t.id not in run["passing_ids"])
-        if bad:
+        if grows and bad:
             notes.append(
-                f"{runner}:{name}: not recorded, {len(bad)} case(s) fail, first: {bad[0]}"
+                f"{runner}:{name}: not grown, {len(bad)} case(s) fail, first: {bad[0]}"
             )
             continue
         if not old <= set(names):

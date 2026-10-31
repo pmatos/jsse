@@ -37,7 +37,7 @@ The 367 old names were recovered from the checkout before #1488 (`git archive 61
     uv run python scripts/run-ts-pass-list.py tsc-projects --update-baseline --issue 1298 \
       --legacy-cases tsc-projects=<the 367 names>
 
-`tsc-projects` joined `DEFAULT_RUNNERS` of `scripts/ts_nightly_1298.py`. `tsc-watch` (38) and `hereby` (32) are still digest-only; their next recording adopts their names (pass both runners, no option needed).
+`tsc-projects` joined `DEFAULT_RUNNERS` of `scripts/ts_nightly_1298.py`. `tsc-watch` (38) and `hereby` (32) were recorded in the same change with `run-ts-pass-list.py tsc-watch hereby --update-baseline --issue 1298` (their digests still matched the universe, so their names were adopted without `--legacy-cases`, `added` empty): all three scripted buckets can grow without a human recording the old names, so a new fixture can never turn the blocking nightly red by itself. A recorded scripted bucket that ever has to be re-recorded because the file grew past the 20,000-byte hook limit (14.5 KB for 483 names) should be split per runner.
 
 ## Not covered
 

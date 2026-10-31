@@ -322,6 +322,18 @@ class GateTest(unittest.TestCase):
         self.assertEqual(out[:2], (d, lists))
         self.assertIn("gone", out[2][0])
 
+    def test_a_bucket_recorded_with_known_failures_still_gets_its_case_list(self):
+        d, _, lists = side(digest_only="abc")
+        tests, run = self.run_of("abc", failing={"b"})
+        _, new_cases, _ = cases.record_scripted(
+            d, lists, run, {(R, "all"): tests}, {}, "rev"
+        )
+        self.assertEqual(new_cases[R]["all"]["cases"], list("abc"))
+
+    def test_a_malformed_buckets_value_is_a_value_error(self):
+        with self.assertRaises(ValueError):
+            cases.parse_cases('{"schema": 1, "buckets": ["x"]}')
+
     def test_recording_twice_changes_nothing_and_keeps_added(self):
         d, _, lists = side(digest_only="abc")
         tests, run = self.run_of("abcde")

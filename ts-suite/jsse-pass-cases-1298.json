@@ -1,6 +1,44 @@
 {
  "schema": 1,
  "buckets": {
+  "hereby": {
+   "all": {
+    "cases": [
+     "cycle",
+     "deps",
+     "deps-colour",
+     "deps-dumb-term",
+     "deps-no-colour",
+     "duplicate-name",
+     "load-throws",
+     "no-exports",
+     "no-herebyfile",
+     "tasks-both-colour-env",
+     "tasks-chain",
+     "tasks-colour",
+     "tasks-default",
+     "tasks-fail-async",
+     "tasks-fail-both",
+     "tasks-fail-pty",
+     "tasks-fail-string",
+     "tasks-fail-sync",
+     "tasks-list",
+     "tasks-missing",
+     "tasks-no-colour",
+     "tasks-pty",
+     "ts-help",
+     "ts-missing-herebyfile",
+     "ts-missing-task",
+     "ts-tasks",
+     "ts-tasks-colour",
+     "ts-tasks-pty-narrow",
+     "ts-tasks-pty-wide",
+     "ts-tasks-simple",
+     "ts-typo-task",
+     "ts-version"
+    ]
+   }
+  },
   "tsc-projects": {
    "all": {
     "added": [
@@ -465,6 +503,50 @@
      "tsconfig-bad",
      "tsconfig-show-config",
      "tsconfig-strict-extends"
+    ]
+   }
+  },
+  "tsc-watch": {
+   "all": {
+    "cases": [
+     "watch-atomic-save",
+     "watch-build",
+     "watch-build-errors",
+     "watch-burst",
+     "watch-config-broken",
+     "watch-config-edit",
+     "watch-config-options",
+     "watch-config-removed",
+     "watch-create",
+     "watch-declaration",
+     "watch-delete",
+     "watch-diagnostics",
+     "watch-dynamic-polling",
+     "watch-edit",
+     "watch-env-dir",
+     "watch-env-file",
+     "watch-env-nonpolling",
+     "watch-exclude-dirs",
+     "watch-exclude-files",
+     "watch-exclude-files-idle",
+     "watch-exclude-idle",
+     "watch-files-only",
+     "watch-fixed-polling",
+     "watch-fs-events",
+     "watch-fs-events-parent",
+     "watch-incremental",
+     "watch-lib",
+     "watch-listemitted",
+     "watch-listfiles",
+     "watch-no-pretty-forced",
+     "watch-noemit",
+     "watch-noemit-on-error",
+     "watch-preserve",
+     "watch-pretty",
+     "watch-priority-polling",
+     "watch-rename",
+     "watch-sync-dir",
+     "watch-touch"
     ]
    }
   }
