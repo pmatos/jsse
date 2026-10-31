@@ -6021,13 +6021,13 @@ impl Interpreter {
         let mut program = match p.parse_program() {
             Ok(prog) => prog,
             Err(e) => {
-                return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
+                return Completion::Throw(self.create_error("SyntaxError", &e.message));
             }
         };
         crate::ast::assign_ic_sites(&mut program.body);
         // Validate private name usage in eval-in-class context
         if let Err(e) = p.validate_eval_private_names() {
-            return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
+            return Completion::Throw(self.create_error("SyntaxError", &e.message));
         }
         if in_field_initializer {
             if crate::ast::stmts_contain_matching(

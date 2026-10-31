@@ -54,7 +54,7 @@ fn check_dynamic_parts(
         is_generator,
         is_async,
     )
-    .map_err(|e| interp.create_error("SyntaxError", &format!("{}", e)))
+    .map_err(|e| interp.create_error("SyntaxError", &e.message))
 }
 
 impl Interpreter {
@@ -138,7 +138,7 @@ impl Interpreter {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
+                                interp.create_error("SyntaxError", &e.message),
                             );
                         }
                     };
@@ -670,7 +670,7 @@ impl Interpreter {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
+                                interp.create_error("SyntaxError", &e.message),
                             );
                         }
                     };
@@ -783,7 +783,7 @@ impl Interpreter {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
+                                interp.create_error("SyntaxError", &e.message),
                             );
                         }
                     };
@@ -898,7 +898,7 @@ impl Interpreter {
                         Ok(prog) => prog,
                         Err(e) => {
                             return Completion::Throw(
-                                interp.create_error("SyntaxError", &format!("{}", e)),
+                                interp.create_error("SyntaxError", &e.message),
                             );
                         }
                     };
