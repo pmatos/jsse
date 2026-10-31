@@ -319,8 +319,7 @@ pub(crate) enum StateMachineExecutionState {
     Completed,
 }
 
-/// Where a [`BytecodeGenerator`] stands in its lifecycle
-/// (sec-generatorstart, sec-generatorresume).
+/// A generator's lifecycle (sec-generatorstart, sec-generatorresume).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BytecodeGeneratorStatus {
     SuspendedStart,
@@ -2027,7 +2026,7 @@ pub(crate) enum IteratorState {
         string: JsString,
         global: bool,
         full_unicode: bool,
-        done: bool,
+        state: BytecodeGeneratorStatus,
         matcher_id: u64,
     },
     TypedArrayIterator {
