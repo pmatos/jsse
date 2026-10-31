@@ -124,3 +124,13 @@ windows-1252 TypeError ERR_INVALID_ARG_TYPE The "input" argument must be an inst
 0
 "" "😀" ""
 "👍�"
+proxy-u8 THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+dataview-window => "B"
+float64-view => 8
+subclass-buffer-getter => 4
+pending-is-a-copy => "€"
+subarray-window => "B"
+buffer-pool => "yz"
+latin1-stream-keeps-state => "éé"
+label-nbsp THROWS RangeError RangeError ERR_ENCODING_NOT_SUPPORTED "The \" utf-8\" encoding is not supported"
+label-proto THROWS RangeError RangeError ERR_ENCODING_NOT_SUPPORTED "The \"__proto__\" encoding is not supported"

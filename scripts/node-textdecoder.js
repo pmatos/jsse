@@ -3,17 +3,14 @@
 // symbol-keyed slots, Node's argument validation, error codes and inspect
 // output. The decoders are the ones node-buffer-shim.js leaves in
 // `globalThis.__node_decoders`. internal/errors, internal/validators and
-// internal/util/inspect are loaded on first use through the handoff that
-// node-builtin-loader.js completes, so a decoder that never fails never
-// loads them.
+// internal/util/inspect are loaded through the handoff that
+// node-builtin-loader.js completes, only by a call that throws or inspects.
 
 (function () {
   "use strict";
 
   var decoders = globalThis.__node_decoders;
-  if (decoders === undefined || typeof globalThis.TextDecoder !== "undefined") {
-    return;
-  }
+  if (decoders === undefined) return;
   delete globalThis.__node_decoders;
 
   var handoffKey = Symbol.for("jsse.node.textdecoder");
@@ -23,20 +20,33 @@
     configurable: true,
   });
 
-  var lazy;
-  function internals() {
-    if (lazy === undefined) {
-      var load = handoff.require;
-      var validators = load("internal/validators");
-      lazy = {
-        codes: load("internal/errors").codes,
-        validateObject: validators.validateObject,
-        types: load("internal/util/types"),
-        inspect: load("internal/util/inspect").inspect,
-      };
-    }
-    return lazy;
+  function internal(id) {
+    return handoff.require(id);
   }
+
+  var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  var U8 = Uint8Array;
+  var u8Set = uncurryThis(U8.prototype.set);
+  var u8Subarray = uncurryThis(U8.prototype.subarray);
+  var charCodeAt = uncurryThis(String.prototype.charCodeAt);
+  var strSlice = uncurryThis(String.prototype.slice);
+  var toLowerCase = uncurryThis(String.prototype.toLowerCase);
+  var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  var getPrototypeOf = Object.getPrototypeOf;
+
+  function getter(proto, name) {
+    return uncurryThis(getOwnPropertyDescriptor(proto, name).get);
+  }
+  var TypedArrayProto = getPrototypeOf(U8).prototype;
+  var taTag = getter(TypedArrayProto, Symbol.toStringTag);
+  var taBuffer = getter(TypedArrayProto, "buffer");
+  var taOffset = getter(TypedArrayProto, "byteOffset");
+  var taBytes = getter(TypedArrayProto, "byteLength");
+  var dvBuffer = getter(DataView.prototype, "buffer");
+  var dvOffset = getter(DataView.prototype, "byteOffset");
+  var dvBytes = getter(DataView.prototype, "byteLength");
+  var abBytes = getter(ArrayBuffer.prototype, "byteLength");
+  var sabBytes = getter(SharedArrayBuffer.prototype, "byteLength");
 
   var kDecoder = Symbol("decoder");
   var kFlags = Symbol("flags");
@@ -55,10 +65,10 @@
   var FLAGS_FATAL = 0x2;
   var FLAGS_IGNORE_BOM = 0x4;
 
-  var empty = new Uint8Array(0);
+  var empty = new U8(0);
   var kEmptyObject = Object.freeze({ __proto__: null });
 
-  var LABELS = new Map();
+  var LABELS = Object.create(null);
   [
     ["utf-8", "unicode-1-1-utf-8 unicode11utf8 unicode20utf8 utf-8 utf8 x-unicode20utf8"],
     [
@@ -70,7 +80,7 @@
     ["utf-16be", "unicodefffe utf-16be"],
   ].forEach(function (entry) {
     entry[1].split(" ").forEach(function (label) {
-      LABELS.set(label, entry[0]);
+      LABELS[label] = entry[0];
     });
   });
 
@@ -79,18 +89,18 @@
   }
 
   function getEncodingFromLabel(label) {
-    var enc = LABELS.get(label);
+    var enc = LABELS[label];
     if (enc !== undefined) return enc;
     var start = 0;
     var end = label.length;
-    while (start < end && isAsciiSpace(label.charCodeAt(start))) start++;
-    while (end > start && isAsciiSpace(label.charCodeAt(end - 1))) end--;
-    return LABELS.get(label.slice(start, end).toLowerCase());
+    while (start < end && isAsciiSpace(charCodeAt(label, start))) start++;
+    while (end > start && isAsciiSpace(charCodeAt(label, end - 1))) end--;
+    return LABELS[toLowerCase(strSlice(label, start, end))];
   }
 
   function validateDecoder(obj) {
     if (obj == null || obj[kDecoder] !== true) {
-      throw new (internals().codes.ERR_INVALID_THIS)("TextDecoder");
+      throw new (internal("internal/errors").codes.ERR_INVALID_THIS)("TextDecoder");
     }
   }
 
@@ -101,18 +111,42 @@
     return e;
   }
 
-  function toBytes(input) {
-    if (input instanceof Uint8Array) return input;
-    var types = internals().types;
+  function isBranded(get, value) {
     try {
-      if (types.isAnyArrayBuffer(input)) return new Uint8Array(input);
-      if (types.isArrayBufferView(input)) {
-        return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+      get(value);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // The bytes of an ArrayBuffer, SharedArrayBuffer or view, read through the
+  // intrinsic accessors; a detached or out-of-bounds source is empty.
+  function toBytes(input) {
+    if (input === null || typeof input !== "object") return undefined;
+    var buffer = input;
+    var offset = 0;
+    var length;
+    try {
+      if (taTag(input) !== undefined) {
+        buffer = taBuffer(input);
+        offset = taOffset(input);
+        length = taBytes(input);
+      } else if (isBranded(dvBuffer, input)) {
+        buffer = dvBuffer(input);
+        offset = dvOffset(input);
+        length = dvBytes(input);
+      } else if (isBranded(abBytes, input)) {
+        length = abBytes(input);
+      } else if (isBranded(sabBytes, input)) {
+        length = sabBytes(input);
+      } else {
+        return undefined;
       }
+      return new U8(buffer, offset, length);
     } catch (e) {
       return empty;
     }
-    return undefined;
   }
 
   var SHARED_LIST =
@@ -125,7 +159,7 @@
       return nativeArgError(SHARED_INPUT);
     }
     if (enc === "utf-8" && utf8Binding) return nativeArgError(SHARED_LIST);
-    return new (internals().codes.ERR_INVALID_ARG_TYPE)(
+    return new (internal("internal/errors").codes.ERR_INVALID_ARG_TYPE)(
       "input",
       ["ArrayBuffer", "ArrayBufferView"],
       input
@@ -134,7 +168,7 @@
 
   function getConstructorOf(obj) {
     while (obj) {
-      var descriptor = Object.getOwnPropertyDescriptor(obj, "constructor");
+      var descriptor = getOwnPropertyDescriptor(obj, "constructor");
       if (
         descriptor !== undefined &&
         typeof descriptor.value === "function" &&
@@ -142,21 +176,32 @@
       ) {
         return descriptor.value;
       }
-      obj = Object.getPrototypeOf(obj);
+      obj = getPrototypeOf(obj);
     }
     return null;
+  }
+
+  function checkOptions(options) {
+    if (options === null) return;
+    var type = typeof options;
+    if (type !== "object" && type !== "function") {
+      internal("internal/validators").validateObject(
+        options,
+        "options",
+        ALLOW_OBJECTS_AND_NULL
+      );
+    }
   }
 
   class TextDecoder {
     constructor(encoding = "utf-8", options = kEmptyObject) {
       encoding = `${encoding}`;
-      if (options !== kEmptyObject) {
-        var lib = internals();
-        lib.validateObject(options, "options", ALLOW_OBJECTS_AND_NULL);
-      }
+      checkOptions(options);
       var enc = getEncodingFromLabel(encoding);
       if (enc === undefined) {
-        throw new (internals().codes.ERR_ENCODING_NOT_SUPPORTED)(encoding);
+        throw new (internal("internal/errors").codes.ERR_ENCODING_NOT_SUPPORTED)(
+          encoding
+        );
       }
       var flags = 0;
       if (options !== null) {
@@ -166,50 +211,45 @@
       this[kDecoder] = true;
       this[kFlags] = flags;
       this[kEncoding] = enc;
-      this[kIgnoreBOM] = Boolean(options?.ignoreBOM);
-      this[kFatal] = Boolean(options?.fatal);
+      this[kIgnoreBOM] = (flags & FLAGS_IGNORE_BOM) !== 0;
+      this[kFatal] = (flags & FLAGS_FATAL) !== 0;
       this[kUTF8FastPath] = enc === "utf-8";
       this[kHandle] = undefined;
-      this[kSingleByte] = undefined;
+      this[kSingleByte] = enc === "windows-1252" ? decoders.latin : undefined;
       this[kChunk] = null;
       this[kBOMSeen] = false;
     }
 
     decode(input = empty, options = kEmptyObject) {
       validateDecoder(this);
-      if (options !== kEmptyObject) {
-        var lib = internals();
-        lib.validateObject(options, "options", ALLOW_OBJECTS_AND_NULL);
-      }
+      checkOptions(options);
       var stream = options?.stream;
       var enc = this[kEncoding];
       var pending = this[kChunk];
       var bytes = toBytes(input);
       if (bytes === undefined) {
-        throw badInput(enc, !stream && !pending, input);
+        throw badInput(enc, this[kUTF8FastPath] && !stream && !pending, input);
       }
+      if (this[kSingleByte]) return this[kSingleByte](bytes);
       var ignoreBOM = this[kIgnoreBOM] || this[kBOMSeen];
       if (!stream) this[kBOMSeen] = false;
       if (pending) {
-        var joined = new Uint8Array(pending.length + bytes.length);
-        joined.set(pending, 0);
-        joined.set(bytes, pending.length);
+        var joined = new U8(pending.length + bytes.length);
+        u8Set(joined, pending, 0);
+        u8Set(joined, bytes, pending.length);
         bytes = joined;
         this[kChunk] = null;
       }
       var fatal = this[kFatal];
-      var result;
-      if (enc === "utf-8") {
-        result = decoders.utf8(bytes, fatal, ignoreBOM, stream);
-      } else if (enc === "windows-1252") {
-        result = { out: decoders.latin(bytes), pending: 0 };
-      } else {
-        result = decoders.utf16(bytes, enc === "utf-16be", fatal, ignoreBOM, stream);
-      }
+      var result = this[kUTF8FastPath]
+        ? decoders.utf8(bytes, fatal, ignoreBOM, stream)
+        : decoders.utf16(bytes, enc === "utf-16be", fatal, ignoreBOM, stream);
       if (stream) {
         var tail = result.pending;
         if (bytes.length - tail > 0) this[kBOMSeen] = true;
-        if (tail > 0) this[kChunk] = new Uint8Array(bytes.subarray(bytes.length - tail));
+        if (tail > 0) {
+          this[kChunk] = new U8(u8Subarray(bytes, bytes.length - tail));
+        }
       }
       return result.out;
     }
@@ -240,7 +280,7 @@
         obj[kFlags] = this[kFlags];
         obj[kHandle] = this[kHandle];
       }
-      return `${constructor.name} ${internals().inspect(obj)}`;
+      return `${constructor.name} ${internal("internal/util/inspect").inspect(obj)}`;
     },
   };
   var descriptors = Object.getOwnPropertyDescriptors(shared);
