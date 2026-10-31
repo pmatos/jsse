@@ -354,12 +354,9 @@
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var B64URL =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  // Reverse lookup accepts both the standard and URL-safe alphabets, matching
-  // Node (its "base64" decoder also accepts '-' and '_').
-  var B64REV = {};
-  for (var k = 0; k < B64.length; k++) B64REV[B64.charCodeAt(k)] = k;
-  B64REV["-".charCodeAt(0)] = 62;
-  B64REV["_".charCodeAt(0)] = 63;
+  // Node-exact string decoder from node-base64-decode.js (#1328).
+  var b64 = globalThis.__node_base64;
+  delete globalThis.__node_base64;
 
   function base64Encode(bytes, urlSafe) {
     var chars = urlSafe ? B64URL : B64;
@@ -390,29 +387,6 @@
     return out;
   }
 
-  // Forgiving base64 decode: whitespace and other non-alphabet characters are
-  // skipped, '=' terminates, and missing padding is tolerated (Node behavior).
-  function base64Decode(str) {
-    var out = [];
-    var bits = 0;
-    var nbits = 0;
-    for (var i = 0; i < str.length; i++) {
-      var c = str.charCodeAt(i);
-      var v = B64REV[c];
-      if (v === undefined) {
-        if (c === 0x3d) break; // '='
-        continue;
-      }
-      bits = (bits << 6) | v;
-      nbits += 6;
-      if (nbits >= 8) {
-        nbits -= 8;
-        out.push((bits >> nbits) & 0xff);
-      }
-    }
-    return Uint8Array.from(out);
-  }
-
   // Encode a JS string to a plain Uint8Array of bytes for `encoding`.
   function strToBytes(str, encoding) {
     str = String(str);
@@ -432,7 +406,7 @@
         return hexDecode(str);
       case "base64":
       case "base64url":
-        return base64Decode(str);
+        return b64.decode(str, b64.byteLength(str));
       case "ucs2": {
         out = new Uint8Array(str.length * 2);
         var dv = new DataView(out.buffer);
@@ -781,7 +755,7 @@
             return value.length * 2;
           case "base64":
           case "base64url":
-            return base64Decode(value).length;
+            return b64.byteLength(value);
           case "utf8":
           default:
             return utf8Encode(value).length;
@@ -908,7 +882,11 @@
         if (!Number.isInteger(length) || length < 0 || length > remaining) {
           throw new RangeError('"length" is outside of buffer bounds');
         }
-        var bytes = strToBytes(string, encoding);
+        var enc = normalizeEncoding(encoding);
+        var bytes =
+          enc === "base64" || enc === "base64url"
+            ? b64.decode(string, length)
+            : strToBytes(string, encoding);
         var n = Math.min(bytes.length, length);
         for (var i = 0; i < n; i++) this[offset + i] = bytes[i];
         return n;
