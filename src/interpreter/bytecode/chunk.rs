@@ -180,7 +180,7 @@ pub(crate) struct FinallyExit {
 }
 
 /// How `BindHead` stores an iteration value in a for-in/for-of head the
-/// native binding ops do not cover (sec-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset).
+/// native binding ops do not cover (ForIn/OfBodyEvaluation).
 #[derive(Debug, Clone)]
 pub(crate) enum HeadBinding {
     /// `let`/`const`/`var` with a destructuring pattern.
@@ -237,9 +237,21 @@ pub(crate) struct Chunk {
     /// reads. A getter with this shape is served without a frame (see
     /// `Interpreter::call_getter`).
     pub(crate) trivial_private_getter: Option<u16>,
+    /// `--node` only (empty otherwise): the V8 error position, a source
+    /// offset plus one, of each member op, as `(op offset, position)` by
+    /// offset. Read when such an op finds a null or undefined base.
+    pub(crate) member_pos: Vec<(u32, u32)>,
 }
 
 impl Chunk {
+    pub(crate) fn member_pos_at(&self, pc: usize) -> Option<u32> {
+        let at = self
+            .member_pos
+            .binary_search_by_key(&u32::try_from(pc).ok()?, |e| e.0)
+            .ok()?;
+        Some(self.member_pos[at].1)
+    }
+
     /// Recognise the `return this.#name;` body: an optional `Safepoint`, then
     /// `LoadThis`, `GetPrivate`, `Return`, with at most a trailing
     /// `ReturnUndefined` after it. Nothing else may be present, so no

@@ -1,0 +1,9 @@
+[eval]:1
+null.x
+     ^
+
+TypeError: Cannot read properties of null (reading 'x')
+    at [eval]:1:6
+    at [eval]-wrapper:6:24
+
+Node.js <version>

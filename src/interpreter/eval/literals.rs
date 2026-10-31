@@ -350,9 +350,7 @@ impl Interpreter {
             .as_object_id()
             .filter(|_| self.is_constructor(superclass))
         else {
-            return Completion::Throw(
-                self.create_type_error("Class extends value is not a constructor or null"),
-            );
+            return Completion::Throw(self.class_extends_error(superclass));
         };
         self.superclass_prototype(super_id, superclass)
     }
@@ -415,9 +413,7 @@ impl Interpreter {
             && !(sv).is_null()
             && !self.is_constructor(sv)
         {
-            return Completion::Throw(
-                self.create_type_error("Class extends value is not a constructor or null"),
-            );
+            return Completion::Throw(self.class_extends_error(sv));
         }
 
         if let Some(ref sv) = super_val {

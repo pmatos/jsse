@@ -2438,9 +2438,7 @@ impl Interpreter {
                         Err(e) => Completion::Throw(e),
                     }
                 } else {
-                    Completion::Throw(self.create_type_error(
-                        "Cannot use 'in' operator to search for a property in a non-object",
-                    ))
+                    Completion::Throw(self.in_operand_error(left, right))
                 }
             }
             BinaryOp::Instanceof => {
@@ -2838,7 +2836,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         match expr {
-            Expression::Member(obj_expr, prop, _) => {
+            Expression::Member(obj_expr, prop, site) => {
                 // Handle super.prop / super[expr] assignment
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     let key = match prop {
@@ -2901,6 +2899,7 @@ impl Interpreter {
                         MemberProperty::Private(_) => unreachable!(),
                     };
                     if obj_val.is_null() || obj_val.is_undefined() {
+                        i.note_member_pos(*site);
                         return Err(i.create_type_error(&format!(
                             "Cannot set properties of {} (setting '{key}')",
                             if obj_val.is_null() {
@@ -3041,7 +3040,7 @@ impl Interpreter {
                 };
                 self.put_value_by_ref(name, final_val, &id_ref, env)
             }
-            Expression::Member(obj_expr, prop, _) => {
+            Expression::Member(obj_expr, prop, site) => {
                 // §13.3.7.1: super[expr] = val — special evaluation order
                 if matches!(obj_expr.as_ref(), Expression::Super)
                     && !matches!(prop, MemberProperty::Private(_))
@@ -3192,11 +3191,18 @@ impl Interpreter {
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
                         if obj_val.is_null() || obj_val.is_undefined() {
+                            interp.note_member_pos(*site);
                             let error = match key_val.as_ref() {
                                 Some(k) => interp.nullish_read_error(&obj_val, k),
-                                None => interp.create_type_error(&format!(
-                                    "Cannot read properties of {obj_val}"
-                                )),
+                                None => {
+                                    let MemberProperty::Dot(n) = prop else {
+                                        unreachable!()
+                                    };
+                                    let k = JsPropertyKey::from(n.clone());
+                                    interp.create_type_error(
+                                        &interp.nullish_keyed_read_message(&obj_val, &k),
+                                    )
+                                }
                             };
                             return Completion::Throw(error);
                         }
@@ -3233,6 +3239,7 @@ impl Interpreter {
                     // Note: super[key] = val is handled by the early return above
                     // Throw for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
+                        interp.note_member_pos(*site);
                         let key = match key {
                             Some(key) => key,
                             None => propagate!(interp.member_key(prop, key_val.as_ref())),
@@ -4769,7 +4776,7 @@ impl Interpreter {
                 Ok(pair) => pair,
                 Err(done) => return done,
             },
-            Expression::Member(obj_expr, prop, _) => {
+            Expression::Member(obj_expr, prop, site) => {
                 let is_super_call = matches!(obj_expr.as_ref(), Expression::Super);
                 let obj_val = match self.eval_expr(obj_expr, env) {
                     Completion::Normal(v) => v,
@@ -4910,6 +4917,7 @@ impl Interpreter {
                         (JsValue::UNDEFINED, obj_val)
                     }
                 } else if obj_val.is_nullish() {
+                    self.note_member_pos(*site);
                     let msg = self.nullish_keyed_read_message(&obj_val, &key);
                     return Completion::Throw(self.create_type_error(&msg));
                 } else {
@@ -5534,10 +5542,7 @@ impl Interpreter {
             let function_realm = obj.borrow().function_realm();
             if is_class_ctor && !self.calling_as_construct {
                 return self.with_realm(function_realm, |interp| {
-                    Completion::Throw(
-                        interp
-                            .create_type_error("Class constructor cannot be invoked without 'new'"),
-                    )
+                    Completion::Throw(interp.class_call_error(o.id))
                 });
             }
             let callable = match obj.borrow().callable.as_deref() {
@@ -6019,7 +6024,7 @@ impl Interpreter {
                 return result;
             }
         }
-        let desc = format!("{} is not a function", self.describe_non_callable(func_val));
+        let desc = self.not_callable_message(func_val);
         let err = self.create_type_error(&desc);
         Completion::Throw(err)
     }
@@ -6090,7 +6095,7 @@ impl Interpreter {
     /// Names a non-callable value for a "... is not a function" message.
     /// Never runs user code (no ToString, no getters) and never exposes
     /// engine-internal object state.
-    fn describe_non_callable(&self, val: &JsValue) -> String {
+    pub(crate) fn describe_non_callable(&self, val: &JsValue) -> String {
         if let Some(s) = val.as_string() {
             let preview: String = char::decode_utf16(s.as_units().iter().copied())
                 .take(30)
@@ -6779,18 +6784,19 @@ impl Interpreter {
                             None => String::new(),
                         };
                         drop(b);
-                        let name = if name.is_empty() {
+                        let name = interp.node_callee_text(true).unwrap_or(if name.is_empty() {
                             interp.describe_non_callable(callee_val)
                         } else {
                             name
-                        };
+                        });
                         return Completion::Throw(
-                            interp.create_type_error(&format!("{} is not a constructor", name)),
+                            interp.create_type_error(&format!("{name} is not a constructor")),
                         );
                     }
                 }
             } else {
-                let desc = interp.describe_non_callable(callee_val);
+                let desc = (interp.node_callee_text(true))
+                    .unwrap_or_else(|| interp.describe_non_callable(callee_val));
                 return Completion::Throw(
                     interp.create_type_error(&format!("{desc} is not a constructor")),
                 );
@@ -7251,9 +7257,7 @@ impl Interpreter {
 
     pub(super) fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
         if !(right).is_object() {
-            return Completion::Throw(
-                self.create_type_error("Right-hand side of instanceof is not an object"),
-            );
+            return Completion::Throw(self.instanceof_error(false));
         }
         let rhs_obj = crate::types::JsObject {
             id: right.as_object_id().expect("object checked"),
@@ -7283,9 +7287,7 @@ impl Interpreter {
             }
         }
         if !self.is_callable(right) {
-            return Completion::Throw(
-                self.create_type_error("Right-hand side of instanceof is not callable"),
-            );
+            return Completion::Throw(self.instanceof_error(true));
         }
         self.ordinary_has_instance(right, left)
     }
@@ -8197,15 +8199,12 @@ impl Interpreter {
         // Helper: close the for-of loops from `$from` inward, surfacing an
         // abrupt completion from a disposer or an iterator `return` method.
         // `$seed` is the completion driving the unwind (as in
-        // `unwind_scopes_to!`), so a parked-then-resumed re-entry (via
-        // `$then`) continues from the cursor's own finished completion,
-        // equivalent to never having suspended (see the ADR for this issue).
-        // Each level's `iteration_env` dispose may suspend: on
+        // `unwind_scopes_to!`). A dispose may suspend: on
         // `ForOfUnwindOutcome::Parked` this parks the function with `$then`
         // and returns, leaving the loop on `for_of_stack` with its
-        // `iteration_env` taken, so the resumed re-entry proceeds straight to
-        // `close_for_of_iterator`. The per-level handler-boundary re-check
-        // re-runs after every level's dispose, synchronous or resumed.
+        // `iteration_env` taken; the resumed re-entry proceeds straight to
+        // `close_for_of_iterator`. The handler-boundary re-check re-runs
+        // after every level's dispose.
         macro_rules! unwind_for_of {
             ($from:expr, $seed:expr, $then:expr) => {
                 let unwind_from = $from;

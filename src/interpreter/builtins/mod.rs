@@ -24,6 +24,7 @@ mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_brotli_ctx;
 mod node_host_builtins;
+mod node_host_callee;
 #[cfg(unix)]
 mod node_host_child;
 #[cfg(unix)]
@@ -58,6 +59,7 @@ mod node_host_fs_ops;
 mod node_host_fs_watch;
 mod node_host_idna;
 mod node_host_loop;
+mod node_host_messages;
 mod node_host_module_frame;
 mod node_host_os;
 mod node_host_os_constants;

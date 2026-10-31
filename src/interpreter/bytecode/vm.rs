@@ -14,6 +14,7 @@ use smallvec::SmallVec;
 use std::cell::Cell;
 
 mod iteration;
+mod member_pos;
 mod name_store;
 mod spread;
 
@@ -1136,8 +1137,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
     let mut pc: usize = 0;
     let frame_plain = is_plain_declarative(frame_env);
     // Block environments `PushEnv` opened, innermost last, mirrored in
-    // `call_stack_envs` from `envs_base` for the GC. The frame environment
-    // stays caller-rooted. Local-op slot hints address `frame_env` or these.
+    // `call_stack_envs` from `envs_base` for the GC.
     let mut scopes: SmallVec<[EnvRef; 4]> = SmallVec::new();
     let envs_base = interp.call_stack_envs.len();
     let roots_base = interp.gc_bytecode_roots.len();
@@ -1198,10 +1198,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
             }
         };
     }
-    // Private Names this frame has resolved, by `Chunk::private_names` index.
-    // The Private Environment is fixed for the life of a frame (a class
-    // evaluated inside it scopes only its own members' closures), so one
-    // walk of the environment chain per name serves every access.
+    // Private Names this frame has resolved, by `Chunk::private_names` index
+    // (the Private Environment is fixed for the life of a frame).
     let mut private_ids: SmallVec<[PrivateId; 4]> =
         SmallVec::from_elem(PrivateId::UNRESOLVED, chunk.private_names.len());
     macro_rules! private_id {
@@ -1602,6 +1600,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::GetProp => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     assert_operands_rooted!();
@@ -1684,6 +1683,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::GetElement => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     let key_val = stack.last().expect("stack underflow on GetElement key");
                     let base_index = stack
                         .len()
@@ -1712,6 +1712,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::LoadMethod => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     assert_operands_rooted!();
@@ -1725,6 +1726,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::LoadMethodElement => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     assert_operands_rooted!();
                     let key_val = stack
                         .pop()
@@ -1744,6 +1746,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::SetProp => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     let idx = decode_u16(chunk, pc);
                     pc += 2;
                     assert_operands_rooted!();
@@ -1758,6 +1761,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::SetElement => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     let len = stack.len();
                     if len >= 3
                         && let Some(index) = stack[len - 2].as_number()
@@ -1892,9 +1896,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     assert!(stack.len() > argc, "stack underflow on construct operands");
                     let base = stack.len() - argc - 1;
                     let callee = stack[base].clone();
-                    // The operands stay on the operand stack (and in
-                    // gc_bytecode_roots) for the whole nested construction, as
-                    // for Op::Call: it can run arbitrary JS and safepoints.
+                    // The operands stay rooted for the whole construction.
                     let result = interp.construct_from_evaluated(&callee, &stack[base + 1..]);
                     pop_operands(interp, stack, argc + 1);
                     match result {
@@ -1996,9 +1998,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         }
                     };
                     if let Some(l) = operand {
-                        // As `LoadLocal` then `BinConst`: the loaded value is
-                        // rooted for the whole operation (an object operand's
-                        // `valueOf` may rebind the local and collect).
+                        // Rooted: `valueOf` may rebind the local and collect.
                         root_stack_value(interp, &l);
                         match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
                             Completion::Normal(v) => push_value(interp, stack, v),
@@ -2420,9 +2420,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                 }
                 Op::ToPrimitiveKey => {
-                    // sec-getvalue: the base-nullish check runs before ToPropertyKey's
-                    // ToPrimitive side effect, so peek the base (one below the key,
-                    // don't pop it) and check it first, without touching the key.
+                    // sec-getvalue: the base-nullish check precedes ToPrimitive on
+                    // the key, so peek the base below it first.
                     let base_index = stack
                         .len()
                         .checked_sub(2)

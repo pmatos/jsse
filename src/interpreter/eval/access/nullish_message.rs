@@ -8,8 +8,18 @@ impl Interpreter {
             Some(sym) if self.get_symbol_iterator_key() == Some(sym.to_property_key()) => {
                 Self::not_iterable_read_message(base)
             }
-            _ => format!("Cannot read properties of {base} (reading property)"),
+            _ => format!(
+                "Cannot read properties of {base} (reading {})",
+                self.node_key_text(key).unwrap_or_else(|| "property".into())
+            ),
         }
+    }
+
+    /// V8 names a primitive key in the message (`reading '0'`); the key is
+    /// never converted, so an object key stays unnamed. `--node` only.
+    fn node_key_text(&self, key: &JsValue) -> Option<String> {
+        let named = self.node_host.stack.installed && !key.is_object() && !key.is_symbol();
+        named.then(|| format!("'{key}'"))
     }
 
     pub(crate) fn nullish_read_error(&mut self, base: &JsValue, key: &JsValue) -> JsValue {

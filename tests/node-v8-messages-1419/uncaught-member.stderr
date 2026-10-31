@@ -1,0 +1,9 @@
+<dir>/uncaught-member.js:5
+  return config.server.port;
+                       ^
+
+TypeError: Cannot read properties of undefined (reading 'port')
+    at readPort (<dir>/uncaught-member.js:5:24)
+    at Object.<anonymous> (<dir>/uncaught-member.js:7:1)
+
+Node.js <version>

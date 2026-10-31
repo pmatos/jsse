@@ -22,6 +22,7 @@ mod block_scope;
 mod calls;
 mod lexical;
 mod loop_scope;
+mod member_pos;
 use loop_scope::LoopHead;
 use suspend::BodyKind;
 pub(crate) use suspend::{compile_async_body, compile_async_generator_body};
@@ -274,6 +275,7 @@ struct Compiler {
     /// *around* that construct, and handlers of the constructs it just left
     /// must not see it (see `push_handler`).
     unwind_segments: Vec<(usize, usize, usize)>,
+    member_pos: Vec<(u32, u32)>,
     /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
     /// handed to the tree-walker must not contain one (it could not suspend).
     generator: bool,
@@ -324,6 +326,7 @@ impl Compiler {
             no_tail: 0,
             kind_constants: Vec::new(),
             unwind_segments: Vec::new(),
+            member_pos: Vec::new(),
         }
     }
 
@@ -804,13 +807,13 @@ impl Compiler {
                 Expression::Identifier(name) => {
                     self.compile_identifier_assign(*op, name, value, false)
                 }
-                Expression::Member(obj, prop, _) => match prop {
+                Expression::Member(obj, prop, site) => match prop {
                     MemberProperty::Dot(name) => {
                         let idx = self.add_name(name)?;
                         if *op == AssignOp::Assign {
                             self.compile_expr(obj)?;
                             self.compile_expr(value)?;
-                            self.emit(Op::SetProp);
+                            self.emit_member(Op::SetProp, *site);
                             self.emit_u16(idx);
                             self.pop_n(2);
                             self.push_n(1);
@@ -820,7 +823,7 @@ impl Compiler {
                             // pop their own copy; it is evaluated once.
                             self.compile_expr(obj)?;
                             self.emit_dup_n(1);
-                            self.emit(Op::GetProp);
+                            self.emit_member(Op::GetProp, *site);
                             self.emit_u16(idx);
                             self.compile_expr(value)?;
                             self.emit(Self::compound_binary_op(*op)?);
@@ -838,18 +841,16 @@ impl Compiler {
                         self.compile_expr(key)?;
                         if *op == AssignOp::Assign {
                             self.compile_expr(value)?;
-                            self.emit(Op::SetElement);
+                            self.emit_member(Op::SetElement, *site);
                             self.pop_n(3);
                             self.push_n(1);
                         } else {
-                            // ToPrimitiveKey performs ToPropertyKey's only side-effecting
-                            // step exactly once, in the spec's required order (base-nullish
-                            // check before key coercion); base and key are then duplicated
-                            // so GetElement's pop and SetElement's pop each consume their
-                            // own copy.
+                            // ToPrimitiveKey coerces the key once, after the
+                            // base-nullish check; base and key are then
+                            // duplicated for GetElement and SetElement.
                             self.emit(Op::ToPrimitiveKey);
                             self.emit_dup_n(2);
-                            self.emit(Op::GetElement);
+                            self.emit_member(Op::GetElement, *site);
                             self.pop_n(2);
                             self.push_n(1);
                             self.compile_expr(value)?;
@@ -967,18 +968,18 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
-            Expression::Member(obj, prop, _site_id) => match prop {
+            Expression::Member(obj, prop, site) => match prop {
                 MemberProperty::Dot(name) => {
                     self.compile_expr(obj)?;
                     let idx = self.add_name(name)?;
-                    self.emit(Op::GetProp);
+                    self.emit_member(Op::GetProp, *site);
                     self.emit_u16(idx);
                     Ok(())
                 }
                 MemberProperty::Computed(key) => {
                     self.compile_expr(obj)?;
                     self.compile_expr(key)?;
-                    self.emit(Op::GetElement);
+                    self.emit_member(Op::GetElement, *site);
                     self.pop_n(2);
                     self.push_n(1);
                     Ok(())
@@ -1481,18 +1482,18 @@ impl Compiler {
                 self.emit_u16(name_idx);
                 self.push_n(2);
             }
-            Expression::Member(obj, MemberProperty::Dot(name), _) => {
+            Expression::Member(obj, MemberProperty::Dot(name), site) => {
                 self.compile_expr(obj)?;
                 let name_idx = self.add_name(name)?;
-                self.emit(Op::LoadMethod);
+                self.emit_member(Op::LoadMethod, *site);
                 self.emit_u16(name_idx);
                 self.push_n(1);
             }
-            Expression::Member(obj, MemberProperty::Computed(key), _) => {
+            Expression::Member(obj, MemberProperty::Computed(key), site) => {
                 self.compile_expr(obj)?;
                 self.compile_expr(key)?;
-                // base + key on the stack become callee + this in place.
-                self.emit(Op::LoadMethodElement);
+                // base + key become callee + this in place.
+                self.emit_member(Op::LoadMethodElement, *site);
             }
             Expression::Member(obj, MemberProperty::Private(name), _) => {
                 self.compile_expr(obj)?;
@@ -1882,16 +1883,9 @@ impl Compiler {
                 // is updated to undefined, and a missing else on the false
                 // path returns undefined. A value-producing arm replaces it.
                 self.reset_script_completion();
-                // Lowering (mirrors `Conditional`'s JumpIfFalse discipline):
-                //   <test>
-                //   JumpIfFalse else_target   ; JumpIfFalse POPS the test value
-                //   <consequent>
-                //   [Jump end_target]         ; only when an alternate exists
-                // else_target:
-                //   [<alternate>]
-                // end_target:
-                // Branches are statements (net-zero on the stack), so unlike
-                // the ternary expression nothing is re-pushed at the merge.
+                // Lowering: <test>; JumpIfFalse else (pops the test);
+                // <consequent>; [Jump end]; else: [<alternate>]; end:.
+                // Branches are net-zero on the stack.
                 let else_target = self.compile_cond_jump(&if_stmt.test)?;
                 self.compile_statement(&if_stmt.consequent)?;
                 if let Some(alternate) = &if_stmt.alternate {
@@ -3091,6 +3085,7 @@ impl Compiler {
             persistent_slots: self.max_persistent,
             fallback_reasons: self.fallback_reasons,
             trivial_private_getter: None,
+            member_pos: self.member_pos,
         }
     }
 }

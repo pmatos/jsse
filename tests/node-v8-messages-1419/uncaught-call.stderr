@@ -1,0 +1,9 @@
+<dir>/uncaught-call.js:5
+  service.stop();
+          ^
+
+TypeError: service.stop is not a function
+    at boot (<dir>/uncaught-call.js:5:11)
+    at Object.<anonymous> (<dir>/uncaught-call.js:7:1)
+
+Node.js <version>
