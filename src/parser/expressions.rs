@@ -1258,18 +1258,22 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
+                let list_start = self.token_mark();
                 let expr = self.parse_assignment_expression()?;
                 if self.current == Token::Comma || self.current == Token::RightParen {
                     let mut exprs = vec![expr];
+                    let mut arrow_only = false;
                     while self.current == Token::Comma {
                         self.advance()?;
                         if self.current == Token::Ellipsis {
                             self.advance()?;
                             let pat = self.parse_binding_pattern()?;
                             exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
+                            arrow_only = true;
                             break;
                         }
                         if self.current == Token::RightParen {
+                            arrow_only = true;
                             break;
                         }
                         exprs.push(self.parse_assignment_expression()?);
@@ -1278,28 +1282,7 @@ impl<'a> Parser<'a> {
                     self.no_in = saved_no_in;
                     if self.current == Token::Arrow && !self.prev_line_terminator {
                         self.advance()?;
-                        if self.in_async {
-                            for e in &exprs {
-                                if Self::expr_contains_await_expression(e) {
-                                    return Err(self.error("Await expression is not allowed in formal parameters of an async function"));
-                                }
-                            }
-                        }
-                        if self.in_generator {
-                            for e in &exprs {
-                                if Self::expr_contains_yield_expression(e) {
-                                    return Err(self.error("Yield expression is not allowed in formal parameters of a generator function"));
-                                }
-                            }
-                        }
-                        let params: Vec<Pattern> = exprs
-                            .into_iter()
-                            .map(expr_to_pattern)
-                            .collect::<Result<_, _>>()?;
-                        if self.strict {
-                            self.check_strict_params(&params)?;
-                        }
-                        self.check_duplicate_params_strict(&params)?;
+                        let params = self.arrow_params_from_cover(exprs, list_start, false)?;
                         let (body, body_is_strict) = if self.current == Token::LeftBrace {
                             let (stmts, strict) = self.parse_arrow_body_checked(false, &params)?;
                             (ArrowBody::Block(Body::new(stmts)), strict)
@@ -1320,6 +1303,9 @@ impl<'a> Parser<'a> {
                             body_is_strict,
                             info: Default::default(),
                         }));
+                    }
+                    if arrow_only {
+                        return Err(self.error("Unexpected token ')'"));
                     }
                     // Just a parenthesized expression
                     if exprs.len() == 1 {
@@ -2077,6 +2063,7 @@ impl<'a> Parser<'a> {
                 info: Default::default(),
             }));
         }
+        let list_start = self.token_mark();
         let expr = self.parse_assignment_expression()?;
         if self.current == Token::Comma || self.current == Token::RightParen {
             let mut exprs = vec![expr];
@@ -2096,23 +2083,7 @@ impl<'a> Parser<'a> {
             self.eat(&Token::RightParen)?;
             if self.current == Token::Arrow && !self.prev_line_terminator {
                 self.advance()?;
-                for e in &exprs {
-                    if Self::expr_contains_await_identifier(e)
-                        || Self::expr_contains_await_expression(e)
-                    {
-                        return Err(
-                            self.error("'await' is not allowed in async arrow formal parameters")
-                        );
-                    }
-                }
-                let params: Vec<Pattern> = exprs
-                    .into_iter()
-                    .map(expr_to_pattern)
-                    .collect::<Result<_, _>>()?;
-                if self.strict {
-                    self.check_strict_params(&params)?;
-                }
-                self.check_duplicate_params_strict(&params)?;
+                let params = self.arrow_params_from_cover(exprs, list_start, true)?;
                 let prev_async = self.in_async;
                 self.in_async = true;
                 let (body, body_is_strict) = if self.current == Token::LeftBrace {

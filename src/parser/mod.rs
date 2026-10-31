@@ -4,10 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
+mod arrow_params;
+mod catch_param;
 mod declarations;
 pub(crate) mod dynamic_function;
 mod expressions;
 pub(crate) mod inferred_names;
+mod module_early_errors;
 mod modules;
 mod node_hooks;
 mod positions;
@@ -173,6 +176,8 @@ pub(crate) struct Parser<'a> {
     /// Set by a `( ArrowFunction )` primary so the enclosing
     /// `parse_primary_expression` keeps `last_expr_parenthesized` for it.
     parenthesized_arrow: bool,
+    /// Set while an arrow's parameter list is re-parsed as FormalParameters.
+    refining_arrow_params: bool,
     last_obj_had_proto_dup: bool,
     /// Current recursive-descent nesting depth (expressions + statements).
     /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
@@ -273,6 +278,7 @@ impl<'a> Parser<'a> {
             last_expr_parenthesized: false,
             arrow_held_token: None,
             parenthesized_arrow: false,
+            refining_arrow_params: false,
             last_obj_had_proto_dup: false,
             parse_depth: 0,
             lone_surrogate_stand_ins: false,
@@ -1151,173 +1157,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// §16.2.1.1 Static Semantics: Early Errors for Module
-    fn validate_module_early_errors(&self, items: &[ModuleItem]) -> Result<(), ParseError> {
-        use HashSet;
-
-        let mut lex_names: HashSet<String> = HashSet::new();
-        let mut var_names: HashSet<String> = HashSet::new();
-        let mut exported_bindings: HashSet<String> = HashSet::new();
-
-        // Collect all lexically-declared and var-declared names
-        for item in items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    self.collect_module_var_names(stmt, &mut var_names);
-                    self.collect_module_lex_names(stmt, &mut lex_names)?;
-                }
-                ModuleItem::ExportDeclaration(export) => {
-                    self.collect_export_var_names(export, &mut var_names);
-                    self.collect_export_lex_names(export, &mut lex_names)?;
-                    self.collect_exported_bindings(export, &mut exported_bindings);
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    for spec in &import.specifiers {
-                        let name = match spec {
-                            ImportSpecifier::Default(n, _) => n,
-                            ImportSpecifier::Named { local, .. } => local,
-                            ImportSpecifier::Namespace(n) => n,
-                            ImportSpecifier::DeferredNamespace(n) => n,
-                            ImportSpecifier::SourcePhase(n) => n,
-                        };
-                        // §13.1.1: import binding cannot be "arguments" or "eval"
-                        if name == "arguments" || name == "eval" {
-                            return Err(self.error(format!(
-                                "'{name}' cannot be used as an import binding in module code"
-                            )));
-                        }
-                        if !lex_names.insert(name.clone()) {
-                            return Err(
-                                self.error(format!("Duplicate binding '{name}' in module scope"))
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check: LexicallyDeclaredNames ∩ VarDeclaredNames must be empty
-        for name in &lex_names {
-            if var_names.contains(name) {
-                return Err(self.error(format!("Identifier '{name}' has already been declared")));
-            }
-        }
-
-        // ExportedBindings must all be in VarDeclaredNames ∪ LexicallyDeclaredNames
-        for name in &exported_bindings {
-            if !var_names.contains(name) && !lex_names.contains(name) {
-                return Err(self.error(format!("Export '{name}' is not defined")));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn collect_module_var_names(&self, stmt: &Statement, names: &mut HashSet<String>) {
-        match stmt {
-            Statement::Variable(decl) if decl.kind == VarKind::Var => {
-                for d in &decl.declarations {
-                    let mut n = Vec::new();
-                    d.pattern.bound_names(&mut n);
-                    names.extend(n);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_module_lex_names(
-        &self,
-        stmt: &Statement,
-        names: &mut HashSet<String>,
-    ) -> Result<(), ParseError> {
-        match stmt {
-            Statement::Variable(decl) if decl.kind != VarKind::Var => {
-                for d in &decl.declarations {
-                    let mut n = Vec::new();
-                    d.pattern.bound_names(&mut n);
-                    for name in n {
-                        if !names.insert(name.clone()) {
-                            return Err(self
-                                .error(format!("Identifier '{name}' has already been declared")));
-                        }
-                    }
-                }
-            }
-            // In modules, function/class/generator declarations are lexically scoped
-            Statement::FunctionDeclaration(f)
-                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", f.name))
-                );
-            }
-            Statement::ClassDeclaration(c)
-                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", c.name))
-                );
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn collect_export_var_names(&self, export: &ExportDeclaration, names: &mut HashSet<String>) {
-        if let ExportDeclaration::Named {
-            declaration: Some(decl),
-            ..
-        } = export
-        {
-            self.collect_module_var_names(decl, names);
-        }
-    }
-
-    fn collect_export_lex_names(
-        &self,
-        export: &ExportDeclaration,
-        names: &mut HashSet<String>,
-    ) -> Result<(), ParseError> {
-        match export {
-            ExportDeclaration::Named {
-                declaration: Some(decl),
-                ..
-            } => {
-                self.collect_module_lex_names(decl, names)?;
-            }
-            ExportDeclaration::DefaultFunction(f)
-                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", f.name))
-                );
-            }
-            ExportDeclaration::DefaultClass(c)
-                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", c.name))
-                );
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn collect_exported_bindings(&self, export: &ExportDeclaration, names: &mut HashSet<String>) {
-        if let ExportDeclaration::Named {
-            specifiers,
-            source: None,
-            ..
-        } = export
-        {
-            for spec in specifiers {
-                names.insert(spec.local.clone());
-            }
-        }
-    }
-
     fn parse_module_item(&mut self) -> Result<ModuleItem, ParseError> {
         match &self.current {
             Token::Keyword(Keyword::Import) => {
@@ -1405,6 +1244,14 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                 if let PropertyKind::Init = prop.kind {
                     if let Expression::Spread(inner) = prop.value {
                         saw_rest = true;
+                        if matches!(
+                            inner.as_ref(),
+                            Expression::Array(..) | Expression::Object(..)
+                        ) {
+                            return Err(ParseError {
+                                message: "`...` must be followed by an assignable reference in assignment contexts".to_string(),
+                            });
+                        }
                         let pat = expr_to_pattern(inner.into_expression())?;
                         pat_props.push(ObjectPatternProperty::Rest(pat));
                     } else if prop.shorthand {
