@@ -735,7 +735,7 @@ impl Interpreter {
                     );
                 }
                 let len_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = match interp.to_index_for(&len_val, 2) {
+                let len = match interp.index_arg(&len_val, 2) {
                     Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
@@ -1193,7 +1193,7 @@ impl Interpreter {
                     );
                 }
                 let len_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = match interp.to_index_for(&len_val, 2) {
+                let len = match interp.index_arg(&len_val, 2) {
                     Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
@@ -3096,9 +3096,7 @@ impl Interpreter {
                                     } else { 0 };
                                     // §22.2.4.5 step 7: modulo check before detach check
                                     if byte_offset % bpe != 0 {
-                                        return Completion::Throw(interp.create_error("RangeError",
-                                            "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
-                                        ));
+                                        return Completion::Throw(interp.multiple_error("start offset", kind.name(), bpe));
                                     }
                                     let has_length_arg = args.len() > 2 && !args[2].is_undefined();
                                     let is_length_tracking = is_resizable && !has_length_arg;
@@ -3130,9 +3128,7 @@ impl Interpreter {
                                             ));
                                         }
                                         if !is_resizable && !(buf_len - byte_offset).is_multiple_of(bpe) {
-                                            return Completion::Throw(interp.create_error("RangeError",
-                                                "byte length of typed array should be a multiple of BYTES_PER_ELEMENT"
-                                            ));
+                                            return Completion::Throw(interp.multiple_error("byte length", kind.name(), bpe));
                                         }
                                         (buf_len - byte_offset) / bpe
                                     };
@@ -3277,7 +3273,7 @@ impl Interpreter {
                             Completion::Throw(interp.create_type_error("invalid argument"))
                         }
                         _ => {
-                            let len_val = match interp.to_index_for(first, 1) {
+                            let len_val = match interp.index_arg(first, 1) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => return Completion::Normal(JsValue::UNDEFINED),

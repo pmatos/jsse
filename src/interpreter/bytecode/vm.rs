@@ -737,10 +737,7 @@ fn update_prop_op(
 
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
     if base.is_nullish() {
-        let err = interp.create_type_error(&format!(
-            "Cannot read properties of {base} (reading '{name}')"
-        ));
-        return Completion::Throw(err);
+        return Completion::Throw(interp.nullish_named_error(base, name));
     }
     if let Some(object_id) = base.as_object_id() {
         return interp.get_object_property(object_id, name, base);
@@ -1176,7 +1173,6 @@ fn run_chunk_inner<const GENERATOR: bool>(
         }
         generator_control = Some(control);
     }
-    // Before an opcode that can run user code with operands pending.
     macro_rules! assert_operands_rooted {
         () => {
             debug_assert_operands_rooted(interp, stack, roots_base, completion_value.as_ref())
@@ -2583,7 +2579,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 }
                 Op::GetIterator | Op::ForInHead => {
                     if let Err(e) = iteration_head(interp, stack, op == Op::ForInHead) {
-                        throw!('dispatch, e);
+                        throw!('dispatch, interp.reword_iterable_noted(e, chunk, pc - 1));
                     }
                 }
                 Op::IterStep | Op::ForInStep => {

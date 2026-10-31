@@ -11,9 +11,12 @@ use crate::interpreter::{Completion, Interpreter};
 
 const CONTEXT: usize = 10;
 
+const MAX_DEPTH: usize = 1000;
+
 struct Scanner<'a> {
     units: &'a [u16],
     pos: usize,
+    depth: usize,
 }
 
 type Failure = String;
@@ -183,6 +186,16 @@ impl Scanner<'_> {
 
     fn value(&mut self) -> Result<(), Failure> {
         self.skip_ws();
+        if self.depth >= MAX_DEPTH {
+            return Err(Failure::new());
+        }
+        self.depth += 1;
+        let outcome = self.value_at();
+        self.depth -= 1;
+        outcome
+    }
+
+    fn value_at(&mut self) -> Result<(), Failure> {
         match self.at(self.pos) {
             Some(0x22) => self.string(),
             Some(0x2D | 0x30..=0x39) => self.number(),
@@ -256,6 +269,7 @@ pub(super) fn v8_json_message(text: &str) -> Option<String> {
     let mut scanner = Scanner {
         units: &units,
         pos: 0,
+        depth: 0,
     };
     let outcome = scanner.value().and_then(|()| {
         scanner.skip_ws();
@@ -268,7 +282,7 @@ pub(super) fn v8_json_message(text: &str) -> Option<String> {
             Ok(())
         }
     });
-    outcome.err()
+    outcome.err().filter(|message| !message.is_empty())
 }
 
 fn word(interp: &mut Interpreter, input: &JsonText, result: Completion) -> Completion {

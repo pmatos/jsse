@@ -241,9 +241,17 @@ pub(crate) struct Chunk {
     /// offset plus one, of each member op, as `(op offset, position)` by
     /// offset. Read when such an op finds a null or undefined base.
     pub(crate) member_pos: Vec<(u32, u32)>,
+    /// `--node` only: the initializer text of a `let`/`const` object pattern,
+    /// by the offset of its first read (V8 names it in the destructuring error).
+    pub(crate) pattern_src: Vec<(u32, std::rc::Rc<str>)>,
 }
 
 impl Chunk {
+    pub(crate) fn pattern_src_at(&self, pc: usize) -> Option<&std::rc::Rc<str>> {
+        let pc = u32::try_from(pc).ok()?;
+        self.pattern_src.iter().find(|e| e.0 == pc).map(|e| &e.1)
+    }
+
     pub(crate) fn member_pos_at(&self, pc: usize) -> Option<u32> {
         let at = self
             .member_pos

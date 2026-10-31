@@ -37,6 +37,13 @@ pub(crate) struct NodeHostState {
     pub(crate) stack: super::node_host_stack::NodeStackState,
     /// Source offset plus one of the call this frame is making (0 = unknown).
     pub(crate) call_pos: u32,
+    /// Initializer text of the object pattern whose read is about to fail.
+    pub(crate) pattern_src: Option<std::rc::Rc<str>>,
+    /// How many `bind_pattern` calls are open (counted under `--node` only).
+    pub(crate) pattern_depth: u32,
+    /// The error object `not_iterable_error` made last; a for-of or spread
+    /// that finds it rewords it with its operand's text.
+    pub(crate) iterable_error: Option<u64>,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     /// `--expose-internals`: user `require` may name `internal/...` builtins.

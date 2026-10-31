@@ -152,6 +152,10 @@ TypeError: [object Int32Array] is not a shared typed array.
 RangeError: Offset is outside the bounds of the DataView
 ## typedFrom
 TypeError: number 1 is not a function
+## typedOffset
+RangeError: start offset of Uint32Array should be a multiple of 4
+## typedLength
+RangeError: byte length of Uint32Array should be a multiple of 4
 ## typedSet
 RangeError: offset is out of bounds
 ## typedSetOffset

@@ -73,7 +73,7 @@ impl Compiler {
                     return Err(unsupported);
                 };
                 self.compile_expr(init)?;
-                self.compile_simple_object_pattern(&bindings, is_const)?;
+                self.compile_simple_object_pattern(&bindings, is_const, init)?;
                 continue;
             };
             if declarator.init.as_ref().is_some_and(is_anonymous_class) {
@@ -97,6 +97,7 @@ impl Compiler {
         &mut self,
         bindings: &[SimpleBinding],
         is_const: bool,
+        init: &crate::ast::Expression,
     ) -> Result<(), CompileError> {
         let last = bindings.len() - 1;
         for (i, binding) in bindings.iter().enumerate() {
@@ -104,6 +105,9 @@ impl Compiler {
                 self.emit_dup_n(1);
             }
             let key = self.add_name(&binding.key)?;
+            if i == 0 {
+                self.note_pattern_source(init);
+            }
             self.emit(Op::GetProp);
             self.emit_u16(key);
             self.emit_init_lexical(&binding.name, is_const)?;

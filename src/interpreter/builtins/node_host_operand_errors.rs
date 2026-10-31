@@ -10,7 +10,11 @@ impl Interpreter {
             let shown = i.v8_call_site_text(value);
             format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
         });
-        self.create_type_error(&text)
+        let error = self.create_type_error(&text);
+        self.node_host.iterable_error = error
+            .as_object_id()
+            .filter(|_| self.node_host.stack.installed);
+        error
     }
 
     /// `GetIterator(undefined)`.
@@ -23,24 +27,24 @@ impl Interpreter {
 
     /// `ToIndex` whose RangeError reads as V8's under `--node`: `what` 1 is a
     /// typed array length, 2 an array buffer length.
-    pub(crate) fn to_index_for(&mut self, value: &JsValue, what: u8) -> Completion {
-        let result = self.to_index(value);
-        let Completion::Throw(error) = &result else {
-            return result;
-        };
-        let range = error
-            .as_object_id()
-            .and_then(|id| self.data_property_string(id, "name"))
-            .is_some_and(|name| name == "RangeError");
-        if !self.node_host.stack.installed || !range {
-            return result;
+    pub(crate) fn index_arg(&mut self, value: &JsValue, what: u8) -> Completion {
+        if !self.node_host.stack.installed {
+            return self.to_index(value);
         }
-        let text = if what == 1 {
-            format!("Invalid typed array length: {}", self.v8_plain_text(value))
-        } else {
-            "Invalid array buffer length".to_string()
+        let number = match self.to_number_value(value) {
+            Ok(n) if n.is_nan() => 0.0,
+            Ok(n) => n.trunc(),
+            Err(e) => return Completion::Throw(e),
         };
-        Completion::Throw(self.create_range_error(&text))
+        if !(0.0..=9007199254740991.0).contains(&number) {
+            let text = if what == 1 {
+                format!("Invalid typed array length: {}", self.v8_plain_text(value))
+            } else {
+                "Invalid array buffer length".to_string()
+            };
+            return Completion::Throw(self.create_range_error(&text));
+        }
+        Completion::Normal(JsValue::number(number))
     }
 
     /// `Atomics` on something that is not an integer (or waitable) typed array.
@@ -126,5 +130,14 @@ impl Interpreter {
             format!("{} is not a constructor", i.v8_plain_text(target))
         });
         self.create_type_error(&text)
+    }
+
+    /// `start offset of Uint32Array should be a multiple of 4`.
+    pub(crate) fn multiple_error(&mut self, what: &str, kind: &str, bpe: usize) -> JsValue {
+        let engine = format!("{what} of typed array should be a multiple of BYTES_PER_ELEMENT");
+        let text = self.v8_message(&engine, |_| {
+            format!("{what} of {kind} should be a multiple of {bpe}")
+        });
+        self.create_range_error(&text)
     }
 }

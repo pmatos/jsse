@@ -37,9 +37,11 @@ mod node_host_child_sync;
 mod node_host_cjs_lexer;
 mod node_host_cjs_patterns;
 mod node_host_crypto;
+mod node_host_destructure;
 mod node_host_error_keys;
 mod node_host_esm;
 mod node_host_eval_frame;
+pub(crate) mod node_host_expr_text;
 #[cfg(unix)]
 mod node_host_fs;
 #[cfg(unix)]

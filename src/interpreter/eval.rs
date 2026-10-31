@@ -3290,22 +3290,13 @@ impl Interpreter {
                     Completion::Normal(final_val)
                 })
             }
-            Expression::Array(elements, _) if op == AssignOp::Assign => {
+            Expression::Array(..) | Expression::Object(..) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                match self.destructure_array_assignment(elements, &rval, env) {
-                    Completion::Normal(_) => Completion::Normal(rval),
-                    other => other,
-                }
-            }
-            Expression::Object(props, _) if op == AssignOp::Assign => {
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                match self.destructure_object_assignment(props, &rval, env) {
+                let done = self.assign_pattern_value(left, right, &rval, env);
+                match done {
                     Completion::Normal(_) => Completion::Normal(rval),
                     other => other,
                 }
@@ -4270,7 +4261,7 @@ impl Interpreter {
         }
     }
 
-    fn destructure_array_assignment(
+    pub(crate) fn destructure_array_assignment(
         &mut self,
         elements: &[Option<Expression>],
         rval: &JsValue,
@@ -4463,7 +4454,7 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
-    fn destructure_object_assignment(
+    pub(crate) fn destructure_object_assignment(
         &mut self,
         props: &[Property],
         rval: &JsValue,

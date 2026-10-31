@@ -84,6 +84,8 @@ const cases = {
   atomicsWait() { Atomics.wait(new Int32Array(1), 0, 0); },
   dataViewRange() { new DataView(new ArrayBuffer(1)).setInt32(0, 1); },
   typedFrom() { Uint8Array.from(1, 1); },
+  typedOffset() { new Uint32Array(new ArrayBuffer(8), 1); },
+  typedLength() { new Uint32Array(new ArrayBuffer(7)); },
   typedSet() { new Uint8Array(1).set([1, 2]); },
   typedSetOffset() { new Uint8Array(1).set([1], -1); },
 };
