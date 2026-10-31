@@ -1,0 +1,179 @@
+## Array.prototype.map
+    at fail (native.mjs:4:9)
+    at Array.map (<anonymous>)
+    at native.mjs:20:39
+    at show (native.mjs:14:5)
+    at native.mjs:20:1
+## Array.prototype.forEach
+    at fail (native.mjs:4:9)
+    at Array.forEach (<anonymous>)
+    at native.mjs:21:43
+    at show (native.mjs:14:5)
+    at native.mjs:21:1
+## Array.prototype.sort
+    at fail (native.mjs:4:9)
+    at Array.sort (<anonymous>)
+    at native.mjs:22:43
+    at show (native.mjs:14:5)
+    at native.mjs:22:1
+## Array.prototype.toSorted
+    at fail (native.mjs:4:9)
+    at Array.toSorted (<anonymous>)
+    at native.mjs:23:47
+    at show (native.mjs:14:5)
+    at native.mjs:23:1
+## Array.prototype.flatMap
+    at fail (native.mjs:4:9)
+    at Array.flatMap (<anonymous>)
+    at native.mjs:24:43
+    at show (native.mjs:14:5)
+    at native.mjs:24:1
+## Array.prototype.find
+    at fail (native.mjs:4:9)
+    at Array.find (<anonymous>)
+    at native.mjs:25:40
+    at show (native.mjs:14:5)
+    at native.mjs:25:1
+## Array.prototype.map.call
+    at fail (native.mjs:4:9)
+    at Array.map (<anonymous>)
+    at native.mjs:26:60
+    at show (native.mjs:14:5)
+    at native.mjs:26:1
+## Array.from
+    at fail (native.mjs:4:9)
+    at Array.from (<anonymous>)
+    at native.mjs:27:32
+    at show (native.mjs:14:5)
+    at native.mjs:27:1
+## Uint8Array.prototype.map
+    at fail (native.mjs:4:9)
+    at Uint8Array.map (<anonymous>)
+    at native.mjs:28:58
+    at show (native.mjs:14:5)
+    at native.mjs:28:1
+## new Map
+    at Object.fail (native.mjs:4:9)
+    at new Map (<anonymous>)
+    at native.mjs:29:23
+    at show (native.mjs:14:5)
+    at native.mjs:29:1
+## new Set
+    at Object.fail (native.mjs:4:9)
+    at new Set (<anonymous>)
+    at native.mjs:30:23
+    at show (native.mjs:14:5)
+    at native.mjs:30:1
+## Map.prototype.forEach
+    at fail (native.mjs:4:9)
+    at Map.forEach (<anonymous>)
+    at native.mjs:31:55
+    at show (native.mjs:14:5)
+    at native.mjs:31:1
+## String.prototype.replace
+    at fail (native.mjs:4:9)
+    at String.replace (<anonymous>)
+    at native.mjs:32:44
+    at show (native.mjs:14:5)
+    at native.mjs:32:1
+## String.prototype.replaceAll
+    at fail (native.mjs:4:9)
+    at String.replaceAll (<anonymous>)
+    at native.mjs:33:47
+    at show (native.mjs:14:5)
+    at native.mjs:33:1
+## RegExp.prototype[Symbol.replace]
+    at fail (native.mjs:4:9)
+    at [Symbol.replace] (<anonymous>)
+    at native.mjs:34:67
+    at show (native.mjs:14:5)
+    at native.mjs:34:1
+## Object.fromEntries
+    at Object.fail (native.mjs:4:9)
+    at Object.fromEntries (<anonymous>)
+    at native.mjs:35:41
+    at show (native.mjs:14:5)
+    at native.mjs:35:1
+## JSON.parse reviver
+    at Array.fail (native.mjs:4:9)
+    at JSON.parse (<anonymous>)
+    at native.mjs:36:39
+    at show (native.mjs:14:5)
+    at native.mjs:36:1
+## JSON.parse syntax error
+    at JSON.parse (<anonymous>)
+    at native.mjs:37:44
+    at show (native.mjs:14:5)
+    at native.mjs:37:1
+## Array.prototype.reduce, empty
+    at Array.reduce (<anonymous>)
+    at native.mjs:38:48
+    at show (native.mjs:14:5)
+    at native.mjs:38:1
+## Number.prototype.toFixed
+    at Number.toFixed (<anonymous>)
+    at native.mjs:39:44
+    at show (native.mjs:14:5)
+    at native.mjs:39:1
+## Object.defineProperty
+    at Object.defineProperty (<anonymous>)
+    at native.mjs:40:44
+    at show (native.mjs:14:5)
+    at native.mjs:40:1
+## new Intl.NumberFormat
+    at new NumberFormat (<anonymous>)
+    at native.mjs:41:37
+    at show (native.mjs:14:5)
+    at native.mjs:41:1
+## Reflect.apply has no frame
+    at fail (native.mjs:4:9)
+    at native.mjs:42:50
+    at show (native.mjs:14:5)
+    at native.mjs:42:1
+## Function.prototype.call has no frame
+    at fail (native.mjs:4:9)
+    at native.mjs:43:57
+    at show (native.mjs:14:5)
+    at native.mjs:43:1
+## Function.prototype.apply has no frame
+    at fail (native.mjs:4:9)
+    at native.mjs:44:58
+    at show (native.mjs:14:5)
+    at native.mjs:44:1
+## bound function has no frame
+    at fail (native.mjs:4:9)
+    at native.mjs:45:58
+    at show (native.mjs:14:5)
+    at native.mjs:45:1
+## new Array has no frame
+    at native.mjs:46:38
+    at show (native.mjs:14:5)
+    at native.mjs:46:1
+## a builtin called from a builtin
+    at fail (native.mjs:4:9)
+    at Array.map (<anonymous>)
+    at native.mjs:47:66
+    at Array.map (<anonymous>)
+    at native.mjs:47:53
+    at show (native.mjs:14:5)
+    at native.mjs:47:1
+## a limited trace
+    at fail (native.mjs:4:9)
+    at Array.map (<anonymous>)
+## captureStackTrace
+    at fail (native.mjs:4:9)
+    at inner (native.mjs:60:7)
+    at Array.forEach (<anonymous>)
+    at Outer (native.mjs:59:9)
+    at native.mjs:75:1
+    at capture (native.mjs:66:13)
+    at Array.forEach (<anonymous>)
+    at Outer (native.mjs:65:9)
+    at native.mjs:75:1
+    at Array.forEach (<anonymous>)
+    at Outer (native.mjs:69:9)
+    at native.mjs:75:1
+## new Promise
+    at fail (native.mjs:4:9)
+    at new Promise (<anonymous>)
+    at native.mjs:77:1

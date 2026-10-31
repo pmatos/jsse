@@ -1,0 +1,50 @@
+## sync
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'missing-sync.mjs' imported from import-site.mjs
+    at sync (import-site.mjs:12:3)
+    at import-site.mjs:14:1
+## await, two async functions
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'missing-await.mjs' imported from import-site.mjs
+    at awaited (import-site.mjs:17:13)
+    at outer (import-site.mjs:20:9)
+    at import-site.mjs:22:7
+## a call in the specifier
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'missing-args.mjs' imported from import-site.mjs
+    at withArguments (import-site.mjs:25:23)
+    at import-site.mjs:27:7
+## await of a chain
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'missing-chain.mjs' imported from import-site.mjs
+    at chained (import-site.mjs:30:3)
+    at import-site.mjs:34:7
+## missing dependency
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'gone.mjs' imported from imports-missing.mjs
+    at dependency (import-site.mjs:37:3)
+    at import-site.mjs:39:7
+## missing dependency, sync
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'gone-for-sync.mjs' imported from imports-missing-sync.mjs
+    at syncDependency (import-site.mjs:42:3)
+    at import-site.mjs:44:1
+## syntax error
+SyntaxError: Unexpected token '='
+    at syntax (import-site.mjs:48:3)
+    at import-site.mjs:50:7
+## missing export
+bad-export.mjs:1
+import { present, absent as renamed } from "./lib.mjs";
+                  ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async badExport (import-site.mjs:53:3)
+    at async import-site.mjs:55:1
+## missing export, tabs
+bad-export-tabs.mjs:2
+	absent,
+	^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async badExportTabs (import-site.mjs:58:3)
+    at async import-site.mjs:60:1
+## missing default export
+bad-default.mjs:1
+import lib, { present } from "./lib.mjs";
+       ^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'default'
+    at async badDefault (import-site.mjs:63:3)
+    at async import-site.mjs:65:1

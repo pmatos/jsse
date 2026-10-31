@@ -214,8 +214,7 @@ impl Interpreter {
         } else {
             return Ok(default_ctor.clone());
         };
-        // `Promise[@@species]` is `get [Symbol.species]() { return this; }`;
-        // skip the call while it is still the original accessor.
+        // Skip the `Promise[@@species]` call while it is the original accessor.
         if self.is_intrinsic_promise_constructor(&ctor)
             && self.promise_species_getter_is_original(ctor_id)
         {
@@ -298,7 +297,6 @@ impl Interpreter {
         self.define_method(proto_id, "catch", 1, |interp, this, args| {
             let on_rejected = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             // Spec 27.2.5.1: Return ? Invoke(this, "then", « undefined, onRejected »).
-            // Invoke calls GetV(V, P) which calls ToObject(V).
             let obj = match interp.to_object(this) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Completion::Throw(e),
@@ -480,11 +478,13 @@ impl Interpreter {
                 }
                 let promise_id = promise.as_object_id().unwrap_or_default();
                 let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
-                let result = interp.call_function(
-                    &executor,
-                    &JsValue::UNDEFINED,
-                    &[resolve_fn.clone(), reject_fn.clone()],
-                );
+                let result = interp.with_gc_root_scope(|interp| {
+                    for v in [&promise, &resolve_fn, &reject_fn] {
+                        interp.gc_root_value(v);
+                    }
+                    let args = [resolve_fn.clone(), reject_fn.clone()];
+                    interp.call_function(&executor, &JsValue::UNDEFINED, &args)
+                });
                 if let Completion::Throw(e) = result
                     && let Completion::Throw(e2) =
                         interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[e])
@@ -495,8 +495,7 @@ impl Interpreter {
             },
         ));
 
-        // Mark Promise constructor as deferred_construct so construct_with_new_target
-        // skips early prototype access (Promise checks callable before OrdinaryCreateFromConstructor).
+        // deferred_construct: Promise checks callable before OrdinaryCreateFromConstructor.
         if let Some(o) = ctor.as_object_id()
             && let Some(func_obj) = self.get_object_cell(o)
         {

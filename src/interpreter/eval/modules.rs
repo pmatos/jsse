@@ -432,20 +432,8 @@ impl Interpreter {
                         return self.create_rejected_promise(e);
                     }
                 };
-            let resolved_canon = resolved.canonicalize();
-            let mut stack = vec![];
-            if let Err(ref e) = self.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
-                for m_path in &stack {
-                    if let Some(m) = self.module_registry_get(m_path) {
-                        let mut mb = m.borrow_mut();
-                        mb.evaluated = true;
-                        mb.is_evaluating = false;
-                        if mb.error.is_none() {
-                            mb.error = Some(e.clone());
-                        }
-                    }
-                }
-                return self.create_rejected_promise(e.clone());
+            if let Err(e) = self.evaluate_dynamic_import(&resolved) {
+                return self.create_rejected_promise(e);
             }
             let (resolve, reject, promise) = self.create_promise_parts();
             return self.settle_dynamic_import_promise(&module, promise, resolve, reject);
@@ -461,31 +449,21 @@ impl Interpreter {
         let reject_root = reject.clone();
 
         let job_promise = promise.clone();
-        let roots = vec![promise_root, resolve_root.clone(), reject_root.clone()];
+        let site = self.node_import_site();
+        let roots = vec![
+            promise_root,
+            resolve_root.clone(),
+            reject_root.clone(),
+            site.clone(),
+        ];
         let job = move |interp: &mut Interpreter| {
-            match interp.load_module_for_type(&resolved_path, None, super::ModuleLoadMode::Evaluate)
-            {
+            let loaded = interp.node_at_import_site(&site, |interp| {
+                interp.load_module_for_type(&resolved_path, None, super::ModuleLoadMode::Evaluate)
+            });
+            match loaded {
                 Ok(m) => {
-                    let resolved_canon = resolved_path.canonicalize();
-                    let mut stack = vec![];
-                    if let Err(ref e) =
-                        interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
-                    {
-                        for m_path in &stack {
-                            if let Some(m) = interp.module_registry_get(m_path) {
-                                let mut mb = m.borrow_mut();
-                                mb.evaluated = true;
-                                mb.is_evaluating = false;
-                                if mb.error.is_none() {
-                                    mb.error = Some(e.clone());
-                                }
-                            }
-                        }
-                        let _ = interp.call_function(
-                            &reject_root,
-                            &JsValue::UNDEFINED,
-                            std::slice::from_ref(e),
-                        );
+                    if let Err(e) = interp.evaluate_dynamic_import(&resolved_path) {
+                        let _ = interp.call_function(&reject_root, &JsValue::UNDEFINED, &[e]);
                         return Completion::Normal(JsValue::UNDEFINED);
                     }
                     let _ = interp.settle_dynamic_import_promise(
