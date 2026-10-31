@@ -24,7 +24,7 @@ const ARRAY_NAMED: [&str; 13] = [
     "some",
 ];
 
-const DATE_METHOD: [&str; 29] = [
+const DATE_METHOD: [&str; 27] = [
     "getYear",
     "setDate",
     "setFullYear",
@@ -52,8 +52,6 @@ const DATE_METHOD: [&str; 29] = [
     "toTimeString",
     "toUTCString",
     "toGMTString",
-    "toJSON",
-    "valueOf",
 ];
 
 const ARRAY_BUFFER_METHOD: [&str; 4] = ["resize", "slice", "transfer", "transferToFixedLength"];
@@ -182,14 +180,8 @@ impl Interpreter {
                         "Object.prototype.toLocaleString called on null or undefined".to_string(),
                     );
                 }
-                (name == "catch" && self.is_builtin_member(func, "Promise", name, false)).then(
-                    || {
-                        format!(
-                            "Cannot read properties of {} (reading 'then')",
-                            receiver.to_string()
-                        )
-                    },
-                )
+                (name == "catch" && self.is_builtin_member(func, "Promise", name, false))
+                    .then(|| format!("Cannot read properties of {} (reading 'then')", receiver))
             }
             "not an ArrayBuffer"
                 if ARRAY_BUFFER_METHOD.contains(&name)
@@ -202,7 +194,6 @@ impl Interpreter {
             }
             "this is not a Date object"
                 if DATE_METHOD.contains(&name)
-                    && !["valueOf", "toJSON"].contains(&name)
                     && self.is_builtin_member(func, "Date", name, false) =>
             {
                 Some(self.incompatible(&format!("Date.prototype.{name}"), &receiver))

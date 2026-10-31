@@ -27,6 +27,7 @@ impl Interpreter {
                 ) {
                     Ok(Some(v)) => {
                         if !interp.to_boolean_val(&v) {
+                            interp.note_define_key(obj_id, &key);
                             return Ok(false);
                         }
                         let desc = interp.to_property_descriptor(desc_val).ok();

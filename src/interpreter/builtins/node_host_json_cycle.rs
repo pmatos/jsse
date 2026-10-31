@@ -1,12 +1,10 @@
 //! V8's circular `JSON.stringify` message (`JsonStringifier::
 //! ConstructCircularStructureErrorMessage`), under `--node` only (#1532): it
 //! shows the objects of the cycle and the property each was reached through.
-//! The serializer keeps the open objects, not the keys, so the keys are
-//! found again from the objects (the first own data property that holds the
-//! next one) on this error path.
+//! The serializer keeps the open objects; the keys they were reached by are
+//! kept beside them in `NodeHostState::json_keys` (only under `--node`).
 
 use super::super::*;
-use crate::interpreter::types::OwnKeyFilter;
 
 const ENGINE: &str = "Converting circular structure to JSON";
 const PREFIX_COUNT: usize = 2;
@@ -28,15 +26,25 @@ impl Interpreter {
         }
     }
 
-    fn json_key_holding(&self, parent: u64, child: u64) -> Option<String> {
-        let obj = self.get_object(parent)?;
-        let keys = obj
-            .borrow()
-            .ordinary_own_property_keys(OwnKeyFilter::EnumerableStrings)?;
-        keys.into_iter().find_map(|key| {
-            let held = obj.borrow().get_own_property(&key)?.value?;
-            (held.as_object_id() == Some(child)).then(|| key.to_string())
-        })
+    pub(crate) fn json_key_push(&mut self, key: &JsPropertyKey) {
+        if self.node_host.stack.installed {
+            self.node_host.json_keys.push(key.clone());
+        }
+    }
+
+    pub(crate) fn json_key_pop(&mut self) {
+        if self.node_host.stack.installed {
+            self.node_host.json_keys.pop();
+        }
+    }
+
+    /// The key the open object at `index` of `stack` was reached by.
+    fn json_open_key(&self, stack: &[u64], index: usize) -> String {
+        let keys = &self.node_host.json_keys;
+        keys.len()
+            .checked_sub(stack.len())
+            .and_then(|base| keys.get(base + index))
+            .map_or_else(String::new, |key| key.to_string())
     }
 
     /// `stack` holds the objects being serialized, `target` is the one met
@@ -53,9 +61,7 @@ impl Interpreter {
             };
             let cycle = &stack[start..];
             let line = |from: usize| {
-                let key = i.json_key_holding(cycle[from - 1], cycle[from]);
-                let key =
-                    key.map_or_else(|| "property ''".to_string(), |k| Self::json_key_text(&k));
+                let key = Self::json_key_text(&i.json_open_key(stack, start + from));
                 format!(
                     "\n    |     {key} -> object with constructor '{}'",
                     i.json_constructor_name(cycle[from])

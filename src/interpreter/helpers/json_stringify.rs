@@ -317,6 +317,7 @@ fn json_stringify_walk(
                 return Err(interp.json_cycle_error(stack, obj_id, key));
             }
             stack.push(obj_id);
+            interp.json_key_push(key);
 
             let is_array = is_array_value(interp, obj_id)?;
             let obj_val = JsValue::object(obj_id);
@@ -418,6 +419,7 @@ fn json_stringify_walk(
                 Ok(())
             })();
             stack.pop();
+            interp.json_key_pop();
             result?;
         }
         ValueKind::Undefined | ValueKind::Symbol => return Ok(false),

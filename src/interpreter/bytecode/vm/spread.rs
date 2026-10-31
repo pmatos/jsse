@@ -38,43 +38,41 @@ fn spread_values(
     Ok(spread)
 }
 
-/// Runs one spread-argument op. `before` is the operand of `ArgSpreadFirst`:
+/// Runs one spread-argument op and returns the length of its operand, read
+/// here (`before` is the operand of `ArgSpreadFirst`:
 /// the arguments already pushed.
 #[inline(never)]
 pub(super) fn run(
     interp: &mut Interpreter,
     chunk: &Chunk,
     stack: &mut Vec<JsValue>,
-    pc: &mut usize,
+    pc: usize,
     op: Op,
-) -> Result<(), Completion> {
-    if !chunk.pattern_src.is_empty() {
-        interp.node_host.pattern_src = chunk.pattern_src_at(*pc - 1).cloned();
-    }
-    let before = if op == Op::ArgSpreadFirst {
-        *pc += 2;
-        usize::from(decode_u16(chunk, *pc - 2))
+) -> Result<usize, Completion> {
+    interp.node_host.pattern_src = chunk.pattern_src_at(pc - 1).cloned();
+    let (operand_len, before) = if op == Op::ArgSpreadFirst {
+        (2, usize::from(decode_u16(chunk, pc)))
     } else {
-        0
+        (0, 0)
     };
     let (argc, is_call) = match op {
         Op::ArgSpreadFirst => {
             let total = before + spread_values(interp, stack, false).map_err(Completion::Throw)?;
             stack.push(JsValue::number(total as f64));
-            return Ok(());
+            return Ok(operand_len);
         }
         Op::ArgSpread => {
             let before = count_of(&stack[stack.len() - 2]);
             let total = before + spread_values(interp, stack, true).map_err(Completion::Throw)?;
             stack.push(JsValue::number(total as f64));
-            return Ok(());
+            return Ok(operand_len);
         }
         Op::ArgPush => {
             let top = stack.len() - 1;
             let before = count_of(&stack[top - 1]);
             stack.swap(top - 1, top);
             stack[top] = JsValue::number((before + 1) as f64);
-            return Ok(());
+            return Ok(operand_len);
         }
         Op::CallSpreadSole | Op::ConstructSpreadSole => (
             spread_values(interp, stack, false).map_err(Completion::Throw)?,
@@ -85,7 +83,7 @@ pub(super) fn run(
             op == Op::CallSpread,
         ),
     };
-    finish_call(interp, stack, argc, is_call)
+    finish_call(interp, stack, argc, is_call).map(|()| operand_len)
 }
 
 /// The layout under the arguments is the one `Op::Call`/`Op::Construct`

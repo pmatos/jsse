@@ -7,7 +7,7 @@
 use super::super::*;
 
 pub(crate) struct ProxyNote {
-    trap: String,
+    trap: &'static str,
     target: JsValue,
     key: Option<JsValue>,
     result: JsValue,
@@ -15,11 +15,15 @@ pub(crate) struct ProxyNote {
 
 impl Interpreter {
     pub(crate) fn note_proxy_trap(&mut self, trap: &str, args: &[JsValue], result: &JsValue) {
+        let named = ["get", "has", "set", "deleteProperty", "defineProperty"];
+        let Some(trap) = named.into_iter().find(|name| *name == trap) else {
+            return;
+        };
         if !self.node_host.stack.installed {
             return;
         }
         self.node_host.proxy_note = Some(ProxyNote {
-            trap: trap.to_string(),
+            trap,
             target: args.first().cloned().unwrap_or(JsValue::UNDEFINED),
             key: args.get(1).cloned(),
             result: result.clone(),
@@ -151,6 +155,11 @@ impl Interpreter {
             tail.replacen("for property ", &format!("for property {key} "), 1)
         } else {
             return None;
+        };
+        let tail = if trap == "deleteProperty" {
+            tail.replace("is not extensible", "is non-extensible")
+        } else {
+            tail
         };
         Some(format!("'{trap}' on proxy: {tail}"))
     }
