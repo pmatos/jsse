@@ -10,6 +10,8 @@
 //! access re-validates the live own property, so there is no invalidation
 //! surface.
 
+mod record;
+
 use super::*;
 use crate::types::JsPropertyKey;
 use std::cell::Cell;

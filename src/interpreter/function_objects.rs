@@ -243,10 +243,8 @@ impl Interpreter {
         Some(proto_id)
     }
 
-    pub(super) fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
-        if f.phase == DeclPhase::CopyOnly {
-            return;
-        }
+    /// A fresh closure for a hoisted function declaration over `env`.
+    pub(super) fn hoisted_function_value(&mut self, f: &FunctionDecl, env: &EnvRef) -> JsValue {
         let enclosing_strict = env.borrow().strict;
         let info = f.info();
         let func = JsFunction::User {
@@ -265,29 +263,33 @@ impl Interpreter {
             uses_arguments: info.uses_arguments,
             has_simple_params: info.has_simple_params,
         };
-        let val = self.create_function(func);
-        if is_global {
-            // §16.1.7 step 17c: CreateGlobalFunctionBinding(fn, fo, false)
-            self.env_declare_global_function_binding(env, &f.name, val, false);
+        self.create_function(func)
+    }
+
+    /// A function declaration hoisted into the function or block scope `env`
+    /// (global functions are created by `create_global_function_binding`).
+    pub(super) fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef) {
+        if f.phase == DeclPhase::CopyOnly {
+            return;
+        }
+        let val = self.hoisted_function_value(f, env);
+        let local = {
+            let e = env.borrow();
+            e.global_object_id.is_none() && e.indirect_bindings.is_none()
+        };
+        if local {
+            env.borrow_mut().bindings.insert_atom(
+                &f.info().frame.own_name_atom(&f.name),
+                Binding {
+                    value: val,
+                    kind: BindingKind::Var,
+                    initialized: true,
+                    deletable: false,
+                },
+            );
         } else {
-            let local = {
-                let e = env.borrow();
-                e.global_object_id.is_none() && e.indirect_bindings.is_none()
-            };
-            if local {
-                env.borrow_mut().bindings.insert_atom(
-                    &info.frame.own_name_atom(&f.name),
-                    Binding {
-                        value: val,
-                        kind: BindingKind::Var,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
-            } else {
-                env.borrow_mut().declare(&f.name, BindingKind::Var);
-                let _ = self.env_set(env, &f.name, val);
-            }
+            env.borrow_mut().declare(&f.name, BindingKind::Var);
+            let _ = self.env_set(env, &f.name, val);
         }
     }
 }

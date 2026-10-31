@@ -262,37 +262,6 @@ fn prepare(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Compl
     done(JsValue::UNDEFINED)
 }
 
-/// Drop the declarative `Var` bindings a context's global environment keeps
-/// beside the global object's own properties (implicit globals, function
-/// declarations), so the properties alone answer for those names and a sync
-/// that replaces one cannot be shadowed by a stale binding.
-fn settle(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
-    let Some(realm) = realm_of(interp, args.first().unwrap_or(JsValue::undefined_ref())) else {
-        return type_error(interp, "vm: not the global object of a context");
-    };
-    let Some(global) = interp.realms[realm]
-        .global_object
-        .and_then(|id| interp.get_object_cell(id).cloned())
-    else {
-        return done(JsValue::UNDEFINED);
-    };
-    let env = interp.realms[realm].global_env.clone();
-    let mirrored: Vec<String> = {
-        let e = env.borrow();
-        (0..)
-            .map_while(|i| e.bindings.entry_at(i))
-            .filter(|(name, b)| {
-                b.kind == BindingKind::Var && global.borrow().has_own_property(name.as_str())
-            })
-            .map(|(name, _)| name.as_str().to_string())
-            .collect()
-    };
-    for name in &mirrored {
-        env.borrow_mut().bindings.remove(name.as_str());
-    }
-    done(JsValue::UNDEFINED)
-}
-
 fn compile(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
     let source = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     let filename = match string_arg(interp, args, 1) {
@@ -403,10 +372,9 @@ impl Interpreter {
     pub(super) fn setup_node_host_vm(&mut self) {
         let binding = self.create_object_id();
         type Native = fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion;
-        let functions: [(&str, usize, Native); 7] = [
+        let functions: [(&str, usize, Native); 6] = [
             ("newContext", 0, new_context),
             ("prepare", 1, prepare),
-            ("settle", 1, settle),
             ("compile", 4, compile),
             ("run", 2, run),
             ("release", 1, release),
