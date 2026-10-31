@@ -25,9 +25,7 @@ impl<'a> Parser<'a> {
     fn positions_itself(spec: &Expression) -> bool {
         match spec {
             Expression::Identifier(_) => true,
-            Expression::Member(object, MemberProperty::Dot(_), _) => {
-                matches!(&**object, Expression::Identifier(_)) || Self::positions_itself(object)
-            }
+            Expression::Member(object, MemberProperty::Dot(_), _) => Self::positions_itself(object),
             _ => false,
         }
     }

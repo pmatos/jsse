@@ -401,7 +401,12 @@ impl<'a> Parser<'a> {
                 | Token::TemplateTail(_, raw) => template_escape_message(raw).to_string(),
                 _ => msg,
             },
-            "Expected property after '?.'" if self.is_template_token() => {
+            "Expected property after '?.'"
+                if matches!(
+                    self.current,
+                    Token::NoSubstitutionTemplate(..) | Token::TemplateHead(..)
+                ) =>
+            {
                 "Invalid tagged template on optional chain".to_string()
             }
             "Declaration not allowed in statement position of iteration statement"
@@ -437,13 +442,6 @@ impl<'a> Parser<'a> {
                 e
             }
         })
-    }
-
-    fn is_template_token(&self) -> bool {
-        matches!(
-            self.current,
-            Token::NoSubstitutionTemplate(..) | Token::TemplateHead(..)
-        )
     }
 
     /// `++x` / `x++` on something that cannot be assigned to.
