@@ -1,7 +1,7 @@
 """Run an oracle subprocess tree in its own session and never leave it behind.
 
-`run_group` starts the command as the leader of a new session (so a process group of its own), and in every
-exit path (normal return, timeout, KeyboardInterrupt, SIGTERM/SIGHUP, interpreter exit) kills the whole group:
+`group` (a context manager; `run_group`, `run_measured` and `call` are built on it) starts the command as the
+leader of a new session (so a process group of its own), and in every exit path (normal return, timeout, KeyboardInterrupt, SIGTERM/SIGHUP, interpreter exit) kills the whole group:
 SIGTERM, a short grace, then SIGKILL. Forked workers (mocha, hereby runtests-parallel) that outlive their
 host otherwise get re-parented to the init/user manager and keep running. Output goes to temporary files, so a
 straggler that inherited the pipes cannot block the reader.
@@ -41,6 +41,10 @@ def _signal_group(pgid, sig):
         pass
 
 
+def _gone(child):
+    return child.poll() is not None and not _alive(child.pid)
+
+
 def reap_group(child, grace=GRACE):
     """Kill every process of `child`'s group, wait for the group to vanish, and reap the leader."""
     pgid = child.pid
@@ -55,10 +59,6 @@ def reap_group(child, grace=GRACE):
     deadline = time.monotonic() + grace
     while _alive(pgid) and time.monotonic() < deadline:
         time.sleep(0.02)
-
-
-def _gone(child):
-    return child.poll() is not None and not _alive(child.pid)
 
 
 def kill_all():
