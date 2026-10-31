@@ -1,16 +1,166 @@
 name: Nightly TypeScript suite
 
+# TypeScript 6.0.3's own test suite (compiler, conformance, project, transpile,
+# fourslash, fourslash-server and unit-test runners, plus the scripted tsc, tsc
+# --watch and hereby oracles) on `jsse --node`, judged against the checked-in pass
+# list ts-suite/jsse-pass-1296.json by scripts/run-ts-pass-list.py (#1296). One job
+# builds jsse with the shipped release profile; TS_SHARDS jobs each run the suites
+# that scripts/ts_nightly_1298.py assigns them (balanced by estimated cost, every
+# suite in exactly one shard) and upload ts-suite-shard-<n> (pass, fail and
+# regression id lists per runner, timings.json, summary.json); the report job merges
+# them into ts-suite-nightly-results and prints the table in the step summary.
+# Layout and reproduction: docs/agents/library-tests-typescript-nightly-1298.md.
+#
+# Full cases nightly, a sampled smoke in CI (ts-suite-nightly-smoke.yml). The
+# pull_request trigger is only for changes to this file: GitHub dispatches a
+# workflow_dispatch workflow only from the default branch, so a change to the
+# workflow is validated by running it on its own pull request.
+#
+# BLOCKING SWITCH: TS_SUITE_BLOCKING below. "false" (non-blocking): baseline
+# regressions and crashed batches are warnings and the report job stays green.
+# "true" (blocking): they fail the report job, i.e. the workflow. Integrity
+# problems (a shard missing, a suite run twice or never, a universe or bucket that
+# differs from the pin) fail the report job in both modes.
+
 on:
   schedule:
     - cron: "45 1 * * *"
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/nightly-ts-suite-1298.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  TS_SHARDS: "20"
+  TS_SUITE_BLOCKING: "false"
+  TYPESCRIPT_VERSION: 6.0.3
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  probe:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 90
     steps:
-      - run: echo probe
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ts-suite-jsse
+          path: target/release/jsse
+          retention-days: 2
+          if-no-files-found: error
+
+  shard:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ts-suite-jsse
+          path: ${{ runner.temp }}/bin
+
+      - name: Make the binary executable
+        run: chmod +x "$RUNNER_TEMP/bin/jsse"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - name: Fetch and build the pinned TypeScript tree
+        run: python3 scripts/run-ts-suite-oracle.py --dir "$RUNNER_TEMP/ts-suite" fetch install build
+
+      - name: Install the typescript package for the scripted tsc oracles
+        run: npm install --prefix "$RUNNER_TEMP/tsc" "typescript@${TYPESCRIPT_VERSION}" --ignore-scripts --no-audit --no-fund
+
+      - name: Run the shard
+        env:
+          SHARD: ${{ matrix.shard }}
+          TS_SRC_DIR: ${{ runner.temp }}/ts-suite/ts-src
+          TSC_DIR: ${{ runner.temp }}/tsc/node_modules/typescript
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/shard"
+          python3 scripts/run-ts-suite-nightly-1298.py shard --shard "$SHARD" --shards "$TS_SHARDS" \
+            --out "$RUNNER_TEMP/shard/results" --jsse "$RUNNER_TEMP/bin/jsse" --jobs 2 \
+            --timeout 10800 | tee "$RUNNER_TEMP/shard/results.log"
+
+      - name: Upload the shard results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ts-suite-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/shard/results
+            ${{ runner.temp }}/shard/results.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  report:
+    needs: shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the shard results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ts-suite-shard-*
+          path: ${{ runner.temp }}/shards
+
+      - name: Merge
+        run: |
+          set -o pipefail
+          args=()
+          if [ "$TS_SUITE_BLOCKING" = "true" ]; then args+=(--blocking); fi
+          python3 scripts/run-ts-suite-nightly-1298.py merge --results "$RUNNER_TEMP/shards" \
+            --out "$RUNNER_TEMP/merged" --shards "$TS_SHARDS" "${args[@]}" | tee "$RUNNER_TEMP/merge.log"
+
+      - name: Summarise
+        if: ${{ always() }}
+        run: |
+          cat "$RUNNER_TEMP/merged/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the merged results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ts-suite-nightly-results
+          path: |
+            ${{ runner.temp }}/merged
+            ${{ runner.temp }}/merge.log
+          retention-days: 30
+          if-no-files-found: ignore
