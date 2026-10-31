@@ -123,12 +123,13 @@ impl Interpreter {
             });
         }
 
-        // General case: call new C(executor) where executor captures resolve/reject
-        let resolve_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::UNDEFINED));
-        let reject_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::UNDEFINED));
+        // General case: call new C(executor) where executor captures resolve/reject.
+        // The captured functions live in Rooted Slots pinned on the executor: a
+        // user constructor can collect (every statement boundary) after calling
+        // the executor and before returning.
+        let slots = RootedSlots::new(self, 2);
+        let capture = slots.clone();
 
-        let rs = resolve_slot.clone();
-        let rj = reject_slot.clone();
         let executor = self.create_function(JsFunction::native(
             "".to_string(),
             2,
@@ -137,26 +138,23 @@ impl Interpreter {
                 let reject_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Spec: If promiseCapability.[[Resolve]] is not undefined, throw TypeError
-                if !(*rs.borrow()).is_undefined() {
-                    return Completion::Throw(
-                        interp.create_type_error("Promise executor has already been resolved"),
-                    );
-                }
                 // Spec: If promiseCapability.[[Reject]] is not undefined, throw TypeError
-                if !(*rj.borrow()).is_undefined() {
+                if !capture.get(interp, 0).is_undefined() || !capture.get(interp, 1).is_undefined()
+                {
                     return Completion::Throw(
                         interp.create_type_error("Promise executor has already been resolved"),
                     );
                 }
 
                 // Spec: Set promiseCapability.[[Resolve]] to resolve
-                *rs.borrow_mut() = resolve_arg;
                 // Spec: Set promiseCapability.[[Reject]] to reject
-                *rj.borrow_mut() = reject_arg;
+                capture.set(interp, 0, resolve_arg);
+                capture.set(interp, 1, reject_arg);
 
                 Completion::Normal(JsValue::UNDEFINED)
             },
         ));
+        slots.pin_on(self, &executor);
 
         let promise = match self.construct(constructor, &[executor]) {
             Completion::Normal(v) => v,
@@ -164,8 +162,8 @@ impl Interpreter {
             _ => return Err(self.create_type_error("Promise constructor returned abnormally")),
         };
 
-        let resolve = resolve_slot.borrow().clone();
-        let reject = reject_slot.borrow().clone();
+        let resolve = slots.get(self, 0);
+        let reject = slots.get(self, 1);
 
         if !self.is_callable(&resolve) {
             return Err(self.create_type_error("Promise resolve function is not callable"));
