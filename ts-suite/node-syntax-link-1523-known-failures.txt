@@ -6,7 +6,6 @@
 script	"if (1) let x = 1"	Lexical declaration cannot appear in a single-statement context	Unexpected identifier 'x'
 script	"for (let of x) ;"	Unexpected identifier 'x'	The identifier 'let' is disallowed as a left-hand side expression of a for-of loop
 script	"let [...a,] = []"	Rest element must be last element	Unexpected token ','
-script	"({...{a}} = {})"	`...` must be followed by an assignable reference in assignment contexts	parses
 script	"function f(...a, b) {}"	Rest parameter must be last formal parameter	Unexpected token ','
 script	"function f(...a = []) {}"	Rest parameter may not have a default initializer	Unexpected token '='
 script	"(...a, b) => 1"	Rest parameter must be last formal parameter	Unexpected token ','
@@ -16,24 +15,20 @@ script	"async (a = await 1) => 1"	missing ) after argument list	Unexpected numbe
 script	"yield => 1; function* g() { (yield) => 1 }"	Invalid destructuring assignment target	Yield expression not allowed in formal parameter
 script	"var \\u0061wait; async function f() { var \\u0061wait; }"	Unexpected reserved word	Unexpected identifier '\u0061wait'
 script	"var x = /(?<=a)+/u"	Invalid regular expression: /(?<=a)+/u: Invalid quantifier	Invalid regular expression: /(?<=a)+/u: Nothing to repeat
-script	"var x = (a, )"	Unexpected token ')'	parses
 script	"var x = { 1 }"	Unexpected number	Unexpected token '}'
 script	"var x = { 'a' }"	Unexpected string	Unexpected token '}'
 script	"var x = { [a] }"	Unexpected token '['	Unexpected token '}'
 script	"import()"	import() requires a specifier	Unexpected token ')'
 script	"class let {}"	Unexpected strict mode reserved word	Unexpected identifier 'let'
 script	"class yield {}"	Unexpected strict mode reserved word	Unexpected identifier 'yield'
-script	"(a.b) => 1"	Invalid destructuring assignment target	parses
-script	"([a.b]) => 1"	Illegal property in declaration context	parses
-script	"({a: b.c}) => 1"	Illegal property in declaration context	parses
-script	"((a)) => 1"	Invalid destructuring assignment target	parses
-script	"try {} catch ([e]) { var e; }"	Identifier 'e' has already been declared	parses
+script	"([a.b]) => 1"	Illegal property in declaration context	Unexpected token '.'
+script	"({a: b.c}) => 1"	Illegal property in declaration context	Unexpected token '.'
+script	"((a)) => 1"	Invalid destructuring assignment target	Unexpected token '('
 script	"var {1}"	Unexpected number	Unexpected token '}'
 script	"var {a: 1}"	Invalid destructuring assignment target	Unexpected number
 script	"var {'a'}"	Unexpected string	Unexpected token '}'
 script	"var {[a]}"	Unexpected token '['	Unexpected token '}'
 script	"var {...a, b}"	Rest element must be last element	Unexpected token ','
-script	"var {...{a}}"	`...` must be followed by an identifier in declaration contexts	Missing initializer in destructuring declaration
 script	"var [...a, b]"	Rest element must be last element	Unexpected token ','
 script	"var [...a = 1]"	Invalid destructuring assignment target	Unexpected token '='
 script	"var [1]"	Invalid destructuring assignment target	Unexpected number
@@ -50,7 +45,6 @@ module	"export default 1; export default 2;"	Identifier '.default' has already b
 module	"export"	Unexpected token 'export'	Unexpected end of input
 module	"import defer * as ns from './lib.mjs'"	Unexpected token '*'	loads
 module	"export default function () {} export default 1"	Identifier '.default' has already been declared	Duplicate export of 'default'
-module	"let x; { var x; }"	Identifier 'x' has already been declared	loads
 
 # Stacks and module loading (see docs/agents/node-host-syntax-link-1523.md).
 stack	import() nested in an expression (id(import('x')), a && import('x'), (await import('x')), [1, import('x')]) reports the position V8 emitted last (statement start, operator, array literal); jsse reports the import keyword
