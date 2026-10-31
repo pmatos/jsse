@@ -12,7 +12,7 @@ impl Lexer<'_> {
     }
 
     pub(super) fn add_reexport(&mut self, name: String) {
-        if !self.reexports.contains(&name) {
+        if self.seen_reexports.insert(name.clone()) {
             self.reexports.push(name);
         }
     }

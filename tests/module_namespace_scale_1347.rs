@@ -15,7 +15,8 @@ const EXPORTS: usize = 30_000;
 const BOUND: Duration = Duration::from_secs(20);
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("jsse-ns-scale-1347-{name}"));
+    let dir =
+        std::env::temp_dir().join(format!("jsse-ns-scale-1347-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("failed to create scratch dir");
     dir

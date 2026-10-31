@@ -36,6 +36,7 @@ pub(super) struct Lexer<'a> {
     pub(super) pos: usize,
     pub(super) exports: Vec<String>,
     pub(super) seen_exports: HashSet<String>,
+    pub(super) seen_reexports: HashSet<String>,
     pub(super) reexports: Vec<String>,
     pub(super) star_map: HashMap<String, String>,
 }
@@ -395,6 +396,7 @@ pub(crate) fn lex_cjs_names(source: &str) -> CjsNames {
         pos: 0,
         exports: Vec::new(),
         seen_exports: HashSet::new(),
+        seen_reexports: HashSet::new(),
         reexports: Vec::new(),
         star_map: HashMap::new(),
     };

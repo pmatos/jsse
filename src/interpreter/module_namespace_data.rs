@@ -17,7 +17,7 @@ pub(crate) struct ExportNames {
 
 impl ExportNames {
     fn new(mut names: Vec<String>) -> Self {
-        names.sort();
+        names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         let index = names.iter().cloned().collect();
         Self {
             sorted: names,

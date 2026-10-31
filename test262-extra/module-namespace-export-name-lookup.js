@@ -35,7 +35,7 @@ flags: [module]
 import * as ns from "./module-namespace-export-name-lookup_FIXTURE.mjs";
 
 var expected = ["B", "_", "a", "a b", "ab", "b", "bump", "counter", "default",
-  "fromStar", "star", "é"];
+  "fromStar", "star", "\u00e9", "\u{10000}", "\uFFFD"];
 assert.compareArray(Object.keys(ns), expected, "keys are the sorted export names");
 assert.compareArray(Reflect.ownKeys(ns), expected.concat([Symbol.toStringTag]),
   "ownKeys: sorted names, then @@toStringTag");
@@ -60,7 +60,7 @@ expected.forEach(function (name) {
 
 assert.sameValue(ns.b, "b", "local export shadows export * of the same name");
 assert.sameValue(ns.fromStar, "fromStar", "export * name");
-assert.sameValue(ns["é"], "accented", "string-literal export name");
+assert.sameValue(ns["\u00e9"], "accented", "string-literal export name");
 assert.sameValue(ns.star.fromStar, "fromStar", "export * as ns");
 
 assert.sameValue(ns.counter, 0, "initial live binding");
