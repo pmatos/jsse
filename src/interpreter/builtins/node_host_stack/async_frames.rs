@@ -285,10 +285,9 @@ impl Interpreter {
             called_with: parked.called_with,
         };
         self.frame_record(&raw, record);
-        let method = record.pop().unwrap_or(JsValue::UNDEFINED);
-        let flags = record.pop().and_then(|v| v.as_number()).unwrap_or(0.0);
-        record.push(JsValue::number(flags + FLAG_ASYNC));
-        record.push(method);
+        let flags_at = record.len() - 2;
+        let flags = record[flags_at].as_number().unwrap_or(0.0);
+        record[flags_at] = JsValue::number(flags + FLAG_ASYNC);
     }
 
     fn combinator_record(hop: &CombinatorHop, record: &mut Vec<JsValue>) {

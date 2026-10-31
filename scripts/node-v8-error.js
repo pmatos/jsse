@@ -34,19 +34,19 @@
 
   function describe(frames, index) {
     var base = index * RECORD;
-    var place =
-      (frames[base + 4] & COMBINATOR) !== 0 ? undefined : locate(frames[base + 2], frames[base + 3]);
+    var combinator = (frames[base + 4] & COMBINATOR) !== 0;
+    var place = combinator ? undefined : locate(frames[base + 2], frames[base + 3]);
     return {
       functionName: frames[base] === undefined ? null : frames[base],
       typeName: frames[base + 1] === undefined ? null : frames[base + 1],
-      file: place === undefined ? undefined : place[0],
+      file: combinator ? null : place === undefined ? undefined : place[0],
       line: place === undefined ? null : place[1],
       column: place === undefined ? null : place[2],
       constructor: (frames[base + 4] & CONSTRUCTOR) !== 0,
       toplevel: (frames[base + 4] & TOPLEVEL) !== 0,
       async: (frames[base + 4] & ASYNC) !== 0,
       method: frames[base + 5] === undefined ? null : frames[base + 5],
-      promiseIndex: (frames[base + 4] & COMBINATOR) !== 0 ? frames[base + 3] : null,
+      promiseIndex: combinator ? frames[base + 3] : null,
     };
   }
 
@@ -73,10 +73,10 @@
       return this.#frame.method;
     }
     getFileName() {
-      return this.#frame.promiseIndex === null ? this.#frame.file : null;
+      return this.#frame.file;
     }
     getScriptNameOrSourceURL() {
-      return this.#frame.promiseIndex === null ? this.#frame.file : null;
+      return this.#frame.file;
     }
     getScriptHash() {
       return "";
