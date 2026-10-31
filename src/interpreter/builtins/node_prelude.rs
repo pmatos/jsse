@@ -21,7 +21,9 @@ const HIDE_GLOBALS: &str = r#"(function (names) {
 
 /// Load order matters: the process shim extends the `process` object that the
 /// console/util shim creates, the timers shim needs the event-loop shim's
-/// handoff, the fs scripts need `Buffer` and `util`, and the globals are hidden last.
+/// handoff, the fs scripts need `Buffer` and `util`, the Buffer shim consumes the
+/// base64 decoder that `node-base64-decode.js` leaves on `globalThis`, and the
+/// globals are hidden last.
 const NODE_PRELUDE: &[(&str, &str)] = &[
     (
         "node-v8-error.js",

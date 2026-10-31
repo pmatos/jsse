@@ -886,7 +886,7 @@
         var bytes =
           enc === "base64" || enc === "base64url"
             ? b64.decode(string, length)
-            : strToBytes(string, encoding);
+            : strToBytes(string, enc);
         var n = Math.min(bytes.length, length);
         for (var i = 0; i < n; i++) this[offset + i] = bytes[i];
         return n;

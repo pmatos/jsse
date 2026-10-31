@@ -119,3 +119,34 @@ fn a_surrogate_pair_ends_decoding_and_a_leading_one_gives_an_empty_buffer() {
         new Buffer("ab\u{1F600}cd", "base64").toString("hex"))"#;
     assert_eq!(run(&[], script), "69 0 69 69");
 }
+
+#[test]
+fn long_mixed_input_switches_between_the_fast_and_slow_paths_like_node() {
+    let script = r#"
+var pool = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_ !*" + String.fromCharCode(0x161, 0x100, 0xd800);
+var seed = 7;
+function rnd(n) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; }
+var s = "";
+for (var i = 0; i < 6000; i++) s += pool[rnd(pool.length)];
+var out = [];
+["base64", "base64url"].forEach(function (enc) {
+  var clean = s.replace(/[^A-Za-z0-9+\/]/g, "").slice(0, 300) + "=" + s.slice(0, 40);
+  [s, clean, s + String.fromCharCode(0xd83d, 0xde00) + s].forEach(function (str) {
+    var b = Buffer.from(str, enc);
+    var room = Buffer.alloc(100);
+    var n = room.write(str, 3, 50, enc);
+    out.push([enc, str.length, b.length, require("crypto").createHash("sha1").update(b).digest("hex"), n, room.toString("hex").slice(0, 40)].join(" "));
+  });
+});
+console.log(out.join("\n"));
+"#;
+    let expected = "\
+base64 6000 4500 2225d51e7baa667441b9277028ea577dbcc88030 50 000000900fb0220e0862083003efb0c28028e3ea
+base64 341 225 620071ef7a10ef5b8d044f51bb1249dbac44054f 50 000000900c08838218820c00c30a00a38a20c306
+base64 12002 4500 2225d51e7baa667441b9277028ea577dbcc88030 50 000000900fb0220e0862083003efb0c28028e3ea
+base64url 6000 4500 2225d51e7baa667441b9277028ea577dbcc88030 50 000000900fb0220e0862083003efb0c28028e3ea
+base64url 341 225 620071ef7a10ef5b8d044f51bb1249dbac44054f 50 000000900c08838218820c00c30a00a38a20c306
+base64url 12002 4500 2225d51e7baa667441b9277028ea577dbcc88030 50 000000900fb0220e0862083003efb0c28028e3ea";
+    assert_eq!(run(&[], script), expected);
+    assert_eq!(run(&["--no-bytecode"], script), expected);
+}
