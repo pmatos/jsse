@@ -35,11 +35,16 @@ impl Parser<'_> {
             }
         }
         let binding = &head[start..];
-        let at = if declared && binding.starts_with(['[', '{']) {
+        let pattern = binding.starts_with(['[', '{']);
+        let at = if declared && pattern {
             head.len().saturating_sub(1)
-        } else if let Some(open) = binding.strip_suffix(']').and_then(Self::open_bracket) {
+        } else if let Some(open) = binding
+            .strip_suffix(']')
+            .filter(|_| !pattern)
+            .and_then(Self::open_bracket)
+        {
             start + open
-        } else if let Some(dot) = binding.rfind('.').filter(|_| !declared) {
+        } else if let Some(dot) = binding.rfind('.').filter(|_| !declared && !pattern) {
             start + dot + 1
         } else {
             start

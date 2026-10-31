@@ -101,10 +101,10 @@ impl Interpreter {
     }
 
     /// Sets the position the next call reports: a for-of head steps its
-    /// iterator at the head's own.
+    /// iterator at the head's own (0: unknown, the function's start).
     #[inline]
     pub(crate) fn node_set_call_pos(&mut self, at: u32) {
-        if at != 0 && self.node_host.stack.installed {
+        if self.node_host.stack.installed {
             self.node_host.call_pos = at;
         }
     }
@@ -119,6 +119,9 @@ impl Interpreter {
     }
 
     pub(crate) fn node_generator_pos(&self, gen_id: u64) -> u32 {
+        if !self.node_host.stack.installed {
+            return 0;
+        }
         let slot = self
             .get_object(gen_id)
             .and_then(|object| object.borrow().hidden_slot(GENERATOR_POSITION));
@@ -155,18 +158,13 @@ impl Interpreter {
     pub(super) fn parked_generator(&self, gen_id: u64) -> Option<ParkedAwait> {
         let func = self.generator_function(gen_id)?;
         let env = self.generator_env(gen_id)?;
-        let object = self.get_object(gen_id)?;
-        let pos = object
-            .borrow()
-            .hidden_slot(GENERATOR_POSITION)
-            .and_then(|pos| pos.as_number())
-            .unwrap_or(0.0);
+        let pos = self.node_generator_pos(gen_id);
         let receiver = env.borrow().get_this();
         Some(ParkedAwait {
             func,
             receiver,
             called_with: false,
-            pos: pos as u32,
+            pos,
             result: self.generator_request_promise(gen_id),
             module: None,
         })
@@ -174,7 +172,10 @@ impl Interpreter {
 
     /// How many reactions `awaited`, if a promise, has: taken before an
     /// `await_then` so the one it registers can be told from a foreign one.
-    pub(crate) fn node_reaction_count(&self, awaited: &JsValue) -> usize {
+    fn node_reaction_count(&self, awaited: &JsValue) -> usize {
+        if !self.node_host.stack.installed {
+            return 0;
+        }
         awaited
             .as_object_id()
             .and_then(|id| self.get_object(id))
@@ -182,18 +183,24 @@ impl Interpreter {
             .unwrap_or(0)
     }
 
-    /// Marks the continuation `await_then` registered on `awaited` (which had
-    /// `before` reactions), which an async generator's closure-based `await`
-    /// (`yield*`, a disposer's) parks at, as the generator's, so the `at async`
-    /// walk can see it. PromiseResolve may have awaited another promise
-    /// instead; then nothing is marked.
-    pub(crate) fn node_mark_generator_await(
+    /// `await_then` for a closure-based `await` of async generator `gen_id`
+    /// (`yield*`, a disposer's). The continuation registered on `awaited` is
+    /// marked as the generator's, so the `at async` walk can see it, and the
+    /// position of the park is unknown. PromiseResolve may have awaited another
+    /// promise instead; then nothing is marked.
+    pub(crate) fn await_then_in_generator(
         &mut self,
         awaited: &JsValue,
         gen_id: u64,
-        before: usize,
+        resume: impl Fn(&mut Interpreter, Result<JsValue, JsValue>) -> Completion + 'static,
     ) {
-        if !self.node_host.stack.installed || self.node_reaction_count(awaited) != before + 1 {
+        let before = self.node_reaction_count(awaited);
+        self.await_then(awaited, resume);
+        if !self.node_host.stack.installed {
+            return;
+        }
+        self.node_note_generator_pos(gen_id, 0);
+        if self.node_reaction_count(awaited) != before + 1 {
             return;
         }
         let handler = awaited

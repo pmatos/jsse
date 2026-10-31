@@ -3240,12 +3240,10 @@ impl Interpreter {
         }
         let gen_this = gen_this.clone();
         let promise = promise.clone();
-        let before = self.node_reaction_count(inner_result);
-        self.await_then(inner_result, move |interp, outcome| {
+        self.await_then_in_generator(inner_result, gen_id, move |interp, outcome| {
             interp.yield_star_await_inner_result_resume(&gen_this, gen_id, step, outcome, &promise);
             Completion::Normal(JsValue::UNDEFINED)
         });
-        self.node_mark_generator_await(inner_result, gen_id, before);
     }
 
     /// Called when Await(innerResult) settles during yield* delegation in an async generator.
@@ -5603,11 +5601,9 @@ impl Interpreter {
         value: &JsValue,
     ) {
         self.generator_pending_dispose.insert(gen_id, disposal);
-        let before = self.node_reaction_count(value);
-        self.await_then(value, move |interp, outcome| {
+        self.await_then_in_generator(value, gen_id, move |interp, outcome| {
             interp.async_gen_dispose_resume(gen_id, outcome)
         });
-        self.node_mark_generator_await(value, gen_id, before);
     }
 
     /// Suspend the driver at a `for-of` unwind's disposal `Await`: snapshot

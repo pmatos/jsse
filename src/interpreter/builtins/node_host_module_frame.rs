@@ -51,7 +51,7 @@ impl Interpreter {
     }
 
     /// The same for the top-level `await` state machine `async_id`, if it is a
-    /// module's. Every resumption also forgets the `await` position it parked at.
+    /// module's. Every resumption of a module's also forgets the `await` position it parked at.
     pub(crate) fn node_push_async_module_frame(&mut self, async_id: u64) -> bool {
         if !self.node_host.stack.installed {
             return false;
