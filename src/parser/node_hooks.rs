@@ -30,17 +30,18 @@ impl<'a> Parser<'a> {
         let raw = self.raw_current();
         match &self.current {
             Token::Eof => "Unexpected end of input".to_string(),
+            Token::Keyword(Keyword::Let | Keyword::Static | Keyword::Yield) if self.strict => {
+                "Unexpected strict mode reserved word".to_string()
+            }
+            Token::Keyword(Keyword::Await) if self.in_async || self.is_module => {
+                "Unexpected reserved word".to_string()
+            }
             Token::Identifier(_)
             | Token::IdentifierWithEscape(_)
             | Token::PrivateName(_)
-            | Token::Keyword(
-                Keyword::Async
-                | Keyword::Await
-                | Keyword::Let
-                | Keyword::Of
-                | Keyword::Static
-                | Keyword::Yield,
-            ) => format!("Unexpected identifier '{raw}'"),
+            | Token::Keyword(Keyword::Await | Keyword::Let | Keyword::Static | Keyword::Yield) => {
+                format!("Unexpected identifier '{raw}'")
+            }
             Token::NumericLiteral(_)
             | Token::LegacyOctalLiteral(_)
             | Token::NonOctalDecimalLiteral(_)
@@ -71,6 +72,15 @@ impl<'a> Parser<'a> {
             self.error(self.v8_unexpected())
         } else {
             self.error(message)
+        }
+    }
+
+    /// `f(1 2)`: V8 asks for the closing parenthesis of the argument list.
+    pub(super) fn unterminated_arguments(&self) -> ParseError {
+        if inferred_names::enabled() {
+            self.error("missing ) after argument list")
+        } else {
+            self.expected_error(&Token::RightParen)
         }
     }
 

@@ -34,6 +34,22 @@ const sources = [
   "a => {",
   "switch (x) { foo }",
   "do x while (y)",
+  "f(1 2)",
+  "f(1",
+  "f(1;",
+  "f(",
+  "new F(1 2)",
+  "f(...a b)",
+  "f(1,",
+  "f(1 +)",
+  "'use strict'; let let = 1",
+  "'use strict'; var static",
+  "'use strict'; yield 1",
+  "async function f() { var await }",
+  "var of of",
+  "a async",
+  "a static",
+  "'use strict'; a static",
 ];
 
 for (const source of sources) {

@@ -26,7 +26,7 @@ directory removed from paths (regenerate by running the fixture on Node and remo
 - `import-site.mjs`: `import()` from a plain function, an `await` in async functions, a call in the specifier,
   an `await` of a chain, a missing dependency of the imported module, a syntax error, and a missing named, renamed and
   default export (decorated source line, tabs kept).
-- `syntax.mjs`: the V8 text of 31 sources through `vm.Script` plus a module that does not parse.
+- `syntax.mjs`: the V8 text of 47 sources through `vm.Script` plus a module that does not parse.
 
 `scripts/test_node_stacks_1482.py` covers the oracle's extra normalisation.
 
@@ -35,7 +35,7 @@ directory removed from paths (regenerate by running the fixture on Node and remo
 Matches: builtin frames as above; an `import()` error's call position (`import` keyword, or the `await` in front of
 it, or the last call made while evaluating its specifier); load errors (resolution, parse) carry the caller's live frames
 and `at async` chain, link errors (missing export) the `at async` chain only; `Unexpected token '='` / `identifier` /
-`number` / `string` / `template string` / `end of input` for the common productions; `The requested module
+`number` / `string` / `template string` / `end of input` / `strict mode reserved word` / `missing ) after argument list` for the common productions; `The requested module
 './lib.mjs' does not provide an export named 'x'` with the source line and carets for named and default imports.
 
 Does not (filed as #1523 and #1524 under #1418, see the ADR's Known gaps): parser messages of the productions that have their own V8 text;

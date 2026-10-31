@@ -17,7 +17,10 @@ impl<'a> Parser<'a> {
             }
             self.advance()?;
         }
-        self.eat(&Token::RightParen)?;
+        if self.current != Token::RightParen {
+            return Err(self.unterminated_arguments());
+        }
+        self.advance()?;
         Ok(args)
     }
 }

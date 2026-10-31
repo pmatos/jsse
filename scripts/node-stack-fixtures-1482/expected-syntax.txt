@@ -29,4 +29,20 @@
 "a => {" SyntaxError: Unexpected end of input
 "switch (x) { foo }" SyntaxError: Unexpected identifier 'foo'
 "do x while (y)" SyntaxError: Unexpected token 'while'
+"f(1 2)" SyntaxError: missing ) after argument list
+"f(1" SyntaxError: missing ) after argument list
+"f(1;" SyntaxError: missing ) after argument list
+"f(" SyntaxError: Unexpected end of input
+"new F(1 2)" SyntaxError: missing ) after argument list
+"f(...a b)" SyntaxError: missing ) after argument list
+"f(1," SyntaxError: Unexpected end of input
+"f(1 +)" SyntaxError: Unexpected token ')'
+"'use strict'; let let = 1" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var static" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; yield 1" SyntaxError: Unexpected strict mode reserved word
+"async function f() { var await }" SyntaxError: Unexpected reserved word
+"var of of" SyntaxError: Unexpected token 'of'
+"a async" SyntaxError: Unexpected token 'async'
+"a static" SyntaxError: Unexpected identifier 'static'
+"'use strict'; a static" SyntaxError: Unexpected strict mode reserved word
 module SyntaxError: Unexpected token '='

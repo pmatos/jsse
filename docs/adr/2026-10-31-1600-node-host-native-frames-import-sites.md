@@ -74,7 +74,7 @@ gated by the same switch as function name inference.
 5. **Parser wording** (`parser/node_hooks.rs`). Once hooks are installed, "this
    token is not allowed here" reads like V8: `Unexpected token '='`,
    `Unexpected identifier 'y'`, `Unexpected number`/`string`/`template string`,
-   `Unexpected end of input`. The token text is sliced from the source. Covered:
+   `Unexpected end of input`, `Unexpected strict mode reserved word`, `Unexpected reserved word` (`await`), `missing ) after argument list`. The token text is sliced from the source. Covered:
    `eat`, `eat_semicolon`, the binding pattern, property name and primary
    expression fallbacks, array/object literal separators and the class name.
 
@@ -89,6 +89,7 @@ Filed as #1523 (parser wording) and #1524 (loader errors).
   `eval` and `Function` prefix the message with `SyntaxError: ` (both modes).
 - `export { x } from './m'` and `export * from` link errors keep the old text and
   have no source line.
+- Builtins of a second realm (`$262.createRealm`, `vm` contexts, ShadowRealm) are created after the table is built and show no frame; `Error.captureStackTrace(o, fn)` with a builtin as `fn` hides nothing.
 - A generator body has no frame, so `Generator.next` is named `Object.next`.
 - Importing a module that failed to load again returns the first error object
   with its first stack (Node makes a fresh one).
