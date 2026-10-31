@@ -1,0 +1,16 @@
+name: Nightly TypeScript suite
+
+on:
+  schedule:
+    - cron: "45 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo probe
