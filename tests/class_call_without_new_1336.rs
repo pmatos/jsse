@@ -1,9 +1,6 @@
 //! Calling a class constructor without `new` names the class in the
-//! TypeError, in default and `--node` mode (#1336). The text is
-//! implementation-defined (ECMA-262 §10.2.1 [[Call]] step 2 only requires a
-//! TypeError), so test262 cannot see it; the expectations are Node's, which
-//! prints the declared or inferred name and, for an unnamed class, the
-//! plural form.
+//! TypeError (#1336). The text is implementation-defined (ECMA-262 §10.2.1
+//! [[Call]] step 2), so test262 cannot see it; expectations are Node's.
 
 use std::process::Command;
 
