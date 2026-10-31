@@ -85,7 +85,7 @@ var proxyApplyForward = new Proxy(proxyApplyRecurse, {
   },
 });
 callMustRangeError("Proxy apply-trap forwarding recursion", function () {
-  proxyApplyForward(10000);
+  proxyApplyForward(20000);
 });
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ function evalMustRangeError(label, src) {
 // measured while calibrating this constant, and is bounded the same way.
 //
 // 80,000 operands: comfortably above both profiles' EVAL_DEPTH_LIMIT (2,000
-// debug / 50,000 release), while staying clear of jsse#612 — a *parser*-side
+// debug / 60,000 release), while staying clear of jsse#612 — a *parser*-side
 // native stack limit (unrelated to eval_depth, found while implementing
 // jsse#607) that overflows a debug build on these same flat/member-chain
 // shapes past roughly 122,000 operands, before evaluation even starts.
@@ -143,17 +143,17 @@ evalMustRangeError(
 // repeated deep-eval failures would accumulate phantom depth until an
 // expression well *below* the limit spuriously threw. Trip the limit many
 // times, then require a moderately deep (but legal) expression to still
-// evaluate to the right value in the same process. 60,000 stays under
+// evaluate to the right value in the same process. 80,000 stays under
 // jsse#612's parser-side ceiling noted above.
 for (var i = 0; i < 20; i++) {
   try {
-    eval("1" + "+1".repeat(60000));
+    eval("1" + "+1".repeat(80000));
   } catch (e) {
     // expected RangeError, swallow
   }
 }
 // 500 stays safely under both profiles' EVAL_DEPTH_LIMIT (2,000 debug /
-// 50,000 release) — this checks the counter unwinds, not "realistic code
+// 60,000 release) — this checks the counter unwinds, not "realistic code
 // depth", so the exact value is otherwise arbitrary.
 if (eval("1" + "+1".repeat(500)) !== 501) {
   throw new Error("eval-depth counter leaked: a below-limit expression failed after recovery");
