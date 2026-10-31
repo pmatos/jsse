@@ -3,6 +3,7 @@ pub(crate) mod array_dense;
 mod array_transform;
 mod atomics;
 pub(crate) mod bigint;
+mod class_call_error;
 mod collections;
 mod date;
 mod disposable;
