@@ -52,7 +52,7 @@ Guards: `scripts/test_ts_passlist.py` (ids, buckets, selection, batching, grep, 
 
 | runner | tests | recorded |
 |---|---|---|
-| compiler | 43656 | 43074 (buckets 2, A-K, M-Y; **not L**, see below) |
+| compiler | 43656 | 43656 (all buckets; L was recorded after #1448, see below) |
 | conformance | 46182 | 46182 (53 buckets) |
 | project | 2528 | 2528 |
 | transpile | 37 | 37 |
@@ -61,8 +61,8 @@ Guards: `scripts/test_ts_passlist.py` (ids, buckets, selection, batching, grep, 
 | unittests | 7154 | 7154 (36 suites) |
 | tsc-projects, tsc-watch, hereby | 367, 38, 32 | 437 |
 
-106222 tests recorded, none failing on jsse (`ts-suite/pass-list-1296-not-passing.txt` is empty). Wall time of the recording on a shared 24-core host at 4 jobs: compiler 2.5 h, conformance 2 h, unittests 0.5 h, fourslash 15 min, fourslash-server about 25 min (tsserver logs), project 3 min, transpile 6 s; about 5.5 h in all. A gate run over a sample (`--sample 0.01 --seed 7`, all runners) finishes in minutes.
+106804 tests recorded (106222 when first recorded, before bucket L), none failing on jsse (`ts-suite/pass-list-1296-not-passing.txt` is empty). Wall time of the recording on a shared 24-core host at 4 jobs: compiler 2.5 h, conformance 2 h, unittests 0.5 h, fourslash 15 min, fourslash-server about 25 min (tsserver logs), project 3 min, transpile 6 s; about 5.5 h in all. A gate run over a sample (`--sample 0.01 --seed 7`, all runners) finishes in minutes.
 
-**Not recorded: compiler bucket L (582 tests).** `largeControlFlowGraph.ts` fails all six of its tests with `RangeError: Maximum call stack size exceeded` in the `before all` hook (TypeScript's flow analysis recurses to `flowDepth` 2000, more than the 4000 nested JS calls of the release soft limit; Node reaches 12,523). The engine fix is PR #1448 (#1271, call-depth limits raised to 8000/10000). Once it is merged, `uv run python scripts/run-ts-pass-list.py compiler:L --update-baseline` records the bucket; recording it earlier would put a test into the pass list that `main` fails. The other 576 tests of L pass on jsse. One `unittests` batch and one `(root)` conformance bucket were re-run after fixing the gate itself (a title with a newline cut mocha's `--grep`, `conformance:(root)` is missing from `ts-suite/oracle.json`'s bucket table).
+**Compiler bucket L (582 tests)** was first left out: `largeControlFlowGraph.ts` failed all six of its tests with `RangeError: Maximum call stack size exceeded` (TypeScript's flow analysis recurses to `flowDepth` 2000, more than the 4000 nested JS calls of the old release soft limit; Node reaches 12,523). PR #1448 (#1271) raised the call-depth limits to 8000/10000 and bucket L is now recorded (`--list` marks `L=582*`). One `unittests` batch and one `(root)` conformance bucket were re-run after fixing the gate itself (a title with a newline cut mocha's `--grep`, `conformance:(root)` is missing from `ts-suite/oracle.json`'s bucket table).
 
 The eslint rule tests (`hereby run-eslint-rules-tests`, 79) are not a mocha runner and are not in the list.
