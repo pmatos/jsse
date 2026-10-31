@@ -1,6 +1,7 @@
 # Node host mode: async `fs` follow-ups
 
-Status: accepted (#1341); amends ADR 2026-10-26-2300 (#1234).
+Status: accepted (#1341); the `cp` decision is superseded by ADR
+2026-10-31-1500 (#1503); amends ADR 2026-10-26-2300 (#1234).
 
 ## Context
 
@@ -36,7 +37,8 @@ failures were reported through the callback; `chmod`/`chown`/`utimes`/`link`/
   floor.
 - **`cp` is validated synchronously** (`S.cpValidate`: options and both paths)
   and still runs whole on a later turn, because `cpSync` catches around its
-  floor calls and cannot be probed. Splitting it is #1503.
+  floor calls and cannot be probed. Superseded: #1503 replaced it with a port
+  of Node's promise-based copy.
 - **readv/writev** (`internal/fs/vectored.js`) are one `read`/`write` of the
   buffers' combined length on a temporary that is scattered to or gathered from
   the caller's buffers, which is what one `readv(2)`/`writev(2)` does. No new
@@ -63,6 +65,6 @@ call and GC stress.
 
 ## Known gaps
 
-Non-blocking `cp` with an async `filter` (#1503); `readableWebStream` and a
+`readableWebStream` and a
 lazy `openAsBlob` (#1504, blocked by web streams #1360); `signal` on the
 FileHandle forms and mid-write aborts (#1505).

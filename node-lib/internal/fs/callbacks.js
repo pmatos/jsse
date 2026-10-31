@@ -146,23 +146,6 @@ function run(syncFn, args, cb, extra) {
   advance(true);
 }
 
-// A function that cannot be probed (`cp` catches around its floor calls):
-// validate now, then run whole on a later loop turn, reporting everything that
-// goes wrong through the callback.
-function deferred(syncFn, args, cb, validate) {
-  validate(...args);
-  setImmediate(() => {
-    let result;
-    try {
-      result = syncFn(...args);
-    } catch (e) {
-      cb(e);
-      return;
-    }
-    settle(cb, result);
-  });
-}
-
 // options.signal of readFile/writeFile/appendFile: an aborted signal fails the
 // call before it starts; readFile also fails if the signal fires meanwhile.
 const SIGNAL_AT = { readFile: 1, writeFile: 2, appendFile: 2 };
@@ -202,11 +185,7 @@ function define(name, syncFn, options) {
       cb = withSignal(name, args, cb);
       if (cb === null) return;
     }
-    if (options && options.deferred && options.deferred(args)) {
-      deferred(syncFn, args, cb, options.validate);
-    } else {
-      run(syncFn, args, cb, options && options.extra && options.extra(args));
-    }
+    run(syncFn, args, cb, options && options.extra && options.extra(args));
   };
   ObjectDefineProperty(wrapper, 'name', { value: name, configurable: true });
   if (!(options && options.hidden)) exports[name] = wrapper;
@@ -244,7 +223,16 @@ define('lstat', sync.lstatSync, { args: withoutThrowIfNoEntry });
 
 define('readdir', sync.readdirSync);
 exports.readdirDepthFirst = define('readdir', S.readdirDepthFirst, { hidden: true });
-define('cp', sync.cpSync, { deferred: () => true, required: 2, validate: S.cpValidate });
+
+// `cp` is not a script of floor calls: it is Node's promise-based copy.
+exports.cp = function cp(src, dest, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = undefined;
+  }
+  checkCallback(callback);
+  require('internal/fs/cp').cpCallback(src, dest, options, callback);
+};
 define('rm', sync.rmSync);
 define('truncate', sync.truncateSync, {
   args: (args) => {
