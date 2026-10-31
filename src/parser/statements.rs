@@ -844,7 +844,7 @@ impl<'a> Parser<'a> {
                         let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                             ForInOfLeft::Expression(expr)
                         } else {
-                            let pat = expr_to_pattern(expr)?;
+                            let pat = self.for_head(expr)?;
                             self.check_strict_assignment_pattern(&pat)?;
                             ForInOfLeft::Pattern(pat)
                         };
@@ -866,7 +866,7 @@ impl<'a> Parser<'a> {
                         let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                             ForInOfLeft::Expression(expr)
                         } else {
-                            let pat = expr_to_pattern(expr)?;
+                            let pat = self.for_head(expr)?;
                             self.check_strict_assignment_pattern(&pat)?;
                             ForInOfLeft::Pattern(pat)
                         };
@@ -1060,7 +1060,7 @@ impl<'a> Parser<'a> {
                     let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                         ForInOfLeft::Expression(expr)
                     } else {
-                        let pat = expr_to_pattern(expr)?;
+                        let pat = self.for_head(expr)?;
                         self.check_strict_assignment_pattern(&pat)?;
                         ForInOfLeft::Pattern(pat)
                     };
@@ -1090,7 +1090,7 @@ impl<'a> Parser<'a> {
                     let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                         ForInOfLeft::Expression(expr)
                     } else {
-                        let pat = expr_to_pattern(expr)?;
+                        let pat = self.for_head(expr)?;
                         self.check_strict_assignment_pattern(&pat)?;
                         ForInOfLeft::Pattern(pat)
                     };

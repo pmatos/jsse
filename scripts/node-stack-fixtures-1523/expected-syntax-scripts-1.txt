@@ -1,0 +1,246 @@
+"function () {}" SyntaxError: Function statements require a function name
+"let let = 1" SyntaxError: let is disallowed as a lexically bound name
+"const let = 1" SyntaxError: let is disallowed as a lexically bound name
+"@" SyntaxError: Invalid or unexpected token
+"@x" SyntaxError: Invalid or unexpected token
+"try {}" SyntaxError: Missing catch or finally after try
+"try {} catch" SyntaxError: Unexpected end of input
+"let x; let x;" SyntaxError: Identifier 'x' has already been declared
+"var x; let x;" SyntaxError: Identifier 'x' has already been declared
+"const x;" SyntaxError: Missing initializer in const declaration
+"let [a];" SyntaxError: Missing initializer in destructuring declaration
+"const {a};" SyntaxError: Missing initializer in destructuring declaration
+"break;" SyntaxError: Illegal break statement
+"continue;" SyntaxError: Illegal continue statement: no surrounding iteration statement
+"return 1;" SyntaxError: Illegal return statement
+"foo: foo: 1" SyntaxError: Label 'foo' has already been declared
+"x: while(1) { (function(){ break x; }) }" SyntaxError: Undefined label 'x'
+"while(1) { break y; }" SyntaxError: Undefined label 'y'
+"x: { continue x; }" SyntaxError: Illegal continue statement: 'x' does not denote an iteration statement
+"throw\n1" SyntaxError: Illegal newline after throw
+"'use strict'; with (a) {}" SyntaxError: Strict mode code may not include a with statement
+"'use strict'; delete x;" SyntaxError: Delete of an unqualified identifier in strict mode.
+"'use strict'; eval = 1" SyntaxError: Unexpected eval or arguments in strict mode
+"'use strict'; arguments++" SyntaxError: Unexpected eval or arguments in strict mode
+"'use strict'; 010" SyntaxError: Octal literals are not allowed in strict mode.
+"'use strict'; '\\01'" SyntaxError: Octal escape sequences are not allowed in strict mode.
+"'use strict'; function f(a, a) {}" SyntaxError: Duplicate parameter name not allowed in this context
+"'use strict'; var eval;" SyntaxError: Unexpected eval or arguments in strict mode
+"'use strict'; function eval() {}" SyntaxError: Unexpected eval or arguments in strict mode
+"'use strict'; implements = 1" SyntaxError: Unexpected strict mode reserved word
+"function f(a, a) { 'use strict'; }" SyntaxError: Duplicate parameter name not allowed in this context
+"function f(a = 1) { 'use strict'; }" SyntaxError: Illegal 'use strict' directive in function with non-simple parameter list
+"(a, a) => 1" SyntaxError: Duplicate parameter name not allowed in this context
+"if (1) function f(){}" parses
+"'use strict'; if (1) function f(){}" SyntaxError: In strict mode code, functions can only be declared at top level or inside a block.
+"if (1) class C {}" SyntaxError: Unexpected token 'class'
+"if (1) const x = 1" SyntaxError: Unexpected token 'const'
+"while (1) function f(){}" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+"while (1) let\nx" parses
+"label: let\nx" parses
+"label: function* g(){}" SyntaxError: Generators can only be declared at the top level or inside a block.
+"label: class C {}" SyntaxError: Unexpected token 'class'
+"if (1) async function f(){}" SyntaxError: Async functions can only be declared at the top level or inside a block.
+"for (let x of [], []) ;" SyntaxError: Unexpected token ','
+"for (async of x) ;" SyntaxError: The left-hand side of a for-of loop may not be 'async'.
+"for (let x = 1 of y) ;" SyntaxError: for-of loop variable declaration may not have an initializer.
+"for (var x = 1 of y) ;" SyntaxError: for-of loop variable declaration may not have an initializer.
+"for (let x = 1 in y) ;" SyntaxError: for-in loop variable declaration may not have an initializer.
+"for (x, y of z) ;" SyntaxError: Invalid left-hand side in for-loop
+"for (1 of z) ;" SyntaxError: Invalid left-hand side in for-loop
+"for (1 in z) ;" SyntaxError: Invalid left-hand side in for-loop
+"for (let [a] = 1 of z) ;" SyntaxError: for-of loop variable declaration may not have an initializer.
+"for await (x in y) ;" SyntaxError: Unexpected reserved word
+"async function f() { for await (x;;) ; }" SyntaxError: Unexpected token ';'
+"for await (x of y) ;" SyntaxError: Unexpected reserved word
+"1 = 2" SyntaxError: Invalid left-hand side in assignment
+"a + b = 2" SyntaxError: Invalid left-hand side in assignment
+"++1" SyntaxError: Invalid left-hand side expression in prefix operation
+"1++" SyntaxError: Invalid left-hand side expression in postfix operation
+"f() = 1" parses
+"[a + 1] = []" SyntaxError: Invalid destructuring assignment target
+"({a: 1} = {})" SyntaxError: Invalid destructuring assignment target
+"({a = 1})" SyntaxError: Invalid shorthand property initializer
+"({a = 1}).x" SyntaxError: Invalid shorthand property initializer
+"[...a, b] = []" SyntaxError: Rest element must be last element
+"[...a,] = []" SyntaxError: Rest element must be last element
+"({...a, b} = {})" SyntaxError: Rest element must be last element
+"function f(a,,) {}" SyntaxError: Unexpected token ','
+"({ get a(x) {} })" SyntaxError: Getter must not have any formal parameters.
+"({ set a() {} })" SyntaxError: Setter must have exactly one formal parameter.
+"({ set a(x, y) {} })" SyntaxError: Setter must have exactly one formal parameter.
+"({ set a(...x) {} })" SyntaxError: Setter function argument must not be a rest parameter
+"class C { get constructor() {} }" SyntaxError: Class constructor may not be an accessor
+"class C { constructor() {} constructor() {} }" SyntaxError: A class may only have one constructor
+"class C { *constructor() {} }" SyntaxError: Class constructor may not be a generator
+"class C { async constructor() {} }" SyntaxError: Class constructor may not be an async method
+"class C { static prototype() {} }" SyntaxError: Classes may not have a static property named 'prototype'
+"class C { constructor = 1 }" SyntaxError: Classes may not have a field named 'constructor'
+"class C { #constructor }" SyntaxError: Classes may not have a field named 'constructor'
+"class C { #a; #a }" SyntaxError: Identifier '#a' has already been declared
+"class C { foo() { this.#b } }" SyntaxError: Private field '#b' must be declared in an enclosing class
+"this.#a" SyntaxError: Private field '#a' must be declared in an enclosing class
+"class C extends D { foo() { super(); } }" SyntaxError: 'super' keyword unexpected here
+"function f() { super.x }" SyntaxError: 'super' keyword unexpected here
+"function f() { super() }" SyntaxError: 'super' keyword unexpected here
+"({ f() { super() } })" SyntaxError: 'super' keyword unexpected here
+"new.target" SyntaxError: new.target expression is not allowed here
+"class C { x = arguments }" SyntaxError: 'arguments' is not allowed in class field initializer or static initialization block
+"class C { static { arguments } }" SyntaxError: 'arguments' is not allowed in class field initializer or static initialization block
+"class C { static { return } }" SyntaxError: Illegal return statement
+"class C extends (() => 1) {}" parses
+"class A { static async *#x() {} static #x }" SyntaxError: Identifier '#x' has already been declared
+"({ __proto__: 1, __proto__: 2 })" SyntaxError: Duplicate __proto__ fields are not allowed in object literals
+"delete this.#a" SyntaxError: Private field '#a' must be declared in an enclosing class
+"class C { #a; m() { delete this.#a } }" SyntaxError: Private fields can not be deleted
+"class C { #a; m() { delete (this.#a) } }" SyntaxError: Private fields can not be deleted
+"a?.b = 1" SyntaxError: Invalid left-hand side in assignment
+"a?.`x`" SyntaxError: Invalid tagged template on optional chain
+"new a?.b()" SyntaxError: Invalid optional chain from new expression
+"a?.b++" SyntaxError: Invalid left-hand side expression in postfix operation
+"async function f() { function await() {} }" SyntaxError: Unexpected reserved word
+"async function await() {}" parses
+"async function f(await) {}" SyntaxError: Unexpected reserved word
+"async function f(a = await 1) {}" SyntaxError: Illegal await-expression in formal parameters of async function
+"async (await) => 1" SyntaxError: 'await' is not a valid identifier name in an async function
+"function* g() { function yield() {} }" SyntaxError: Unexpected identifier 'yield'
+"function* g(a = yield) {}" SyntaxError: Yield expression not allowed in formal parameter
+"function* yield() {}" parses
+"function* g() { yield\n* 1 }" SyntaxError: Unexpected token '*'
+"function* g() { var yield; }" SyntaxError: Unexpected identifier 'yield'
+"function* g(yield) {}" SyntaxError: Unexpected identifier 'yield'
+"async function* f() { await = 1 }" SyntaxError: Unexpected token '='
+"await 1" SyntaxError: await is only valid in async functions and the top level bodies of modules
+"function f() { await 1 }" SyntaxError: await is only valid in async functions and the top level bodies of modules
+"async () => { var await; }" SyntaxError: Unexpected reserved word
+"v\\u0061r x" SyntaxError: Keyword must not contain escaped characters
+"\\u0076ar x" SyntaxError: Keyword must not contain escaped characters
+"var v\\u{1F600}" SyntaxError: Invalid or unexpected token
+"var a\\u{110000}" SyntaxError: Undefined Unicode code-point
+"var \\u{}" SyntaxError: Invalid Unicode escape sequence
+"var \\u12" SyntaxError: Invalid Unicode escape sequence
+"var x = \"\\u12\"" SyntaxError: Invalid Unicode escape sequence
+"var x = \"\\x1\"" SyntaxError: Invalid hexadecimal escape sequence
+"var x = \"\\u{110000}\"" SyntaxError: Undefined Unicode code-point
+"var x = \"\\u{}\"" SyntaxError: Invalid Unicode escape sequence
+"var x = \"abc" SyntaxError: Invalid or unexpected token
+"var x = 'abc\n'" SyntaxError: Invalid or unexpected token
+"var x = `abc" SyntaxError: Unexpected end of input
+"var x = `${1`" SyntaxError: Unexpected end of input
+"var x = `${}`" SyntaxError: Unexpected token '}'
+"var x = `\\u12`" SyntaxError: Invalid Unicode escape sequence
+"var x = `\\01`" SyntaxError: Octal escape sequences are not allowed in template strings.
+"tag`\\u12`; `\\u12`" SyntaxError: Invalid Unicode escape sequence
+"/* abc" SyntaxError: Invalid or unexpected token
+"var x = /abc" SyntaxError: Invalid regular expression: missing /
+"var x = /(/" SyntaxError: Invalid regular expression: /(/: Unterminated group
+"var x = /a/gg" SyntaxError: Invalid regular expression flags
+"var x = /a/x" SyntaxError: Invalid regular expression flags
+"var x = /[b-a]/" SyntaxError: Invalid regular expression: /[b-a]/: Range out of order in character class
+"var x = /(?<a>.)(?<a>.)/" SyntaxError: Invalid regular expression: /(?<a>.)(?<a>.)/: Duplicate capture group name
+"var x = /\\k<a>/u" SyntaxError: Invalid regular expression: /\k<a>/u: Invalid named capture referenced
+"var x = /{1}/u" SyntaxError: Invalid regular expression: /{1}/u: Nothing to repeat
+"var x = /a{2,1}/" SyntaxError: Invalid regular expression: /a{2,1}/: numbers out of order in {} quantifier
+"var x = /\\p{Foo}/u" SyntaxError: Invalid regular expression: /\p{Foo}/u: Invalid property name
+"var x = 1__0" SyntaxError: Only one underscore is allowed as numeric separator
+"var x = 1_" SyntaxError: Numeric separators are not allowed at the end of numeric literals
+"var x = 0_1" SyntaxError: Numeric separator can not be used after leading 0.
+"var x = 0x_1" SyntaxError: Invalid or unexpected token
+"var x = 1._1" SyntaxError: Invalid or unexpected token
+"var x = 1e_1" SyntaxError: Invalid or unexpected token
+"var x = 1n_" SyntaxError: Invalid or unexpected token
+"var x = 1.5n" SyntaxError: Invalid or unexpected token
+"var x = 01n" SyntaxError: Invalid or unexpected token
+"var x = 09n" SyntaxError: Invalid or unexpected token
+"var x = 0b2" SyntaxError: Invalid or unexpected token
+"var x = 0o8" SyntaxError: Invalid or unexpected token
+"var x = 0x" SyntaxError: Invalid or unexpected token
+"var x = 3in []" SyntaxError: Invalid or unexpected token
+"var x = 3a" SyntaxError: Invalid or unexpected token
+"var x = 1e" SyntaxError: Invalid or unexpected token
+"var x = 1e+" SyntaxError: Invalid or unexpected token
+"var x = .e1" SyntaxError: Unexpected token '.'
+"'use strict'; var x = 08" SyntaxError: Decimals with leading zeros are not allowed in strict mode.
+"var x = #" SyntaxError: Invalid or unexpected token
+"var x = a #b" SyntaxError: Unexpected identifier '#b'
+"var x = \\" SyntaxError: Invalid or unexpected token
+"var x = \\u" SyntaxError: Invalid Unicode escape sequence
+"var x = ?" SyntaxError: Unexpected token '?'
+"var x = a ?? b || c" SyntaxError: Unexpected token '||'
+"var x = a || b ?? c" SyntaxError: Unexpected token '??'
+"var x = -1 ** 2" SyntaxError: Unary operator used immediately before exponentiation expression. Parenthesis must be used to disambiguate operator precedence
+"var x = typeof 1 ** 2" SyntaxError: Unary operator used immediately before exponentiation expression. Parenthesis must be used to disambiguate operator precedence
+"var x = a ? b" SyntaxError: Unexpected end of input
+"var x = a ? b :" SyntaxError: Unexpected end of input
+"var x = ()" SyntaxError: Unexpected token ')'
+"var x = (a b)" SyntaxError: Unexpected identifier 'b'
+"var x = ( " SyntaxError: Unexpected end of input
+"var x = [" SyntaxError: Unexpected end of input
+"var x = {" SyntaxError: Unexpected end of input
+"var x = { a" SyntaxError: Unexpected end of input
+"var x = { a:" SyntaxError: Unexpected end of input
+"var x = { a: 1," SyntaxError: Unexpected end of input
+"var x = { get }" parses
+"var x = { async a }" SyntaxError: Unexpected token '}'
+"var x = { async *a }" SyntaxError: Unexpected token '}'
+"var x = { async\na() {} }" SyntaxError: Unexpected identifier 'a'
+"var x = { *a }" SyntaxError: Unexpected token '}'
+"var x = { a() }" SyntaxError: Unexpected token '}'
+"var x = { a(}" SyntaxError: Unexpected token '}'
+"var x = a." SyntaxError: Unexpected end of input
+"var x = a.1" SyntaxError: Unexpected number
+"var x = a[" SyntaxError: Unexpected end of input
+"var x = a[1" SyntaxError: Unexpected end of input
+"var x = a(" SyntaxError: Unexpected end of input
+"var x = new" SyntaxError: Unexpected end of input
+"var x = new." SyntaxError: Unexpected end of input
+"var x = new.foo" SyntaxError: Unexpected identifier 'foo'
+"var x = import" SyntaxError: Cannot use import statement outside a module
+"var x = import." SyntaxError: Unexpected end of input
+"var x = import.foo" SyntaxError: Unexpected identifier 'foo'
+"import.meta" SyntaxError: Cannot use 'import.meta' outside a module
+"import(" SyntaxError: Unexpected end of input
+"import(a, b, c)" SyntaxError: Unexpected identifier 'c'
+"new import(a)" SyntaxError: Cannot use new with import
+"import a from 'a'" SyntaxError: Cannot use import statement outside a module
+"export default 1" SyntaxError: Unexpected token 'export'
+"export {}" SyntaxError: Unexpected token 'export'
+"function f() { import.meta }" SyntaxError: Cannot use 'import.meta' outside a module
+"var x = function" SyntaxError: Unexpected end of input
+"var x = function (" SyntaxError: Unexpected end of input
+"var x = function (a" SyntaxError: Unexpected end of input
+"var x = function () " SyntaxError: Unexpected end of input
+"var x = function () {" SyntaxError: Unexpected end of input
+"var x = class" SyntaxError: Unexpected end of input
+"var x = class {" SyntaxError: Unexpected end of input
+"var x = class extends" SyntaxError: Unexpected end of input
+"var x = class A extends {}" SyntaxError: Unexpected end of input
+"class" SyntaxError: Unexpected end of input
+"class 1" SyntaxError: Unexpected number
+"class A {" SyntaxError: Unexpected end of input
+"class A { 1 }" parses
+"class A { a b }" SyntaxError: Unexpected identifier 'b'
+"class A { a() }" SyntaxError: Unexpected token '}'
+"class A { static }" parses
+"class A { get }" parses
+"class A { get a }" SyntaxError: Unexpected token '}'
+"class A { ; }" parses
+"class A { , }" SyntaxError: Unexpected token ','
+"class A extends B, C {}" SyntaxError: Unexpected token ','
+"'use strict'; class yield {}" SyntaxError: Unexpected strict mode reserved word
+"class A { static static static() {} }" SyntaxError: Unexpected strict mode reserved word
+"function" SyntaxError: Unexpected end of input
+"function f" SyntaxError: Unexpected end of input
+"function f(" SyntaxError: Unexpected end of input
+"function f(a" SyntaxError: Unexpected end of input
+"function f(a," SyntaxError: Unexpected end of input
+"function f()" SyntaxError: Unexpected end of input
+"function f() {" SyntaxError: Unexpected end of input
+"function f(1) {}" SyntaxError: Unexpected number
+"function f([a) {}" SyntaxError: Unexpected token ')'
+"function f({a) {}" SyntaxError: Unexpected token ')'
+"function f(a b) {}" SyntaxError: Unexpected identifier 'b'
+"function* " SyntaxError: Unexpected end of input
+"async function" SyntaxError: Unexpected end of input
+"async function (" SyntaxError: Function statements require a function name
+"async" parses

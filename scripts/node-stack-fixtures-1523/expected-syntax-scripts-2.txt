@@ -1,0 +1,246 @@
+"async x" SyntaxError: Unexpected identifier 'x'
+"async x =>" SyntaxError: Unexpected end of input
+"async (x) " parses
+"async (x) =>" SyntaxError: Unexpected end of input
+"x =>" SyntaxError: Unexpected end of input
+"x => {" SyntaxError: Unexpected end of input
+"x\n=> 1" SyntaxError: Unexpected token '=>'
+"(x)\n=> 1" SyntaxError: Unexpected token '=>'
+"() " SyntaxError: Unexpected token ')'
+"(x, y) " parses
+"(1) => 1" SyntaxError: Invalid destructuring assignment target
+"var x = (a, b) => { } ()" SyntaxError: Unexpected token '('
+"var x = () => {}\n()" SyntaxError: Unexpected token ')'
+"var x = a => {} + 1" SyntaxError: Unexpected token '+'
+"if" SyntaxError: Unexpected end of input
+"if (" SyntaxError: Unexpected end of input
+"if (1" SyntaxError: Unexpected end of input
+"if (1)" SyntaxError: Unexpected end of input
+"if (1) 1; else" SyntaxError: Unexpected end of input
+"else" SyntaxError: Unexpected token 'else'
+"while" SyntaxError: Unexpected end of input
+"while (" SyntaxError: Unexpected end of input
+"while (1" SyntaxError: Unexpected end of input
+"do" SyntaxError: Unexpected end of input
+"do 1" SyntaxError: Unexpected end of input
+"do 1; while" SyntaxError: Unexpected end of input
+"do 1; while (" SyntaxError: Unexpected end of input
+"for" SyntaxError: Unexpected end of input
+"for (" SyntaxError: Unexpected end of input
+"for (1" SyntaxError: Unexpected end of input
+"for (1;" SyntaxError: Unexpected end of input
+"for (1;1" SyntaxError: Unexpected end of input
+"for (1;1;" SyntaxError: Unexpected end of input
+"for (1;1;1" SyntaxError: Unexpected end of input
+"for (let x of" SyntaxError: Unexpected end of input
+"for (let x in" SyntaxError: Unexpected end of input
+"for (let x " SyntaxError: Unexpected end of input
+"for (let " SyntaxError: Unexpected end of input
+"for (var " SyntaxError: Unexpected end of input
+"for (const x;;) ;" SyntaxError: Missing initializer in const declaration
+"for (const x = 1, y;;) ;" SyntaxError: Missing initializer in const declaration
+"switch" SyntaxError: Unexpected end of input
+"switch (" SyntaxError: Unexpected end of input
+"switch (1) {" SyntaxError: Unexpected end of input
+"switch (1) { case" SyntaxError: Unexpected end of input
+"switch (1) { case 1" SyntaxError: Unexpected end of input
+"switch (1) { case 1:" SyntaxError: Unexpected end of input
+"switch (1) { default: default: }" SyntaxError: More than one default clause in switch statement
+"switch (1) { 1 }" SyntaxError: Unexpected number
+"switch (1) { let x; let x; }" SyntaxError: Unexpected identifier 'let'
+"{ let x; var x; }" SyntaxError: Identifier 'x' has already been declared
+"{ function f() {} let f; }" SyntaxError: Identifier 'f' has already been declared
+"'use strict'; { function f() {} function f() {} }" SyntaxError: Identifier 'f' has already been declared
+"function f(a) { let a; }" SyntaxError: Identifier 'a' has already been declared
+"function f() { let a; var a; }" SyntaxError: Identifier 'a' has already been declared
+"try {} catch (e) { let e; }" SyntaxError: Identifier 'e' has already been declared
+"try {} catch (e, f) {}" SyntaxError: Unexpected token ','
+"try {} catch (e" SyntaxError: Unexpected end of input
+"try {} catch (" SyntaxError: Unexpected end of input
+"try {} catch () {}" SyntaxError: Unexpected token ')'
+"try {} finally" SyntaxError: Unexpected end of input
+"try" SyntaxError: Unexpected end of input
+"try {} catch {} finally" SyntaxError: Unexpected end of input
+"with" SyntaxError: Unexpected end of input
+"with (" SyntaxError: Unexpected end of input
+"with (1)" SyntaxError: Unexpected end of input
+"debugger x" SyntaxError: Unexpected identifier 'x'
+"throw" SyntaxError: Unexpected end of input
+"throw;" SyntaxError: Unexpected token ';'
+"var" SyntaxError: Unexpected end of input
+"var;" SyntaxError: Unexpected token ';'
+"var 1" SyntaxError: Unexpected number
+"var a," SyntaxError: Unexpected end of input
+"var a = " SyntaxError: Unexpected end of input
+"var a =;" SyntaxError: Unexpected token ';'
+"var [" SyntaxError: Unexpected end of input
+"var [a" SyntaxError: Unexpected end of input
+"var [a," SyntaxError: Unexpected end of input
+"var {" SyntaxError: Unexpected end of input
+"var {a" SyntaxError: Unexpected end of input
+"var {a," SyntaxError: Unexpected end of input
+"var {a:" SyntaxError: Unexpected end of input
+"var {a.b}" SyntaxError: Unexpected token '.'
+"var [a] " SyntaxError: Missing initializer in destructuring declaration
+"var {a} " SyntaxError: Missing initializer in destructuring declaration
+"let" parses
+"let;" parses
+"let 1" SyntaxError: Unexpected number
+"let a," SyntaxError: Unexpected end of input
+"let [a" SyntaxError: Unexpected end of input
+"let {a" SyntaxError: Unexpected end of input
+"let let" SyntaxError: let is disallowed as a lexically bound name
+"const" SyntaxError: Unexpected end of input
+"const a" SyntaxError: Missing initializer in const declaration
+"const [a]" SyntaxError: Missing initializer in destructuring declaration
+"const {a}" SyntaxError: Missing initializer in destructuring declaration
+"'use strict'; let\nlet" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; yield" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var yield" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; function yield() {}" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; function f(yield) {}" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var public" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var interface" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var package" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var private" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var protected" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var let" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var static" SyntaxError: Unexpected strict mode reserved word
+"var enum" SyntaxError: Unexpected reserved word
+"var class" SyntaxError: Unexpected token 'class'
+"var function" SyntaxError: Unexpected token 'function'
+"var if" SyntaxError: Unexpected token 'if'
+"var null" SyntaxError: Unexpected token 'null'
+"var true" SyntaxError: Unexpected token 'true'
+"var this" SyntaxError: Unexpected token 'this'
+"var typeof" SyntaxError: Unexpected token 'typeof'
+"var new" SyntaxError: Unexpected token 'new'
+"var super" SyntaxError: Unexpected token 'super'
+"var import" SyntaxError: Unexpected token 'import'
+"var export" SyntaxError: Unexpected token 'export'
+"var default" SyntaxError: Unexpected token 'default'
+"var in" SyntaxError: Unexpected token 'in'
+"var instanceof" SyntaxError: Unexpected token 'instanceof'
+"class A { static async *#x() {} static async *#x() {} }" SyntaxError: Identifier '#x' has already been declared
+"x = 1 +" SyntaxError: Unexpected end of input
+"x = 1 + ;" SyntaxError: Unexpected token ';'
+"x = * 1" SyntaxError: Unexpected token '*'
+"x = ** 1" SyntaxError: Unexpected token '**'
+"x = 1 ? : 2" SyntaxError: Unexpected token ':'
+"x = ..." SyntaxError: Unexpected token '...'
+"x = ...a" SyntaxError: Unexpected token '...'
+"x = typeof" SyntaxError: Unexpected end of input
+"x = void" SyntaxError: Unexpected end of input
+"x = delete" SyntaxError: Unexpected end of input
+"x = !" SyntaxError: Unexpected end of input
+"x = ~" SyntaxError: Unexpected end of input
+"x = -" SyntaxError: Unexpected end of input
+"x = +" SyntaxError: Unexpected end of input
+"x = ++" SyntaxError: Unexpected end of input
+"x = --" SyntaxError: Unexpected end of input
+"x = a ++ ++" SyntaxError: Unexpected token '++'
+"x = a\n++" SyntaxError: Unexpected end of input
+"x = await" parses
+"x = yield" parses
+"x = a in" SyntaxError: Unexpected end of input
+"x = a instanceof" SyntaxError: Unexpected end of input
+"x = a ===" SyntaxError: Unexpected end of input
+"x = a &&" SyntaxError: Unexpected end of input
+"x = a ||" SyntaxError: Unexpected end of input
+"x = a ??" SyntaxError: Unexpected end of input
+"x = a ??=" SyntaxError: Unexpected end of input
+"x = a &&=" SyntaxError: Unexpected end of input
+"x = 1 &&= 2" SyntaxError: Invalid left-hand side in assignment
+"x = a? .b" SyntaxError: Unexpected token '.'
+"x = a?." SyntaxError: Unexpected end of input
+"x = a?.[" SyntaxError: Unexpected end of input
+"x = a?.(" SyntaxError: Unexpected end of input
+"x = a?.b." SyntaxError: Unexpected end of input
+"x = super" SyntaxError: 'super' keyword unexpected here
+"x = super." SyntaxError: 'super' keyword unexpected here
+"x = super[" SyntaxError: 'super' keyword unexpected here
+"x = this." SyntaxError: Unexpected end of input
+"x = this.#" SyntaxError: Invalid or unexpected token
+"x = a.#b" SyntaxError: Private field '#b' must be declared in an enclosing class
+"x = #a in b" SyntaxError: Private field '#a' must be declared in an enclosing class
+"class C { #a; m() { #a } }" SyntaxError: Unexpected identifier '#a'
+"class C { #a; m() { #a + 1 } }" SyntaxError: Unexpected identifier '#a'
+"class C { #a; m() { 1 + #a in x } }" SyntaxError: Unexpected identifier '#a'
+"x = `${" SyntaxError: Unexpected end of input
+"x = `${a" SyntaxError: Missing } in template expression
+"x = `${a}" SyntaxError: Unexpected end of input
+"x = `${a}${" SyntaxError: Unexpected end of input
+"x = a`${" SyntaxError: Unexpected end of input
+"'\\u{110000}'" SyntaxError: Undefined Unicode code-point
+"'\\xZ'" SyntaxError: Invalid hexadecimal escape sequence
+"'\\u00Z'" SyntaxError: Invalid Unicode escape sequence
+"'abc\\" SyntaxError: Invalid or unexpected token
+"\"abc" SyntaxError: Invalid or unexpected token
+"  }" SyntaxError: Unexpected token '}'
+"x = 1   +" SyntaxError: Unexpected end of input
+"\\u0041 = 1 }" SyntaxError: Unexpected token '}'
+"a\\u{ = 1" SyntaxError: Invalid Unicode escape sequence
+"var \\u0061 = 1 }" SyntaxError: Unexpected token '}'
+"x = '\u0000' }" SyntaxError: Unexpected token '}'
+"x = a <!-- b\n }" SyntaxError: Unexpected token '}'
+"x = a --> b }" SyntaxError: Unexpected token '}'
+"/*" SyntaxError: Invalid or unexpected token
+"/* \n" SyntaxError: Invalid or unexpected token
+"x = /" SyntaxError: Invalid regular expression: missing /
+"x = /\n/" SyntaxError: Invalid regular expression: missing /
+"x = /a\n/" SyntaxError: Invalid regular expression: missing /
+"x = /[/" SyntaxError: Invalid regular expression: missing /
+"x = 1 @ 2" SyntaxError: Invalid or unexpected token
+"x = a ` b" SyntaxError: Unexpected end of input
+"x = $" parses
+"x = 1.2.3" SyntaxError: Unexpected number
+"x = 1..2" SyntaxError: Unexpected number
+"x = 0x1.2" SyntaxError: Unexpected number
+"x = 1e1.2" SyntaxError: Unexpected number
+"x = 1 2" SyntaxError: Unexpected number
+"x = 'a' 'b'" SyntaxError: Unexpected string
+"x = a b" SyntaxError: Unexpected identifier 'b'
+"x = a 1" SyntaxError: Unexpected number
+"x = a 'b'" SyntaxError: Unexpected string
+"x = a `b` 1" SyntaxError: Unexpected number
+"x = a /b/" SyntaxError: Unexpected end of input
+"x = {} {}" SyntaxError: Unexpected token '{'
+"x = [] []" SyntaxError: Unexpected token ']'
+"x = function(){} function(){}" SyntaxError: Unexpected token 'function'
+"x = class {} class {}" SyntaxError: Unexpected token 'class'
+"x = new new" SyntaxError: Unexpected end of input
+"x = new a(" SyntaxError: Unexpected end of input
+"x = new a(1" SyntaxError: missing ) after argument list
+"x = new a(1," SyntaxError: Unexpected end of input
+"x = new a(1 2)" SyntaxError: missing ) after argument list
+"x = new a." SyntaxError: Unexpected end of input
+"x = new a?.b" SyntaxError: Invalid optional chain from new expression
+"x = new a`b`?.c" SyntaxError: Invalid optional chain from new expression
+"x = a()?.b`c`" SyntaxError: Invalid tagged template on optional chain
+"x = a?.b`c`" SyntaxError: Invalid tagged template on optional chain
+"x = a?.`c`" SyntaxError: Invalid tagged template on optional chain
+"x = a?.[b]`c`" SyntaxError: Invalid tagged template on optional chain
+"x = async () => await" SyntaxError: Unexpected end of input
+"x = async () => { await }" SyntaxError: Unexpected token '}'
+"x = async function () { await }" SyntaxError: Unexpected token '}'
+"x = function* () { yield yield }" parses
+"x = function* () { yield* }" SyntaxError: Unexpected token '}'
+"x = function* () { yield\n* }" SyntaxError: Unexpected token '*'
+"x = function* () { yield ? 1 : 2 }" SyntaxError: Unexpected token '?'
+"x = function* () { yield ,  }" SyntaxError: Unexpected token '}'
+"x = function* () { yield ) }" SyntaxError: Unexpected token ')'
+"x = function* () { (yield) = 1 }" SyntaxError: Invalid left-hand side in assignment
+"x = function* () { yield = 1 }" SyntaxError: Unexpected token '='
+"x = function* () { yield => 1 }" SyntaxError: Unexpected token '=>'
+"x = function* () { (a = yield) => 1 }" SyntaxError: Yield expression not allowed in formal parameter
+"x = async function () { (a = await 1) => 1 }" SyntaxError: Illegal await-expression in formal parameters of async function
+"x = async function () { (await) => 1 }" SyntaxError: Unexpected token ')'
+"x = async function () { async (await) => 1 }" SyntaxError: Unexpected token ')'
+"x = async function () { await => 1 }" SyntaxError: Unexpected token '=>'
+"x = async function () { async await => 1 }" SyntaxError: Unexpected reserved word
+"x = async function () { await = 1 }" SyntaxError: Unexpected token '='
+"x = async function () { await.x }" SyntaxError: Unexpected token '.'
+"x = async function () { await ) }" SyntaxError: Unexpected token ')'
+"x = async function () { x = await ) }" SyntaxError: Unexpected token ')'
+"x = async function () { x = await ]}" SyntaxError: Unexpected token ']'
+"x = async function () { x = await , }" SyntaxError: Unexpected token ','

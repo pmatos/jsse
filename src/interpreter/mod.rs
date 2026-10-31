@@ -2418,7 +2418,8 @@ impl Interpreter {
         if let Some(o) = (err).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(s) = (self.get_property_on_id(o.id, "message")).as_string()
         {
-            return s.to_string().contains("Ambiguous export");
+            return s.to_string().contains("Ambiguous export")
+                || s.to_string().contains("conflicting star");
         }
         false
     }
@@ -2732,6 +2733,7 @@ impl Interpreter {
                             interp.validate_and_resolve_static_module_request(request, Some(path))
                         {
                             Self::cache_module_error(&loaded_module, &error);
+                            interp.forget_failed_load(&canon_path, &error);
                             return Err(error);
                         }
                     }
@@ -2751,6 +2753,7 @@ impl Interpreter {
                         ) {
                             if should_cache_error {
                                 Self::cache_module_error(&loaded_module, &error);
+                                interp.forget_failed_load(&canon_path, &error);
                             }
                             return Err(error);
                         }
@@ -3684,8 +3687,7 @@ impl Interpreter {
         }
 
         for spec in specifiers {
-            let mut visited = HashSet::new();
-            self.resolve_export(&resolved, &spec.local, &mut visited)?;
+            self.link_reexport(current_module, source, spec, &resolved)?;
         }
         Ok(())
     }
@@ -3715,14 +3717,7 @@ impl Interpreter {
             let module_ref = module.borrow();
             if let Some(binding) = module_ref.export_bindings.get(export_name) {
                 if binding == "*ambiguous*" {
-                    return Err(self.create_error(
-                        "SyntaxError",
-                        &format!(
-                            "Ambiguous export '{}' in module '{}'",
-                            export_name,
-                            canon_path.display()
-                        ),
-                    ));
+                    return Err(self.ambiguous_export_error(&canon_path, export_name));
                 }
                 if let Some(ns_source) = binding.strip_prefix("*ns:") {
                     // Namespace re-export — resolve to the actual source module's env
@@ -3843,14 +3838,7 @@ impl Interpreter {
                     return Ok(());
                 }
                 if binding == "*ambiguous*" {
-                    return Err(self.create_error(
-                        "SyntaxError",
-                        &format!(
-                            "Ambiguous export '{}' in module '{}'",
-                            export_name,
-                            canon_path.display()
-                        ),
-                    ));
+                    return Err(self.ambiguous_export_error(&canon_path, export_name));
                 }
                 if let Some(info) = binding.strip_prefix("*reexport:") {
                     let parts: Vec<&str> = info.splitn(2, ':').collect();
@@ -3903,25 +3891,11 @@ impl Interpreter {
                     match (ra, rb) {
                         (Ok((env1, name1)), Ok((env2, name2))) => {
                             if !std::rc::Rc::ptr_eq(&env1, &env2) || name1 != name2 {
-                                return Err(self.create_error(
-                                    "SyntaxError",
-                                    &format!(
-                                        "Ambiguous export '{}' in module '{}'",
-                                        export_name,
-                                        canon_path.display()
-                                    ),
-                                ));
+                                return Err(self.ambiguous_export_error(&canon_path, export_name));
                             }
                         }
                         _ => {
-                            return Err(self.create_error(
-                                "SyntaxError",
-                                &format!(
-                                    "Ambiguous export '{}' in module '{}'",
-                                    export_name,
-                                    canon_path.display()
-                                ),
-                            ));
+                            return Err(self.ambiguous_export_error(&canon_path, export_name));
                         }
                     }
                 }

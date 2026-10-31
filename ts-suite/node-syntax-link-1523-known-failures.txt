@@ -1,0 +1,59 @@
+# Differences between Node v26.8.2 and `jsse --node` that remain after #1484, #1523 and #1524.
+# Format: <goal> <TAB> <source as JSON> <TAB> Node message <TAB> jsse message.
+# 'parses' / 'loads' means jsse accepts a source that V8 rejects (default mode too);
+# those are parser bugs filed under #1418, not message wording.
+# Regenerate by running scripts/node-stack-fixtures-1523/syntax-*.mjs sources on both engines.
+script	"if (1) let x = 1"	Lexical declaration cannot appear in a single-statement context	Unexpected identifier 'x'
+script	"for (let of x) ;"	Unexpected identifier 'x'	The identifier 'let' is disallowed as a left-hand side expression of a for-of loop
+script	"let [...a,] = []"	Rest element must be last element	Unexpected token ','
+script	"({...{a}} = {})"	`...` must be followed by an assignable reference in assignment contexts	parses
+script	"function f(...a, b) {}"	Rest parameter must be last formal parameter	Unexpected token ','
+script	"function f(...a = []) {}"	Rest parameter may not have a default initializer	Unexpected token '='
+script	"(...a, b) => 1"	Rest parameter must be last formal parameter	Unexpected token ','
+script	"(a, ...b,) => 1"	Rest parameter must be last formal parameter	Unexpected token ','
+script	"class C { static { await } }"	Unexpected reserved word	Unexpected identifier 'await'
+script	"({ #a: 1 })"	Unexpected identifier '#a'	Unexpected token ':'
+script	"async (a = await 1) => 1"	missing ) after argument list	Unexpected number
+script	"yield => 1; function* g() { (yield) => 1 }"	Invalid destructuring assignment target	Yield expression not allowed in formal parameter
+script	"var \\u0061wait; async function f() { var \\u0061wait; }"	Unexpected reserved word	Unexpected identifier '\u0061wait'
+script	"var x = /(?<=a)+/u"	Invalid regular expression: /(?<=a)+/u: Invalid quantifier	Invalid regular expression: /(?<=a)+/u: Nothing to repeat
+script	"var x = (a, )"	Unexpected token ')'	parses
+script	"var x = { 1 }"	Unexpected number	Unexpected token '}'
+script	"var x = { 'a' }"	Unexpected string	Unexpected token '}'
+script	"var x = { [a] }"	Unexpected token '['	Unexpected token '}'
+script	"import()"	import() requires a specifier	Unexpected token ')'
+script	"class let {}"	Unexpected strict mode reserved word	Unexpected identifier 'let'
+script	"class yield {}"	Unexpected strict mode reserved word	Unexpected identifier 'yield'
+script	"(a.b) => 1"	Invalid destructuring assignment target	parses
+script	"([a.b]) => 1"	Illegal property in declaration context	parses
+script	"({a: b.c}) => 1"	Illegal property in declaration context	parses
+script	"((a)) => 1"	Invalid destructuring assignment target	parses
+script	"try {} catch ([e]) { var e; }"	Identifier 'e' has already been declared	parses
+script	"var {1}"	Unexpected number	Unexpected token '}'
+script	"var {a: 1}"	Invalid destructuring assignment target	Unexpected number
+script	"var {'a'}"	Unexpected string	Unexpected token '}'
+script	"var {[a]}"	Unexpected token '['	Unexpected token '}'
+script	"var {...a, b}"	Rest element must be last element	Unexpected token ','
+script	"var {...{a}}"	`...` must be followed by an identifier in declaration contexts	Missing initializer in destructuring declaration
+script	"var [...a, b]"	Rest element must be last element	Unexpected token ','
+script	"var [...a = 1]"	Invalid destructuring assignment target	Unexpected token '='
+script	"var [1]"	Invalid destructuring assignment target	Unexpected number
+script	"var [a.b]"	Illegal property in declaration context	Unexpected token '.'
+script	"const a,"	Missing initializer in const declaration	Unexpected end of input
+script	"'use strict'; let"	Unexpected strict mode reserved word	Unexpected end of input
+script	"x = (...a)"	Unexpected token '...'	Unexpected end of input
+script	"x = (...a) + 1"	Unexpected token '...'	Unexpected token '+'
+script	"x = /a/\\u0067"	Invalid regular expression flags	Unexpected identifier '\u0067'
+script	"x = function* () { (yield) => 1 }"	Invalid destructuring assignment target	Yield expression not allowed in formal parameter
+script	"x = async function () { async (a = await 1) => 1 }"	Illegal await-expression in formal parameters of async function	'await' is not a valid identifier name in an async function
+module	"export default 1; export default 2;"	Identifier '.default' has already been declared	Duplicate export of 'default'
+module	"export"	Unexpected token 'export'	Unexpected end of input
+module	"import defer * as ns from './lib.mjs'"	Unexpected token '*'	loads
+module	"export default function () {} export default 1"	Identifier '.default' has already been declared	Duplicate export of 'default'
+module	"let x; { var x; }"	Identifier 'x' has already been declared	loads
+
+# Stacks and module loading (see docs/agents/node-host-syntax-link-1523.md).
+stack	import() nested in an expression (id(import('x')), a && import('x'), (await import('x')), [1, import('x')]) reports the position V8 emitted last (statement start, operator, array literal); jsse reports the import keyword
+stack	import(a + b) and import(`${x}`) report the operator and template positions in V8; jsse reports the import keyword / await
+stack	uncaught error thrown inside a node: builtin has no node:fs:L source-line header in jsse, and its frame numbers are the embedded lib's own lines (#1487)
+stack	main CommonJS script that does not parse prints no file:line source header (the ParseError carries no position)

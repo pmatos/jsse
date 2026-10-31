@@ -449,7 +449,7 @@ impl<'a> Parser<'a> {
                 };
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                self.validate_assignment_target(&expr, true, true)?;
+                self.validate_update_target(&expr, true)?;
                 Ok(Expression::Update(op, true, ExprBox::new(expr)))
             }
             Token::Keyword(Keyword::Await)
@@ -479,7 +479,7 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(op) = op {
-                self.validate_assignment_target(&expr, true, true)?;
+                self.validate_update_target(&expr, false)?;
                 self.advance()?;
                 return Ok(Expression::Update(op, false, ExprBox::new(expr)));
             }
@@ -922,20 +922,7 @@ impl<'a> Parser<'a> {
                             let old_no_in = self.no_in;
                             self.no_in = false;
                             let source = self.parse_assignment_expression()?;
-                            let options = if self.current == Token::Comma {
-                                self.advance()?;
-                                if self.current == Token::RightParen {
-                                    None
-                                } else {
-                                    let opts = self.parse_assignment_expression()?;
-                                    if self.current == Token::Comma {
-                                        self.advance()?;
-                                    }
-                                    Some(ExprBox::new(opts))
-                                }
-                            } else {
-                                None
-                            };
+                            let options = self.parse_import_options()?;
                             self.no_in = old_no_in;
                             self.eat(&Token::RightParen)?;
                             if is_defer {
@@ -952,24 +939,13 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let old_no_in = self.no_in;
                     self.no_in = false;
+                    let spec_start = self.current_token_start;
                     let source = self.parse_assignment_expression()?;
-                    let options = if self.current == Token::Comma {
-                        self.advance()?;
-                        if self.current == Token::RightParen {
-                            None
-                        } else {
-                            let opts = self.parse_assignment_expression()?;
-                            if self.current == Token::Comma {
-                                self.advance()?;
-                            }
-                            Some(ExprBox::new(opts))
-                        }
-                    } else {
-                        None
-                    };
+                    let spec_end = self.prev_token_end;
+                    let options = self.parse_import_options()?;
                     self.no_in = old_no_in;
                     self.eat(&Token::RightParen)?;
-                    Ok(Expression::Import(ExprBox::new(source), options, at))
+                    Ok(self.import_call(source, options, at, (spec_start, spec_end)))
                 } else {
                     Err(self.error("Unexpected 'import'"))
                 }

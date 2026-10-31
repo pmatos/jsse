@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::types::JsBigInt;
 
 mod capture_walk;
+mod export_specifier;
 pub(crate) use capture_walk::CaptureWalk;
+pub(crate) use export_specifier::ExportSpecifier;
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -282,12 +284,6 @@ pub(crate) enum ExportDeclaration {
         source: String,
         attributes: Vec<(String, String)>,
     },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ExportSpecifier {
-    pub local: String,
-    pub exported: String,
 }
 
 #[derive(Clone, Debug)]
