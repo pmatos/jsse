@@ -15,8 +15,6 @@
 const { sync, support: S, async: hostAsync } = require('internal/host/fs');
 
 const { ObjectDefineProperty, SymbolFor } = primordials;
-const { AbortError } = require('internal/errors');
-const { validateAbortSignal } = require('internal/validators');
 const { kCustomPromisifyArgsSymbol } = require('internal/util');
 
 const host = S.host;
@@ -146,31 +144,26 @@ function run(syncFn, args, cb, extra) {
   advance(true);
 }
 
-// options.signal of readFile/writeFile/appendFile: an aborted signal fails the
-// call before it starts; readFile also fails if the signal fires meanwhile.
-const SIGNAL_AT = { readFile: 1, writeFile: 2, appendFile: 2 };
+// options.signal: readFile/writeFile/appendFile are Node's own sequence of
+// steps with the signal checked between them; stat/lstat/fstat fail as soon as
+// it fires (signal.js). Returns the callback to run with, or null if handled.
+const SIGNAL_AT = { readFile: 1, writeFile: 2, appendFile: 2, stat: 1, lstat: 1, fstat: 1 };
 
 function withSignal(name, args, cb) {
-  const options = args[SIGNAL_AT[name]];
-  const signal = options !== null && typeof options === 'object' ? options.signal : undefined;
-  if (signal === undefined) return cb;
-  validateAbortSignal(signal, 'options.signal');
-  const aborted = () => new AbortError(undefined, { cause: signal.reason });
-  if (signal.aborted) {
-    process.nextTick(cb, aborted());
-    return null;
+  const options = snapshot(args[SIGNAL_AT[name]]);
+  if (options === null || typeof options !== 'object' || options.signal === undefined) {
+    return cb;
   }
-  if (name !== 'readFile') return cb;
-  let finished = false;
-  const finish = (...result) => {
-    if (finished) return;
-    finished = true;
-    signal.removeEventListener('abort', onAbort);
-    cb(...result);
-  };
-  const onAbort = () => finish(aborted());
-  signal.addEventListener('abort', onAbort, { once: true });
-  return (error, ...rest) => (signal.aborted ? finish(aborted()) : finish(error, ...rest));
+  const forms = require('internal/fs/signal');
+  if (name === 'readFile') {
+    forms.readFileCallback(args[0], options, cb);
+  } else if (name === 'writeFile' || name === 'appendFile') {
+    forms.writeFileCallback(args[0], args[1], options, cb, name === 'appendFile');
+  } else {
+    if (name !== 'fstat') S.getValidatedPath(args[0]);
+    return forms.bindStat(options, cb);
+  }
+  return null;
 }
 
 function define(name, syncFn, options) {
@@ -185,7 +178,12 @@ function define(name, syncFn, options) {
       cb = withSignal(name, args, cb);
       if (cb === null) return;
     }
-    run(syncFn, args, cb, options && options.extra && options.extra(args));
+    try {
+      run(syncFn, args, cb, options && options.extra && options.extra(args));
+    } catch (e) {
+      if (cb.cancel) cb.cancel();
+      throw e;
+    }
   };
   ObjectDefineProperty(wrapper, 'name', { value: name, configurable: true });
   if (!(options && options.hidden)) exports[name] = wrapper;
