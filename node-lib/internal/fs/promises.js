@@ -26,7 +26,7 @@ function promisify(fn) {
 
 const call = {};
 for (const name of [
-  'access', 'chmod', 'chown', 'close', 'copyFile', 'cp', 'fchmod', 'fchown',
+  'access', 'chmod', 'chown', 'close', 'copyFile', 'fchmod', 'fchown',
   'fdatasync', 'fstat', 'fsync', 'ftruncate', 'futimes', 'lchown', 'link',
   'lstat', 'lutimes', 'mkdir', 'mkdtemp', 'open', 'opendir', 'readdir',
   'readlink', 'rename', 'rm', 'rmdir', 'stat', 'statfs',
@@ -183,6 +183,7 @@ if (Symbol.asyncDispose) {
 }
 
 require('internal/fs/vectored').installFileHandle(FileHandle);
+require('internal/fs/webstream').installReadableWebStream(FileHandle, { kRef, kUnref, kClosePromise });
 
 async function openHandle(path, flags, mode) {
   return new FileHandle(await call.open(path, flags, mode));
@@ -233,7 +234,7 @@ module.exports = {
     chown: call.chown,
     constants: fs.constants,
     copyFile: call.copyFile,
-    cp: call.cp,
+    cp: (src, dest, options) => require('internal/fs/cp').cp(src, dest, options),
     lchown: call.lchown,
     link: call.link,
     lstat: call.lstat,

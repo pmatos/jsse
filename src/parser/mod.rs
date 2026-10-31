@@ -9,6 +9,7 @@ pub(crate) mod dynamic_function;
 mod expressions;
 pub(crate) mod inferred_names;
 mod modules;
+mod node_hooks;
 mod positions;
 mod prologue;
 mod statements;
@@ -327,7 +328,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok(())
         } else {
-            Err(self.error(format!("Expected {expected:?}, got {:?}", self.current)))
+            Err(self.expected_error(expected))
         }
     }
 
@@ -343,7 +344,7 @@ impl<'a> Parser<'a> {
         {
             return Ok(());
         }
-        Err(self.error("Expected semicolon"))
+        Err(self.expected_semicolon())
     }
 
     fn error(&self, msg: impl Into<String>) -> ParseError {
@@ -797,7 +798,7 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::expr_contains_await_identifier)
             }
-            Expression::Import(inner, opts)
+            Expression::Import(inner, opts, _)
             | Expression::ImportDefer(inner, opts)
             | Expression::ImportSource(inner, opts) => {
                 Self::expr_contains_await_identifier(inner)
@@ -1173,7 +1174,7 @@ impl<'a> Parser<'a> {
                 ModuleItem::ImportDeclaration(import) => {
                     for spec in &import.specifiers {
                         let name = match spec {
-                            ImportSpecifier::Default(n) => n,
+                            ImportSpecifier::Default(n, _) => n,
                             ImportSpecifier::Named { local, .. } => local,
                             ImportSpecifier::Namespace(n) => n,
                             ImportSpecifier::DeferredNamespace(n) => n,

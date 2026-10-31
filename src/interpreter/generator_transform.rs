@@ -657,8 +657,7 @@ fn transform_generator_inner_opts(
         return create_simple_machine(body, params, &analysis);
     }
 
-    // For async generators/functions, also check for await expressions, for-await-of,
-    // and return statements (which need Return(None) vs Return(Some) distinction for tick counting)
+    // Async bodies also need await, for-await-of and return statements checked.
     if is_async
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
@@ -2027,7 +2026,7 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Import(spec, opts)
+        Expression::Import(spec, opts, _)
         | Expression::ImportDefer(spec, opts)
         | Expression::ImportSource(spec, opts) => {
             let opts_suspend = opts
@@ -2039,7 +2038,9 @@ fn transform_yielding_expression(
                 .map(|o| lower_operand(o, false, "imp_opts", ctx));
             let boxed_opts = temp_opts.map(ExprBox::new);
             let combined = match expr {
-                Expression::Import(_, _) => Expression::Import(ExprBox::new(temp_spec), boxed_opts),
+                Expression::Import(_, _, at) => {
+                    Expression::Import(ExprBox::new(temp_spec), boxed_opts, *at)
+                }
                 Expression::ImportDefer(_, _) => {
                     Expression::ImportDefer(ExprBox::new(temp_spec), boxed_opts)
                 }
@@ -4741,9 +4742,10 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Sequence(exprs) => {
             Expression::Sequence(exprs.iter().map(rewrite_expr).collect())
         }
-        Expression::Import(spec, opts) => Expression::Import(
+        Expression::Import(spec, opts, at) => Expression::Import(
             ExprBox::new(rewrite_expr(spec)),
             opts.as_ref().map(|o| ExprBox::new(rewrite_expr(o))),
+            *at,
         ),
         Expression::ImportDefer(spec, opts) => Expression::ImportDefer(
             ExprBox::new(rewrite_expr(spec)),

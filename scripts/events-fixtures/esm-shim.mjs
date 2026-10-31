@@ -95,7 +95,8 @@ async function run() {
   }
   let quiet = 0;
   let last = -1;
-  while (quiet < 3) {
+  const deadline = Date.now() + 60000;
+  while (quiet < 3 || (expectations.some((e) => e.actual < e.exact) && Date.now() <= deadline)) {
     if (last === activity) quiet++;
     else { quiet = 0; last = activity; }
     await new Promise((resolve) => setTimeout(resolve, 20));

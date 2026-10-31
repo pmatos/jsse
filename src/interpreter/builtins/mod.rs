@@ -25,6 +25,7 @@ pub(crate) mod node_host;
 mod node_host_brotli_ctx;
 mod node_host_builtin_errors;
 mod node_host_builtins;
+mod node_host_builtins_webstreams;
 mod node_host_callee;
 #[cfg(unix)]
 mod node_host_child;
@@ -100,6 +101,7 @@ pub(crate) mod regexp;
 mod regexp_lookbehind;
 mod regexp_lookbehind_parse;
 mod regexp_lookbehind_route;
+mod regexp_string_iterator;
 mod shadow_realm;
 pub(crate) mod string;
 mod structured_clone;

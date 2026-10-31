@@ -23,6 +23,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("fs"),
     builtin!("fs/promises"),
     builtin!("internal/fs/callbacks"),
+    builtin!("internal/fs/cp"),
     builtin!("internal/fs/dir"),
     builtin!("internal/fs/glob"),
     builtin!("internal/fs/glob_sync"),
@@ -188,7 +189,6 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/streams/state"),
     builtin!("internal/streams/transform"),
     builtin!("internal/streams/utils"),
-    builtin!("internal/webstreams/adapters"),
     builtin!("internal/streams/writable"),
     builtin!("internal/streams/writable_end"),
     builtin!("internal/streams/writable_state"),
@@ -249,6 +249,7 @@ impl Interpreter {
                 Completion::Normal(
                     NODE_BUILTIN_MODULES
                         .iter()
+                        .chain(super::node_host_builtins_webstreams::WEBSTREAMS_MODULES)
                         .find(|(n, _)| *n == name)
                         .map_or(JsValue::UNDEFINED, |(_, src)| {
                             JsValue::string(JsString::from_str(src))

@@ -289,13 +289,20 @@ function __eventsVerify() {
   process.exit(0);
 }
 
+// A call that is still owed is not quiet: under GC stress or coverage a test
+// can take longer than the quiet window between two mustCall hits (#1516).
+function __eventsWaiting() {
+  return __eventsPending.some(function (e) { return e.actual < e.exact; });
+}
+
 function __eventsFinish() {
   __eventsRunTests().then(function () {
     var quiet = 0;
     var last = -1;
+    var deadline = Date.now() + 60000;
     (function poll() {
       if (last === __eventsActivity) {
-        if (++quiet >= 3) return __eventsVerify();
+        if (++quiet >= 3 && (!__eventsWaiting() || Date.now() > deadline)) return __eventsVerify();
       } else {
         quiet = 0;
         last = __eventsActivity;

@@ -390,15 +390,7 @@
   }
 
   function cpSync(src, dest, options) {
-    var o = Object.assign({
-      dereference: false,
-      errorOnExist: false,
-      filter: undefined,
-      force: true,
-      preserveTimestamps: false,
-      recursive: false,
-      verbatimSymlinks: false,
-    }, validateOptions(options));
+    var o = withDefaults(options);
     src = S.getValidatedPath(src, "src");
     dest = S.getValidatedPath(dest, "dest");
     if (o.filter) {
@@ -408,6 +400,18 @@
     }
     checkPaths(src, dest, o.dereference, o.recursive);
     return getStats(src, dest, o);
+  }
+
+  function withDefaults(options) {
+    return Object.assign({
+      dereference: false,
+      errorOnExist: false,
+      filter: undefined,
+      force: true,
+      preserveTimestamps: false,
+      recursive: false,
+      verbatimSymlinks: false,
+    }, validateOptions(options));
   }
 
   function validateOptions(options) {
@@ -434,10 +438,15 @@
     return o;
   }
 
-  S.cpValidate = function (src, dest, options) {
-    validateOptions(options);
-    S.getValidatedPath(src, "src");
-    S.getValidatedPath(dest, "dest");
+  // The arguments of the asynchronous copy (internal/fs/cp.js), validated in
+  // the order `fs.cp` does.
+  S.cpPrepare = function (src, dest, options) {
+    var o = withDefaults(options);
+    return {
+      options: o,
+      src: S.getValidatedPath(src, "src"),
+      dest: S.getValidatedPath(dest, "dest"),
+    };
   };
   S.cp = { cpSync: cpSync };
 })();

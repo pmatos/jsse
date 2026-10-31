@@ -16,6 +16,7 @@ const {
   Promise,
   ReflectApply,
   ReflectConstruct,
+  RegExpPrototypeSymbolReplace,
   SafeSet,
   StringPrototypeReplace,
   Symbol,
@@ -294,8 +295,19 @@ function setOwnProperty(obj, key, value) {
   });
 }
 
+function SideEffectFreeRegExpPrototypeSymbolReplace(regex, string, replacement) {
+  return RegExpPrototypeSymbolReplace(regex, string, replacement);
+}
+
+function normalizeEncoding(enc) {
+  return require('internal/string_decoder').normalizeEncoding(enc);
+}
+
 module.exports = {
   assignFunctionName,
+  SideEffectFreeRegExpPrototypeSymbolReplace,
+  getDeprecationWarningEmitter,
+  normalizeEncoding,
   setOwnProperty,
   once,
   customInspectSymbol: SymbolFor('nodejs.util.inspect.custom'),

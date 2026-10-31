@@ -177,23 +177,25 @@ mod tests {
 
     #[test]
     fn load_installs_the_globals_and_takes_the_process_floor_private() {
-        let mut interp = floor_interp();
-        interp.set_node_host_argv("jsse".into(), "/bin/jsse".into(), None, Vec::new());
-        interp.load_node_prelude().expect("prelude loads");
-        run_ok(
-            &mut interp,
-            r#"
-            const hidden = Object.keys(globalThis).filter((k) => ["process", "Buffer", "TextEncoder", "TextDecoder", "util"].includes(k));
-            if (hidden.length) throw new Error("enumerable globals: " + hidden);
-            const got = [
-              typeof process, typeof Buffer, typeof TextEncoder, typeof TextDecoder,
-              typeof crypto.getRandomValues, typeof __host_argv, typeof __host_cwd, typeof __host_write,
-              typeof __host_builtin_source, typeof __node_builtin, typeof __node_builtins,
-              typeof __host_main_kind, typeof __node_run_main, typeof require, typeof require("fs").readFileSync,
-            ].join(",");
-            const want = "object,function,function,function,function,undefined,undefined,function,undefined,undefined,undefined,undefined,undefined,function,function";
-            if (got !== want) throw new Error(got);
-            "#,
-        );
+        crate::run_on_engine_stack(|| {
+            let mut interp = floor_interp();
+            interp.set_node_host_argv("jsse".into(), "/bin/jsse".into(), None, Vec::new());
+            interp.load_node_prelude().expect("prelude loads");
+            run_ok(
+                &mut interp,
+                r#"
+                const hidden = Object.keys(globalThis).filter((k) => ["process", "Buffer", "TextEncoder", "TextDecoder", "util"].includes(k));
+                if (hidden.length) throw new Error("enumerable globals: " + hidden);
+                const got = [
+                  typeof process, typeof Buffer, typeof TextEncoder, typeof TextDecoder,
+                  typeof crypto.getRandomValues, typeof __host_argv, typeof __host_cwd, typeof __host_write,
+                  typeof __host_builtin_source, typeof __node_builtin, typeof __node_builtins,
+                  typeof __host_main_kind, typeof __node_run_main, typeof require, typeof require("fs").readFileSync,
+                ].join(",");
+                const want = "object,function,function,function,function,undefined,undefined,function,undefined,undefined,undefined,undefined,undefined,function,function";
+                if (got !== want) throw new Error(got);
+                "#,
+            );
+        });
     }
 }

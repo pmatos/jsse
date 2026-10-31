@@ -1,6 +1,9 @@
 use super::super::*;
 use crate::interpreter::key_intern::key_to_js_string;
 
+mod create;
+use create::object_create;
+
 /// EnumerableOwnProperties (§7.3.23) for kind value / key+value on `obj_id`.
 /// Ordinary objects walk their stored keys, re-reading each key's
 /// enumerability right before its [[Get]] (a getter may delete or hide later
@@ -1338,86 +1341,7 @@ impl Interpreter {
         let create_fn = self.create_function(JsFunction::native(
             "create".to_string(),
             2,
-            |interp, _this, args| {
-                let proto_arg = args.first().cloned().unwrap_or(JsValue::NULL);
-                if !proto_arg.is_object() && !proto_arg.is_null() {
-                    return Completion::Throw(interp.proto_value_error(&proto_arg));
-                }
-                let new_obj_id = interp.create_object_id();
-                if let Some(proto_id) = proto_arg.as_object_id() {
-                    interp
-                        .get_object_cell_expect(new_obj_id)
-                        .borrow_mut()
-                        .prototype_id = Some(proto_id);
-                } else if proto_arg.is_null() {
-                    interp
-                        .get_object_cell_expect(new_obj_id)
-                        .borrow_mut()
-                        .prototype_id = None;
-                } else {
-                    unreachable!()
-                }
-                let id = new_obj_id;
-                let target = JsValue::object(id);
-
-                let props_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                if !(props_arg).is_undefined() {
-                    // ObjectDefineProperties(target, props_arg)
-                    let props_obj_val = match interp.to_object(&props_arg) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(target),
-                    };
-                    if let Some(d_id) = props_obj_val.as_object_id() {
-                        let all_keys = match interp.proxy_own_keys(d_id) {
-                            Ok(k) => k,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        for key_val in all_keys {
-                            let key = to_property_key_string(&key_val);
-                            // Check enumerability via [[GetOwnProperty]]
-                            let desc_check =
-                                match interp.proxy_get_own_property_descriptor(d_id, &key) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                            if (desc_check).is_undefined() {
-                                continue;
-                            }
-                            if let Ok(chk) = interp.to_property_descriptor(&desc_check)
-                                && chk.enumerable == Some(false)
-                            {
-                                continue;
-                            }
-                            let prop_desc_val =
-                                match interp.get_object_property(d_id, &key, &props_obj_val) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => continue,
-                                };
-                            match interp.to_property_descriptor(&prop_desc_val) {
-                                Ok(desc) => {
-                                    if let Some(target_obj) = interp.get_object(id)
-                                        && !target_obj.borrow_mut().define_own_property(key, desc)
-                                    {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "Cannot define property on non-extensible object",
-                                        ));
-                                    }
-                                }
-                                Err(Some(e)) => return Completion::Throw(e),
-                                Err(None) => {
-                                    return Completion::Throw(
-                                        interp.descriptor_error(&prop_desc_val),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Completion::Normal(target)
-            },
+            |interp, _this, args| object_create(interp, args),
         ));
         obj_func
             .borrow_mut()

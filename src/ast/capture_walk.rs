@@ -278,7 +278,7 @@ impl<'a> CaptureWalk<'a> {
             Expression::Template(tpl) => {
                 tpl.expressions.iter().for_each(|e| self.push_expr(e));
             }
-            Expression::Import(spec, opts)
+            Expression::Import(spec, opts, _)
             | Expression::ImportDefer(spec, opts)
             | Expression::ImportSource(spec, opts) => {
                 self.push_expr(spec);
