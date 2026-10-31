@@ -16,9 +16,9 @@ name: Nightly TypeScript suite
 # workflow_dispatch workflow only from the default branch, so a change to the
 # workflow is validated by running it on its own pull request.
 #
-# BLOCKING SWITCH: TS_SUITE_BLOCKING below. "false" (non-blocking): baseline
-# regressions and crashed batches are warnings and the report job stays green.
-# "true" (blocking): they fail the report job, i.e. the workflow. Integrity
+# BLOCKING SWITCH: TS_SUITE_BLOCKING below, now "true" (blocking): baseline
+# regressions and crashed batches fail the report job, i.e. the workflow.
+# "false" (non-blocking) would make them warnings and keep the report job green. Integrity
 # problems (a shard missing, a suite run twice or never, a universe or bucket that
 # differs from the pin) fail the report job in both modes.
 
@@ -34,7 +34,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   TS_SHARDS: "20"
-  TS_SUITE_BLOCKING: "false"
+  TS_SUITE_BLOCKING: "true"
   TYPESCRIPT_VERSION: 6.0.3
 
 permissions:

@@ -163,10 +163,12 @@ def read_at(ref, path, cwd=None):
     return git("show", f"{ref}:{path}", cwd=cwd)
 
 
-def ratchet_problems(base, head):
+def ratchet_problems(base, head, grown=()):
     """What a change from `base` to `head` loses. Each side is (baseline doc, not-passing dict) or None
     for a file that does not exist: new files are always fine; recorded buckets stay with the same size and
-    digest; the not-passing set only shrinks, except for the entries of a bucket recorded by this change."""
+    digest, except the scripted buckets in `grown` (scripts/ts_passlist_cases_1298.py has proved that every
+    recorded case is still there); the not-passing set only shrinks, except for the entries of a bucket recorded
+    by this change."""
     if head is None:
         return (
             ["the pass list was deleted; it may only gain entries"]
@@ -193,7 +195,7 @@ def ratchet_problems(base, head):
             h = head_doc["buckets"].get(runner, {}).get(name)
             if h is None:
                 problems.append(f"bucket {runner}:{name} was removed")
-            elif h != e:
+            elif h != e and (runner, name) not in grown:
                 problems.append(
                     f"bucket {runner}:{name} changed ({e[0]} tests {e[1][:12]} -> {h[0]} tests {h[1][:12]})"
                 )

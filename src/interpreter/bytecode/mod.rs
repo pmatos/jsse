@@ -1,14 +1,19 @@
 pub(crate) mod chunk;
 pub(crate) mod compiler;
 pub(crate) mod op;
+pub(crate) mod switch_table;
 pub(crate) mod vm;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_decode;
+#[cfg(test)]
 mod tests_hook_isolation;
 #[cfg(test)]
 mod tests_member_pos;
+#[cfg(test)]
+mod tests_switch_table;
 
 use std::rc::Rc;
 

@@ -277,6 +277,11 @@ pub(crate) enum Op {
     /// run, for `--node` stack traces. Emitted only when the Node prelude
     /// installed its hooks; no stack effect.
     SetCallPos = 115,
+    /// `switch` over number/string literal cases: `[..., discriminant]` →
+    /// `[...]`, continuing at the clause body its `Chunk::switch_tables` entry
+    /// (u16 operand) names, else at `default`. Skipped selectors have no
+    /// effects, so no case is evaluated.
+    SwitchTable = 116,
 }
 
 /// Where `Op::Yield`'s operands sit counted back from the end of the op, which
@@ -404,6 +409,7 @@ impl Op {
             113 => Some(Op::CallSpreadSole),
             114 => Some(Op::ConstructSpreadSole),
             115 => Some(Op::SetCallPos),
+            116 => Some(Op::SwitchTable),
             _ => None,
         }
     }

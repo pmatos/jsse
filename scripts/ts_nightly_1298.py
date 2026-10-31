@@ -26,9 +26,8 @@ WEIGHT = {
     "tsc-watch": 11.0,
     "hereby": 3.0,
 }
-# The runners of the nightly job. tsc-projects is left out: its recorded bucket in ts-suite/jsse-pass-1296.json
-# holds 367 cases, scripts/tsc-fixtures has 413 since #1488, and a recorded bucket may not change (the ratchet), so
-# the gate reports the baseline as being for another test set. Add it back once the bucket is re-recorded.
+# The runners of the nightly job: the seven mocha runners and the scripted oracles. The recorded bucket of a
+# scripted runner may grow with its fixtures (ts-suite/jsse-pass-cases-1298.json, scripts/ts_passlist_cases_1298.py).
 DEFAULT_RUNNERS = (
     "compiler",
     "conformance",
@@ -37,6 +36,7 @@ DEFAULT_RUNNERS = (
     "fourslash",
     "fourslash-server",
     "unittests",
+    "tsc-projects",
     "tsc-watch",
     "hereby",
 )

@@ -9,7 +9,7 @@ use crate::interpreter::Interpreter;
 use crate::interpreter::builtins::node_host_stack::call_positions_enabled;
 use crate::parser::{Parser, inferred_names};
 
-fn ops_of_free_name_call() -> Vec<Op> {
+fn ops_of_free_name_call() -> Vec<(Op, usize)> {
     use super::compiler::{FrameShape, compile_function_body};
 
     let program = Parser::new("g = f();")
@@ -24,7 +24,10 @@ fn ops_of_free_name_call() -> Vec<Op> {
         },
     )
     .expect("compile");
-    decode_ops(&chunk).into_iter().map(|(op, _)| op).collect()
+    decode_ops(&chunk)
+        .into_iter()
+        .map(|(op, operands)| (op, operands.len()))
+        .collect()
 }
 
 fn load_prelude() {
@@ -34,7 +37,7 @@ fn load_prelude() {
     interp.load_node_prelude().expect("prelude loads");
 }
 
-type Snapshot = (bool, bool, Vec<Op>);
+type Snapshot = (bool, bool, Vec<(Op, usize)>);
 
 /// Runs `f` on a fresh thread with the engine's stack (the prelude overflows
 /// a debug test thread's default one) and reports that thread's hook state.
@@ -60,11 +63,21 @@ fn on_fresh_thread(f: fn()) -> Snapshot {
 fn a_prelude_on_one_thread_does_not_change_what_another_thread_compiles() {
     let (positions, names, plain) = on_fresh_thread(|| {});
     assert!(!positions && !names);
-    assert!(!plain.contains(&Op::SetCallPos), "{plain:?}");
+    assert!(plain.contains(&(Op::Call, 2)), "{plain:?}");
+    assert!(
+        !plain.iter().any(|(op, _)| *op == Op::SetCallPos),
+        "{plain:?}"
+    );
 
+    // The position travels inside the call op (#1492): a third operand, and
+    // no separate op before it.
     let (positions, names, hooked) = on_fresh_thread(load_prelude);
     assert!(positions && names, "the prelude's own thread has the hooks");
-    assert!(hooked.contains(&Op::SetCallPos), "{hooked:?}");
+    assert!(hooked.contains(&(Op::Call, 3)), "{hooked:?}");
+    assert!(
+        !hooked.iter().any(|(op, _)| *op == Op::SetCallPos),
+        "{hooked:?}"
+    );
 
     assert_eq!(on_fresh_thread(|| {}), (false, false, plain));
 }

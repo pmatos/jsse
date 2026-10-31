@@ -5,7 +5,9 @@
 
 Compares ts-suite/jsse-pass-1296.json and ts-suite/pass-list-1296-not-passing.txt by git blob only (no TypeScript
 checkout, no engine): a recorded bucket may not disappear or change, and the not-passing set may only shrink
-(scripts/ts_passlist_store.py). A file that does not exist on the old side is new and always fine.
+(scripts/ts_passlist_store.py), except that a scripted bucket (tsc-projects, tsc-watch, hereby) may grow while every
+recorded case is still listed (scripts/ts_passlist_cases_1298.py). A file that does not exist on the old side is new
+and always fine.
 """
 
 import argparse
@@ -13,17 +15,19 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ts_passlist_cases_1298 as cases  # noqa: E402
 import ts_passlist_store as store  # noqa: E402
 
 
 def load(ref):
-    """(baseline doc, not-passing dict) at a revision, None when the baseline does not exist there."""
+    """(baseline doc, not-passing dict, scripted case lists) at a revision, None when the baseline does not exist there."""
     text = store.read_at(ref, store.BASELINE)
     if text is None:
         return None
     doc = store.parse_baseline(text)
     np_text = store.read_at(ref, store.NOT_PASSING)
-    return doc, store.parse_not_passing(np_text) if np_text is not None else {}
+    np = store.parse_not_passing(np_text) if np_text is not None else {}
+    return doc, np, cases.load_at(ref)
 
 
 def main(argv=None):
@@ -47,7 +51,10 @@ def main(argv=None):
     except ValueError as e:
         print(f"ts pass list: malformed file: {e}", file=sys.stderr)
         return 1
-    problems = store.ratchet_problems(base, head)
+    grown, extra = cases.growth(base, head)
+    problems = (
+        store.ratchet_problems(base and base[:2], head and head[:2], grown) + extra
+    )
     if not problems:
         return 0
     print(

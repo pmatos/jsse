@@ -68,6 +68,11 @@ pub(crate) struct BlockScope {
 /// it the operand is a slot in the frame (function) environment.
 pub(crate) const BLOCK_SLOT_FLAG: u16 = 0x8000;
 
+/// A call op's argument-count operand with this bit set is followed by a u32
+/// source position after the call-site id: the `--node` stack hooks' call
+/// position, folded into the call (#1492).
+pub(crate) const CALL_POS_FLAG: u16 = 0x8000;
+
 /// `InitLexical`'s slot operand when the compiler has no position to hint.
 pub(crate) const NO_INIT_SLOT: u16 = u16::MAX;
 pub(crate) const BLOCK_SLOT_MAX_SCOPES: usize = 0x80;
@@ -244,6 +249,8 @@ pub(crate) struct Chunk {
     /// `--node` only: the initializer text of a `let`/`const` object pattern,
     /// by the offset of its first read (V8 names it in the destructuring error).
     pub(crate) pattern_src: Vec<(u32, std::rc::Rc<str>)>,
+    /// One dispatch table per `SwitchTable` op (constant-selector `switch`).
+    pub(crate) switch_tables: Vec<super::switch_table::SwitchTable>,
 }
 
 impl Chunk {

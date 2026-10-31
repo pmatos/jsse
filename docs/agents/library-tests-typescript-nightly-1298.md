@@ -22,7 +22,7 @@ All actions are pinned by SHA like the other workflows; the matrix values go to 
 
 ## Blocking switch
 
-`TS_SUITE_BLOCKING` in the workflow's top-level `env:` is the one line to change. `"false"` (now): a baseline regression (a test in the pass list that failed or did not report) and a crashed batch (mocha exited without a report) are `warning:` lines in the merge log and the step summary table (not workflow annotations), and the workflow is green. `"true"`: the report job passes `--blocking` and fails on them. Integrity problems fail the report job in both modes: a shard with no result directory, a gate that did not run, a runner missing from the universe, a universe that differs between shards, shards that together ran a different number of tests than the universe holds (a suite run twice or by nobody), a universe or recorded bucket that differs from the pin (`ts-suite/oracle.json`, `ts-suite/jsse-pass-1296.json`). A scheduled workflow is not a required check; flipping the switch makes the nightly run red, nothing else.
+`TS_SUITE_BLOCKING` in the workflow's top-level `env:` is the one line to change. It is `"true"` since #1298 closed: the report job passes `--blocking` and fails on a baseline regression (a test in the pass list that failed or did not report) and on a crashed batch (mocha exited without a report). With `"false"` they are `warning:` lines in the merge log and the step summary table (not workflow annotations) and the workflow is green. Integrity problems fail the report job in both modes: a shard with no result directory, a gate that did not run, a runner missing from the universe, a universe that differs between shards, shards that together ran a different number of tests than the universe holds (a suite run twice or by nobody), a universe or recorded bucket that differs from the pin (`ts-suite/oracle.json`, `ts-suite/jsse-pass-1296.json`). A scheduled workflow is not a required check; the switch makes the nightly run red on a regression, nothing else.
 
 ## Sharding
 
@@ -48,8 +48,8 @@ All actions are pinned by SHA like the other workflows; the matrix values go to 
 
 ## Not covered
 
-- `tsc-projects` (the scripted `tsc` project oracle) is not run: its recorded bucket in `ts-suite/jsse-pass-1296.json` holds 367 cases and `scripts/tsc-fixtures` has had 413 since #1488, so the gate reports the baseline as being for another test set (`recorded bucket tsc-projects:all has 367 tests, the checkout lists 413`). A recorded bucket may not change (the ratchet), so adding it back needs a ruling on re-recording the bucket (or splitting it per fixture file); then add it to `DEFAULT_RUNNERS`. All 413 cases agreed with Node in the first full run.
-- The eslint rule tests are a hereby task, not a gate runner (see the #1296 page).
+- `tsc-projects` runs again (it is in `DEFAULT_RUNNERS`): its bucket was re-recorded with all 413 cases after the ratchet learned that a recorded scripted bucket may grow while every recorded case stays ([the rule](library-tests-typescript-conformance-scripted-growth-1298.md)).
+- The eslint rule tests (`hereby run-eslint-rules-tests`, 79) are a hereby task, not a gate runner, and no workflow runs the `eslint-*` cases of `run-ts-mocha-oracle.py`: the nightly does not cover them.
 
 ## Measurements
 
