@@ -15,9 +15,19 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return JsValue::UNDEFINED;
         }
+        self.capture_frames_array(0, None)
+    }
+
+    /// The current stack as the array of frame records `stack` is formatted
+    /// from; `undefined` when `Error.stackTraceLimit` is not a number.
+    pub(super) fn capture_frames_array(
+        &mut self,
+        skip_top: usize,
+        until: Option<Until>,
+    ) -> JsValue {
         match self.stack_trace_limit() {
             Some(limit) => {
-                let record = self.capture_records(0, None, limit);
+                let record = self.capture_records(skip_top, until, limit);
                 self.create_array(record)
             }
             None => JsValue::UNDEFINED,

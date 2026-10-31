@@ -59,11 +59,7 @@ impl<'a> Parser<'a> {
     /// The error for a token that is not allowed here. `fallback` is the
     /// parser's own wording followed by the token, used outside `--node`.
     pub(super) fn unexpected_token(&self, fallback: &str) -> ParseError {
-        if inferred_names::enabled() {
-            self.error(self.v8_unexpected())
-        } else {
-            self.error(format!("{fallback}{:?}", self.current))
-        }
+        self.v8_error(&format!("{fallback}{:?}", self.current))
     }
 
     /// `message` outside `--node`, V8's wording for the current token inside.
@@ -85,18 +81,10 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn expected_error(&self, expected: &Token) -> ParseError {
-        if inferred_names::enabled() {
-            self.error(self.v8_unexpected())
-        } else {
-            self.error(format!("Expected {expected:?}, got {:?}", self.current))
-        }
+        self.v8_error(&format!("Expected {expected:?}, got {:?}", self.current))
     }
 
     pub(super) fn expected_semicolon(&self) -> ParseError {
-        if inferred_names::enabled() {
-            self.error(self.v8_unexpected())
-        } else {
-            self.error("Expected semicolon")
-        }
+        self.v8_error("Expected semicolon")
     }
 }

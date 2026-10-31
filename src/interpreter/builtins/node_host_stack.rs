@@ -239,16 +239,9 @@ impl Interpreter {
                 return;
             }
         }
-        let frames = match (
-            self.node_host.stack.import_site.clone(),
-            self.stack_trace_limit(),
-        ) {
-            (Some(site), Some(_)) => site,
-            (_, Some(limit)) => {
-                let record = self.capture_records(skip_top, until, limit);
-                self.create_array(record)
-            }
-            _ => JsValue::UNDEFINED,
+        let frames = match self.node_host.stack.import_site.clone() {
+            Some(site) if self.stack_trace_limit().is_some() => site,
+            _ => self.capture_frames_array(skip_top, until),
         };
         {
             let mut b = handle.borrow_mut();
