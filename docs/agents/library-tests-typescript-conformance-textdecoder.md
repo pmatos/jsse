@@ -16,10 +16,11 @@ Node's own tests observe it.
 - `scripts/node-buffer-shim.js` keeps only the decoders (`utf8Decode`,
   `utf16Decode`, `windows1252Decode`) and hands them over in the hidden global
   `__node_decoders`, which the class takes and deletes.
-- `internal/errors`, `internal/validators`, `internal/util/types` and
-  `internal/util/inspect` are loaded on first use through the handoff object
+- `internal/errors`, `internal/validators` and `internal/util/inspect` are loaded
+  only by a call that throws or inspects, through the handoff object
   under `Symbol.for("jsse.node.textdecoder")`; `node-builtin-loader.js` fills in
-  its `require`. A decoder that never fails loads none of them.
+  its `require`. Buffers and views are read through intrinsic accessors captured
+  at prelude time, so decoding loads no builtin module.
 - `ERR_ENCODING_NOT_SUPPORTED` is defined in `node-lib/internal/errors.js`.
 
 ## Node behaviour reproduced (v26.8.2)
