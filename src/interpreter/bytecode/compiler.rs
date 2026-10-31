@@ -5,11 +5,12 @@ use super::chunk::{
     RegExpTemplate, ShapeProperty,
 };
 use super::op::{Op, UPDATE_DISCARD};
+use super::switch_table::SwitchTable;
 use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, CatchClause, DeclPhase, DoWhileStatement, Expression,
     ForInOfLeft, ForInit, ForStatement, Literal, LogicalOp, MemberProperty, Pattern, Property,
-    PropertyKey, PropertyKind, Statement, SwitchStatement, TryStatement, UnaryOp, UpdateOp,
-    VarKind, VariableDeclaration, WhileStatement,
+    PropertyKey, PropertyKind, Statement, TryStatement, UnaryOp, UpdateOp, VarKind,
+    VariableDeclaration, WhileStatement,
 };
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
@@ -23,6 +24,7 @@ mod calls;
 mod lexical;
 mod loop_scope;
 mod member_pos;
+mod switch;
 use loop_scope::LoopHead;
 use suspend::BodyKind;
 pub(crate) use suspend::{compile_async_body, compile_async_generator_body};
@@ -145,6 +147,7 @@ struct Snapshot {
     stack_base: u16,
     no_tail: u32,
     unwind_segments_len: usize,
+    switch_tables_len: usize,
 }
 
 #[derive(Default)]
@@ -274,6 +277,7 @@ struct Compiler {
     unwind_segments: Vec<(usize, usize, usize)>,
     member_pos: Vec<(u32, u32)>,
     pattern_src: Vec<(u32, std::rc::Rc<str>)>,
+    switch_tables: Vec<SwitchTable>,
     /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
     /// handed to the tree-walker must not contain one (it could not suspend).
     generator: bool,
@@ -326,6 +330,7 @@ impl Compiler {
             unwind_segments: Vec::new(),
             member_pos: Vec::new(),
             pattern_src: Vec::new(),
+            switch_tables: Vec::new(),
         }
     }
 
@@ -670,6 +675,7 @@ impl Compiler {
             stack_base: self.stack_base,
             no_tail: self.no_tail,
             unwind_segments_len: self.unwind_segments.len(),
+            switch_tables_len: self.switch_tables.len(),
         }
     }
 
@@ -709,6 +715,7 @@ impl Compiler {
         self.stack_base = snap.stack_base;
         self.no_tail = snap.no_tail;
         self.unwind_segments.truncate(snap.unwind_segments_len);
+        self.switch_tables.truncate(snap.switch_tables_len);
     }
 
     fn add_ast_node(&mut self, node: AstNode, reason: &'static str) -> Result<u16, CompileError> {
@@ -2202,120 +2209,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// `switch` (sec-switch-statement-runtime-semantics-evaluation,
-    /// sec-runtime-semantics-caseblockevaluation): the discriminant is
-    /// evaluated once; each case selector is evaluated lazily, in source
-    /// order, and compared with `===`; execution starts at the first match
-    /// (else the `default` clause) and falls through the later clauses.
-    ///
-    ///   <discriminant>
-    ///   per case:  <selector>; CaseStrictEq match_i
-    ///   Pop; Jump default_body | end
-    ///   match_i:   Pop; Jump body_i            (one trampoline per case)
-    ///   body_0 ... body_n                      (source order)
-    ///   end:
-    fn compile_switch(
-        &mut self,
-        switch: &SwitchStatement,
-        labels: Vec<String>,
-    ) -> Result<(), CompileError> {
-        if self.goal != CompileGoal::Function {
-            return Err(CompileError::Unsupported("statement:Switch"));
-        }
-        // Case bodies share one block scope, entered after the discriminant
-        // is evaluated; the selectors run inside it
-        // (sec-switch-statement-runtime-semantics-evaluation). The tree-walker
-        // hoists a case clause's function declarations as `var`-kind
-        // bindings with its own rules, so those keep the whole statement
-        // there.
-        let scoped = switch
-            .cases
-            .iter()
-            .any(|case| block_declares_lexical(&case.consequent));
-        let decls = if scoped {
-            let lists: Vec<&[Statement]> = switch
-                .cases
-                .iter()
-                .map(|case| case.consequent.as_slice())
-                .collect();
-            Some(
-                self.scope_declarations(&lists)
-                    .filter(|decls| decls.functions.is_empty())
-                    .ok_or(CompileError::Unsupported("block-scoped declaration"))?,
-            )
-        } else {
-            None
-        };
-        self.compile_expr(&switch.discriminant)?;
-        if let Some(decls) = decls {
-            self.open_scope(decls)?;
-        }
-        let mut match_sites: Vec<Option<usize>> = Vec::with_capacity(switch.cases.len());
-        for case in &switch.cases {
-            match &case.test {
-                Some(test) => {
-                    self.compile_expr(test)?;
-                    self.pop_n(1);
-                    match_sites.push(Some(self.emit_jump(Op::CaseStrictEq)));
-                }
-                None => match_sites.push(None),
-            }
-        }
-        // No selector matched: drop the discriminant and go to `default`,
-        // or past the switch when there is none.
-        self.emit(Op::Pop);
-        self.pop_n(1);
-        let no_match_site = self.emit_jump(Op::Jump);
-        let mut trampoline_sites: Vec<Option<usize>> = Vec::with_capacity(switch.cases.len());
-        for match_site in &match_sites {
-            match match_site {
-                Some(site) => {
-                    self.patch_jump(*site)?;
-                    self.emit(Op::Pop);
-                    trampoline_sites.push(Some(self.emit_jump(Op::Jump)));
-                }
-                None => trampoline_sites.push(None),
-            }
-        }
-        let mut frame = LoopFrame::new(
-            labels,
-            None,
-            self.scopes.len(),
-            self.cleanups.len(),
-            self.stack_base,
-        );
-        frame.is_switch = true;
-        self.loop_frames.push(frame);
-        let mut body_starts: Vec<usize> = Vec::with_capacity(switch.cases.len());
-        for case in &switch.cases {
-            body_starts.push(self.code.len());
-            self.compile_statements(&case.consequent, false, scoped)?;
-        }
-        let frame = self
-            .loop_frames
-            .pop()
-            .expect("pushed above, not re-entrant");
-        for (site, start) in trampoline_sites.iter().zip(&body_starts) {
-            if let Some(site) = site {
-                self.patch_jump_to(*site, *start)?;
-            }
-        }
-        match switch.cases.iter().position(|case| case.test.is_none()) {
-            Some(default_index) => {
-                self.patch_jump_to(no_match_site, body_starts[default_index])?;
-            }
-            None => self.patch_jump(no_match_site)?,
-        }
-        for site in frame.break_sites {
-            self.patch_jump(site)?;
-        }
-        self.resolve_escape_targets(&frame.escape_breaks);
-        if scoped {
-            self.close_scope();
-        }
-        Ok(())
-    }
-
     /// `try`/`catch`/`finally` (sec-try-statement-runtime-semantics-evaluation).
     ///
     ///   <block>                        protected by `Handler` -> catch_pad
@@ -3087,6 +2980,7 @@ impl Compiler {
             trivial_private_getter: None,
             member_pos: self.member_pos,
             pattern_src: self.pattern_src,
+            switch_tables: self.switch_tables,
         }
     }
 }

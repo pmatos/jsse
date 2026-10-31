@@ -244,6 +244,8 @@ pub(crate) struct Chunk {
     /// `--node` only: the initializer text of a `let`/`const` object pattern,
     /// by the offset of its first read (V8 names it in the destructuring error).
     pub(crate) pattern_src: Vec<(u32, std::rc::Rc<str>)>,
+    /// One dispatch table per `SwitchTable` op (constant-selector `switch`).
+    pub(crate) switch_tables: Vec<super::switch_table::SwitchTable>,
 }
 
 impl Chunk {

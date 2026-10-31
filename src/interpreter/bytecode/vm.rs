@@ -13,16 +13,20 @@ use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
 use std::cell::Cell;
 
+mod call_operands;
 mod iteration;
 mod member_pos;
 mod name_store;
 mod spread;
+mod switch;
 
+use call_operands::{release_call_operands, take_call_operands};
 use iteration::{
     bind_head_op, drop_below, end_finally, iteration_close, iteration_close_throw, iteration_head,
     iteration_step,
 };
 use name_store::{store_local, store_resolved_name};
+use switch::switch_target;
 
 #[inline(always)]
 fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
@@ -532,27 +536,6 @@ fn pop_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, context: &'stat
     let value = stack.pop().unwrap_or_else(|| panic!("{context}"));
     unroot_stack_value(interp, &value);
     value
-}
-
-fn take_call_operands(stack: &mut Vec<JsValue>, argc: usize) -> (JsValue, JsValue, Vec<JsValue>) {
-    assert!(stack.len() >= argc + 2, "stack underflow on call operands");
-    let args = stack.split_off(stack.len() - argc);
-    let this_value = stack.pop().expect("stack underflow on call this");
-    let callee = stack.pop().expect("stack underflow on call callee");
-    (callee, this_value, args)
-}
-
-fn release_call_operands(
-    interp: &mut Interpreter,
-    callee: &JsValue,
-    this_value: &JsValue,
-    args: &[JsValue],
-) {
-    for arg in args.iter().rev() {
-        unroot_stack_value(interp, arg);
-    }
-    unroot_stack_value(interp, this_value);
-    unroot_stack_value(interp, callee);
 }
 
 /// Takes the top `count` operands as the elements of an array literal and
@@ -2387,6 +2370,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         pc = (pc as i32 + offset) as usize;
                     }
                 }
+                Op::SwitchTable => pc = switch_target(interp, chunk, stack, pc),
                 Op::JumpIfTruthyKeep => {
                     let offset = decode_i16(chunk, pc) as i32;
                     pc += 2;
