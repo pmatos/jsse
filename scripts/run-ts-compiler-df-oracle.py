@@ -15,12 +15,12 @@ unusable TS_SRC_DIR fails instead of skipping. The exit status is 1 if any chunk
 """
 
 import os
-import signal
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs  # noqa: E402
 import ts_compiler_slices_df as df  # noqa: E402
 
 ORACLE = os.path.join(ROOT, "scripts", "run-ts-compiler-oracle.py")
@@ -29,27 +29,15 @@ BASE = [sys.executable, ORACLE, "--require", "--slices-module", "ts_compiler_sli
 
 
 def run(args, echo=True):
-    """Run the oracle in its own process group, stream its output, kill the group on SIGINT/SIGTERM."""
-    proc = subprocess.Popen(
-        BASE + args, stdout=subprocess.PIPE, text=True, start_new_session=True
-    )
-
-    def stop(signum, _frame):
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        raise SystemExit(128 + signum)
-
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, stop)
+    """Run the oracle in its own process group and stream its output; the group dies with this driver."""
     lines = []
-    for line in proc.stdout:
-        lines.append(line)
-        if echo:
-            print(line, end="", flush=True)
-    proc.wait()
-    return proc.returncode, "".join(lines)
+    with oracle_procs.group(BASE + args, stdout=subprocess.PIPE, text=True) as proc:
+        for line in proc.stdout:
+            lines.append(line)
+            if echo:
+                print(line, end="", flush=True)
+        proc.wait()
+        return proc.returncode, "".join(lines)
 
 
 def listing(spec):
@@ -79,6 +67,7 @@ def check_partition():
 
 
 def main():
+    oracle_procs.install_cleanup()
     argv = sys.argv[1:]
     cut = argv.index("--") if "--" in argv else len(argv)
     mine, extra = argv[:cut], argv[cut + 1 :]

@@ -23,6 +23,7 @@ Options: --jobs N (default 4), --timeout SECONDS per wait (default 300), --settl
 """
 
 import argparse
+import contextlib
 import difflib
 import hashlib
 import importlib.util
@@ -39,6 +40,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import oracle_procs  # noqa: E402
+
 spec = importlib.util.spec_from_file_location(
     "tsc_projects", os.path.join(HERE, "run-tsc-projects-oracle.py")
 )
@@ -185,15 +188,17 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
             out=len(out), err=len(err), files=files, ready=len(READY.findall(out))
         )
 
+    stack = contextlib.ExitStack()
     with open(out_path, "wb") as fo, open(err_path, "wb") as fe:
-        p = subprocess.Popen(
-            cmd,
-            cwd=tree,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=fo,
-            stderr=fe,
-            start_new_session=True,
+        p = stack.enter_context(
+            oracle_procs.group(
+                cmd,
+                cwd=tree,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=fo,
+                stderr=fe,
+            )
         )
 
     def wait_cycles(base):
@@ -233,14 +238,17 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
                     snapshot_record(f"idle after {'; '.join(pending) or 'nothing'}")
                     pending.clear()
     finally:
-        if p.poll() is None:
-            os.killpg(p.pid, signal.SIGINT)
-            try:
-                p.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
-                p.wait()
-                problem = problem or "ignored SIGINT"
+        try:
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGINT)
+                try:
+                    p.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    os.killpg(p.pid, signal.SIGKILL)
+                    p.wait()
+                    problem = problem or "ignored SIGINT"
+        finally:
+            stack.close()
     status = problem or str(p.returncode)
     elapsed = time.monotonic() - start
     snapshot_record(f"end (exit {status})")
@@ -270,6 +278,7 @@ def pins(path):
 
 
 def main():
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser()
     ap.add_argument("cases", nargs="*")
     ap.add_argument("--jobs", type=int, default=4)

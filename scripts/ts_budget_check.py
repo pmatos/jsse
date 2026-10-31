@@ -1,12 +1,5 @@
 """Measurement and budget arithmetic of run-ts-budget-oracle.py (issue #1297); no TypeScript checkout needed."""
 
-import os
-import signal
-import subprocess
-import sys
-import tempfile
-import time
-
 import oracle_procs
 
 RSS_RATIO_CAP = 6
@@ -20,42 +13,10 @@ def run_measured(argv, cwd, env, timeout):
     driver's, into the child's at exec; the driver stays far below the smallest measured process.) The whole
     group is killed when the run ends, times out, or the oracle is interrupted (scripts/oracle_procs.py).
     """
-    with tempfile.TemporaryFile() as out:
-        with oracle_procs._lock:
-            if oracle_procs._stopping:
-                raise RuntimeError("oracle is shutting down")
-            proc = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            oracle_procs._live[proc.pid] = proc
-        start = time.monotonic()
-        code = "timeout"
-        try:
-            while True:
-                pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
-                if pid:
-                    code = str(os.waitstatus_to_exitcode(status))
-                    break
-                if time.monotonic() - start > timeout:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    _, _, usage = os.wait4(proc.pid, 0)
-                    break
-                time.sleep(0.05)
-            secs = time.monotonic() - start
-            proc.returncode = 0
-        finally:
-            oracle_procs.reap_group(proc)
-            with oracle_procs._lock:
-                oracle_procs._live.pop(proc.pid, None)
-        out.seek(0)
-        rss = usage.ru_maxrss / (1024 * 1024 if sys.platform == "darwin" else 1024)
-        return code, out.read(), secs, rss
+    code, out, _, secs, rss = oracle_procs.run_measured(
+        argv, cwd, env, timeout, merge_stderr=True
+    )
+    return (code if code == "timeout" else str(code)), out, secs, rss
 
 
 def summarise(report):

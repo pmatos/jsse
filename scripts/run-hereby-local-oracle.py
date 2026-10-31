@@ -30,13 +30,15 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs  # noqa: E402
+
 DROP_ENV = (
     "NODE_OPTIONS",
     "FORCE_COLOR",
@@ -181,28 +183,14 @@ def hereby_local(engine, exe, tree, timeout):
         "local",
     ]
     start = time.monotonic()
-    proc = subprocess.Popen(
-        argv,
-        cwd=tree,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-        start_new_session=True,
+    code, out, err = oracle_procs.run_group(argv, tree, env, timeout)
+    out, err = (
+        re.sub(r"\r\n?", "\n", b.decode("utf-8", "replace")) for b in (out, err)
     )
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        out, err = proc.communicate()
-        return (
-            124,
-            out,
-            err + f"\ntimed out after {timeout}s\n",
-            time.monotonic() - start,
-        )
-    return proc.returncode, out, err, time.monotonic() - start
+    secs = time.monotonic() - start
+    if code == "timeout":
+        return 124, out, err + f"\ntimed out after {timeout}s\n", secs
+    return int(code), out, err, secs
 
 
 def copy_tree(src, dst):
@@ -236,11 +224,12 @@ def run_harness(pkg, jsse, jobs, ci):
         "--full",
         "--no-timing",
     ]
-    codes = [subprocess.run(a, env=env).returncode for a in (startup, argv)]
+    codes = [oracle_procs.call(a, env=env) for a in (startup, argv)]
     return max(codes)
 
 
 def main():
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
