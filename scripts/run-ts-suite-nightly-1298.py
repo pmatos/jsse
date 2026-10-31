@@ -181,7 +181,7 @@ def build_gate_argv(args):
             argv += [flag, value]
     if args.sample is not None:
         argv += ["--sample", str(args.sample), "--seed", str(args.seed or 0)]
-    return argv + list(args.specs)
+    return argv + (list(args.specs) or list(nightly.DEFAULT_RUNNERS))
 
 
 def main(argv=None):
@@ -210,7 +210,7 @@ def main(argv=None):
     mg.add_argument("--shards", type=int, required=True)
     mg.add_argument("--blocking", action="store_true")
     mg.add_argument("--sampled", action="store_true")
-    mg.add_argument("--runners", default=",".join(pl.ALL_RUNNERS))
+    mg.add_argument("--runners", default=",".join(nightly.DEFAULT_RUNNERS))
     pn = sub.add_parser("plan")
     pn.add_argument("--shards", type=int, required=True)
     args = ap.parse_args(argv)

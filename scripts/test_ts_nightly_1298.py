@@ -51,7 +51,7 @@ class PartitionTest(unittest.TestCase):
         chosen = chosen_of(self.SIZES)
         parts = [nightly.partition(chosen, i, 5) for i in range(5)]
         for runner, suites in chosen.items():
-            got = sorted(p for part in parts for p, _ in part[runner])
+            got = sorted(p for part in parts for p, _ in part.get(runner, []))
             self.assertEqual(got, sorted(p for p, _ in suites))
 
     def test_shards_are_balanced_by_estimated_cost(self):
@@ -74,6 +74,16 @@ class PartitionTest(unittest.TestCase):
                 self.names(nightly.partition(chosen, i, 3)),
                 self.names(nightly.partition(flipped, i, 3)),
             )
+
+    def test_a_runner_without_a_suite_in_the_shard_is_dropped(self):
+        chosen = chosen_of({"hereby": [1, 1], "compiler": [5]})
+        parts = [nightly.partition(chosen, i, 3) for i in range(3)]
+        self.assertEqual(sum("hereby" in p for p in parts), 2)
+        self.assertTrue(all(r for p in parts for r in p.values()))
+
+    def test_every_nightly_runner_has_a_weight(self):
+        self.assertTrue(set(nightly.DEFAULT_RUNNERS) <= set(nightly.WEIGHT))
+        self.assertNotIn("tsc-projects", nightly.DEFAULT_RUNNERS)
 
     def test_a_shard_out_of_range_is_refused(self):
         for shard, shards in ((3, 3), (-1, 3), (0, 0)):

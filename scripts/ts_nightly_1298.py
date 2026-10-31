@@ -11,20 +11,35 @@ import json
 import os
 
 SCHEMA = 1
-# Seconds of one job per test, measured on the 24-core recording host of #1296 (4 jobs); only the ratios matter,
-# they balance the shards. The timings artifact of a nightly run is the data to refresh them from.
+# Seconds of one job per test (wall seconds of a mocha batch at --jobs 2) measured by the first full run of this
+# workflow on GitHub-hosted runners; only the ratios matter, they balance the shards. Refresh them from the
+# timings.json of a nightly run. tsc-watch is per case (a session settles for seconds).
 WEIGHT = {
-    "compiler": 0.8,
-    "conformance": 0.6,
-    "unittests": 1.0,
-    "fourslash": 0.6,
-    "fourslash-server": 12.0,
-    "project": 0.3,
-    "transpile": 0.6,
-    "tsc-projects": 25.0,
-    "tsc-watch": 60.0,
-    "hereby": 60.0,
+    "compiler": 0.71,
+    "conformance": 0.48,
+    "unittests": 1.12,
+    "fourslash": 0.46,
+    "fourslash-server": 2.75,
+    "project": 0.22,
+    "transpile": 1.7,
+    "tsc-projects": 1.9,
+    "tsc-watch": 11.0,
+    "hereby": 3.0,
 }
+# The runners of the nightly job. tsc-projects is left out: its recorded bucket in ts-suite/jsse-pass-1296.json
+# holds 367 cases, scripts/tsc-fixtures has 413 since #1488, and a recorded bucket may not change (the ratchet), so
+# the gate reports the baseline as being for another test set. Add it back once the bucket is re-recorded.
+DEFAULT_RUNNERS = (
+    "compiler",
+    "conformance",
+    "project",
+    "transpile",
+    "fourslash",
+    "fourslash-server",
+    "unittests",
+    "tsc-watch",
+    "hereby",
+)
 
 
 def line_of(test_id):
@@ -54,10 +69,12 @@ def partition(chosen, shard, shards):
         heapq.heappush(loads, (load - cost, i))
         if i == shard:
             mine.add((runner, parent))
-    return {
+    # A runner without a suite here is dropped: the gate would run a scripted oracle with no case names, i.e. all of them.
+    mine_by_runner = {
         runner: [(p, ts) for p, ts in suites if (runner, p) in mine]
         for runner, suites in chosen.items()
     }
+    return {runner: suites for runner, suites in mine_by_runner.items() if suites}
 
 
 LIST_PREFIXES = ("pass", "fail", "regression")
@@ -120,6 +137,7 @@ def check_shards(found, shards, runners, sampled):
         elif len(got) > 1:
             problems.append(f"shard {i}: {len(got)} result directories")
     ran = []
+    reported = collections.defaultdict(list)
     for got in by_shard.values():
         for s in got:
             if s.get("ran"):
@@ -128,7 +146,11 @@ def check_shards(found, shards, runners, sampled):
                 problems.append(
                     f"shard {s.get('shard')}: the pass list gate did not run (exit {s.get('exit')})"
                 )
-            problems += [f"shard {s.get('shard')}: {p}" for p in s.get("integrity", [])]
+            for p in s.get("integrity", []):
+                reported[p].append(s.get("shard"))
+    for text, who in reported.items():
+        shown = f"shard {who[0]}" if len(who) == 1 else f"{len(who)} shards"
+        problems.append(f"{shown}: {text}")
     if not ran:
         return problems
     universes = {json.dumps(s["universe"], sort_keys=True) for s in ran}
