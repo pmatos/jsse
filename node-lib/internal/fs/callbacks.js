@@ -136,13 +136,10 @@ function run(syncFn, args, cb, extra) {
       steps.push(error ? { failed: true, error } : { failed: false, raw });
       advance(false);
     };
-    if (first) {
-      submit(hit, done);
-      return;
-    }
     try {
       submit(hit, done);
     } catch (e) {
+      if (first) throw e;
       cb(e);
     }
   };

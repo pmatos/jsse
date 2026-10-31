@@ -145,27 +145,18 @@ function openAsBlob(path, options) {
 }
 
 function installFileHandle(FileHandle) {
-  const vector = (call) => function(buffers, position) {
+  const counted = (call) => function(buffers, position) {
     return new Promise((resolve, reject) => {
-      try {
-        call(this.fd, buffers, position, (error, count) => {
-          if (error) reject(error);
-          else resolve({ count, buffers });
-        });
-      } catch (error) {
-        reject(error);
-      }
+      call(this.fd, buffers, position, (error, count) => (error ? reject(error) : resolve(count)));
     });
   };
-  const readvAsync = vector(readv);
-  const writevAsync = vector(writev);
+  const readCount = counted(readv);
+  const writeCount = counted(writev);
   FileHandle.prototype.readv = async function readvOnHandle(buffers, position) {
-    const { count } = await readvAsync.call(this, buffers, position);
-    return { bytesRead: count, buffers };
+    return { bytesRead: await readCount.call(this, buffers, position), buffers };
   };
   FileHandle.prototype.writev = async function writevOnHandle(buffers, position) {
-    const { count } = await writevAsync.call(this, buffers, position);
-    return { bytesWritten: count, buffers };
+    return { bytesWritten: await writeCount.call(this, buffers, position), buffers };
   };
   FileHandle.prototype.readLines = function readLines(options) {
     return require('readline').createInterface({
