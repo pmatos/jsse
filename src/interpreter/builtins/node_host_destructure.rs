@@ -236,8 +236,8 @@ impl Interpreter {
     /// Whether `error` is the not-iterable error the `GetIterator` of the
     /// current call frame made, not one raised inside user code it ran.
     fn iterable_error_here(&mut self, error: &JsValue) -> bool {
-        let made = self.node_host.iterable_error.take();
         let here = self.call_depth;
-        error.as_object_id().is_some() && made == error.as_object_id().map(|id| (id, here))
+        let made = self.node_host.iterable_error.take();
+        made.is_some() && made == error.as_object_id().map(|id| (id, here))
     }
 }
