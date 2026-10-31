@@ -60,14 +60,18 @@ def partition(chosen, shard, shards):
     }
 
 
+LIST_PREFIXES = ("pass", "fail", "regression")
+
+
+def write_json(path, doc, **kw):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=1, **kw)
+
+
 def write_shard(out_dir, summary, passed, failed, regressed, timings):
     """Write one shard's results: summary.json, timings.json and the id lists per runner."""
     os.makedirs(out_dir, exist_ok=True)
-    for prefix, by_runner in (
-        ("pass", passed),
-        ("fail", failed),
-        ("regression", regressed),
-    ):
+    for prefix, by_runner in zip(LIST_PREFIXES, (passed, failed, regressed)):
         for runner, ids in by_runner.items():
             if ids:
                 with open(
@@ -76,10 +80,8 @@ def write_shard(out_dir, summary, passed, failed, regressed, timings):
                     encoding="utf-8",
                 ) as f:
                     f.write("".join(line_of(i) + "\n" for i in sorted(ids)))
-    with open(os.path.join(out_dir, "timings.json"), "w", encoding="utf-8") as f:
-        json.dump(timings, f, indent=1)
-    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=1, sort_keys=True)
+    write_json(os.path.join(out_dir, "timings.json"), timings)
+    write_json(os.path.join(out_dir, "summary.json"), summary, sort_keys=True)
 
 
 def find_shards(root):
@@ -117,10 +119,12 @@ def check_shards(found, shards, runners, sampled):
             )
         elif len(got) > 1:
             problems.append(f"shard {i}: {len(got)} result directories")
-    ran = [s for got in by_shard.values() for s in got if s.get("ran")]
+    ran = []
     for got in by_shard.values():
         for s in got:
-            if not s.get("ran"):
+            if s.get("ran"):
+                ran.append(s)
+            else:
                 problems.append(
                     f"shard {s.get('shard')}: the pass list gate did not run (exit {s.get('exit')})"
                 )
@@ -153,7 +157,7 @@ def merge(root, out_dir, shards, runners, blocking=False, sampled=False):
     shard_dirs = {
         p: s for p, s in found.items() if isinstance(s, dict) and s.get("ran")
     }
-    tables = collections.defaultdict(lambda: collections.Counter())
+    tables = collections.defaultdict(collections.Counter)
     lists = collections.defaultdict(list)
     timings, batch_errors = [], []
     for path, s in sorted(shard_dirs.items(), key=lambda kv: kv[1].get("shard", -1)):
@@ -167,19 +171,14 @@ def merge(root, out_dir, shards, runners, blocking=False, sampled=False):
             problems.append(f"shard {s['shard']}: timings.json missing or unreadable")
         for name in sorted(os.listdir(path)):
             stem, ext = os.path.splitext(name)
-            if ext == ".txt" and stem.split("-", 1)[0] in (
-                "pass",
-                "fail",
-                "regression",
-            ):
+            if ext == ".txt" and stem.split("-", 1)[0] in LIST_PREFIXES:
                 with open(os.path.join(path, name), encoding="utf-8") as f:
-                    lists[stem].extend(f.read().splitlines())
+                    lists[stem].extend(f.read().split("\n")[:-1])
     os.makedirs(out_dir, exist_ok=True)
     for stem, lines in lists.items():
         with open(os.path.join(out_dir, stem + ".txt"), "w", encoding="utf-8") as f:
             f.write("".join(line + "\n" for line in sorted(lines)))
-    with open(os.path.join(out_dir, "timings.json"), "w", encoding="utf-8") as f:
-        json.dump(timings, f, indent=1)
+    write_json(os.path.join(out_dir, "timings.json"), timings)
     total = collections.Counter()
     for row in tables.values():
         total.update(row)
@@ -196,8 +195,7 @@ def merge(root, out_dir, shards, runners, blocking=False, sampled=False):
         "integrity_problems": problems,
         "gating_problems": gating,
     }
-    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=1, sort_keys=True)
+    write_json(os.path.join(out_dir, "summary.json"), summary, sort_keys=True)
     with open(os.path.join(out_dir, "summary.md"), "w", encoding="utf-8") as f:
         f.write(markdown(summary, timings, shard_dirs))
     messages = [f"error: {p}" for p in problems]
@@ -212,16 +210,15 @@ def markdown(summary, timings, shard_dirs):
         "| runner | baseline | pass | fail | new-pass | regression |",
         "|---|--:|--:|--:|--:|--:|",
     ]
-    for runner, c in summary["runners"].items():
-        rows.append(
-            f"| {runner} | {c.get('held', 0)} | {c.get('pass', 0)} | {c.get('fail', 0)} | "
-            f"{c.get('new_pass', 0)} | {c.get('regression', 0)} |"
+
+    def row(name, c):
+        cells = (
+            c.get(k, 0) for k in ("held", "pass", "fail", "new_pass", "regression")
         )
-    t = summary["total"]
-    rows.append(
-        f"| **total** | {t.get('held', 0)} | {t.get('pass', 0)} | {t.get('fail', 0)} | "
-        f"{t.get('new_pass', 0)} | {t.get('regression', 0)} |"
-    )
+        return f"| {name} | " + " | ".join(map(str, cells)) + " |"
+
+    rows += [row(r, c) for r, c in summary["runners"].items()]
+    rows.append(row("**total**", summary["total"]))
     secs = collections.Counter()
     for x in timings:
         if not x.get("dry"):
