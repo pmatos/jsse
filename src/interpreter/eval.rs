@@ -19,7 +19,9 @@ mod literals;
 pub(crate) use literals::{
     LiteralPropertySpec, prefixed_function_name, regexp_literal_source, static_property_key,
 };
+mod import_evaluation;
 mod modules;
+mod native_call;
 mod operand;
 
 use generator_runtime::ForOfUnwindOutcome;
@@ -974,8 +976,9 @@ impl Interpreter {
                 self.await_value(&val)
             }
             Expression::ImportMeta => self.eval_import_meta(env),
-            Expression::Import(source_expr, options_expr) => {
+            Expression::Import(source_expr, options_expr, at) => {
                 // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
+                self.node_host.call_pos = *at;
                 let source_val = match self.eval_expr(source_expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -5602,30 +5605,13 @@ impl Interpreter {
                 }
                 let pending = self.with_realm(function_realm, |interp| {
                     match func {
-                        CallTarget::Native(f) => {
-                            #[cfg(feature = "perf-counters")]
-                            {
-                                interp.perf.calls_to_native += 1;
-                            }
-                            let operands_base = interp.gc_root_frame();
-                            interp.gc_root_value(_this_val);
-                            for a in args.iter() {
-                                interp.gc_root_value(a);
-                            }
-                            let operands_depth = interp.gc_root_frame();
-                            let saved_this = interp.last_call_this_value.take();
-                            let result = f(interp, _this_val, args);
-                            interp.last_call_this_value = saved_this;
-                            interp.last_call_had_explicit_return = true;
-                            interp.gc_assert_root_depth(operands_depth, "a native call");
-                            // Unroot the native call operands after the call returns.
-                            for a in args.iter().rev() {
-                                interp.gc_unroot_value(a);
-                            }
-                            interp.gc_unroot_value(_this_val);
-                            interp.gc_assert_root_depth(operands_base, "a native call's operands");
-                            CallOutcome::Ready(result)
-                        }
+                        CallTarget::Native(f) => CallOutcome::Ready(interp.run_native_call(
+                            o.id,
+                            &*f,
+                            _this_val,
+                            args,
+                            was_construct,
+                        )),
                         CallTarget::User {
                             params,
                             body,

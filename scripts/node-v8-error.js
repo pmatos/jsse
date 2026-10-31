@@ -12,10 +12,12 @@
   var captureFrames = __host_stack_capture;
   var framesOf = __host_stack_frames;
   var locate = __host_stack_locate;
+  var arrowOf = __host_stack_arrow;
   delete globalThis.__host_stack_install;
   delete globalThis.__host_stack_capture;
   delete globalThis.__host_stack_frames;
   delete globalThis.__host_stack_locate;
+  delete globalThis.__host_stack_arrow;
 
   var ErrorCtor = Error;
   var defineProperty = Object.defineProperty;
@@ -208,7 +210,9 @@
   function getStack() {
     var frames = framesOf(this);
     if (frames === undefined) return undefined;
+    var arrow = arrowOf(this);
     var value = formatStack(this, frames);
+    if (arrow !== undefined) value = arrow + value;
     setStack.call(this, value);
     return value;
   }

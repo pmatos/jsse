@@ -283,6 +283,7 @@ impl Interpreter {
             receiver: parked.receiver,
             constructor: false,
             called_with: parked.called_with,
+            native: false,
         };
         self.frame_record(&raw, record);
         let flags_at = record.len() - 2;

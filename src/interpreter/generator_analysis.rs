@@ -609,7 +609,7 @@ fn analyze_expression(
             analyze_expression(inner, analysis, ctx, true);
         }
 
-        Expression::Import(source, opts)
+        Expression::Import(source, opts, _)
         | Expression::ImportDefer(source, opts)
         | Expression::ImportSource(source, opts) => {
             analyze_expression(source, analysis, ctx, true);
@@ -846,7 +846,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         | Expression::PreIterated(e)
         | Expression::ClassProtoParent(e)
         | Expression::Update(_, _, e) => expr_contains(e, target),
-        Expression::Import(e, opts)
+        Expression::Import(e, opts, _)
         | Expression::ImportDefer(e, opts)
         | Expression::ImportSource(e, opts) => {
             expr_contains(e, target) || opts.as_ref().is_some_and(|o| expr_contains(o, target))
@@ -898,8 +898,7 @@ pub(crate) fn for_in_of_left_contains_suspension(left: &ForInOfLeft) -> bool {
 
 fn for_in_of_head_contains_yield(left: &ForInOfLeft) -> bool {
     match left {
-        // The transform moves these bindings into the loop body before it
-        // lowers the loop.
+        // The transform moves these bindings into the loop body first.
         ForInOfLeft::Variable(decl) => decl
             .declarations
             .iter()

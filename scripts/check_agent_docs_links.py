@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Check that every Markdown link in AGENTS.md and docs/agents/ resolves (issue #1299).
+
+    uv run python scripts/check_agent_docs_links.py [--root DIR] [--strict] [--list-orphans]
+
+A link `[text](target)` is checked unless it is external (`http:`, `https:`, `mailto:`): the file
+must exist (relative to the linking file) and, when the target has a `#fragment` into a Markdown
+file, a heading of that file must produce the fragment (GitHub's slug rules). Links inside fenced
+code blocks and inline code are ignored. Exit 1 on a broken link.
+
+An orphan is a page of docs/agents/ that no chain of links from AGENTS.md reaches. Orphans are
+printed as warnings; `--strict` makes them an error, `--list-orphans` prints only their paths.
+Standard library only; never writes anything.
+"""
+
+import argparse
+import os
+import re
+import sys
+
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+INLINE_CODE = re.compile(r"`+[^`\n]*`+")
+LINK = re.compile(
+    r"(?<!\!)\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)"
+)
+HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+EXTERNAL = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)")
+
+
+def slug(text):
+    text = text.replace("`", "")
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = text.strip().lower()
+    text = re.sub(r"[^\w\- ]", "", text, flags=re.UNICODE)
+    return text.replace(" ", "-")
+
+
+def text_lines(text):
+    """Yield (line number, raw line) of the text outside fenced code blocks."""
+    fence = None
+    for number, line in enumerate(text.splitlines(), 1):
+        m = FENCE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                continue
+            yield number, line
+        elif set(line.strip()) == {fence[0]} and len(line.strip()) >= len(fence):
+            fence = None
+
+
+def anchors(text):
+    """The heading slugs GitHub generates: a repeated slug gets -1, -2, ... and never repeats one already used."""
+    uses = {}
+    found = set()
+    for _, line in text_lines(text):
+        m = HEADING.match(line)
+        if not m:
+            continue
+        base = slug(m.group(2))
+        count = uses.get(base, 0)
+        candidate = base if count == 0 else "%s-%d" % (base, count)
+        while candidate in found:
+            count += 1
+            candidate = "%s-%d" % (base, count)
+        uses[base] = count + 1
+        found.add(candidate)
+    return found
+
+
+def links(text):
+    for number, line in text_lines(text):
+        for m in LINK.finditer(INLINE_CODE.sub("", line)):
+            yield number, m.group(1)
+
+
+def markdown_files(root):
+    out = []
+    agents = os.path.join(root, "AGENTS.md")
+    if os.path.isfile(agents):
+        out.append(agents)
+    for base, _, names in sorted(os.walk(os.path.join(root, "docs", "agents"))):
+        out.extend(os.path.join(base, n) for n in sorted(names) if n.endswith(".md"))
+    return out
+
+
+def linked_pages(path):
+    """Yield (line, target, destination file, fragment) for each local link of a Markdown file."""
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    for number, target in links(text):
+        if EXTERNAL.match(target):
+            continue
+        file_part, _, fragment = target.partition("#")
+        dest = (
+            path
+            if file_part == ""
+            else os.path.normpath(os.path.join(os.path.dirname(path), file_part))
+        )
+        yield number, target, file_part, dest, fragment
+
+
+def check(root):
+    """Return (errors, edges): broken links as strings, and {file: set(linked Markdown files)} for the scanned files."""
+    errors, edges, anchor_cache = [], {}, {}
+
+    def anchors_of(path):
+        if path not in anchor_cache:
+            with open(path, encoding="utf-8") as f:
+                anchor_cache[path] = anchors(f.read())
+        return anchor_cache[path]
+
+    for path in markdown_files(root):
+        rel = os.path.relpath(path, root)
+        edges[path] = set()
+        for number, target, file_part, dest, fragment in linked_pages(path):
+            if file_part != "" and not os.path.exists(dest):
+                errors.append("%s:%d: %s does not exist" % (rel, number, target))
+            elif dest.endswith(".md") and os.path.isfile(dest):
+                edges[path].add(dest)
+                if fragment and fragment not in anchors_of(dest):
+                    errors.append(
+                        "%s:%d: %s has no heading #%s"
+                        % (rel, number, os.path.relpath(dest, root), fragment)
+                    )
+    return errors, edges
+
+
+def orphans(root, edges):
+    """Pages of docs/agents/ that no chain of links from AGENTS.md reaches (the chain may pass through any Markdown file)."""
+    start = os.path.join(root, "AGENTS.md")
+    reached, todo = set(), [start]
+    while todo:
+        current = todo.pop()
+        if current in reached:
+            continue
+        reached.add(current)
+        if current in edges:
+            todo.extend(edges[current])
+        elif os.path.isfile(current):
+            todo.extend(
+                d
+                for _, _, _, d, _ in linked_pages(current)
+                if d.endswith(".md") and os.path.isfile(d)
+            )
+    agents_dir = os.path.join(root, "docs", "agents") + os.sep
+    return sorted(p for p in edges if p.startswith(agents_dir) and p not in reached)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="orphan pages are an error"
+    )
+    parser.add_argument(
+        "--list-orphans", action="store_true", help="print only the orphan paths"
+    )
+    args = parser.parse_args(argv)
+    root = os.path.abspath(args.root)
+    errors, edges = check(root)
+    lost = [os.path.relpath(p, root) for p in orphans(root, edges)]
+    if args.list_orphans:
+        print("\n".join(lost))
+        return 0
+    for line in errors:
+        print("error: " + line)
+    for rel in lost:
+        print(
+            "%s: %s is not reachable from AGENTS.md"
+            % ("error" if args.strict else "warning", rel)
+        )
+    pages = len(edges)
+    print("%d pages, %d broken links, %d orphans" % (pages, len(errors), len(lost)))
+    return 1 if errors or (args.strict and lost) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -462,7 +462,8 @@ impl<'a> Parser<'a> {
                 }
                 let at = CallSiteId::at(self.current_token_start).1;
                 self.advance()?;
-                let expr = self.parse_unary()?;
+                let mut expr = self.parse_unary()?;
+                Self::retarget_import(&mut expr, at);
                 Ok(Expression::Await(ExprBox::new(expr), at))
             }
             _ => self.parse_postfix(),
@@ -711,7 +712,7 @@ impl<'a> Parser<'a> {
             if is_direct_import
                 && matches!(
                     &primary,
-                    Expression::Import(_, _)
+                    Expression::Import(_, _, _)
                         | Expression::ImportDefer(_, _)
                         | Expression::ImportSource(_, _)
                 )
@@ -902,6 +903,7 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Identifier("static".to_string()))
             }
             Token::Keyword(Keyword::Import) => {
+                let at = CallSiteId::at(self.current_token_start).1;
                 self.advance()?;
                 if self.current == Token::Dot {
                     self.advance()?;
@@ -947,7 +949,6 @@ impl<'a> Parser<'a> {
                         }
                     }
                 } else if self.current == Token::LeftParen {
-                    // import(source [, options] [,]) - dynamic import
                     self.advance()?;
                     let old_no_in = self.no_in;
                     self.no_in = false;
@@ -955,11 +956,9 @@ impl<'a> Parser<'a> {
                     let options = if self.current == Token::Comma {
                         self.advance()?;
                         if self.current == Token::RightParen {
-                            // Trailing comma after first arg: import(source,)
                             None
                         } else {
                             let opts = self.parse_assignment_expression()?;
-                            // Allow trailing comma after second arg
                             if self.current == Token::Comma {
                                 self.advance()?;
                             }
@@ -970,7 +969,7 @@ impl<'a> Parser<'a> {
                     };
                     self.no_in = old_no_in;
                     self.eat(&Token::RightParen)?;
-                    Ok(Expression::Import(ExprBox::new(source), options))
+                    Ok(Expression::Import(ExprBox::new(source), options, at))
                 } else {
                     Err(self.error("Unexpected 'import'"))
                 }
@@ -1384,7 +1383,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Identifier("of".to_string()))
             }
-            _ => Err(self.error(format!("Unexpected token: {:?}", self.current))),
+            _ => Err(self.unexpected_token("Unexpected token: ")),
         }
     }
 
@@ -1414,7 +1413,7 @@ impl<'a> Parser<'a> {
                     trailing_comma_after_spread = true;
                 }
             } else if self.current != Token::RightBracket {
-                return Err(self.error("Expected ',' or ']' in array literal"));
+                return Err(self.v8_error("Expected ',' or ']' in array literal"));
             }
         }
         self.eat(&Token::RightBracket)?;
@@ -1464,7 +1463,7 @@ impl<'a> Parser<'a> {
                     trailing_comma_after_spread = true;
                 }
             } else if self.current != Token::RightBrace {
-                return Err(self.error("Expected ',' or '}' after property definition"));
+                return Err(self.v8_error("Expected ',' or '}' after property definition"));
             }
         }
         self.eat(&Token::RightBrace)?;

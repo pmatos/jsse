@@ -60,6 +60,18 @@ def load_base():
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    internal_normalise = mod.normalise
+
+    def normalise(text, work, ts_dir):
+        text = internal_normalise(text, work, ts_dir)
+        kept = [
+            line
+            for line in text.splitlines()
+            if not (mod.FRAME.match(line) and "node:diagnostics_channel" in line)
+        ]
+        return "\n".join(kept) + "\n"
+
+    mod.normalise = normalise
     return mod
 
 

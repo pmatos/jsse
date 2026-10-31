@@ -162,6 +162,10 @@ Before a performance investigation, read [Execution Counters](docs/agents/execut
 
 Before running or extending library tests, read [Library Tests](docs/agents/library-tests.md) for harness instructions and known results.
 
+## Node host and TypeScript suite
+
+Read [Node host](docs/agents/node-host.md) before changing `--node` mode ([add a module](docs/agents/node-host-add-module.md)); for TypeScript work see [running the suite](docs/agents/typescript-suite-local.md), [triage](docs/agents/typescript-suite-triage.md) and the [index](docs/agents/library-tests-typescript.md).
+
 ## Architecture Notes
 
 Before changing the interpreter, read the relevant architecture instructions:

@@ -1,0 +1,48 @@
+"const = 1;" SyntaxError: Unexpected token '='
+"let x = 1 y;" SyntaxError: Unexpected identifier 'y'
+"let x = 1 2;" SyntaxError: Unexpected number
+"let x = 1 'a';" SyntaxError: Unexpected string
+"x = ;" SyntaxError: Unexpected token ';'
+"class {" SyntaxError: Unexpected token '{'
+"if (x) {" SyntaxError: Unexpected end of input
+"foo(" SyntaxError: Unexpected end of input
+"var 1;" SyntaxError: Unexpected number
+"let [ = 1;" SyntaxError: Unexpected token '='
+"var {a: } = 1;" SyntaxError: Unexpected token '}'
+"a b" SyntaxError: Unexpected identifier 'b'
+"1 +" SyntaxError: Unexpected end of input
+"for (;;" SyntaxError: Unexpected end of input
+"x = {a: 1 b: 2}" SyntaxError: Unexpected identifier 'b'
+"x = [1 2]" SyntaxError: Unexpected number
+"({a b})" SyntaxError: Unexpected identifier 'b'
+"var x = `a` `b` 1" SyntaxError: Unexpected number
+"if" SyntaxError: Unexpected end of input
+"}" SyntaxError: Unexpected token '}'
+")" SyntaxError: Unexpected token ')'
+"x ? y" SyntaxError: Unexpected end of input
+"var a, ;" SyntaxError: Unexpected token ';'
+"class A { x y }" SyntaxError: Unexpected identifier 'y'
+"var x = 1; var x = ;" SyntaxError: Unexpected token ';'
+"x = (1, 2" SyntaxError: Unexpected end of input
+"x = 1 +* 2" SyntaxError: Unexpected token '*'
+"async function f() { await }" SyntaxError: Unexpected token '}'
+"a => {" SyntaxError: Unexpected end of input
+"switch (x) { foo }" SyntaxError: Unexpected identifier 'foo'
+"do x while (y)" SyntaxError: Unexpected token 'while'
+"f(1 2)" SyntaxError: missing ) after argument list
+"f(1" SyntaxError: missing ) after argument list
+"f(1;" SyntaxError: missing ) after argument list
+"f(" SyntaxError: Unexpected end of input
+"new F(1 2)" SyntaxError: missing ) after argument list
+"f(...a b)" SyntaxError: missing ) after argument list
+"f(1," SyntaxError: Unexpected end of input
+"f(1 +)" SyntaxError: Unexpected token ')'
+"'use strict'; let let = 1" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; var static" SyntaxError: Unexpected strict mode reserved word
+"'use strict'; yield 1" SyntaxError: Unexpected strict mode reserved word
+"async function f() { var await }" SyntaxError: Unexpected reserved word
+"var of of" SyntaxError: Unexpected token 'of'
+"a async" SyntaxError: Unexpected token 'async'
+"a static" SyntaxError: Unexpected identifier 'static'
+"'use strict'; a static" SyntaxError: Unexpected strict mode reserved word
+module SyntaxError: Unexpected token '='
