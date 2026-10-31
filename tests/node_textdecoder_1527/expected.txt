@@ -1,0 +1,126 @@
+badlabel THROWS RangeError RangeError ERR_ENCODING_NOT_SUPPORTED "The \"nope\" encoding is not supported"
+badlabel-sym THROWS TypeError TypeError undefined "Cannot convert a Symbol value to a string"
+label-undefined => "utf-8"
+label-null THROWS RangeError RangeError ERR_ENCODING_NOT_SUPPORTED "The \"null\" encoding is not supported"
+label-empty THROWS RangeError RangeError ERR_ENCODING_NOT_SUPPORTED "The \"\" encoding is not supported"
+label-object => "utf-8"
+opts-number THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"options\" argument must be of type object. Received type number (1)"
+opts-string THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"options\" argument must be of type object. Received type string ('x')"
+opts-null => false
+opts-fn => false
+opts-arr => false
+decode-str THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+decode-num THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+decode-null THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+decode-obj THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+decode-undefined => ""
+decode-ab => "hi"
+decode-dv => "hi"
+decode-u16 => "hi"
+decode-sab => "\u0000\u0000"
+decode-buffer => "hi"
+decode-opts-null => "h"
+decode-opts-num THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"options\" argument must be of type object. Received type number (1)"
+decode-opts-str THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"options\" argument must be of type object. Received type string ('x')"
+decode-opts-fn => "h"
+decode-this THROWS TypeError TypeError ERR_INVALID_THIS "Value of \"this\" must be of type TextDecoder"
+encoding-this THROWS TypeError TypeError ERR_INVALID_THIS "Value of \"this\" must be of type TextDecoder"
+fatal-this THROWS TypeError TypeError ERR_INVALID_THIS "Value of \"this\" must be of type TextDecoder"
+ignoreBOM-this THROWS TypeError TypeError ERR_INVALID_THIS "Value of \"this\" must be of type TextDecoder"
+call-without-new THROWS TypeError TypeError undefined "Class constructor TextDecoder cannot be invoked without 'new'"
+tag => "[object TextDecoder]"
+keys => "constructor,decode,encoding,fatal,ignoreBOM"
+own-syms => "Symbol(nodejs.util.inspect.custom),Symbol(Symbol.toStringTag)"
+ownprops => "Symbol(decoder),Symbol(flags),Symbol(encoding),Symbol(kIgnoreBOM),Symbol(kFatal),Symbol(kUTF8FastPath),Symbol(handle),Symbol(single-byte),Symbol(chunk),Symbol(BOM seen)"
+length => "0 0"
+name => "TextDecoder decode"
+inspect => "TextDecoder { encoding: 'utf-8', fatal: false, ignoreBOM: false }"
+inspect-fatal => "TextDecoder { encoding: 'utf-16le', fatal: true, ignoreBOM: true }"
+inspect-hidden => "TextDecoder {\n  encoding: 'utf-8',\n  fatal: false,\n  ignoreBOM: false,\n  Symbol(flags): 0,\n  Symbol(handle): undefined\n}"
+inspect-depth => "[TextDecoder]"
+inspect-class => "[class TextDecoder]"
+desc-enc => "function,,true,true"
+desc-fatal => "function,,true,true"
+desc-global => "function,true,false,true"
+util-same => true
+fatal-utf8-C0 THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-8"
+fatal-le-1 THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16le"
+fatal-be-1 THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16be"
+fatal-1252 => ""
+fatal-le-stream-even-odd THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16le"
+fatal-le-stream-odd-even THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16le"
+fatal-le-stream-odd-odd => "A"
+fatal-le-stream-odd-flush THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16le"
+fatal-le-stream-flush-then-reuse => "A"
+fatal-le-lone-hi-stream-flush THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16le"
+fatal-le-lone-hi-stream-then-nonlo THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16le"
+nonfatal-le-lone-hi-flush => "�"
+nonfatal-le-odd-flush => "�"
+nonfatal-le-odd-even => "AB"
+fatal-le-split-pair => "👍"
+fatal-be-stream-flush THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-16be"
+fatal-utf8-trunc-flush THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-8"
+fatal-utf8-trunc-flush2 THROWS TypeError TypeError ERR_ENCODING_INVALID_ENCODED_DATA "The encoded data was not valid for encoding utf-8"
+nonfatal-utf8-trunc-flush => "�"
+fatal-err-props => "code | TypeError | ERR_ENCODING_INVALID_ENCODED_DATA | TypeError | TypeError: The encoded data was not valid for encoding utf-8 | true"
+badlabel-props => "code | RangeError | ERR_ENCODING_NOT_SUPPORTED | RangeError | RangeError [ERR_ENCODING_NOT_SUPPORTED]: The \"nope\" encoding is not supported | true"
+invalid-arg-props => "code | TypeError | ERR_INVALID_ARG_TYPE | TypeError | TypeError: The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+labels-ws => "utf-8"
+labels-utf16 => "utf-16le"
+labels-ascii => "windows-1252"
+labels-latin1 => "windows-1252"
+labels-utf16le-dash => "utf-16le"
+bom-strip => 1
+bom-keep => 2
+bom-16-strip => 1
+stream-reuse => "|€"
+undefined-fatal-opt => true
+toString => "[object TextDecoder]"
+ctor-proto => true
+subclass => "utf-8"
+decode-detached => ""
+utf-8 err-mid-stream-after-bom-then-bom => 2
+utf-8 err-first-stream-then-bom => 1
+utf-8 err-flush-then-bom => 1
+utf-8 stream-bom-twice => [ 1, 2 ]
+utf-8 empty-stream-then-bom => 1
+utf-8 stream-string THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of ArrayBuffer or ArrayBufferView. Received type string ('abc')"
+utf-8 stream-null THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of ArrayBuffer or ArrayBufferView. Received null"
+utf-8 nonstream-str THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"list\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-8 sab => 2
+utf-8 detached-stream => ""
+utf-16le err-mid-stream-after-bom-then-bom => 2
+utf-16le err-first-stream-then-bom => 1
+utf-16le err-flush-then-bom => 1
+utf-16le stream-bom-twice => [ 1, 2 ]
+utf-16le empty-stream-then-bom => 1
+utf-16le stream-string THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-16le stream-null THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-16le nonstream-str THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-16le sab => 1
+utf-16le detached-stream => ""
+utf-16be err-mid-stream-after-bom-then-bom => 2
+utf-16be err-first-stream-then-bom => 1
+utf-16be err-flush-then-bom => 1
+utf-16be stream-bom-twice => [ 1, 2 ]
+utf-16be empty-stream-then-bom => 1
+utf-16be stream-string THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-16be stream-null THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-16be nonstream-str THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView."
+utf-16be sab => 1
+utf-16be detached-stream => ""
+1252 str THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of ArrayBuffer or ArrayBufferView. Received type string ('abc')"
+1252 num THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "The \"input\" argument must be an instance of ArrayBuffer or ArrayBufferView. Received type number (1)"
+1252 sab => 2
+1252 stream => "€"
+1252 euro => "€"
+1252 fatal e9 => "é"
+utf8 stream 1 TypeError ERR_INVALID_ARG_TYPE The "input" argument must be an instance of ArrayBuffer or ArrayBufferView. Received type number (1) [ 'code' ] TypeError [ERR_INVALID_ARG_TYPE]: The "input" argument must be an instance of ArrayBuffer or ArrayBufferView. Received type number (1)
+utf8 {} TypeError ERR_INVALID_ARG_TYPE The "list" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView. [ 'code' ] TypeError: The "list" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView.
+utf8 null stream TypeError ERR_INVALID_ARG_TYPE The "input" argument must be an instance of ArrayBuffer or ArrayBufferView. Received null [ 'code' ] TypeError [ERR_INVALID_ARG_TYPE]: The "input" argument must be an instance of ArrayBuffer or ArrayBufferView. Received null
+utf-16le TypeError ERR_INVALID_ARG_TYPE The "input" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView. [ 'code' ] TypeError: The "input" argument must be an instance of SharedArrayBuffer, ArrayBuffer or ArrayBufferView.
+windows-1252 TypeError ERR_INVALID_ARG_TYPE The "input" argument must be an instance of ArrayBuffer or ArrayBufferView. Received an instance of Object [ 'code' ] TypeError [ERR_INVALID_ARG_TYPE]: The "input" argument must be an instance of ArrayBuffer or ArrayBufferView. Received an instance of Object
+[ 'code' ] RangeError [ERR_ENCODING_NOT_SUPPORTED]: The "xx" encoding is not supported
+0
+"" "😀" ""
+"👍�"

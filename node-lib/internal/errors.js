@@ -275,6 +275,7 @@ E('ERR_STREAM_UNABLE_TO_PIPE', Error, 'Cannot pipe to a closed or destroyed stre
 E('ERR_STREAM_UNSHIFT_AFTER_END_EVENT', Error, 'stream.unshift() after end event');
 E('ERR_STREAM_WRITE_AFTER_END', Error, 'write after end');
 E('ERR_UNKNOWN_ENCODING', TypeError, (encoding) => format('Unknown encoding: %s', encoding));
+E('ERR_ENCODING_NOT_SUPPORTED', RangeError, (enc) => `The "${enc}" encoding is not supported`);
 E('ERR_INVALID_THIS', TypeError, (type) => `Value of "this" must be of type ${type}`);
 E('ERR_MISSING_ARGS', TypeError, (...args) => {
   let msg = 'The ';
