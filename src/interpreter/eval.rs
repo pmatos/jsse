@@ -7963,12 +7963,11 @@ impl Interpreter {
                     func_env.borrow_mut().has_parameter_expressions = true;
                 }
             }
-            if let Err(error) =
+            if let Err(error) = interp.node_in_async_frame(_func_obj_id, &func_env, |interp| {
                 interp.bind_function_parameters(params, args, &func_env, has_simple_params)
-            {
+            }) {
                 interp.promise_resolvers_reject(&resolvers, error);
-                // A default-param expression may have called `__host_exit`
-                // (issue #229): return abrupt so the caller unwinds.
+                // `__host_exit` in a default-param expression (#229): unwind.
                 if interp.pending_exit.is_some() {
                     return Completion::Throw(JsValue::UNDEFINED);
                 }
@@ -8013,7 +8012,7 @@ impl Interpreter {
             interp.hoist_annexb_at_state_machine_entry(body, &func_env);
 
             let async_id = interp.scheduler.alloc_async_function_id();
-
+            interp.node_keep_async_receiver(&func_env, is_arrow.then_some(this_val));
             interp.scheduler.insert_async_function_state(
                 async_id,
                 AsyncFunctionState {
@@ -8037,10 +8036,8 @@ impl Interpreter {
 
             let resume = interp.async_function_resume(async_id, JsValue::UNDEFINED, false);
 
-            // If the body ran `__host_exit` synchronously (before any await, issue
-            // #242), propagate the exit as this call's completion — in expression
-            // position too (`f(), g()`; `h(f())`), which a statement-level check
-            // cannot reach — instead of returning the never-to-settle promise.
+            // `__host_exit` before any await (#242): propagate it as this call's
+            // completion, in expression position too, not a never-settling promise.
             if let Completion::Exit(code) = resume {
                 return Completion::Exit(code);
             }
@@ -8064,13 +8061,11 @@ impl Interpreter {
             return self.resume_hosted_async(async_id, sent_value, is_error);
         };
         self.with_realm(Some(realm_id), |interp| {
-            let framed = interp.node_push_async_module_frame(async_id);
+            let framed = interp.node_push_async_frame(async_id);
             let envs_base = interp.call_stack_envs.len();
             let completion = interp.async_function_resume_in_realm(async_id, sent_value, is_error);
             interp.call_stack_envs.truncate(envs_base);
-            if framed {
-                interp.node_pop_module_frame();
-            }
+            interp.node_pop_async_frame(framed);
             completion
         })
     }
