@@ -51,6 +51,8 @@ mod node_host_fs_jobs;
 #[cfg(unix)]
 mod node_host_fs_meta;
 #[cfg(unix)]
+mod node_host_fs_more;
+#[cfg(unix)]
 mod node_host_fs_ops;
 #[cfg(unix)]
 mod node_host_fs_watch;

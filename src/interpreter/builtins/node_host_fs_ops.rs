@@ -7,6 +7,8 @@
 use super::super::*;
 use super::node_host_fs_args::*;
 use super::node_host_fs_error::{io_error, uv_error};
+use super::node_host_fs_jobs::Reply;
+use super::node_host_fs_more::{self as more, settle, settle_reply, target_arg};
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
@@ -33,7 +35,7 @@ pub(super) fn uv_dirent_type(t: &std::fs::FileType) -> f64 {
 
 /// libuv's `uv__fs_to_timespec`: nanosecond resolution, floored for
 /// negative times, infinity means "now" and NaN leaves the time alone.
-fn timespec_of(time: f64) -> libc::timespec {
+pub(super) fn timespec_of(time: f64) -> libc::timespec {
     if !time.is_finite() {
         return libc::timespec {
             tv_sec: 0,
@@ -226,35 +228,20 @@ impl Interpreter {
         self.host_fs_fn("__host_fs_symlink", 2, |interp, args| {
             let target = path_bytes(interp, arg(args, 0))?;
             let link = path_bytes(interp, arg(args, 1))?;
-            std::os::unix::fs::symlink(as_path(&target), as_path(&link))
-                .map_err(|e| io_error(interp, &e, "symlink", Some(&target), Some(&link)))?;
-            Ok(JsValue::UNDEFINED)
+            settle(interp, more::symlink(&target, &link))
         });
 
         self.host_fs_fn("__host_fs_link", 2, |interp, args| {
             let from = path_bytes(interp, arg(args, 0))?;
             let to = path_bytes(interp, arg(args, 1))?;
-            std::fs::hard_link(as_path(&from), as_path(&to))
-                .map_err(|e| io_error(interp, &e, "link", Some(&from), Some(&to)))?;
-            Ok(JsValue::UNDEFINED)
+            settle(interp, more::link(&from, &to))
         });
 
         // (pathOrFd, mode, isFd)
         self.host_fs_fn("__host_fs_chmod", 3, |interp, args| {
-            let mode = int(interp, arg(args, 1))? as libc::mode_t;
-            if arg(args, 2).as_boolean() == Some(true) {
-                let fd = int(interp, arg(args, 0))? as i32;
-                if unsafe { libc::fchmod(fd, mode) } != 0 {
-                    return Err(uv_error(interp, last_errno(), "fchmod", None, None));
-                }
-            } else {
-                let bytes = path_bytes(interp, arg(args, 0))?;
-                let c = cpath(interp, &bytes)?;
-                if unsafe { libc::chmod(c.as_ptr(), mode) } != 0 {
-                    return Err(uv_error(interp, last_errno(), "chmod", Some(&bytes), None));
-                }
-            }
-            Ok(JsValue::UNDEFINED)
+            let mode = int(interp, arg(args, 1))? as u32;
+            let target = target_arg(interp, args, arg(args, 2).as_boolean() == Some(true))?;
+            settle(interp, more::chmod(&target, mode))
         });
 
         // (pathOrFd, uid, gid, kind) with kind 0 chown, 1 lchown, 2 fchown
@@ -262,24 +249,8 @@ impl Interpreter {
             let uid = int(interp, arg(args, 1))? as libc::uid_t;
             let gid = int(interp, arg(args, 2))? as libc::gid_t;
             let kind = int(interp, arg(args, 3))?;
-            if kind == 2 {
-                let fd = int(interp, arg(args, 0))? as i32;
-                if unsafe { libc::fchown(fd, uid, gid) } != 0 {
-                    return Err(uv_error(interp, last_errno(), "fchown", None, None));
-                }
-                return Ok(JsValue::UNDEFINED);
-            }
-            let bytes = path_bytes(interp, arg(args, 0))?;
-            let c = cpath(interp, &bytes)?;
-            let (rc, name) = if kind == 1 {
-                (unsafe { libc::lchown(c.as_ptr(), uid, gid) }, "lchown")
-            } else {
-                (unsafe { libc::chown(c.as_ptr(), uid, gid) }, "chown")
-            };
-            if rc != 0 {
-                return Err(uv_error(interp, last_errno(), name, Some(&bytes), None));
-            }
-            Ok(JsValue::UNDEFINED)
+            let target = target_arg(interp, args, kind == 2)?;
+            settle(interp, more::chown(&target, uid, gid, kind == 1))
         });
 
         // (pathOrFd, atimeSeconds, mtimeSeconds, kind) with kind 0 utime,
@@ -288,25 +259,8 @@ impl Interpreter {
             let atime = interp.to_number_value(arg(args, 1))?;
             let mtime = interp.to_number_value(arg(args, 2))?;
             let kind = int(interp, arg(args, 3))?;
-            let times = [timespec_of(atime), timespec_of(mtime)];
-            if kind == 2 {
-                let fd = int(interp, arg(args, 0))? as i32;
-                if unsafe { libc::futimens(fd, times.as_ptr()) } != 0 {
-                    return Err(uv_error(interp, last_errno(), "futime", None, None));
-                }
-                return Ok(JsValue::UNDEFINED);
-            }
-            let bytes = path_bytes(interp, arg(args, 0))?;
-            let c = cpath(interp, &bytes)?;
-            let (flag, name) = if kind == 1 {
-                (libc::AT_SYMLINK_NOFOLLOW, "lutime")
-            } else {
-                (0, "utime")
-            };
-            if unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), flag) } != 0 {
-                return Err(uv_error(interp, last_errno(), name, Some(&bytes), None));
-            }
-            Ok(JsValue::UNDEFINED)
+            let target = target_arg(interp, args, kind == 2)?;
+            settle(interp, more::utimes(&target, atime, mtime, kind == 1))
         });
 
         self.host_fs_fn("__host_fs_ftruncate", 2, |interp, args| {
@@ -334,50 +288,24 @@ impl Interpreter {
 
         // (prefix, asBuffer) -> the created directory
         self.host_fs_fn("__host_fs_mkdtemp", 2, |interp, args| {
-            let mut template = path_bytes(interp, arg(args, 0))?;
-            template.extend_from_slice(b"XXXXXX");
+            let prefix = path_bytes(interp, arg(args, 0))?;
             let as_buffer = arg(args, 1).as_boolean() == Some(true);
-            let c = cpath(interp, &template)?;
-            let mut raw = c.into_bytes_with_nul();
-            if unsafe { libc::mkdtemp(raw.as_mut_ptr().cast()) }.is_null() {
-                return Err(uv_error(
-                    interp,
-                    last_errno(),
-                    "mkdtemp",
-                    Some(&template),
-                    None,
-                ));
+            match settle_reply(interp, more::mkdtemp(&prefix))? {
+                Reply::Path(Some(dir)) => Ok(name_value(interp, &dir, as_buffer)),
+                _ => Ok(JsValue::UNDEFINED),
             }
-            raw.pop();
-            Ok(name_value(interp, &raw, as_buffer))
         });
 
         // path -> [type, bsize, frsize, blocks, bfree, bavail, files, ffree]
         self.host_fs_fn("__host_fs_statfs", 1, |interp, args| {
             let bytes = path_bytes(interp, arg(args, 0))?;
-            let c = cpath(interp, &bytes)?;
-            let mut st: libc::statfs = unsafe { std::mem::zeroed() };
-            if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
-                return Err(uv_error(interp, last_errno(), "statfs", Some(&bytes), None));
+            match settle_reply(interp, more::statfs(&bytes))? {
+                Reply::Numbers(items) => {
+                    let items = items.into_iter().map(JsValue::number).collect();
+                    Ok(interp.create_array(items))
+                }
+                _ => Ok(JsValue::UNDEFINED),
             }
-            #[cfg(target_os = "linux")]
-            let frsize = st.f_frsize as f64;
-            #[cfg(not(target_os = "linux"))]
-            let frsize = st.f_bsize as f64;
-            let items = [
-                st.f_type as f64,
-                st.f_bsize as f64,
-                frsize,
-                st.f_blocks as f64,
-                st.f_bfree as f64,
-                st.f_bavail as f64,
-                st.f_files as f64,
-                st.f_ffree as f64,
-            ]
-            .into_iter()
-            .map(JsValue::number)
-            .collect();
-            Ok(interp.create_array(items))
         });
 
         // (src, dest, flags) with flags bit 0 COPYFILE_EXCL

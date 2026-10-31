@@ -35,6 +35,11 @@ for (const name of [
   call[name] = promisify(cbs[name]);
 }
 call.realpath = promisify(cbs.realpath.native);
+const readdirLevels = call.readdir;
+const readdirDepthFirst = promisify(cbs.readdirDepthFirst);
+call.readdir = (path, options) => (
+  options !== null && typeof options === 'object' && options.recursive ?
+    readdirDepthFirst(path, options) : readdirLevels(path, options));
 const readFd = (fd, buffer, offset, length, position) => new Promise((resolve, reject) => {
   cbs.read(fd, buffer, offset, length, position, (error, bytesRead) => {
     if (error) reject(error);
@@ -176,6 +181,8 @@ class FileHandle extends EventEmitter {
 if (Symbol.asyncDispose) {
   FileHandle.prototype[Symbol.asyncDispose] = function() { return this.close(); };
 }
+
+require('internal/fs/vectored').installFileHandle(FileHandle);
 
 async function openHandle(path, flags, mode) {
   return new FileHandle(await call.open(path, flags, mode));

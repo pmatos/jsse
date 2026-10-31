@@ -6,6 +6,7 @@
 
 use super::node_host_fs_args::*;
 use super::node_host_fs_meta::stat_values;
+use super::node_host_fs_more as more;
 use super::node_host_fs_ops::{copy_file, mkdir_p, sync_data, uv_dirent_type};
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -52,7 +53,7 @@ pub(super) struct AsyncError {
 }
 
 impl AsyncError {
-    fn new(errno: i32, syscall: &'static str) -> Self {
+    pub(super) fn new(errno: i32, syscall: &'static str) -> Self {
         AsyncError {
             errno,
             syscall,
@@ -61,14 +62,14 @@ impl AsyncError {
         }
     }
 
-    fn at(errno: i32, syscall: &'static str, path: &[u8]) -> Self {
+    pub(super) fn at(errno: i32, syscall: &'static str, path: &[u8]) -> Self {
         AsyncError {
             path: Some(path.to_vec()),
             ..Self::new(errno, syscall)
         }
     }
 
-    fn io(e: &std::io::Error, syscall: &'static str, path: &[u8]) -> Self {
+    pub(super) fn io(e: &std::io::Error, syscall: &'static str, path: &[u8]) -> Self {
         Self::at(e.raw_os_error().unwrap_or(libc::EIO), syscall, path)
     }
 }
@@ -99,6 +100,15 @@ pub(super) enum Job {
     CopyFile(Vec<u8>, Vec<u8>, bool),
     Ftruncate(i32, i64),
     Fsync(i32, bool),
+    Chmod(Target, u32),
+    Chown(Target, u32, u32, bool),
+    Utimes(Target, f64, f64, bool),
+    Link(Vec<u8>, Vec<u8>),
+    Symlink(Vec<u8>, Vec<u8>),
+    Mkdtemp(Vec<u8>),
+    Statfs(Vec<u8>),
+    RemoveAll(Vec<u8>),
+    ReaddirTree(Vec<u8>),
 }
 
 pub(super) enum Reply {
@@ -108,9 +118,11 @@ pub(super) enum Reply {
     Stat(Vec<i128>),
     Path(Option<Vec<u8>>),
     Dirents(Vec<Vec<u8>>, Vec<f64>),
+    Numbers(Vec<f64>),
+    Tree(more::Tree),
 }
 
-type Outcome = Result<Reply, AsyncError>;
+pub(super) type Outcome = Result<Reply, AsyncError>;
 
 fn cstring(bytes: &[u8]) -> Result<CString, AsyncError> {
     CString::new(bytes).map_err(|_| AsyncError::new(libc::EINVAL, "open"))
@@ -301,5 +313,14 @@ fn execute(job: Job) -> Outcome {
                 status(unsafe { libc::fsync(fd) }, "fsync")
             }
         }
+        Job::Chmod(target, mode) => more::chmod(&target, mode),
+        Job::Chown(target, uid, gid, link) => more::chown(&target, uid, gid, link),
+        Job::Utimes(target, atime, mtime, link) => more::utimes(&target, atime, mtime, link),
+        Job::Link(from, to) => more::link(&from, &to),
+        Job::Symlink(target, link) => more::symlink(&target, &link),
+        Job::Mkdtemp(prefix) => more::mkdtemp(&prefix),
+        Job::Statfs(path) => more::statfs(&path),
+        Job::RemoveAll(path) => more::remove_all(&path).map(|()| Reply::Unit),
+        Job::ReaddirTree(path) => more::readdir_tree(&path).map(Reply::Tree),
     }
 }

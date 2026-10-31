@@ -10,6 +10,7 @@ use super::node_host_fs_args::*;
 use super::node_host_fs_error::uv_error;
 use super::node_host_fs_jobs::{AsyncError, Job, Reply, Target, run, spawn};
 use super::node_host_fs_meta::stat_items;
+use super::node_host_fs_more::tree_value;
 
 /// How the main thread turns a worker's `Reply` into the callback's value.
 enum Post {
@@ -20,6 +21,7 @@ enum Post {
     Names(bool),
     Dirents(bool),
     Path(bool),
+    Tree(bool),
 }
 
 fn flag(args: &[JsValue], i: usize) -> bool {
@@ -41,6 +43,14 @@ fn window(interp: &mut Interpreter, args: &[JsValue]) -> Res<(View, usize, usize
         return Err(interp.create_range_error("buffer window exceeds the buffer"));
     }
     Ok((view, off, len))
+}
+
+fn metadata_target(interp: &mut Interpreter, a: &[JsValue], fd: bool) -> Res<Target> {
+    if fd {
+        Ok(Target::Fd(int(interp, arg(a, 0))? as i32))
+    } else {
+        Ok(Target::Path(path_bytes(interp, arg(a, 0))?))
+    }
 }
 
 fn fd_arg(interp: &mut Interpreter, args: &[JsValue], i: usize) -> Res<i32> {
@@ -154,6 +164,43 @@ fn decode(interp: &mut Interpreter, op: &str, a: &[JsValue]) -> Res<(Job, Post, 
             Post::Plain,
             None,
         ),
+        "chmod" => {
+            let target = metadata_target(interp, a, flag(a, 2))?;
+            let mode = int(interp, arg(a, 1))? as u32;
+            (Job::Chmod(target, mode), Post::Plain, None)
+        }
+        "chown" => {
+            let kind = int(interp, arg(a, 3))?;
+            let target = metadata_target(interp, a, kind == 2)?;
+            let uid = int(interp, arg(a, 1))? as u32;
+            let gid = int(interp, arg(a, 2))? as u32;
+            (Job::Chown(target, uid, gid, kind == 1), Post::Plain, None)
+        }
+        "utimes" => {
+            let kind = int(interp, arg(a, 3))?;
+            let target = metadata_target(interp, a, kind == 2)?;
+            let atime = interp.to_number_value(arg(a, 1))?;
+            let mtime = interp.to_number_value(arg(a, 2))?;
+            (
+                Job::Utimes(target, atime, mtime, kind == 1),
+                Post::Plain,
+                None,
+            )
+        }
+        "link" => (
+            Job::Link(path(interp, 0)?, path(interp, 1)?),
+            Post::Plain,
+            None,
+        ),
+        "symlink" => (
+            Job::Symlink(path(interp, 0)?, path(interp, 1)?),
+            Post::Plain,
+            None,
+        ),
+        "mkdtemp" => (Job::Mkdtemp(path(interp, 0)?), Post::Path(raw), None),
+        "statfs" => (Job::Statfs(path(interp, 0)?), Post::Plain, None),
+        "rm_all" => (Job::RemoveAll(path(interp, 0)?), Post::Plain, None),
+        "readdir_tree" => (Job::ReaddirTree(path(interp, 0)?), Post::Tree(raw), None),
         _ => return Err(interp.create_type_error(&format!("unknown async fs op {op}"))),
     })
 }
@@ -192,6 +239,11 @@ fn value_of(interp: &mut Interpreter, post: Post, reply: Reply, keep: Option<&Js
             let names = names.iter().map(|n| name_value(interp, n, raw)).collect();
             interp.create_array(names)
         }
+        (Post::Plain, Reply::Numbers(items)) => {
+            let items = items.into_iter().map(JsValue::number).collect();
+            interp.create_array(items)
+        }
+        (Post::Tree(raw), Reply::Tree(tree)) => tree_value(interp, tree, raw),
         _ => JsValue::UNDEFINED,
     }
 }
@@ -227,6 +279,7 @@ fn finish(interp: &mut Interpreter, id: u64, post: Post, outcome: Result<Reply, 
 
 impl Interpreter {
     pub(super) fn setup_node_host_fs_async(&mut self) {
+        self.setup_node_host_fs_more();
         // (op, callback, ...args): callback(err) | callback(null, value)
         self.host_fs_fn("__host_fs_async", 2, |interp, args| {
             let op = interp.to_string_lossy(arg(args, 0))?;

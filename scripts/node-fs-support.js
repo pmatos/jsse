@@ -21,7 +21,7 @@
     "exists", "access", "readdir", "readlink", "realpath", "mkdir", "rmdir",
     "unlink", "rename", "constants", "symlink", "link", "chmod", "chown",
     "utimes", "ftruncate", "fsync", "mkdtemp", "statfs", "copyfile",
-    "readdir_types", "mkdirp",
+    "readdir_types", "mkdirp", "rm_all", "readdir_tree",
   ].forEach(function (name) {
     host[name] = globalThis["__host_fs_" + name];
     delete globalThis["__host_fs_" + name];

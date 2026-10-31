@@ -28,6 +28,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("internal/fs/glob_sync"),
     builtin!("internal/fs/promises"),
     builtin!("internal/fs/streams"),
+    builtin!("internal/fs/vectored"),
     builtin!("internal/fs/recursive_watch"),
     builtin!("internal/fs/stat_watcher"),
     builtin!("internal/fs/watch_native"),
