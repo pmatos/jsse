@@ -1312,9 +1312,7 @@ impl Interpreter {
                 o
             }
             _ => {
-                let err =
-                    self.bad_this(promise_val, "Promise.prototype.then called on non-promise");
-                return Completion::Throw(err);
+                return Completion::Throw(self.promise_then_receiver_error(promise_val));
             }
         };
 

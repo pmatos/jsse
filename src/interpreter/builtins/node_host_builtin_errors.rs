@@ -408,6 +408,10 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn promise_then_receiver_error(&mut self, this: &JsValue) -> JsValue {
+        self.bad_this(this, "Promise.prototype.then called on non-promise")
+    }
+
     pub(crate) fn repeat_count_error(&mut self, count: &JsValue) -> JsValue {
         let text = self.v8_message("Invalid count value", |i| {
             format!("Invalid count value: {}", i.v8_plain_text(count))
