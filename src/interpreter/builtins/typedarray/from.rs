@@ -89,9 +89,7 @@ fn collect_iterable(
     iter_fn: &JsValue,
 ) -> Result<Vec<JsValue>, Completion> {
     if !interp.is_callable(iter_fn) {
-        return Err(Completion::Throw(
-            interp.create_type_error("@@iterator is not a function"),
-        ));
+        return Err(Completion::Throw(interp.typed_array_iterator_error(false)));
     }
     let iter = match interp.call_function(iter_fn, source, &[]) {
         Completion::Normal(v) => v,

@@ -37,6 +37,29 @@ impl Parser<'_> {
         }
     }
 
+    pub(super) fn check_cooked(
+        &self,
+        cooked: &Option<Vec<u16>>,
+        tagged: bool,
+    ) -> Result<(), ParseError> {
+        if !tagged && cooked.is_none() {
+            return Err(self.error("Invalid escape sequence in template literal"));
+        }
+        Ok(())
+    }
+
+    /// A template literal's cache id. A tagged template also
+    /// carries its source offset plus one in the high 32 bits: V8 reports a
+    /// failed tag call at the template (`interpreter::eval`, `note_template_pos`).
+    pub(super) fn template_id(&self, tagged: bool, start: usize) -> u64 {
+        let id = crate::ast::next_template_id();
+        if tagged {
+            id | (u64::try_from(start + 1).unwrap_or(0) << 32)
+        } else {
+            id
+        }
+    }
+
     /// The source every function of this parse shares as its `SourceText` origin.
     pub(crate) fn source_origin(&self) -> Rc<str> {
         self.source_text_source.clone()

@@ -360,6 +360,7 @@ impl<'a> Parser<'a> {
         let mut has_string_local = false;
         while self.current != Token::RightBrace {
             let is_string = matches!(self.current, Token::StringLiteral(_));
+            let start = self.current_token_start;
             let local = self.parse_module_export_name()?;
             if is_string {
                 has_string_local = true;
@@ -372,7 +373,16 @@ impl<'a> Parser<'a> {
                 local.clone()
             };
 
-            specifiers.push(ExportSpecifier { local, exported });
+            let width = self.source_text_source[start..self.prev_token_end]
+                .chars()
+                .count();
+            let at = CallSiteId::at(start).1;
+            specifiers.push(ExportSpecifier {
+                local,
+                exported,
+                at,
+                width,
+            });
 
             if self.current == Token::Comma {
                 self.advance()?;

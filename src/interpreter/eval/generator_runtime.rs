@@ -2083,7 +2083,7 @@ impl Interpreter {
                                     }
                                     if let Some(d) = decl.declarations.first()
                                         && let Completion::Throw(e) =
-                                            self.bind_pattern(&d.pattern, val, kind, &bind_env)
+                                            self.bind_head(&d.pattern, val, kind, &bind_env)
                                     {
                                         self.iterator_close(&iterator, e.clone());
                                         self.discard_failed_generator_for_of_loop(
@@ -5264,7 +5264,7 @@ impl Interpreter {
                                     }
                                     if let Some(d) = decl.declarations.first()
                                         && let Completion::Throw(e) =
-                                            self.bind_pattern(&d.pattern, val, kind, &bind_env)
+                                            self.bind_head(&d.pattern, val, kind, &bind_env)
                                     {
                                         self.iterator_close(&iterator, e.clone());
                                         self.discard_failed_generator_for_of_loop(

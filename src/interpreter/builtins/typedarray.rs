@@ -1,6 +1,7 @@
 use super::super::*;
 use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
+use super::node_host_buffer_errors::BufferRange;
 use super::predicate_quantification::{self, Quantifier};
 use super::reduction::{self, Reduction};
 use super::typedarray_codec::{decode_base64, decode_hex, encode_base64};
@@ -2921,9 +2922,7 @@ impl Interpreter {
                                         // Re-read buf_len in case side effects changed it
                                         let buf_len = buffer_len(&buf_rc);
                                         if buf_len < byte_offset {
-                                            return Completion::Throw(interp.create_error("RangeError",
-                                                "start offset is outside the bounds of the buffer"
-                                            ));
+                                            return Completion::Throw(interp.buffer_range_error(BufferRange::TypedArrayOffset, byte_offset));
                                         }
                                         if !is_resizable && !(buf_len - byte_offset).is_multiple_of(bpe) {
                                             return Completion::Throw(interp.multiple_error("byte length", kind.name(), bpe));
@@ -2934,7 +2933,7 @@ impl Interpreter {
                                     // Re-read buffer length (side effects may have resized)
                                     let current_buf_len = buffer_len(&buf_rc);
                                     if byte_offset + byte_length > current_buf_len {
-                                        return Completion::Throw(interp.create_error("RangeError", "invalid typed array length"));
+                                        return Completion::Throw(interp.buffer_range_error(BufferRange::TypedArrayLength, array_length));
                                     }
                                     let ta_info = TypedArrayInfo {
                                         kind,
@@ -3752,9 +3751,7 @@ impl Interpreter {
             } else if self.is_callable(&iter_fn) {
                 Some(iter_fn)
             } else {
-                return Err(Completion::Throw(
-                    self.create_type_error("@@iterator is not a function"),
-                ));
+                return Err(Completion::Throw(self.typed_array_iterator_error(true)));
             };
 
             if let Some(iter_fn) = using_iterator {
@@ -4434,35 +4431,35 @@ impl Interpreter {
                         (buf, det, len, resizable, immutable)
                     };
                     if byte_offset > buf_len {
-                        return Completion::Throw(interp.create_error(
-                            "RangeError",
-                            "offset is outside the bounds of the buffer",
-                        ));
+                        return Completion::Throw(
+                            interp.buffer_range_error(BufferRange::DataViewOffset, byte_offset),
+                        );
                     }
                     let byte_length_arg = args.get(2).unwrap_or(JsValue::undefined_ref());
                     let has_byte_length = !byte_length_arg.is_undefined();
                     let is_length_tracking = is_resizable && !has_byte_length;
-                    let byte_length = if !has_byte_length {
-                        buf_len - byte_offset
-                    } else {
-                        match interp.to_index(byte_length_arg) {
-                            Completion::Normal(v) => match v.as_number() {
-                                Some(n) => {
-                                    let bl = n as usize;
-                                    if byte_offset + bl > buf_len {
-                                        return Completion::Throw(interp.create_error(
-                                            "RangeError",
-                                            "invalid DataView length",
-                                        ));
+                    let byte_length =
+                        if !has_byte_length {
+                            buf_len - byte_offset
+                        } else {
+                            match interp.to_index(byte_length_arg) {
+                                Completion::Normal(v) => match v.as_number() {
+                                    Some(n) => {
+                                        let bl = n as usize;
+                                        if byte_offset + bl > buf_len {
+                                            return Completion::Throw(interp.buffer_range_error(
+                                                BufferRange::DataViewLength,
+                                                bl,
+                                            ));
+                                        }
+                                        bl
                                     }
-                                    bl
-                                }
-                                None => 0,
-                            },
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => 0,
-                        }
-                    };
+                                    None => 0,
+                                },
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => 0,
+                            }
+                        };
                     let dv_info = DataViewInfo {
                         buffer: buf_rc,
                         byte_offset,
@@ -4492,14 +4489,13 @@ impl Interpreter {
                         }
                         let new_buf_len = obj_ref.arraybuffer_data().map(buffer_len).unwrap_or(0);
                         if byte_offset > new_buf_len {
-                            return Completion::Throw(interp.create_error(
-                                "RangeError",
-                                "offset is outside the bounds of the buffer",
-                            ));
+                            return Completion::Throw(
+                                interp.buffer_range_error(BufferRange::DataViewOffset, byte_offset),
+                            );
                         }
                         if has_byte_length && byte_offset + byte_length > new_buf_len {
                             return Completion::Throw(
-                                interp.create_error("RangeError", "invalid DataView length"),
+                                interp.buffer_range_error(BufferRange::DataViewLength, byte_length),
                             );
                         }
                     }

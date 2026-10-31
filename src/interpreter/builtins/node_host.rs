@@ -35,15 +35,30 @@ pub(crate) struct NodeHostState {
     /// the run ends without an explicit `__host_exit`.
     pub(crate) exit_code: Option<i32>,
     pub(crate) stack: super::node_host_stack::NodeStackState,
+    /// How V8 words a failed access to each private name of a class.
+    pub(crate) private_notes: super::node_host_private::PrivateNotes,
     /// Source offset plus one of the call this frame is making (0 = unknown).
     pub(crate) call_pos: u32,
     /// Initializer text of the object pattern whose read is about to fail.
     pub(crate) pattern_src: Option<std::rc::Rc<str>>,
     /// The call-stack depth of each open `bind_pattern` (under `--node` only).
     pub(crate) pattern_frames: Vec<usize>,
+    /// Whether each open `bind_pattern` is an object pattern.
+    pub(crate) pattern_kinds: Vec<bool>,
+    /// The text V8 prints for the initializer of the pattern binding open at
+    /// the call depth, with that depth.
+    pub(crate) pattern_origin: Option<(usize, super::node_host_pattern_origin::PatternOrigin)>,
     /// The error object `not_iterable_error` made last, with the call-stack
     /// depth it was made at; a for-of or spread at that depth rewords it.
     pub(crate) iterable_error: Option<(u64, usize)>,
+    /// The operand of that error.
+    pub(crate) iterable_value: Option<JsValue>,
+    /// The last proxy trap call, for the wording of its invariant errors.
+    pub(crate) proxy_note: Option<super::node_host_proxy_errors::ProxyNote>,
+    /// The keys the open objects of a `JSON.stringify` were reached by.
+    pub(crate) json_keys: Vec<crate::types::JsPropertyKey>,
+    /// The target and key of the last define, for refused-define wording.
+    pub(crate) define_note: Option<(u64, crate::types::JsPropertyKey)>,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     /// `--expose-internals`: user `require` may name `internal/...` builtins.

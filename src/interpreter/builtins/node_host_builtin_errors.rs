@@ -157,6 +157,13 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return Cow::Borrowed(msg);
         }
+        if let Some(text) = self
+            .frame_wording(msg)
+            .or_else(|| self.proxy_wording(msg))
+            .or_else(|| self.define_wording(msg))
+        {
+            return Cow::Owned(text);
+        }
         static_text(msg).unwrap_or(Cow::Borrowed(msg))
     }
 
@@ -202,7 +209,7 @@ impl Interpreter {
     }
 
     /// The first data property `key` along `id`'s prototype chain.
-    fn data_property_value(&self, mut id: u64, key: &str) -> Option<JsValue> {
+    pub(super) fn data_property_value(&self, mut id: u64, key: &str) -> Option<JsValue> {
         for _ in 0..64 {
             let obj = self.get_object(id)?;
             let b = obj.borrow();
@@ -429,24 +436,6 @@ impl Interpreter {
                 "Cannot delete property '{key}' of {}",
                 i.v8_plain_text(target)
             )
-        });
-        self.create_type_error(&text)
-    }
-
-    /// `Object.defineProperty` refused: V8 tells a redefinition of an existing
-    /// property from a new property on a non-extensible object.
-    pub(crate) fn define_rejected_error(&mut self, target: u64, key: &JsPropertyKey) -> JsValue {
-        let engine =
-            "Cannot define property, object is not extensible or property is non-configurable";
-        let exists = self
-            .get_object(target)
-            .is_some_and(|obj| obj.borrow().has_own_property(key));
-        let text = self.v8_message(engine, |_| {
-            if exists {
-                format!("Cannot redefine property: {key}")
-            } else {
-                format!("Cannot define property {key}, object is not extensible")
-            }
         });
         self.create_type_error(&text)
     }

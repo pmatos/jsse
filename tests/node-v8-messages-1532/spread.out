@@ -1,0 +1,28 @@
+spreadNumber -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+spreadLiteral -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+spreadObject -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+spreadBadIterator -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+spreadUndefined -> TypeError: u is not iterable (cannot read property undefined)
+spreadUndefinedLiteral -> TypeError: undefined is not iterable (cannot read property undefined)
+spreadNull -> TypeError: n is not iterable (cannot read property null)
+spreadMember -> TypeError: u is not iterable (cannot read property undefined)
+spreadMemberNumber -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+spreadSecond -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+spreadNew -> TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+arraySpreadBad -> TypeError: bad is not iterable
+arrayPatternVariable -> TypeError: five is not iterable
+arrayPatternLet -> TypeError: five is not iterable
+arrayPatternRest -> TypeError: five is not iterable
+arrayPatternObject -> TypeError: obj is not iterable
+arrayPatternLiteral -> TypeError: 5 is not iterable
+arrayPatternObjectLiteral -> TypeError: {} is not iterable
+arrayPatternCall -> TypeError: f is not a function or its return value is not iterable
+arrayPatternMember -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+arrayPatternBad -> TypeError: bad is not iterable
+nestedPattern -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+nestedPatternNull -> TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+forOfBad -> TypeError: bad is not iterable
+tagNotFunction -> TypeError: o.g is not a function     at tagNotFunction (spread.js:91:8)
+tagMember -> TypeError: o.p is not a function     at tagMember (spread.js:94:8)
+tagResultNotFunction -> TypeError: tag(...) is not a function     at tagResultNotFunction (spread.js:97:11)
+tagVariable -> TypeError: five is not a function     at tagVariable (spread.js:100:9)

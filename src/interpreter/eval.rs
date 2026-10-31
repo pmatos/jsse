@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
+use crate::interpreter::builtins::node_host_private::PrivateAccess;
 use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::{BytecodeCacheState, vm};
 use crate::interpreter::generator_analysis::block_has_await_using;
@@ -1172,6 +1173,7 @@ impl Interpreter {
                         }
                     }
 
+                    i.note_template_pos(tmpl.id);
                     if tail {
                         return Completion::TailCall {
                             func: func_val,
@@ -2833,9 +2835,7 @@ impl Interpreter {
                         let has_mutable_local = {
                             let eb = env.borrow();
                             eb.with_object.is_none()
-                                && eb.bindings.get(name).is_some_and(|b| {
-                                    b.kind == BindingKind::Var || b.kind == BindingKind::Let
-                                })
+                                && eb.bindings.get(name).is_some_and(|b| b.is_plain_mutable())
                         };
                         if has_mutable_local {
                             let rval = match self.eval_expr(right, env) {
@@ -2885,9 +2885,7 @@ impl Interpreter {
                     let has_mutable_local = {
                         let eb = env.borrow();
                         eb.with_object.is_none()
-                            && eb.bindings.get(name).is_some_and(|b| {
-                                b.kind == BindingKind::Var || b.kind == BindingKind::Let
-                            })
+                            && eb.bindings.get(name).is_some_and(|b| b.is_plain_mutable())
                     };
                     if has_mutable_local {
                         let lval = match self.env_get(env, name) {
@@ -3752,9 +3750,8 @@ impl Interpreter {
         name: &str,
     ) -> Completion {
         let Some(obj_id) = obj_val.as_object_id() else {
-            return Completion::Throw(self.create_type_error(&format!(
-                "Cannot read private member #{name} from a non-object"
-            )));
+            let err = self.private_access_error(branded, name, obj_val, PrivateAccess::Read);
+            return Completion::Throw(err);
         };
         let Some(obj) = self.get_object_cell(obj_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
@@ -3767,9 +3764,8 @@ impl Interpreter {
             None => None,
         };
         let Some(getter) = found else {
-            return Completion::Throw(self.create_type_error(&format!(
-                "Cannot read private member #{name} from an object whose class did not declare it"
-            )));
+            let err = self.private_access_error(branded, name, obj_val, PrivateAccess::Read);
+            return Completion::Throw(err);
         };
         match getter {
             Some(getter) => self.call_function(&getter, obj_val, &[]),
@@ -3784,9 +3780,7 @@ impl Interpreter {
     /// is a TypeError, otherwise PrivateElementFind decides.
     pub(crate) fn private_in(&mut self, branded: PrivateId, rval: &JsValue) -> Completion {
         let Some(id) = rval.as_object_id() else {
-            return Completion::Throw(self.create_type_error(
-                "Cannot use 'in' operator to search for a private field without an object",
-            ));
+            return Completion::Throw(self.private_in_error(branded, rval));
         };
         Completion::Normal(JsValue::boolean(
             self.get_object_cell(id)
@@ -3814,9 +3808,7 @@ impl Interpreter {
         val: JsValue,
     ) -> Result<(), JsValue> {
         let Some(id) = obj_val.as_object_id() else {
-            return Err(self.create_type_error(&format!(
-                "Cannot write private member #{name} to a non-object"
-            )));
+            return Err(self.private_access_error(branded, name, obj_val, PrivateAccess::Write));
         };
         let Some(obj) = self.get_object_cell(id) else {
             return Ok(());
@@ -3837,9 +3829,8 @@ impl Interpreter {
                 Some(PrivateElement::Accessor { set, .. }) => set.clone(),
                 None => {
                     drop(borrowed);
-                    return Err(self.create_type_error(&format!(
-                        "Cannot write private member #{name} to an object whose class did not declare it"
-                    )));
+                    let access = PrivateAccess::Write;
+                    return Err(self.private_access_error(branded, name, obj_val, access));
                 }
             }
         };
@@ -5906,7 +5897,7 @@ impl Interpreter {
 
     /// The values a spread element contributes: its operand's iteration, or,
     /// for the lowering's `PreIterated` array, that array's elements.
-    fn spread_values(
+    pub(crate) fn spread_values(
         &mut self,
         inner: &Expression,
         value: &JsValue,
@@ -5934,7 +5925,7 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
-                let items = self.spread_values(inner, &val)?;
+                let items = self.call_spread_items(inner, &val)?;
                 for item in &items {
                     self.gc_root_value(item);
                 }
@@ -6041,13 +6032,13 @@ impl Interpreter {
         let mut program = match p.parse_program() {
             Ok(prog) => prog,
             Err(e) => {
-                return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
+                return Completion::Throw(self.create_error("SyntaxError", &e.js()));
             }
         };
         crate::ast::assign_ic_sites(&mut program.body);
         // Validate private name usage in eval-in-class context
         if let Err(e) = p.validate_eval_private_names() {
-            return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
+            return Completion::Throw(self.create_error("SyntaxError", &e.js()));
         }
         if in_field_initializer {
             if crate::ast::stmts_contain_matching(
@@ -6874,10 +6865,7 @@ impl Interpreter {
             return Ok((target_id, None));
         }
         if !self.is_callable(&trap_val) {
-            return Err(self.create_type_error(&format!(
-                "proxy handler's {} trap is not a function",
-                trap_name
-            )));
+            return Err(self.proxy_trap_error(trap_name, &trap_val, &handler_val));
         }
         Ok((target_id, Some((handler_val, trap_val))))
     }
@@ -6895,7 +6883,10 @@ impl Interpreter {
             (_, None) => Ok(None),
             (_, Some((handler_val, trap_val))) => {
                 match self.call_function(&trap_val, &handler_val, &args) {
-                    Completion::Normal(v) => Ok(Some(v)),
+                    Completion::Normal(v) => {
+                        self.note_proxy_trap(trap_name, &args, &v);
+                        Ok(Some(v))
+                    }
                     Completion::Throw(e) => Err(e),
                     _ => Ok(Some(JsValue::UNDEFINED)),
                 }
@@ -6973,9 +6964,7 @@ impl Interpreter {
 
             for key in &target_nonconfig {
                 if !trap_set.contains(key.as_bytes()) {
-                    return Err(self.create_type_error(
-                        "'ownKeys' on proxy: trap result did not include all non-configurable own keys of the proxy target",
-                    ));
+                    return Err(self.proxy_missing_key_error(key));
                 }
             }
 
@@ -7237,14 +7226,12 @@ impl Interpreter {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
                     )),
-                    SetBindingCheck::ConstAssign => Completion::Throw(
-                        self.create_type_error("Assignment to constant variable."),
-                    ),
+                    SetBindingCheck::ConstAssign => {
+                        Completion::Throw(self.const_assign_error(name, specific_env))
+                    }
                     SetBindingCheck::FunctionNameAssign => {
                         if specific_env.borrow().strict || env.borrow().strict {
-                            Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            )
+                            Completion::Throw(self.const_assign_error(name, specific_env))
                         } else {
                             Completion::Normal(value)
                         }
@@ -7321,9 +7308,9 @@ impl Interpreter {
                         }
                         match self.env_set(specific_env, key, value.clone()) {
                             Ok(()) => Completion::Normal(value),
-                            Err(_) => Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            ),
+                            Err(_) => {
+                                Completion::Throw(self.const_assign_error(name, specific_env))
+                            }
                         }
                     }
                 }
@@ -9182,7 +9169,7 @@ impl Interpreter {
                                         }
                                     }
                                     if let Some(d) = decl.declarations.first() {
-                                        match self.bind_pattern(
+                                        match self.bind_head(
                                             &d.pattern,
                                             value,
                                             match decl.kind {

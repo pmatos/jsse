@@ -2412,9 +2412,8 @@ impl Compiler {
                 self.emit_init_lexical(name, false)?;
             }
             Some(pattern) => {
-                self.emit_bind_head(HeadBinding::Declare {
+                self.emit_bind_head(HeadBinding::Catch {
                     pattern: pattern.clone(),
-                    kind: BindingKind::Let,
                 })?;
             }
             None => {

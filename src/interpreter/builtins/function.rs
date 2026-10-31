@@ -14,6 +14,9 @@ impl Interpreter {
             "call".to_string(),
             1,
             |interp, _this, args| {
+                if interp.node_host.stack.installed && !interp.is_callable(_this) {
+                    return Completion::Throw(interp.call_target_error(_this));
+                }
                 let this_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let call_args = if args.len() > 1 { &args[1..] } else { &[] };
                 interp.call_function(_this, &this_arg, call_args)

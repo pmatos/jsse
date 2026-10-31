@@ -176,3 +176,4 @@
     utimesSync: utimesSync,
   };
 })();
+//# sourceURL=node:fs

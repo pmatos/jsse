@@ -111,7 +111,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
                 .collect();
             format!("[{}]", items.join(","))
         }
-        Expression::Object(props, _) if props.is_empty() => "{}".into(),
+        Expression::Object(props, _) => format!("{{{}}}", UNKNOWN.repeat(props.len())),
         Expression::Conditional(..) => UNKNOWN.repeat(3),
         _ => UNKNOWN.into(),
     }
