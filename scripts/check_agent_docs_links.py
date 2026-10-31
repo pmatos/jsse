@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that every Markdown link in AGENTS.md and docs/agents/ resolves (issue #1299).
 
-    python3 scripts/check_agent_docs_links.py [--root DIR] [--strict] [--list-orphans]
+    uv run python scripts/check_agent_docs_links.py [--root DIR] [--strict] [--list-orphans]
 
 A link `[text](target)` is checked unless it is external (`http:`, `https:`, `mailto:`): the file
 must exist (relative to the linking file) and, when the target has a `#fragment` into a Markdown
@@ -18,7 +18,7 @@ import os
 import re
 import sys
 
-FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 INLINE_CODE = re.compile(r"`+[^`\n]*`+")
 LINK = re.compile(
     r"(?<!\!)\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)"
@@ -28,45 +28,49 @@ EXTERNAL = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)")
 
 
 def slug(text):
-    text = re.sub(r"`", "", text)
+    text = text.replace("`", "")
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
     text = text.strip().lower()
     text = re.sub(r"[^\w\- ]", "", text, flags=re.UNICODE)
     return text.replace(" ", "-")
 
 
-def prose_lines(text):
-    """Yield (line number, line) outside fenced code blocks, inline code removed."""
+def text_lines(text):
+    """Yield (line number, raw line) of the text outside fenced code blocks."""
     fence = None
     for number, line in enumerate(text.splitlines(), 1):
         m = FENCE.match(line)
-        if m:
-            if fence is None:
-                fence = m.group(1)
-            elif m.group(1) == fence:
-                fence = None
-            continue
         if fence is None:
-            yield number, INLINE_CODE.sub("", line)
+            if m:
+                fence = m.group(1)
+                continue
+            yield number, line
+        elif set(line.strip()) == {fence[0]} and len(line.strip()) >= len(fence):
+            fence = None
 
 
 def anchors(text):
-    seen = {}
+    """The heading slugs GitHub generates: a repeated slug gets -1, -2, ... and never repeats one already used."""
+    uses = {}
     found = set()
-    for _, line in prose_lines(text):
+    for _, line in text_lines(text):
         m = HEADING.match(line)
         if not m:
             continue
         base = slug(m.group(2))
-        count = seen.get(base, 0)
-        seen[base] = count + 1
-        found.add(base if count == 0 else "%s-%d" % (base, count))
+        count = uses.get(base, 0)
+        candidate = base if count == 0 else "%s-%d" % (base, count)
+        while candidate in found:
+            count += 1
+            candidate = "%s-%d" % (base, count)
+        uses[base] = count + 1
+        found.add(candidate)
     return found
 
 
 def links(text):
-    for number, line in prose_lines(text):
-        for m in LINK.finditer(line):
+    for number, line in text_lines(text):
+        for m in LINK.finditer(INLINE_CODE.sub("", line)):
             yield number, m.group(1)
 
 
@@ -80,8 +84,24 @@ def markdown_files(root):
     return out
 
 
+def linked_pages(path):
+    """Yield (line, target, destination file, fragment) for each local link of a Markdown file."""
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    for number, target in links(text):
+        if EXTERNAL.match(target):
+            continue
+        file_part, _, fragment = target.partition("#")
+        dest = (
+            path
+            if file_part == ""
+            else os.path.normpath(os.path.join(os.path.dirname(path), file_part))
+        )
+        yield number, target, file_part, dest, fragment
+
+
 def check(root):
-    """Return (errors, edges): broken links as strings, and {file: set(linked Markdown files)}."""
+    """Return (errors, edges): broken links as strings, and {file: set(linked Markdown files)} for the scanned files."""
     errors, edges, anchor_cache = [], {}, {}
 
     def anchors_of(path):
@@ -92,22 +112,11 @@ def check(root):
 
     for path in markdown_files(root):
         rel = os.path.relpath(path, root)
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
         edges[path] = set()
-        for number, target in links(text):
-            if EXTERNAL.match(target):
-                continue
-            file_part, _, fragment = target.partition("#")
-            dest = (
-                path
-                if file_part == ""
-                else os.path.normpath(os.path.join(os.path.dirname(path), file_part))
-            )
+        for number, target, file_part, dest, fragment in linked_pages(path):
             if file_part != "" and not os.path.exists(dest):
                 errors.append("%s:%d: %s does not exist" % (rel, number, target))
-                continue
-            if dest.endswith(".md") and os.path.isfile(dest):
+            elif dest.endswith(".md") and os.path.isfile(dest):
                 edges[path].add(dest)
                 if fragment and fragment not in anchors_of(dest):
                     errors.append(
@@ -120,6 +129,7 @@ def check(root):
 
 
 def orphans(root, edges):
+    """Pages of docs/agents/ that no chain of links from AGENTS.md reaches (the chain may pass through any Markdown file)."""
     start = os.path.join(root, "AGENTS.md")
     reached, todo = set(), [start]
     while todo:
@@ -127,7 +137,14 @@ def orphans(root, edges):
         if current in reached:
             continue
         reached.add(current)
-        todo.extend(edges.get(current, ()))
+        if current in edges:
+            todo.extend(edges[current])
+        elif os.path.isfile(current):
+            todo.extend(
+                d
+                for _, _, _, d, _ in linked_pages(current)
+                if d.endswith(".md") and os.path.isfile(d)
+            )
     agents_dir = os.path.join(root, "docs", "agents") + os.sep
     return sorted(p for p in edges if p.startswith(agents_dir) and p not in reached)
 

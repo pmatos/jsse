@@ -48,10 +48,23 @@ class SlugTests(unittest.TestCase):
         found = links.anchors("# A\n\n## B\n\n## B\n\n```\n# not a heading\n```\n")
         self.assertEqual(found, {"a", "b", "b-1"})
 
+    def test_suffix_never_repeats_a_slug(self):
+        self.assertEqual(links.anchors("# A\n# A\n# A-1\n"), {"a", "a-1", "a-1-1"})
+
+    def test_backticks_stay_in_the_text_of_a_heading(self):
+        self.assertEqual(
+            links.anchors("## Running `tsc` now\n## `--node` host\n"),
+            {"running-tsc-now", "--node-host"},
+        )
+
 
 class ExtractionTests(unittest.TestCase):
     def test_code_is_not_scanned(self):
         text = "[ok](a.md) and `[no](b.md)`\n\n```\n[no](c.md)\n```\n![img](d.png)\n"
+        self.assertEqual([t for _, t in links.links(text)], ["a.md"])
+
+    def test_fence_length_and_character(self):
+        text = "````\n```\n[no](b.md)\n````\n[yes](a.md)\n~~~\n[no](c.md)\n```\n[no](d.md)\n~~~\n"
         self.assertEqual([t for _, t in links.links(text)], ["a.md"])
 
     def test_title_and_angle_brackets(self):
@@ -105,6 +118,28 @@ class CheckTests(unittest.TestCase):
         errors, _ = links.check(root)
         self.assertEqual(len(errors), 1)
         self.assertIn("scripts/y.py", errors[0])
+
+    def test_backticked_heading_anchor_resolves(self):
+        root = self.tree(
+            {
+                "AGENTS.md": "[a](docs/agents/a.md#the-tsc-oracle) [b](docs/agents/a.md#the--tsc--oracle)\n",
+                "docs/agents/a.md": "# A\n\n## The `tsc` oracle\n",
+            }
+        )
+        errors, _ = links.check(root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("#the--tsc--oracle", errors[0])
+
+    def test_orphan_reachable_through_a_page_outside_docs_agents(self):
+        root = self.tree(
+            {
+                "AGENTS.md": "[adr](docs/adr/x.md)\n",
+                "docs/adr/x.md": "[a](../agents/a.md)\n",
+                "docs/agents/a.md": "# A\n",
+            }
+        )
+        _, edges = links.check(root)
+        self.assertEqual(links.orphans(root, edges), [])
 
     def test_orphans_are_warnings_unless_strict(self):
         root = self.tree(
