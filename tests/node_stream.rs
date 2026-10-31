@@ -245,22 +245,21 @@ fn stream_module_ids_resolve_and_internals_stay_private() {
 }
 
 #[test]
-fn web_stream_interop_throws_until_web_streams_exist() {
+fn web_stream_interop_adapts_node_streams() {
     let source = r#"
       const { Readable, Writable, Duplex } = require("stream");
-      const attempts = [
-        () => Readable.toWeb(new Readable()),
-        () => Readable.fromWeb({}),
-        () => Writable.toWeb(new Writable()),
-        () => Writable.fromWeb({}),
-        () => Duplex.toWeb(new Duplex()),
-        () => Duplex.fromWeb({}),
-      ];
-      for (const fn of attempts) {
-        try { fn(); print("no throw"); } catch (e) { print(e.code); }
+      print(Readable.toWeb(new Readable({ read() {} })) instanceof ReadableStream);
+      print(Writable.toWeb(new Writable({ write() {} })) instanceof WritableStream);
+      const pair = Duplex.toWeb(new Duplex({ read() {}, write() {} }));
+      print(pair.readable instanceof ReadableStream, pair.writable instanceof WritableStream);
+      for (const fn of [Readable.fromWeb, Writable.fromWeb, Duplex.fromWeb]) {
+        try { fn({}); print("no throw"); } catch (e) { print(e.code); }
       }
     "#;
     let out = run(&["--node", "-e", source], None);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), ["ERR_METHOD_NOT_IMPLEMENTED"; 6].join("\n"));
+    assert_eq!(
+        stdout(&out),
+        "true\ntrue\ntrue true\nERR_INVALID_ARG_TYPE\nERR_INVALID_ARG_TYPE\nERR_INVALID_ARG_TYPE"
+    );
 }
