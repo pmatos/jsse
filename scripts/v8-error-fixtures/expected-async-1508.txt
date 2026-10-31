@@ -1,0 +1,127 @@
+## a function named like its receiver type
+Error: same name
+    at Gadget [as build] (<dir>/async-1508.js:123:10)
+    at methods (<dir>/async-1508.js:127:64)
+## an alias
+Error: named
+    at Object.named [as other] (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:128:27)
+## two aliases are ambiguous
+Error: named
+    at Object.named (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:129:44)
+## an inherited alias
+Error: named
+    at Object.named [as shared] (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:130:40)
+## a class method called by its name
+Error: method
+    at Widget.method (<dir>/async-1508.js:90:12)
+    at methods (<dir>/async-1508.js:131:52)
+## a class method called through an alias
+Error: method
+    at Widget.method (<dir>/async-1508.js:90:12)
+    at methods (<dir>/async-1508.js:132:57)
+## a getter called explicitly
+Error: getter
+    at get value (<dir>/async-1508.js:93:12)
+    at methods (<dir>/async-1508.js:134:45)
+## a getter of an object literal
+Error: accessor
+    at get prop (<dir>/async-1508.js:117:12)
+    at methods (<dir>/async-1508.js:135:96)
+## a static method
+Error: static
+    at Widget.make (<dir>/async-1508.js:96:12)
+    at methods (<dir>/async-1508.js:136:34)
+## a static method through an alias
+Error: static
+    at Widget.make (<dir>/async-1508.js:96:12)
+    at methods (<dir>/async-1508.js:137:51)
+## a function inferred from an assignment
+Error: inferred
+    at exported.run (<dir>/async-1508.js:106:10)
+    at methods (<dir>/async-1508.js:138:59)
+## a prototype method and an own alias
+Error: named
+    at Timeoutish.named (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:139:53)
+## an own alias beside a prototype method
+Error: named
+    at Timeoutish.named (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:140:56)
+## a non-enumerable alias
+Error: named
+    at Object.named (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:141:41)
+## call with another receiver
+Error: named
+    at Object.named [as other] (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:142:44)
+## a plain call
+Error: named
+    at named (<dir>/async-1508.js:86:10)
+    at methods (<dir>/async-1508.js:143:24)
+## Promise.all
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.all (index 1)
+    at async viaAll (<dir>/async-1508.js:28:11)
+    at async main (<dir>/async-1508.js:72:23)
+## Promise.allSettled
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.allSettled (index 0)
+    at async viaSettled (<dir>/async-1508.js:31:11)
+    at async main (<dir>/async-1508.js:73:30)
+## Promise.any
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.any (index 1)
+    at async viaAny (<dir>/async-1508.js:34:10)
+    at async main (<dir>/async-1508.js:74:23)
+## Promise.race has no frame
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async viaRace (<dir>/async-1508.js:37:10)
+    at async main (<dir>/async-1508.js:75:37)
+## nested Promise.all
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.all (index 1)
+    at async viaAll (<dir>/async-1508.js:28:11)
+    at async Promise.all (index 0)
+    at async nested (<dir>/async-1508.js:40:11)
+    at async main (<dir>/async-1508.js:76:30)
+## Promise.all then handler
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.all (index 0)
+    at async viaAllThen (<dir>/async-1508.js:43:10)
+    at async main (<dir>/async-1508.js:77:36)
+## race of all
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.all (index 0)
+    at async raceOfAll (<dir>/async-1508.js:46:10)
+    at async main (<dir>/async-1508.js:78:23)
+## several elements
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async Promise.all (index 1)
+    at async manyElements (<dir>/async-1508.js:49:19)
+    at async main (<dir>/async-1508.js:79:28)
+## a promise with two reactions
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+## a resolve function
+Error: x
+    at leaf (<dir>/async-1508.js:20:10)
+    at async viaResolve (<dir>/async-1508.js:58:10)
+    at async main (<dir>/async-1508.js:81:30)
+## combinator not awaited by the leaf's caller
+Error: inner
+    at inner (<dir>/async-1508.js:65:19)
+    at async Promise.all (index 0)
+    at async viaCombinatorOnly (<dir>/async-1508.js:62:3)
+    at async main (<dir>/async-1508.js:82:55)

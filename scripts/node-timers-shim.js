@@ -23,6 +23,7 @@
   var invalidArgType = handoff.invalidArgType;
   var emitWarning = handoff.emitWarning;
 
+  var proc = globalThis.process;
   var nativeSetTimeout = globalThis.setTimeout;
   var nativeClearTimeout = globalThis.clearTimeout;
   var slice = Array.prototype.slice;
@@ -36,9 +37,7 @@
 
   // ---- Timeout ----------------------------------------------------------------
   function arm(timer) {
-    var id = nativeSetTimeout(function () {
-      fire(timer);
-    }, timer._idleTimeout);
+    var id = nativeSetTimeout(processTimers.bind(proc, timer), timer._idleTimeout);
     timer._native = id;
     if (!timer[kRefed]) hostTimerRef(id, false);
   }
@@ -47,7 +46,12 @@
     if (timer[kHasPrimitive]) delete knownTimersById[timer[kAsyncId]];
   }
 
-  function fire(timer) {
+  // Named and bound like Node's frames (`listOnTimeout`, `process.processTimers`).
+  function processTimers(timer) {
+    listOnTimeout(timer);
+  }
+
+  function listOnTimeout(timer) {
     timer._native = 0;
     var callback = timer._onTimeout;
     try {
@@ -260,7 +264,7 @@
       immediate._onImmediate = null;
     }
   }
-  hostSetImmediate(processImmediate);
+  hostSetImmediate(processImmediate.bind(proc));
   handoff.afterHandledUncaught = function () {
     setImmediate(function () {});
   };

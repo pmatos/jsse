@@ -24,23 +24,31 @@
   var kIsNodeError = Symbol.for("kIsNodeError");
   var reflectApply = Reflect.apply;
   var stringCtor = String;
-  var RECORD = 5;
+  var RECORD = 6;
   var CONSTRUCTOR = 1;
   var TOPLEVEL = 2;
   var ASYNC = 4;
+  var COMBINATOR = 8;
+
+  function endsWith(text, suffix) {
+    return text.length >= suffix.length && text.slice(text.length - suffix.length) === suffix;
+  }
 
   function describe(frames, index) {
     var base = index * RECORD;
-    var place = locate(frames[base + 2], frames[base + 3]);
+    var combinator = (frames[base + 4] & COMBINATOR) !== 0;
+    var place = combinator ? undefined : locate(frames[base + 2], frames[base + 3]);
     return {
       functionName: frames[base] === undefined ? null : frames[base],
       typeName: frames[base + 1] === undefined ? null : frames[base + 1],
-      file: place === undefined ? undefined : place[0],
+      file: combinator ? null : place === undefined ? undefined : place[0],
       line: place === undefined ? null : place[1],
       column: place === undefined ? null : place[2],
       constructor: (frames[base + 4] & CONSTRUCTOR) !== 0,
       toplevel: (frames[base + 4] & TOPLEVEL) !== 0,
       async: (frames[base + 4] & ASYNC) !== 0,
+      method: frames[base + 5] === undefined ? null : frames[base + 5],
+      promiseIndex: combinator ? frames[base + 3] : null,
     };
   }
 
@@ -64,10 +72,7 @@
       return this.#frame.functionName;
     }
     getMethodName() {
-      var frame = this.#frame;
-      if (frame.toplevel || frame.constructor) return null;
-      var name = frame.functionName;
-      return name === null ? null : name.slice(name.lastIndexOf(".") + 1);
+      return this.#frame.method;
     }
     getFileName() {
       return this.#frame.file;
@@ -91,13 +96,13 @@
       return this.#frame.column;
     }
     getPosition() {
-      return 0;
+      return this.#frame.promiseIndex === null ? 0 : this.#frame.promiseIndex;
     }
     getEvalOrigin() {
       return undefined;
     }
     getPromiseIndex() {
-      return null;
+      return this.#frame.promiseIndex;
     }
     isToplevel() {
       return this.#frame.toplevel;
@@ -115,7 +120,7 @@
       return this.#frame.async;
     }
     isPromiseAll() {
-      return false;
+      return this.#frame.promiseIndex !== null && this.#frame.functionName === "all";
     }
     toString() {
       var text = this.#plain();
@@ -123,6 +128,9 @@
     }
     #plain() {
       var frame = this.#frame;
+      if (frame.promiseIndex !== null) {
+        return "Promise." + frame.functionName + " (index " + frame.promiseIndex + ")";
+      }
       var where =
         (frame.file === undefined || frame.file === null
           ? "<anonymous>"
@@ -137,10 +145,15 @@
         if (name === null) return type + ".<anonymous> (" + where + ")";
         var accessor = name.lastIndexOf("get ", 0) === 0 || name.lastIndexOf("set ", 0) === 0;
         var qualified = name.indexOf(".") !== -1;
-        if (type !== null && !accessor && !qualified && name.lastIndexOf(type, 0) !== 0) {
+        var method = frame.method;
+        var alias =
+          method !== null && !accessor && name !== method && !endsWith(name, "." + method)
+            ? " [as " + method + "]"
+            : "";
+        if (type !== null && !accessor && !qualified && name !== type) {
           name = type + "." + name;
         }
-        return name + " (" + where + ")";
+        return name + alias + " (" + where + ")";
       }
       return name === null ? where : name + " (" + where + ")";
     }
