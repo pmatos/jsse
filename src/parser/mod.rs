@@ -19,6 +19,7 @@ mod node_hooks;
 mod positions;
 mod prologue;
 mod statements;
+pub(crate) mod v8_messages;
 mod yield_scan;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -52,16 +53,10 @@ impl From<LexError> for ParseError {
 /// unconditionally so a failed nested parse can't leak the re-scoped values
 /// into the enclosing construct (issue #608, following #597/#602).
 ///
-/// `save_block_scope` only snapshots — it does not itself set either flag.
-/// The four brace-body sites (`Block`, the three `try` bodies) need
-/// `in_block_or_function = true; in_switch_case = false`, but the `switch`
-/// `CaseBlock` consequent needs only `in_switch_case = true`, leaving
-/// `in_block_or_function` at its ambient value. Baking a fixed pair of
-/// values into the snapshot step silently overwrote that fifth site's
-/// ambient `in_block_or_function` and dropped `in_switch_case` to `false`
-/// instead of `true` — accepting `using`/`await using` declarations
-/// directly in a case body that must reject them. Each site's `enter`
-/// closure sets exactly the fields it needs.
+/// `save_block_scope` only snapshots; it sets neither flag. The four
+/// brace-body sites need `in_block_or_function = true; in_switch_case =
+/// false`, the `switch` `CaseBlock` consequent only `in_switch_case = true`,
+/// so each site's `enter` closure sets exactly the fields it needs.
 #[derive(Clone, Copy)]
 struct SavedBlockScope {
     in_block_or_function: bool,
@@ -357,9 +352,8 @@ impl<'a> Parser<'a> {
     }
 
     fn error(&self, msg: impl Into<String>) -> ParseError {
-        ParseError {
-            message: msg.into(),
-        }
+        let message = self.v8_text(msg.into());
+        ParseError { message }
     }
 
     fn source_since(&self, start: usize) -> Option<SourceText> {

@@ -8,7 +8,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(super) fn validate_assignment_target(
+    pub(in crate::parser) fn validate_assignment_target(
         &self,
         expr: &Expression,
         simple_only: bool,

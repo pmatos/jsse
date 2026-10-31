@@ -173,3 +173,4 @@
     realpathSync: realpathSync,
   };
 })();
+//# sourceURL=node:fs

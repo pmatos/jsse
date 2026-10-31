@@ -288,3 +288,4 @@
     rmSync: rmSync,
   };
 })();
+//# sourceURL=node:fs

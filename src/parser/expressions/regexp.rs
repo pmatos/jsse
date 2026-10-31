@@ -23,7 +23,12 @@ pub(super) fn validate_regexp_literal(pattern: &[u16], flags: &str) -> Result<()
         });
     }
     if let Err(msg) = crate::interpreter::validate_js_pattern_units(pattern, flags) {
-        return Err(ParseError { message: msg });
+        let message = if inferred_names::enabled() {
+            v8_messages::regexp_literal_message(&msg, flags)
+        } else {
+            msg
+        };
+        return Err(ParseError { message });
     }
     Ok(())
 }
