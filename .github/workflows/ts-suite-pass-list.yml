@@ -1,0 +1,41 @@
+name: TypeScript suite pass list
+
+# The jsse pass list of TypeScript's own test suite (ts-suite/jsse-pass-1296.json,
+# #1296) may only gain entries. This is a pure git-blob comparison (no TypeScript
+# checkout, no engine): the same check as the ts-pass-list-ratchet pre-commit hook,
+# run against the merge base so a bypassed hook cannot merge a loss. Deliberately a
+# separate workflow from ci.yml; the scripts/test_*.py suite that covers the check
+# runs in the required `build` job.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ts-suite/jsse-pass-1296.json"
+      - "ts-suite/pass-list-1296-not-passing.txt"
+      - "scripts/check_ts_pass_list_ratchet.py"
+      - "scripts/ts_passlist_store.py"
+      - ".github/workflows/ts-suite-pass-list.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Pass list only gains entries
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_ts_pass_list_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
