@@ -64,6 +64,7 @@ impl Compiler {
         if let [Expression::Spread(iterable)] = args {
             self.compile_expr(iterable)?;
             self.emit_call_pos(site_id);
+            self.note_spread_source(iterable);
             self.emit(if below == 2 {
                 Op::CallSpreadSole
             } else {
@@ -79,6 +80,7 @@ impl Compiler {
             match (arg, spread_seen) {
                 (Expression::Spread(iterable), false) => {
                     self.compile_expr(iterable)?;
+                    self.note_spread_source(iterable);
                     self.emit(Op::ArgSpreadFirst);
                     self.emit_u16(slots);
                     spread_seen = true;
@@ -86,6 +88,7 @@ impl Compiler {
                 }
                 (Expression::Spread(iterable), true) => {
                     self.compile_expr(iterable)?;
+                    self.note_spread_source(iterable);
                     self.emit(Op::ArgSpread);
                     self.pop_n(1);
                 }

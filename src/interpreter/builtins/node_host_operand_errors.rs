@@ -11,6 +11,7 @@ impl Interpreter {
             format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
         });
         let error = self.create_type_error(&text);
+        self.node_host.iterable_value = Some(value.clone());
         let frame = self.call_depth;
         self.node_host.iterable_error = error
             .as_object_id()

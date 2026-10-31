@@ -1870,13 +1870,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 | Op::ConstructSpread
                 | Op::CallSpreadSole
                 | Op::ConstructSpreadSole => {
-                    let before = if op == Op::ArgSpreadFirst {
-                        pc += 2;
-                        decode_u16(chunk, pc - 2)
-                    } else {
-                        0
-                    };
-                    if let Err(abrupt) = spread::run(interp, stack, op, usize::from(before)) {
+                    if let Err(abrupt) = spread::run(interp, chunk, stack, &mut pc, op) {
                         bail!('dispatch, abrupt);
                     }
                 }

@@ -2,8 +2,9 @@
 //! arguments live on the operand stack, rooted one by one like any operand,
 //! with their running count in a Number slot above them.
 
-use super::{Op, pop_operands, pop_value, push_value};
+use super::{Op, decode_u16, pop_operands, pop_value, push_value};
 use crate::interpreter::Interpreter;
+use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::types::Completion;
 use crate::types::JsValue;
 
@@ -21,7 +22,8 @@ fn spread_values(
     stack: &mut Vec<JsValue>,
     counted: bool,
 ) -> Result<usize, JsValue> {
-    let values = interp.iterate_to_vec(stack.last().expect("stack underflow on spread"))?;
+    let values =
+        interp.iterate_call_spread_noted(stack.last().expect("stack underflow on spread"))?;
     pop_value(interp, stack, "stack underflow on spread");
     if counted {
         stack.pop();
@@ -41,10 +43,20 @@ fn spread_values(
 #[inline(never)]
 pub(super) fn run(
     interp: &mut Interpreter,
+    chunk: &Chunk,
     stack: &mut Vec<JsValue>,
+    pc: &mut usize,
     op: Op,
-    before: usize,
 ) -> Result<(), Completion> {
+    if !chunk.pattern_src.is_empty() {
+        interp.node_host.pattern_src = chunk.pattern_src_at(*pc - 1).cloned();
+    }
+    let before = if op == Op::ArgSpreadFirst {
+        *pc += 2;
+        usize::from(decode_u16(chunk, *pc - 2))
+    } else {
+        0
+    };
     let (argc, is_call) = match op {
         Op::ArgSpreadFirst => {
             let total = before + spread_values(interp, stack, false).map_err(Completion::Throw)?;

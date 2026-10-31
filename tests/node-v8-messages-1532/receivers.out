@@ -1,0 +1,215 @@
+%TypedArray%.prototype.at [1] -> TypeError: Method %TypedArray%.prototype.at called on incompatible receiver 1
+%TypedArray%.prototype.at [[object Object]] -> TypeError: Method %TypedArray%.prototype.at called on incompatible receiver #<Object>
+%TypedArray%.prototype.at [null] -> TypeError: Method %TypedArray%.prototype.at called on incompatible receiver null
+%TypedArray%.prototype.fill [1] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.fill [[object Object]] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.fill [null] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.forEach [1] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.forEach [[object Object]] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.forEach [null] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.join [1] -> TypeError: Method %TypedArray%.prototype.join called on incompatible receiver 1
+%TypedArray%.prototype.join [[object Object]] -> TypeError: Method %TypedArray%.prototype.join called on incompatible receiver #<Object>
+%TypedArray%.prototype.join [null] -> TypeError: Method %TypedArray%.prototype.join called on incompatible receiver null
+%TypedArray%.prototype.map [1] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.map [[object Object]] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.map [null] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.set [1] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.set [[object Object]] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.set [null] -> TypeError: this is not a typed array.
+%TypedArray%.prototype.slice [1] -> TypeError: Method %TypedArray%.prototype.slice called on incompatible receiver 1
+%TypedArray%.prototype.slice [[object Object]] -> TypeError: Method %TypedArray%.prototype.slice called on incompatible receiver #<Object>
+%TypedArray%.prototype.slice [null] -> TypeError: Method %TypedArray%.prototype.slice called on incompatible receiver null
+%TypedArray%.prototype.sort [1] -> TypeError: Method %TypedArray%.prototype.sort called on incompatible receiver 1
+%TypedArray%.prototype.sort [[object Object]] -> TypeError: Method %TypedArray%.prototype.sort called on incompatible receiver #<Object>
+%TypedArray%.prototype.sort [null] -> TypeError: Method %TypedArray%.prototype.sort called on incompatible receiver null
+%TypedArray%.prototype.subarray [1] -> TypeError: Method %TypedArray%.prototype.subarray called on incompatible receiver 1
+%TypedArray%.prototype.subarray [[object Object]] -> TypeError: Method %TypedArray%.prototype.subarray called on incompatible receiver #<Object>
+%TypedArray%.prototype.subarray [null] -> TypeError: Method %TypedArray%.prototype.subarray called on incompatible receiver null
+%TypedArray%.prototype.toSorted [1] -> TypeError: Method %TypedArray%.prototype.toSorted called on incompatible receiver 1
+%TypedArray%.prototype.toSorted [[object Object]] -> TypeError: Method %TypedArray%.prototype.toSorted called on incompatible receiver #<Object>
+%TypedArray%.prototype.toSorted [null] -> TypeError: Method %TypedArray%.prototype.toSorted called on incompatible receiver null
+Array.prototype.at [1] -> ok
+Array.prototype.at [[object Object]] -> ok
+Array.prototype.at [null] -> TypeError: Cannot convert undefined or null to object
+Array.prototype.concat [1] -> ok
+Array.prototype.concat [[object Object]] -> ok
+Array.prototype.concat [null] -> TypeError: Array.prototype.concat called on null or undefined
+Array.prototype.every [1] -> ok
+Array.prototype.every [[object Object]] -> ok
+Array.prototype.every [null] -> TypeError: Array.prototype.every called on null or undefined
+Array.prototype.filter [1] -> ok
+Array.prototype.filter [[object Object]] -> ok
+Array.prototype.filter [null] -> TypeError: Array.prototype.filter called on null or undefined
+Array.prototype.find [1] -> ok
+Array.prototype.find [[object Object]] -> ok
+Array.prototype.find [null] -> TypeError: Array.prototype.find called on null or undefined
+Array.prototype.findIndex [1] -> ok
+Array.prototype.findIndex [[object Object]] -> ok
+Array.prototype.findIndex [null] -> TypeError: Array.prototype.findIndex called on null or undefined
+Array.prototype.findLast [1] -> ok
+Array.prototype.findLast [[object Object]] -> ok
+Array.prototype.findLast [null] -> TypeError: Array.prototype.findLast called on null or undefined
+Array.prototype.findLastIndex [1] -> ok
+Array.prototype.findLastIndex [[object Object]] -> ok
+Array.prototype.findLastIndex [null] -> TypeError: Array.prototype.findLastIndex called on null or undefined
+Array.prototype.forEach [1] -> ok
+Array.prototype.forEach [[object Object]] -> ok
+Array.prototype.forEach [null] -> TypeError: Array.prototype.forEach called on null or undefined
+Array.prototype.includes [1] -> ok
+Array.prototype.includes [[object Object]] -> ok
+Array.prototype.includes [null] -> TypeError: Cannot convert undefined or null to object
+Array.prototype.indexOf [1] -> ok
+Array.prototype.indexOf [[object Object]] -> ok
+Array.prototype.indexOf [null] -> TypeError: Array.prototype.indexOf called on null or undefined
+Array.prototype.join [1] -> ok
+Array.prototype.join [[object Object]] -> ok
+Array.prototype.join [null] -> TypeError: Cannot convert undefined or null to object
+Array.prototype.map [1] -> ok
+Array.prototype.map [[object Object]] -> ok
+Array.prototype.map [null] -> TypeError: Array.prototype.map called on null or undefined
+Array.prototype.reduce [1] -> TypeError: Reduce of empty array with no initial value
+Array.prototype.reduce [[object Object]] -> TypeError: Reduce of empty array with no initial value
+Array.prototype.reduce [null] -> TypeError: Array.prototype.reduce called on null or undefined
+Array.prototype.reduceRight [1] -> TypeError: Reduce of empty array with no initial value
+Array.prototype.reduceRight [[object Object]] -> TypeError: Reduce of empty array with no initial value
+Array.prototype.reduceRight [null] -> TypeError: Array.prototype.reduceRight called on null or undefined
+Array.prototype.slice [1] -> ok
+Array.prototype.slice [[object Object]] -> ok
+Array.prototype.slice [null] -> TypeError: Cannot convert undefined or null to object
+Array.prototype.some [1] -> ok
+Array.prototype.some [[object Object]] -> ok
+Array.prototype.some [null] -> TypeError: Array.prototype.some called on null or undefined
+ArrayBuffer.prototype.resize [1] -> TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver 1
+ArrayBuffer.prototype.resize [[object Object]] -> TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver #<Object>
+ArrayBuffer.prototype.resize [null] -> TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver null
+ArrayBuffer.prototype.slice [1] -> TypeError: Method ArrayBuffer.prototype.slice called on incompatible receiver 1
+ArrayBuffer.prototype.slice [[object Object]] -> TypeError: Method ArrayBuffer.prototype.slice called on incompatible receiver #<Object>
+ArrayBuffer.prototype.slice [null] -> TypeError: Method ArrayBuffer.prototype.slice called on incompatible receiver null
+ArrayBuffer.prototype.transfer [1] -> TypeError: Method ArrayBuffer.prototype.transfer called on incompatible receiver 1
+ArrayBuffer.prototype.transfer [[object Object]] -> TypeError: Method ArrayBuffer.prototype.transfer called on incompatible receiver #<Object>
+ArrayBuffer.prototype.transfer [null] -> TypeError: Method ArrayBuffer.prototype.transfer called on incompatible receiver null
+ArrayBuffer.prototype.transferToFixedLength [1] -> TypeError: Method ArrayBuffer.prototype.transferToFixedLength called on incompatible receiver 1
+ArrayBuffer.prototype.transferToFixedLength [[object Object]] -> TypeError: Method ArrayBuffer.prototype.transferToFixedLength called on incompatible receiver #<Object>
+ArrayBuffer.prototype.transferToFixedLength [null] -> TypeError: Method ArrayBuffer.prototype.transferToFixedLength called on incompatible receiver null
+BigInt.asIntN(-1) -> RangeError: Invalid value: not (convertible to) a safe integer
+BigInt.asUintN(9007199254740992) -> RangeError: Invalid value: not (convertible to) a safe integer
+DataView.prototype.getFloat64 [1] -> TypeError: Method DataView.prototype.getFloat64 called on incompatible receiver 1
+DataView.prototype.getFloat64 [[object Object]] -> TypeError: Method DataView.prototype.getFloat64 called on incompatible receiver #<Object>
+DataView.prototype.getFloat64 [null] -> TypeError: Method DataView.prototype.getFloat64 called on incompatible receiver null
+DataView.prototype.getInt8 [1] -> TypeError: Method DataView.prototype.getInt8 called on incompatible receiver 1
+DataView.prototype.getInt8 [[object Object]] -> TypeError: Method DataView.prototype.getInt8 called on incompatible receiver #<Object>
+DataView.prototype.getInt8 [null] -> TypeError: Method DataView.prototype.getInt8 called on incompatible receiver null
+DataView.prototype.getUint32 [1] -> TypeError: Method DataView.prototype.getUint32 called on incompatible receiver 1
+DataView.prototype.getUint32 [[object Object]] -> TypeError: Method DataView.prototype.getUint32 called on incompatible receiver #<Object>
+DataView.prototype.getUint32 [null] -> TypeError: Method DataView.prototype.getUint32 called on incompatible receiver null
+DataView.prototype.setBigInt64 [1] -> TypeError: Method DataView.prototype.setBigInt64 called on incompatible receiver 1
+DataView.prototype.setBigInt64 [[object Object]] -> TypeError: Method DataView.prototype.setBigInt64 called on incompatible receiver #<Object>
+DataView.prototype.setBigInt64 [null] -> TypeError: Method DataView.prototype.setBigInt64 called on incompatible receiver null
+DataView.prototype.setInt16 [1] -> TypeError: Method DataView.prototype.setInt16 called on incompatible receiver 1
+DataView.prototype.setInt16 [[object Object]] -> TypeError: Method DataView.prototype.setInt16 called on incompatible receiver #<Object>
+DataView.prototype.setInt16 [null] -> TypeError: Method DataView.prototype.setInt16 called on incompatible receiver null
+Date.prototype.getTime [1] -> TypeError: this is not a Date object.
+Date.prototype.getTime [[object Object]] -> TypeError: this is not a Date object.
+Date.prototype.getTime [null] -> TypeError: this is not a Date object.
+Date.prototype.setHours [1] -> TypeError: Method Date.prototype.setHours called on incompatible receiver 1
+Date.prototype.setHours [[object Object]] -> TypeError: Method Date.prototype.setHours called on incompatible receiver #<Object>
+Date.prototype.setHours [null] -> TypeError: Method Date.prototype.setHours called on incompatible receiver null
+Date.prototype.setTime [1] -> TypeError: Method Date.prototype.setTime called on incompatible receiver 1
+Date.prototype.setTime [[object Object]] -> TypeError: Method Date.prototype.setTime called on incompatible receiver #<Object>
+Date.prototype.setTime [null] -> TypeError: Method Date.prototype.setTime called on incompatible receiver null
+Date.prototype.toDateString [1] -> TypeError: Method Date.prototype.toDateString called on incompatible receiver 1
+Date.prototype.toDateString [[object Object]] -> TypeError: Method Date.prototype.toDateString called on incompatible receiver #<Object>
+Date.prototype.toDateString [null] -> TypeError: Method Date.prototype.toDateString called on incompatible receiver null
+Date.prototype.toISOString [1] -> TypeError: Method Date.prototype.toISOString called on incompatible receiver 1
+Date.prototype.toISOString [[object Object]] -> TypeError: Method Date.prototype.toISOString called on incompatible receiver #<Object>
+Date.prototype.toISOString [null] -> TypeError: Method Date.prototype.toISOString called on incompatible receiver null
+Date.prototype.toLocaleString [1] -> TypeError: Method Date.prototype.toLocaleString called on incompatible receiver 1
+Date.prototype.toLocaleString [[object Object]] -> TypeError: Method Date.prototype.toLocaleString called on incompatible receiver #<Object>
+Date.prototype.toLocaleString [null] -> TypeError: Method Date.prototype.toLocaleString called on incompatible receiver null
+Date.prototype.toString [1] -> TypeError: Method Date.prototype.toString called on incompatible receiver 1
+Date.prototype.toString [[object Object]] -> TypeError: Method Date.prototype.toString called on incompatible receiver #<Object>
+Date.prototype.toString [null] -> TypeError: Method Date.prototype.toString called on incompatible receiver null
+Date.prototype.toUTCString [1] -> TypeError: Method Date.prototype.toUTCString called on incompatible receiver 1
+Date.prototype.toUTCString [[object Object]] -> TypeError: Method Date.prototype.toUTCString called on incompatible receiver #<Object>
+Date.prototype.toUTCString [null] -> TypeError: Method Date.prototype.toUTCString called on incompatible receiver null
+Function.prototype.apply.call(1) -> TypeError: Function.prototype.apply was called on 1, which is a number and not a function
+Function.prototype.call.call(1) -> TypeError: Function.prototype.call was called on 1, which is a number and not a function
+Function.prototype.call.call([object Object]) -> TypeError: Function.prototype.call was called on #<Object>, which is an object and not a function
+Object.prototype.hasOwnProperty [1] -> ok
+Object.prototype.hasOwnProperty [[object Object]] -> ok
+Object.prototype.hasOwnProperty [null] -> TypeError: Cannot convert undefined or null to object
+Object.prototype.toLocaleString [1] -> ok
+Object.prototype.toLocaleString [[object Object]] -> ok
+Object.prototype.toLocaleString [null] -> TypeError: Object.prototype.toLocaleString called on null or undefined
+Promise.all [1] -> TypeError: Promise.all called on non-object
+Promise.all [abc] -> TypeError: Promise.all called on non-object
+Promise.all [undefined] -> TypeError: Promise.all called on non-object
+Promise.allSettled [1] -> TypeError: Promise.allSettled called on non-object
+Promise.allSettled [abc] -> TypeError: Promise.allSettled called on non-object
+Promise.allSettled [undefined] -> TypeError: Promise.allSettled called on non-object
+Promise.any [1] -> TypeError: Promise.any called on non-object
+Promise.any [abc] -> TypeError: Promise.any called on non-object
+Promise.any [undefined] -> TypeError: Promise.any called on non-object
+Promise.prototype.catch [1] -> TypeError: undefined is not a function
+Promise.prototype.catch [[object Object]] -> TypeError: undefined is not a function
+Promise.prototype.catch [null] -> TypeError: Cannot read properties of null (reading 'then')
+Promise.prototype.then [1] -> TypeError: Method Promise.prototype.then called on incompatible receiver 1
+Promise.prototype.then [[object Object]] -> TypeError: Method Promise.prototype.then called on incompatible receiver #<Object>
+Promise.prototype.then [null] -> TypeError: Method Promise.prototype.then called on incompatible receiver null
+Promise.race [1] -> TypeError: Promise.race called on non-object
+Promise.race [abc] -> TypeError: Promise.race called on non-object
+Promise.race [undefined] -> TypeError: Promise.race called on non-object
+RegExp.prototype.compile [1] -> TypeError: Method RegExp.prototype.compile called on incompatible receiver 1
+RegExp.prototype.compile [[object Object]] -> TypeError: Method RegExp.prototype.compile called on incompatible receiver #<Object>
+RegExp.prototype.compile [null] -> TypeError: Method RegExp.prototype.compile called on incompatible receiver null
+RegExp.prototype.exec [1] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver 1
+RegExp.prototype.exec [[object Object]] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver #<Object>
+RegExp.prototype.exec [null] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver null
+RegExp.prototype.test [1] -> TypeError: Method RegExp.prototype.test called on incompatible receiver 1
+RegExp.prototype.test [[object Object]] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver #<Object>
+RegExp.prototype.test [null] -> TypeError: Method RegExp.prototype.test called on incompatible receiver null
+RegExp.prototype.toString [1] -> TypeError: Method RegExp.prototype.toString called on incompatible receiver 1
+RegExp.prototype.toString [[object Object]] -> ok
+RegExp.prototype.toString [null] -> TypeError: Method RegExp.prototype.toString called on incompatible receiver null
+RegExp.prototype[@@matchAll] [1] -> TypeError: Method RegExp.prototype.@@matchAll called on incompatible receiver 1
+RegExp.prototype[@@matchAll] [[object Object]] -> SyntaxError: Invalid flags supplied to RegExp constructor 'undefined'
+RegExp.prototype[@@matchAll] [abc] -> TypeError: Method RegExp.prototype.@@matchAll called on incompatible receiver abc
+RegExp.prototype[@@match] [1] -> TypeError: Method RegExp.prototype.@@match called on incompatible receiver 1
+RegExp.prototype[@@match] [[object Object]] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver #<Object>
+RegExp.prototype[@@match] [abc] -> TypeError: Method RegExp.prototype.@@match called on incompatible receiver abc
+RegExp.prototype[@@replace] [1] -> TypeError: Method RegExp.prototype.@@replace called on incompatible receiver 1
+RegExp.prototype[@@replace] [[object Object]] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver #<Object>
+RegExp.prototype[@@replace] [abc] -> TypeError: Method RegExp.prototype.@@replace called on incompatible receiver abc
+RegExp.prototype[@@search] [1] -> TypeError: Method RegExp.prototype.@@search called on incompatible receiver 1
+RegExp.prototype[@@search] [[object Object]] -> TypeError: Method RegExp.prototype.exec called on incompatible receiver #<Object>
+RegExp.prototype[@@search] [abc] -> TypeError: Method RegExp.prototype.@@search called on incompatible receiver abc
+RegExp.prototype[@@split] [1] -> TypeError: Method RegExp.prototype.@@split called on incompatible receiver 1
+RegExp.prototype[@@split] [[object Object]] -> SyntaxError: Invalid flags supplied to RegExp constructor 'undefinedy'
+RegExp.prototype[@@split] [abc] -> TypeError: Method RegExp.prototype.@@split called on incompatible receiver abc
+String.prototype.at [1] -> ok
+String.prototype.at [[object Object]] -> ok
+String.prototype.at [null] -> TypeError: String.prototype.at called on null or undefined
+String.prototype.includes [1] -> ok
+String.prototype.includes [[object Object]] -> ok
+String.prototype.includes [null] -> TypeError: String.prototype.includes called on null or undefined
+String.prototype.padEnd [1] -> ok
+String.prototype.padEnd [[object Object]] -> ok
+String.prototype.padEnd [null] -> TypeError: String.prototype.padEnd called on null or undefined
+String.prototype.repeat [1] -> ok
+String.prototype.repeat [[object Object]] -> ok
+String.prototype.repeat [null] -> TypeError: String.prototype.repeat called on null or undefined
+String.prototype.split [1] -> ok
+String.prototype.split [[object Object]] -> ok
+String.prototype.split [null] -> TypeError: String.prototype.split called on null or undefined
+String.prototype.toUpperCase [1] -> ok
+String.prototype.toUpperCase [[object Object]] -> ok
+String.prototype.toUpperCase [null] -> TypeError: String.prototype.toUpperCase called on null or undefined
+String.prototype.trim [1] -> ok
+String.prototype.trim [[object Object]] -> ok
+String.prototype.trim [null] -> TypeError: String.prototype.trim called on null or undefined
+String.prototype.trimEnd [1] -> ok
+String.prototype.trimEnd [[object Object]] -> ok
+String.prototype.trimEnd [null] -> TypeError: String.prototype.trimRight called on null or undefined
+String.prototype.trimStart [1] -> ok
+String.prototype.trimStart [[object Object]] -> ok
+String.prototype.trimStart [null] -> TypeError: String.prototype.trimLeft called on null or undefined

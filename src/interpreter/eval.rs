@@ -1171,6 +1171,7 @@ impl Interpreter {
                         }
                     }
 
+                    i.note_template_pos(tmpl.id);
                     if tail {
                         return Completion::TailCall {
                             func: func_val,
@@ -5895,7 +5896,7 @@ impl Interpreter {
 
     /// The values a spread element contributes: its operand's iteration, or,
     /// for the lowering's `PreIterated` array, that array's elements.
-    fn spread_values(
+    pub(crate) fn spread_values(
         &mut self,
         inner: &Expression,
         value: &JsValue,
@@ -5923,7 +5924,7 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
-                let items = self.spread_values(inner, &val)?;
+                let items = self.call_spread_items(inner, &val)?;
                 for item in &items {
                     self.gc_root_value(item);
                 }
@@ -6863,10 +6864,7 @@ impl Interpreter {
             return Ok((target_id, None));
         }
         if !self.is_callable(&trap_val) {
-            return Err(self.create_type_error(&format!(
-                "proxy handler's {} trap is not a function",
-                trap_name
-            )));
+            return Err(self.proxy_trap_error(trap_name, &trap_val, &handler_val));
         }
         Ok((target_id, Some((handler_val, trap_val))))
     }
@@ -6884,7 +6882,10 @@ impl Interpreter {
             (_, None) => Ok(None),
             (_, Some((handler_val, trap_val))) => {
                 match self.call_function(&trap_val, &handler_val, &args) {
-                    Completion::Normal(v) => Ok(Some(v)),
+                    Completion::Normal(v) => {
+                        self.note_proxy_trap(trap_name, &args, &v);
+                        Ok(Some(v))
+                    }
                     Completion::Throw(e) => Err(e),
                     _ => Ok(Some(JsValue::UNDEFINED)),
                 }
@@ -6962,9 +6963,7 @@ impl Interpreter {
 
             for key in &target_nonconfig {
                 if !trap_set.contains(key.as_bytes()) {
-                    return Err(self.create_type_error(
-                        "'ownKeys' on proxy: trap result did not include all non-configurable own keys of the proxy target",
-                    ));
+                    return Err(self.proxy_missing_key_error(key));
                 }
             }
 
@@ -7226,14 +7225,12 @@ impl Interpreter {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
                     )),
-                    SetBindingCheck::ConstAssign => Completion::Throw(
-                        self.create_type_error("Assignment to constant variable."),
-                    ),
+                    SetBindingCheck::ConstAssign => {
+                        Completion::Throw(self.const_assign_error(name, specific_env))
+                    }
                     SetBindingCheck::FunctionNameAssign => {
                         if specific_env.borrow().strict || env.borrow().strict {
-                            Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            )
+                            Completion::Throw(self.const_assign_error(name, specific_env))
                         } else {
                             Completion::Normal(value)
                         }
@@ -7310,9 +7307,9 @@ impl Interpreter {
                         }
                         match self.env_set(specific_env, key, value.clone()) {
                             Ok(()) => Completion::Normal(value),
-                            Err(_) => Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            ),
+                            Err(_) => {
+                                Completion::Throw(self.const_assign_error(name, specific_env))
+                            }
                         }
                     }
                 }

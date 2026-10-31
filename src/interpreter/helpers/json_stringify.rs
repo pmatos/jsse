@@ -314,9 +314,7 @@ fn json_stringify_walk(
             }
             let obj_id = obj.borrow().id.unwrap();
             if stack.contains(&obj_id) {
-                return Err(
-                    interp.create_error("TypeError", "Converting circular structure to JSON")
-                );
+                return Err(interp.json_cycle_error(stack, obj_id, key));
             }
             stack.push(obj_id);
 

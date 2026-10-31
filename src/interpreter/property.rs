@@ -1170,15 +1170,8 @@ impl Interpreter {
                 );
             };
             let key_val = self.symbol_key_to_jsvalue(key);
-            let trap_call = match self.call_function(
-                &trap_val,
-                &handler_val,
-                &[target_val.clone(), key_val, value.clone(), receiver.clone()],
-            ) {
-                Completion::Normal(v) => Ok(v),
-                Completion::Throw(e) => Err(e),
-                _ => Ok(JsValue::UNDEFINED),
-            };
+            let args = [target_val.clone(), key_val, value.clone(), receiver.clone()];
+            let trap_call = self.call_noted_trap("set", &trap_val, &handler_val, &args);
             match trap_call {
                 Ok(v) => {
                     if self.to_boolean_val(&v) {

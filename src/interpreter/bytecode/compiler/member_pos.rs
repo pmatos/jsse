@@ -19,6 +19,16 @@ impl Compiler {
         }
     }
 
+    /// Remembers the text of a call spread's operand for the spread op that
+    /// is emitted next.
+    pub(super) fn note_spread_source(&mut self, operand: &crate::ast::Expression) {
+        if call_positions_enabled() {
+            let at = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            let text = crate::interpreter::builtins::node_host_expr_text::expr_text(operand);
+            self.pattern_src.push((at, text.into()));
+        }
+    }
+
     /// Remembers the message for a for-of operand that is not iterable.
     pub(super) fn note_iterable_source(&mut self, right: &crate::ast::Expression, is_of: bool) {
         if is_of && call_positions_enabled() {

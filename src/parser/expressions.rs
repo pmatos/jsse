@@ -2196,18 +2196,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_template_literal_expr(&mut self, tagged: bool) -> Result<TemplateLiteral, ParseError> {
+        let start = self.current_token_start;
         match &self.current {
             Token::NoSubstitutionTemplate(cooked, raw) => {
                 let cooked = cooked.clone();
                 let raw = raw.clone();
-                if !tagged {
-                    cooked
-                        .as_ref()
-                        .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
-                }
+                self.check_cooked(&cooked, tagged)?;
                 self.advance()?;
                 Ok(TemplateLiteral {
-                    id: crate::ast::next_template_id(),
+                    id: self.template_id(tagged, start),
                     quasis: vec![cooked],
                     raw_quasis: vec![raw],
                     raw_stand_ins: self.lone_surrogate_stand_ins,
@@ -2217,11 +2214,7 @@ impl<'a> Parser<'a> {
             Token::TemplateHead(cooked, raw) => {
                 let cooked = cooked.clone();
                 let raw = raw.clone();
-                if !tagged {
-                    cooked
-                        .as_ref()
-                        .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
-                }
+                self.check_cooked(&cooked, tagged)?;
                 let mut quasis = vec![cooked];
                 let mut raw_quasis = vec![raw];
                 let mut expressions = Vec::new();
@@ -2258,7 +2251,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Ok(TemplateLiteral {
-                    id: crate::ast::next_template_id(),
+                    id: self.template_id(tagged, start),
                     quasis,
                     raw_quasis,
                     raw_stand_ins: self.lone_surrogate_stand_ins,

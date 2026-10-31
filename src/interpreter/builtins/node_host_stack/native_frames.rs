@@ -145,6 +145,13 @@ impl Interpreter {
         mark
     }
 
+    /// The builtin that is running (one V8 shows) and its receiver, when no
+    /// script frame is above it.
+    pub(crate) fn top_native(&self) -> Option<(u64, JsValue)> {
+        let top = self.node_host.stack.natives.frames.last()?;
+        (top.depth == self.call_stack_frames.len()).then(|| (top.func, top.receiver.clone()))
+    }
+
     #[inline]
     pub(crate) fn node_leave_native(&mut self, mark: usize) {
         if mark != NOT_PUSHED {

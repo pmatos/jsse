@@ -13,4 +13,3 @@ iteration and non-name-chain callees is covered by `tests/node-v8-messages-1510`
 | `x_undefined_var`, `let z = z`, `const c = 1; c = 2`, `Symbol() + ''` | caret column 1 | #1511 |
 | `o.x.y += 1`, `o.x[k] += 1` (position) | V8 reports the last evaluated sub-expression | #1511 |
 | `var {a} = null`, `var [a] = null`, `for (const x of 5)`, `[...5]` (position) | the message matches; caret at the statement, V8 at the property, initializer or operand | #1511 |
-| ``o.f`a` `` | tagged template records no call position: the frame is `1:1` | #1512 |

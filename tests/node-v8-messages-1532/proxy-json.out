@@ -1,0 +1,40 @@
+trapNotFunction -> TypeError: '1' returned for property 'get' of object '#<Object>' is not a function
+trapNotFunctionHas -> TypeError: '1' returned for property 'has' of object '#<Object>' is not a function
+getInvariant -> TypeError: 'get' on proxy: property 'x' is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value (expected '1' but got '2')
+hasInvariant -> TypeError: 'has' on proxy: trap returned falsish for property 'x' which exists in the proxy target as non-configurable
+ownKeysInvariant -> TypeError: 'ownKeys' on proxy: trap result did not include 'x'
+deleteInvariant -> TypeError: 'deleteProperty' on proxy: trap returned truish for property 'x' which is non-configurable in the proxy target
+setInvariant -> TypeError: 'set' on proxy: trap returned truish for property 'x' which exists in the proxy target as a non-configurable and non-writable data property with a different value
+setFalse -> TypeError: 'set' on proxy: trap returned falsish for property 'x'
+defineFalse -> TypeError: 'defineProperty' on proxy: trap returned falsish for property 'x'
+defineFrozen -> TypeError: Cannot define property z, object is not extensible
+defineFrozenOne -> TypeError: Cannot define property z, object is not extensible
+jsonCycle -> TypeError: Converting circular structure to JSON
+    --> starting at object with constructor 'Object'
+    --- property 'a' closes the circle
+jsonCycleDeep -> TypeError: Converting circular structure to JSON
+    --> starting at object with constructor 'Object'
+    |     property 'b' -> object with constructor 'Object'
+    |     property 'c' -> object with constructor 'Object'
+    --- property 'd' closes the circle
+jsonCycleLong -> TypeError: Converting circular structure to JSON
+    --> starting at object with constructor 'Object'
+    |     property 'b' -> object with constructor 'Object'
+    |     property 'c' -> object with constructor 'Object'
+    |     ...
+    |     property 'f' -> object with constructor 'Object'
+    --- property 'g' closes the circle
+jsonCycleArray -> TypeError: Converting circular structure to JSON
+    --> starting at object with constructor 'Array'
+    --- index 0 closes the circle
+jsonCycleNested -> TypeError: Converting circular structure to JSON
+    --> starting at object with constructor 'Object'
+    |     property 'list' -> object with constructor 'Array'
+    |     index 0 -> object with constructor 'Object'
+    --- property 'back' closes the circle
+arrayFromIterator -> TypeError: %Array%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+arrayFromNull -> TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+undefinedAssign -> TypeError: Cannot assign to read only property 'undefined' of object '#<Object>'
+nanAssign -> TypeError: Cannot assign to read only property 'NaN' of object '#<Object>'
+newObjectLiteralMethod -> TypeError: {(intermediate value)}.m is not a constructor
+newObjectLiteralTwo -> TypeError: {(intermediate value)(intermediate value)}.m is not a constructor

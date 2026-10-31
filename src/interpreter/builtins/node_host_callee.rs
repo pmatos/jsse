@@ -153,8 +153,12 @@ fn render_expr(s: &str) -> Option<String> {
             return Some(format!("({word} {})", render_expr(rest)?));
         }
     }
-    if s == "{}" {
-        return Some(s.into());
+    if let Some(body) = s.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+        let props = split_top(body, ",")
+            .into_iter()
+            .filter(|p| !p.trim().is_empty())
+            .count();
+        return Some(format!("{{{}}}", "(intermediate value)".repeat(props)));
     }
     if s.starts_with(['"', '\'']) {
         let quote = s.chars().next()?;
@@ -206,6 +210,13 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
         } else if last == b']' {
             let open = src[..i - 1].rfind('[')?;
             parts.push(render_index(&src[open + 1..i - 1])?);
+            i = open;
+        } else if last == b'`' {
+            let open = src[..i - 1].rfind('`')?;
+            if src[open..i].contains("${") {
+                return None;
+            }
+            parts.push("(...)".into());
             i = open;
         } else if matches!(last, b'"' | b'\'') {
             let open = src[..i - 1].rfind(last as char)?;
@@ -309,6 +320,7 @@ pub(super) fn callee_text(src: &str, pos: u32, construct: bool) -> Option<String
     }
     let end = match *b.get(at)? {
         b'(' => at,
+        b'`' => at,
         c if ident_byte(c) => {
             let mut e = at;
             while e < b.len() && ident_byte(b[e]) {
@@ -334,6 +346,16 @@ impl Interpreter {
         }
     }
 
+    /// A tagged template about to call its tag: the frame's position becomes
+    /// the template's (see `Parser::template_id`).
+    pub(crate) fn note_template_pos(&mut self, id: u64) {
+        if let Ok(pos) = u32::try_from(id >> 32)
+            && pos != 0
+        {
+            self.node_host.call_pos = pos;
+        }
+    }
+
     /// The source text of the frame making the call being dispatched.
     fn node_caller_source(&self) -> Option<Rc<str>> {
         let func = self.call_stack_frames.last()?.func_obj_id;
@@ -352,7 +374,7 @@ impl Interpreter {
     /// V8's text for the callee of the call (or `new`) being dispatched,
     /// under `--node` only.
     pub(crate) fn node_callee_text(&self, construct: bool) -> Option<String> {
-        if !self.node_host.stack.installed {
+        if !self.node_host.stack.installed || self.top_native().is_some() {
             return None;
         }
         let src = self.node_caller_source()?;

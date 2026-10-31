@@ -44,6 +44,12 @@ pub(crate) struct NodeHostState {
     /// The error object `not_iterable_error` made last, with the call-stack
     /// depth it was made at; a for-of or spread at that depth rewords it.
     pub(crate) iterable_error: Option<(u64, usize)>,
+    /// The operand of that error.
+    pub(crate) iterable_value: Option<JsValue>,
+    /// The last proxy trap call, for the wording of its invariant errors.
+    pub(crate) proxy_note: Option<super::node_host_proxy_errors::ProxyNote>,
+    /// The target and key of the last define, for refused-define wording.
+    pub(crate) define_note: Option<(u64, crate::types::JsPropertyKey)>,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     /// `--expose-internals`: user `require` may name `internal/...` builtins.

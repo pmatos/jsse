@@ -97,7 +97,32 @@ impl Interpreter {
                 return Completion::Throw(error);
             }
         }
-        self.bind_pattern(&declarator.pattern, value, kind, env)
+        let top = value.clone();
+        let bound = self.bind_pattern(&declarator.pattern, value, kind, env);
+        match (&declarator.pattern, &declarator.init, bound) {
+            (
+                Pattern::Array(_),
+                Some(
+                    init @ (Expression::Identifier(_)
+                    | Expression::Literal(_)
+                    | Expression::Call(..)
+                    | Expression::Object(..)),
+                ),
+                Completion::Throw(e),
+            ) if self.node_host.stack.installed && self.iterable_error_was_for(&top) => {
+                Completion::Throw(self.reword_iterable(e, init))
+            }
+            (_, _, bound) => bound,
+        }
+    }
+
+    /// Whether the not-iterable error made last was for `value` itself, not
+    /// for a value nested inside it.
+    fn iterable_error_was_for(&self, value: &JsValue) -> bool {
+        self.node_host
+            .iterable_value
+            .as_ref()
+            .is_some_and(|operand| crate::interpreter::helpers::same_value(operand, value))
     }
 
     /// The error for `{...} = source` / `[...] = source` when the value is
@@ -235,7 +260,7 @@ impl Interpreter {
 
     /// Whether `error` is the not-iterable error the `GetIterator` of the
     /// current call frame made, not one raised inside user code it ran.
-    fn iterable_error_here(&mut self, error: &JsValue) -> bool {
+    pub(super) fn iterable_error_here(&mut self, error: &JsValue) -> bool {
         let here = self.call_depth;
         let made = self.node_host.iterable_error.take();
         made.is_some() && made == error.as_object_id().map(|id| (id, here))
