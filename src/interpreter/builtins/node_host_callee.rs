@@ -229,19 +229,4 @@ impl Interpreter {
             .unwrap_or_else(|| self.describe_non_callable(value));
         format!("{shown} is not a function")
     }
-
-    /// The TypeError for calling a class constructor without `new`.
-    pub(crate) fn class_call_error(&mut self, class: u64) -> crate::types::JsValue {
-        let name = self
-            .node_host
-            .stack
-            .installed
-            .then(|| self.own_data_string(class, "name"))
-            .flatten();
-        let text = match name {
-            Some(name) => format!("Class constructor {name} cannot be invoked without 'new'"),
-            None => "Class constructor cannot be invoked without 'new'".to_string(),
-        };
-        self.create_type_error(&text)
-    }
 }
