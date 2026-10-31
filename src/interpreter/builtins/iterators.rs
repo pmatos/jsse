@@ -3783,33 +3783,6 @@ impl Interpreter {
         self.get_iterator_from_method(&iter_fn, obj)
     }
 
-    /// GetIteratorFromMethod (§7.4.3): calls `method` on `obj`, then reads
-    /// `next` once and keeps it as the iterator's `[[NextMethod]]`.
-    pub(crate) fn get_iterator_from_method(
-        &mut self,
-        method: &JsValue,
-        obj: &JsValue,
-    ) -> Result<JsValue, JsValue> {
-        match self.call_function(method, obj, &[]) {
-            Completion::Normal(v) => {
-                if let Some(v_id) = v.as_object_id() {
-                    let next_method = match self.get_object_property(v_id, "next", &v) {
-                        Completion::Normal(n) => n,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    self.iterator_next_cache.insert(v_id, next_method);
-                    Ok(v)
-                } else {
-                    Err(self
-                        .create_type_error("Result of the Symbol.iterator method is not an object"))
-                }
-            }
-            Completion::Throw(e) => Err(e),
-            _ => Err(self.not_iterable_error(obj)),
-        }
-    }
-
     pub(crate) fn get_async_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let async_sym_key = self.get_symbol_key("asyncIterator");
         if let Some(key) = &async_sym_key {

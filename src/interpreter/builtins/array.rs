@@ -2544,20 +2544,13 @@ impl Interpreter {
 
                 // Check if source is null/undefined
                 if (source).is_nullish() {
-                    return Completion::Throw(
-                        interp.create_type_error("Cannot convert undefined or null to object"),
-                    );
+                    return Completion::Throw(interp.nullish_iterable_error(&source));
                 }
 
                 // §23.1.2.1 step 4: Let usingIterator be ? GetMethod(items, @@iterator).
-                let using_iterator = if let Some(key) = interp.get_symbol_key("iterator") {
-                    match interp.access_property_on_value(&source, &key) {
-                        Completion::Normal(v) if !(v).is_nullish() => Some(v),
-                        Completion::Normal(_) => None,
-                        other => return other,
-                    }
-                } else {
-                    None
+                let using_iterator = match interp.items_iterator_method(&source) {
+                    Ok(method) => method,
+                    Err(abrupt) => return abrupt,
                 };
 
                 if let Some(iter_method) = using_iterator {

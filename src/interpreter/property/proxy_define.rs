@@ -10,6 +10,7 @@ impl Interpreter {
         desc_val: &JsValue,
     ) -> Result<bool, JsValue> {
         let key = key.into();
+        self.note_define_key(obj_id, &key);
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = self.symbol_key_to_jsvalue(&key);
@@ -26,6 +27,7 @@ impl Interpreter {
                 ) {
                     Ok(Some(v)) => {
                         if !interp.to_boolean_val(&v) {
+                            interp.note_define_key(obj_id, &key);
                             return Ok(false);
                         }
                         let desc = interp.to_property_descriptor(desc_val).ok();

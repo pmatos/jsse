@@ -1,0 +1,28 @@
+u8Length -> RangeError: Invalid typed array length: 5
+u8Offset -> RangeError: Start offset 5 is outside the bounds of the buffer
+u32Length -> RangeError: Invalid typed array length: 4
+u16Multiple -> RangeError: byte length of Uint16Array should be a multiple of 2
+dvOffset -> RangeError: Start offset 5 is outside the bounds of the buffer
+dvLength -> RangeError: Invalid DataView length 8
+dvGetOutside -> RangeError: Offset is outside the bounds of the DataView
+dvGetNegative -> RangeError: Offset is outside the bounds of the DataView
+dvSetNegative -> RangeError: Offset is outside the bounds of the DataView
+abLength -> RangeError: Invalid array buffer length
+abMaxLength -> RangeError: Invalid array buffer max length
+abResizeRange -> RangeError: ArrayBuffer.prototype.resize: Invalid length parameter
+abResizeFixed -> TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver #<ArrayBuffer>
+taWithRange -> RangeError: Invalid typed array index
+taFill -> TypeError: Cannot perform %TypedArray%.prototype.fill on a detached or out-of-bounds ArrayBuffer
+taAt -> TypeError: Cannot perform %TypedArray%.prototype.at on a detached or out-of-bounds ArrayBuffer
+taSet -> TypeError: Cannot perform %TypedArray%.prototype.set on a detached or out-of-bounds ArrayBuffer
+taMap -> TypeError: Cannot perform %TypedArray%.prototype.map on a detached or out-of-bounds ArrayBuffer
+taSlice -> TypeError: Cannot perform %TypedArray%.prototype.slice on a detached or out-of-bounds ArrayBuffer
+taJoin -> TypeError: Cannot perform %TypedArray%.prototype.join on a detached or out-of-bounds ArrayBuffer
+taSort -> TypeError: Cannot perform %TypedArray%.prototype.sort on a detached or out-of-bounds ArrayBuffer
+taEntries -> TypeError: Cannot perform %TypedArray%.prototype.entries on a detached or out-of-bounds ArrayBuffer
+dvGetDetached -> TypeError: Cannot perform DataView.prototype.getInt8 on a detached or out-of-bounds ArrayBuffer
+dvLengthDetached -> TypeError: Cannot perform get DataView.prototype.byteLength on a detached or out-of-bounds ArrayBuffer
+abSliceDetached -> TypeError: Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer
+abTransferDetached -> TypeError: Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer
+newTaDetached -> TypeError: Cannot perform Construct on a detached ArrayBuffer
+newDvDetached -> TypeError: Cannot perform DataView constructor on a detached ArrayBuffer
