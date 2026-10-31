@@ -12,6 +12,16 @@ use crate::interpreter::ModuleKey;
 const FLAG_ASYNC: f64 = 4.0;
 const MAX_HOPS: usize = 4096;
 
+pub(crate) enum AsyncFrame {
+    None,
+    Module,
+    Function { receiver_noted: bool },
+}
+
+/// An async arrow's call receiver, kept in its environment (where the
+/// collector finds it) under a name no script can spell.
+const RECEIVER_BINDING: &str = "%receiver";
+
 /// An async function or module body parked at an `await`.
 pub(crate) struct ParkedAwait {
     pub(crate) func: u64,
@@ -28,10 +38,11 @@ impl Interpreter {
             return Some(parked);
         }
         let state = self.scheduler.async_function_state(id)?;
+        let kept = Self::kept_async_receiver(&state.func_env);
         Some(ParkedAwait {
             func: state.func_obj_id,
-            receiver: state.func_env.borrow().get_this(),
-            called_with: false,
+            called_with: kept.is_some(),
+            receiver: kept.or_else(|| state.func_env.borrow().get_this()),
             pos: state.await_pos,
             result: match state.resolvers {
                 PromiseResolvers::Internal(promise) => Some(promise),
@@ -39,6 +50,88 @@ impl Interpreter {
             },
             module: state.module_path.clone(),
         })
+    }
+
+    fn on_live_stack(&self, skip_top: usize, target: u64) -> bool {
+        let mut frames = self.call_stack_frames.iter().rev().skip(skip_top);
+        frames.any(|f| f.func_obj_id == target)
+    }
+
+    /// The frame an async state machine runs in while `--node` stacks are
+    /// captured: a module body's top-level frame, or the function's own, which
+    /// the bytecode VM's async activations have too (issue #1358).
+    pub(crate) fn node_push_async_frame(&mut self, async_id: u64) -> AsyncFrame {
+        if self.node_push_async_module_frame(async_id) {
+            return AsyncFrame::Module;
+        }
+        if !self.node_host.stack.installed {
+            return AsyncFrame::None;
+        }
+        let Some((func, env)) = self
+            .scheduler
+            .async_function_state(async_id)
+            .map(|state| (state.func_obj_id, state.func_env.clone()))
+            .filter(|(func, _)| *func != 0)
+        else {
+            return AsyncFrame::None;
+        };
+        self.push_function_frame(func, env)
+    }
+
+    fn push_function_frame(&mut self, func: u64, env: EnvRef) -> AsyncFrame {
+        let receiver = Self::kept_async_receiver(&env);
+        self.call_stack_envs.push(env);
+        self.push_async_stack_frame(func);
+        if let Some(receiver) = &receiver {
+            self.node_note_arrow_receiver(receiver);
+        }
+        AsyncFrame::Function {
+            receiver_noted: receiver.is_some(),
+        }
+    }
+
+    /// Runs `run` (the parameter defaults of an async function) in the
+    /// function's frame, as V8 does.
+    pub(crate) fn node_in_async_frame<T>(
+        &mut self,
+        func: u64,
+        env: &EnvRef,
+        run: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        if !self.node_host.stack.installed {
+            return run(self);
+        }
+        let frame = self.push_function_frame(func, env.clone());
+        let result = run(self);
+        self.node_pop_async_frame(frame);
+        result
+    }
+
+    pub(crate) fn node_keep_async_receiver(&self, env: &EnvRef, receiver: Option<&JsValue>) {
+        if let Some(receiver) = receiver.filter(|_| self.node_host.stack.installed) {
+            let mut env = env.borrow_mut();
+            env.declare(RECEIVER_BINDING, BindingKind::Var);
+            env.initialize_binding(RECEIVER_BINDING, receiver.clone());
+        }
+    }
+
+    fn kept_async_receiver(env: &EnvRef) -> Option<JsValue> {
+        let env = env.borrow();
+        Some(env.bindings.get(RECEIVER_BINDING)?.value.clone())
+    }
+
+    pub(crate) fn node_pop_async_frame(&mut self, frame: AsyncFrame) {
+        match frame {
+            AsyncFrame::None => {}
+            AsyncFrame::Module => self.node_pop_module_frame(),
+            AsyncFrame::Function { receiver_noted } => {
+                if receiver_noted {
+                    self.node_host.stack.arrow_receivers.pop();
+                }
+                self.pop_call_frame();
+                self.call_stack_envs.pop();
+            }
+        }
     }
 
     pub(crate) fn node_note_await_pos(&mut self, async_id: u64, at: u32) {
@@ -86,7 +179,9 @@ impl Interpreter {
         result
     }
 
-    fn async_awaiters(&self, room: usize) -> Vec<ParkedAwait> {
+    /// `skip_until` is a `captureStackTrace` function that is not on the live
+    /// stack: V8 drops async frames up to and including its own, if it has one.
+    fn async_awaiters(&self, room: usize, mut skip_until: Option<u64>) -> Vec<ParkedAwait> {
         let mut out = Vec::new();
         let mut next = self.node_host.stack.job_promise;
         for _ in 0..MAX_HOPS {
@@ -111,7 +206,11 @@ impl Interpreter {
                         break;
                     };
                     next = parked.result;
-                    out.push(parked);
+                    match skip_until {
+                        Some(target) if parked.func == target => skip_until = None,
+                        Some(_) => {}
+                        None => out.push(parked),
+                    }
                 }
                 other => next = other.promise_id(),
             }
@@ -132,9 +231,12 @@ impl Interpreter {
         for raw in &raws {
             self.frame_record(raw, &mut record);
         }
-        let found_nothing = matches!(until, Some(Until::Seen(_))) && raws.is_empty();
-        if self.node_host.stack.job_promise.is_some() && !found_nothing && raws.len() < limit {
-            for parked in self.async_awaiters(limit - raws.len()) {
+        let skip_until = match until {
+            Some(Until::Seen(target)) if !self.on_live_stack(skip_top, target) => Some(target),
+            _ => None,
+        };
+        if self.node_host.stack.job_promise.is_some() && raws.len() < limit {
+            for parked in self.async_awaiters(limit - raws.len(), skip_until) {
                 self.async_record(parked, &mut record);
             }
         }

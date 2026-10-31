@@ -1,0 +1,81 @@
+## method after await
+Error: start
+    at Worker.start (<dir>/async.js:13:12)
+    at async main (<dir>/async.js:95:31)
+## static method after await
+Error: make
+    at Worker.make (<dir>/async.js:17:12)
+    at async main (<dir>/async.js:96:38)
+## method before await
+Error: sync
+    at Worker.sync (<dir>/async.js:20:12)
+    at main (<dir>/async.js:97:51)
+## nested async function
+Error: inner
+    at inner (<dir>/async.js:27:12)
+    at async nested (<dir>/async.js:25:10)
+    at async main (<dir>/async.js:98:34)
+## thrown before await
+Error: thrown
+    at throws (<dir>/async.js:32:9)
+    at main (<dir>/async.js:100:11)
+## loops and finally
+Error: loops
+    at loops (<dir>/async.js:45:10)
+    at async main (<dir>/async.js:104:30)
+## inside a then handler
+Error: then
+    at <dir>/async.js:49:72
+## default parameter
+Error: default
+    at withDefault (<dir>/async.js:80:36)
+    at main (<dir>/async.js:106:36)
+## async arrow before await
+Error: early
+    at Object.early (<dir>/async.js:86:22)
+    at main (<dir>/async.js:107:50)
+## async arrow after await
+Error: late
+    at Context.late (<dir>/async.js:90:12)
+    at async main (<dir>/async.js:108:36)
+## async arrow default parameter
+Error: arrow default
+    at Context.defaulted (<dir>/async.js:87:29)
+    at main (<dir>/async.js:109:65)
+## issue 1333
+Error: x
+    at a (<dir>/async.js:54:10)
+    at async b (<dir>/async.js:57:10)
+    at async main (<dir>/async.js:110:22)
+## issue 1358
+Error: sync part
+    at frameBeforeAwait (<dir>/async.js:77:10)
+    at main (<dir>/async.js:111:28)
+## captureStackTrace skipping c
+Error
+    at async e (<dir>/async.js:70:10)
+    at async f (<dir>/async.js:73:10)
+    at async main (<dir>/async.js:112:40)
+## captureStackTrace skipping e
+Error
+    at async f (<dir>/async.js:73:10)
+    at async main (<dir>/async.js:113:40)
+## captureStackTrace skipping f
+Error
+    at async main (<dir>/async.js:114:40)
+## captureStackTrace skipping main
+Error
+## captureStackTrace skipping a stranger
+Error
+## captureStackTrace skipping nothing
+Error
+    at capture (<dir>/async.js:62:9)
+    at c (<dir>/async.js:67:10)
+    at async e (<dir>/async.js:70:10)
+    at async f (<dir>/async.js:73:10)
+    at async main (<dir>/async.js:117:46)
+## captureStackTrace skipping a live function
+Error
+    at c (<dir>/async.js:67:10)
+    at async e (<dir>/async.js:70:10)
+    at async main (<dir>/async.js:118:54)

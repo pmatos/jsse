@@ -58,20 +58,8 @@ fn replay_named(name: &str, extra: &[&str], stress: Option<&str>) {
     assert!(out.status.success(), "{}", stderr(&out));
     let expected =
         std::fs::read_to_string(dir.join(format!("expected-{name}.txt"))).expect("snapshot");
-    let mut actual = normalise(&stdout(&out), &dir);
-    let mut expected = expected.trim_end().to_string();
-    if extra.contains(&"--no-bytecode") {
-        // The state machine behind async functions has no frame of its own.
-        for text in [&mut actual, &mut expected] {
-            *text = text
-                .split("## async before await")
-                .next()
-                .and_then(|kept| kept.split("## async arrow body").next())
-                .unwrap()
-                .trim_end()
-                .to_string();
-        }
-    }
+    let actual = normalise(&stdout(&out), &dir);
+    let expected = expected.trim_end().to_string();
     assert_eq!(actual, expected, "output differs from Node's pinned output");
 }
 

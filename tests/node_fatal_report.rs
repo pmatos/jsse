@@ -57,7 +57,7 @@ fn expected_status(text: &str) -> i32 {
     header(text, "RUN")[0].parse().unwrap()
 }
 
-fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
+fn check_all(args: &[&str], gc_stress: bool) {
     let dir = fixture_dir();
     let mut checked = 0;
     let mut entries: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
@@ -71,9 +71,6 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
         else {
             continue;
         };
-        if skip.contains(&name) {
-            continue;
-        }
         let fixture = ["js", "mjs"]
             .map(|ext| dir.join(format!("{name}.fixture.{ext}")))
             .into_iter()
@@ -113,18 +110,17 @@ fn check_all(args: &[&str], gc_stress: bool, skip: &[&str]) {
 
 #[test]
 fn fatal_reports_match_node() {
-    check_all(&[], false, &[]);
+    check_all(&[], false);
 }
 
 #[test]
 fn fatal_reports_match_node_on_the_tree_walker() {
-    // The tree-walker drops the async function's frame (#1358).
-    check_all(&["--no-bytecode"], false, &["fatal-reject-async"]);
+    check_all(&["--no-bytecode"], false);
 }
 
 #[test]
 fn fatal_reports_match_node_under_gc_stress() {
-    check_all(&[], true, &[]);
+    check_all(&[], true);
 }
 
 #[test]
