@@ -163,12 +163,14 @@ fn a_failed_copy_leaks_no_descriptors() {
         "const fs = require('fs'); const fds = () => fs.readdirSync('/proc/self/fd').length;
          const before = fds(); let left = 20, failures = 0;
          for (let i = 0; i < 20; i++) {{
-           fs.cp({:?} + '/src', {:?} + '/src/sub/in' + i, {{ recursive: true }}, (e) => {{
-             if (e && e.code === 'ERR_FS_CP_EINVAL') failures++;
+           fs.mkdirSync({:?} + '/dest' + i);
+           fs.writeFileSync({:?} + '/dest' + i + '/sub', 'file');
+           fs.cp({:?} + '/src', {:?} + '/dest' + i, {{ recursive: true }}, (e) => {{
+             if (e && e.code === 'ERR_FS_CP_DIR_TO_NON_DIR') failures++;
              if (--left === 0) console.log(failures, fds() - before);
            }});
          }}",
-        dir, dir
+        dir, dir, dir, dir
     );
     let (out, err, rc) = run(&script);
     assert_eq!((out.as_str(), rc), ("20 0", 0), "{err}");
