@@ -1,16 +1,12 @@
-//! %RegExpStringIteratorPrototype%.next (sec-%regexpstringiteratorprototype%.next).
-//!
-//! The iterator is specified as a generator closure, so `next` runs
-//! GeneratorResume: GeneratorValidate throws a TypeError when the closure is
-//! already executing, which a re-entrant `exec` override can provoke.
+//! %RegExpStringIteratorPrototype%.next (sec-%regexpstringiteratorprototype%.next):
+//! GeneratorResume over the matchAll closure, rejecting re-entrant calls.
 
 use super::super::*;
 use super::regexp::{
     advance_string_index, regex_input_for_subject, regexp_exec_abstract, spec_set,
 };
 
-/// One resumption of the closure up to its next `Yield` or its return. The
-/// flag is true when the closure suspended at a yield and can resume again.
+/// The flag is true when the closure suspended at a yield and can resume.
 fn rsi_next_step(
     interp: &mut Interpreter,
     string: JsString,

@@ -90,3 +90,37 @@ iter = new Reentrant("a", "g")[Symbol.matchAll]("aa");
 assert.sameValue(iter.next().done, false, "no re-entrance: first match");
 assert.sameValue(iter.next().done, false, "no re-entrance: second match");
 assert.sameValue(iter.next().done, true, "no re-entrance: exhausted");
+
+var phaseNested = [];
+var phaseIter;
+var phaseCalls = 0;
+class PhaseExec extends RegExp {
+  exec() {
+    if (phaseCalls++ > 0) return null;
+    var attempt = function (label) {
+      try {
+        phaseIter.next();
+        phaseNested.push(label + ": no throw");
+      } catch (e) {
+        phaseNested.push(label + ": " + e.constructor.name);
+      }
+    };
+    return {
+      get 0() {
+        attempt("get 0");
+        return {
+          toString() {
+            attempt("ToString");
+            return "";
+          }
+        };
+      }
+    };
+  }
+}
+phaseIter = new PhaseExec("", "g")[Symbol.matchAll]("a");
+var phaseResult = phaseIter.next();
+assert.sameValue(phaseResult.done, false, "empty match: outer next yields the result");
+assert.sameValue(phaseNested.join(), "get 0: TypeError,ToString: TypeError",
+  "next is rejected while reading match[0] and converting it to a string");
+assert.sameValue(phaseIter.next().done, true, "empty match: exhausted after exec returns null");
