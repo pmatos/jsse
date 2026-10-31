@@ -1,4 +1,5 @@
 use super::super::*;
+use super::regexp_string_iterator::rsi_next;
 
 fn is_syntax_character(c: char) -> bool {
     matches!(
@@ -626,7 +627,7 @@ fn is_co_property(content: &str) -> bool {
     }
 }
 
-struct RegexInput {
+pub(super) struct RegexInput {
     subject: JsString,
     ascii: bool,
     unicode: std::cell::OnceCell<Box<str>>,
@@ -1018,7 +1019,10 @@ impl SubjectCache {
     }
 }
 
-fn regex_input_for_subject(interp: &mut Interpreter, subject: JsString) -> Rc<RegexInput> {
+pub(super) fn regex_input_for_subject(
+    interp: &mut Interpreter,
+    subject: JsString,
+) -> Rc<RegexInput> {
     interp.regexp_legacy.input_cache.lookup_or_insert(subject)
 }
 
@@ -8587,7 +8591,7 @@ fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
 }
 
 /// Spec-compliant Set(O, P, V, Throw) — invokes setters and Proxy traps
-fn spec_set(
+pub(super) fn spec_set(
     interp: &mut Interpreter,
     obj_id: u64,
     key: &str,
@@ -8646,7 +8650,11 @@ fn set_last_index_strict(interp: &mut Interpreter, obj_id: u64, val: f64) -> Res
     spec_set(interp, obj_id, "lastIndex", JsValue::number(val), true)
 }
 
-fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput) -> Completion {
+pub(super) fn regexp_exec_abstract(
+    interp: &mut Interpreter,
+    rx_id: u64,
+    input: &RegexInput,
+) -> Completion {
     let rx_val = JsValue::object(rx_id);
     let exec_val = match interp.get_object_property(rx_id, "exec", &rx_val) {
         Completion::Normal(v) => v,
@@ -8692,7 +8700,7 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, input: &RegexInput
 /// UTF-16 code units directly. That is both exact — no PUA sentinel can be
 /// confused with a real scalar — and O(1), where scanning a converted view cost
 /// two full passes over the subject on every call.
-fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usize {
+pub(super) fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usize {
     if !unicode {
         return index + 1;
     }
@@ -8706,86 +8714,6 @@ fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usiz
         index + 2
     } else {
         index + 1
-    }
-}
-
-fn rsi_next_step(
-    interp: &mut Interpreter,
-    o_id: u64,
-    string: JsString,
-    global: bool,
-    full_unicode: bool,
-    mid: u64,
-) -> Completion {
-    let regex_input = regex_input_for_subject(interp, string);
-
-    let result = regexp_exec_abstract(interp, mid, &regex_input);
-    let result_val = match result {
-        Completion::Normal(v) => v,
-        other => return other,
-    };
-
-    if result_val.is_null() {
-        set_rsi_done(interp, o_id, true);
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
-    }
-
-    if !global {
-        set_rsi_done(interp, o_id, true);
-        return Completion::Normal(interp.create_iter_result_object(result_val, false));
-    }
-
-    // Global: check for empty match, advance if needed
-    let result_id = if let Some(ro_id) = result_val.as_object_id() {
-        ro_id
-    } else {
-        set_rsi_done(interp, o_id, true);
-        return Completion::Normal(interp.create_iter_result_object(result_val, false));
-    };
-    let match_str_val = match interp.get_object_property(result_id, "0", &result_val) {
-        Completion::Normal(v) => v,
-        other => return other,
-    };
-    let match_str = match interp.to_string_lossy(&match_str_val) {
-        Ok(s) => s,
-        Err(e) => return Completion::Throw(e),
-    };
-    if match_str.is_empty() {
-        let matcher_val = JsValue::object(mid);
-        let li_val = match interp.get_object_property(mid, "lastIndex", &matcher_val) {
-            Completion::Normal(v) => v,
-            other => return other,
-        };
-        let li_num = match interp.to_number_value(&li_val) {
-            Ok(n) => n,
-            Err(e) => return Completion::Throw(e),
-        };
-        let this_index = if li_num.is_nan() || li_num <= 0.0 {
-            0
-        } else {
-            li_num.min(9007199254740991.0).floor() as usize
-        };
-        let next_index = advance_string_index(&regex_input, this_index, full_unicode);
-        if let Err(e) = spec_set(
-            interp,
-            mid,
-            "lastIndex",
-            JsValue::number(next_index as f64),
-            true,
-        ) {
-            return Completion::Throw(e);
-        }
-    }
-
-    Completion::Normal(interp.create_iter_result_object(result_val, false))
-}
-
-fn set_rsi_done(interp: &mut Interpreter, o_id: u64, new_done: bool) {
-    if let Some(obj) = interp.get_object_cell(o_id)
-        && let Some(IteratorState::RegExpStringIterator { done, .. }) =
-            obj.borrow_mut().iterator_state_mut()
-    {
-        *done = new_done;
     }
 }
 
@@ -10536,7 +10464,7 @@ impl Interpreter {
                             string: regex_input.subject.clone(),
                             global,
                             full_unicode,
-                            done: false,
+                            state: BytecodeGeneratorStatus::SuspendedStart,
                             matcher_id,
                         });
 
@@ -10568,51 +10496,7 @@ impl Interpreter {
         let rsi_next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
             0,
-            |interp, this_val, _args| {
-                let o_id = match this_val.as_object_id() {
-                    Some(id) => id,
-                    None => {
-                        return Completion::Throw(interp.create_type_error(
-                            "%RegExpStringIteratorPrototype%.next requires that 'this' be an Object",
-                        ));
-                    }
-                };
-                let obj = match interp.get_object_cell(o_id) {
-                    Some(obj) => obj,
-                    None => {
-                        return Completion::Throw(interp.create_type_error(
-                            "%RegExpStringIteratorPrototype%.next called on invalid object",
-                        ));
-                    }
-                };
-                let (string, global, full_unicode, done, mid) =
-                    if let Some(IteratorState::RegExpStringIterator {
-                        string,
-                        global,
-                        full_unicode,
-                        done,
-                        matcher_id,
-                    }) = obj.borrow().iterator_state()
-                    {
-                        (string.clone(), *global, *full_unicode, *done, *matcher_id)
-                    } else {
-                        return Completion::Throw(interp.create_type_error(
-                            "%RegExpStringIteratorPrototype%.next requires that 'this' be a RegExp String Iterator",
-                        ));
-                    };
-
-                if done {
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
-                }
-
-                let completion = rsi_next_step(interp, o_id, string, global, full_unicode, mid);
-                if !matches!(completion, Completion::Normal(_)) {
-                    set_rsi_done(interp, o_id, true);
-                }
-                completion
-            },
+            |interp, this_val, _args| rsi_next(interp, this_val),
         ));
         self.get_object_cell_expect(rsi_proto_id)
             .borrow_mut()

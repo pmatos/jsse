@@ -96,6 +96,7 @@ pub(crate) mod regexp;
 mod regexp_lookbehind;
 mod regexp_lookbehind_parse;
 mod regexp_lookbehind_route;
+mod regexp_string_iterator;
 mod shadow_realm;
 pub(crate) mod string;
 mod structured_clone;
