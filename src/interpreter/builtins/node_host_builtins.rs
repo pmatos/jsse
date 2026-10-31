@@ -23,6 +23,7 @@ const NODE_BUILTIN_MODULES: &[(&str, &str)] = &[
     builtin!("fs"),
     builtin!("fs/promises"),
     builtin!("internal/fs/callbacks"),
+    builtin!("internal/fs/cp"),
     builtin!("internal/fs/dir"),
     builtin!("internal/fs/glob"),
     builtin!("internal/fs/glob_sync"),
