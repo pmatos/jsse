@@ -77,6 +77,9 @@ const BUILTIN_GLOBAL_NAMES: &[&str] = &[
     "SuppressedError",
     "ShadowRealm",
     "Iterator",
+    "Test262Error",
+    "$DONOTEVALUATE",
+    "print",
 ];
 
 impl Interpreter {
@@ -198,6 +201,7 @@ impl Interpreter {
                     }
                 }
             }
+            env.bindings.remove("globalThis");
         }
     }
 
@@ -206,9 +210,13 @@ impl Interpreter {
         {
             let realm_id = self.current_realm_id;
             let dollar_262_val = self.create_dollar_262(realm_id);
-            let global_env = self.realm().global_env.clone();
-            global_env.borrow_mut().declare("$262", BindingKind::Var);
-            let _ = self.env_set(&global_env, "$262", dollar_262_val);
+            self.realm().global_env.borrow_mut().bindings.remove("$262");
+            self.get_object_cell_expect(self.realm().global_object.expect("global object"))
+                .borrow_mut()
+                .insert_property(
+                    "$262".to_string(),
+                    PropertyDescriptor::data(dollar_262_val, true, true, true),
+                );
         }
     }
 }

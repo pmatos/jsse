@@ -244,31 +244,33 @@ impl Interpreter {
             return Some(err);
         }
 
-        // Hoist var declarations. When a cached analysis is present, declare from
-        // its precomputed name set instead of re-walking the AST — this exactly
-        // replicates the leaf logic of `hoist_pattern` (declare into `var_scope`,
-        // skip if a binding already exists, global vs non-global path).
-        if let Some(analysis) = analysis {
+        if is_global {
+            // The global object's own properties hold var and function
+            // names (§9.1.1.4); a block entered at global level declares none.
+            if !is_block_scope
+                && let Err(e) = self.instantiate_global_functions_and_vars(stmts, env)
+            {
+                return Some(Completion::Throw(e));
+            }
+        } else if let Some(analysis) = analysis {
             for name in &analysis.var_names {
                 if !var_scope.borrow().bindings.contains_key(name) {
-                    if is_global {
-                        self.env_declare_global_var(&var_scope, name);
-                    } else {
-                        var_scope.borrow_mut().declare(name, BindingKind::Var);
-                    }
+                    var_scope.borrow_mut().declare(name, BindingKind::Var);
                 }
             }
         } else {
             for stmt in stmts {
                 // Recursively hoist var declarations from all sub-statements
-                self.hoist_vars_from_stmt(stmt, &var_scope, is_global);
+                self.hoist_vars_from_stmt(stmt, &var_scope);
             }
         }
-        for stmt in stmts {
-            // Check for function declarations (including inside labels). This
-            // builds fresh closures per call and is never cached.
-            if let Some(f) = super::hoisting::unwrap_labeled_function(stmt) {
-                self.hoist_function_decl(f, env, is_global);
+        if !is_global || is_block_scope {
+            for stmt in stmts {
+                // Check for function declarations (including inside labels). This
+                // builds fresh closures per call and is never cached.
+                if let Some(f) = super::hoisting::unwrap_labeled_function(stmt) {
+                    self.hoist_function_decl(f, env);
+                }
             }
         }
 
@@ -299,7 +301,10 @@ impl Interpreter {
                     Cow::Owned(names)
                 }
             };
-            self.register_annexb_function_names(stmts, env, is_global, &all_annexb);
+            if let Err(e) = self.register_annexb_function_names(stmts, env, is_global, &all_annexb)
+            {
+                return Some(Completion::Throw(e));
+            }
         }
 
         None
@@ -352,9 +357,9 @@ impl Interpreter {
         env: &EnvRef,
         is_global: bool,
         all_annexb: &[String],
-    ) {
+    ) -> Result<(), JsValue> {
         if all_annexb.is_empty() {
-            return;
+            return Ok(());
         }
         let mut registered = Vec::new();
         // Collect top-level var/function names from statements
@@ -412,8 +417,11 @@ impl Interpreter {
                 }
             }
             if !env.borrow().bindings.contains_key(name) {
-                if is_global {
-                    self.env_declare_global_var(env, name);
+                if let Some(gid) = env.borrow().global_object_id.filter(|_| is_global) {
+                    if !self.can_declare_global_var(gid, name)? {
+                        continue;
+                    }
+                    self.create_global_var_binding(gid, name, false)?;
                 } else {
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
@@ -433,6 +441,7 @@ impl Interpreter {
             }
             env.borrow_mut().annexb_function_names = Some(merged);
         }
+        Ok(())
     }
 
     /// §sec-functiondeclarationinstantiation web-compat insertion point: run
@@ -451,7 +460,12 @@ impl Interpreter {
             return;
         }
         let analysis = self.hoist_cache.analysis_for(body);
-        self.register_annexb_function_names(body.as_slice(), env, false, &analysis.annexb_names);
+        let _ = self.register_annexb_function_names(
+            body.as_slice(),
+            env,
+            false,
+            &analysis.annexb_names,
+        );
     }
 
     fn exec_prepared_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
@@ -490,34 +504,8 @@ impl Interpreter {
         result
     }
 
-    /// §9.1.1.4.16 CanDeclareGlobalFunction
-    fn can_declare_global_function(gb: &JsObjectData, name: &str) -> bool {
-        if let Some(desc) = gb.properties.get(name) {
-            if desc.configurable() == Some(true) {
-                return true;
-            }
-            if desc.value().is_some()
-                && desc.writable() == Some(true)
-                && desc.enumerable() == Some(true)
-            {
-                return true;
-            }
-            false
-        } else {
-            gb.extensible
-        }
-    }
-
-    /// §9.1.1.4.15 CanDeclareGlobalVar
-    fn can_declare_global_var(gb: &JsObjectData, name: &str) -> bool {
-        if gb.properties.contains_key(name) {
-            return true;
-        }
-        gb.extensible
-    }
-
     /// Collect lexical declaration names (let/const/class) from top-level statements.
-    fn collect_lex_names(stmts: &[Statement]) -> Vec<String> {
+    pub(crate) fn collect_lex_names(stmts: &[Statement]) -> Vec<String> {
         let mut names = Vec::new();
         for stmt in stmts {
             match stmt {
@@ -535,110 +523,12 @@ impl Interpreter {
         names
     }
 
-    /// §9.1.1.4.13 HasRestrictedGlobalProperty
-    fn has_restricted_global_property(gb: &JsObjectData, name: &str) -> bool {
-        if let Some(desc) = gb.properties.get(name) {
-            desc.configurable() == Some(false)
-        } else {
-            false
-        }
-    }
-
-    /// Pre-check all global function/var/lex declarations per §16.1.7.
-    /// Returns Some(Completion::Throw) if any check fails, None if all OK.
-    fn check_global_declarations(
-        &mut self,
-        stmts: &[Statement],
-        env: &EnvRef,
-    ) -> Option<Completion> {
-        let gid = env.borrow().global_object_id?;
-        let global_obj = self.get_object_cell(gid)?;
-
-        // §16.1.7 step 3: Check lexical names
-        let lex_names = Self::collect_lex_names(stmts);
-        for name in &lex_names {
-            // Step 3a: If envRec.HasLexicalDeclaration(name) is true, throw SyntaxError
-            if let Some(binding) = env.borrow().bindings.get(name)
-                && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-            {
-                let err = self.create_error(
-                    "SyntaxError",
-                    &format!("Identifier '{}' has already been declared", name),
-                );
-                return Some(Completion::Throw(err));
-            }
-            // Step 3b-d: If HasRestrictedGlobalProperty(name) is true, throw SyntaxError
-            // Non-eval var/function declarations create non-configurable global properties,
-            // so this also catches var-lex collisions for non-eval declarations.
-            if Self::has_restricted_global_property(&global_obj.borrow(), name) {
-                let err = self.create_error(
-                    "SyntaxError",
-                    &format!("Identifier '{}' has already been declared", name),
-                );
-                return Some(Completion::Throw(err));
-            }
-        }
-
-        // §16.1.7 step 6: For each var name, check HasLexicalDeclaration
-        let mut var_names = HashSet::new();
-        Self::collect_var_names_from_stmts(stmts, &mut var_names);
-        for name in &var_names {
-            if let Some(binding) = env.borrow().bindings.get(name)
-                && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-            {
-                let err = self.create_error(
-                    "SyntaxError",
-                    &format!("Identifier '{}' has already been declared", name),
-                );
-                return Some(Completion::Throw(err));
-            }
-        }
-
-        // Collect function declaration names (step 10)
-        let mut declared_function_names: Vec<String> = Vec::new();
-        for stmt in stmts.iter().rev() {
-            if let Some(f) = super::hoisting::unwrap_labeled_function(stmt)
-                && !declared_function_names.contains(&f.name)
-            {
-                // Step 6 also applies to function decl names
-                if let Some(binding) = env.borrow().bindings.get(&f.name)
-                    && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-                {
-                    let err = self.create_error(
-                        "SyntaxError",
-                        &format!("Identifier '{}' has already been declared", f.name),
-                    );
-                    return Some(Completion::Throw(err));
-                }
-                if !Self::can_declare_global_function(&global_obj.borrow(), &f.name) {
-                    let err = self
-                        .create_type_error(&format!("Cannot declare global function '{}'", f.name));
-                    return Some(Completion::Throw(err));
-                }
-                declared_function_names.push(f.name.clone());
-            }
-        }
-
-        // Collect var declaration names (step 12)
-        for name in &var_names {
-            if !declared_function_names.contains(name)
-                && !Self::can_declare_global_var(&global_obj.borrow(), name)
-            {
-                let err =
-                    self.create_type_error(&format!("Cannot declare global variable '{}'", name));
-                return Some(Completion::Throw(err));
-            }
-        }
-
-        None
-    }
-
     /// The function half of BlockDeclarationInstantiation for one statement
     /// of a block the bytecode VM entered (`Op::PushEnv`): a (possibly
     /// labelled) function declaration becomes a closure over `env`.
     pub(crate) fn hoist_block_function_declaration(&mut self, stmt: &Statement, env: &EnvRef) {
         if let Some(f) = super::hoisting::unwrap_labeled_function(stmt) {
-            self.hoist_function_decl(f, env, false);
+            self.hoist_function_decl(f, env);
         }
     }
 
@@ -651,22 +541,18 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn hoist_pattern(&mut self, pat: &Pattern, env: &EnvRef, is_global: bool) {
+    pub(crate) fn hoist_pattern(&mut self, pat: &Pattern, env: &EnvRef) {
         match pat {
             Pattern::Identifier(name) => {
                 if !env.borrow().bindings.contains_key(name) {
-                    if is_global {
-                        self.env_declare_global_var(env, name);
-                    } else {
-                        env.borrow_mut().declare(name, BindingKind::Var);
-                    }
+                    env.borrow_mut().declare(name, BindingKind::Var);
                 }
             }
             Pattern::Array(elems) => {
                 for elem in elems.iter().flatten() {
                     match elem {
                         ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                            self.hoist_pattern(p, env, is_global);
+                            self.hoist_pattern(p, env);
                         }
                     }
                 }
@@ -675,109 +561,100 @@ impl Interpreter {
                 for prop in props {
                     match prop {
                         ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
-                            self.hoist_pattern(p, env, is_global);
+                            self.hoist_pattern(p, env);
                         }
                         ObjectPatternProperty::Shorthand(name) => {
                             if !env.borrow().bindings.contains_key(name) {
-                                if is_global {
-                                    self.env_declare_global_var(env, name);
-                                } else {
-                                    env.borrow_mut().declare(name, BindingKind::Var);
-                                }
+                                env.borrow_mut().declare(name, BindingKind::Var);
                             }
                         }
                     }
                 }
             }
             Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
-                self.hoist_pattern(inner, env, is_global);
+                self.hoist_pattern(inner, env);
             }
             Pattern::MemberExpression(_) => {}
         }
     }
 
-    pub(crate) fn hoist_vars_from_stmt(
-        &mut self,
-        stmt: &Statement,
-        var_scope: &EnvRef,
-        is_global: bool,
-    ) {
+    pub(crate) fn hoist_vars_from_stmt(&mut self, stmt: &Statement, var_scope: &EnvRef) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
-                    self.hoist_pattern(&d.pattern, var_scope, is_global);
+                    self.hoist_pattern(&d.pattern, var_scope);
                 }
             }
             Statement::Block(stmts) => {
                 for s in stmts {
-                    self.hoist_vars_from_stmt(s, var_scope, is_global);
+                    self.hoist_vars_from_stmt(s, var_scope);
                 }
             }
             Statement::If(i) => {
-                self.hoist_vars_from_stmt(&i.consequent, var_scope, is_global);
+                self.hoist_vars_from_stmt(&i.consequent, var_scope);
                 if let Some(alt) = &i.alternate {
-                    self.hoist_vars_from_stmt(alt, var_scope, is_global);
+                    self.hoist_vars_from_stmt(alt, var_scope);
                 }
             }
-            Statement::While(w) => self.hoist_vars_from_stmt(&w.body, var_scope, is_global),
-            Statement::DoWhile(d) => self.hoist_vars_from_stmt(&d.body, var_scope, is_global),
+            Statement::While(w) => self.hoist_vars_from_stmt(&w.body, var_scope),
+            Statement::DoWhile(d) => self.hoist_vars_from_stmt(&d.body, var_scope),
             Statement::For(f) => {
                 if let Some(ForInit::Variable(decl)) = &f.init
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        self.hoist_pattern(&d.pattern, var_scope, is_global);
+                        self.hoist_pattern(&d.pattern, var_scope);
                     }
                 }
-                self.hoist_vars_from_stmt(&f.body, var_scope, is_global);
+                self.hoist_vars_from_stmt(&f.body, var_scope);
             }
             Statement::ForIn(fi) => {
                 if let ForInOfLeft::Variable(decl) = &fi.left
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        self.hoist_pattern(&d.pattern, var_scope, is_global);
+                        self.hoist_pattern(&d.pattern, var_scope);
                     }
                 }
-                self.hoist_vars_from_stmt(&fi.body, var_scope, is_global);
+                self.hoist_vars_from_stmt(&fi.body, var_scope);
             }
             Statement::ForOf(fo) => {
                 if let ForInOfLeft::Variable(decl) = &fo.left
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        self.hoist_pattern(&d.pattern, var_scope, is_global);
+                        self.hoist_pattern(&d.pattern, var_scope);
                     }
                 }
-                self.hoist_vars_from_stmt(&fo.body, var_scope, is_global);
+                self.hoist_vars_from_stmt(&fo.body, var_scope);
             }
             Statement::Switch(sw) => {
                 for case in &sw.cases {
                     for s in &case.consequent {
-                        self.hoist_vars_from_stmt(s, var_scope, is_global);
+                        self.hoist_vars_from_stmt(s, var_scope);
                     }
                 }
             }
             Statement::Try(t) => {
                 for s in &t.block {
-                    self.hoist_vars_from_stmt(s, var_scope, is_global);
+                    self.hoist_vars_from_stmt(s, var_scope);
                 }
                 if let Some(handler) = &t.handler {
                     for s in &handler.body {
-                        self.hoist_vars_from_stmt(s, var_scope, is_global);
+                        self.hoist_vars_from_stmt(s, var_scope);
                     }
                 }
                 if let Some(finalizer) = &t.finalizer {
                     for s in finalizer {
-                        self.hoist_vars_from_stmt(s, var_scope, is_global);
+                        self.hoist_vars_from_stmt(s, var_scope);
                     }
                 }
             }
             Statement::Labeled(_, inner) => {
-                self.hoist_vars_from_stmt(inner, var_scope, is_global);
+                self.hoist_vars_from_stmt(inner, var_scope);
             }
             Statement::With(_, inner) => {
-                self.hoist_vars_from_stmt(inner, var_scope, is_global);
+                self.hoist_vars_from_stmt(inner, var_scope);
             }
             _ => {}
         }
@@ -1424,15 +1301,7 @@ impl Interpreter {
             Pattern::Identifier(name) => {
                 if kind == BindingKind::Var {
                     let var_scope = Environment::find_var_scope(env);
-                    let already_declared = {
-                        let gid = var_scope.borrow().global_object_id;
-                        let vs = var_scope.borrow();
-                        vs.bindings.contains_key(name)
-                            || gid
-                                .and_then(|id| self.get_object_cell(id))
-                                .is_some_and(|g| g.borrow().properties.contains_key(name))
-                    };
-                    if !already_declared {
+                    if Self::var_scope_lacks(&var_scope, name) {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
@@ -1465,7 +1334,12 @@ impl Interpreter {
                         } else {
                             env.clone()
                         };
-                        if !target.borrow().bindings.contains_key(name) {
+                        let lacks = if kind == BindingKind::Var {
+                            Self::var_scope_lacks(&target, name)
+                        } else {
+                            !target.borrow().bindings.contains_key(name)
+                        };
+                        if lacks {
                             target.borrow_mut().bindings.insert(
                                 name,
                                 Binding {
@@ -1645,7 +1519,7 @@ impl Interpreter {
                                 let v = propagate!(interp.access_property_on_value(&val, name));
                                 if kind == BindingKind::Var {
                                     let var_scope = Environment::find_var_scope(env);
-                                    if !var_scope.borrow().bindings.contains_key(name) {
+                                    if Interpreter::var_scope_lacks(&var_scope, name) {
                                         var_scope.borrow_mut().declare(name, kind);
                                     }
                                     propagate!(interp.env_set(env, name, v));
@@ -1700,17 +1574,7 @@ impl Interpreter {
                                 {
                                     // Step 2: ResolveBinding(bindingId, environment)
                                     let var_scope = Environment::find_var_scope(env);
-                                    let already = {
-                                        let gid = var_scope.borrow().global_object_id;
-                                        let vs = var_scope.borrow();
-                                        vs.bindings.contains_key(binding_name)
-                                            || gid
-                                                .and_then(|id| interp.get_object_cell(id))
-                                                .is_some_and(|g| {
-                                                    g.borrow().properties.contains_key(binding_name)
-                                                })
-                                    };
-                                    if !already {
+                                    if Interpreter::var_scope_lacks(&var_scope, binding_name) {
                                         var_scope.borrow_mut().declare(binding_name, kind);
                                     }
                                     let resolved = if interp.with_scope_depth > 0

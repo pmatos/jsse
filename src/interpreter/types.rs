@@ -1545,39 +1545,6 @@ impl Environment {
         );
     }
 
-    /// Bindings-only fallback for `Interpreter::env_declare_global_var` (used
-    /// when the env has no `global_object_id`). The wrapper handles the
-    /// global-object property side via the slab.
-    pub(crate) fn declare_global_var(&mut self, name: &str) {
-        if !self.bindings.contains_key(name) {
-            self.declare(name, BindingKind::Var);
-        }
-    }
-
-    /// Bindings-only fallback for
-    /// `Interpreter::env_declare_global_var_configurable`.
-    pub(crate) fn declare_global_var_configurable(&mut self, name: &str) {
-        if !self.bindings.contains_key(name) {
-            self.declare(name, BindingKind::Var);
-        }
-    }
-
-    /// Bindings-only fallback for
-    /// `Interpreter::env_declare_global_function_binding`. The wrapper sets the
-    /// value mirror on the global object via the slab.
-    pub(crate) fn declare_global_function_binding(
-        &mut self,
-        name: &str,
-        value: JsValue,
-        _configurable: bool,
-    ) {
-        self.declare(name, BindingKind::Var);
-        if let Some(binding) = self.bindings.get_mut(name) {
-            binding.value = value;
-            binding.initialized = true;
-        }
-    }
-
     /// Bindings-only set. Mirroring to the realm's global object lives in
     /// `Interpreter::env_set`. External callers should always use that wrapper.
     pub(crate) fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
