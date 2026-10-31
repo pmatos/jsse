@@ -82,7 +82,7 @@ impl<'a> Parser<'a> {
             match source_import {
                 SourceImportKind::Default => {
                     self.advance()?; // from
-                    specifiers.push(ImportSpecifier::Default("source".to_string()));
+                    specifiers.push(ImportSpecifier::Default("source".to_string(), 0));
                 }
                 SourceImportKind::PhaseNamed => {
                     let local = self
@@ -110,8 +110,9 @@ impl<'a> Parser<'a> {
 
         // import defaultExport from "module"
         if let Some(name) = self.current_identifier_name() {
+            let at = CallSiteId::at(self.current_token_start).1;
             self.advance()?;
-            specifiers.push(ImportSpecifier::Default(name));
+            specifiers.push(ImportSpecifier::Default(name, at));
 
             // import defaultExport, { named } from "module"
             // import defaultExport, * as ns from "module"
@@ -219,6 +220,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), ParseError> {
         while self.current != Token::RightBrace {
             let is_binding = self.current_identifier_name().is_some();
+            let at = CallSiteId::at(self.current_token_start).1;
             let imported = self.parse_module_export_name()?;
 
             let local = if self.is_as_keyword() {
@@ -236,7 +238,11 @@ impl<'a> Parser<'a> {
                 ));
             };
 
-            specifiers.push(ImportSpecifier::Named { imported, local });
+            specifiers.push(ImportSpecifier::Named {
+                imported,
+                local,
+                at,
+            });
 
             if self.current == Token::Comma {
                 self.advance()?;

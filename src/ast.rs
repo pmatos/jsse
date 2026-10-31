@@ -255,8 +255,12 @@ pub(crate) struct ImportDeclaration {
 
 #[derive(Clone, Debug)]
 pub(crate) enum ImportSpecifier {
-    Named { imported: String, local: String },
-    Default(String),
+    Named {
+        imported: String,
+        local: String,
+        at: u32,
+    },
+    Default(String, u32),
     Namespace(String),
     DeferredNamespace(String),
     SourcePhase(String),
@@ -451,7 +455,8 @@ pub(crate) enum Expression {
     Void(ExprBox),
     Delete(ExprBox),
     Sequence(Vec<Expression>),
-    Import(ExprBox, Option<ExprBox>), // dynamic import(specifier, options?)
+    // dynamic import(specifier, options?, V8 position + 1)
+    Import(ExprBox, Option<ExprBox>, u32),
     ImportDefer(ExprBox, Option<ExprBox>), // import.defer(specifier, options?)
     ImportSource(ExprBox, Option<ExprBox>), // import.source(specifier, options?)
     ImportMeta,
@@ -514,10 +519,7 @@ impl ExprBox {
 
 impl Clone for ExprBox {
     fn clone(&self) -> Self {
-        // Delegates to `Box<Expression>`'s clone, which recurses per nesting
-        // level exactly as it always has — unaffected by this fix. Cloning a
-        // chain deep enough to overflow the stack is a pre-existing,
-        // out-of-scope limitation (jsse#614 is about Drop only).
+        // Recurses per nesting level; jsse#614 is about Drop only.
         Self(self.0.clone())
     }
 }
@@ -633,7 +635,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
                 stack.push(take(arg));
             }
         }
-        Expression::Import(spec, opts)
+        Expression::Import(spec, opts, _)
         | Expression::ImportDefer(spec, opts)
         | Expression::ImportSource(spec, opts) => {
             stack.push(take(spec));
@@ -1431,7 +1433,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
                 stack.extend(tpl.expressions.iter());
             }
             Expression::Template(tpl) => stack.extend(tpl.expressions.iter()),
-            Expression::Import(spec, opts)
+            Expression::Import(spec, opts, _)
             | Expression::ImportDefer(spec, opts)
             | Expression::ImportSource(spec, opts) => {
                 stack.push(spec);
@@ -1664,7 +1666,7 @@ pub(crate) fn expr_contains_matching(
         Expression::OptionalChain(object, chain) => {
             expr_contains_matching(object, pred) || expr_contains_matching(chain, pred)
         }
-        Expression::Import(inner, opts)
+        Expression::Import(inner, opts, _)
         | Expression::ImportDefer(inner, opts)
         | Expression::ImportSource(inner, opts) => {
             expr_contains_matching(inner, pred)
@@ -2046,7 +2048,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
                     stack.push(SiteWork::Expr(e));
                 }
             }
-            Expression::Import(spec, opts)
+            Expression::Import(spec, opts, _)
             | Expression::ImportDefer(spec, opts)
             | Expression::ImportSource(spec, opts) => {
                 if let Some(opts) = opts.as_deref_mut() {
@@ -2147,7 +2149,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             Expression::Comma(exprs) | Expression::Sequence(exprs) => {
                 stack.extend(exprs.iter_mut())
             }
-            Expression::Import(spec, opts)
+            Expression::Import(spec, opts, _)
             | Expression::ImportDefer(spec, opts)
             | Expression::ImportSource(spec, opts) => {
                 stack.push(spec);

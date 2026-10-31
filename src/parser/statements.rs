@@ -24,7 +24,6 @@ impl<'a> Parser<'a> {
         if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
             return self.parse_function_declaration();
         }
-        // Decorated class declaration: @decorator class Name {}
         if self.current == Token::At {
             self.parse_decorator_list()?;
             if self.current == Token::Keyword(Keyword::Class) {
@@ -40,8 +39,7 @@ impl<'a> Parser<'a> {
                 if self.strict {
                     return self.parse_lexical_declaration();
                 }
-                // In sloppy mode `let` declares only before a binding start
-                // token (identifier, `{`, `[`, or keyword-as-identifier).
+                // In sloppy mode `let` declares only before a binding start token.
                 let is_decl = self.lookahead(|tokens| {
                     tokens.advance().is_ok()
                         && matches!(
@@ -80,8 +78,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
-        // Depth guard: nested statements recurse through here; bound it so
-        // deep nesting is a catchable parse error, not a native stack overflow.
+        // Depth guard: deep nesting is a catchable error, not a stack overflow.
         self.enter_recursion()?;
         let r = self.parse_statement_inner();
         self.exit_recursion();
@@ -1284,6 +1281,9 @@ impl<'a> Parser<'a> {
             None
         };
 
+        if handler.is_none() && finalizer.is_none() {
+            return Err(self.error("Missing catch or finally after try"));
+        }
         Ok(Statement::Try(TryStatement {
             block,
             handler,

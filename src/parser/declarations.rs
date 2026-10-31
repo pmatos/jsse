@@ -196,7 +196,7 @@ impl<'a> Parser<'a> {
                     return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
                 }
                 self.set_strict(prev_strict);
-                return Err(self.error("Expected class name"));
+                return Err(self.v8_error("Expected class name"));
             }
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
@@ -472,7 +472,7 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::expr_has_direct_super)
             }
-            Expression::Import(inner, opts)
+            Expression::Import(inner, opts, _)
             | Expression::ImportDefer(inner, opts)
             | Expression::ImportSource(inner, opts) => {
                 Self::expr_has_direct_super(inner)
@@ -905,7 +905,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Identifier("null".to_string()), false))
         } else {
-            Err(self.error(format!("Expected property name, got {:?}", self.current)))
+            Err(self.unexpected_token("Expected property name, got "))
         }
     }
 
