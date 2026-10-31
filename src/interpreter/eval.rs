@@ -23,6 +23,7 @@ mod import_evaluation;
 mod modules;
 mod native_call;
 mod operand;
+mod parameter_tdz;
 mod set_rejection;
 mod to_primitive;
 
@@ -4856,6 +4857,7 @@ impl Interpreter {
             return Ok(());
         }
 
+        Self::declare_parameter_names_ahead(func_env, params);
         self.with_env_rooted(func_env, |interp| {
             for (index, param) in params.iter().enumerate() {
                 if let Pattern::Rest(inner) = param {
@@ -4938,6 +4940,7 @@ impl Interpreter {
         args: &[JsValue],
         func_env: &EnvRef,
     ) -> Result<(), JsValue> {
+        let mut declared_ahead = false;
         for (index, (param, atom)) in params.iter().zip(plan.atoms()).enumerate() {
             let value = match param {
                 Pattern::Identifier(_) => args.get(index).cloned().unwrap_or(JsValue::UNDEFINED),
@@ -4948,14 +4951,9 @@ impl Interpreter {
                 Pattern::Assign(_, default) => {
                     let supplied = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
                     if supplied.is_undefined() {
-                        {
-                            let mut env = func_env.borrow_mut();
-                            if !env.bindings.contains_key(atom) {
-                                env.bindings.push_unique(
-                                    atom.clone(),
-                                    Binding::new(JsValue::UNDEFINED, BindingKind::Var, false),
-                                );
-                            }
+                        if !declared_ahead {
+                            declared_ahead = true;
+                            Self::declare_named_parameters_ahead(func_env, &plan.atoms()[index..]);
                         }
                         let evaluated = self.with_env_rooted(func_env, |interp| {
                             interp.eval_expr(default, func_env)
