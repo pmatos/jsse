@@ -65,7 +65,6 @@ fn date_to_locale_string(
     let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-    // ToDateTimeOptions(options, required, defaults)
     let options_obj_id = if (options_arg).is_undefined() {
         interp.create_object_id()
     } else {
@@ -195,24 +194,22 @@ fn date_to_locale_string(
 
     let opt_val = JsValue::object(options_obj_id);
 
-    // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
     let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
         Some(v) => v,
         None => {
             return Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(
                 tv,
+                interp.node_host_enabled,
             ))));
         }
     };
 
-    // Call new Intl.DateTimeFormat(locales, options)
     let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, opt_val]) {
         Completion::Normal(v) => v,
         Completion::Throw(e) => return Completion::Throw(e),
         _ => return Completion::Normal(JsValue::UNDEFINED),
     };
 
-    // Get the format function from the DateTimeFormat instance
     if let Some(dtf_id) = dtf_instance.as_object_id() {
         let format_val = match interp.get_object_property(dtf_id, "format", &dtf_instance) {
             Completion::Normal(v) => v,
@@ -220,7 +217,6 @@ fn date_to_locale_string(
             _ => JsValue::UNDEFINED,
         };
 
-        // Call format(tv)
         let date_val = JsValue::number(tv);
         match interp.call_function(&format_val, &dtf_instance, &[date_val]) {
             Completion::Normal(v) => Completion::Normal(v),
@@ -228,7 +224,10 @@ fn date_to_locale_string(
             _ => Completion::Normal(JsValue::UNDEFINED),
         }
     } else {
-        Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(tv))))
+        Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(
+            tv,
+            interp.node_host_enabled,
+        ))))
     }
 }
 
@@ -852,7 +851,10 @@ impl Interpreter {
                             "Invalid Date",
                         )));
                     }
-                    Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(t))))
+                    Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(
+                        t,
+                        interp.node_host_enabled,
+                    ))))
                 }),
             ),
             (
@@ -887,7 +889,7 @@ impl Interpreter {
                         )));
                     }
                     Completion::Normal(JsValue::string(JsString::from_str(
-                        &format_time_only_string(t),
+                        &format_time_only_string(t, interp.node_host_enabled),
                     )))
                 }),
             ),
@@ -1115,7 +1117,7 @@ impl Interpreter {
                 if interp.new_target.is_none() {
                     let t = now_ms();
                     return Completion::Normal(JsValue::string(JsString::from_str(
-                        &format_date_string(t),
+                        &format_date_string(t, interp.node_host_enabled),
                     )));
                 }
 
