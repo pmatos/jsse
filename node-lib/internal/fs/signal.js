@@ -24,19 +24,15 @@ const Buffer = S.Buffer;
 
 let cbs;
 const fsCb = () => (cbs ??= require('internal/fs/callbacks'));
-const lift = (name) => (...args) => new Promise((resolve, reject) => {
+const call = (name, ...args) => new Promise((resolve, reject) => {
   fsCb()[name](...args, (error, value) => (error ? reject(error) : resolve(value)));
 });
-const openFd = lift('open');
-const closeFd = lift('close');
-const fstatFd = lift('fstat');
-const fsyncFd = lift('fsync');
-const readFd = (fd, buffer, length) => new Promise((resolve, reject) => {
-  fsCb().read(fd, buffer, 0, length, null, (error, n) => (error ? reject(error) : resolve(n)));
-});
-const writeFd = (fd, buffer, offset, length) => new Promise((resolve, reject) => {
-  fsCb().write(fd, buffer, offset, length, null, (error, n) => (error ? reject(error) : resolve(n)));
-});
+const openFd = (path, flag, mode) => call('open', path, flag, mode);
+const closeFd = (fd) => call('close', fd);
+const fstatFd = (fd) => call('fstat', fd);
+const fsyncFd = (fd) => call('fsync', fd);
+const readFd = (fd, buffer, length) => call('read', fd, buffer, 0, length, null);
+const writeFd = (fd, buffer, offset, length) => call('write', fd, buffer, offset, length, null);
 
 const abortError = (signal) => new AbortError(undefined, { cause: signal.reason });
 function checkAborted(signal) {
