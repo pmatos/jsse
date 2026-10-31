@@ -258,19 +258,17 @@ impl Interpreter {
             let value = self.hoisted_function_value(f, env);
             self.create_global_function_binding(gid, &f.name, value, false)?;
         }
-        self.create_global_var_bindings(stmts, env)
+        self.create_global_var_bindings(gid, stmts, env)
     }
 
     /// The var half of GlobalDeclarationInstantiation (steps 17 to 18):
     /// `CreateGlobalVarBinding` for each declared name, in source order.
-    pub(crate) fn create_global_var_bindings(
+    fn create_global_var_bindings(
         &mut self,
+        gid: u64,
         stmts: &[Statement],
         env: &EnvRef,
     ) -> Result<(), JsValue> {
-        let Some(gid) = env.borrow().global_object_id else {
-            return Ok(());
-        };
         let mut seen = HashSet::new();
         for name in super::super::hoisting::collect_var_names(stmts) {
             if !seen.insert(name.clone()) || env.borrow().bindings.contains_key(name.as_str()) {
