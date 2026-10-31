@@ -1,0 +1,9 @@
+<dir>/uncaught-store.js:4
+  state.user.name = "x";
+                  ^
+
+TypeError: Cannot set properties of undefined (setting 'name')
+    at save (<dir>/uncaught-store.js:4:19)
+    at Object.<anonymous> (<dir>/uncaught-store.js:6:1)
+
+Node.js <version>

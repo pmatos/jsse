@@ -717,6 +717,7 @@ impl Interpreter {
                         other => return ComputedKey::Done(other),
                     };
                     if obj_val.is_nullish() {
+                        this.note_member_pos(site_id);
                         return ComputedKey::Done(Completion::Throw(
                             this.nullish_read_error(&obj_val, &v),
                         ));
@@ -744,7 +745,7 @@ impl Interpreter {
             // Computed access goes straight to the slow path; caching it
             // requires extra logic for non-string keys and is deferred.
             if matches!(prop, MemberProperty::Dot(_))
-                && site_id != PropSiteId::UNASSIGNED
+                && !site_id.is_unassigned()
                 && self.with_scope_depth == 0
             {
                 use crate::interpreter::ic::{PropIcKind, PropIcSlot};
@@ -775,15 +776,9 @@ impl Interpreter {
                     self.ic_hit_count.set(self.ic_hit_count.get() + 1);
                     return Completion::Normal(v);
                 }
-                // Probe miss — snapshot the pre-miss slot BEFORE the slow
-                // path, then record afterwards. `get_object_property` can
-                // run user code (an accessor getter or a proxy `get` trap)
-                // that re-enters this same body + `PropSiteId` and mutates
-                // the slot; capturing here keeps the state-machine
-                // transition operating on the slot as it stood before this
-                // access, honoring `PropIcSlot::advance`'s contract. The
-                // clone is on the cold miss path only and allocates nothing
-                // unless the slot was already `Poly`.
+                // Probe miss: snapshot the slot BEFORE the slow path (user
+                // code in a getter or proxy trap can re-enter this site and
+                // mutate it), then record afterwards.
                 self.ic_slow_path_count
                     .set(self.ic_slow_path_count.get() + 1);
                 let prev = self.with_prop_slot(site_id, |slot| slot.clone());
@@ -832,6 +827,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         } else {
+            self.note_member_pos(site_id);
             let err = self.create_type_error(&format!(
                 "Cannot read properties of {obj_val} (reading '{key}')"
             ));

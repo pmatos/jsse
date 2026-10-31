@@ -86,10 +86,10 @@ pub(crate) enum SourceType {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub(crate) struct CallSiteId(pub u32, pub u32);
 
-/// Dense identifier for a property-access IC site within a single `Body`.
+/// Dense property-access IC site id within a `Body`, plus the V8 error
+/// position's source offset plus one (0 = unknown).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-#[repr(transparent)]
-pub(crate) struct PropSiteId(pub u32);
+pub(crate) struct PropSiteId(pub u32, pub u32);
 
 impl CallSiteId {
     pub(crate) const UNASSIGNED: Self = Self(u32::MAX, 0);
@@ -104,7 +104,15 @@ impl CallSiteId {
 }
 
 impl PropSiteId {
-    pub(crate) const UNASSIGNED: Self = Self(u32::MAX);
+    pub(crate) const UNASSIGNED: Self = Self(u32::MAX, 0);
+
+    pub(crate) fn at(offset: usize) -> Self {
+        Self(u32::MAX, u32::try_from(offset + 1).unwrap_or(0))
+    }
+
+    pub(crate) fn is_unassigned(self) -> bool {
+        self.0 == u32::MAX
+    }
 }
 
 /// Metadata describing the number of IC sites in a `Body`.
@@ -1823,13 +1831,9 @@ fn assign_class_sites(c: &mut ClassDecl, call_id: &mut u32, prop_id: &mut u32) {
                 if let PropertyKey::Computed(e) = &mut p.key {
                     assign_expr_sites(e, call_id, prop_id);
                 }
-                // Static field initializers also run at class-definition time,
-                // so their sites belong to this body. Instance field and
-                // instance auto-accessor initializers run later, during
-                // construction, under whatever body invokes the constructor —
-                // numbering their sites here would make them index that body's
-                // (possibly smaller) IC store and panic. Leave them UNASSIGNED
-                // so they take the IC slow path wherever they execute.
+                // Static initializers run at class-definition time, so their
+                // sites belong to this body. Instance initializers run under
+                // the constructing body's IC store: leave them UNASSIGNED.
                 if p.is_static
                     && let Some(v) = p.value.as_mut()
                 {
@@ -1932,7 +1936,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
                 continue;
             }
             SiteWork::SetProp(site) => {
-                *site = PropSiteId(*prop_id);
+                site.0 = *prop_id;
                 *prop_id += 1;
                 continue;
             }
@@ -2008,11 +2012,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
                     match el {
                         ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
                         ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
-                            // See assign_class_sites: number computed keys and static
-                            // initializers (evaluated at class-definition time), but
-                            // leave instance field / auto-accessor initializers
-                            // UNASSIGNED so they take the IC slow path when they run
-                            // during construction under the constructor's handle.
+                            // As in assign_class_sites.
                             if let PropertyKey::Computed(e) = &mut p.key {
                                 assign_expr_sites(e, call_id, prop_id);
                             }
@@ -2091,7 +2091,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
                 stack.extend(args.iter_mut());
             }
             Expression::Member(obj, prop, site) => {
-                *site = PropSiteId::UNASSIGNED;
+                site.0 = u32::MAX;
                 stack.push(obj);
                 if let MemberProperty::Computed(e) = prop {
                     stack.push(e);

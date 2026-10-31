@@ -49,8 +49,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
-        // Depth guard: every nested sub-expression funnels through here, so
-        // bounding this bounds recursive-descent native recursion.
+        // Depth guard: every nested sub-expression funnels through here.
         self.enter_recursion()?;
         let r = self.parse_assignment_expression_inner();
         self.exit_recursion();
@@ -111,6 +110,8 @@ impl<'a> Parser<'a> {
             // Assignment target: duplicate __proto__ is allowed (destructuring)
             self.last_obj_had_proto_dup = saved_proto_dup;
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
+            let mut left = left;
+            self.retarget_store_site(&mut left, op);
             self.advance()?;
             let right_start = self.current_token_start;
             let right = self.parse_assignment_expression()?;
@@ -523,11 +524,10 @@ impl<'a> Parser<'a> {
             self.parse_primary_expression()?
         };
 
-        // §13.3: an unparenthesized ArrowFunction is not a LeftHandSideExpression.
-        // An ArrowFunction is a whole AssignmentExpression, so no operator may
-        // continue it: hide the next token from the binary/conditional levels
-        // above (parse_assignment_expression restores it). Otherwise `/` after
-        // `() => {}` and a newline would lex as division, not a RegExp (§12.9.4).
+        // §13.3: an unparenthesized ArrowFunction is a whole
+        // AssignmentExpression: hide the next token from the operator levels
+        // above (parse_assignment_expression restores it), so `/` after
+        // `() => {}` and a newline lexes as a RegExp (§12.9.4).
         if matches!(expr, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
             self.arrow_held_token = Some(std::mem::replace(&mut self.current, Token::Eof));
             return Ok(expr);
@@ -549,31 +549,40 @@ impl<'a> Parser<'a> {
             return Err(self.error("Invalid shorthand property initializer"));
         }
 
+        let mut called = false;
         loop {
             match &self.current {
                 Token::Dot => {
+                    let dot = self.current_token_start;
                     self.advance()?;
+                    let at = if called {
+                        dot
+                    } else {
+                        self.current_token_start
+                    };
                     let prop = self.parse_dot_member_property()?;
                     if matches!(expr, Expression::Super)
                         && matches!(prop, MemberProperty::Private(_))
                     {
                         return Err(self.error("Private fields are not accessible on 'super'"));
                     }
-                    expr = Expression::Member(ExprBox::new(expr), prop, PropSiteId::UNASSIGNED);
+                    expr = Expression::Member(ExprBox::new(expr), prop, PropSiteId::at(at));
                 }
                 Token::LeftBracket => {
+                    let at = self.current_token_start;
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;
                     expr = Expression::Member(
                         ExprBox::new(expr),
                         MemberProperty::Computed(ExprBox::new(prop)),
-                        PropSiteId::UNASSIGNED,
+                        PropSiteId::at(at),
                     );
                 }
                 Token::LeftParen => {
                     let site = self.call_site(&expr);
                     let args = self.parse_arguments()?;
+                    called = true;
                     expr = Expression::Call(ExprBox::new(expr), args, site);
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
@@ -696,8 +705,7 @@ impl<'a> Parser<'a> {
         let mut callee = if self.current == Token::Keyword(Keyword::New) {
             self.parse_new_expression()?
         } else {
-            // `new import(...)` is a syntax error (ImportCall is not a MemberExpression)
-            // but `new (import(...))` is valid — parenthesized
+            // `new import(...)` is an error; `new (import(...))` is valid.
             let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
             let primary = self.parse_primary_expression()?;
             if is_direct_import
@@ -753,8 +761,7 @@ impl<'a> Parser<'a> {
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
         let result = self.parse_primary_expression_inner();
-        // An arrow body or parameter list can leave `last_expr_parenthesized`
-        // stale; only a `( ArrowFunction )` primary is genuinely parenthesized.
+        // Only a `( ArrowFunction )` primary is genuinely parenthesized.
         let parenthesized_arrow = std::mem::take(&mut self.parenthesized_arrow);
         if matches!(result, Ok(Expression::ArrowFunction(_))) {
             self.last_expr_parenthesized = parenthesized_arrow;
@@ -1323,8 +1330,7 @@ impl<'a> Parser<'a> {
                         }
                         self.last_expr_parenthesized = true;
                         self.parenthesized_arrow = matches!(e, Expression::ArrowFunction(_));
-                        // Wrap parenthesized Object/Array/Assign in Sequence marker
-                        // so validate_destructuring_target can reject them
+                        // Sequence marker: validate_destructuring_target rejects it
                         if matches!(
                             &e,
                             Expression::Object(..)

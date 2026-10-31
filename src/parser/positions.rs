@@ -22,6 +22,15 @@ impl Parser<'_> {
         }
     }
 
+    /// V8 reports a failed `o.x = v` at the `=`, which is the current token:
+    /// a plain assignment's member target takes that position (a compound
+    /// one reads first, at the member's own).
+    pub(super) fn retarget_store_site(&self, target: &mut Expression, op: AssignOp) {
+        if let (AssignOp::Assign, Expression::Member(_, _, site)) = (op, target) {
+            site.1 = PropSiteId::at(self.current_token_start).1;
+        }
+    }
+
     /// The source every function of this parse shares as its `SourceText` origin.
     pub(crate) fn source_origin(&self) -> Rc<str> {
         self.source_text_source.clone()

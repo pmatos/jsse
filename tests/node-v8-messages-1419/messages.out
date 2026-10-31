@@ -1,0 +1,133 @@
+## callMember
+TypeError: o.f is not a function
+at Object.callMember (<dir>/messages.js:23:7)
+## callDeepMember
+TypeError: Cannot read properties of undefined (reading 'b')
+at Object.callDeepMember (<dir>/messages.js:26:9)
+## callBare
+TypeError: f is not a function
+at Object.callBare (<dir>/messages.js:30:5)
+## callComputedString
+TypeError: o.f is not a function
+at Object.callComputedString (<dir>/messages.js:33:11)
+## callComputedNumber
+TypeError: o[1] is not a function
+at Object.callComputedNumber (<dir>/messages.js:36:9)
+## callComputedName
+TypeError: o[k] is not a function
+at Object.callComputedName (<dir>/messages.js:39:9)
+## callIndexed
+TypeError: arr[0] is not a function
+at Object.callIndexed (<dir>/messages.js:42:11)
+## callThisMember
+TypeError: this.missing is not a function
+at Other.method (<dir>/messages.js:14:17)
+## callParenthesized
+TypeError: o.f is not a function
+at Object.callParenthesized (<dir>/messages.js:48:10)
+## callOptional
+TypeError: o?.f is not a function
+at Object.callOptional (<dir>/messages.js:51:8)
+## callNonFunctionValue
+TypeError: v.f is not a function
+at Object.callNonFunctionValue (<dir>/messages.js:55:7)
+## callResultOfCall
+TypeError: m.get(...) is not a function
+at Object.callResultOfCall (<dir>/messages.js:59:13)
+## callAfterNewline
+TypeError: o.g is not a function
+at Object.callAfterNewline (<dir>/messages.js:63:8)
+## newBare
+TypeError: x is not a constructor
+at Object.newBare (<dir>/messages.js:67:5)
+## newMember
+TypeError: o.F is not a constructor
+at Object.newMember (<dir>/messages.js:70:5)
+## newThisMember
+TypeError: this.Nope is not a constructor
+at Other.make (<dir>/messages.js:17:12)
+## newArrow
+TypeError: f is not a constructor
+at Object.newArrow (<dir>/messages.js:77:5)
+## newWithoutArguments
+TypeError: o.Nope is not a constructor
+at Object.newWithoutArguments (<dir>/messages.js:80:5)
+## classWithoutNew
+TypeError: Class constructor Plain cannot be invoked without 'new'
+at Object.classWithoutNew (<dir>/messages.js:83:5)
+## readNull
+TypeError: Cannot read properties of null (reading 'x')
+at Object.readNull (<dir>/messages.js:86:17)
+## readUndefined
+TypeError: Cannot read properties of undefined (reading 'x')
+at Object.readUndefined (<dir>/messages.js:89:22)
+## readVariable
+TypeError: Cannot read properties of null (reading 'x')
+at Object.readVariable (<dir>/messages.js:92:14)
+## readChain
+TypeError: Cannot read properties of undefined (reading 'y')
+at Object.readChain (<dir>/messages.js:95:16)
+## readDeepChain
+TypeError: Cannot read properties of undefined (reading 'b')
+at Object.readDeepChain (<dir>/messages.js:98:16)
+## readComputedNumber
+TypeError: Cannot read properties of undefined (reading 'y')
+at Object.readComputedNumber (<dir>/messages.js:101:17)
+## readComputedString
+TypeError: Cannot read properties of undefined (reading 'y')
+at Object.readComputedString (<dir>/messages.js:104:21)
+## readComputedNameOnNull
+TypeError: Cannot read properties of null (reading 'kk')
+at Object.readComputedNameOnNull (<dir>/messages.js:107:13)
+## readComputedNumberOnUndefined
+TypeError: Cannot read properties of undefined (reading '0')
+at Object.readComputedNumberOnUndefined (<dir>/messages.js:110:13)
+## readAfterCall
+TypeError: Cannot read properties of undefined (reading 'x')
+at Object.readAfterCall (<dir>/messages.js:114:20)
+## readAfterCallChain
+TypeError: Cannot read properties of undefined (reading 'x')
+at Object.readAfterCallChain (<dir>/messages.js:118:20)
+## readMethodOnResult
+TypeError: Cannot read properties of undefined (reading 'x')
+at Object.readMethodOnResult (<dir>/messages.js:122:13)
+## readInsideFunction
+TypeError: Cannot read properties of undefined (reading 'y')
+at <dir>/messages.js:126:21
+## readNestedMember
+TypeError: Cannot read properties of undefined (reading 's')
+at Object.readNestedMember (<dir>/messages.js:131:18)
+## readSymbolKey
+TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+at Object.readSymbolKey (<dir>/messages.js:134:13)
+## writeChain
+TypeError: Cannot set properties of undefined (setting 'y')
+at Object.writeChain (<dir>/messages.js:137:11)
+## writeNull
+TypeError: Cannot set properties of null (setting 'x')
+at Object.writeNull (<dir>/messages.js:140:12)
+## writeVariable
+TypeError: Cannot set properties of null (setting 'a')
+at Object.writeVariable (<dir>/messages.js:143:9)
+## writeComputed
+TypeError: Cannot set properties of undefined (setting 'kk')
+at Object.writeComputed (<dir>/messages.js:146:10)
+## writeDeepChain
+TypeError: Cannot read properties of undefined (reading 'z')
+at Object.writeDeepChain (<dir>/messages.js:150:9)
+## compoundWrite
+TypeError: Cannot read properties of undefined (reading 'y')
+## compoundComputed
+TypeError: Cannot read properties of undefined (reading 'kk')
+## inOperator
+TypeError: Cannot use 'in' operator to search for '1' in 1
+## inOperatorString
+TypeError: Cannot use 'in' operator to search for 'a' in 1
+## instanceofNonObject
+TypeError: Right-hand side of 'instanceof' is not an object
+## instanceofNonCallable
+TypeError: Right-hand side of 'instanceof' is not callable
+## extendsNumber
+TypeError: Class extends value 1 is not a constructor or null
+## extendsUndefined
+TypeError: Class extends value undefined is not a constructor or null
