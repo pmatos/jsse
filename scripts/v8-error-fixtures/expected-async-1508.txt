@@ -1,63 +1,67 @@
+## a function named like its receiver type
+Error: same name
+    at Gadget [as build] (<dir>/async-1508.js:123:10)
+    at methods (<dir>/async-1508.js:127:64)
 ## an alias
 Error: named
     at Object.named [as other] (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:122:27)
+    at methods (<dir>/async-1508.js:128:27)
 ## two aliases are ambiguous
 Error: named
     at Object.named (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:123:44)
+    at methods (<dir>/async-1508.js:129:44)
 ## an inherited alias
 Error: named
     at Object.named [as shared] (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:124:40)
+    at methods (<dir>/async-1508.js:130:40)
 ## a class method called by its name
 Error: method
     at Widget.method (<dir>/async-1508.js:90:12)
-    at methods (<dir>/async-1508.js:125:52)
+    at methods (<dir>/async-1508.js:131:52)
 ## a class method called through an alias
 Error: method
     at Widget.method (<dir>/async-1508.js:90:12)
-    at methods (<dir>/async-1508.js:126:57)
+    at methods (<dir>/async-1508.js:132:57)
 ## a getter called explicitly
 Error: getter
     at get value (<dir>/async-1508.js:93:12)
-    at methods (<dir>/async-1508.js:128:45)
+    at methods (<dir>/async-1508.js:134:45)
 ## a getter of an object literal
 Error: accessor
     at get prop (<dir>/async-1508.js:117:12)
-    at methods (<dir>/async-1508.js:129:96)
+    at methods (<dir>/async-1508.js:135:96)
 ## a static method
 Error: static
     at Widget.make (<dir>/async-1508.js:96:12)
-    at methods (<dir>/async-1508.js:130:34)
+    at methods (<dir>/async-1508.js:136:34)
 ## a static method through an alias
 Error: static
     at Widget.make (<dir>/async-1508.js:96:12)
-    at methods (<dir>/async-1508.js:131:51)
+    at methods (<dir>/async-1508.js:137:51)
 ## a function inferred from an assignment
 Error: inferred
     at exported.run (<dir>/async-1508.js:106:10)
-    at methods (<dir>/async-1508.js:132:59)
+    at methods (<dir>/async-1508.js:138:59)
 ## a prototype method and an own alias
 Error: named
     at Timeoutish.named (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:133:53)
+    at methods (<dir>/async-1508.js:139:53)
 ## an own alias beside a prototype method
 Error: named
     at Timeoutish.named (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:134:56)
+    at methods (<dir>/async-1508.js:140:56)
 ## a non-enumerable alias
 Error: named
     at Object.named (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:135:41)
+    at methods (<dir>/async-1508.js:141:41)
 ## call with another receiver
 Error: named
     at Object.named [as other] (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:136:44)
+    at methods (<dir>/async-1508.js:142:44)
 ## a plain call
 Error: named
     at named (<dir>/async-1508.js:86:10)
-    at methods (<dir>/async-1508.js:137:24)
+    at methods (<dir>/async-1508.js:143:24)
 ## Promise.all
 Error: x
     at leaf (<dir>/async-1508.js:20:10)

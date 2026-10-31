@@ -22,8 +22,8 @@ differences from Node 26 its "Remaining differences" listed. Two groups are fixe
   included; else the one enumerable, non-index key along the receiver's prototype chain that holds it, none if two do.
   It reads property records only: no getter, trap or script runs. `CallSite.getMethodName()` returns it. The prelude
   prints the suffix unless the function name equals the method name or ends with `.` plus it, or is an accessor. Two
-  rules it had wrong are fixed with it: V8 prefixes the type name even when the function name starts with it
-  (`at Foo.FooBar`, `at process.processTimers`), and an element key never names a method (`a[0] = function () {}` has
+  rules it had wrong are fixed with it: V8 prefixes the type name even when the function name merely starts with it
+  (`at Foo.FooBar`, `at process.processTimers`), and omits it only when the two are equal (`at Foo`), and an element key never names a method (`a[0] = function () {}` has
   no `[as 0]`).
 - **Timer frames.** The timers shim's frames now carry Node's names: `listOnTimeout` and `process.processTimers` for a
   timeout or interval, `process.processImmediate` for an immediate (the callbacks are bound to `process`). The

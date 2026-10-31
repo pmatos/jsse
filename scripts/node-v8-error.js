@@ -148,7 +148,7 @@
           method !== null && !accessor && name !== method && !endsWith(name, "." + method)
             ? " [as " + method + "]"
             : "";
-        if (type !== null && !accessor && !qualified) {
+        if (type !== null && !accessor && !qualified && name !== type) {
           name = type + "." + name;
         }
         return name + alias + " (" + where + ")";

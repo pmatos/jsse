@@ -118,7 +118,13 @@ const accessors = {
   },
 };
 
+function Gadget() {}
+Gadget.prototype.build = function Gadget() {
+  return new Error("same name").stack;
+};
+
 function methods() {
+  show("a function named like its receiver type", new Gadget().build());
   show("an alias", single.other());
   show("two aliases are ambiguous", holder.other());
   show("an inherited alias", inherited.shared());
