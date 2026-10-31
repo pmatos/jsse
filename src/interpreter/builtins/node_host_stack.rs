@@ -12,9 +12,10 @@
 use super::super::*;
 pub(crate) use super::node_host_stack_sources::NodeStackState;
 mod async_frames;
+mod hook_flags;
 pub(crate) use async_frames::ParkedAwait;
+pub(crate) use hook_flags::call_positions_enabled;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) const HOOK_ERROR: PrivateId = PrivateId(u64::MAX - 2);
 pub(super) const HOOK_GETTER: PrivateId = PrivateId(u64::MAX - 3);
@@ -24,14 +25,6 @@ const FRAMES: PrivateId = PrivateId(u64::MAX - 5);
 const FLAG_CONSTRUCTOR: f64 = 1.0;
 const FLAG_TOPLEVEL: f64 = 2.0;
 const RECORD_LEN: usize = 5;
-
-static CALL_POSITIONS: AtomicBool = AtomicBool::new(false);
-
-/// Whether the bytecode compiler should record call positions. Process-wide
-/// because chunks are compiled lazily and shared; set once by the prelude.
-pub(crate) fn call_positions_enabled() -> bool {
-    CALL_POSITIONS.load(Ordering::Relaxed)
-}
 
 /// Where a capture starts: after the innermost frame of this function
 /// (`captureStackTrace`'s argument; absent means nothing is captured), or,
@@ -334,7 +327,7 @@ impl Interpreter {
                     interp.gc_write_barrier_value(&handle, value);
                 }
                 interp.node_host.stack.installed = true;
-                CALL_POSITIONS.store(true, Ordering::Relaxed);
+                hook_flags::enable_call_positions();
                 crate::parser::inferred_names::enable();
                 Completion::Normal(JsValue::UNDEFINED)
             },
