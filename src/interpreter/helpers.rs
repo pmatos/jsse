@@ -4,7 +4,9 @@ use crate::types::ValueKind;
 mod json_internalize;
 pub(crate) use json_internalize::json_internalize;
 mod json_stringify;
+mod json_v8_errors;
 pub(crate) use json_stringify::json_stringify_full;
+pub(crate) use json_v8_errors::{json_parse_value, json_parse_value_with_source};
 
 // Resolves a spec "relative index" argument (already passed through ToIntegerOrInfinity)
 // against a length, per the clamp used by e.g. Array.prototype.slice, String.prototype.slice,
@@ -589,26 +591,7 @@ impl JsonText {
     }
 }
 
-pub(crate) fn json_parse_value(interp: &mut Interpreter, input: &JsonText) -> Completion {
-    json_parse_value_inner(interp, &input.text, input.stand_ins, None, &input.text)
-}
-
-pub(crate) fn json_parse_value_with_source(
-    interp: &mut Interpreter,
-    input: &JsonText,
-) -> (Completion, SourceTextMap) {
-    let mut source_map = SourceTextMap::default();
-    let result = json_parse_value_inner(
-        interp,
-        &input.text,
-        input.stand_ins,
-        Some(&mut source_map),
-        &input.text,
-    );
-    (result, source_map)
-}
-
-fn json_parse_value_inner(
+pub(super) fn json_parse_value_inner(
     interp: &mut Interpreter,
     s: &str,
     stand_ins: bool,

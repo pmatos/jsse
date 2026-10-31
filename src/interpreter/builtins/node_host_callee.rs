@@ -59,6 +59,128 @@ fn render_index(inner: &str) -> Option<String> {
     (chain && !inner.starts_with('.') && !inner.ends_with('.')).then(|| format!("[{inner}]"))
 }
 
+/// The index of the `(` that matches the `)` at `close`.
+fn open_before(b: &[u8], close: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for at in (0..=close).rev() {
+        match b[at] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The index of the `)` that matches the `(` at `open`.
+fn close_after(b: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, &c) in b.iter().enumerate().skip(open) {
+        match c {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `s` split at the top-level (outside brackets and quotes) `sep`.
+fn split_top<'a>(s: &'a str, sep: &str) -> Vec<&'a str> {
+    let b = s.as_bytes();
+    let (mut parts, mut depth, mut quote, mut from, mut at) = (Vec::new(), 0i32, 0u8, 0, 0);
+    while at < b.len() {
+        let c = b[at];
+        if quote != 0 {
+            quote = if c == quote { 0 } else { quote };
+        } else if matches!(c, b'"' | b'\'' | b'`') {
+            quote = c;
+        } else if matches!(c, b'(' | b'[' | b'{') {
+            depth += 1;
+        } else if matches!(c, b')' | b']' | b'}') {
+            depth -= 1;
+        } else if depth == 0 && b[at..].starts_with(sep.as_bytes()) {
+            parts.push(&s[from..at]);
+            at += sep.len();
+            from = at;
+            continue;
+        }
+        at += 1;
+    }
+    parts.push(&s[from..]);
+    parts
+}
+
+fn is_function_like(s: &str) -> bool {
+    ["function", "async", "class", "await"].iter().any(|word| {
+        s.strip_prefix(word)
+            .is_some_and(|rest| !rest.starts_with(ident_byte_char))
+    }) || split_top(s, "=>").len() > 1
+}
+
+fn ident_byte_char(c: char) -> bool {
+    c.is_ascii() && ident_byte(c as u8)
+}
+
+/// V8's text for the expression `s`, if it is one of the shapes it prints.
+fn render_expr(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if is_function_like(s) {
+        return Some("(intermediate value)".into());
+    }
+    for op in ["||", "&&", "??"] {
+        let parts = split_top(s, op);
+        if parts.len() > 1 {
+            let shown: Option<Vec<String>> = parts.iter().map(|p| render_expr(p)).collect();
+            return Some(format!("({})", shown?.join(&format!(" {op} "))));
+        }
+    }
+    for word in ["void", "typeof", "delete"] {
+        if let Some(rest) = s.strip_prefix(word).filter(|r| r.starts_with(' ')) {
+            return Some(format!("({word} {})", render_expr(rest)?));
+        }
+    }
+    if s == "{}" {
+        return Some(s.into());
+    }
+    if s.starts_with(['"', '\'']) {
+        let quote = s.chars().next()?;
+        let body = s.strip_prefix(quote)?.strip_suffix(quote)?;
+        let plain = !body.contains(['\'', '"', '\\', '\n']);
+        return plain.then(|| format!("\"{body}\""));
+    }
+    if s.starts_with('(') && close_after(s.as_bytes(), 0)? == s.len() - 1 {
+        return render_group(&s[1..s.len() - 1]);
+    }
+    let (text, start) = chain_before(s, s.len())?;
+    (start == 0).then_some(text)
+}
+
+/// V8's text for the parenthesised expression `inner`: a comma sequence
+/// prints as `(a , b)`.
+fn render_group(inner: &str) -> Option<String> {
+    let inner = inner.trim();
+    let commas = split_top(inner, ",");
+    if commas.len() > 1 && !is_function_like(inner) {
+        let shown: Option<Vec<String>> = commas.iter().map(|p| render_expr(p)).collect();
+        return Some(format!("({})", shown?.join(" , ")));
+    }
+    render_expr(inner)
+}
+
 /// The callee that ends just before byte `end`, read right to left, with the
 /// byte where it starts.
 fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
@@ -85,22 +207,27 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
             let open = src[..i - 1].rfind('[')?;
             parts.push(render_index(&src[open + 1..i - 1])?);
             i = open;
-        } else if last == b')' {
-            let open = src[..i - 1].rfind('(')?;
-            if src[open + 1..i - 1].contains(['(', ')', '\'', '"', '`']) {
+        } else if matches!(last, b'"' | b'\'') {
+            let open = src[..i - 1].rfind(last as char)?;
+            let body = &src[open + 1..i - 1];
+            if body.contains(['\\', '\n']) {
                 return None;
             }
+            parts.push(format!("\"{body}\""));
+            i = open;
+            head = true;
+        } else if last == b')' {
+            let open = open_before(b, i - 1)?;
             let before = skip_ws_back(b, open);
             let call =
                 before > 0 && (ident_byte(b[before - 1]) || matches!(b[before - 1], b']' | b')'));
             if call {
-                parts.push("(...)".into());
-            } else {
-                let (inner, start) = chain_before(src, i - 1)?;
-                if skip_ws_fwd(b, open + 1) != start {
+                if src[open + 1..i - 1].contains(['\'', '"', '`']) {
                     return None;
                 }
-                parts.push(inner);
+                parts.push("(...)".into());
+            } else {
+                parts.push(render_group(&src[open + 1..i - 1])?);
                 head = true;
             }
             i = open;
@@ -127,15 +254,25 @@ fn chain_after_new(src: &str, at: usize) -> Option<String> {
     let b = src.as_bytes();
     let mut i = skip_ws_fwd(b, at + 3);
     let mut out = String::new();
+    let mut grouped = false;
+    if b.get(i) == Some(&b'(') {
+        let close = close_after(b, i)?;
+        out = render_group(&src[i + 1..close])?;
+        i = close + 1;
+        grouped = true;
+    }
     loop {
-        let s = i;
-        while i < b.len() && ident_byte(b[i]) {
-            i += 1;
+        if !grouped {
+            let s = i;
+            while i < b.len() && ident_byte(b[i]) {
+                i += 1;
+            }
+            if s == i {
+                return None;
+            }
+            out.push_str(word_text(&src[s..i]));
         }
-        if s == i {
-            return None;
-        }
-        out.push_str(word_text(&src[s..i]));
+        grouped = false;
         loop {
             let k = skip_ws_fwd(b, i);
             match b.get(k) {

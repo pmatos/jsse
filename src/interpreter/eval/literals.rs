@@ -179,7 +179,6 @@ impl Interpreter {
 
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<JsPropertyKey, JsValue> {
-        // Fast path: non-negative integer Number → integer string (avoids ryu_js)
         if let Some(n) = (val).as_number() {
             let trunc = n.trunc();
             if n == trunc && trunc >= 0.0 && trunc <= u32::MAX as f64 {
@@ -264,7 +263,7 @@ impl Interpreter {
                                     items.push(Some(item));
                                 }
                             }
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => return Completion::Throw(self.reword_iterable(e, inner)),
                         }
                     }
                     Some(expr) => {

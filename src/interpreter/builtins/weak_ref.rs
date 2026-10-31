@@ -17,9 +17,7 @@ impl Interpreter {
                 interp.keep_during_job(&target);
                 return Completion::Normal(target);
             }
-            Completion::Throw(
-                interp.create_type_error("WeakRef.prototype.deref requires a WeakRef"),
-            )
+            Completion::Throw(interp.bad_this(this, "WeakRef.prototype.deref requires a WeakRef"))
         });
 
         // @@toStringTag

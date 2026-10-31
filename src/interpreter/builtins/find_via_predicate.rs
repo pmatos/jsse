@@ -105,7 +105,7 @@ impl FindMethod {
                     Self::FindLastIndex => "findLastIndex predicate is not a function",
                 },
             };
-            return Completion::Throw(interp.create_type_error(message));
+            return Completion::Throw(interp.callback_error(&predicate, message));
         }
 
         let descending = matches!(self, Self::FindLast | Self::FindLastIndex);

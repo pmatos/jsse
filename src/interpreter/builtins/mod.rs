@@ -23,6 +23,7 @@ mod math;
 mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_brotli_ctx;
+mod node_host_builtin_errors;
 mod node_host_builtins;
 mod node_host_callee;
 #[cfg(unix)]
@@ -36,9 +37,11 @@ mod node_host_child_sync;
 mod node_host_cjs_lexer;
 mod node_host_cjs_patterns;
 mod node_host_crypto;
+mod node_host_destructure;
 mod node_host_error_keys;
 mod node_host_esm;
 mod node_host_eval_frame;
+pub(crate) mod node_host_expr_text;
 #[cfg(unix)]
 mod node_host_fs;
 #[cfg(unix)]
@@ -61,6 +64,7 @@ mod node_host_idna;
 mod node_host_loop;
 mod node_host_messages;
 mod node_host_module_frame;
+mod node_host_operand_errors;
 mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;

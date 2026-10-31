@@ -1497,7 +1497,7 @@ impl Interpreter {
                     false
                 };
                 if !is_callable {
-                    return Err(Some(self.create_type_error("Getter must be a function")));
+                    return Err(Some(self.accessor_not_function_error("Getter", getter)));
                 }
             }
             if let Some(ref setter) = desc.set
@@ -1513,22 +1513,18 @@ impl Interpreter {
                     false
                 };
                 if !is_callable {
-                    return Err(Some(self.create_type_error("Setter must be a function")));
+                    return Err(Some(self.accessor_not_function_error("Setter", setter)));
                 }
             }
 
             // Cannot have both accessor and data descriptor fields
             if desc.is_accessor_descriptor() && desc.is_data_descriptor() {
-                return Err(Some(self.create_type_error(
-                    "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute",
-                )));
+                return Err(Some(self.mixed_descriptor_error(val)));
             }
 
             Ok(desc)
         } else {
-            Err(Some(self.create_type_error(
-                "Property description must be an object",
-            )))
+            Err(Some(self.descriptor_error(val)))
         }
     }
 
