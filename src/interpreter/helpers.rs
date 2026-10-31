@@ -7,6 +7,8 @@ mod json_stringify;
 mod json_v8_errors;
 pub(crate) use json_stringify::json_stringify_full;
 pub(crate) use json_v8_errors::{json_parse_value, json_parse_value_with_source};
+mod tz_long_name;
+pub(crate) use tz_long_name::{local_time_zone_name, long_time_zone_name};
 
 // Resolves a spec "relative index" argument (already passed through ToIntegerOrInfinity)
 // against a length, per the clamp used by e.g. Array.prototype.slice, String.prototype.slice,
@@ -1356,20 +1358,6 @@ pub(crate) fn utc_time(t: f64) -> f64 {
     t - offset_secs as f64 * 1000.0
 }
 
-fn local_time_zone_abbreviation(t: f64) -> String {
-    let Some(tz) = system_time_zone_jiff() else {
-        return system_time_zone_identifier();
-    };
-    if !t.is_finite() {
-        return system_time_zone_identifier();
-    }
-    let epoch_secs = (t.floor() as i64).div_euclid(1000);
-    match named_time_zone_timestamp(epoch_secs) {
-        Some(ts) => tz.to_offset_info(ts).abbreviation().to_string(),
-        None => system_time_zone_identifier(),
-    }
-}
-
 /// Shared final step of every `Date.prototype.set*` method: combine a day
 /// number and a time-within-day into an absolute time, convert back from
 /// local time to UTC when `is_local`, and clip to the valid Date range.
@@ -1430,7 +1418,7 @@ fn format_year_string(y: f64) -> String {
     }
 }
 
-pub(crate) fn format_date_string(t: f64) -> String {
+pub(crate) fn format_date_string(t: f64, long_tz: bool) -> String {
     let lt = local_time(t);
     let wd = week_day(lt);
     let y = year_from_time(lt);
@@ -1447,7 +1435,7 @@ pub(crate) fn format_date_string(t: f64) -> String {
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = local_time_zone_abbreviation(t);
+    let tz_abbr = local_time_zone_name(t, long_tz);
     format!(
         "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         day_name(wd),
@@ -1532,7 +1520,7 @@ pub(crate) fn format_date_only_string(t: f64) -> String {
     )
 }
 
-pub(crate) fn format_time_only_string(t: f64) -> String {
+pub(crate) fn format_time_only_string(t: f64, long_tz: bool) -> String {
     let lt = local_time(t);
     let h = hour_from_time(lt);
     let min = min_from_time(lt);
@@ -1545,7 +1533,7 @@ pub(crate) fn format_time_only_string(t: f64) -> String {
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = local_time_zone_abbreviation(t);
+    let tz_abbr = local_time_zone_name(t, long_tz);
     format!(
         "{:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         h as i32, min as i32, s as i32, sign, oh, om, tz_abbr

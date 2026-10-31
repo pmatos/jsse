@@ -801,28 +801,11 @@ impl Interpreter {
                         current = next;
                     }
 
-                    // At global level — check global object property descriptor
-                    let global_id = self.realm().global_env.borrow().global_object_id;
-                    if let Some(gid) = global_id
-                        && let Some(global) = self.get_object_cell(gid)
-                    {
-                        let gb = global.borrow();
-                        if let Some(desc) = gb.properties.get(name) {
-                            if desc.configurable() == Some(false) {
-                                return Completion::Normal(JsValue::boolean(false));
-                            }
-                            drop(gb);
-                            global.borrow_mut().remove_property(name);
-                            self.realm().global_env.borrow_mut().bindings.remove(name);
-                            return Completion::Normal(JsValue::boolean(true));
-                        }
+                    // At global level (§9.1.1.4.7 DeleteBinding)
+                    match self.delete_global_binding(name) {
+                        Ok(deleted) => Completion::Normal(JsValue::boolean(deleted)),
+                        Err(e) => Completion::Throw(e),
                     }
-                    // A binding in the global env (var declaration not on global object)
-                    if self.realm().global_env.borrow().bindings.contains_key(name) {
-                        return Completion::Normal(JsValue::boolean(false));
-                    }
-                    // Unresolvable reference — return true per spec
-                    Completion::Normal(JsValue::boolean(true))
                 }
                 Expression::OptionalChain(base, chain) => {
                     self.with_tail_position_suppressed(|this| {
@@ -3201,16 +3184,6 @@ impl Interpreter {
                     };
                     if !set_outcome.succeeded() && strict {
                         return Completion::Throw(interp.member_assignment_error(&obj_val, &key));
-                    }
-                    // The realm test comes before `as_str`, which validates the
-                    // whole key as UTF-8: it is both cheaper and false for
-                    // essentially every write in a real program.
-                    if let Some(obj_id) = obj_val.as_object_id()
-                        && set_outcome.wrote_own_data_property_on(obj_id)
-                        && interp.is_realm_global_object(obj_id)
-                        && let Some(key_str) = key.as_str()
-                    {
-                        interp.sync_global_object_binding(obj_id, key_str, &final_val);
                     }
                     Completion::Normal(final_val)
                 })
@@ -6286,40 +6259,18 @@ impl Interpreter {
             }
         }
 
-        // Check CanDeclareGlobalFunction / CanDeclareGlobalVar for global context
-        if is_global {
-            let global_id = var_env.borrow().global_object_id;
-            let global_obj = global_id.and_then(|id| self.get_object(id));
-            if let Some(ref gobj) = global_obj {
-                let gb = gobj.borrow();
-                let extensible = gb.extensible;
-                for fname in &declared_func_names {
-                    if let Some(desc) = gb.properties.get(fname) {
-                        if desc.configurable() != Some(true) {
-                            let is_valid_data = desc.value().is_some()
-                                && desc.writable() == Some(true)
-                                && desc.enumerable() == Some(true);
-                            if !is_valid_data {
-                                return Err(self.create_type_error(&format!(
-                                    "Cannot declare global function '{}'",
-                                    fname
-                                )));
-                            }
-                        }
-                    } else if !extensible {
-                        return Err(self.create_type_error(&format!(
-                            "Cannot define global function '{}'",
-                            fname
-                        )));
-                    }
+        // CanDeclareGlobalFunction / CanDeclareGlobalVar for global context
+        if is_global && let Some(gid) = var_env.borrow().global_object_id {
+            for fname in &declared_func_names {
+                if !self.can_declare_global_function(gid, fname)? {
+                    return Err(self
+                        .create_type_error(&format!("Cannot declare global function '{fname}'")));
                 }
-                for vname in &declared_var_names {
-                    if !gb.properties.contains_key(vname) && !extensible {
-                        return Err(self.create_type_error(&format!(
-                            "Cannot define global variable '{}'",
-                            vname
-                        )));
-                    }
+            }
+            for vname in &declared_var_names {
+                if !self.can_declare_global_var(gid, vname)? {
+                    return Err(self
+                        .create_type_error(&format!("Cannot declare global variable '{vname}'")));
                 }
             }
         }
@@ -6345,8 +6296,8 @@ impl Interpreter {
                 has_simple_params: info.has_simple_params,
             };
             let val = self.create_function(func);
-            if is_global {
-                self.env_declare_global_function_binding(var_env, &f.name, val, true);
+            if let Some(gid) = var_env.borrow().global_object_id {
+                self.create_global_function_binding(gid, &f.name, val, true)?;
             } else {
                 if !var_env.borrow().bindings.contains_key(&f.name) {
                     var_env
@@ -6401,8 +6352,8 @@ impl Interpreter {
         // Hoist var declarations to var_env
         for name in &declared_var_names {
             if !var_env.borrow().bindings.contains_key(name) {
-                if is_global {
-                    self.env_declare_global_var_configurable(var_env, name);
+                if let Some(gid) = var_env.borrow().global_object_id {
+                    self.create_global_var_binding(gid, name, true)?;
                 } else {
                     var_env
                         .borrow_mut()
@@ -6468,9 +6419,9 @@ impl Interpreter {
                             }
                         }
 
-                        if is_global {
+                        if let Some(gid) = var_env.borrow().global_object_id {
                             if !var_env.borrow().bindings.contains_key(&name) {
-                                self.env_declare_global_var_configurable(var_env, &name);
+                                self.create_global_var_binding(gid, &name, true)?;
                             }
                         } else if !var_env.borrow().bindings.contains_key(&name) {
                             var_env
@@ -7211,38 +7162,12 @@ impl Interpreter {
     }
 
     /// PutValue for unresolvable reference in sloppy mode (§6.2.5.6):
-    /// Set property on the global object.
+    /// `Set(globalObject, name, value, false)`.
     fn set_global_implicit(&mut self, name: &str, value: JsValue) -> Completion {
         let global_env = self.realm().global_env.clone();
-        if !global_env.borrow().bindings.contains_key(name) {
-            global_env
-                .borrow_mut()
-                .declare_deletable(name, BindingKind::Var);
-        }
         match self.env_set(&global_env, name, value.clone()) {
             Ok(()) => Completion::Normal(value),
-            Err(_) => Completion::Throw(self.create_type_error("Assignment to constant variable.")),
-        }
-    }
-
-    /// Whether `obj_id` is some realm's global object — the only case in which
-    /// a property write has a global environment binding to mirror.
-    fn is_realm_global_object(&self, obj_id: u64) -> bool {
-        self.realms
-            .iter()
-            .any(|realm| realm.global_object == Some(obj_id))
-    }
-
-    /// Sync a property set on an object to the corresponding global env binding,
-    /// if the object is a realm's global object.
-    fn sync_global_object_binding(&mut self, obj_id: u64, key: &str, value: &JsValue) {
-        let env = self.realms.iter().find_map(|realm| {
-            (realm.global_object == Some(obj_id)).then(|| realm.global_env.clone())
-        });
-        if let Some(env) = env
-            && env.borrow().bindings.contains_key(key)
-        {
-            let _ = self.env_set(&env, key, value.clone());
+            Err(e) => Completion::Throw(e),
         }
     }
 
@@ -7377,7 +7302,6 @@ impl Interpreter {
                                                 ),
                                             ));
                                         }
-                                        self.sync_global_object_binding(gid, name, &value);
                                         return Completion::Normal(value);
                                     }
                                     Err(e) => return Completion::Throw(e),

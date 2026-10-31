@@ -31,18 +31,16 @@ pub(super) enum NamedGet {
     Slow,
 }
 
-/// The observable result of [[Set]] plus the internal write-path fact needed
-/// by the evaluator's global object-record bridge.
+/// The observable result of [[Set]].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SetOutcome {
     Rejected,
     Succeeded,
-    OwnDataWrite(u64),
 }
 
 impl SetOutcome {
     pub(crate) fn succeeded(self) -> bool {
-        !matches!(self, Self::Rejected)
+        self == Self::Succeeded
     }
 
     fn from_success(succeeded: bool) -> Self {
@@ -51,18 +49,6 @@ impl SetOutcome {
         } else {
             Self::Rejected
         }
-    }
-
-    fn from_own_data_write(receiver_id: u64, succeeded: bool) -> Self {
-        if succeeded {
-            Self::OwnDataWrite(receiver_id)
-        } else {
-            Self::Rejected
-        }
-    }
-
-    pub(crate) fn wrote_own_data_property_on(self, receiver_id: u64) -> bool {
-        self == Self::OwnDataWrite(receiver_id)
     }
 }
 
@@ -1319,25 +1305,16 @@ impl Interpreter {
                         };
                         return self
                             .array_set_length(obj_id as usize, val_desc)
-                            .map(|succeeded| SetOutcome::from_own_data_write(obj_id, succeeded));
+                            .map(SetOutcome::from_success);
                     }
                     self.gc_write_barrier_value(&obj, &value);
                     let succeeded = obj.borrow_mut_untracked().set_property_value(key, value);
-                    return Ok(SetOutcome::from_own_data_write(obj_id, succeeded));
+                    return Ok(SetOutcome::from_success(succeeded));
                 }
                 // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
                 if let Some(rid) = recv_id {
-                    let receiver_uses_proxy_define =
-                        self.get_object_cell(rid).is_some_and(|cell| {
-                            let b = cell.borrow();
-                            b.is_proxy() || b.is_proxy_revoked()
-                        });
                     let succeeded = self.set_on_receiver_native(rid, key, value)?;
-                    return Ok(if receiver_uses_proxy_define {
-                        SetOutcome::from_success(succeeded)
-                    } else {
-                        SetOutcome::from_own_data_write(rid, succeeded)
-                    });
+                    return Ok(SetOutcome::from_success(succeeded));
                 }
                 // Receiver is not an Object: [[Set]] must return false, never
                 // fall back to writing the property onto `obj` itself — `obj`
@@ -1387,7 +1364,7 @@ impl Interpreter {
                     let succeeded = recv_obj
                         .borrow_mut_untracked()
                         .set_property_value(key, value);
-                    return Ok(SetOutcome::from_own_data_write(recv_id, succeeded));
+                    return Ok(SetOutcome::from_success(succeeded));
                 }
             }
             // Receiver is not an Object (or resolved to no live object): [[Set]]

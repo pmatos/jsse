@@ -1,7 +1,7 @@
-//! Interpreter-side wrappers around the slim `Environment` methods. They
-//! re-introduce the global-object mirroring that PR 1b.4 removed from
-//! `Environment::set/get/has/declare_global_*` so those methods could be
-//! free of `Rc<RefCell<JsObjectData>>` field access.
+//! Interpreter-side wrappers around the slim `Environment` methods: the
+//! global-object fall-through of lookups and the `[[Set]]` of a name no
+//! declarative scope binds (the Object Environment Record half of the global
+//! environment; see `global_access/record.rs`).
 //!
 //! Borrow-ordering rule: every wrapper drops all `RefCell` borrows on `env`
 //! before invoking `proxy_set` / `set_property_value` on the global object.
@@ -36,9 +36,9 @@ impl Interpreter {
             .and_then(|go| go.borrow().own_property_lookup(name))
     }
 
-    /// Mirrors `Environment::set`'s old chain walk + global-object mirror,
-    /// preserving sloppy-mode implicit globals and the var-binding mirror at
-    /// the global env.
+    /// SetMutableBinding along the scope chain; a name no declarative scope
+    /// binds is written to the global object with [[Set]] (setters and a
+    /// Proxy global see it).
     pub(crate) fn env_set<N: BindingName + ?Sized>(
         &mut self,
         env: &EnvRef,
@@ -78,17 +78,9 @@ impl Interpreter {
                         }
                         return Ok(());
                     }
-                    if global_object_id.is_none() {
-                        binding.value = value;
-                        binding.initialized = true;
-                        return Ok(());
-                    }
-                    let mirror_gid = if binding.kind == BindingKind::Var {
-                        global_object_id
-                    } else {
-                        None
-                    };
-                    EnvSetAction::WriteBinding { mirror_gid, strict }
+                    binding.value = value;
+                    binding.initialized = true;
+                    return Ok(());
                 } else if e.parent.is_some() {
                     EnvSetAction::Recurse(e.parent.clone().unwrap())
                 } else if let Some(gid) = global_object_id {
@@ -99,54 +91,11 @@ impl Interpreter {
             };
 
             match action {
-                EnvSetAction::WriteBinding { mirror_gid, strict } => {
-                    if let Some(gid) = mirror_gid {
-                        // Borrow on `current` is dropped above; safe to call
-                        // out to the slab (re-entrant set traps OK).
-                        if let Some(go) = self.get_object_cell(gid) {
-                            self.gc_write_barrier_value(go, &value);
-                            let ok = go
-                                .borrow_mut_untracked()
-                                .set_property_value(name, value.clone());
-                            if !ok {
-                                if strict {
-                                    return Err(JsValue::from_str(&format!(
-                                        "Cannot assign to read only property '{name}' of object '#<Object>'"
-                                    )));
-                                }
-                                return Ok(());
-                            }
-                        }
-                    }
-                    let mut e = current.borrow_mut();
-                    if let Some(b) = e.bindings.get_mut(key) {
-                        b.value = value;
-                        b.initialized = true;
-                    }
-                    return Ok(());
-                }
                 EnvSetAction::Recurse(parent) => {
                     current = parent;
                 }
                 EnvSetAction::ImplicitGlobal { gid } => {
-                    let already_on_global = self
-                        .get_object_cell(gid)
-                        .is_some_and(|go| go.borrow().has_own_property(name));
-                    let ok = self.get_object_cell(gid).is_some_and(|go| {
-                        self.gc_write_barrier_value(go, &value);
-                        go.borrow_mut_untracked()
-                            .set_property_value(name, value.clone())
-                    });
-                    if !ok {
-                        return Ok(());
-                    }
-                    if already_on_global {
-                        return Ok(());
-                    }
-                    key.insert_into(
-                        &mut current.borrow_mut().bindings,
-                        Binding::new(value, BindingKind::Var, true),
-                    );
+                    self.set_global_object_property(gid, name, value)?;
                     return Ok(());
                 }
                 EnvSetAction::CreateBinding => {
@@ -211,54 +160,6 @@ impl Interpreter {
         false
     }
 
-    /// CreateGlobalVarBinding (§9.1.1.4.17): declare a non-configurable Var
-    /// on the global object when env is the global env, otherwise just declare
-    /// in env.bindings.
-    pub(crate) fn env_declare_global_var(&mut self, env: &EnvRef, name: &str) {
-        let gid = env.borrow().global_object_id;
-        if let Some(gid) = gid {
-            if let Some(go) = self.get_object_cell(gid) {
-                let mut g = go.borrow_mut();
-                if !g.properties.contains_key(name) {
-                    let key = crate::interpreter::key_intern::intern_key(name);
-                    g.properties.insert(
-                        key,
-                        PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
-                    );
-                }
-            }
-        } else {
-            env.borrow_mut().declare_global_var(name);
-        }
-    }
-
-    /// CreateGlobalVarBinding with configurable=true (eval-declared vars).
-    pub(crate) fn env_declare_global_var_configurable(&mut self, env: &EnvRef, name: &str) {
-        let gid = env.borrow().global_object_id;
-        if let Some(gid) = gid {
-            if !env.borrow().bindings.contains_key(name) {
-                let has_global_prop = self
-                    .get_object_cell(gid)
-                    .is_some_and(|g| g.borrow().properties.contains_key(name));
-                if !has_global_prop {
-                    env.borrow_mut().declare(name, BindingKind::Var);
-                }
-            }
-            if let Some(go) = self.get_object_cell(gid) {
-                let mut g = go.borrow_mut();
-                if !g.properties.contains_key(name) {
-                    let key = crate::interpreter::key_intern::intern_key(name);
-                    g.properties.insert(
-                        key,
-                        PropertyDescriptor::data(JsValue::UNDEFINED, true, true, true),
-                    );
-                }
-            }
-        } else {
-            env.borrow_mut().declare_global_var_configurable(name);
-        }
-    }
-
     /// Walk the scope chain and check what error (if any) setting a binding
     /// would produce. Mirrors the static `Environment::check_set_binding` but
     /// reads the global object via the slab.
@@ -307,44 +208,10 @@ impl Interpreter {
             }
         }
     }
-
-    /// CreateGlobalFunctionBinding (eval-declared functions).
-    pub(crate) fn env_declare_global_function_binding(
-        &mut self,
-        env: &EnvRef,
-        name: &str,
-        value: JsValue,
-        configurable: bool,
-    ) {
-        env.borrow_mut()
-            .declare_global_function_binding(name, value.clone(), configurable);
-        let gid = env.borrow().global_object_id;
-        if let Some(gid) = gid
-            && let Some(go) = self.get_object_cell(gid)
-        {
-            let mut g = go.borrow_mut();
-            let existing = g.properties.get(name);
-            let need_full_desc =
-                existing.is_none() || existing.is_some_and(|d| d.configurable() == Some(true));
-            if need_full_desc {
-                let desc = PropertyDescriptor::data(value, true, true, configurable);
-                let key = crate::interpreter::key_intern::intern_key(name);
-                g.properties.insert(key, desc);
-            } else {
-                g.set_property_value(name, value);
-            }
-        }
-    }
 }
 
 enum EnvSetAction {
-    WriteBinding {
-        mirror_gid: Option<u64>,
-        strict: bool,
-    },
     Recurse(EnvRef),
-    ImplicitGlobal {
-        gid: u64,
-    },
+    ImplicitGlobal { gid: u64 },
     CreateBinding,
 }

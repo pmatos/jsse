@@ -4163,7 +4163,7 @@ impl Interpreter {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
-                    self.hoist_pattern(&d.pattern, env, false);
+                    self.hoist_pattern(&d.pattern, env);
                 }
             }
             // §16.2.1.6.1 InitializeEnvironment: pre-declare let/const/using bindings (TDZ)
@@ -4213,7 +4213,7 @@ impl Interpreter {
                 }
             }
             other => {
-                self.hoist_vars_from_stmt(other, env, false);
+                self.hoist_vars_from_stmt(other, env);
             }
         }
     }

@@ -76,8 +76,6 @@ function lookup(object, key) {
   return undefined;
 }
 
-const host = require('internal/host/vm');
-
 function createSync(sandbox, global) {
   const baseline = new SafeMap();
   const tracked = new SafeMap();
@@ -140,7 +138,6 @@ function createSync(sandbox, global) {
 
   // Before a script runs: pick up what the object gained or lost.
   function enter() {
-    host.settle(global);
     for (const { 0: key, 1: entry } of tracked) {
       if (lookup(sandbox, key) !== undefined) continue;
       if (entry.mode === kForward || entry.restorable) restore(key);
@@ -178,7 +175,6 @@ function createSync(sandbox, global) {
 
   // After a script ran: push what it left on the global back to the object.
   function leave() {
-    host.settle(global);
     const keys = ReflectOwnKeys(global);
     const present = new SafeMap();
     for (let i = 0; i < keys.length; i++) {

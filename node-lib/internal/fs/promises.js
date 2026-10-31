@@ -15,6 +15,9 @@ const kRefs = Symbol('kRefs');
 const kClosePromise = Symbol('kClosePromise');
 const kCloseResolve = Symbol('kCloseResolve');
 const CHUNK = 64 * 1024;
+const hasSignal = (options) => (
+  options !== null && typeof options === 'object' && options.signal !== undefined);
+const withSignal = () => require('internal/fs/signal');
 
 function promisify(fn) {
   return function(...args) {
@@ -153,14 +156,19 @@ class FileHandle extends EventEmitter {
   }
 
   async readFile(options) {
+    if (hasSignal(options)) return withSignal().readFile(undefined, options, this);
     return encodeResult(await readAll(this[kFd]), options);
   }
 
   async writeFile(data, options) {
+    if (hasSignal(options)) return withSignal().writeFile(undefined, data, options, false, this);
     await writeAll(this[kFd], toBytes(data, options));
   }
 
-  appendFile(data, options) { return this.writeFile(data, options); }
+  async appendFile(data, options) {
+    if (hasSignal(options)) return withSignal().writeFile(undefined, data, options, true, this);
+    return this.writeFile(data, options);
+  }
   stat(options) { return call.fstat(this[kFd], options); }
   chmod(mode) { return call.fchmod(this[kFd], mode); }
   chown(uid, gid) { return call.fchown(this[kFd], uid, gid); }
@@ -200,11 +208,13 @@ async function withFile(path, flags, fn) {
 
 function readFile(path, options) {
   if (path instanceof FileHandle) return path.readFile(options);
+  if (hasSignal(options)) return withSignal().readFile(path, options);
   return promisify(cbs.readFile)(path, options);
 }
 
 async function writeFile(path, data, options) {
   if (path instanceof FileHandle) return path.writeFile(data, options);
+  if (hasSignal(options)) return withSignal().writeFile(path, data, options, false);
   if (typeof data === 'string' || S.isView(data)) {
     return promisify(cbs.writeFile)(path, data, options);
   }
@@ -220,6 +230,7 @@ async function writeFile(path, data, options) {
 
 function appendFile(path, data, options) {
   if (path instanceof FileHandle) return path.appendFile(data, options);
+  if (hasSignal(options)) return withSignal().writeFile(path, data, options, true);
   return promisify(cbs.appendFile)(path, data, options);
 }
 
