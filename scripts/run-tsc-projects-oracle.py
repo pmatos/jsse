@@ -37,6 +37,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs
 from tsc_oracle_norm import normalise_file, normalise_name, normalise_stats
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -248,21 +249,11 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
         if pty:
             run = [sys.executable, "-I", PTY_RUN, "--rows", pty[0], "--cols", pty[1]]
             run += ["--timeout", str(max(timeout - 5, 1)), "--"] + cmd + args
-        try:
-            r = subprocess.run(
-                run,
-                cwd=tree,
-                env={**env, **extra},
-                capture_output=True,
-                timeout=timeout,
-            )
-            codes.append(str(r.returncode))
-            out.append(r.stdout)
-            err.append(r.stderr)
-        except subprocess.TimeoutExpired as e:
-            codes.append("timeout")
-            out.append(e.stdout or b"")
-            err.append(e.stderr or b"")
+        code, o, e = oracle_procs.run_group(run, tree, {**env, **extra}, timeout)
+        codes.append(code)
+        out.append(o)
+        err.append(e)
+        if code == "timeout":
             break
     elapsed = time.monotonic() - start
     after = snapshot(tree)
@@ -360,6 +351,7 @@ def render(label, bad, limit):
 
 def main():
     global FIX, PINNED
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser()
     ap.add_argument("cases", nargs="*")
     ap.add_argument("--jobs", type=int, default=4)

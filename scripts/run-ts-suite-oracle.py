@@ -26,6 +26,9 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs  # noqa: E402
+
 SUITE = os.path.join(ROOT, "ts-suite")
 PIN = os.path.join(SUITE, "pin.json")
 MANIFEST = os.path.join(SUITE, "oracle.json")
@@ -83,13 +86,12 @@ def sh(cmd, cwd, log=None, env=None):
     print("+", " ".join(cmd), flush=True)
     out = open(log, "ab") if log else None
     try:
-        r = subprocess.run(
+        return oracle_procs.call(
             cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT if out else None
         )
     finally:
         if out:
             out.close()
-    return r.returncode
 
 
 def must(cmd, cwd, **kw):
@@ -428,6 +430,7 @@ def check(manifest, obs):
 
 
 def main(argv=None):
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

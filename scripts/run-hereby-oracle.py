@@ -28,6 +28,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs  # noqa: E402
+
 FIX = os.path.join(ROOT, "scripts", "hereby-fixtures")
 PTY = os.path.join(ROOT, "scripts", "tty-fixtures", "pty-run.py")
 DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS", "NODE_DISABLE_COLORS")
@@ -130,11 +133,7 @@ def execute(engine, exe, cwd, argv, env_extra, cols, timeout, ts_dir, work):
     if cols:
         cmd = [sys.executable, PTY, "--cols", str(cols), "--"] + cmd
     start = time.monotonic()
-    try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
-        code, out, err = str(r.returncode), r.stdout, r.stderr
-    except subprocess.TimeoutExpired as e:
-        code, out, err = "timeout", e.stdout or b"", e.stderr or b""
+    code, out, err = oracle_procs.run_group(cmd, cwd, env, timeout)
     return {
         "exit": code,
         "stdout": normalise(out.decode("utf-8", "replace"), work, ts_dir),
@@ -195,6 +194,7 @@ def check_checkout(ts_dir):
 
 
 def main():
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser()
     ap.add_argument("cases", nargs="*")
     ap.add_argument("--jobs", type=int, default=4)

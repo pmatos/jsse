@@ -27,8 +27,6 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
 import time
@@ -36,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs  # noqa: E402
 from ts_unittest_groups import GROUPS  # noqa: E402
 
 BASELINE = os.path.join(ROOT, "ts-suite", "unittests-config-sys.json")
@@ -79,26 +78,7 @@ def prepare(work, engine, group):
 
 def launch(cmd, cwd, env, timeout):
     start = time.monotonic()
-    child = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    try:
-        out, err = child.communicate(timeout=timeout)
-        code = str(child.returncode)
-    except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)
-        out, err = child.communicate()
-        code = "timeout"
-    else:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    code, out, err = oracle_procs.run_group(cmd, cwd, env, timeout)
     return code, out, err, time.monotonic() - start
 
 
@@ -231,6 +211,7 @@ def load_baseline(path):
 
 def main():
     global TS_DIR
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser()
     ap.add_argument("groups", nargs="*")
     ap.add_argument("--jobs", type=int, default=MAX_JOBS)

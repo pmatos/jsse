@@ -32,14 +32,14 @@ import hashlib
 import json
 import os
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_procs  # noqa: E402
+
 BUDGET = os.path.join(ROOT, "scripts", "tsc-fixtures", "selfcompile-budget.json")
 DROP_ENV = ("NODE_OPTIONS", "FORCE_COLOR", "NO_COLOR", "COLUMNS", "CI")
 OVERRIDES = [
@@ -160,30 +160,7 @@ def snapshot(directory, tree):
     return files
 
 
-def run_measured(argv, cwd, env, timeout):
-    """Run argv; return (exit code or 'timeout', stdout, stderr, seconds, peak RSS in MiB)."""
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        start = time.monotonic()
-        proc = subprocess.Popen(
-            argv, cwd=cwd, env=env, stdout=out, stderr=err, start_new_session=True
-        )
-        code = "timeout"
-        while True:
-            pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
-            if pid:
-                code = os.waitstatus_to_exitcode(status)
-                break
-            if time.monotonic() - start > timeout:
-                os.killpg(proc.pid, signal.SIGKILL)
-                _, _, usage = os.wait4(proc.pid, 0)
-                break
-            time.sleep(0.05)
-        secs = time.monotonic() - start
-        proc.returncode = 0
-        out.seek(0)
-        err.seek(0)
-        rss = usage.ru_maxrss / (1024 * 1024 if sys.platform == "darwin" else 1024)
-        return code, out.read(), err.read(), secs, rss
+run_measured = oracle_procs.run_measured
 
 
 def prepare(tree, ts_dir, generated):
@@ -330,6 +307,7 @@ def check_inputs(ts_dir, tsc_dir, needs_src):
 
 
 def main():
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
