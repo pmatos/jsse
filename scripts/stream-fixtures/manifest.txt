@@ -2,8 +2,8 @@
 # test-pipeline-*.js, test-finished-*.js and test-compose-*.js files in this directory,
 # verbatim. One name per line; further words mark what a test needs from --node
 # beyond the stream module, probed by scripts/run-node-stream-oracle.sh and tests/node_stream.rs:
-#   needs-webstreams      ReadableStream and friends exist (web streams, tracked in #1360;
-#                         these seven tests stay skipped until then)
+#   needs-webstreams      ReadableStream and friends exist (web streams, #1360; the web-stream
+#                         tests are in scripts/webstreams-fixtures)
 # A line starting with "!" names a Node test that is not vendored, with the reason.
 
 test-readable-from
@@ -197,10 +197,10 @@ test-streams-highwatermark
 
 ! test-stream-add-abort-signal requires internal/streams/add-abort-signal (not available in jsse yet)
 ! test-stream-base-prototype-accessors-enumerability requires internal/test/binding (not available in jsse yet)
-! test-stream-consumers requires stream/consumers, stream/web (not available in jsse yet)
+! test-stream-consumers in scripts/webstreams-fixtures/manifest.txt (stream/consumers is there; blocked by the engine's TextDecoder error codes)
 ! test-stream-destroy requires http (not available in jsse yet)
-! test-stream-duplex requires stream/web (not available in jsse yet)
-! test-stream-duplex-from requires buffer, stream/web (not available in jsse yet)
+! test-stream-duplex runs in scripts/run-node-webstreams-oracle.sh (needs stream/web)
+! test-stream-duplex-from runs in scripts/run-node-webstreams-oracle.sh (needs stream/web and Blob)
 ! test-stream-finished requires fs, http, internal/streams/end-of-stream (not available in jsse yet)
 ! test-stream-finished-async-local-storage requires async_hooks, internal/async_context_frame, internal/async_hooks (not available in jsse yet)
 ! test-stream-finished-bindAsyncResource-path requires async_hooks, internal/async_hooks (not available in jsse yet)

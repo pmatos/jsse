@@ -2,8 +2,9 @@
 
 // Blob and File over the prelude's Buffer, shaped after Node v26.8.2
 // lib/internal/blob.js and lib/internal/file.js. The bytes are copied into one
-// Uint8Array when the Blob is constructed. `stream()` and `textStream()` are
-// absent until the web streams exist, and there is no object URL registry.
+// Uint8Array when the Blob is constructed. `stream()` and `textStream()` read
+// that copy through a byte ReadableStream (#1360); there is no object URL
+// registry.
 
 const {
   DateNow,
@@ -80,9 +81,15 @@ function relative(value, size) {
   return value < 0 ? MathMax(size + value, 0) : MathMin(value, size);
 }
 
+let isBlob;
+
 class Blob {
   #bytes;
   #type;
+
+  static {
+    isBlob = (value) => Blob.#is(value);
+  }
 
   constructor(sources = [], options = kEmptyObject) {
     const sequence = toSequence(sources);
@@ -180,6 +187,31 @@ class Blob {
     if (!Blob.#is(this)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
     return PromiseResolve(this.#bytes.slice());
   }
+
+  stream() {
+    Blob.#check(this);
+    const bytes = this.#bytes;
+    let done = false;
+    const { ReadableStream } = require('internal/webstreams/readablestream');
+    return new ReadableStream({
+      type: 'bytes',
+      pull(controller) {
+        if (done || bytes.length === 0) {
+          controller.close();
+          controller.byobRequest?.respond(0);
+          return;
+        }
+        done = true;
+        controller.enqueue(bytes.slice());
+      },
+    });
+  }
+
+  textStream() {
+    Blob.#check(this);
+    const { TextDecoderStream } = require('internal/webstreams/encoding');
+    return this.stream().pipeThrough(new TextDecoderStream());
+  }
 }
 
 ObjectDefineProperties(Blob.prototype, {
@@ -194,6 +226,8 @@ ObjectDefineProperties(Blob.prototype, {
   arrayBuffer: { __proto__: null, enumerable: true },
   text: { __proto__: null, enumerable: true },
   bytes: { __proto__: null, enumerable: true },
+  stream: { __proto__: null, enumerable: true },
+  textStream: { __proto__: null, enumerable: true },
 });
 
 class File extends Blob {
@@ -249,4 +283,4 @@ function resolveObjectURL(url) {
   return undefined;
 }
 
-module.exports = { Blob, File, resolveObjectURL };
+module.exports = { Blob, File, isBlob, resolveObjectURL };

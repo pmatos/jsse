@@ -156,6 +156,14 @@
     Object.getPrototypeOf(Object.getPrototypeOf(async function* () {}).prototype),
     false,
   ];
+  ["SafePromiseAll", "SafePromiseAllReturnVoid", "SafePromisePrototypeFinally"].forEach(function (name) {
+    table[name] = [
+      function () {
+        return reflectApply(requireBuiltin("internal/per_context/safe_promise")[name], undefined, arguments);
+      },
+      false,
+    ];
+  });
   if (table.ErrorCaptureStackTrace === undefined) {
     table.ErrorCaptureStackTrace = [function captureStackTrace() {}, false];
   }
@@ -196,6 +204,13 @@
     exports: {
       TextEncoder: globalThis.TextEncoder,
       TextDecoder: globalThis.TextDecoder,
+    },
+  };
+  // Web streams (#1360) take these two from the user-visible globals.
+  cache["internal/host/webstreams"] = {
+    exports: {
+      queueMicrotask: globalThis.queueMicrotask,
+      structuredClone: globalThis.structuredClone,
     },
   };
 
@@ -359,6 +374,21 @@
       configurable: true,
     });
   }
+  // The web stream classes (#1360), grouped by the module that defines them.
+  var WEBSTREAMS = "internal/webstreams/";
+  [
+    ["readablestream", "ReadableStream ReadableStreamDefaultReader ReadableStreamBYOBReader " +
+      "ReadableStreamBYOBRequest ReadableByteStreamController ReadableStreamDefaultController"],
+    ["writablestream", "WritableStream WritableStreamDefaultWriter WritableStreamDefaultController"],
+    ["transformstream", "TransformStream TransformStreamDefaultController"],
+    ["queuingstrategies", "ByteLengthQueuingStrategy CountQueuingStrategy"],
+    ["encoding", "TextEncoderStream TextDecoderStream"],
+    ["compression", "CompressionStream DecompressionStream"],
+  ].forEach(function (group) {
+    group[1].split(" ").forEach(function (name) {
+      LAZY_GLOBALS.push([WEBSTREAMS + group[0], name]);
+    });
+  });
   LAZY_GLOBALS.forEach(function (entry) {
     defineLazyGlobal(entry[0], entry[1]);
   });

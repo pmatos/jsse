@@ -16,8 +16,10 @@ const {
   Promise,
   ReflectApply,
   ReflectConstruct,
+  RegExpPrototypeSymbolReplace,
   SafeSet,
   StringPrototypeReplace,
+  StringPrototypeToLowerCase,
   Symbol,
   SymbolFor,
   SymbolPrototypeGetDescription,
@@ -294,8 +296,28 @@ function setOwnProperty(obj, key, value) {
   });
 }
 
+function SideEffectFreeRegExpPrototypeSymbolReplace(regex, string, replacement) {
+  return RegExpPrototypeSymbolReplace(regex, string, replacement);
+}
+
+const kEncodingNames = {
+  __proto__: null,
+  'utf8': 'utf8', 'utf-8': 'utf8',
+  'ucs2': 'utf16le', 'ucs-2': 'utf16le', 'utf16le': 'utf16le', 'utf-16le': 'utf16le',
+  'latin1': 'latin1', 'binary': 'latin1', 'base64': 'base64', 'base64url': 'base64url',
+  'hex': 'hex', 'ascii': 'ascii',
+};
+
+function normalizeEncoding(enc) {
+  if (enc == null) return 'utf8';
+  return kEncodingNames[StringPrototypeToLowerCase(`${enc}`)];
+}
+
 module.exports = {
   assignFunctionName,
+  SideEffectFreeRegExpPrototypeSymbolReplace,
+  getDeprecationWarningEmitter,
+  normalizeEncoding,
   setOwnProperty,
   once,
   customInspectSymbol: SymbolFor('nodejs.util.inspect.custom'),

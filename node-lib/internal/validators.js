@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  ArrayBufferIsView,
   ArrayIsArray,
   ArrayPrototypeIncludes,
   ArrayPrototypeJoin,
@@ -23,6 +24,9 @@ const kValidateObjectAllowNullable = 1 << 0;
 const kValidateObjectAllowArray = 1 << 1;
 const kValidateObjectAllowFunction = 1 << 2;
 const kValidateObjectAllowObjects = kValidateObjectAllowArray |
+  kValidateObjectAllowFunction;
+const kValidateObjectAllowObjectsAndNull = kValidateObjectAllowNullable |
+  kValidateObjectAllowArray |
   kValidateObjectAllowFunction;
 
 function validateString(value, name) {
@@ -163,8 +167,16 @@ function validateUnion(value, name, union) {
   }
 }
 
+function validateBuffer(buffer, name = 'buffer') {
+  if (!ArrayBufferIsView(buffer)) {
+    throw new ERR_INVALID_ARG_TYPE(name, ['Buffer', 'TypedArray', 'DataView'], buffer);
+  }
+}
+
 module.exports = {
   kValidateObjectAllowArray,
+  kValidateObjectAllowObjectsAndNull,
+  validateBuffer,
   validateArray,
   validateBooleanArray,
   validateOneOf,

@@ -24,6 +24,7 @@ mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_brotli_ctx;
 mod node_host_builtins;
+mod node_host_builtins_webstreams;
 mod node_host_callee;
 #[cfg(unix)]
 mod node_host_child;

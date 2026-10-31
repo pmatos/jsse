@@ -7,6 +7,7 @@ const {
   ArrayPrototypePush,
   FunctionPrototypeCall,
   ObjectPrototypeIsPrototypeOf,
+  SafeSet,
   String,
   SymbolIterator,
   TypeError,
@@ -87,8 +88,22 @@ function createInterfaceConverter(name, prototype) {
   };
 }
 
+function createEnumConverter(name, values) {
+  const accepted = new SafeSet(values);
+  return function(V, options = kEmptyObject) {
+    const S = converters.DOMString(V, options);
+    if (!accepted.has(S)) {
+      throw makeException(
+        `'${S}' is not a valid enum value of type ${name}.`,
+        { ...options, code: 'ERR_INVALID_ARG_VALUE' });
+    }
+    return S;
+  };
+}
+
 module.exports = {
   converters,
+  createEnumConverter,
   createInterfaceConverter,
   createSequenceConverter,
 };
