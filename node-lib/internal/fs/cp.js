@@ -254,4 +254,4 @@ function cpCallback(src, dest, options, callback) {
   callbackified(prepared.src, prepared.dest, prepared.options, callback);
 }
 
-module.exports = { cp, cpCallback, cpFn };
+module.exports = { cp, cpCallback };
