@@ -76,7 +76,6 @@ const TEXTS = ["", "abc", "héllo wörld €", "😀 emoji", "\ud800x", "x\udc00
 const IN_ENC = [undefined, "utf8", "UTF-8", "latin1", "binary", "ascii", "hex", "base64", "base64url", "ucs2", "utf16le", "UCS-2", "foo", "buffer", ""];
 for (const t of TEXTS) {
   for (const enc of IN_ENC) {
-    if (t.includes("\ud83d") && /base64/.test(enc)) continue; // Buffer shim: #1328
     attempt(`update ${JSON.stringify(t)} ${enc}`, () => crypto.createHash("sha256").update(t, enc).digest("hex"));
   }
 }
