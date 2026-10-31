@@ -2350,28 +2350,6 @@ impl Interpreter {
         }
     }
 
-    /// For a loop sharing one iteration environment, the `let`/`const`
-    /// identifier its head binds, interned once so each iteration installs it
-    /// without hashing the name again.
-    fn simple_head_binding(
-        left: &ForInOfLeft,
-        shared_env: Option<&EnvRef>,
-    ) -> Option<(Atom, BindingKind)> {
-        shared_env?;
-        let ForInOfLeft::Variable(decl) = left else {
-            return None;
-        };
-        let kind = match decl.kind {
-            VarKind::Let => BindingKind::Let,
-            VarKind::Const => BindingKind::Const,
-            _ => return None,
-        };
-        match decl.declarations.first().map(|d| &d.pattern) {
-            Some(Pattern::Identifier(name)) => Some((Atom::intern(name), kind)),
-            _ => None,
-        }
-    }
-
     fn exec_for_of_loop(
         &mut self,
         fo: &ForOfStatement,
@@ -2391,6 +2369,7 @@ impl Interpreter {
             if self.gc_safepoint_poll() {
                 return self.budget_exit();
             }
+            self.node_set_call_pos(fo.at);
             let val = if fo.is_await {
                 let step_result = match self.iterator_next(iterator) {
                     Ok(v) => v,

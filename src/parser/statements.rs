@@ -1,3 +1,5 @@
+mod with_switch;
+
 use super::*;
 
 mod block_body;
@@ -522,6 +524,7 @@ impl<'a> Parser<'a> {
             false
         };
         self.eat(&Token::LeftParen)?;
+        let head_start = self.current_token_start;
 
         // for (using x of expr) or for (using x = expr; test; update)
         // Special case: `for (using of = init; ...)` — `of` is binding identifier.
@@ -541,6 +544,7 @@ impl<'a> Parser<'a> {
         };
         if is_for_using {
             self.advance()?; // using
+            let at = CallSiteId::at(self.current_token_start).1;
             let ident = self
                 .current_identifier_name()
                 .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
@@ -563,6 +567,7 @@ impl<'a> Parser<'a> {
                     right,
                     body,
                     is_await,
+                    at,
                     scope_capture: Default::default(),
                 }));
             }
@@ -651,6 +656,7 @@ impl<'a> Parser<'a> {
         if is_for_await_using {
             self.advance()?; // await
             self.advance()?; // using
+            let at = CallSiteId::at(self.current_token_start).1;
             let ident = self
                 .current_identifier_name()
                 .ok_or_else(|| self.error("Expected identifier in await using declaration"))?;
@@ -673,6 +679,7 @@ impl<'a> Parser<'a> {
                     right,
                     body,
                     is_await,
+                    at,
                     scope_capture: Default::default(),
                 }));
             }
@@ -779,7 +786,7 @@ impl<'a> Parser<'a> {
                             "for-of loop variable declaration may not have an initializer",
                         ));
                     }
-                    self.advance()?;
+                    let at = self.advance_past_of(head_start)?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
@@ -791,6 +798,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         is_await,
+                        at,
                         scope_capture: Default::default(),
                     }));
                 }
@@ -859,7 +867,7 @@ impl<'a> Parser<'a> {
                         if matches!(&expr, Expression::Identifier(n) if n == "let") {
                             return Err(self.error("The identifier 'let' is disallowed as a left-hand side expression of a for-of loop"));
                         }
-                        self.advance()?;
+                        let at = self.advance_past_of(head_start)?;
                         let right = self.parse_assignment_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
@@ -875,6 +883,7 @@ impl<'a> Parser<'a> {
                             right,
                             body,
                             is_await,
+                            at,
                             scope_capture: Default::default(),
                         }));
                     }
@@ -918,7 +927,7 @@ impl<'a> Parser<'a> {
                                 "for-of loop variable declaration may not have an initializer",
                             ));
                         }
-                        self.advance()?;
+                        let at = self.advance_past_of(head_start)?;
                         let right = self.parse_assignment_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
@@ -931,6 +940,7 @@ impl<'a> Parser<'a> {
                             right,
                             body,
                             is_await,
+                            at,
                             scope_capture: Default::default(),
                         }));
                     }
@@ -995,7 +1005,7 @@ impl<'a> Parser<'a> {
                             "for-of loop variable declaration may not have an initializer",
                         ));
                     }
-                    self.advance()?;
+                    let at = self.advance_past_of(head_start)?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
@@ -1008,6 +1018,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         is_await,
+                        at,
                         scope_capture: Default::default(),
                     }));
                 }
@@ -1083,7 +1094,7 @@ impl<'a> Parser<'a> {
                     {
                         return Err(self.error("The identifier 'async' is disallowed as a left-hand side expression of a for-of loop"));
                     }
-                    self.advance()?;
+                    let at = self.advance_past_of(head_start)?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
@@ -1099,6 +1110,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         is_await,
+                        at,
                         scope_capture: Default::default(),
                     }));
                 }
@@ -1291,28 +1303,6 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_switch_statement(&mut self) -> Result<Statement, ParseError> {
-        self.advance()?; // switch
-        self.eat(&Token::LeftParen)?;
-        let discriminant = self.parse_expression()?;
-        self.eat(&Token::RightParen)?;
-        self.eat(&Token::LeftBrace)?;
-        // The decrement below is unconditional, matching `parse_iteration_body`.
-        // That is deliberate: a counter some inner construct zeroed without
-        // restoring underflows here — a panic under `overflow-checks`, which
-        // the fuzz targets and the test profile both enable — rather than
-        // silently corrupting `break`/`continue` validation further out.
-        self.in_switch += 1;
-        let result = self.parse_switch_case_block();
-        self.in_switch -= 1;
-        let cases = result?;
-        self.eat(&Token::RightBrace)?;
-        Ok(Statement::Switch(SwitchStatement {
-            discriminant,
-            cases,
-        }))
-    }
-
     fn parse_switch_case_block(&mut self) -> Result<Vec<SwitchCase>, ParseError> {
         let mut cases = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
@@ -1388,29 +1378,6 @@ impl<'a> Parser<'a> {
         Ok(consequent)
     }
 
-    fn parse_with_statement(&mut self) -> Result<Statement, ParseError> {
-        if self.strict {
-            return Err(self.error("Strict mode code may not include a with statement"));
-        }
-        self.advance()?; // with
-        self.eat(&Token::LeftParen)?;
-        let expr = self.parse_expression()?;
-        self.eat(&Token::RightParen)?;
-        // §14.11.1: FunctionDeclaration, GeneratorDeclaration, ClassDeclaration
-        // are not allowed in Statement position of WithStatement
-        if matches!(self.current, Token::Keyword(Keyword::Function)) {
-            return Err(self.error("Function declaration not allowed in statement position"));
-        }
-        if matches!(self.current, Token::Keyword(Keyword::Class)) {
-            return Err(self.error("Class declaration not allowed in statement position"));
-        }
-        let body = self.parse_statement()?;
-        // §14.11.1: IsLabelledFunction(Statement) must be false
-        if Self::is_labelled_function(&body) {
-            return Err(self.error("Labelled function declaration not allowed in with statement"));
-        }
-        Ok(Statement::With(expr, Box::new(body)))
-    }
     fn parse_expression_statement(&mut self) -> Result<Statement, ParseError> {
         let expr = self.parse_expression()?;
         self.eat_semicolon()?;

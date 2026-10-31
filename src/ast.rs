@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::types::JsBigInt;
 
 mod capture_walk;
+mod for_of;
 pub(crate) use capture_walk::CaptureWalk;
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
@@ -895,31 +896,9 @@ pub(crate) struct ForOfStatement {
     /// which also covers `await using` ForDeclarations that suspend at iteration disposal
     /// without awaiting the iteration protocol itself.
     pub is_await: bool,
+    /// V8's position of the head (`parser/for_head_site.rs`).
+    pub at: u32,
     pub scope_capture: ScopeCaptureCell,
-}
-
-impl ForOfStatement {
-    /// See [`ForStatement::may_capture_iteration_scope`].
-    pub(crate) fn may_capture_iteration_scope(&self) -> bool {
-        self.scope_capture
-            .get_or_compute(|| for_in_of_may_capture(&self.left, &self.body))
-    }
-
-    /// Whether this loop can suspend the enclosing async function/generator at its head,
-    /// either through the async iteration protocol (`is_await`) or through an `await using`
-    /// ForDeclaration's per-iteration DisposeResources `Await`.
-    pub(crate) fn awaits_at_head(&self) -> bool {
-        self.is_await || self.disposes_at_head()
-    }
-
-    /// Whether the ForDeclaration is `await using`, so each iteration's
-    /// DisposeResources may `Await`.
-    pub(crate) fn disposes_at_head(&self) -> bool {
-        matches!(
-            &self.left,
-            ForInOfLeft::Variable(decl) if decl.kind == VarKind::AwaitUsing
-        )
-    }
 }
 
 /// Cached answer to "could this loop's per-iteration scope be observed?".

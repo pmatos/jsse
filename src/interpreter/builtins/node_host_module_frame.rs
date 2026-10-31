@@ -60,8 +60,9 @@ impl Interpreter {
             self.scheduler
                 .async_function_state_mut(async_id)
                 .and_then(|state| {
+                    let key = state.module_path.clone()?;
                     state.await_pos = 0;
-                    Some((state.module_path.clone()?, state.func_env.clone()))
+                    Some((key, state.func_env.clone()))
                 })
         else {
             return false;

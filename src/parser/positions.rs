@@ -1,10 +1,13 @@
+mod for_head_site;
+
 use super::*;
 
 impl Parser<'_> {
     /// The position a V8 stack trace reports for a call whose `(` is the
     /// current token: the callee's last identifier when it ends the previous
     /// token (not parenthesized or written with escapes), else the parenthesis.
-    /// V8 reports the parenthesis for a private name (`this.#m(`) too.
+    /// V8 reports the parenthesis for a private name (`this.#m(`) too, and
+    /// for a property named like a reserved word (`it.return(`).
     pub(super) fn call_site(&self, callee: &Expression) -> CallSiteId {
         let name: &str = match callee {
             Expression::Identifier(name) | Expression::Member(_, MemberProperty::Dot(name), _) => {
@@ -12,6 +15,9 @@ impl Parser<'_> {
             }
             _ => return CallSiteId::at(self.current_token_start),
         };
+        if Self::is_reserved_identifier(name, false) {
+            return CallSiteId::at(self.current_token_start);
+        }
         let end = self.prev_token_end;
         let start = end.saturating_sub(name.len());
         let written = self.source.get(start..end);
