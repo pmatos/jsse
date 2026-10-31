@@ -54,43 +54,49 @@ impl Interpreter {
             let action = {
                 let mut e = current.borrow_mut();
                 if e.is_indirect_binding(name) {
-                    return Err(JsValue::from_str("Assignment to constant variable."));
-                }
-                let strict = e.strict;
-                let global_object_id = e.global_object_id;
-                if let Some(binding) = e.bindings.get_mut(key) {
-                    if !binding.initialized
-                        && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-                    {
-                        return Err(JsValue::from_str(&format!(
-                            "Cannot access '{name}' before initialization"
-                        )));
-                    }
-                    if binding.kind == BindingKind::Const && binding.initialized {
-                        return Err(JsValue::from_str("Assignment to constant variable."));
-                    }
-                    if (binding.kind == BindingKind::FunctionName
-                        || binding.kind == BindingKind::ImmutableValue)
-                        && binding.initialized
-                    {
-                        if strict {
-                            return Err(JsValue::from_str("Assignment to constant variable."));
-                        }
-                        return Ok(());
-                    }
-                    binding.value = value;
-                    binding.initialized = true;
-                    return Ok(());
-                } else if e.parent.is_some() {
-                    EnvSetAction::Recurse(e.parent.clone().unwrap())
-                } else if let Some(gid) = global_object_id {
-                    EnvSetAction::ImplicitGlobal { gid }
+                    EnvSetAction::ConstAssign
                 } else {
-                    EnvSetAction::CreateBinding
+                    let strict = e.strict;
+                    let global_object_id = e.global_object_id;
+                    if let Some(binding) = e.bindings.get_mut(key) {
+                        if !binding.initialized
+                            && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+                        {
+                            EnvSetAction::Tdz
+                        } else if binding.kind == BindingKind::Const && binding.initialized {
+                            EnvSetAction::ConstAssign
+                        } else if (binding.kind == BindingKind::FunctionName
+                            || binding.kind == BindingKind::ImmutableValue)
+                            && binding.initialized
+                        {
+                            if strict {
+                                EnvSetAction::ConstAssign
+                            } else {
+                                EnvSetAction::Ignored
+                            }
+                        } else {
+                            binding.value = value;
+                            binding.initialized = true;
+                            return Ok(());
+                        }
+                    } else if e.parent.is_some() {
+                        EnvSetAction::Recurse(e.parent.clone().unwrap())
+                    } else if let Some(gid) = global_object_id {
+                        EnvSetAction::ImplicitGlobal { gid }
+                    } else {
+                        EnvSetAction::CreateBinding
+                    }
                 }
             };
 
             match action {
+                EnvSetAction::Ignored => return Ok(()),
+                EnvSetAction::Tdz => {
+                    return Err(self.create_reference_error(&format!(
+                        "Cannot access '{name}' before initialization"
+                    )));
+                }
+                EnvSetAction::ConstAssign => return Err(self.const_assign_error(name, &current)),
                 EnvSetAction::Recurse(parent) => {
                     current = parent;
                 }
@@ -211,7 +217,19 @@ impl Interpreter {
 }
 
 enum EnvSetAction {
+    Ignored,
+    Tdz,
+    ConstAssign,
     Recurse(EnvRef),
     ImplicitGlobal { gid: u64 },
     CreateBinding,
+}
+
+impl Binding {
+    /// An initialized `var`/`let` binding: a plain write needs no TDZ or
+    /// immutability handling, so assignment fast paths may skip the full
+    /// reference resolution.
+    pub(crate) fn is_plain_mutable(&self) -> bool {
+        self.initialized && matches!(self.kind, BindingKind::Var | BindingKind::Let)
+    }
 }

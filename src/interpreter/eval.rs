@@ -2834,7 +2834,7 @@ impl Interpreter {
                             let eb = env.borrow();
                             eb.with_object.is_none()
                                 && eb.bindings.get(name).is_some_and(|b| {
-                                    b.kind == BindingKind::Var || b.kind == BindingKind::Let
+                                    b.is_plain_mutable()
                                 })
                         };
                         if has_mutable_local {
@@ -2886,7 +2886,7 @@ impl Interpreter {
                         let eb = env.borrow();
                         eb.with_object.is_none()
                             && eb.bindings.get(name).is_some_and(|b| {
-                                b.kind == BindingKind::Var || b.kind == BindingKind::Let
+                                b.is_plain_mutable()
                             })
                     };
                     if has_mutable_local {
