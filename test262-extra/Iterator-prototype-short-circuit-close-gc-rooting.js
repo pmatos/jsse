@@ -73,6 +73,18 @@ var found = new CollectingIterator().find(function() {
 assert.sameValue(typeof found, "object", "find returns an object after closing");
 assert.sameValue(found.marker, "found", "find returns the matched value, not a freed slot");
 
+var steps = 0;
+class CountingIterator extends Iterator {
+  next() {
+    collect();
+    return steps++ < 3 ? { done: false, value: steps } : { done: true, value: undefined };
+  }
+}
+var reduced = new CountingIterator().reduce(function(acc, value) {
+  return { total: acc.total + value };
+}, { total: 0 });
+assert.sameValue(reduced.total, 6, "reduce keeps the running accumulator alive across next()");
+
 var mapped = new CollectingIterator().map(function() {
   throw new Test262Error("mapper threw");
 });
