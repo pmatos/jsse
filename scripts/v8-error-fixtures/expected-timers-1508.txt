@@ -1,0 +1,24 @@
+## a named timeout callback
+Error: timeout
+    at Timeout.named [as _onTimeout] (<dir>/timers-1508.js:19:36)
+    at listOnTimeout (node:internal/timers)
+    at process.processTimers (node:internal/timers)
+## a named immediate callback
+Error: immediate
+    at Immediate.immediate [as _onImmediate] (<dir>/timers-1508.js:21:40)
+    at process.processImmediate (node:internal/timers)
+## a named interval callback
+Error: interval
+    at Timeout.tick [as _onTimeout] (<dir>/timers-1508.js:23:41)
+    at listOnTimeout (node:internal/timers)
+    at process.processTimers (node:internal/timers)
+## an arrow timeout callback
+Error: arrow
+    at Timeout._onTimeout (<dir>/timers-1508.js:26:43)
+    at listOnTimeout (node:internal/timers)
+    at process.processTimers (node:internal/timers)
+## an anonymous timeout callback
+Error: anonymous
+    at Timeout._onTimeout (<dir>/timers-1508.js:28:49)
+    at listOnTimeout (node:internal/timers)
+    at process.processTimers (node:internal/timers)

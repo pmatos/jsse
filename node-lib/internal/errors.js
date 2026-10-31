@@ -390,6 +390,7 @@ E('ERR_REQUIRE_ESM', Error, (filename) => {
 });
 
 require('internal/errors/require_esm')(E);
+require('internal/errors/webstreams')(E, codes);
 
 E('ERR_MODULE_NOT_FOUND', Error, function(path, base, exactUrl) {
   if (exactUrl) this.url = `${exactUrl}`;

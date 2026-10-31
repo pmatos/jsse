@@ -32,6 +32,12 @@ const from = require('internal/streams/from');
 
 const { AbortController } = require('internal/abort_controller');
 
+// internal/blob loads on demand: only a Blob-shaped body needs it.
+function isBlob(value) {
+  return value != null && typeof value === 'object' &&
+    typeof value.arrayBuffer === 'function' && require('internal/blob').isBlob(value);
+}
+
 // This is needed for pre node 17.
 class Duplexify extends Duplex {
   constructor(options) {
@@ -135,6 +141,10 @@ module.exports = function duplexify(body, name) {
 
     throw new ERR_INVALID_RETURN_VALUE(
       'Iterable, AsyncIterable or AsyncFunction', name, value);
+  }
+
+  if (isBlob(body)) {
+    return duplexify(body.arrayBuffer());
   }
 
   if (isIterable(body)) {

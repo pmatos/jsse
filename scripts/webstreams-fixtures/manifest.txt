@@ -1,0 +1,35 @@
+# Node v26.8.2 test/parallel web-stream tests (test-webstreams-*, test-whatwg-*stream*, and the
+# stream/consumers, Duplex.from and TextDecoder streaming ones) in this directory, verbatim.
+# One name per line, run by scripts/run-node-webstreams-oracle.sh on jsse --node and Node.
+# A line starting with "!" names a Node test that is not vendored, with the reason.
+
+test-stream-duplex
+test-stream-duplex-from
+test-webstreams-abort-controller
+test-webstreams-adapters-sync-write-error
+test-webstreams-adapters-writable-buffer-sources
+test-webstreams-compose
+test-webstreams-compression-bad-chunks
+test-webstreams-compression-buffer-source
+test-webstreams-decompression-reject-trailing
+test-webstreams-duplex-fromweb-writev-unhandled-rejection
+test-webstreams-finished
+test-webstreams-pipeto-write-request
+test-webstreams-queue-wraparound
+test-whatwg-encoding-custom-textdecoder-streaming
+test-whatwg-readablebytestream
+test-whatwg-readablebytestream-bad-buffers-and-views
+test-whatwg-readablebytestreambyob
+test-whatwg-readablestream-byob-read-min
+test-whatwg-transformstream
+test-whatwg-transformstream-cancel-write-race
+test-whatwg-webstreams-compression
+test-whatwg-writablestream
+test-whatwg-writablestream-close
+
+! test-stream-consumers stream/consumers decodes with the engine's TextDecoder, whose errors lack Node's codes (ERR_INVALID_ARG_TYPE, ERR_ENCODING_INVALID_ENCODED_DATA); tracked in #1527
+! test-webstreams-clone-unref structuredClone(..., { transfer }) of a ReadableStream/WritableStream needs MessagePort-backed cross-realm transfer, which jsse does not have (#1528)
+! test-webstreams-pipeline needs http
+! test-whatwg-encoding-custom-fatal-streaming the engine's TextDecoder does not throw for a dangling odd byte of a fatal utf-16le stream (#1527)
+! test-whatwg-readablestream over the 20,000-byte file budget (41 KB); the corpus covers its ground
+! test-filehandle-readablestream posts a FileHandle through a MessageChannel (#1528); readableWebStream itself is covered by the corpus
