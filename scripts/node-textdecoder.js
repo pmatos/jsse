@@ -99,7 +99,7 @@
   }
 
   function validateDecoder(obj) {
-    if (obj == null || obj[kDecoder] !== true) {
+    if (obj?.[kDecoder] !== true) {
       throw new (internal("internal/errors").codes.ERR_INVALID_THIS)("TextDecoder");
     }
   }
@@ -116,6 +116,7 @@
       get(value);
       return true;
     } catch (e) {
+      // The intrinsic getter throws for a value without that internal slot.
       return false;
     }
   }
@@ -145,6 +146,7 @@
       }
       return new U8(buffer, offset, length);
     } catch (e) {
+      // A detached or out-of-bounds source decodes as no bytes.
       return empty;
     }
   }
