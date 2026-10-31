@@ -2486,7 +2486,7 @@ impl Interpreter {
             };
             let actual = match resolve_element_index(relative_index, len) {
                 Some(k) => k,
-                None => return Completion::Throw(interp.create_range_error("Invalid index")),
+                None => return Completion::Throw(interp.with_index_error(args)),
             };
             let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
             let mut result = Vec::with_capacity(len);

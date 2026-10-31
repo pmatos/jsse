@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::{CallSiteId, PropSiteId};
+use crate::interpreter::builtins::node_host_private::PrivateAccess;
 use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::{BytecodeCacheState, vm};
 use crate::interpreter::generator_analysis::block_has_await_using;
@@ -2833,9 +2834,7 @@ impl Interpreter {
                         let has_mutable_local = {
                             let eb = env.borrow();
                             eb.with_object.is_none()
-                                && eb.bindings.get(name).is_some_and(|b| {
-                                    b.kind == BindingKind::Var || b.kind == BindingKind::Let
-                                })
+                                && eb.bindings.get(name).is_some_and(|b| b.is_plain_mutable())
                         };
                         if has_mutable_local {
                             let rval = match self.eval_expr(right, env) {
@@ -2885,9 +2884,7 @@ impl Interpreter {
                     let has_mutable_local = {
                         let eb = env.borrow();
                         eb.with_object.is_none()
-                            && eb.bindings.get(name).is_some_and(|b| {
-                                b.kind == BindingKind::Var || b.kind == BindingKind::Let
-                            })
+                            && eb.bindings.get(name).is_some_and(|b| b.is_plain_mutable())
                     };
                     if has_mutable_local {
                         let lval = match self.env_get(env, name) {
@@ -3752,9 +3749,8 @@ impl Interpreter {
         name: &str,
     ) -> Completion {
         let Some(obj_id) = obj_val.as_object_id() else {
-            return Completion::Throw(self.create_type_error(&format!(
-                "Cannot read private member #{name} from a non-object"
-            )));
+            let err = self.private_access_error(branded, name, obj_val, PrivateAccess::Read);
+            return Completion::Throw(err);
         };
         let Some(obj) = self.get_object_cell(obj_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
@@ -3767,9 +3763,8 @@ impl Interpreter {
             None => None,
         };
         let Some(getter) = found else {
-            return Completion::Throw(self.create_type_error(&format!(
-                "Cannot read private member #{name} from an object whose class did not declare it"
-            )));
+            let err = self.private_access_error(branded, name, obj_val, PrivateAccess::Read);
+            return Completion::Throw(err);
         };
         match getter {
             Some(getter) => self.call_function(&getter, obj_val, &[]),
@@ -3784,9 +3779,7 @@ impl Interpreter {
     /// is a TypeError, otherwise PrivateElementFind decides.
     pub(crate) fn private_in(&mut self, branded: PrivateId, rval: &JsValue) -> Completion {
         let Some(id) = rval.as_object_id() else {
-            return Completion::Throw(self.create_type_error(
-                "Cannot use 'in' operator to search for a private field without an object",
-            ));
+            return Completion::Throw(self.private_in_error(branded, rval));
         };
         Completion::Normal(JsValue::boolean(
             self.get_object_cell(id)
@@ -3814,9 +3807,7 @@ impl Interpreter {
         val: JsValue,
     ) -> Result<(), JsValue> {
         let Some(id) = obj_val.as_object_id() else {
-            return Err(self.create_type_error(&format!(
-                "Cannot write private member #{name} to a non-object"
-            )));
+            return Err(self.private_access_error(branded, name, obj_val, PrivateAccess::Write));
         };
         let Some(obj) = self.get_object_cell(id) else {
             return Ok(());
@@ -3837,9 +3828,8 @@ impl Interpreter {
                 Some(PrivateElement::Accessor { set, .. }) => set.clone(),
                 None => {
                     drop(borrowed);
-                    return Err(self.create_type_error(&format!(
-                        "Cannot write private member #{name} to an object whose class did not declare it"
-                    )));
+                    let access = PrivateAccess::Write;
+                    return Err(self.private_access_error(branded, name, obj_val, access));
                 }
             }
         };
@@ -9163,7 +9153,7 @@ impl Interpreter {
                                         }
                                     }
                                     if let Some(d) = decl.declarations.first() {
-                                        match self.bind_pattern(
+                                        match self.bind_head(
                                             &d.pattern,
                                             value,
                                             match decl.kind {

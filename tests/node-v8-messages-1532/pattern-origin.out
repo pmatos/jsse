@@ -1,0 +1,45 @@
+for-of const [a] -> TypeError: .for is not iterable
+for-of let [a] -> TypeError: .for is not iterable
+for-of var [a] -> TypeError: .for is not iterable
+for-of [a] null -> TypeError: .for is not iterable
+for-of [a] undefined -> TypeError: .for is not iterable
+for-of [a] object -> TypeError: .for is not iterable
+for-of [...r] -> TypeError: .for is not iterable
+for-of [] -> TypeError: .for is not iterable
+for-of [a = 1] -> TypeError: .for is not iterable
+for-of [[a]] -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+for-of [[a]] null -> TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+for-of {a} null -> TypeError: Cannot destructure property 'a' of '.for' as it is null.
+for-of {a} undefined -> TypeError: Cannot destructure property 'a' of '.for' as it is undefined.
+for-of {} null -> TypeError: Cannot destructure '.for' as it is null.
+for-of {...r} null -> TypeError: Cannot destructure '.for' as it is null.
+for-of {a: [b]} -> TypeError: .for is not iterable (cannot read property Symbol(Symbol.iterator))
+for-of {a: [b]} null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of '.for' as it is null.
+for-of var {a: [b]} -> TypeError: .for is not iterable (cannot read property Symbol(Symbol.iterator))
+for-of {a: {c: [b]}} -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+for-of [{b}] -> TypeError: Cannot read properties of null (reading 'b')
+generator for-of -> TypeError: .for is not iterable
+generator for-of {a} -> TypeError: Cannot destructure property 'a' of '.for' as it is null.
+var {a: [b]} = ident -> TypeError: five is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: [b]} = ident null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of 'empty' as it is null.
+var {a: [b]} = member -> TypeError: o.p is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: [b]} = member null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of 'o.q' as it is null.
+var {a: [b]} = call -> TypeError: f(...) is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: [b]} = call null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of 'f(...)' as it is null.
+var {a: [b]} = literal -> TypeError: {(intermediate value)} is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: [b]} = literal null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of '{(intermediate value)}' as it is null.
+var {a: [b]} = literal undefined -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of '{(intermediate value)}' as it is undefined.
+var {a: [b]} = literal object -> TypeError: {(intermediate value)} is not iterable (cannot read property Symbol(Symbol.iterator))
+var {x, a: [b]} = literal -> TypeError: {(intermediate value)(intermediate value)} is not iterable (cannot read property Symbol(Symbol.iterator))
+var {x, a: [b]} = ident -> TypeError: five is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: [...b]} = ident -> TypeError: five is not iterable (cannot read property Symbol(Symbol.iterator))
+let {a: [b]} = ident -> TypeError: five is not iterable (cannot read property Symbol(Symbol.iterator))
+const {a: [b]} = ident null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of 'empty' as it is null.
+var {[key]: [b]} = ident -> TypeError: five is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: {c: [b]}} = ident -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+var {a: {c: [b]}} = ident null -> TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+var [[a]] = [5] -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+var [[a]] = [null] -> TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+param {a: [b]} -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+param {a: [b]} null -> TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of 'object null' as it is null.
+param [b] -> TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))

@@ -300,11 +300,7 @@ impl Interpreter {
                 ClassElement::StaticBlock(_) => continue,
             };
             if let PropertyKey::Private(n) = key {
-                pn_set.insert_if_absent(n, || {
-                    let id = PrivateId(self.next_private_id);
-                    self.next_private_id += 1;
-                    id
-                });
+                self.declare_private_name(&mut pn_set, n, elem, class_binding_name);
             }
         }
         self.class_private_names.push(Rc::new(pn_set));

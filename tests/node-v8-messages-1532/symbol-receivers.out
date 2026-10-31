@@ -1,0 +1,46 @@
+String[@@iterator] null -> TypeError: String.prototype[Symbol.iterator] called on null or undefined
+String[@@iterator] undefined -> TypeError: String.prototype[Symbol.iterator] called on null or undefined
+Date[@@toPrimitive] 1 -> TypeError: Method Date.prototype [ @@toPrimitive ] called on incompatible receiver 1
+Date[@@toPrimitive] undefined -> TypeError: Method Date.prototype [ @@toPrimitive ] called on incompatible receiver undefined
+Date[@@toPrimitive] hint -> TypeError: Invalid hint: x
+Date[@@toPrimitive] hint number -> TypeError: Invalid hint: 1
+Date[@@toPrimitive] no hint -> TypeError: Invalid hint: undefined
+Symbol[@@toPrimitive] 1 -> TypeError: Symbol.prototype [ @@toPrimitive ] requires that 'this' be a Symbol
+Symbol[@@toPrimitive] object -> TypeError: Symbol.prototype [ @@toPrimitive ] requires that 'this' be a Symbol
+finally number -> TypeError: Promise.prototype.finally called on non-object
+finally boolean -> TypeError: Promise.prototype.finally called on non-object
+finally undefined -> TypeError: Promise.prototype.finally called on non-object
+finally object -> TypeError: Promise.prototype.finally called on non-object
+finally string -> TypeError: Promise.prototype.finally called on non-object
+finally symbol -> TypeError: Promise.prototype.finally called on non-object
+finally object -> TypeError: undefined is not a function
+finally function -> TypeError: undefined is not a function
+finally without callback -> TypeError: Promise.prototype.finally called on non-object
+new Uint8Array iterator number -> TypeError: TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+Uint8Array.from iterator number -> TypeError: %TypedArray%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+new Uint8Array iterator object -> TypeError: TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+Uint8Array.from iterator object -> TypeError: %TypedArray%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+new Uint8Array iterator boolean -> TypeError: TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+Uint8Array.from iterator boolean -> TypeError: %TypedArray%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+new Uint8Array iterator number -> TypeError: TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+Uint8Array.from iterator number -> TypeError: %TypedArray%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+new Uint8Array iterator string -> TypeError: TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+Uint8Array.from iterator string -> TypeError: %TypedArray%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+new BigInt64Array iterator -> TypeError: TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+new Uint8Array null iterator -> ok
+[1].with(-2) -> RangeError: Invalid index : -2
+[1].with(5) -> RangeError: Invalid index : 5
+[1].with(1.5) -> RangeError: Invalid index : 1.5
+[1].with(5.5) -> RangeError: Invalid index : 5.5
+[1].with(Infinity) -> RangeError: Invalid index : Infinity
+[1].with(-Infinity) -> RangeError: Invalid index : -Infinity
+[1].with(7) -> RangeError: Invalid index : 7
+[1].with(9007199254740992) -> RangeError: Invalid index : 9007199254740992
+[1].with(1e+21) -> RangeError: Invalid index : 1e+21
+[1].with(true) -> RangeError: Invalid index : true
+[1].with(object) -> ok
+[1].with(object) -> ok
+[1].with(object) -> RangeError: Invalid index : #<Object>
+[].with() -> RangeError: Invalid index : undefined
+[].with(undefined) -> RangeError: Invalid index : undefined
+array-like with -> RangeError: Invalid index : 3

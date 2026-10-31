@@ -443,10 +443,7 @@ fn bind_head(
     value: JsValue,
     env: &EnvRef,
 ) -> Completion {
-    match head {
-        HeadBinding::Declare { pattern, kind } => interp.bind_pattern(pattern, value, *kind, env),
-        HeadBinding::Assign { pattern } => interp.assign_to_for_pattern(pattern, value, env),
-    }
+    interp.bind_head_binding(head, value, env)
 }
 
 /// Leaves block environments until `depth` remain, keeping the VM's scope

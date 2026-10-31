@@ -7,7 +7,7 @@ use crate::types::JsValue;
 impl Interpreter {
     /// How V8 prints a value inside a message: a string bare, a primitive as
     /// written, an object as `#<Class>`. Never runs user code.
-    fn v8_value_text(&self, value: &JsValue) -> String {
+    pub(super) fn v8_value_text(&self, value: &JsValue) -> String {
         match value.as_string() {
             Some(s) => s.to_string(),
             None => self.describe_non_callable(value),

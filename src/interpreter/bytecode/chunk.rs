@@ -190,6 +190,8 @@ pub(crate) struct FinallyExit {
 pub(crate) enum HeadBinding {
     /// `let`/`const`/`var` with a destructuring pattern.
     Declare { pattern: Pattern, kind: BindingKind },
+    /// A destructuring `catch` parameter.
+    Catch { pattern: Pattern },
     /// An assignment target pattern: `[a, b]`, `{x: o.p}`, `o.p`.
     Assign { pattern: Pattern },
 }
