@@ -108,15 +108,16 @@ fn default_mode_keeps_its_own_wording() {
         .expect("run jsse");
     let text = String::from_utf8_lossy(&out.stdout);
     for own in [
-        "SyntaxError: Expected function name",
-        "SyntaxError: 'let' is not allowed as a variable name in lexical declarations",
-        "SyntaxError: Expected decorator expression after '@'",
-        "SyntaxError: Illegal continue statement",
-        "SyntaxError: Invalid left-hand side in assignment",
-        "SyntaxError: Numeric separator must be exactly one underscore",
+        "Expected function name",
+        "'let' is not allowed as a variable name in lexical declarations",
+        "Expected decorator expression after '@'",
+        "Illegal continue statement",
+        "Invalid left-hand side in assignment",
+        "Numeric separator must be exactly one underscore",
     ] {
         assert!(text.contains(own), "{own}: {text}");
     }
+    assert!(!text.contains("SyntaxError:"), "doubled prefix: {text}");
 }
 
 #[test]
