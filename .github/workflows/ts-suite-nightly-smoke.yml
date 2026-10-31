@@ -1,0 +1,116 @@
+name: TypeScript suite nightly smoke
+
+# A sampled run of the nightly TypeScript suite job (nightly-ts-suite-1298.yml, #1298):
+# the same shard and merge commands over a deterministic 0.2% of the suites of each
+# mocha runner (--sample 0.002 --seed 1), judged against ts-suite/jsse-pass-1296.json.
+# It proves the machinery (partition, gate, result files, merge) on every change to
+# it and catches an engine change that breaks the suite wholesale; the full cases
+# run nightly. Deliberately a separate workflow from ci.yml: it needs a clone and an
+# npm install, so it must never gate the required `build` check.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "node-lib/**"
+      - "scripts/node-*.js"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/run-ts-suite-nightly-1298.py"
+      - "scripts/ts_nightly_1298.py"
+      - "scripts/run-ts-pass-list.py"
+      - "scripts/ts_passlist*.py"
+      - "scripts/run-ts-compiler-oracle.py"
+      - "scripts/run-ts-suite-oracle.py"
+      - "scripts/oracle_procs.py"
+      - "ts-suite/pin.json"
+      - "ts-suite/jsse-pass-1296.json"
+      - "ts-suite/pass-list-1296-not-passing.txt"
+      - ".github/workflows/ts-suite-nightly-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "node-lib/**"
+      - "scripts/node-*.js"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/run-ts-suite-nightly-1298.py"
+      - "scripts/ts_nightly_1298.py"
+      - "scripts/run-ts-pass-list.py"
+      - "scripts/ts_passlist*.py"
+      - "scripts/run-ts-compiler-oracle.py"
+      - "scripts/run-ts-suite-oracle.py"
+      - "scripts/oracle_procs.py"
+      - "ts-suite/pin.json"
+      - "ts-suite/jsse-pass-1296.json"
+      - "ts-suite/pass-list-1296-not-passing.txt"
+      - ".github/workflows/ts-suite-nightly-smoke.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+# Only PR pushes cancel each other; every commit on main keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # A sampled run judges correctness, not speed: skip the slow fat-LTO link.
+      - name: Build
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: cargo build --release --locked
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - name: Fetch and build the pinned TypeScript tree
+        run: python3 scripts/run-ts-suite-oracle.py --dir "$RUNNER_TEMP/ts-suite" fetch install build
+
+      - name: Sampled shard
+        env:
+          TS_SRC_DIR: ${{ runner.temp }}/ts-suite/ts-src
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/smoke"
+          python3 scripts/run-ts-suite-nightly-1298.py shard --shard 0 --shards 1 --sample 0.002 --seed 1 \
+            --out "$RUNNER_TEMP/smoke/shard" --jsse ./target/release/jsse --jobs 2 --timeout 3000 \
+            compiler conformance project transpile fourslash fourslash-server unittests | tee "$RUNNER_TEMP/smoke/shard.log"
+
+      - name: Merge
+        run: |
+          python3 scripts/run-ts-suite-nightly-1298.py merge --results "$RUNNER_TEMP/smoke/shard" \
+            --out "$RUNNER_TEMP/smoke/merged" --shards 1 --sampled --blocking \
+            --runners compiler,conformance,project,transpile,fourslash,fourslash-server,unittests
+          cat "$RUNNER_TEMP/smoke/merged/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ts-suite-nightly-smoke
+          path: ${{ runner.temp }}/smoke
+          retention-days: 7
+          if-no-files-found: ignore

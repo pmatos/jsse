@@ -52,3 +52,4 @@ rules:
       - lint-pr-title.yml
       - tsc-selfcompile-smoke.yml
       - nightly-tsc-selfcompile.yml
+      - nightly-ts-suite-1298.yml
