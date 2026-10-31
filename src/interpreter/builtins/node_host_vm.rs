@@ -9,6 +9,7 @@
 use super::super::*;
 use super::node_host_stack::{HOOK_ERROR, HOOK_GETTER, HOOK_SETTER};
 use crate::parser::Parser;
+use crate::parser::v8_messages::node_message;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -84,11 +85,15 @@ fn parse(source: &JsValue, interp: &mut Interpreter) -> Result<(Program, Rc<str>
         span,
         text: text.to_string(),
     };
-    let mut parser =
-        Parser::for_source(&code, stand_ins).map_err(|e| failure(e.message, (0, 0), &code))?;
+    let mut parser = Parser::for_source(&code, stand_ins)
+        .map_err(|e| failure(node_message(e.message), (0, 0), &code))?;
     match parser.parse_program() {
         Ok(program) => Ok((program, parser.source_origin())),
-        Err(e) => Err(failure(e.message, parser.failure_span(), &code)),
+        Err(e) => Err(failure(
+            node_message(e.message),
+            parser.failure_span(),
+            &code,
+        )),
     }
 }
 

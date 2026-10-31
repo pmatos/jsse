@@ -54,7 +54,7 @@ fn check_dynamic_parts(
         is_generator,
         is_async,
     )
-    .map_err(|e| interp.create_error("SyntaxError", &e.message))
+    .map_err(|e| interp.create_error("SyntaxError", &e.js()))
 }
 
 impl Interpreter {
@@ -137,9 +137,7 @@ impl Interpreter {
                     let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &e.message),
-                            );
+                            return Completion::Throw(interp.create_error("SyntaxError", &e.js()));
                         }
                     };
 
@@ -669,9 +667,7 @@ impl Interpreter {
                     let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &e.message),
-                            );
+                            return Completion::Throw(interp.create_error("SyntaxError", &e.js()));
                         }
                     };
 
@@ -782,9 +778,7 @@ impl Interpreter {
                     let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &e.message),
-                            );
+                            return Completion::Throw(interp.create_error("SyntaxError", &e.js()));
                         }
                     };
 
@@ -897,9 +891,7 @@ impl Interpreter {
                     let program = match parse_dynamic_function_source(&source, pua) {
                         Ok(prog) => prog,
                         Err(e) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", &e.message),
-                            );
+                            return Completion::Throw(interp.create_error("SyntaxError", &e.js()));
                         }
                     };
 

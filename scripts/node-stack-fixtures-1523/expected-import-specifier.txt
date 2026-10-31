@@ -1,0 +1,36 @@
+## variable
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope1.mjs' imported from import-specifier.mjs
+    at variable (import-specifier.mjs:10:46)
+    at import-specifier.mjs:20:7
+## literal
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope2.mjs' imported from import-specifier.mjs
+    at literal (import-specifier.mjs:11:28)
+    at import-specifier.mjs:21:7
+## member
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope4.mjs' imported from import-specifier.mjs
+    at member (import-specifier.mjs:12:44)
+    at import-specifier.mjs:22:7
+## nested member
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope12.mjs' imported from import-specifier.mjs
+    at deepMember (import-specifier.mjs:13:53)
+    at import-specifier.mjs:23:7
+## not awaited
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope6.mjs' imported from import-specifier.mjs
+    at sync (import-specifier.mjs:14:36)
+    at import-specifier.mjs:24:7
+## const m = await
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope7.mjs' imported from import-specifier.mjs
+    at declared (import-specifier.mjs:15:56)
+    at import-specifier.mjs:26:7
+## kept promise
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope8.mjs' imported from import-specifier.mjs
+    at kept (import-specifier.mjs:16:46)
+    at import-specifier.mjs:27:7
+## return await
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope9.mjs' imported from import-specifier.mjs
+    at returned (import-specifier.mjs:17:53)
+    at import-specifier.mjs:28:7
+## global member
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'nope11.mjs' imported from import-specifier.mjs
+    at globalMember (import-specifier.mjs:18:57)
+    at import-specifier.mjs:29:7

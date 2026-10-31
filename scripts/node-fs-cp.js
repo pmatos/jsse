@@ -450,3 +450,4 @@
   };
   S.cp = { cpSync: cpSync };
 })();
+//# sourceURL=node:fs

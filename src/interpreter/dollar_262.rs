@@ -92,7 +92,7 @@ impl Interpreter {
                 let program = match p.parse_program() {
                     Ok(prog) => prog,
                     Err(e) => {
-                        return Completion::Throw(interp.create_error("SyntaxError", &e.message));
+                        return Completion::Throw(interp.create_error("SyntaxError", &e.js()));
                     }
                 };
                 let result = interp.with_realm(Some(eval_realm_id), |interp| interp.run(&program));
