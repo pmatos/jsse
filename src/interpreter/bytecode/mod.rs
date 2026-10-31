@@ -5,6 +5,8 @@ pub(crate) mod vm;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hook_isolation;
 
 use std::rc::Rc;
 
