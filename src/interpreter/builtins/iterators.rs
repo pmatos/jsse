@@ -3,6 +3,7 @@ use crate::interpreter::bytecode::vm::Resume;
 use crate::interpreter::gc::RootedSlots;
 
 mod close;
+mod wrap_valid;
 use close::{
     close_iterator_for_error, iterator_close_all, iterator_close_getter,
     iterator_close_with_completion,
@@ -2490,81 +2491,7 @@ impl Interpreter {
             .borrow_mut()
             .prototype_id = self.realm().iterator_prototype;
 
-        self.define_method(
-            wrap_valid_proto_id,
-            "next",
-            0,
-            move |interp, this, _args| {
-                let Some(this_id) = this.as_object_id() else {
-                    let err = interp.create_type_error("next requires an Iterator wrapper");
-                    return Completion::Throw(err);
-                };
-                let record = interp.get_object_cell(this_id).and_then(|o| {
-                    if let Some(crate::interpreter::types::IterHelperData::Delegation {
-                        iter,
-                        next,
-                    }) = o.borrow().iter_helper()
-                    {
-                        Some((iter.clone(), next.clone()))
-                    } else {
-                        None
-                    }
-                });
-                let (iter, next_method) = match record {
-                    Some(r) => r,
-                    None => {
-                        let err = interp.create_type_error("next requires an Iterator wrapper");
-                        return Completion::Throw(err);
-                    }
-                };
-                interp.call_function(&next_method, &iter, &[])
-            },
-        );
-
-        self.define_method(
-            wrap_valid_proto_id,
-            "return",
-            0,
-            move |interp, this, _args| {
-                let Some(this_id) = this.as_object_id() else {
-                    let err = interp.create_type_error("return requires an Iterator wrapper");
-                    return Completion::Throw(err);
-                };
-                let record = interp.get_object_cell(this_id).and_then(|o| {
-                    if let Some(crate::interpreter::types::IterHelperData::Delegation {
-                        iter,
-                        next,
-                    }) = o.borrow().iter_helper()
-                    {
-                        Some((iter.clone(), next.clone()))
-                    } else {
-                        None
-                    }
-                });
-                let (iter, _next_method) = match record {
-                    Some(r) => r,
-                    None => {
-                        let err = interp.create_type_error("return requires an Iterator wrapper");
-                        return Completion::Throw(err);
-                    }
-                };
-                if let Some(iter_id) = iter.as_object_id() {
-                    let return_method = match interp.get_object_property(iter_id, "return", &iter) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::UNDEFINED,
-                    };
-                    if return_method.is_nullish() {
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
-                    interp.call_function(&return_method, &iter, &[])
-                } else {
-                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
-                }
-            },
-        );
+        wrap_valid::define_wrap_valid_methods(self, wrap_valid_proto_id);
 
         let wvp_for_from: Option<u64> = Some(wrap_valid_proto_id);
         let iterator_ctor_for_from = iterator_ctor.clone();
@@ -2617,6 +2544,10 @@ impl Interpreter {
                 Completion::Normal(JsValue::object(wrapper_id))
             },
         ));
+
+        // `from` captures the wrapper prototype by id only, which the tracer
+        // cannot see, so no wrapper alive means nothing else keeps it.
+        self.pin_native_root(&from_fn, &JsValue::object(wrap_valid_proto_id));
 
         if let Some(ctor_id) = iterator_ctor.as_object_id()
             && let Some(obj) = self.get_object_cell(ctor_id)
