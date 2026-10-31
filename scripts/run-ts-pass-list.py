@@ -204,7 +204,7 @@ def run_batches(args, work, ts_dir, exe, chosen):
     return {r: pl.outcome_table(c) for r, c in tables.items()}, errors
 
 
-def apply_update(doc, np, run, complete, universe, args, jsse_rev):
+def apply_update(doc, np, run, complete, args, jsse_rev):
     """Record the complete buckets of a clean run: (new doc, new not-passing dict, notes)."""
     doc = json.loads(json.dumps(doc))
     np = dict(np)
@@ -416,9 +416,7 @@ def update(args, chosen, universe, run):
             full = [t for t in universe[runner] if t.bucket == name]
             if len(full) == len(tests):
                 complete[(runner, name)] = tests
-    new_doc, new_np, notes = apply_update(
-        doc, np, run, complete, universe, args, jsse_revision()
-    )
+    new_doc, new_np, notes = apply_update(doc, np, run, complete, args, jsse_revision())
     print("\n".join(notes))
     if new_doc != doc or new_np != np:
         for rel, text in (

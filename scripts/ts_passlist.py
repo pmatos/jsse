@@ -15,7 +15,6 @@ import ts_passlist_scripted as scripted
 import ts_passlist_store as store
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(SCRIPTS)
 RUNNERS = (
     "compiler",
     "conformance",
