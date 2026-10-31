@@ -6,19 +6,21 @@
 //! own scripts are untouched.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Called by the stack prelude's install hook; process-wide like the call
-/// positions, since scripts parse lazily.
+/// Called by the stack prelude's install hook. Per thread, like the call
+/// positions: an interpreter parses lazily on the thread that owns it.
 pub(crate) fn enable() {
-    ENABLED.store(true, Ordering::Relaxed);
+    ENABLED.set(true);
+}
+
+pub(crate) fn enabled() -> bool {
+    ENABLED.get()
 }
 
 type Entry = (std::rc::Weak<str>, Rc<str>);
 
 thread_local! {
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static NAMES: std::cell::RefCell<HashMap<(usize, usize), Entry>> = Default::default();
     static PURGE_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(1024) };
 }
@@ -136,7 +138,7 @@ impl Parser<'_> {
         right: &Expression,
         right_start: usize,
     ) {
-        if !ENABLED.load(Ordering::Relaxed)
+        if !enabled()
             || !matches!(left, Expression::Member(..))
             || !matches!(
                 op,

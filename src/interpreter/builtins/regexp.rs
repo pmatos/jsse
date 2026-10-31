@@ -8548,21 +8548,6 @@ fn meta_build_error(pattern: &str, bytes: bool) -> String {
     regex_err.unwrap_or_else(|| "invalid regular expression".to_string())
 }
 
-fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
-    if let Some(obj_id) = this_val.as_object_id()
-        && let Some(obj) = interp.get_object_cell(obj_id)
-    {
-        let b = obj.borrow();
-        let r = b.regexp()?;
-        let flags = r.flags.to_rust_string();
-        let source = js_string_to_regex_pattern(r.source.as_units(), &flags);
-        drop(b);
-        Some((source, flags, obj_id))
-    } else {
-        None
-    }
-}
-
 /// Check if a RegExp object is "pristine": standard prototype, exec not overridden.
 /// Used to enable fast paths in Symbol.match/replace that bypass JS-level dispatch.
 fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
@@ -8724,29 +8709,83 @@ fn advance_string_index(input: &RegexInput, index: usize, unicode: bool) -> usiz
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn set_rsi_state(
+fn rsi_next_step(
     interp: &mut Interpreter,
     o_id: u64,
-    source: String,
-    flags: String,
     string: JsString,
     global: bool,
-    last_index: usize,
-    done: bool,
-    matcher_id: u64,
-) {
-    if let Some(obj2) = interp.get_object_cell(o_id) {
-        obj2.borrow_mut()
-            .set_iterator_state(IteratorState::RegExpStringIterator {
-                source,
-                flags,
-                string,
-                global,
-                last_index,
-                done,
-                matcher_id,
-            });
+    full_unicode: bool,
+    mid: u64,
+) -> Completion {
+    let regex_input = regex_input_for_subject(interp, string);
+
+    let result = regexp_exec_abstract(interp, mid, &regex_input);
+    let result_val = match result {
+        Completion::Normal(v) => v,
+        other => return other,
+    };
+
+    if result_val.is_null() {
+        set_rsi_done(interp, o_id, true);
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
+    }
+
+    if !global {
+        set_rsi_done(interp, o_id, true);
+        return Completion::Normal(interp.create_iter_result_object(result_val, false));
+    }
+
+    // Global: check for empty match, advance if needed
+    let result_id = if let Some(ro_id) = result_val.as_object_id() {
+        ro_id
+    } else {
+        set_rsi_done(interp, o_id, true);
+        return Completion::Normal(interp.create_iter_result_object(result_val, false));
+    };
+    let match_str_val = match interp.get_object_property(result_id, "0", &result_val) {
+        Completion::Normal(v) => v,
+        other => return other,
+    };
+    let match_str = match interp.to_string_lossy(&match_str_val) {
+        Ok(s) => s,
+        Err(e) => return Completion::Throw(e),
+    };
+    if match_str.is_empty() {
+        let matcher_val = JsValue::object(mid);
+        let li_val = match interp.get_object_property(mid, "lastIndex", &matcher_val) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        let li_num = match interp.to_number_value(&li_val) {
+            Ok(n) => n,
+            Err(e) => return Completion::Throw(e),
+        };
+        let this_index = if li_num.is_nan() || li_num <= 0.0 {
+            0
+        } else {
+            li_num.min(9007199254740991.0).floor() as usize
+        };
+        let next_index = advance_string_index(&regex_input, this_index, full_unicode);
+        if let Err(e) = spec_set(
+            interp,
+            mid,
+            "lastIndex",
+            JsValue::number(next_index as f64),
+            true,
+        ) {
+            return Completion::Throw(e);
+        }
+    }
+
+    Completion::Normal(interp.create_iter_result_object(result_val, false))
+}
+
+fn set_rsi_done(interp: &mut Interpreter, o_id: u64, new_done: bool) {
+    if let Some(obj) = interp.get_object_cell(o_id)
+        && let Some(IteratorState::RegExpStringIterator { done, .. }) =
+            obj.borrow_mut().iterator_state_mut()
+    {
+        *done = new_done;
     }
 }
 
@@ -10477,15 +10516,6 @@ impl Interpreter {
                     let global = flags.contains('g');
                     let full_unicode = flags.contains('u') || flags.contains('v');
 
-                    // Extract source/flags from the matcher for the iterator state
-                    let (m_source, m_flags, _) = match extract_source_flags(interp, &matcher_val) {
-                        Some(v) => v,
-                        None => {
-                            // Use empty pattern if matcher has no source/flags
-                            (String::new(), String::new(), matcher_id)
-                        }
-                    };
-
                     // Create iterator with %RegExpStringIteratorPrototype%
                     let iter_obj_id = interp.create_object_id();
                     interp
@@ -10502,20 +10532,10 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(iter_obj_id)
                         .borrow_mut()
-                        .insert_value(
-                            "__full_unicode__".to_string(),
-                            JsValue::boolean(full_unicode),
-                        );
-
-                    interp
-                        .get_object_cell_expect(iter_obj_id)
-                        .borrow_mut()
                         .set_iterator_state(IteratorState::RegExpStringIterator {
-                            source: m_source,
-                            flags: m_flags,
                             string: regex_input.subject.clone(),
                             global,
-                            last_index: last_index as usize,
+                            full_unicode,
                             done: false,
                             matcher_id,
                         });
@@ -10565,30 +10585,16 @@ impl Interpreter {
                         ));
                     }
                 };
-                let state = obj.borrow().iterator_state().cloned();
-                let full_unicode_val = interp.get_property_on_id(o_id, "__full_unicode__");
-                let full_unicode = full_unicode_val.as_boolean() == Some(true);
-
-                let (source, flags, string, global, last_index, done, mid) =
+                let (string, global, full_unicode, done, mid) =
                     if let Some(IteratorState::RegExpStringIterator {
-                        ref source,
-                        ref flags,
-                        ref string,
+                        string,
                         global,
-                        last_index,
+                        full_unicode,
                         done,
                         matcher_id,
-                    }) = state
+                    }) = obj.borrow().iterator_state()
                     {
-                        (
-                            source.clone(),
-                            flags.clone(),
-                            string.clone(),
-                            global,
-                            last_index,
-                            done,
-                            matcher_id,
-                        )
+                        (string.clone(), *global, *full_unicode, *done, *matcher_id)
                     } else {
                         return Completion::Throw(interp.create_type_error(
                             "%RegExpStringIteratorPrototype%.next requires that 'this' be a RegExp String Iterator",
@@ -10601,79 +10607,11 @@ impl Interpreter {
                     );
                 }
 
-                let regex_input = regex_input_for_subject(interp, string.clone());
-
-                let result = regexp_exec_abstract(interp, mid, &regex_input);
-                let result_val = match result {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-
-                if result_val.is_null() {
-                    set_rsi_state(interp, o_id, source, flags, string, global, last_index, true, mid);
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+                let completion = rsi_next_step(interp, o_id, string, global, full_unicode, mid);
+                if !matches!(completion, Completion::Normal(_)) {
+                    set_rsi_done(interp, o_id, true);
                 }
-
-                if !global {
-                    set_rsi_state(interp, o_id, source, flags, string, global, last_index, true, mid);
-                    return Completion::Normal(
-                        interp.create_iter_result_object(result_val, false),
-                    );
-                }
-
-                // Global: check for empty match, advance if needed
-                let result_id = if let Some(ro_id) = result_val.as_object_id() {
-                    ro_id
-                } else {
-                    set_rsi_state(interp, o_id, source, flags, string, global, last_index, true, mid);
-                    return Completion::Normal(
-                        interp.create_iter_result_object(result_val, false),
-                    );
-                };
-                let match_str_val = match interp.get_object_property(
-                    result_id, "0", &result_val,
-                ) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let match_str = match interp.to_string_lossy(&match_str_val) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                };
-                if match_str.is_empty() {
-                    let matcher_val2 =
-                        JsValue::object(mid);
-                    let li_val = match interp.get_object_property(
-                        mid, "lastIndex", &matcher_val2,
-                    ) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let li_num = match interp.to_number_value(&li_val) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let this_index = if li_num.is_nan() || li_num <= 0.0 {
-                        0
-                    } else {
-                        li_num.min(9007199254740991.0).floor() as usize
-                    };
-                    let next_index =
-                        advance_string_index(&regex_input, this_index, full_unicode);
-                    if let Err(e) = spec_set(
-                        interp, mid, "lastIndex",
-                        JsValue::number(next_index as f64), true,
-                    ) {
-                        return Completion::Throw(e);
-                    }
-                }
-
-                set_rsi_state(interp, o_id, source, flags, string, global, last_index, false, mid);
-                Completion::Normal(
-                    interp.create_iter_result_object(result_val, false),
-                )
+                completion
             },
         ));
         self.get_object_cell_expect(rsi_proto_id)

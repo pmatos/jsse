@@ -195,6 +195,13 @@ _Avoid_: leaked try context, unpaired pop.
 
 ## Memory
 
+**Job Scope**:
+`with_job` (`job.rs`) owns synchronous job nesting and ClearKeptObjects.
+Nested returns retain WeakRef targets; the outermost return releases them.
+Results pass through unchanged. Programs, microtasks, timers and Node callbacks
+retain their input roots, completion routing and queue checkpoints.
+_Avoid_: manual job pairing.
+
 **Temp-Root Frame**:
 A saved `gc_temp_roots` depth. `RootStack` permits LIFO push/pop/truncate through
 `gc_root_id`, `gc_unroot_id` and frame helpers: `gc_root_frame` saves depth,
@@ -213,7 +220,13 @@ A `JsValue` attached to an anchor object's `gc_native_roots` list by `pin_native
 _Avoid_: permanent root, closure root.
 
 **Rooted Slot**:
-A GC-traced container an anchor pins once and the owner then mutates in place, for a capture whose value is *replaced* over the anchor's lifetime. A native closure's own `Rc<RefCell<…>>` state is invisible to the tracer, and re-pinning each replacement would retain every superseded value, so the slot — not the value — is what gets pinned. `RootedSlots` in `gc.rs` is the container: growable and indexable (`push`, `set`, `get`, `snapshot`), backed by an arena object so writes run the generational write barrier, and pinned with `pin_on`. Its consumers are `Iterator.concat` and `Iterator.prototype.flatMap` — through `RootedPair` in `builtins/iterators.rs`, the two-slot adapter holding the iterator currently being drawn from plus that iterator's `next` method — and the accumulators of the Promise combinators (`all`, `allSettled`, `any`, `allKeyed`, `allSettledKeyed`).
+An arena-backed, GC-traced container for native captures replaced during an
+anchor's lifetime. Pin `RootedSlots` (`gc.rs`) once with `pin_on`, then use
+`push`, `set`, `get` and `snapshot`; writes run the generational barrier.
+Closure-owned `Rc<RefCell<…>>` values are invisible to the tracer, and pinning
+each replacement would retain superseded values. Consumers are
+`Iterator.concat`/`flatMap` (`RootedPair` holds iterator and `next`) and Promise
+`all`/`allSettled`/`any`/`allKeyed`/`allSettledKeyed` accumulators.
 _Avoid_: root cell, traced box, rooted buffer.
 
 ## Builtins

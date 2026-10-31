@@ -1,6 +1,7 @@
 use super::*;
 
 mod arguments;
+mod async_body;
 mod regexp;
 mod targets;
 
@@ -1020,7 +1021,7 @@ impl<'a> Parser<'a> {
                     } else {
                         (
                             ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
+                                self.async_arrow_expr_body()?,
                             ))])),
                             false,
                         )
@@ -2014,7 +2015,7 @@ impl<'a> Parser<'a> {
                 } else {
                     (
                         ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                            self.parse_arrow_expression_body()?,
+                            self.async_arrow_expr_body()?,
                         ))])),
                         false,
                     )
@@ -2055,7 +2056,7 @@ impl<'a> Parser<'a> {
             } else {
                 (
                     ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                        self.parse_arrow_expression_body()?,
+                        self.async_arrow_expr_body()?,
                     ))])),
                     false,
                 )
@@ -2115,7 +2116,7 @@ impl<'a> Parser<'a> {
                 } else {
                     (
                         ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                            self.parse_arrow_expression_body()?,
+                            self.async_arrow_expr_body()?,
                         ))])),
                         false,
                     )

@@ -227,10 +227,7 @@ impl Interpreter {
                                 .unwrap()
                                 .export_names
                                 .clone();
-                            if key
-                                .as_str()
-                                .is_some_and(|key| export_names.iter().any(|name| name == key))
-                            {
+                            if key.as_str().is_some_and(|key| export_names.contains(key)) {
                                 return Completion::Normal(JsValue::boolean(false));
                             }
                             return Completion::Normal(JsValue::boolean(true));
@@ -360,9 +357,10 @@ impl Interpreter {
                             .and_then(|obj| {
                                 let b = obj.borrow();
                                 let ns = b.module_namespace()?;
-                                Some(key.as_str().is_some_and(|key| {
-                                    ns.export_names.iter().any(|name| name == key)
-                                }))
+                                Some(
+                                    key.as_str()
+                                        .is_some_and(|key| ns.export_names.contains(key)),
+                                )
                             })
                             .unwrap_or(false);
                         if is_export {

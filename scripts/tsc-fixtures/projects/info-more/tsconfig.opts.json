@@ -1,0 +1,5 @@
+{
+  // second base: comments and a trailing comma
+  "compilerOptions": { "noUnusedLocals": true, "newLine": "lf", },
+  "watchOptions": { "watchFile": "fixedPollingInterval" },
+}

@@ -1,0 +1,48 @@
+# name | project | expected exit code per invocation | arguments; ` ;; ` starts another invocation in the same tree
+# Second half of the informational-flag set (#1247), next to cases-info.txt: the same flags under --build, with project references, package.json imports/exports/typesVersions, typeRoots, reference directives, JS packages, outFile, composite, ${configDir}, extends arrays, --locale. Tree: projects/info-more (and projects/chain for --build). @stats normalises the moving numbers of the statistics block.
+infm-b-listfiles | chain | 0 0 | @utimes 1600000000 . ;; -b --listFiles ;; -b --listFiles --verbose
+infm-b-emitted | chain | 0 0 | @utimes 1600000000 . ;; -b --listEmittedFiles ;; -b --force --listEmittedFiles --verbose
+infm-b-explain | chain | 0 | @utimes 1600000000 . ;; -b --explainFiles solo
+infm-b-extended | chain | 0 0 | @utimes 1600000000 . ;; @stats -b --extendedDiagnostics solo ;; @stats -b --diagnostics --force solo
+infm-b-trace | chain | 0 | @utimes 1600000000 . ;; -b --traceResolution app
+infm-b-generate | chain | 0 0 | @utimes 1600000000 . ;; -b --generateTrace tr solo ;; -b --generateCpuProfile prof.cpuprofile --force solo
+infm-b-showconfig | chain | 1 1 | -b --showConfig ;; -b --init
+infm-b-errors | chain | 2 1 | @utimes 1600000000 . ;; @replace util/src/index.ts 'toUpperCase()' 'toUpperCase(1)' ;; -b --listFiles --listEmittedFiles --verbose util ;; -b --explainFiles util
+infm-refs-explain | info-more | 0 0 | -b tsconfig.comp.json ;; -p tsconfig.refs.json --explainFiles --listFiles --noEmit
+infm-refs-trace | info-more | 0 0 | -b tsconfig.comp.json ;; -p tsconfig.refs.json --traceResolution --noEmit
+infm-refs-extended | info-more | 0 0 | -b tsconfig.comp.json ;; @stats -p tsconfig.refs.json --extendedDiagnostics --noEmit
+infm-refs-unbuilt | info-more | 2 | -p tsconfig.refs.json --explainFiles --listFiles --noEmit
+infm-explain | info-more | 0 2 | --explainFiles --noEmit ;; -p tsconfig.js.json --explainFiles --noEmit
+infm-explain-paths | info-more | 2 | -p tsconfig.paths.json --explainFiles --noEmit
+infm-explain-lib | info-more |  0 2 | --ignoreConfig --explainFiles --noEmit --target es2015 --lib es5 app/reflib.ts ;; --ignoreConfig --explainFiles --noEmit --noResolve --noLib globals.d.ts src/index.ts
+infm-explain-locale | info-more | 0 0 | --locale de --explainFiles --noEmit ;; --locale ja --explainFiles --listFilesOnly
+infm-list-js | info-more | 2 2 | -p tsconfig.js.json --listFiles --noEmit ;; -p tsconfig.js.json --listEmittedFiles
+infm-list-js-noemit-on-error | info-more | 1 | -p tsconfig.js.json --listEmittedFiles --noEmitOnError
+infm-list-outfile | info-more | 0 0 0 | -p tsconfig.outfile.json --listEmittedFiles ;; -p tsconfig.outfile.json --listEmittedFiles --emitDeclarationOnly ;; -p tsconfig.outfile.json --listEmittedFiles --noEmit
+infm-list-composite | info-more | 0 0 | -p tsconfig.comp.json --listEmittedFiles ;; -p tsconfig.comp.json --listEmittedFiles --listFiles
+infm-list-json-jsx | info-more | 0 2 | --listEmittedFiles ;; --listEmittedFiles --jsx react-jsx --outDir other
+infm-trace-default | info-more | 0 | --traceResolution --noEmit
+infm-trace-js | info-more | 2 | -p tsconfig.js.json --traceResolution --noEmit
+infm-trace-node10 | info-more | 2 | --traceResolution --noEmit --moduleResolution node10 --module commonjs --ignoreDeprecations 6.0
+infm-trace-node16 | info-more | 2 | --traceResolution --noEmit --moduleResolution node16 --module node16
+infm-trace-options | info-more | 0 2 2 | --traceResolution --noEmit --customConditions foo,bar ;; --traceResolution --noEmit --resolvePackageJsonExports false --resolvePackageJsonImports false ;; --traceResolution --noEmit --noResolve
+infm-trace-paths | info-more | 2 | -p tsconfig.paths.json --traceResolution --noEmit
+infm-trace-ref-types | info-more | 0 2 | --traceResolution --noEmit --ignoreConfig --noLib --typeRoots typeroots --types special globals.d.ts ;; --traceResolution --noEmit --ignoreConfig --noLib --types special globals.d.ts
+infm-showconfig | info-more | 0 0 0 0 | -p tsconfig.refs.json --showConfig ;; -p tsconfig.comp.json --showConfig ;; -p tsconfig.js.json --showConfig ;; -p tsconfig.paths.json --showConfig
+infm-showconfig-sub | info-more | 0 0 | -p sub --showConfig ;; -p sub --showConfig --outDir elsewhere --incremental --pretty
+infm-showconfig-enums | info-more | 0 0 | --showConfig --jsx react-jsx --newLine crlf --moduleDetection force --target esnext --module nodenext --moduleResolution nodenext --allowArbitraryExtensions ;; --showConfig --ignoreConfig --lib es2023.array,dom.iterable --types x,y --customConditions c --moduleSuffixes .ios,
+infm-init-options | info-init | 0 0 | --init --module nodenext --moduleResolution nodenext --jsx react-jsx --target esnext --strict false --noEmit false --rootDir src --declarationMap --sourceMap --newLine lf ;; --init --pretty
+infm-init-locale | info-init | 0 | --locale ja --init
+infm-init-listfiles | info-init | 0 | --init --listFiles --extendedDiagnostics
+infm-cpuprofile-js | info-more | 2 | @stats -p tsconfig.js.json --generateCpuProfile prof/js.cpuprofile --extendedDiagnostics --noEmit
+infm-trace-file-lib | info-more | 0 0 | --generateTrace tr-lib --ignoreConfig --target es2015 --lib es5 --noEmit app/sibling.ts ;; -p tsconfig.comp.json --generateTrace tr-comp
+infm-extended-js | info-more | 2 | @stats -p tsconfig.js.json --extendedDiagnostics --noEmit
+infm-extended-incremental | info-more | 0 0 0 | @stats -p tsconfig.comp.json --extendedDiagnostics ;; @stats -p tsconfig.comp.json --extendedDiagnostics ;; @stats -p tsconfig.comp.json --extendedDiagnostics --noEmit
+infm-extended-outfile | info-more | 0 | @stats -p tsconfig.outfile.json --extendedDiagnostics
+infm-extended-noresolve | info-more | 2 | @stats --extendedDiagnostics --noEmit --noResolve
+infm-all-together | info-more | 0 | @stats --extendedDiagnostics --listFiles --explainFiles --listEmittedFiles --traceResolution --generateTrace tr-all --pretty false
+infm-unicode | info-more | 2 | -p tsconfig.uni.json --explainFiles --traceResolution --listEmittedFiles --listFiles --outDir uni-out
+infm-unicode-showconfig | info-more | 0 | --showConfig --outDir "dist ü" --rootDir src --types "ünï"
+infm-trace-dom | info-more | 0 | @stats --generateTrace tr-dom --extendedDiagnostics --ignoreConfig --noEmit --target es2022 --lib es2022,dom src/feature.ts
+infm-response-file | info-more | 0 0 0 1 | @args.txt ;; @args-nested.txt ;; @args-showconfig.txt ;; @missing.txt
+infm-cpuprofile-unwritable | info-more | 0 0 | --generateCpuProfile tsconfig.json/p.cpuprofile --noEmit ;; @stats --generateCpuProfile package.json/deeper/p.cpuprofile --extendedDiagnostics --noEmit

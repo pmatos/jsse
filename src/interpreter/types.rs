@@ -2024,11 +2024,9 @@ pub(crate) enum IteratorState {
         pending_return: Option<JsValue>,
     },
     RegExpStringIterator {
-        source: String,
-        flags: String,
         string: JsString,
         global: bool,
-        last_index: usize,
+        full_unicode: bool,
         done: bool,
         matcher_id: u64,
     },
@@ -2431,14 +2429,7 @@ pub(crate) struct JsObjectData {
     pub(crate) kind: ObjectKind,
 }
 
-#[derive(Clone)]
-pub(crate) struct ModuleNamespaceData {
-    pub env: EnvRef,
-    pub export_names: Vec<String>,
-    pub export_to_binding: HashMap<String, String>,
-    pub module_path: Option<super::ModuleKey>,
-    pub deferred: bool,
-}
+pub(crate) use super::module_namespace_data::ModuleNamespaceData;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DisposableStackData {
@@ -3663,7 +3654,7 @@ impl JsObjectData {
         if let Some(ns_data) = self.module_namespace()
             && let Some(key_str) = key.as_property_key_str()
         {
-            if ns_data.export_names.contains(&key_str.to_string()) {
+            if ns_data.export_names.contains(key_str) {
                 let val = if let Some(binding_name) = ns_data.export_to_binding.get(key_str) {
                     ns_data
                         .env
@@ -3765,7 +3756,7 @@ impl JsObjectData {
         if let Some(ns_data) = self.module_namespace()
             && let Some(key_str) = key.as_property_key_str()
         {
-            return ns_data.export_names.contains(&key_str.to_string());
+            return ns_data.export_names.contains(key_str);
         }
         if self.properties.contains_key(key) {
             return true;

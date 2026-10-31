@@ -1,0 +1,2 @@
+# Tests that pass on Node and fail on jsse --node (run-ts-conformance-1282-oracle.py): full test title, TAB, issue.
+# Maintained with --record; a listed test that passes makes the oracle fail.

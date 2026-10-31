@@ -37,7 +37,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tsc_oracle_norm import normalise_file, normalise_stats
+import oracle_procs
+from tsc_oracle_norm import normalise_file, normalise_name, normalise_stats
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIX = os.path.join(ROOT, "scripts", "tsc-fixtures")
@@ -248,47 +249,56 @@ def run_case(engine, exe, tsc_dir, work, case, timeout):
         if pty:
             run = [sys.executable, "-I", PTY_RUN, "--rows", pty[0], "--cols", pty[1]]
             run += ["--timeout", str(max(timeout - 5, 1)), "--"] + cmd + args
-        try:
-            r = subprocess.run(
-                run,
-                cwd=tree,
-                env={**env, **extra},
-                capture_output=True,
-                timeout=timeout,
-            )
-            codes.append(str(r.returncode))
-            out.append(r.stdout)
-            err.append(r.stderr)
-        except subprocess.TimeoutExpired as e:
-            codes.append("timeout")
-            out.append(e.stdout or b"")
-            err.append(e.stderr or b"")
+        code, o, e = oracle_procs.run_group(run, tree, {**env, **extra}, timeout)
+        codes.append(code)
+        out.append(o)
+        err.append(e)
+        if code == "timeout":
             break
     elapsed = time.monotonic() - start
     after = snapshot(tree)
 
-    def norm(b):
+    # tsc prints library paths relative to the directory of the file it writes them to (the work
+    # tree, or a project below it for a .tsbuildinfo): ../../<where TSC_DIR is>/lib/...
+    below_common = os.path.relpath(tsc_dir, os.path.commonpath([tree, tsc_dir]))
+    relative_tsc = re.compile(
+        r"(?<![\w/.-])(?:\.\./)+" + re.escape(below_common) + r"(?![\w.-])"
+    )
+
+    def norm(b, warnings=False):
         t = b.decode("utf-8", "surrogateescape")
         t = t.replace(tree, "<DIR>").replace(tsc_dir, "<TSC>")
+        t = relative_tsc.sub("<TSC>", t)
+        if warnings:
+            t = re.sub(r"\(node:\d+\)", "(node:<PID>)", t)
         t = re.sub(re.escape(os.path.join(work, engine)) + r"(?!\w)", "<WORK>", t)
         t = t.replace(work, "<ROOT>")
         return CLOCK.sub("<TIME>", t)
 
-    files = {
-        p: normalise_file(p, norm(c)) for p, c in after.items() if before.get(p) != c
-    }
+    files = {}
+    for p, c in after.items():
+        if before.get(p) != c:
+            name = normalise_name(p)
+            if name in files:
+                raise SystemExit(
+                    f"{case[0]}: two files are called {name} after normalising"
+                )
+            files[name] = normalise_file(p, norm(c))
     files.update({p: "<deleted>" for p in before if p not in after})
 
-    def joined(parts, moving=()):
-        return "".join(
-            f"--- invocation {i + 1}\n{normalise_stats(norm(p)) if i < len(moving) and moving[i] else norm(p)}"
-            for i, p in enumerate(parts)
-        )
+    def joined(parts, moving=(), warnings=False):
+        rows = []
+        for i, p in enumerate(parts):
+            text = norm(p, warnings)
+            if i < len(moving) and moving[i]:
+                text = normalise_stats(text)
+            rows.append(f"--- invocation {i + 1}\n{text}")
+        return "".join(rows)
 
     return {
         "exit": " ".join(codes),
         "stdout": joined(out, stats),
-        "stderr": joined(err),
+        "stderr": joined(err, warnings=True),
         "files": files,
         "secs": elapsed,
     }
@@ -341,6 +351,7 @@ def render(label, bad, limit):
 
 def main():
     global FIX, PINNED
+    oracle_procs.install_cleanup()
     ap = argparse.ArgumentParser()
     ap.add_argument("cases", nargs="*")
     ap.add_argument("--jobs", type=int, default=4)

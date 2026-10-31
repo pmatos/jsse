@@ -235,14 +235,7 @@ impl Interpreter {
                             "Arguments"
                         } else if ob.callable.is_some() {
                             "Function"
-                        } else if ob.class_name == "Error"
-                            || ob.class_name == "TypeError"
-                            || ob.class_name == "RangeError"
-                            || ob.class_name == "ReferenceError"
-                            || ob.class_name == "SyntaxError"
-                            || ob.class_name == "URIError"
-                            || ob.class_name == "EvalError"
-                        {
+                        } else if super::error_data::has_error_data_slot(ob.class_name) {
                             "Error"
                         } else if ob.class_name == "Boolean" && ob.primitive_value.is_some() {
                             "Boolean"
@@ -974,9 +967,7 @@ impl Interpreter {
                             .and_then(|obj| {
                                 let b = obj.borrow();
                                 let ns = b.module_namespace()?;
-                                Some(key.as_str().is_some_and(|key| {
-                                    ns.export_names.iter().any(|name| name == key)
-                                }))
+                                Some(key.as_str().is_some_and(|k| ns.export_names.contains(k)))
                             })
                             .unwrap_or(false);
                         if is_export {

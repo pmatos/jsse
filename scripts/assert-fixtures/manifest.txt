@@ -22,7 +22,7 @@ test-assert-typedarray-deepequal a892946890680ce41ba278f19eb52532f1cb9355c7221c7
 !test-assert-myers-diff: needs --expose-internals to reach internal/assert/myers_diff
 @test-assert|Errors created in different contexts|no vm module
 @test-assert|Additional assert|no vm module (new vm.Script)
-@test-assert-deep|Check proxies|#1334: ownKeys traps of Proxy arrays are not run; V8 error text
+~test-assert-deep|s#trap result did not include 'length'#trap result did not include all non-configurable own keys of the proxy target#|engine ownKeys invariant message differs from V8's
 @test-assert-deep|Check for AggregateError|#1323: Object.prototype.toString gives [object Object] for AggregateError
 @test-assert-partial-deep-equal|two AggregateErrors with missing message|#1323: Object.prototype.toString gives [object Object] for AggregateError
 ~test-assert-async|s#assert.match(err.stack, /rejects/);##|#1333: no "at async" stack frames

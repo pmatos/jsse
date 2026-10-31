@@ -51,6 +51,7 @@ mod fuzz_host;
 mod gc;
 pub(crate) mod global_access;
 mod module_host;
+mod module_namespace_data;
 mod node_esm;
 pub(crate) use global_access::GlobalHint;
 pub(crate) mod generator_analysis;
@@ -60,6 +61,7 @@ pub(crate) use hoist_cache::{HoistAnalysis, HoistCache};
 mod hoisting;
 pub(crate) mod ic;
 pub(crate) mod ic_store;
+mod job;
 pub(crate) mod key_intern;
 mod keyed_entries;
 pub(crate) mod literal_frame;
@@ -341,7 +343,7 @@ pub(crate) struct Interpreter {
     // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
     gc_marks: Vec<bool>,
     /// [[KeptAlive]] (ECMA-262 §9.10.3): objects a WeakRef saw during the
-    /// running job; GC roots until `finish_job` ends the outermost one.
+    /// running job; GC roots until the outermost `with_job` returns.
     pub(crate) kept_alive: rustc_hash::FxHashSet<u64>,
     /// Running jobs (program run, promise job, timer or loop callback).
     pub(crate) job_depth: u32,
@@ -2026,44 +2028,6 @@ impl Interpreter {
         JsValue::string(exact_key.to_js_string())
     }
 
-    pub(crate) fn run(&mut self, program: &Program) -> Completion {
-        let depth = self.gc_root_frame();
-        let result = self.run_program(program);
-        self.gc_assert_root_depth(depth, "a program run");
-        result
-    }
-
-    fn run_program(&mut self, program: &Program) -> Completion {
-        self.gc_safepoint();
-        self.begin_job();
-        let result = match program.source_type {
-            SourceType::Script => {
-                let global = self.realm().global_env.clone();
-                if program.body_is_strict {
-                    global.borrow_mut().strict = true;
-                }
-                self.exec_framed(&program.body, &global)
-            }
-            SourceType::Module => self.run_module(program, None),
-        };
-        // A top-level `__host_exit` (issue #242) latches its code into the
-        // terminal `pending_exit` sink (read by `main`) and skips draining —
-        // `drain_microtasks_until_idle` early-returns while the sink is set.
-        if let Completion::Exit(code) = &result {
-            self.pending_exit = Some(*code);
-        }
-        self.finish_job();
-        self.drain_after_run(&result);
-        result
-    }
-
-    pub(crate) fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
-        let depth = self.gc_root_frame();
-        let result = self.run_program_with_path(program, path);
-        self.gc_assert_root_depth(depth, "a program run");
-        result
-    }
-
     /// Run synchronous work under a Module Key, restoring the caller's key on
     /// every returned completion. Queued jobs carry their own module identity;
     /// callers that drain jobs under this key keep the drain inside `body`.
@@ -2076,44 +2040,6 @@ impl Interpreter {
         let result = body(self);
         self.current_module_path = previous;
         result
-    }
-
-    fn run_program_with_path(&mut self, program: &Program, path: &Path) -> Completion {
-        self.gc_safepoint();
-        match program.source_type {
-            SourceType::Script => {
-                self.with_module_key(Some(ModuleKey::for_file(path.to_path_buf())), |interp| {
-                    let global = interp.realm().global_env.clone();
-                    if program.body_is_strict {
-                        global.borrow_mut().strict = true;
-                    }
-                    interp.begin_job();
-                    let r = interp.exec_script_body(&program.body, &global);
-                    // A top-level `__host_exit` (issue #242) latches its code (read
-                    // by `main`) so draining is skipped.
-                    if let Completion::Exit(code) = &r {
-                        interp.pending_exit = Some(*code);
-                    }
-                    interp.finish_job();
-                    // Async callbacks need the file's key for relative imports.
-                    interp.drain_after_run(&r);
-                    r
-                })
-            }
-            SourceType::Module => {
-                let module_key = ModuleKey::for_file(path.to_path_buf());
-                self.begin_job();
-                self.node_esm_enter_main(&module_key);
-                let r = self.run_module(program, Some(module_key.clone()));
-                if let Completion::Exit(code) = &r {
-                    self.pending_exit = Some(*code);
-                }
-                self.finish_job();
-                // Keep path set during microtask draining so async callbacks can use relative imports
-                self.with_module_key(Some(module_key), |interp| interp.drain_after_run(&r));
-                r
-            }
-        }
     }
 
     pub(crate) fn module_registry_get(&self, key: &ModuleKey) -> Option<Rc<RefCell<LoadedModule>>> {
@@ -4304,160 +4230,20 @@ impl Interpreter {
     }
 
     fn create_module_namespace(&mut self, module: &Rc<RefCell<LoadedModule>>) -> JsValue {
-        use crate::interpreter::types::ModuleNamespaceData;
-
         // Per §16.2.1.5.2 GetModuleNamespace: return cached namespace if present
         if let Some(cached) = module.borrow().cached_namespace.clone() {
             return cached;
         }
-
-        let obj_id = self.create_object_id();
-        let (env, export_bindings, module_path, export_names) = {
-            let module_ref = module.borrow();
-            let env = module_ref.env.clone();
-            let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.is_empty() {
-                None
-            } else {
-                Some(module_ref.path.clone())
-            };
-            let mut export_names: Vec<String> = module_ref
-                .exports
-                .keys()
-                .filter(|k| {
-                    module_ref
-                        .export_bindings
-                        .get(*k)
-                        .is_none_or(|b| b != "*ambiguous*")
-                })
-                .cloned()
-                .collect();
-            export_names.sort();
-            (env, export_bindings, module_path, export_names)
-        }; // module_ref borrow dropped here
-
-        // Set module namespace data for live bindings
-        self.get_object_cell_expect(obj_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::ModuleNamespace(Box::new(ModuleNamespaceData {
-                env: env.clone(),
-                export_names: export_names.clone(),
-                export_to_binding: export_bindings,
-                module_path,
-                deferred: false,
-            }));
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module";
-        self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .prototype_id = None; // Module namespaces have null prototype
-
-        // Add property descriptors for each export (values will be looked up dynamically)
-        for name in &export_names {
-            // Exports: writable=true, enumerable=true, configurable=false
-            // Value is left as undefined - will be looked up dynamically
-            self.get_object_cell_expect(obj_id)
-                .borrow_mut()
-                .insert_property(
-                    name.clone(),
-                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
-                );
-        }
-
-        // Set Symbol.toStringTag to "Module"
-        // writable=false, enumerable=false, configurable=false
-        let sym_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .insert_property(
-                sym_key,
-                PropertyDescriptor::data(
-                    JsValue::string(JsString::from_str("Module")),
-                    false,
-                    false,
-                    false,
-                ),
-            );
-
-        let id = obj_id;
-        let ns = JsValue::object(id);
+        let ns = self.build_module_namespace(module, false);
         module.borrow_mut().cached_namespace = Some(ns.clone());
         ns
     }
 
     fn create_deferred_module_namespace(&mut self, module: &Rc<RefCell<LoadedModule>>) -> JsValue {
-        use crate::interpreter::types::ModuleNamespaceData;
-
         if let Some(cached) = module.borrow().cached_deferred_namespace.clone() {
             return cached;
         }
-
-        let obj_id = self.create_object_id();
-        let (env, export_bindings, module_path, export_names) = {
-            let module_ref = module.borrow();
-            let env = module_ref.env.clone();
-            let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.is_empty() {
-                None
-            } else {
-                Some(module_ref.path.clone())
-            };
-            let mut export_names: Vec<String> = module_ref
-                .exports
-                .keys()
-                .filter(|k| {
-                    module_ref
-                        .export_bindings
-                        .get(*k)
-                        .is_none_or(|b| b != "*ambiguous*")
-                })
-                .cloned()
-                .collect();
-            export_names.sort();
-            (env, export_bindings, module_path, export_names)
-        };
-
-        self.get_object_cell_expect(obj_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::ModuleNamespace(Box::new(ModuleNamespaceData {
-                env: env.clone(),
-                export_names: export_names.clone(),
-                export_to_binding: export_bindings,
-                module_path,
-                deferred: true,
-            }));
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module";
-        self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .prototype_id = None;
-
-        for name in &export_names {
-            self.get_object_cell_expect(obj_id)
-                .borrow_mut()
-                .insert_property(
-                    name.clone(),
-                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
-                );
-        }
-
-        let sym_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .insert_property(
-                sym_key,
-                PropertyDescriptor::data(
-                    JsValue::string(JsString::from_str("Deferred Module")),
-                    false,
-                    false,
-                    false,
-                ),
-            );
-
-        let id = obj_id;
-        let ns = JsValue::object(id);
+        let ns = self.build_module_namespace(module, true);
         module.borrow_mut().cached_deferred_namespace = Some(ns.clone());
         ns
     }
@@ -4816,32 +4602,6 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
         }
-    }
-
-    /// Runs one dequeued job with the values it keeps alive rooted for its
-    /// duration. Once off the queue the job's own values are reachable from
-    /// nowhere else.
-    pub(crate) fn run_microtask(&mut self, task: scheduler::Microtask) -> Completion {
-        use scheduler::Microtask;
-        let frame = self.gc_root_frame();
-        task.for_each_root(|value| self.gc_root_value(value));
-        let rooted_depth = self.gc_root_frame();
-        self.begin_job();
-        let result = match task {
-            Microtask::Closure { job, .. } => job(self),
-            Microtask::Reaction { reaction, argument } => {
-                self.node_run_reaction_job(reaction, argument)
-            }
-            Microtask::ResolveThenable {
-                promise_id,
-                thenable,
-                then_fn,
-            } => self.run_promise_resolve_thenable_job(promise_id, thenable, then_fn),
-        };
-        self.finish_job();
-        self.gc_assert_root_depth(rooted_depth, "a microtask job");
-        self.gc_unroot_frame(frame);
-        result
     }
 
     pub(crate) fn drain_microtasks(&mut self) {

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": { "@src/*": ["./src/*"], "alias": ["./typeroots/special/index.d.ts"] },
+    "rootDirs": ["src", "app"],
+    "moduleSuffixes": [".ios", ""]
+  },
+  "include": ["app/paths.ts"]
+}

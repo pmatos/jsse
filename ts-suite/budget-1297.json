@@ -1,0 +1,16 @@
+{
+  "bundle-load": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "transpile": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "compiler-first": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "compiler-366": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "conformance-interfaces": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "conformance-generators": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "project-out": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "fourslash-add": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "fourslash-server": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "tsserver-sourcemap": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "tscwatch": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "tsbuild": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "evaluation": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6},
+  "services": {"jsse_max_seconds": null, "jsse_max_rss_mb": null, "max_time_ratio": null, "max_rss_ratio": 6}
+}

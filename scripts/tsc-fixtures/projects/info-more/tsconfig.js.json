@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "maxNodeModuleJsDepth": 1,
+    "declaration": true,
+    "declarationDir": "types",
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src", "app/*.js"]
+}
