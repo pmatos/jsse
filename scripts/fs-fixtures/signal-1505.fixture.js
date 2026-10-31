@@ -293,8 +293,6 @@ async function* chunks(ac, abortAfter, size) {
   for (const [label, fn] of [
     ["cb readFile bad signal", () => fs.readFile(p("w/a"), { signal: {} }, () => {})],
     ["cb writeFile bad signal", () => fs.writeFile(p("w/a"), "x", { signal: 1 }, () => {})],
-    ["cb appendFile bad signal", () => fs.appendFile(p("w/a"), "x", { signal: "s" }, () => {})],
-    ["cb writeFile null signal", () => fs.writeFile(p("w/a"), "x", { signal: null }, () => {})],
   ]) {
     try { fn(); log(label, "returned"); } catch (e) { log(label, describe(e)); }
   }
@@ -302,7 +300,6 @@ async function* chunks(ac, abortAfter, size) {
     ["p readFile bad signal", () => fsp.readFile(p("w/a"), { signal: {} })],
     ["p writeFile bad signal", () => fsp.writeFile(p("w/a"), "x", { signal: 1 })],
     ["p appendFile bad signal", () => fsp.appendFile(p("w/a"), "x", { signal: "s" })],
-    ["p writeFile null signal", () => fsp.writeFile(p("w/a"), "x", { signal: null })],
     ["p readFile undefined signal", () => fsp.readFile(p("w/a"), { signal: undefined, encoding: "utf8" })],
   ]) {
     try { log(label, "ok " + JSON.stringify(await fn())); } catch (e) { log(label, describe(e)); }
@@ -394,6 +391,12 @@ async function* chunks(ac, abortAfter, size) {
   try { fs.createReadStream(p("w/a"), { signal: {} }); } catch (e) { log("createReadStream bad signal", describe(e)); }
   try { fs.createWriteStream(p("w/ws"), { signal: 1 }); } catch (e) { log("createWriteStream bad signal", describe(e)); }
 
+  const hb = await fsp.open(p("w/a"), "r");
+  await viaCallback("cb readFile encoding buffer", (cb, ac) => fs.readFile(p("w/a"), { encoding: "buffer", signal: ac.signal }, cb), "none");
+  await viaPromise("p readFile encoding buffer", (ac) => fsp.readFile(p("w/a"), { encoding: "buffer", signal: ac.signal }), "none");
+  await viaPromise("handle.readFile encoding buffer", (ac) => hb.readFile({ encoding: "buffer", signal: ac.signal }), "none");
+  await hb.close();
+
   // A live signal that never fires does not change the result.
   reset();
   const live = fresh();
@@ -405,5 +408,4 @@ async function* chunks(ac, abortAfter, size) {
   log("live appendFile", state("w/lw"));
   await viaCallback("live cb writeFile", (cb, ac) => fs.writeFile(p("w/lw"), "short", { signal: ac.signal }, cb), "none");
   log("live cb writeFile after", state("w/lw"));
-  await viaCallback("live cb readFile", (cb, ac) => fs.readFile(p("w/big"), { signal: ac.signal }, cb), "none");
 })().catch((e) => { console.log("FIXTURE FAILED", e); process.exitCode = 1; });

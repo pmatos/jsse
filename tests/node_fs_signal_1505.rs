@@ -274,6 +274,28 @@ fn aborted_calls_close_the_files_they_opened() {
 }
 
 #[test]
+fn a_read_of_unknown_size_stops_reading_after_an_abort() {
+    if !std::path::Path::new("/proc/self/fd").exists() {
+        return;
+    }
+    let script = format!(
+        "{PRELUDE} const fds = () => fs.readdirSync('/proc/self/fd').length;
+         (async () => {{
+           const before = fds();
+           const ac = new AbortController();
+           const p = fsp.readFile('/dev/zero', {{ signal: ac.signal }}).catch((e) => e.code);
+           setTimeout(() => ac.abort(), 20);
+           console.log(await p);
+           await new Promise((r) => setTimeout(r, 300));
+           console.log(fds() - before);
+           process.exit(0);
+         }})();"
+    );
+    let (out, err, rc) = run(&script);
+    assert_eq!((out.as_str(), rc), ("ABORT_ERR\n0", 0), "{err}");
+}
+
+#[test]
 fn a_composite_of_aborts_survives_gc_stress() {
     let dir = scratch("gc");
     let script = format!(

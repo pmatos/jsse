@@ -150,7 +150,7 @@ function run(syncFn, args, cb, extra) {
 const SIGNAL_AT = { readFile: 1, writeFile: 2, appendFile: 2, stat: 1, lstat: 1, fstat: 1 };
 
 function withSignal(name, args, cb) {
-  const options = args[SIGNAL_AT[name]];
+  const options = snapshot(args[SIGNAL_AT[name]]);
   if (options === null || typeof options !== 'object' || options.signal === undefined) {
     return cb;
   }
@@ -178,7 +178,12 @@ function define(name, syncFn, options) {
       cb = withSignal(name, args, cb);
       if (cb === null) return;
     }
-    run(syncFn, args, cb, options && options.extra && options.extra(args));
+    try {
+      run(syncFn, args, cb, options && options.extra && options.extra(args));
+    } catch (e) {
+      if (cb.cancel) cb.cancel();
+      throw e;
+    }
   };
   ObjectDefineProperty(wrapper, 'name', { value: name, configurable: true });
   if (!(options && options.hidden)) exports[name] = wrapper;

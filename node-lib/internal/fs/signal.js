@@ -43,9 +43,6 @@ function checkAborted(signal) {
   if (signal?.aborted) throw abortError(signal);
 }
 
-const hasSignal = (options) => (
-  options !== null && typeof options === 'object' && options.signal !== undefined);
-
 function signalOf(options) {
   validateAbortSignal(options.signal, 'options.signal');
   return options.signal;
@@ -91,17 +88,22 @@ function raceAbort(promise, signal) {
 }
 
 function decode(buffer, encoding) {
-  return encoding ? buffer.toString(encoding) : buffer;
+  if (!encoding) return buffer;
+  if (!Buffer.isEncoding(encoding)) {
+    throw S.nodeError(TypeError, 'ERR_UNKNOWN_ENCODING', 'Unknown encoding: ' + encoding);
+  }
+  return buffer.toString(encoding);
 }
 
 // Read an open file to its end. `owned`: the call opened it and Node reads
 // files of at most one chunk in one job, so only a completed read is checked.
+// A file of unknown size (a pipe, /dev/zero) is read in steps and checked.
 async function readContents(fd, signal, state) {
   if (!state.owned) checkAborted(signal);
   const stats = await fstatFd(fd);
   if (!state.owned) checkAborted(signal);
   const size = stats.isFile() ? stats.size : 0;
-  state.oneShot = state.owned && size <= CHUNK;
+  state.oneShot = state.owned && size > 0 && size <= CHUNK;
   const chunks = [];
   let total = 0;
   for (;;) {
@@ -182,7 +184,7 @@ function settle(promise, callback) {
 
 // ---- writeFile / appendFile --------------------------------------------
 
-function normalizeWrite(data, options, append) {
+function normalizeWrite(options, append) {
   options = S.getOptions(options, { encoding: 'utf8', mode: 0o666, flag: append ? 'a' : 'w' });
   const flush = options.flush ?? false;
   S.validateBoolean(flush, 'options.flush');
@@ -227,7 +229,7 @@ function writeAll(fd, isUserFd, buffer, offset, length, signal, flush, callback)
 }
 
 function writeFileCallback(path, data, options, callback, append) {
-  const { options: opts, flush, mode } = normalizeWrite(data, options, append);
+  const { options: opts, flush, mode } = normalizeWrite(options, append);
   const signal = signalOf(opts);
   let flag = opts.flag || (append ? 'a' : 'w');
   if (append && S.isInt32(path)) flag = 'a';
@@ -276,7 +278,7 @@ async function writeContents(fd, data, signal, encoding) {
 
 // fs.promises.writeFile / appendFile (path | handle) and the FileHandle methods.
 async function writeFile(path, data, options, append, handle) {
-  const { options: opts, flush, mode } = normalizeWrite(data, options, append);
+  const { options: opts, flush, mode } = normalizeWrite(options, append);
   const signal = signalOf(opts);
   const flag = opts.flag || (append ? 'a' : 'w');
   if (!S.isView(data) && !isCustomIterable(data)) data = toBuffer(data, opts);
@@ -304,15 +306,17 @@ function bindStat(options, callback) {
     callback(abortError(signal));
   };
   signal.addEventListener('abort', onAbort, { once: true });
-  return (error, ...rest) => {
+  const bound = (error, ...rest) => {
     signal.removeEventListener('abort', onAbort);
     if (!aborted) callback(error, ...rest);
   };
+  // For the caller to call if the stat itself throws on its arguments.
+  bound.cancel = () => signal.removeEventListener('abort', onAbort);
+  return bound;
 }
 
 module.exports = {
   bindStat,
-  hasSignal,
   readFile,
   readFileCallback,
   writeFile,
