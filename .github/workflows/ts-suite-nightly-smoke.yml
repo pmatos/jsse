@@ -27,6 +27,7 @@ on:
       - "ts-suite/pin.json"
       - "ts-suite/jsse-pass-1296.json"
       - "ts-suite/pass-list-1296-not-passing.txt"
+      - "ts-suite/jsse-pass-cases-1298.json"
       - ".github/workflows/ts-suite-nightly-smoke.yml"
   pull_request:
     branches: [main]
@@ -46,6 +47,7 @@ on:
       - "ts-suite/pin.json"
       - "ts-suite/jsse-pass-1296.json"
       - "ts-suite/pass-list-1296-not-passing.txt"
+      - "ts-suite/jsse-pass-cases-1298.json"
       - ".github/workflows/ts-suite-nightly-smoke.yml"
   workflow_dispatch:
 

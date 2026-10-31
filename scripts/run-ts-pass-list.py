@@ -46,6 +46,7 @@ ROOT = os.path.dirname(SCRIPTS)
 sys.path.insert(0, SCRIPTS)
 import oracle_procs  # noqa: E402
 import ts_passlist as pl  # noqa: E402
+import ts_passlist_cases_1298 as grow  # noqa: E402
 import ts_passlist_scripted as scripted  # noqa: E402
 import ts_passlist_store as store  # noqa: E402
 from ts_compiler_report import outcomes_of  # noqa: E402
@@ -136,22 +137,6 @@ def universe_problems(universe, oracle_json=ORACLE_JSON):
             problems.append(
                 f"{runner}: {len(tests)} tests listed, ts-suite/oracle.json pins {want['passed']} passing ids with another digest"
             )
-    return problems
-
-
-def bucket_problems(doc, universe):
-    """Recorded buckets whose ids differ from the universe (the baseline is for another test set)."""
-    problems = []
-    for runner, tests in universe.items():
-        by = collections.defaultdict(list)
-        for t in tests or []:
-            by[t.bucket].append(t)
-        for name, e in doc["buckets"].get(runner, {}).items():
-            got = by.get(name, [])
-            if [len(got), store.bucket_digest(t.id for t in got)] != e:
-                problems.append(
-                    f"recorded bucket {runner}:{name} has {e[0]} tests, the checkout lists {len(got)} (or other ids)"
-                )
     return problems
 
 
@@ -255,6 +240,12 @@ def main(argv=None):
     ap.add_argument("--seed", type=int)
     ap.add_argument("--baseline-ref", default="origin/main")
     ap.add_argument("--issue")
+    ap.add_argument(
+        "--legacy-cases",
+        action="append",
+        metavar="RUNNER=FILE",
+        help="case names (one per line) of a scripted bucket recorded as a digest only",
+    )
     ap.add_argument("--keep-work")
     ap.add_argument(
         "--data-dir", default=DATA_DIR, help="directory of the pass list files"
@@ -274,7 +265,8 @@ def main(argv=None):
     try:
         for spec in args.specs:
             pl.parse_spec(spec)
-    except ValueError as e:
+        legacy = grow.read_legacy(args.legacy_cases)
+    except (OSError, ValueError) as e:
         ap.error(str(e))
     if args.update_baseline and args.engine != "jsse":
         ap.error("--update-baseline records the jsse pass list; use --engine jsse")
@@ -336,7 +328,9 @@ def main(argv=None):
         universe = list_universe(work, ts_dir, node, list(dict.fromkeys(runners)))
         problems = universe_problems(universe, args.oracle_json)
         doc, np, source = load_baseline(args.baseline_ref, args.data_dir)
-        problems += bucket_problems(doc, universe)
+        cases = grow.load(source, args.baseline_ref, args.data_dir, ROOT)
+        known = grow.resolved(doc, cases, legacy)
+        problems += grow.bucket_problems(doc, universe, known)
         chosen = pl.select(universe, args.specs, args.sample, args.seed)
         total = sum(len(ts) for s in chosen.values() for _, ts in s)
         print(
@@ -372,7 +366,7 @@ def main(argv=None):
 
         tables, errors = run_batches(args, work, ts_dir, exe, chosen)
         problems += errors
-        recorded = {(r, b) for r, t in doc["buckets"].items() for b in t}
+        recorded = grow.held(doc, known)
         held = {k[2] for k in np}
         rows, run = {}, {"passing_ids": set(), "failing_ids": set()}
         for runner, suites in chosen.items():
@@ -380,7 +374,7 @@ def main(argv=None):
             res = pl.compare(
                 selected,
                 tables[runner],
-                lambda t: (t.runner, t.bucket) in recorded and t.id not in held,
+                lambda t: recorded(t) and t.id not in held,
             )
             rows[runner] = res
             run["passing_ids"].update(t.id for t in res["pass"])
@@ -393,7 +387,7 @@ def main(argv=None):
             if regressions or errors or problems:
                 print("not updating the baseline: the run has regressions or problems")
             else:
-                update(args, chosen, universe, run)
+                update(args, chosen, universe, run, legacy)
         print(
             "".join("  " + p + "\n" for p in problems)
             + ("pass list: FAIL" if problems else "pass list: PASS")
@@ -405,8 +399,9 @@ def main(argv=None):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def update(args, chosen, universe, run):
-    doc, np, _ = load_baseline(None, args.data_dir)
+def update(args, chosen, universe, run, legacy):
+    doc, np, source = load_baseline(None, args.data_dir)
+    cases = grow.load(source, None, args.data_dir, ROOT)
     complete = {}
     for runner, suites in chosen.items():
         have = collections.defaultdict(list)
@@ -416,16 +411,21 @@ def update(args, chosen, universe, run):
             full = [t for t in universe[runner] if t.bucket == name]
             if len(full) == len(tests):
                 complete[(runner, name)] = tests
-    new_doc, new_np, notes = apply_update(doc, np, run, complete, args, jsse_revision())
-    print("\n".join(notes))
-    if new_doc != doc or new_np != np:
+    rev = jsse_revision()
+    new_doc, new_np, notes = apply_update(doc, np, run, complete, args, rev)
+    new_doc, new_cases, more = grow.record_scripted(
+        new_doc, cases, run, complete, grow.resolved(doc, cases, legacy), rev
+    )
+    print("\n".join(notes + more))
+    if new_doc != doc or new_np != np or new_cases != cases:
         for rel, text in (
             (store.BASELINE, store.dump_baseline(new_doc)),
             (store.NOT_PASSING, store.dump_not_passing(new_np)),
+            (grow.CASES, grow.dump_cases(new_cases)),
         ):
             with open(data_path(args.data_dir, rel), "w", encoding="utf-8") as f:
                 f.write(text)
-        print(f"wrote {store.BASELINE} and {store.NOT_PASSING}")
+        print(f"wrote {store.BASELINE}, {store.NOT_PASSING} and {grow.CASES}")
 
 
 def report(rows, args, problems):

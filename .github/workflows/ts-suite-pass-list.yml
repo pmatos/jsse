@@ -13,8 +13,10 @@ on:
     paths:
       - "ts-suite/jsse-pass-1296.json"
       - "ts-suite/pass-list-1296-not-passing.txt"
+      - "ts-suite/jsse-pass-cases-1298.json"
       - "scripts/check_ts_pass_list_ratchet.py"
       - "scripts/ts_passlist_store.py"
+      - "scripts/ts_passlist_cases_1298.py"
       - ".github/workflows/ts-suite-pass-list.yml"
 
 permissions:
