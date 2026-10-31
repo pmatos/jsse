@@ -1,0 +1,88 @@
+## reexport-missing
+reexport-missing.mjs:1
+export { absent } from "./lib.mjs";
+         ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## reexport-renamed
+reexport-renamed.mjs:1
+export { absent as x } from "./lib.mjs";
+         ^^^^^^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## reexport-chain
+reexport-renamed.mjs:1
+export { absent as x } from "./lib.mjs";
+         ^^^^^^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## reexport-spaced
+reexport-spaced.mjs:1
+export {   absent   as   x   }   from   "./lib.mjs";
+           ^^^^^^^^^^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## reexport-second
+reexport-second.mjs:1
+export { a, absent, b } from "./lib.mjs";
+            ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## star-import
+star-import.mjs:1
+import { y } from "./star-both.mjs";
+         ^
+SyntaxError: The requested module './star-both.mjs' contains conflicting star exports for name 'y'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## star-reexport
+star-reexport.mjs:1
+export { y } from "./star-both.mjs";
+         ^
+SyntaxError: The requested module './star-both.mjs' contains conflicting star exports for name 'y'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## link-and-load
+link-and-load.mjs:2
+import { absent } from "./lib.mjs";
+         ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## twice: parse-error
+same error object: false
+same stack: false
+SyntaxError: Unexpected token '='
+    at parse-error (link-errors.mjs:29:24)
+    at attempt (link-errors.mjs:14:11)
+    at again (link-errors.mjs:48:10)
+    at link-errors.mjs:52:24
+## twice: missing-dependency
+same error object: false
+same stack: false
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'does-not-exist.mjs' imported from missing-dependency.mjs
+    at missing-dependency (link-errors.mjs:30:31)
+    at attempt (link-errors.mjs:14:11)
+    at again (link-errors.mjs:48:10)
+    at link-errors.mjs:52:24
+## twice: reexport-missing
+same error object: true
+same stack: true
+reexport-missing.mjs:1
+export { absent } from "./lib.mjs";
+         ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:44:44
+## twice: throws
+same error object: true
+same stack: true
+Error: boom
+    at throws.mjs:1:7
+    at async attempt (link-errors.mjs:14:5)
+    at async link-errors.mjs:51:17

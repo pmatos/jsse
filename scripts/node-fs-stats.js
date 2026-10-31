@@ -200,3 +200,4 @@
     getStats: getStats,
   };
 })();
+//# sourceURL=node:internal/fs/utils

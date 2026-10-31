@@ -10,6 +10,7 @@ use super::*;
 use crate::interpreter::ModuleKey;
 
 const ARROW: PrivateId = PrivateId(u64::MAX - 6);
+const LINK_ERROR: PrivateId = PrivateId(u64::MAX - 8);
 
 /// The import being linked: the specifier as written, the offset plus one and
 /// the width of the name that asks for the export, and the importing module.
@@ -50,21 +51,84 @@ impl Interpreter {
     pub(crate) fn no_export_error(&mut self, module: &ModuleKey, name: &str) -> JsValue {
         let Some(import) = self.node_host.stack.import_name.clone() else {
             let message = format!("Module '{}' has no export named '{name}'", module.display());
-            return self.create_error("SyntaxError", &message);
+            return self.link_error(&message, None);
         };
-        // Node links in a later job than the one that loads, so the error is
-        // not made inside the `import()` call.
-        let site = self.node_host.stack.import_site.take();
         let message = format!(
             "The requested module '{}' does not provide an export named '{name}'",
             import.specifier
         );
-        let error = self.create_error("SyntaxError", &message);
+        self.link_error(&message, Some(import))
+    }
+
+    /// The `SyntaxError` for `name` exported by two star exports of `module`.
+    pub(crate) fn ambiguous_export_error(&mut self, module: &ModuleKey, name: &str) -> JsValue {
+        match self.node_host.stack.import_name.clone() {
+            Some(import) => {
+                let message = format!(
+                    "The requested module '{}' contains conflicting star exports for name '{name}'",
+                    import.specifier
+                );
+                self.link_error(&message, Some(import))
+            }
+            None => {
+                let message = format!("Ambiguous export '{name}' in module '{}'", module.display());
+                self.link_error(&message, None)
+            }
+        }
+    }
+
+    /// A `SyntaxError` made while linking: Node links in a later job than the
+    /// one that loads, so the error is not made inside the `import()` call, and
+    /// a module that failed this way keeps its error.
+    fn link_error(&mut self, message: &str, import: Option<ImportName>) -> JsValue {
+        let site = self.node_host.stack.import_site.take();
+        let error = self.create_error("SyntaxError", message);
         self.node_host.stack.import_site = site;
-        if let (Some(importer), Some(id)) = (&import.importer, error.as_object_id()) {
+        let Some(id) = error.as_object_id() else {
+            return error;
+        };
+        if let Some(handle) = self.get_object_cell(id) {
+            handle
+                .borrow_mut()
+                .set_hidden_slot(LINK_ERROR, JsValue::TRUE);
+        }
+        if let Some(import) = import
+            && let Some(importer) = &import.importer
+        {
             self.decorate_with_source_line(id, importer, import.at, import.width);
         }
         error
+    }
+
+    /// `export { local as exported } from source`: the export must exist.
+    pub(crate) fn link_reexport(
+        &mut self,
+        importer: &ModuleKey,
+        source: &str,
+        spec: &ExportSpecifier,
+        resolved: &ModuleKey,
+    ) -> Result<(), JsValue> {
+        self.with_import_name(source, (spec.at, spec.width), Some(importer), |s| {
+            s.resolve_export(resolved, &spec.local, &mut HashSet::new())
+        })
+    }
+
+    /// Node resolves and parses a module's requests at every `import()`, so a
+    /// module that failed to load (a request that does not resolve, a request
+    /// that does not parse) is tried again; one that failed to link keeps its
+    /// error.
+    pub(crate) fn forget_failed_load(&mut self, module: &ModuleKey, error: &JsValue) {
+        if !self.node_host.stack.installed {
+            return;
+        }
+        let linked = error
+            .as_object_id()
+            .and_then(|id| self.get_object(id))
+            .is_some_and(|obj| obj.borrow().hidden_slot(LINK_ERROR).is_some());
+        if !linked {
+            self.module_registry
+                .remove(&(self.current_realm_id, module.clone()));
+        }
     }
 
     /// Notes on `error` the line of `importer` at offset `at - 1`, with `width`

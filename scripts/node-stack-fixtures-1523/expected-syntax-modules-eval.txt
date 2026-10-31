@@ -1,0 +1,87 @@
+module "export { x };" SyntaxError: Export 'x' is not defined in module
+module "let a; export { a }; export { a };" SyntaxError: Duplicate export of 'a'
+module "export var a; export var a;" SyntaxError: Duplicate export of 'a'
+module "import { a, a } from './lib.mjs';" SyntaxError: Identifier 'a' has already been declared
+module "import a from './lib.mjs'; let a;" SyntaxError: Identifier 'a' has already been declared
+module "import a from './lib.mjs'; var a;" SyntaxError: Identifier 'a' has already been declared
+module "import a from './lib.mjs'; function a() {}" SyntaxError: Identifier 'a' has already been declared
+module "var await;" SyntaxError: Unexpected reserved word
+module "await = 1;" SyntaxError: Unexpected token '='
+module "function f() { var await; }" SyntaxError: Unexpected reserved word
+module "with (a) {}" SyntaxError: Strict mode code may not include a with statement
+module "delete x;" SyntaxError: Delete of an unqualified identifier in strict mode.
+module "010" SyntaxError: Octal literals are not allowed in strict mode.
+module "var eval;" SyntaxError: Unexpected eval or arguments in strict mode
+module "export { a as 'b' }; var a; export { a as 'b' }" SyntaxError: Duplicate export of 'b'
+module "import { 'a' } from './lib.mjs';" SyntaxError: Unexpected reserved word
+module "import { 'a' as } from './lib.mjs';" SyntaxError: Unexpected token '}'
+module "export {" SyntaxError: Unexpected end of input
+module "export { a" SyntaxError: Unexpected end of input
+module "export { a as }" SyntaxError: Unexpected token '}'
+module "export { a b }" SyntaxError: Unexpected identifier 'b'
+module "export default" SyntaxError: Unexpected end of input
+module "export * from" SyntaxError: Unexpected end of input
+module "export * as from './lib.mjs'" SyntaxError: Unexpected string
+module "export var" SyntaxError: Unexpected end of input
+module "export let" SyntaxError: Unexpected end of input
+module "export const a;" SyntaxError: Missing initializer in const declaration
+module "export function" SyntaxError: Unexpected end of input
+module "export class" SyntaxError: Unexpected end of input
+module "import" SyntaxError: Unexpected end of input
+module "import x" SyntaxError: Unexpected end of input
+module "import x from" SyntaxError: Unexpected end of input
+module "import x from 1" SyntaxError: Unexpected number
+module "import {" SyntaxError: Unexpected end of input
+module "import { a" SyntaxError: Unexpected end of input
+module "import { a as }" SyntaxError: Unexpected token '}'
+module "import { a b } from 'x'" SyntaxError: Unexpected identifier 'b'
+module "import * from 'x'" SyntaxError: Unexpected identifier 'from'
+module "import * as" SyntaxError: Unexpected end of input
+module "import * as x" SyntaxError: Unexpected end of input
+module "import a, * as b, c from 'x'" SyntaxError: Unexpected token ','
+module "import {a,,} from 'x'" SyntaxError: Unexpected token ','
+module "if (1) import x from './lib.mjs';" SyntaxError: Unexpected identifier 'x'
+module "{ export var a; }" SyntaxError: Unexpected token 'export'
+module "function f() { export var a; }" SyntaxError: Unexpected token 'export'
+module "function f() { import x from './lib.mjs'; }" SyntaxError: Unexpected identifier 'x'
+module "import.meta = 1" SyntaxError: Invalid left-hand side in assignment
+module "import.meta++" SyntaxError: Invalid left-hand side expression in postfix operation
+module "new.target" SyntaxError: new.target expression is not allowed here
+module "return 1" SyntaxError: Illegal return statement
+module "yield 1" SyntaxError: Unexpected strict mode reserved word
+module "let yield;" SyntaxError: Unexpected strict mode reserved word
+module "var arguments = 1; (function() { 'use strict'; var arguments; })" SyntaxError: Unexpected eval or arguments in strict mode
+module "export { a as default }; export default 1; var a;" SyntaxError: Duplicate export of 'default'
+module "import 'x' with { type: 'json', type: 'json' }" SyntaxError: Import attribute has duplicate key 'type'
+module "import 'x' with { type: 1 }" SyntaxError: Unexpected number
+module "import 'x' with { 'a': 'b', a: 'c' }" SyntaxError: Import attribute has duplicate key 'a'
+module "import 'x' with { a }" SyntaxError: Unexpected token '}'
+module "import 'x' with" SyntaxError: Unexpected end of input
+module "export * as ns from" SyntaxError: Unexpected end of input
+module "class A {} export { A }; export { A }" SyntaxError: Duplicate export of 'A'
+module "export { default } from './lib.mjs'; export { default } from './lib.mjs'" SyntaxError: Duplicate export of 'default'
+module "label: { import x from 'y' }" SyntaxError: Unexpected identifier 'x'
+module "await 1; function f() { await 1 }" SyntaxError: Unexpected reserved word
+module "for await (x of y) ;; async function f() { for await (x;;) ; }" SyntaxError: Unexpected token ';'
+module "async function f() { await = 1 }" SyntaxError: Unexpected token '='
+module "class await {}" SyntaxError: Unexpected reserved word
+module "function await() {}" SyntaxError: Unexpected reserved word
+module "var x = await;" SyntaxError: Unexpected token ';'
+module "(await) => 1" SyntaxError: Unexpected token ')'
+module "async function f(a = await 1) {}" SyntaxError: Illegal await-expression in formal parameters of async function
+module "arguments = 1" SyntaxError: Unexpected eval or arguments in strict mode
+eval "x = ;" SyntaxError: Unexpected token ';'
+indirect eval "x = ;" SyntaxError: Unexpected token ';'
+new Function "x = ;" SyntaxError: Unexpected token ';'
+eval "function () {}" SyntaxError: Function statements require a function name
+indirect eval "function () {}" SyntaxError: Function statements require a function name
+new Function "function () {}" SyntaxError: Function statements require a function name
+eval "const = 1" SyntaxError: Unexpected token '='
+indirect eval "const = 1" SyntaxError: Unexpected token '='
+new Function "const = 1" SyntaxError: Unexpected token '='
+eval "let let = 1" SyntaxError: Unexpected strict mode reserved word
+indirect eval "let let = 1" SyntaxError: let is disallowed as a lexically bound name
+new Function "let let = 1" SyntaxError: let is disallowed as a lexically bound name
+eval "'use strict'; with (a) {}" SyntaxError: Strict mode code may not include a with statement
+indirect eval "'use strict'; with (a) {}" SyntaxError: Strict mode code may not include a with statement
+new Function "'use strict'; with (a) {}" SyntaxError: Strict mode code may not include a with statement

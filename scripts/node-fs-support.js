@@ -413,3 +413,4 @@
     configurable: true,
   });
 })();
+//# sourceURL=node:internal/fs/utils
