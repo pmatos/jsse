@@ -12,7 +12,9 @@
 use super::super::*;
 pub(crate) use super::node_host_stack_sources::NodeStackState;
 mod async_frames;
+mod combinator_frames;
 mod hook_flags;
+mod method_name;
 pub(crate) use async_frames::ParkedAwait;
 pub(crate) use hook_flags::call_positions_enabled;
 use std::rc::Rc;
@@ -24,7 +26,8 @@ const FRAMES: PrivateId = PrivateId(u64::MAX - 5);
 
 const FLAG_CONSTRUCTOR: f64 = 1.0;
 const FLAG_TOPLEVEL: f64 = 2.0;
-const RECORD_LEN: usize = 5;
+const FLAG_COMBINATOR: f64 = 8.0;
+const RECORD_LEN: usize = 6;
 
 /// Where a capture starts: after the innermost frame of this function
 /// (`captureStackTrace`'s argument; absent means nothing is captured), or,
@@ -208,6 +211,7 @@ impl Interpreter {
         if type_name.is_none() {
             flags += FLAG_TOPLEVEL;
         }
+        let method = self.frame_method(raw, type_name.is_some(), &name);
         let type_name = type_name.filter(|_| !raw.constructor);
         if raw.constructor {
             flags += FLAG_CONSTRUCTOR;
@@ -221,6 +225,7 @@ impl Interpreter {
         record.push(JsValue::number(source_id));
         record.push(JsValue::number(pos));
         record.push(JsValue::number(flags));
+        record.push(method);
     }
 
     fn stack_hook(&self, key: PrivateId) -> Option<JsValue> {

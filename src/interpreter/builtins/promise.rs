@@ -1406,12 +1406,9 @@ impl Interpreter {
             let iterator = interp.get_iterator(iterable)?;
             interp.gc_root_value(&iterator);
 
-            // Accumulated element values live in these slots rather than being
-            // pinned on the capability function. A custom constructor may hand the
-            // same resolving function to every capability it builds, and pins are
-            // never removed, so anchoring there would retain one settled value per
-            // call on a long-lived object — unbounded growth. Every element function
-            // pins the slots, so they outlive them all and die with them.
+            // Element values live in these slots, not pinned on the capability
+            // function (a custom constructor may reuse one resolving function, and
+            // pins are never removed). Every element function pins the slots.
             let slots = RootedSlots::new(interp, 0);
             interp.gc_root_value(&slots.root());
             let remaining = Rc::new(Cell::new(1)); // starts at 1 per spec (decremented at end)
@@ -1490,6 +1487,7 @@ impl Interpreter {
                 ));
                 interp.pin_native_root(&on_fulfilled, &cap.resolve);
                 slots.pin_on(interp, &on_fulfilled);
+                interp.node_mark_combinator(&on_fulfilled, "all", i, &cap.promise);
 
                 let reject_fn_clone = cap.reject.clone();
                 let p_id = p.as_object_id().unwrap_or_default();
@@ -1647,6 +1645,7 @@ impl Interpreter {
                 interp.pin_native_root(&on_rejected, &cap.resolve);
                 slots.pin_on(interp, &on_fulfilled);
                 slots.pin_on(interp, &on_rejected);
+                interp.node_mark_combinator(&on_fulfilled, "allSettled", i, &cap.promise);
 
                 let p_id = p.as_object_id().unwrap_or_default();
                 let then_fn = match interp.get_object_property(p_id, "then", &p) {
@@ -2051,8 +2050,7 @@ impl Interpreter {
             let iterator = interp.get_iterator(iterable)?;
             interp.gc_root_value(&iterator);
 
-            // Slots for the accumulated errors; see promise_all for why they must
-            // not hang off the capability function.
+            // Error slots; see promise_all.
             let slots = RootedSlots::new(interp, 0);
             interp.gc_root_value(&slots.root());
             let remaining = Rc::new(Cell::new(1));
@@ -2128,6 +2126,7 @@ impl Interpreter {
 
                 interp.pin_native_root(&on_rejected, &cap.reject);
                 slots.pin_on(interp, &on_rejected);
+                interp.node_mark_combinator(&on_rejected, "any", i, &cap.promise);
 
                 let p_id = p.as_object_id().unwrap_or_default();
                 let then_fn = match interp.get_object_property(p_id, "then", &p) {

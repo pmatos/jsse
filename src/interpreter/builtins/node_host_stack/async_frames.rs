@@ -6,6 +6,7 @@
 //! function parked at an `await` on the way. Nothing here runs a getter, a
 //! `then` or any script, and nothing runs before the hooks are installed.
 
+use super::combinator_frames::CombinatorHop;
 use super::*;
 use crate::interpreter::ModuleKey;
 
@@ -21,6 +22,12 @@ pub(crate) enum AsyncFrame {
 /// An async arrow's call receiver, kept in its environment (where the
 /// collector finds it) under a name no script can spell.
 const RECEIVER_BINDING: &str = "%receiver";
+
+/// One `at async` frame of the walk.
+enum AsyncStep {
+    Parked(ParkedAwait),
+    Combinator(CombinatorHop),
+}
 
 /// An async function or module body parked at an `await`.
 pub(crate) struct ParkedAwait {
@@ -181,7 +188,7 @@ impl Interpreter {
 
     /// `skip_until` is a `captureStackTrace` function that is not on the live
     /// stack: V8 drops async frames up to and including its own, if it has one.
-    fn async_awaiters(&self, room: usize, mut skip_until: Option<u64>) -> Vec<ParkedAwait> {
+    fn async_awaiters(&self, room: usize, mut skip_until: Option<u64>) -> Vec<AsyncStep> {
         let mut out = Vec::new();
         let mut next = self.node_host.stack.job_promise;
         for _ in 0..MAX_HOPS {
@@ -191,11 +198,19 @@ impl Interpreter {
             let Some(object) = self.get_object(promise) else {
                 break;
             };
-            let target = match object.borrow().promise_data() {
+            let object = object.borrow();
+            let target = match object.promise_data() {
                 Some(data)
                     if matches!(data.state, PromiseState::Pending)
                         && data.fulfill_reactions.len() == 1 =>
                 {
+                    if let Some(hop) = self.combinator_hop(data) {
+                        next = hop.next;
+                        if !hop.name.is_empty() && skip_until.is_none() {
+                            out.push(AsyncStep::Combinator(hop));
+                        }
+                        continue;
+                    }
                     data.fulfill_reactions[0].target.clone()
                 }
                 _ => break,
@@ -209,7 +224,7 @@ impl Interpreter {
                     match skip_until {
                         Some(target) if parked.func == target => skip_until = None,
                         Some(_) => {}
-                        None => out.push(parked),
+                        None => out.push(AsyncStep::Parked(parked)),
                     }
                 }
                 other => next = other.promise_id(),
@@ -236,8 +251,11 @@ impl Interpreter {
             _ => None,
         };
         if self.node_host.stack.job_promise.is_some() && raws.len() < limit {
-            for parked in self.async_awaiters(limit - raws.len(), skip_until) {
-                self.async_record(parked, &mut record);
+            for step in self.async_awaiters(limit - raws.len(), skip_until) {
+                match step {
+                    AsyncStep::Parked(parked) => self.async_record(parked, &mut record),
+                    AsyncStep::Combinator(hop) => Self::combinator_record(&hop, &mut record),
+                }
             }
         }
         record
@@ -255,6 +273,7 @@ impl Interpreter {
                 JsValue::number(source),
                 JsValue::number(f64::from(parked.pos.max(1))),
                 JsValue::number(FLAG_TOPLEVEL + FLAG_ASYNC),
+                JsValue::UNDEFINED,
             ]);
             return;
         }
@@ -266,7 +285,20 @@ impl Interpreter {
             called_with: parked.called_with,
         };
         self.frame_record(&raw, record);
+        let method = record.pop().unwrap_or(JsValue::UNDEFINED);
         let flags = record.pop().and_then(|v| v.as_number()).unwrap_or(0.0);
         record.push(JsValue::number(flags + FLAG_ASYNC));
+        record.push(method);
+    }
+
+    fn combinator_record(hop: &CombinatorHop, record: &mut Vec<JsValue>) {
+        record.extend([
+            string_value(hop.name),
+            string_value("Promise"),
+            JsValue::number(-1.0),
+            JsValue::number(hop.index as f64),
+            JsValue::number(FLAG_ASYNC + FLAG_COMBINATOR),
+            string_value(hop.name),
+        ]);
     }
 }
