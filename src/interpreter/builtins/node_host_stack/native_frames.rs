@@ -247,5 +247,6 @@ impl Interpreter {
         record.push(JsValue::number(-1.0));
         record.push(JsValue::number(0.0));
         record.push(JsValue::number(flags));
+        record.push(JsValue::UNDEFINED);
     }
 }
