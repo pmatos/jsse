@@ -2,6 +2,9 @@ use super::*;
 use crate::interpreter::gc::RootedSlots;
 use std::cell::Cell;
 
+mod construct;
+use construct::promise_construct;
+
 fn is_same_object(intrinsic: Option<&JsValue>, value: &JsValue) -> bool {
     match (
         value.as_object_id(),
@@ -123,12 +126,13 @@ impl Interpreter {
             });
         }
 
-        // General case: call new C(executor) where executor captures resolve/reject
-        let resolve_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::UNDEFINED));
-        let reject_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::UNDEFINED));
+        // General case: call new C(executor) where executor captures resolve/reject.
+        // The captured functions live in Rooted Slots pinned on the executor: a
+        // user constructor can collect (every statement boundary) after calling
+        // the executor and before returning.
+        let slots = RootedSlots::new(self, 2);
+        let capture = slots.clone();
 
-        let rs = resolve_slot.clone();
-        let rj = reject_slot.clone();
         let executor = self.create_function(JsFunction::native(
             "".to_string(),
             2,
@@ -137,26 +141,23 @@ impl Interpreter {
                 let reject_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Spec: If promiseCapability.[[Resolve]] is not undefined, throw TypeError
-                if !(*rs.borrow()).is_undefined() {
-                    return Completion::Throw(
-                        interp.create_type_error("Promise executor has already been resolved"),
-                    );
-                }
                 // Spec: If promiseCapability.[[Reject]] is not undefined, throw TypeError
-                if !(*rj.borrow()).is_undefined() {
+                if !capture.get(interp, 0).is_undefined() || !capture.get(interp, 1).is_undefined()
+                {
                     return Completion::Throw(
                         interp.create_type_error("Promise executor has already been resolved"),
                     );
                 }
 
                 // Spec: Set promiseCapability.[[Resolve]] to resolve
-                *rs.borrow_mut() = resolve_arg;
                 // Spec: Set promiseCapability.[[Reject]] to reject
-                *rj.borrow_mut() = reject_arg;
+                capture.set(interp, 0, resolve_arg);
+                capture.set(interp, 1, reject_arg);
 
                 Completion::Normal(JsValue::UNDEFINED)
             },
         ));
+        slots.pin_on(self, &executor);
 
         let promise = match self.construct(constructor, &[executor]) {
             Completion::Normal(v) => v,
@@ -164,8 +165,8 @@ impl Interpreter {
             _ => return Err(self.create_type_error("Promise constructor returned abnormally")),
         };
 
-        let resolve = resolve_slot.borrow().clone();
-        let reject = reject_slot.borrow().clone();
+        let resolve = slots.get(self, 0);
+        let reject = slots.get(self, 1);
 
         if !self.is_callable(&resolve) {
             return Err(self.create_type_error("Promise resolve function is not callable"));
@@ -449,50 +450,7 @@ impl Interpreter {
         let ctor = self.create_function(JsFunction::constructor(
             "Promise".to_string(),
             1,
-            move |interp, _this, args| {
-                // Step 1: If NewTarget is undefined, throw a TypeError
-                if interp.new_target.is_none() {
-                    return Completion::Throw(
-                        interp.create_type_error("Promise constructor requires 'new'"),
-                    );
-                }
-                // Step 2: If IsCallable(executor) is false, throw a TypeError
-                let executor = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !interp.is_callable(&executor) {
-                    let err = interp.create_type_error("Promise resolver is not a function");
-                    return Completion::Throw(err);
-                }
-                // OrdinaryCreateFromConstructor — realm-aware prototype
-                let proto = match interp
-                    .get_prototype_from_new_target_realm(|realm| realm.promise_prototype)
-                {
-                    Ok(p) => p,
-                    Err(e) => return Completion::Throw(e),
-                };
-                let promise = interp.create_promise_object();
-                if let Some(p) = proto
-                    && let Some(po) = promise.as_object_id()
-                    && let Some(pobj) = interp.get_object_cell(po)
-                {
-                    pobj.borrow_mut().prototype_id = Some(p);
-                }
-                let promise_id = promise.as_object_id().unwrap_or_default();
-                let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
-                let result = interp.with_gc_root_scope(|interp| {
-                    for v in [&promise, &resolve_fn, &reject_fn] {
-                        interp.gc_root_value(v);
-                    }
-                    let args = [resolve_fn.clone(), reject_fn.clone()];
-                    interp.call_function(&executor, &JsValue::UNDEFINED, &args)
-                });
-                if let Completion::Throw(e) = result
-                    && let Completion::Throw(e2) =
-                        interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[e])
-                {
-                    return Completion::Throw(e2);
-                }
-                Completion::Normal(promise)
-            },
+            move |interp, _this, args| promise_construct(interp, args),
         ));
 
         // deferred_construct: Promise checks callable before OrdinaryCreateFromConstructor.
