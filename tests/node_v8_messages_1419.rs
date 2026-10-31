@@ -130,7 +130,7 @@ fn default_mode_keeps_the_engine_wording() {
         "Cannot read properties of null (reading property)",
         "Cannot use 'in' operator to search for a property in a non-object",
         "Right-hand side of instanceof is not an object",
-        "Class constructor cannot be invoked without 'new'",
+        "Class constructor C cannot be invoked without 'new'",
         "Class extends value is not a constructor or null",
     ]
     .join("|");
