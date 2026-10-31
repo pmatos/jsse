@@ -21,6 +21,7 @@ const {
 } = require('internal/errors').codes;
 const { kEmptyObject } = require('internal/util');
 const {
+  validateAbortSignal,
   validateBoolean,
   validateFunction,
   validateInteger,
@@ -32,7 +33,11 @@ const fs = require('fs');
 const { kRef, kUnref, FileHandle } = require('internal/fs/promises');
 const { Buffer } = S;
 const { Readable, Writable, finished } = require('stream');
-const getOptions = (options, defaults) => S.getOptions(options, defaults);
+const getOptions = (options, defaults) => {
+  const result = S.getOptions(options, defaults);
+  if (result.signal !== undefined) validateAbortSignal(result.signal, 'options.signal');
+  return result;
+};
 const getValidatedFd = S.getValidatedFd;
 const validatePath = (path) => S.getValidatedPath(path);
 const copyObject = (source) => ({ ...source });
