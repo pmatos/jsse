@@ -2707,11 +2707,8 @@ impl Interpreter {
             },
         ));
         // TypedArray.from — §23.2.2.1
-        let ta_from_fn = self.create_function(JsFunction::native(
-            "from".to_string(),
-            1,
-            |interp, this_val, args| typed_array_from(interp, this_val, args),
-        ));
+        let ta_from_fn =
+            self.create_function(JsFunction::native("from".to_string(), 1, typed_array_from));
         if let Some(o) = ta_ctor.as_object_id()
             && let Some(obj) = self.get_object_cell(o)
         {
