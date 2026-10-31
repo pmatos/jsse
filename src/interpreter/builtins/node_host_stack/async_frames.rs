@@ -264,6 +264,7 @@ impl Interpreter {
             receiver: parked.receiver,
             constructor: false,
             called_with: parked.called_with,
+            native: false,
         };
         self.frame_record(&raw, record);
         let flags = record.pop().and_then(|v| v.as_number()).unwrap_or(0.0);

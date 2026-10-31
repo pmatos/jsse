@@ -1233,7 +1233,6 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            // §13.15.1: Validate CatchParameter has no duplicate names
             if let Some(ref p) = param {
                 let mut bound = Vec::new();
                 p.bound_names(&mut bound);
@@ -1250,8 +1249,6 @@ impl<'a> Parser<'a> {
             let body = self
                 .with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
             self.eat(&Token::RightBrace)?;
-            // §13.15.1: BoundNames of CatchParameter must not overlap
-            // LexicallyDeclaredNames of Block
             if let Some(ref p) = param {
                 let mut bound = Vec::new();
                 p.bound_names(&mut bound);
@@ -1284,6 +1281,9 @@ impl<'a> Parser<'a> {
             None
         };
 
+        if handler.is_none() && finalizer.is_none() {
+            return Err(self.error("Missing catch or finally after try"));
+        }
         Ok(Statement::Try(TryStatement {
             block,
             handler,

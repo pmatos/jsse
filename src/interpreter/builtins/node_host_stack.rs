@@ -13,8 +13,13 @@ use super::super::*;
 pub(crate) use super::node_host_stack_sources::NodeStackState;
 mod async_frames;
 mod hook_flags;
+mod import_site;
+mod link_errors;
+mod native_frames;
 pub(crate) use async_frames::ParkedAwait;
 pub(crate) use hook_flags::call_positions_enabled;
+pub(crate) use link_errors::ImportName;
+pub(crate) use native_frames::NativeFrames;
 use std::rc::Rc;
 
 pub(super) const HOOK_ERROR: PrivateId = PrivateId(u64::MAX - 2);
@@ -41,6 +46,7 @@ struct RawFrame {
     receiver: Option<JsValue>,
     constructor: bool,
     called_with: bool,
+    native: bool,
 }
 
 fn string_value(text: &str) -> JsValue {
@@ -97,48 +103,10 @@ impl Interpreter {
         ids.take_while(|id| ancestors.contains(id)).count()
     }
 
-    fn raw_frames(&self, skip_top: usize, until: Option<Until>, limit: usize) -> Vec<RawFrame> {
-        let frames = &self.call_stack_frames;
-        let mut out = Vec::new();
-        let skip = skip_top + until.map_or(0, |until| self.frames_through(skip_top, until));
-        for (n, i) in (0..frames.len()).rev().enumerate() {
-            if n < skip {
-                continue;
-            }
-            let frame = &frames[i];
-            if out.len() >= limit {
-                break;
-            }
-            let id = frame.func_obj_id;
-            if id == 0 || self.node_host.stack.hidden_frames.iter().any(|h| h.0 == id) {
-                continue;
-            }
-            let pos = match frames.get(i + 1) {
-                Some(callee) => callee.caller_pos,
-                None => self.node_host.call_pos,
-            };
-            let arrow_this = self.node_arrow_receiver(i);
-            let called_with = arrow_this.is_some();
-            let (receiver, constructor) = match self.call_stack_envs.get(frame.env_index) {
-                Some(_) if called_with => (arrow_this, false),
-                Some(env) if !frame.is_eval => {
-                    let env = env.borrow();
-                    (env.get_this(), env.get_new_target().is_object())
-                }
-                _ => (None, false),
-            };
-            out.push(RawFrame {
-                func: frame.func_obj_id,
-                pos,
-                receiver,
-                constructor,
-                called_with,
-            });
-        }
-        out
-    }
-
     fn frame_record(&mut self, raw: &RawFrame, record: &mut Vec<JsValue>) {
+        if raw.native {
+            return self.native_frame_record(raw, record);
+        }
         let mut name = None;
         let mut origin = None;
         let mut arrow = false;
@@ -271,12 +239,16 @@ impl Interpreter {
                 return;
             }
         }
-        let frames = match self.stack_trace_limit() {
-            Some(limit) => {
+        let frames = match (
+            self.node_host.stack.import_site.clone(),
+            self.stack_trace_limit(),
+        ) {
+            (Some(site), Some(_)) => site,
+            (_, Some(limit)) => {
                 let record = self.capture_records(skip_top, until, limit);
                 self.create_array(record)
             }
-            None => JsValue::UNDEFINED,
+            _ => JsValue::UNDEFINED,
         };
         {
             let mut b = handle.borrow_mut();
@@ -311,6 +283,8 @@ impl Interpreter {
     }
 
     pub(super) fn setup_node_host_stack(&mut self) {
+        self.note_native_frame_intrinsics();
+        self.setup_arrow_hook();
         let install = self.create_function(JsFunction::native(
             "__host_stack_install".to_string(),
             3,

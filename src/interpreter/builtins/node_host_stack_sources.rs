@@ -55,6 +55,12 @@ pub(crate) struct NodeStackState {
     pub(crate) arrow_receivers: Vec<(usize, JsValue)>,
     /// The promise the running reaction job settles, where `at async` frames start.
     pub(super) job_promise: Option<u64>,
+    /// The builtins running right now that V8 would show in a trace.
+    pub(crate) natives: super::node_host_stack::NativeFrames,
+    /// While `import()` loads a module in a job: the frames of the calling code.
+    pub(crate) import_site: Option<JsValue>,
+    /// The import being linked, for the text of a missing-export error.
+    pub(crate) import_name: Option<super::node_host_stack::ImportName>,
 }
 
 /// The last `//# sourceURL=` directive that sits on a line of its own, so a

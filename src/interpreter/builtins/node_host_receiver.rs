@@ -27,6 +27,13 @@ impl Interpreter {
         for (_, receiver) in &self.node_host.stack.arrow_receivers {
             roots.extend(receiver.as_object_id());
         }
+        roots.extend(
+            self.node_host
+                .stack
+                .import_site
+                .iter()
+                .filter_map(JsValue::as_object_id),
+        );
     }
 
     /// V8 prints a private (`#m`) or symbol-keyed (`[sym]`) method without
@@ -63,6 +70,7 @@ impl Interpreter {
                     .unwrap_or_else(|| "Function".to_string()),
             );
         }
+        let start = id;
         for _ in 0..64 {
             let obj = self.get_object(id)?;
             let (ctor, proto) = {
@@ -77,7 +85,9 @@ impl Interpreter {
                 (ctor, b.prototype_id)
             };
             if let Some(ctor) = ctor {
-                if let Some(name) = self.own_data_string(ctor, "name").filter(|n| !n.is_empty()) {
+                if let Some(name) = self.own_data_string(ctor, "name").filter(|n| !n.is_empty())
+                    && name != "Object"
+                {
                     return Some(name);
                 }
                 break;
@@ -85,6 +95,32 @@ impl Interpreter {
             let Some(next) = proto else { break };
             id = next;
         }
-        Some("Object".to_string())
+        Some(
+            self.string_tag(start)
+                .unwrap_or_else(|| "Object".to_string()),
+        )
+    }
+
+    /// The string a plain object's `Symbol.toStringTag` data property holds,
+    /// found without running script (`JSON`, `Math`, `Reflect`): V8 names the
+    /// receiver after it when the constructor is just `Object`.
+    fn string_tag(&self, mut id: u64) -> Option<String> {
+        let key = JsPropertyKey::well_known_symbol("toStringTag");
+        for _ in 0..64 {
+            let obj = self.get_object(id)?;
+            let b = obj.borrow();
+            if b.is_proxy() {
+                return None;
+            }
+            if let Some(descriptor) = b.get_own_property(&key) {
+                return descriptor
+                    .value?
+                    .as_string()
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.is_empty());
+            }
+            id = b.prototype_id?;
+        }
+        None
     }
 }
