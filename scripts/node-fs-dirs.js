@@ -87,47 +87,58 @@
     return result;
   }
 
-  function readdirRecursive(base, options) {
+  // The walk is one floor call (a pool job when asynchronous); this only
+  // shapes its listing. Node's callback and synchronous forms list a level at
+  // a time; `fs.promises.readdir` keeps a stack and finishes the last
+  // directory found first, which `depthFirst` reproduces.
+  function readdirRecursive(base, options, depthFirst) {
     var withFileTypes = Boolean(options.withFileTypes);
-    var results = [];
+    var raw = !meta.plainEncoding(options.encoding);
+    var tree = host.readdir_tree(base, raw);
+    var names = tree[0];
+    var types = tree[1];
+    var parents = tree[2];
+    var isDirectory = tree[3];
     var dirs = [base];
     var prefixes = [""];
-    for (var i = 0; i < dirs.length; i++) {
-      var dir = dirs[i];
-      var listed = listing(dir, options);
-      var names = listed[0];
-      var types = listed[1];
-      for (var j = 0; j < names.length; j++) {
-        var name = names[j];
-        var relative = prefixes[i] === "" ? name : prefixes[i] + "/" + name;
-        var isDirectory;
-        if (withFileTypes) {
-          var dirent = getDirent(dir, name, types[j]);
-          results.push(dirent);
-          isDirectory = dirent.isDirectory() ||
-            (dirent.isSymbolicLink() && isDirectoryFollowing(join(dir, name)));
-        } else {
-          results.push(relative);
-          isDirectory = types[j] === DIRENT_DIR ||
-            ((types[j] === DIRENT_LINK || types[j] === DIRENT_UNKNOWN) &&
-              isDirectoryFollowing(join(dir, name)));
-        }
-        if (isDirectory) {
-          dirs.push(join(dir, name));
-          prefixes.push(relative);
-        }
+    var children = [[]];
+    for (var j = 0; j < names.length; j++) {
+      var name = raw ? meta.encodeName(names[j], options.encoding) : names[j];
+      var dir = dirs[parents[j]];
+      var prefix = prefixes[parents[j]];
+      var relative = prefix === "" ? name : prefix + "/" + name;
+      var entry = {
+        value: withFileTypes ? getDirent(dir, name, types[j]) : relative,
+        dir: -1,
+      };
+      if (isDirectory[j]) {
+        entry.dir = dirs.length;
+        dirs.push(join(dir, name));
+        prefixes.push(relative);
+        children.push([]);
       }
+      children[parents[j]].push(entry);
+    }
+    var results = [];
+    var pending = [0];
+    var head = 0;
+    while (depthFirst ? pending.length > 0 : head < pending.length) {
+      var current = depthFirst ? pending.pop() : pending[head++];
+      children[current].forEach(function (child) {
+        results.push(child.value);
+        if (child.dir !== -1) pending.push(child.dir);
+      });
     }
     return results;
   }
 
-  function readdirSync(path, options) {
+  function readdirWith(path, options, depthFirst) {
     options = getOptions(options, {});
     path = getValidatedPath(path);
     if (options.recursive != null) {
       validateBoolean(options.recursive, "options.recursive");
     }
-    if (options.recursive) return readdirRecursive(path, options);
+    if (options.recursive) return readdirRecursive(path, options, depthFirst);
     if (!options.withFileTypes) {
       var raw = !meta.plainEncoding(options.encoding);
       var names = host.readdir(path, raw);
@@ -139,6 +150,10 @@
     return found[0].map(function (name, i) {
       return getDirent(path, name, found[1][i]);
     });
+  }
+
+  function readdirSync(path, options) {
+    return readdirWith(path, options, false);
   }
 
   // ---- mkdir / mkdtemp -------------------------------------------------------
@@ -228,19 +243,6 @@
     ENOTDIR: "Not a directory",
   };
 
-  // std::filesystem::remove_all, depth first; the first failure aborts.
-  function removeAll(path) {
-    var st = host.stat(path, 1, false);
-    if ((st[1] & S.S_IFMT) === S.hostConstants.S_IFDIR) {
-      host.readdir(path, false).forEach(function (name) {
-        removeAll(path + "/" + name);
-      });
-      host.rmdir(path);
-    } else {
-      host.unlink(path);
-    }
-  }
-
   function rmSync(path, options) {
     var defaults = { force: false, recursive: false, retryDelay: 100, maxRetries: 0 };
     if (options !== undefined) {
@@ -268,7 +270,7 @@
     }
     path = getValidatedPath(path);
     try {
-      if (options.recursive) removeAll(path);
+      if (options.recursive) host.rm_all(path);
       else host.unlink(path);
     } catch (e) {
       if (e.code === "ENOENT" || (options.force && e.code === "ENOTDIR")) return;
@@ -284,6 +286,9 @@
   }
 
   S.path = { normalize: normalize, join: join, isAbsolute: isAbsolute, dirname: dirname, resolve: resolve };
+  S.readdirDepthFirst = function (path, options) {
+    return readdirWith(path, options, true);
+  };
   S.dirs = {
     Dir: Dir,
     Dirent: stats.Dirent,

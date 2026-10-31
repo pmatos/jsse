@@ -1,23 +1,32 @@
 'use strict';
 
-// The callback API (issue #1234). Every function runs the matching synchronous
-// function twice: first with the floor's first syscall replaced by a probe
-// that records its arguments and stops, which validates the call exactly as
-// the synchronous function does and throws its errors synchronously; then,
-// when the syscall's result arrives, again with that one syscall replaced by
-// the result, so post-processing (Stats, Dirent, encodings) is shared too.
-// Blocking syscalls run on the worker pool; the rest run on a later loop turn.
+// The callback API (issues #1234, #1341). Every function runs the matching
+// synchronous function against a script of floor calls. The first run has no
+// script, so its first floor call is replaced by a probe that records its
+// arguments and stops: that validates the call exactly as the synchronous
+// function does and throws its errors synchronously. The recorded call is
+// submitted to the worker pool; when its result arrives the function runs again
+// with the results so far replayed, so post-processing (Stats, Dirent,
+// encodings) is shared code, and stops at its next floor call, until a run
+// completes. Functions with a handful of floor calls (`rm`, `truncate`,
+// `realpath`) therefore never block the loop, and the tree walks (`rm`
+// recursive, recursive `readdir`) are one floor call each.
 
 const { sync, support: S, async: hostAsync } = require('internal/host/fs');
 
-const { ObjectDefineProperty } = primordials;
+const { ObjectDefineProperty, SymbolFor } = primordials;
+const { AbortError } = require('internal/errors');
+const { validateAbortSignal } = require('internal/validators');
+const { kCustomPromisifyArgsSymbol } = require('internal/util');
 
 const host = S.host;
 const STOP = { stop: true };
 const OFFLOADED = new Set([
   'open', 'close', 'read', 'write', 'read_file', 'write_file', 'stat', 'access',
   'readdir', 'readdir_types', 'readlink', 'realpath', 'mkdir', 'mkdirp',
-  'rmdir', 'unlink', 'rename', 'copyfile', 'ftruncate', 'fsync',
+  'rmdir', 'unlink', 'rename', 'copyfile', 'ftruncate', 'fsync', 'chmod',
+  'chown', 'utimes', 'link', 'symlink', 'mkdtemp', 'statfs', 'rm_all',
+  'readdir_tree',
 ]);
 const PROBED = Object.keys(host).filter(
   (name) => name !== 'constants' && name !== 'exists' && typeof host[name] === 'function');
@@ -29,20 +38,35 @@ function checkCallback(cb) {
 }
 
 let probeHit = null;
-const probes = {};
+let script = null;
+let scriptIndex = 0;
+const stubs = {};
 const saved = {};
 for (const name of PROBED) {
-  probes[name] = function() {
-    probeHit = { op: name, args: Array.prototype.slice.call(arguments) };
+  stubs[name] = function() {
+    if (scriptIndex < script.length) {
+      const step = script[scriptIndex++];
+      if (step.failed) throw step.error;
+      return step.raw;
+    }
+    // A `finally` block may make further floor calls while STOP unwinds; the
+    // first one is the one to submit.
+    if (probeHit === null) {
+      probeHit = { op: name, args: Array.prototype.slice.call(arguments) };
+    }
     throw STOP;
   };
 }
 
-function probe(syncFn, args) {
+// Run `syncFn` once with the floor calls in `steps` replayed; `hit` is the
+// next floor call it made (null if it ran to completion with `value`).
+function execute(syncFn, args, steps) {
   probeHit = null;
+  script = steps;
+  scriptIndex = 0;
   for (const name of PROBED) {
     saved[name] = host[name];
-    host[name] = probes[name];
+    host[name] = stubs[name];
   }
   let value;
   try {
@@ -51,24 +75,11 @@ function probe(syncFn, args) {
     if (e !== STOP) throw e;
   } finally {
     for (const name of PROBED) host[name] = saved[name];
+    script = null;
   }
   const hit = probeHit;
   probeHit = null;
   return { hit, value };
-}
-
-function replay(syncFn, args, hit, error, raw) {
-  const saved = host[hit.op];
-  host[hit.op] = function() {
-    host[hit.op] = saved;
-    if (error) throw error;
-    return raw;
-  };
-  try {
-    return syncFn(...args);
-  } finally {
-    host[hit.op] = saved;
-  }
 }
 
 function settle(cb, value, extra) {
@@ -77,40 +88,53 @@ function settle(cb, value, extra) {
   else cb(null, value);
 }
 
-function run(syncFn, args, cb, extra) {
-  const { hit, value } = probe(syncFn, args);
-  const done = (error, raw) => {
-    let result;
+function submit(hit, done) {
+  if (OFFLOADED.has(hit.op)) {
+    hostAsync(hit.op, done, ...hit.args);
+    return;
+  }
+  setImmediate(() => {
+    let raw;
+    let error;
     try {
-      result = hit === null ? value : replay(syncFn, args, hit, error, raw);
+      raw = host[hit.op](...hit.args);
     } catch (e) {
+      error = e;
+    }
+    done(error, raw);
+  });
+}
+
+function run(syncFn, args, cb, extra) {
+  const steps = [];
+  const advance = (first) => {
+    let outcome;
+    try {
+      outcome = execute(syncFn, args, steps);
+    } catch (e) {
+      if (first) throw e;
       cb(e);
       return;
     }
-    settle(cb, result, extra);
-  };
-  if (hit === null) {
-    setImmediate(done);
-  } else if (OFFLOADED.has(hit.op)) {
-    hostAsync(hit.op, done, ...hit.args);
-  } else {
-    setImmediate(() => {
-      let raw;
-      let error;
-      try {
-        raw = host[hit.op](...hit.args);
-      } catch (e) {
-        error = e;
-      }
-      done(error, raw);
+    const { hit, value } = outcome;
+    if (hit === null) {
+      if (first) setImmediate(() => settle(cb, value, extra));
+      else settle(cb, value, extra);
+      return;
+    }
+    submit(hit, (error, raw) => {
+      steps.push(error ? { failed: true, error } : { failed: false, raw });
+      advance(false);
     });
-  }
+  };
+  advance(true);
 }
 
-// Functions that make several syscalls (or are written in JavaScript) cannot
-// be probed: they validate and run on a later loop turn, and everything,
-// including a validation failure, is reported through the callback.
-function deferred(syncFn, args, cb) {
+// A function that cannot be probed (`cp` catches around its floor calls):
+// validate now, then run whole on a later loop turn, reporting everything that
+// goes wrong through the callback.
+function deferred(syncFn, args, cb, validate) {
+  validate(...args);
   setImmediate(() => {
     let result;
     try {
@@ -123,16 +147,38 @@ function deferred(syncFn, args, cb) {
   });
 }
 
+// options.signal of readFile/writeFile/appendFile: an aborted signal fails the
+// call before it starts; readFile also fails if the signal fires meanwhile.
+const SIGNAL_AT = { readFile: 1, writeFile: 2, appendFile: 2 };
+
+function withSignal(name, args, cb) {
+  const options = args[SIGNAL_AT[name]];
+  const signal = options !== null && typeof options === 'object' ? options.signal : undefined;
+  if (signal === undefined) return cb;
+  validateAbortSignal(signal, 'options.signal');
+  const aborted = () => new AbortError(undefined, { cause: signal.reason });
+  if (signal.aborted) {
+    process.nextTick(cb, aborted());
+    return null;
+  }
+  if (name !== 'readFile') return cb;
+  return (error, ...rest) => (signal.aborted ? cb(aborted()) : cb(error, ...rest));
+}
+
 function define(name, syncFn, options) {
   const required = (options && options.required) || 1;
   const wrapper = function(...args) {
     const explicit = args.length > required;
-    const cb = explicit ? args[args.length - 1] : options && options.defaultCallback;
+    let cb = explicit ? args[args.length - 1] : options && options.defaultCallback;
     checkCallback(cb);
     if (explicit) args.pop();
     if (options && options.args) args = options.args(args);
+    if (name in SIGNAL_AT) {
+      cb = withSignal(name, args, cb);
+      if (cb === null) return;
+    }
     if (options && options.deferred && options.deferred(args)) {
-      deferred(syncFn, args, cb);
+      deferred(syncFn, args, cb, options.validate);
     } else {
       run(syncFn, args, cb, options && options.extra && options.extra(args));
     }
@@ -171,17 +217,32 @@ define('close', sync.closeSync, {
 define('stat', sync.statSync, { args: withoutThrowIfNoEntry });
 define('lstat', sync.lstatSync, { args: withoutThrowIfNoEntry });
 
-define('readdir', sync.readdirSync, {
-  deferred: (args) => {
-    const options = args[1];
-    return options !== null && typeof options === 'object' && Boolean(options.recursive);
+define('readdir', sync.readdirSync);
+exports.readdirDepthFirst = define('readdir', S.readdirDepthFirst, { hidden: true });
+define('cp', sync.cpSync, { deferred: () => true, required: 2, validate: S.cpValidate });
+define('rm', sync.rmSync);
+define('truncate', sync.truncateSync, {
+  args: (args) => {
+    if (args[1] === undefined) args[1] = 0;
+    S.validateInteger(args[1], 'len', -S.MAX_SAFE, S.MAX_SAFE);
+    return args;
   },
 });
-define('cp', sync.cpSync, { deferred: () => true, required: 2 });
-define('rm', sync.rmSync, { deferred: () => true });
-define('truncate', sync.truncateSync, { deferred: () => true });
 define('opendir', sync.opendirSync);
-define('realpath', sync.realpathSync, { deferred: () => true }).native =
+define('realpath', sync.realpathSync, {
+  args: (args) => {
+    // Node's callback realpath stringifies what is not a path instead of
+    // throwing: realpath(1, cb) looks up "1".
+    if (typeof args[0] !== 'string') {
+      try {
+        args[0] = S.getValidatedPath(args[0]) + '';
+      } catch {
+        args[0] += '';
+      }
+    }
+    return args;
+  },
+}).native =
   define('realpath', sync.realpathSync.native, { hidden: true });
 
 exports.exists = function exists(path, cb) {
@@ -218,3 +279,12 @@ exports.write = function write(fd, ...rest) {
   checkCallback(cb);
   run(sync.writeSync, [fd, ...rest], cb, rest[0]);
 };
+
+exports.read[kCustomPromisifyArgsSymbol] = ['bytesRead', 'buffer'];
+exports.write[kCustomPromisifyArgsSymbol] = ['bytesWritten', 'buffer'];
+ObjectDefineProperty(exports.exists, SymbolFor('nodejs.util.promisify.custom'), {
+  value: function exists(path) {
+    return new Promise((resolve) => exports.exists(path, resolve));
+  },
+  configurable: true,
+});

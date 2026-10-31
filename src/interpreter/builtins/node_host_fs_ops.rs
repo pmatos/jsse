@@ -33,7 +33,7 @@ pub(super) fn uv_dirent_type(t: &std::fs::FileType) -> f64 {
 
 /// libuv's `uv__fs_to_timespec`: nanosecond resolution, floored for
 /// negative times, infinity means "now" and NaN leaves the time alone.
-fn timespec_of(time: f64) -> libc::timespec {
+pub(super) fn timespec_of(time: f64) -> libc::timespec {
     if !time.is_finite() {
         return libc::timespec {
             tv_sec: 0,

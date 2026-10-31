@@ -434,5 +434,10 @@
     return o;
   }
 
+  S.cpValidate = function (src, dest, options) {
+    validateOptions(options);
+    S.getValidatedPath(src, "src");
+    S.getValidatedPath(dest, "dest");
+  };
   S.cp = { cpSync: cpSync };
 })();

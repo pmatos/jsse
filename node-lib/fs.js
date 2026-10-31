@@ -42,6 +42,9 @@ defineLazy('internal/fs/streams', [
   'createReadStream', 'createWriteStream',
 ]);
 
+defineLazy('internal/fs/vectored', [
+  'readv', 'writev', 'readvSync', 'writevSync', 'openAsBlob',
+]);
 defineLazy('internal/fs/glob', ['glob', 'globSync']);
 defineLazy('internal/fs/watchers', ['watch']);
 defineLazy('internal/fs/stat_watcher', ['watchFile', 'unwatchFile']);
