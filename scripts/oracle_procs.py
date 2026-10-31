@@ -18,7 +18,7 @@ import threading
 import time
 
 GRACE = 2.0
-_lock = threading.Lock()
+_lock = threading.RLock()
 _live = {}
 _stopping = False
 _installed = False
@@ -47,7 +47,7 @@ def reap_group(child, grace=GRACE):
     _signal_group(pgid, signal.SIGTERM)
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
-        if child.poll() is not None and not _alive(pgid):
+        if _gone(child):
             return
         time.sleep(0.02)
     _signal_group(pgid, signal.SIGKILL)
@@ -64,8 +64,9 @@ def _gone(child):
 def kill_all():
     """Stop launching and kill the group of every live run (atexit and signal handlers).
 
-    SIGTERM first and a short grace, then SIGKILL: a group leader that is itself an oracle driver runs its own
-    cleanup on SIGTERM and so takes the groups it started with it; SIGKILL alone would orphan them.
+    SIGTERM first and a grace of twice reap_group's (so a nested driver finishes its own pass), then SIGKILL: a
+    group leader that is itself an oracle driver runs its own cleanup on SIGTERM and so takes the groups it
+    started with it; SIGKILL alone would orphan them.
     """
     global _stopping
     with _lock:
@@ -73,7 +74,7 @@ def kill_all():
         children = list(_live.values())
     for child in children:
         _signal_group(child.pid, signal.SIGTERM)
-    deadline = time.monotonic() + GRACE
+    deadline = time.monotonic() + 2 * GRACE
     while time.monotonic() < deadline and not all(_gone(c) for c in children):
         time.sleep(0.02)
     for child in children:
@@ -101,9 +102,8 @@ def group(cmd, **popen_kw):
     """Start `cmd` as the leader of its own session, registered for cleanup; yield the Popen.
 
     On leaving the block (normally, by an exception, or by the interrupt handlers) the whole group is killed
-    and the leader reaped. Streams default to stdin=DEVNULL; pass stdout=/stderr= to redirect them.
+    and the leader reaped. Streams are as for Popen (inherited unless given).
     """
-    popen_kw.setdefault("stdin", subprocess.DEVNULL)
     with _lock:
         if _stopping:
             raise RuntimeError("oracle is shutting down")
@@ -120,7 +120,14 @@ def group(cmd, **popen_kw):
 def run_group(cmd, cwd, env, timeout):
     """Run `cmd`; return (exit code as str or "timeout", stdout bytes, stderr bytes)."""
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        with group(cmd, cwd=cwd, env=env, stdout=out, stderr=err) as child:
+        with group(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
+        ) as child:
             try:
                 child.wait(timeout=timeout)
                 code = str(child.returncode)
@@ -145,7 +152,14 @@ def run_measured(cmd, cwd, env, timeout, merge_stderr=False):
     """
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         stderr = subprocess.STDOUT if merge_stderr else err
-        with group(cmd, cwd=cwd, env=env, stdout=out, stderr=stderr) as proc:
+        with group(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=stderr,
+        ) as proc:
             start = time.monotonic()
             code = "timeout"
             while True:

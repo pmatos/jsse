@@ -191,7 +191,14 @@ def run_case(engine, exe, tsc_dir, work, case, timeout, settle, fix):
     stack = contextlib.ExitStack()
     with open(out_path, "wb") as fo, open(err_path, "wb") as fe:
         p = stack.enter_context(
-            oracle_procs.group(cmd, cwd=tree, env=env, stdout=fo, stderr=fe)
+            oracle_procs.group(
+                cmd,
+                cwd=tree,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=fo,
+                stderr=fe,
+            )
         )
 
     def wait_cycles(base):

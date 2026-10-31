@@ -184,7 +184,9 @@ def hereby_local(engine, exe, tree, timeout):
     ]
     start = time.monotonic()
     code, out, err = oracle_procs.run_group(argv, tree, env, timeout)
-    out, err = out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+    out, err = (
+        re.sub(r"\r\n?", "\n", b.decode("utf-8", "replace")) for b in (out, err)
+    )
     secs = time.monotonic() - start
     if code == "timeout":
         return 124, out, err + f"\ntimed out after {timeout}s\n", secs

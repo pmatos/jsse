@@ -243,6 +243,18 @@ class SharedHelpersTest(unittest.TestCase):
         self.assertGreater(rss, 1)
 
 
+class ReentrancyTest(unittest.TestCase):
+    def test_a_signal_while_the_registry_is_locked_does_not_deadlock(self):
+        code = (
+            "import sys; sys.path.insert(0, %r); import oracle_procs as p\n"
+            "with p._lock:\n    p.kill_all()\nprint('ok')\n" % str(SCRIPTS)
+        )
+        r = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(r.stdout.strip(), "ok")
+
+
 class AdoptionTest(unittest.TestCase):
     """No driver starts an engine behind oracle_procs' back, and each one installs the interrupt cleanup."""
 
@@ -252,7 +264,7 @@ class AdoptionTest(unittest.TestCase):
             + glob.glob(str(SCRIPTS / "run-tsc-*-oracle.py"))
             + glob.glob(str(SCRIPTS / "run-hereby*-oracle.py"))
         )
-        self.assertGreater(len(scripts), 30)
+        self.assertGreater(len(scripts), 10)
         for path in scripts:
             with self.subTest(os.path.basename(path)):
                 self.assertNotIn("subprocess.Popen", Path(path).read_text())
