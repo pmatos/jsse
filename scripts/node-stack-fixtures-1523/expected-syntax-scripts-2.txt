@@ -1,6 +1,3 @@
-"async x" SyntaxError: Unexpected identifier 'x'
-"async x =>" SyntaxError: Unexpected end of input
-"async (x) " parses
 "async (x) =>" SyntaxError: Unexpected end of input
 "x =>" SyntaxError: Unexpected end of input
 "x => {" SyntaxError: Unexpected end of input
@@ -244,3 +241,11 @@
 "x = async function () { x = await ) }" SyntaxError: Unexpected token ')'
 "x = async function () { x = await ]}" SyntaxError: Unexpected token ']'
 "x = async function () { x = await , }" SyntaxError: Unexpected token ','
+"x = 1 await" SyntaxError: Unexpected reserved word
+"a.await foo" SyntaxError: await is only valid in async functions and the top level bodies of modules
+"a?.await foo" SyntaxError: await is only valid in async functions and the top level bodies of modules
+"class C { #await; m(){ this.#await foo } }" SyntaxError: Unexpected identifier 'foo'
+"x = `a` await y" SyntaxError: Unexpected reserved word
+"x = `\\u{000000041}\\u12`" SyntaxError: Invalid Unicode escape sequence
+"x = `\\u{110000}`" SyntaxError: Undefined Unicode code-point
+"import((a.b))" parses

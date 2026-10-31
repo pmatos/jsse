@@ -42,12 +42,16 @@ impl<'a> Parser<'a> {
     ) -> Expression {
         let mut at = at;
         if inferred_names::enabled() && Self::positions_itself(&spec) {
-            let read = match &spec {
+            let (read, name) = match &spec {
                 Expression::Member(_, MemberProperty::Dot(name), _) => {
-                    spec_end.saturating_sub(name.len())
+                    (spec_end.saturating_sub(name.len()), name)
                 }
-                _ => spec_start,
+                Expression::Identifier(name) => (spec_start, name),
+                _ => unreachable!("positions_itself"),
             };
+            if self.source_text_source.get(read..read + name.len()) != Some(name.as_str()) {
+                return Expression::Import(ExprBox::new(spec), options, at);
+            }
             at = CallSiteId::at(read).1;
         }
         Expression::Import(ExprBox::new(spec), options, at)
@@ -84,28 +88,18 @@ impl<'a> Parser<'a> {
                 "Unexpected strict mode reserved word".to_string()
             }
             Token::Identifier(name)
-                if self.strict
-                    && [
-                        "implements",
-                        "interface",
-                        "package",
-                        "private",
-                        "protected",
-                        "public",
-                    ]
-                    .contains(&name.as_str()) =>
+                if self.strict && super::v8_messages::STRICT_WORDS.contains(&name.as_str()) =>
             {
                 "Unexpected strict mode reserved word".to_string()
             }
-            Token::Keyword(Keyword::Enum) => "Unexpected reserved word".to_string(),
-            Token::At => "Invalid or unexpected token".to_string(),
-            Token::Keyword(Keyword::Await) if self.in_async || self.is_module => {
+            Token::Keyword(Keyword::Await | Keyword::Enum) => {
                 "Unexpected reserved word".to_string()
             }
+            Token::At => "Invalid or unexpected token".to_string(),
             Token::Identifier(_)
             | Token::IdentifierWithEscape(_)
             | Token::PrivateName(_)
-            | Token::Keyword(Keyword::Await | Keyword::Let | Keyword::Static | Keyword::Yield) => {
+            | Token::Keyword(Keyword::Let | Keyword::Static | Keyword::Yield) => {
                 format!("Unexpected identifier '{raw}'")
             }
             Token::NumericLiteral(_)
@@ -155,7 +149,7 @@ impl<'a> Parser<'a> {
         if inferred_names::enabled()
             && before.ends_with("await")
             && !before[..before.len() - 5]
-                .ends_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'))
+                .ends_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '#'))
         {
             return self.error(
                 "await is only valid in async functions and the top level bodies of modules",

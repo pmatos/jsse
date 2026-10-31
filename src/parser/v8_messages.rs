@@ -8,7 +8,7 @@
 use super::*;
 use std::borrow::Cow;
 
-const STRICT_WORDS: [&str; 7] = [
+pub(super) const STRICT_WORDS: [&str; 7] = [
     "implements",
     "interface",
     "let",
@@ -290,7 +290,7 @@ impl ParseError {
     /// throw: `SyntaxError: ...` as the engine words it, V8's text under `--node`.
     pub(crate) fn js(&self) -> String {
         if inferred_names::enabled() {
-            node_message(self.message.clone())
+            self.js_bare()
         } else {
             self.to_string()
         }
@@ -344,8 +344,7 @@ fn template_escape_message(raw: &str) -> &'static str {
                         Some(end)
                             if end > 0 && braced[..end].bytes().all(|b| b.is_ascii_hexdigit()) =>
                         {
-                            if u32::from_str_radix(&braced[..end], 16).is_ok_and(|v| v > 0x10FFFF)
-                                || end > 8
+                            if !u32::from_str_radix(&braced[..end], 16).is_ok_and(|v| v <= 0x10FFFF)
                             {
                                 return "Undefined Unicode code-point";
                             }

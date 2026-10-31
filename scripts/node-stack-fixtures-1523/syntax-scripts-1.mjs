@@ -92,6 +92,7 @@ const scripts = [
  "new.target",
  "class C { x = arguments }",
  "class C { static { arguments } }",
+ "class C { static { await } }",
  "class C { static { return } }",
  "class C extends (() => 1) {}",
  "class A { static async *#x() {} static #x }",
@@ -248,7 +249,10 @@ const scripts = [
  "function* ",
  "async function",
  "async function (",
- "async"
+ "async",
+ "async x",
+ "async x =>",
+ "async (x) "
 ];
 
 for (const source of scripts) {

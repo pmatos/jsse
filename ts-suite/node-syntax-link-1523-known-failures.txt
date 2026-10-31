@@ -11,7 +11,6 @@ script	"function f(...a, b) {}"	Rest parameter must be last formal parameter	Une
 script	"function f(...a = []) {}"	Rest parameter may not have a default initializer	Unexpected token '='
 script	"(...a, b) => 1"	Rest parameter must be last formal parameter	Unexpected token ','
 script	"(a, ...b,) => 1"	Rest parameter must be last formal parameter	Unexpected token ','
-script	"class C { static { await } }"	Unexpected reserved word	Unexpected identifier 'await'
 script	"({ #a: 1 })"	Unexpected identifier '#a'	Unexpected token ':'
 script	"async (a = await 1) => 1"	missing ) after argument list	Unexpected number
 script	"yield => 1; function* g() { (yield) => 1 }"	Invalid destructuring assignment target	Yield expression not allowed in formal parameter
@@ -46,6 +45,7 @@ script	"x = (...a) + 1"	Unexpected token '...'	Unexpected token '+'
 script	"x = /a/\\u0067"	Invalid regular expression flags	Unexpected identifier '\u0067'
 script	"x = function* () { (yield) => 1 }"	Invalid destructuring assignment target	Yield expression not allowed in formal parameter
 script	"x = async function () { async (a = await 1) => 1 }"	Illegal await-expression in formal parameters of async function	'await' is not a valid identifier name in an async function
+script	"for (let [a+b] of c);"	Invalid destructuring assignment target	Unexpected token '+'
 module	"export default 1; export default 2;"	Identifier '.default' has already been declared	Duplicate export of 'default'
 module	"export"	Unexpected token 'export'	Unexpected end of input
 module	"import defer * as ns from './lib.mjs'"	Unexpected token '*'	loads

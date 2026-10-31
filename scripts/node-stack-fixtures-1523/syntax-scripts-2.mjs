@@ -3,9 +3,6 @@
 import vm from "node:vm";
 
 const scripts = [
- "async x",
- "async x =>",
- "async (x) ",
  "async (x) =>",
  "x =>",
  "x => {",
@@ -248,7 +245,15 @@ const scripts = [
  "x = async function () { await ) }",
  "x = async function () { x = await ) }",
  "x = async function () { x = await ]}",
- "x = async function () { x = await , }"
+ "x = async function () { x = await , }",
+ "x = 1 await",
+ "a.await foo",
+ "a?.await foo",
+ "class C { #await; m(){ this.#await foo } }",
+ "x = `a` await y",
+ "x = `\\u{000000041}\\u12`",
+ "x = `\\u{110000}`",
+ "import((a.b))"
 ];
 
 for (const source of scripts) {

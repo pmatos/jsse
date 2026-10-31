@@ -38,7 +38,7 @@ and both under `JSSE_GC_STRESS=7`) against `expected-*.txt`, which is Node v26.8
 removed from paths (`file://<dir>/` and `<dir>/`). Regenerate an expected file by running the fixture with `node` from any
 directory and applying that normalisation.
 
-- `syntax-scripts-1.mjs`, `syntax-scripts-2.mjs`: 492 sources through `vm.Script`.
+- `syntax-scripts-1.mjs`, `syntax-scripts-2.mjs`: 501 sources through `vm.Script`.
 - `syntax-modules-eval.mjs`: 72 module-goal sources (`import()` of a file that does not parse), plus `eval`, indirect eval
   and `new Function` (no doubled prefix).
 - `link-errors.mjs`: export-from, chain, star ambiguity, and importing twice (parse error, missing dependency, link error,

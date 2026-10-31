@@ -87,6 +87,7 @@
 "new.target" SyntaxError: new.target expression is not allowed here
 "class C { x = arguments }" SyntaxError: 'arguments' is not allowed in class field initializer or static initialization block
 "class C { static { arguments } }" SyntaxError: 'arguments' is not allowed in class field initializer or static initialization block
+"class C { static { await } }" SyntaxError: Unexpected reserved word
 "class C { static { return } }" SyntaxError: Illegal return statement
 "class C extends (() => 1) {}" parses
 "class A { static async *#x() {} static #x }" SyntaxError: Identifier '#x' has already been declared
@@ -244,3 +245,6 @@
 "async function" SyntaxError: Unexpected end of input
 "async function (" SyntaxError: Function statements require a function name
 "async" parses
+"async x" SyntaxError: Unexpected identifier 'x'
+"async x =>" SyntaxError: Unexpected end of input
+"async (x) " parses
