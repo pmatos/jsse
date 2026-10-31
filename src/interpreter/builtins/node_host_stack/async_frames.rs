@@ -75,6 +75,10 @@ impl Interpreter {
         else {
             return AsyncFrame::None;
         };
+        self.push_function_frame(func, env)
+    }
+
+    fn push_function_frame(&mut self, func: u64, env: EnvRef) -> AsyncFrame {
         let receiver = Self::kept_async_receiver(&env);
         self.call_stack_envs.push(env);
         self.push_async_stack_frame(func);
@@ -97,11 +101,9 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return run(self);
         }
-        self.call_stack_envs.push(env.clone());
-        self.push_async_stack_frame(func);
+        let frame = self.push_function_frame(func, env.clone());
         let result = run(self);
-        self.pop_call_frame();
-        self.call_stack_envs.pop();
+        self.node_pop_async_frame(frame);
         result
     }
 

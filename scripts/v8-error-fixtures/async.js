@@ -84,6 +84,7 @@ async function withDefault(value = new Error("default")) {
 function Context() {}
 const arrows = {
   early: async () => new Error("early"),
+  defaulted: async (value = new Error("arrow default")) => value,
   late: async () => {
     await null;
     return new Error("late");
@@ -105,6 +106,7 @@ async function main() {
   show("default parameter", (await withDefault()).stack);
   show("async arrow before await", (await arrows.early()).stack);
   show("async arrow after await", (await arrows.late.call(new Context())).stack);
+  show("async arrow default parameter", (await arrows.defaulted.call(new Context())).stack);
   show("issue 1333", await b());
   show("issue 1358", await frameBeforeAwait());
   show("captureStackTrace skipping c", await f(c));

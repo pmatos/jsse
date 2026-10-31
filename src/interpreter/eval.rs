@@ -7963,6 +7963,7 @@ impl Interpreter {
                     func_env.borrow_mut().has_parameter_expressions = true;
                 }
             }
+            interp.node_keep_async_receiver(&func_env, is_arrow.then_some(this_val));
             if let Err(error) = interp.node_in_async_frame(_func_obj_id, &func_env, |interp| {
                 interp.bind_function_parameters(params, args, &func_env, has_simple_params)
             }) {
@@ -8012,7 +8013,6 @@ impl Interpreter {
             interp.hoist_annexb_at_state_machine_entry(body, &func_env);
 
             let async_id = interp.scheduler.alloc_async_function_id();
-            interp.node_keep_async_receiver(&func_env, is_arrow.then_some(this_val));
             interp.scheduler.insert_async_function_state(
                 async_id,
                 AsyncFunctionState {
