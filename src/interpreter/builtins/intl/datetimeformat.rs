@@ -6,6 +6,8 @@ use crate::interpreter::helpers::{
     sec_from_time, week_day, year_from_time,
 };
 
+mod zone_glue;
+
 fn extract_unicode_extension(locale: &str, key: &str) -> Option<String> {
     let u_idx = locale.find("-u-")?;
     let ext = &locale[u_idx + 3..];
@@ -2228,11 +2230,8 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
             part_type == "year" && value.chars().count() > 2 && value.chars().all(char::is_numeric)
         })
         && icu_short_year_is_two_digit(formatter.as_ref()?);
-    Some(normalize_icu_datetime_parts(
-        parts,
-        opts,
-        short_year_two_digit,
-    ))
+    let parts = normalize_icu_datetime_parts(parts, opts, short_year_two_digit);
+    Some(zone_glue::apply_date_zone_glue(ms, opts, parts))
 }
 
 /// Whether the effective locale's short-date pattern uses a two-digit year.
@@ -3005,7 +3004,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     // TimeZone name
     if let Some(ref tzn) = opts.time_zone_name {
         if !result.is_empty() {
-            result.push(' ');
+            result.push_str(zone_glue::raw_zone_separator(opts));
         }
         result.push_str(&format_tz_name(&opts.time_zone, tzn, ms));
     }
@@ -4257,8 +4256,7 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
                 match style {
                     "short" | "shortGeneric" => return abbr,
                     "long" | "longGeneric" => {
-                        // Map common abbreviations to full names
-                        return tz_abbr_to_long_name(&abbr, offset_secs);
+                        return zone_glue::long_name_or_offset(&tz_str, epoch_ms, offset_secs);
                     }
                     _ => return abbr,
                 }
@@ -4286,49 +4284,6 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
         match style {
             "shortOffset" | "longOffset" => "GMT".to_string(),
             _ => tz.to_string(),
-        }
-    }
-}
-
-fn tz_abbr_to_long_name(abbr: &str, offset_secs: i32) -> String {
-    match abbr {
-        "EST" => "Eastern Standard Time".to_string(),
-        "EDT" => "Eastern Daylight Time".to_string(),
-        "CST" if offset_secs == 8 * 3600 => "China Standard Time".to_string(),
-        "CST" => "Central Standard Time".to_string(),
-        "CDT" => "Central Daylight Time".to_string(),
-        "MST" => "Mountain Standard Time".to_string(),
-        "MDT" => "Mountain Daylight Time".to_string(),
-        "PST" => "Pacific Standard Time".to_string(),
-        "PDT" => "Pacific Daylight Time".to_string(),
-        "AKST" => "Alaska Standard Time".to_string(),
-        "AKDT" => "Alaska Daylight Time".to_string(),
-        "HST" => "Hawaii-Aleutian Standard Time".to_string(),
-        "HDT" => "Hawaii-Aleutian Daylight Time".to_string(),
-        "GMT" | "UTC" => "Coordinated Universal Time".to_string(),
-        "BST" => "British Summer Time".to_string(),
-        "IST" if offset_secs == 19800 => "India Standard Time".to_string(),
-        "IST" => "Irish Standard Time".to_string(),
-        "CET" => "Central European Standard Time".to_string(),
-        "CEST" => "Central European Summer Time".to_string(),
-        "EET" => "Eastern European Standard Time".to_string(),
-        "EEST" => "Eastern European Summer Time".to_string(),
-        "WET" => "Western European Standard Time".to_string(),
-        "WEST" => "Western European Summer Time".to_string(),
-        "JST" => "Japan Standard Time".to_string(),
-        "KST" => "Korean Standard Time".to_string(),
-        "AEST" => "Australian Eastern Standard Time".to_string(),
-        "AEDT" => "Australian Eastern Daylight Time".to_string(),
-        "ACST" => "Australian Central Standard Time".to_string(),
-        "ACDT" => "Australian Central Daylight Time".to_string(),
-        "AWST" => "Australian Western Standard Time".to_string(),
-        "NZST" => "New Zealand Standard Time".to_string(),
-        "NZDT" => "New Zealand Daylight Time".to_string(),
-        _ => {
-            // Fallback: use static lookup or abbreviation
-            let hours = offset_secs / 3600;
-            let minutes = (offset_secs.abs() % 3600) / 60;
-            format_offset_long(hours, if hours < 0 { -(minutes) } else { minutes })
         }
     }
 }
@@ -4994,7 +4949,10 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
 
     // TimeZone name
     if let Some(ref tzn) = opts.time_zone_name {
-        parts.push(("literal".to_string(), " ".to_string()));
+        parts.push((
+            "literal".to_string(),
+            zone_glue::raw_zone_separator(opts).to_string(),
+        ));
         parts.push((
             "timeZoneName".to_string(),
             format_tz_name(&opts.time_zone, tzn, ms),
