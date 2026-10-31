@@ -128,6 +128,7 @@ fn an_unref_stdin_does_not_keep_the_loop_alive() {
         .args(["--node", "-e", source])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn jsse");
     let mut pipe = child.stdout.take().unwrap();
