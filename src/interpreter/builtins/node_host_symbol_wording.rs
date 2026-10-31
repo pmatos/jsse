@@ -7,6 +7,12 @@
 use super::super::*;
 
 impl Interpreter {
+    /// How V8 prints the first argument of a call, `undefined` without one.
+    fn first_arg_text(&self, args: &[JsValue]) -> String {
+        args.first()
+            .map_or_else(|| "undefined".to_string(), |v| self.v8_plain_text(v))
+    }
+
     /// `frame_wording` for the builtins named `[Symbol.x]`.
     pub(super) fn symbol_frame_wording(
         &self,
@@ -49,9 +55,7 @@ impl Interpreter {
     /// V8 prints the argument as it was passed.
     pub(crate) fn with_index_error(&mut self, args: &[JsValue]) -> JsValue {
         let text = self.v8_message("Invalid index", |i| {
-            let shown = args
-                .first()
-                .map_or_else(|| "undefined".to_string(), |v| i.v8_plain_text(v));
+            let shown = i.first_arg_text(args);
             format!("Invalid index : {shown}")
         });
         self.create_range_error(&text)
@@ -61,9 +65,7 @@ impl Interpreter {
     /// `"string"`, `"number"` and `"default"`.
     pub(crate) fn invalid_hint_error(&mut self, args: &[JsValue]) -> JsValue {
         let text = self.v8_message("Invalid hint", |i| {
-            let shown = args
-                .first()
-                .map_or_else(|| "undefined".to_string(), |v| i.v8_plain_text(v));
+            let shown = i.first_arg_text(args);
             format!("Invalid hint: {shown}")
         });
         self.create_type_error(&text)
