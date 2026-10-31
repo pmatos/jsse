@@ -37,8 +37,7 @@ and the `stream` module of `2026-10-26-2000-node-host-stream.md`, which left
      is a `Uint8Array.prototype.set` copy in `webstreams/util`.
    - `adapters.js` drops `newReadableStreamFromStreamBase` and
      `newWritableStreamFromStreamBase` (libuv stream handles of `net`/`tls`,
-     which jsse does not have; #1504's `FileHandle.readableWebStream` does
-     not need them) and the zlib failure-code set is built on first use from
+     which jsse does not have; `FileHandle.readableWebStream` does not need them) and the zlib failure-code set is built on first use from
      `require('zlib').constants`.
    - The transfer protocol (`MessageChannel`, `markTransferMode`) is a
      placeholder (`internal/worker/{io,js_transferable}`): structured-clone
@@ -64,19 +63,27 @@ and the `stream` module of `2026-10-26-2000-node-host-stream.md`, which left
    Without `--node` none of them exists. Until first touched the property is
    an accessor, where V8 reports a data property (the same for every lazy
    global).
-6. **`Blob`.** `Blob.prototype.stream()` and `textStream()` read the Blob's
-   bytes through a byte `ReadableStream` (they were absent until now), and
-   `internal/blob` exports `isBlob`, which `Duplex.from(blob)` uses.
+6. **`Blob` and `fs` (#1504).** `Blob.prototype.stream()` and `textStream()`
+   read the Blob through a byte `ReadableStream`, and `internal/blob` exports
+   `isBlob`, which `Duplex.from(blob)` uses. `fs.openAsBlob` returns a
+   file-backed Blob: it keeps the path, the size and the modification time seen
+   when it was called, reads the file only when the Blob is read (`text()`,
+   `arrayBuffer()`, `bytes()`, or a 64 KiB chunk per `stream()` pull) and
+   rejects with `NotReadableError` if the file changed or went away.
+   `FileHandle.prototype.readableWebStream` (`internal/fs/webstream`, Node's
+   code) is a byte stream over the handle that holds a reference on it until
+   done, cancelled or the handle closes.
 
 ## Verification
 
 - `./scripts/run-node-webstreams-oracle.sh` runs 23 of Node's own
   `test-webstreams-*`, `test-whatwg-*stream*`, `test-stream-duplex*` and
   encoding-stream tests (`scripts/webstreams-fixtures`, verbatim) on jsse
-  `--node` and Node, then `corpus-{a,b,run}.js`, ~280 observations
+  `--node` and Node, then `corpus-{a,b,run}.js`, ~300 observations
   (chunk, settlement and microtask order, `inspect` output, error codes,
   byte streams and BYOB, `tee`, `pipeTo`, strategies, text and compression
-  streams, the `toWeb`/`fromWeb` adapters, Blob streams and `stream/consumers`)
+  streams, the `toWeb`/`fromWeb` adapters, Blob streams, `stream/consumers`,
+  `FileHandle.readableWebStream` and the lazy `openAsBlob`)
   that must be byte-identical on both engines and match `corpus.digest`.
   The `node:test` shim registers every test as a `mustCall`, so a test whose
   promise never settles fails.

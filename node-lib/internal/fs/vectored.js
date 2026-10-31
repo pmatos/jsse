@@ -120,7 +120,8 @@ readv[kCustomPromisifyArgsSymbol] = ['bytesRead', 'buffers'];
 writev[kCustomPromisifyArgsSymbol] = ['bytesWritten', 'buffer'];
 
 // Node opens the file when called (a missing file throws at once) and reads it
-// lazily; here the bytes are copied when the Blob is made.
+// lazily; the Blob keeps the path and the size and modification time seen here,
+// reads on demand, and fails with NotReadableError if the file changed (#1504).
 function openAsBlob(path, options) {
   path = S.getValidatedPath(path);
   if (options !== undefined) S.validateObject(options, 'options');
@@ -128,20 +129,17 @@ function openAsBlob(path, options) {
   if (typeof type !== 'string') {
     throw S.invalidArgType('options.type', 'of type string', type);
   }
+  let stat;
   try {
     host.access(path, 4);
+    stat = require('fs').statSync(path);
   } catch {
     const error = new TypeError('Unable to open file as blob');
     error.code = 'ERR_INVALID_ARG_VALUE';
     throw error;
   }
-  const { Blob } = require('buffer');
-  return new Promise((resolve, reject) => {
-    hostAsync('read_file', (error, bytes) => {
-      if (error) reject(error);
-      else resolve(new Blob([bytes], { type }));
-    }, path, S.stringToFlags('r'), false);
-  });
+  const { createFileBackedBlob } = require('internal/blob');
+  return Promise.resolve(createFileBackedBlob(path, stat.size, stat.mtimeMs, type));
 }
 
 function installFileHandle(FileHandle) {

@@ -183,6 +183,7 @@ if (Symbol.asyncDispose) {
 }
 
 require('internal/fs/vectored').installFileHandle(FileHandle);
+require('internal/fs/webstream').installReadableWebStream(FileHandle, { kRef, kUnref, kClosePromise });
 
 async function openHandle(path, flags, mode) {
   return new FileHandle(await call.open(path, flags, mode));

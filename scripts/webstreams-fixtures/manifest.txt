@@ -32,3 +32,4 @@ test-whatwg-writablestream-close
 ! test-webstreams-pipeline needs http
 ! test-whatwg-encoding-custom-fatal-streaming the engine's TextDecoder does not throw for a dangling odd byte of a fatal utf-16le stream (#1527)
 ! test-whatwg-readablestream over the 20,000-byte file budget (41 KB); the corpus covers its ground
+! test-filehandle-readablestream posts a FileHandle through a MessageChannel (#1528); readableWebStream itself is covered by the corpus

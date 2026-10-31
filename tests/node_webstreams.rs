@@ -277,6 +277,34 @@ fn stream_web_imports_from_an_es_module() {
 }
 
 #[test]
+fn open_as_blob_reads_the_file_when_the_blob_is_read() {
+    let dir = scratch("blob");
+    let file = dir.0.join("data.txt");
+    std::fs::write(&file, "0123456789").unwrap();
+    let source = format!(
+        r#"
+      const fs = require("fs");
+      (async () => {{
+        const blob = await fs.openAsBlob({path:?});
+        print(blob.size, await blob.slice(2, 5).text());
+        fs.writeFileSync({path:?}, "changed contents");
+        try {{ await blob.text(); print("no throw"); }} catch (e) {{ print(e.name); }}
+        const handle = await fs.promises.open({path:?});
+        const stream = handle.readableWebStream({{ autoClose: true }});
+        let text = "";
+        for await (const chunk of stream) text += Buffer.from(chunk).toString();
+        print(text, handle.fd);
+      }})();
+    "#,
+        path = file.to_str().unwrap()
+    );
+    assert_eq!(
+        eval(&source, true),
+        "10 234\nNotReadableError\nchanged contents -1"
+    );
+}
+
+#[test]
 fn vendored_sources_stay_under_the_file_budget() {
     let mut files = vec![];
     let mut stack = vec![root().join("node-lib/internal/webstreams")];

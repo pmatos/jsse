@@ -2,9 +2,10 @@
 
 // Blob and File over the prelude's Buffer, shaped after Node v26.8.2
 // lib/internal/blob.js and lib/internal/file.js. The bytes are copied into one
-// Uint8Array when the Blob is constructed. `stream()` and `textStream()` read
-// that copy through a byte ReadableStream (#1360); there is no object URL
-// registry.
+// Uint8Array when the Blob is constructed, except for a Blob made by
+// `fs.openAsBlob` (#1504), which reads its file on demand and fails if the file
+// changed. `stream()` and `textStream()` use a byte ReadableStream (#1360);
+// there is no object URL registry.
 
 const {
   DateNow,
@@ -28,7 +29,7 @@ const {
 const { Buffer } = require('internal/host/buffer');
 const { inspect } = require('internal/util/inspect');
 const { isAnyArrayBuffer, isArrayBufferView } = require('internal/util/types');
-const { customInspectSymbol, kEmptyObject } = require('internal/util');
+const { customInspectSymbol, kEmptyObject, lazyDOMException } = require('internal/util');
 const {
   codes: {
     ERR_INVALID_ARG_TYPE,
@@ -82,13 +83,59 @@ function relative(value, size) {
 }
 
 let isBlob;
+let createFileBackedBlob;
+const kChunkSize = 65536;
 
 class Blob {
   #bytes;
   #type;
+  #file;
 
   static {
     isBlob = (value) => Blob.#is(value);
+    createFileBackedBlob = (path, fileSize, mtimeMs, type) => {
+      const blob = new Blob([], { type });
+      blob.#bytes = undefined;
+      blob.#file = { path, fileSize, mtimeMs, start: 0, size: fileSize };
+      return blob;
+    };
+  }
+
+  static #readRange(file, from, length) {
+    const fs = require('fs');
+    let fd;
+    try {
+      fd = fs.openSync(file.path, 'r');
+      const stat = fs.fstatSync(fd);
+      if (stat.size !== file.fileSize || stat.mtimeMs !== file.mtimeMs) {
+        throw new Error('The file changed');
+      }
+      const out = new Uint8Array(length);
+      let at = 0;
+      while (at < length) {
+        const count = fs.readSync(fd, out, at, length - at, file.start + from + at);
+        if (count === 0) throw new Error('Unexpected end of file');
+        at += count;
+      }
+      return out;
+    } catch {
+      throw lazyDOMException('The blob could not be read', 'NotReadableError');
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
+  #data() {
+    return this.#bytes ?? Blob.#readRange(this.#file, 0, this.#file.size);
+  }
+
+  static #settle(blob, convert) {
+    if (!Blob.#is(blob)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
+    try {
+      return PromiseResolve(convert(blob.#data()));
+    } catch (error) {
+      return PromiseReject(error);
+    }
   }
 
   constructor(sources = [], options = kEmptyObject) {
@@ -110,7 +157,7 @@ class Blob {
     for (const source of sequence) {
       let bytes;
       if (Blob.#is(source)) {
-        bytes = source.#bytes;
+        bytes = source.#data();
       } else if (isAnyArrayBuffer(source) || isArrayBufferView(source)) {
         bytes = bytesOf(source);
       } else {
@@ -155,54 +202,60 @@ class Blob {
 
   get size() {
     Blob.#check(this);
-    return this.#bytes.length;
+    return this.#bytes === undefined ? this.#file.size : this.#bytes.length;
   }
 
   slice(start = 0, end = this.size, contentType = '') {
     Blob.#check(this);
-    const size = this.#bytes.length;
+    const size = this.size;
     const from = relative(start, size);
     const to = relative(end, size);
     const blob = new Blob([], { type: contentType });
-    blob.#bytes = this.#bytes.slice(from, MathMax(from, to));
+    if (this.#bytes === undefined) {
+      blob.#bytes = undefined;
+      blob.#file = { ...this.#file, start: this.#file.start + from, size: MathMax(from, to) - from };
+    } else {
+      blob.#bytes = this.#bytes.slice(from, MathMax(from, to));
+    }
     return blob;
   }
 
   arrayBuffer() {
-    if (!Blob.#is(this)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
-    return PromiseResolve(this.#bytes.slice().buffer);
+    return Blob.#settle(this, (bytes) => (this.#bytes === undefined ? bytes : bytes.slice()).buffer);
   }
 
   text() {
-    if (!Blob.#is(this)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
-    const bytes = this.#bytes;
-    const bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb &&
-                bytes[2] === 0xbf ? 3 : 0;
-    return PromiseResolve(
-      Buffer.from(bytes.buffer, bytes.byteOffset + bom, bytes.length - bom)
-        .toString('utf8'));
+    return Blob.#settle(this, (bytes) => {
+      const bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb &&
+                  bytes[2] === 0xbf ? 3 : 0;
+      return Buffer.from(bytes.buffer, bytes.byteOffset + bom, bytes.length - bom)
+        .toString('utf8');
+    });
   }
 
   bytes() {
-    if (!Blob.#is(this)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
-    return PromiseResolve(this.#bytes.slice());
+    return Blob.#settle(this, (bytes) => (this.#bytes === undefined ? bytes : bytes.slice()));
   }
 
   stream() {
     Blob.#check(this);
+    const size = this.size;
     const bytes = this.#bytes;
-    let done = false;
+    const file = this.#file;
+    let at = 0;
     const { ReadableStream } = require('internal/webstreams/readablestream');
     return new ReadableStream({
       type: 'bytes',
       pull(controller) {
-        if (done || bytes.length === 0) {
+        if (at >= size) {
           controller.close();
           controller.byobRequest?.respond(0);
           return;
         }
-        done = true;
-        controller.enqueue(bytes.slice());
+        const length = bytes === undefined ? MathMin(kChunkSize, size - at) : size;
+        const chunk = bytes === undefined ? Blob.#readRange(file, at, length) : bytes.slice();
+        at += length;
+        controller.enqueue(chunk);
       },
     });
   }
@@ -283,4 +336,6 @@ function resolveObjectURL(url) {
   return undefined;
 }
 
-module.exports = { Blob, File, isBlob, resolveObjectURL };
+module.exports = {
+  Blob, File, createFileBackedBlob: (...args) => createFileBackedBlob(...args), isBlob, resolveObjectURL,
+};

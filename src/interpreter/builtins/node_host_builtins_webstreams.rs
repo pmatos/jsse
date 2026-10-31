@@ -29,6 +29,7 @@ pub(super) const WEBSTREAMS_MODULES: &[(&str, &str)] = &[
     single!("stream/web"),
     single!("stream/consumers"),
     single!("internal/encoding"),
+    single!("internal/fs/webstream"),
     single!("internal/errors/webstreams"),
     single!("internal/per_context/safe_promise"),
     single!("internal/process/task_queues"),

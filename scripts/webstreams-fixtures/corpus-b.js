@@ -375,3 +375,56 @@ scenario("Blob streams", function () {
     out("blob", (await consumers.blob(blob.stream())).size);
   })();
 });
+
+scenario("FileHandle.readableWebStream and openAsBlob", function () {
+  var fs = require("fs");
+  var dir = fs.mkdtempSync(require("path").join(require("os").tmpdir(), "jsse-ws-"));
+  var file = dir + "/data.txt";
+  fs.writeFileSync(file, "x".repeat(40000) + "END");
+  return (async function () {
+    try {
+      var handle = await fs.promises.open(file);
+      var stream = handle.readableWebStream();
+      out(stream instanceof ReadableStream, inspect(stream));
+      attempt("locked", function () { return handle.readableWebStream(); });
+      var sizes = [];
+      for await (var chunk of stream) sizes.push(chunk.byteLength);
+      out("chunks", sizes);
+      await handle.close();
+      attempt("closed", function () { return handle.readableWebStream(); });
+
+      var auto = await fs.promises.open(file);
+      var total = 0;
+      for await (var piece of auto.readableWebStream({ autoClose: true })) total += piece.byteLength;
+      out("autoClose", total, auto.fd);
+
+      var byob = await fs.promises.open(file);
+      var reader = byob.readableWebStream().getReader({ mode: "byob" });
+      var first = await reader.read(new Uint8Array(100));
+      out("byob", first.done, first.value.byteLength);
+      await reader.cancel();
+      await byob.close();
+
+      var pending = await fs.promises.open(file);
+      var rs = pending.readableWebStream();
+      var closing = pending.close();
+      await settle("read after close", rs.getReader().read());
+      await closing;
+      attempt("bad options", function () { return pending.readableWebStream(1); });
+
+      var blob = await fs.openAsBlob(file, { type: "text/plain" });
+      out("blob", blob.size, blob.type, await blob.slice(39998, 40010).text());
+      var streamed = 0;
+      for await (var part of blob.stream()) streamed += part.byteLength;
+      out("blob stream", streamed, (await blob.arrayBuffer()).byteLength);
+      fs.appendFileSync(file, "more");
+      await settle("changed", blob.text());
+      await settle("changed slice", blob.slice(0, 4).arrayBuffer());
+      fs.unlinkSync(file);
+      await settle("removed", blob.bytes());
+      attempt("missing", function () { return fs.openAsBlob(file); });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  })();
+});
