@@ -1,0 +1,2 @@
+# Tests that pass on Node and fail on jsse --node inside a recorded bucket of ts-suite/jsse-pass-1296.json
+# (scripts/run-ts-pass-list.py): runner TAB bucket TAB id TAB issue. Entries may only be removed.
