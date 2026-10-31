@@ -432,6 +432,13 @@
     };
   }
 
+  // The global TextDecoder (#1527) loads its error and validation helpers on
+  // first use.
+  var decoderKey = Symbol.for("jsse.node.textdecoder");
+  var decoderHandoff = globalThis[decoderKey];
+  delete globalThis[decoderKey];
+  if (decoderHandoff !== undefined) decoderHandoff.require = requireBuiltin;
+
   // `console` writes through the embedded util module (Node's inspect/format).
   requireBuiltin("internal/console/node");
   requireBuiltin("internal/process/stdio");

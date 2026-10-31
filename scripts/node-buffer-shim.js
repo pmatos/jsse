@@ -45,52 +45,6 @@
     }
   }
 
-  // TextDecoder uses Encoding Standard labels for the decoder families below;
-  // Buffer has a different vocabulary. Keep normalization separate so
-  // accepting utf-16be does not make Buffer.isEncoding("utf-16be") return true.
-  function normalizeTextDecoderEncoding(label) {
-    switch (String(label).trim().toLowerCase()) {
-      case "unicode-1-1-utf-8":
-      case "unicode11utf8":
-      case "unicode20utf8":
-      case "utf-8":
-      case "utf8":
-      case "x-unicode20utf8":
-        return "utf8";
-      case "ansi_x3.4-1968":
-      case "ascii":
-      case "cp1252":
-      case "cp819":
-      case "csisolatin1":
-      case "ibm819":
-      case "iso-8859-1":
-      case "iso-ir-100":
-      case "iso8859-1":
-      case "iso88591":
-      case "iso_8859-1":
-      case "iso_8859-1:1987":
-      case "l1":
-      case "latin1":
-      case "us-ascii":
-      case "windows-1252":
-      case "x-cp1252":
-        return "windows1252";
-      case "csunicode":
-      case "iso-10646-ucs-2":
-      case "ucs-2":
-      case "unicode":
-      case "unicodefeff":
-      case "utf-16":
-      case "utf-16le":
-        return "utf16le";
-      case "unicodefffe":
-      case "utf-16be":
-        return "utf16be";
-      default:
-        throw new RangeError("Unsupported encoding: " + label);
-    }
-  }
-
   // UTF-8 encode a JS (UTF-16) string to a Uint8Array. Surrogate pairs combine
   // into a 4-byte sequence; a lone surrogate becomes U+FFFD (matching the Rust
   // host floor's __host_write).
@@ -158,11 +112,7 @@
       i = 3;
     }
     function fail() {
-      if (fatal) {
-        throw new TypeError(
-          "The encoded data was not valid for encoding utf-8"
-        );
-      }
+      if (fatal) throw invalidData("utf-8");
       out.push(0xfffd);
     }
     while (i < len) {
@@ -266,11 +216,7 @@
     if (!ignoreBOM && bytes.length >= 2 && readUnit(0) === 0xfeff) i = 2;
 
     function fail() {
-      if (fatal) {
-        throw new TypeError(
-          "The encoded data was not valid for encoding utf-16"
-        );
-      }
+      if (fatal) throw invalidData(bigEndian ? "utf-16be" : "utf-16le");
       out.push(0xfffd);
     }
 
@@ -466,89 +412,16 @@
     globalThis.TextEncoder = TextEncoderShim;
   }
 
-  if (typeof globalThis.TextDecoder === "undefined") {
-    var TextDecoderShim = function TextDecoder(label, options) {
-      var enc = normalizeTextDecoderEncoding(
-        label === undefined ? "utf-8" : String(label)
-      );
-      options = options || {};
-      this._encoding = enc;
-      this._fatal = !!options.fatal;
-      this._ignoreBOM = !!options.ignoreBOM;
-      this._pending = null; // trailing bytes buffered across stream chunks
-      this._bomHandled = false; // only the leading BOM of the stream is stripped
-    };
-    Object.defineProperty(TextDecoderShim.prototype, "encoding", {
-      get: function () {
-        if (this._encoding === "windows1252") return "windows-1252";
-        if (this._encoding === "utf16le") return "utf-16le";
-        if (this._encoding === "utf16be") return "utf-16be";
-        return "utf-8";
-      },
-      configurable: true,
-    });
-    Object.defineProperty(TextDecoderShim.prototype, "fatal", {
-      get: function () {
-        return this._fatal;
-      },
-      configurable: true,
-    });
-    Object.defineProperty(TextDecoderShim.prototype, "ignoreBOM", {
-      get: function () {
-        return this._ignoreBOM;
-      },
-      configurable: true,
-    });
-    TextDecoderShim.prototype.decode = function (input, options) {
-      var bytes;
-      if (input === undefined) {
-        bytes = new Uint8Array(0);
-      } else if (input instanceof Uint8Array) {
-        bytes = input;
-      } else if (input instanceof ArrayBuffer) {
-        bytes = new Uint8Array(input);
-      } else if (ArrayBuffer.isView(input)) {
-        bytes = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-      } else {
-        throw new TypeError("decode() expects a BufferSource");
-      }
-      var stream = !!(options && options.stream);
-      // Prepend any bytes buffered from a previous `{ stream: true }` chunk.
-      if (this._pending && this._pending.length) {
-        var combined = new Uint8Array(this._pending.length + bytes.length);
-        combined.set(this._pending, 0);
-        combined.set(bytes, this._pending.length);
-        bytes = combined;
-      }
-      // Only the BOM at the very start of the stream is stripped; once bytes
-      // have actually been consumed an interior BOM at a chunk boundary is
-      // literal. A non-streaming (final) decode flushes and RESETS the decoder,
-      // so a reused decoder strips a leading BOM again (Node).
-      var ignoreBOM = this._ignoreBOM || this._bomHandled;
-      var res;
-      if (this._encoding === "windows1252") {
-        res = { out: windows1252Decode(bytes), pending: 0 };
-      } else if (this._encoding === "utf16le") {
-        res = utf16Decode(bytes, false, this._fatal, ignoreBOM, stream);
-      } else if (this._encoding === "utf16be") {
-        res = utf16Decode(bytes, true, this._fatal, ignoreBOM, stream);
-      } else {
-        res = utf8Decode(bytes, this._fatal, ignoreBOM, stream);
-      }
-      if (stream) {
-        // Mark BOM-handled only once real bytes were consumed (not merely
-        // buffered), so a BOM split across chunks is still stripped.
-        if (bytes.length - res.pending > 0) this._bomHandled = true;
-        this._pending =
-          res.pending > 0 ? bytes.subarray(bytes.length - res.pending) : null;
-      } else {
-        this._pending = null;
-        this._bomHandled = false;
-      }
-      return res.out;
-    };
-    globalThis.TextDecoder = TextDecoderShim;
+  // The TextDecoder class is node-textdecoder.js; it takes these decoders.
+  function invalidData(name) {
+    var e = new TypeError("The encoded data was not valid for encoding " + name);
+    e.code = "ERR_ENCODING_INVALID_ENCODED_DATA";
+    return e;
   }
+  Object.defineProperty(globalThis, "__node_decoders", {
+    value: { utf8: utf8Decode, utf16: utf16Decode, latin: windows1252Decode },
+    configurable: true,
+  });
 
   // ---- Buffer --------------------------------------------------------------
 

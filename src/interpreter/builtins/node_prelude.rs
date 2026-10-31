@@ -50,6 +50,10 @@ const NODE_PRELUDE: &[(&str, &str)] = &[
         include_str!("../../../scripts/node-buffer-shim.js"),
     ),
     (
+        "node-textdecoder.js",
+        include_str!("../../../scripts/node-textdecoder.js"),
+    ),
+    (
         "node-crypto-shim.js",
         include_str!("../../../scripts/node-crypto-shim.js"),
     ),

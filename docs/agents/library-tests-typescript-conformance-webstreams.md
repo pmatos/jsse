@@ -12,8 +12,6 @@ Not a TypeScript oracle: web streams are what Node's `stream` interop and
 
 | Test | Gap | Issue |
 | --- | --- | --- |
-| `test-stream-consumers` | engine `TextDecoder` throws plain `TypeError` for a non-BufferSource | #1527 |
-| `test-whatwg-encoding-custom-fatal-streaming` | no error for a dangling byte of a fatal utf-16le stream; no `ERR_ENCODING_*` codes | #1527 |
 | `test-webstreams-clone-unref` | `structuredClone(stream, { transfer })` needs `MessageChannel` | #1528 |
 | `test-webstreams-pipeline` | needs `http` | none (no `http` module) |
 | `test-whatwg-readablestream` | 41 KB, over the file budget; the corpus covers it | none |
