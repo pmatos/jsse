@@ -71,7 +71,7 @@ def load_baseline(ref, data_dir=DATA_DIR):
     data directory, else an empty baseline."""
     sources = [("working tree", lambda p: read_file(data_path(data_dir, p)))]
     if ref and data_dir == DATA_DIR:
-        sources.insert(0, (ref, lambda p: store.read_at(ref, p)))
+        sources.insert(0, (ref, lambda p: store.read_at(ref, p, cwd=ROOT)))
     for source, read in sources:
         text = read(store.BASELINE)
         if text is not None:
@@ -172,6 +172,8 @@ def run_batches(args, work, ts_dir, exe, chosen):
         )
         n = sum(len(ts) for _, ts in batch)
         print(f"done {tag} ({n} tests) {res['secs']:.0f}s", flush=True)
+        res["local"] = {}
+        shutil.rmtree(cwd, ignore_errors=True)
         return res
 
     with ThreadPoolExecutor(max(1, min(args.jobs, MAX_JOBS))) as pool:
@@ -274,6 +276,8 @@ def main(argv=None):
             pl.parse_spec(spec)
     except ValueError as e:
         ap.error(str(e))
+    if args.update_baseline and args.engine != "jsse":
+        ap.error("--update-baseline records the jsse pass list; use --engine jsse")
 
     def skip(msg):
         print(("ERROR: " if args.require else "SKIP: ") + msg)

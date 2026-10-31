@@ -66,6 +66,10 @@ class GateTest(unittest.TestCase):
         os.makedirs(os.path.join(self.ts, "built/local"))
         os.makedirs(os.path.join(self.ts, "tests/cases/compiler"))
         os.makedirs(self.data)
+        self.jsse = os.path.join(root, "fake-jsse")
+        with open(self.jsse, "w") as f:
+            f.write('#!/bin/sh\nshift\nexec "%s" "$@"\n' % NODE)
+        os.chmod(self.jsse, 0o755)
         with open(os.path.join(self.ts, "package.json"), "w") as f:
             json.dump({"version": "6.0.3"}, f)
         with open(os.path.join(self.ts, "built/local/run.js"), "w") as f:
@@ -98,12 +102,14 @@ class GateTest(unittest.TestCase):
         with open(os.path.join(self.tmp.name, "oracle.json"), "w") as f:
             json.dump({"runners": runners}, f)
 
-    def gate(self, *args, env=None):
+    def gate(self, *args, env=None, engine="jsse"):
         cmd = [
             sys.executable,
             GATE,
             "--engine",
-            "node",
+            engine,
+            "--jsse",
+            self.jsse,
             "--require",
             "--jobs",
             "2",
@@ -158,8 +164,14 @@ class GateTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 3)
 
+    def test_only_a_jsse_run_may_update_the_baseline(self):
+        code, out = self.gate("compiler", "--update-baseline", engine="node")
+        self.assertEqual(code, 2, out)
+        self.assertIn("--engine jsse", out)
+        self.assertFalse(os.path.exists(os.path.join(self.data, "jsse-pass-1296.json")))
+
     def test_scripted_oracles_have_no_node_only_run(self):
-        code, out = self.gate("hereby")
+        code, out = self.gate("hereby", engine="node")
         self.assertEqual(code, 3, out)
         self.assertIn("no Node-only run", out)
 

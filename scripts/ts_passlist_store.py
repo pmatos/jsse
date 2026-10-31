@@ -129,7 +129,7 @@ def dump_baseline(doc):
 def parse_not_passing(text):
     """{(runner, bucket, id): issue} of the not-passing file; ValueError on a malformed line."""
     out = {}
-    for n, line in enumerate(text.splitlines(), 1):
+    for n, line in enumerate(text.split("\n"), 1):
         if not line or line.startswith("#"):
             continue
         parts = line.split("\t")
@@ -152,15 +152,15 @@ def dump_not_passing(entries):
     )
 
 
-def git(*args):
-    """Stdout of a git command, or None when it fails (missing ref or path)."""
-    r = subprocess.run(["git", *args], capture_output=True)
+def git(*args, cwd=None):
+    """Stdout of a git command run in `cwd` (default: the current directory), or None when it fails."""
+    r = subprocess.run(["git", *args], capture_output=True, cwd=cwd, check=False)
     return r.stdout.decode("utf-8") if r.returncode == 0 else None
 
 
-def read_at(ref, path):
+def read_at(ref, path, cwd=None):
     """Text of `path` at a revision (`ref` ""  = the index), or None when it does not exist there."""
-    return git("show", f"{ref}:{path}")
+    return git("show", f"{ref}:{path}", cwd=cwd)
 
 
 def ratchet_problems(base, head):

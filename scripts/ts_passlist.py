@@ -112,7 +112,7 @@ def select(universe, specs, sample=None, seed=None):
     for runner, buckets in wanted.items():
         suites = [
             (p, ts)
-            for p, ts in suites_of(universe.get(runner, []))
+            for p, ts in suites_of(universe.get(runner) or [])
             if None in buckets or ts[0].bucket in buckets
         ]
         if sample is not None and suites:

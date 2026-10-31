@@ -23,8 +23,8 @@ repos:
         name: TypeScript suite jsse pass list may only gain entries
         entry: python scripts/check_ts_pass_list_ratchet.py
         language: python
-        files: ^ts-suite/(jsse-pass-1296\.json|pass-list-1296-not-passing\.txt)$
         pass_filenames: false
+        always_run: true
         stages: [pre-commit]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks

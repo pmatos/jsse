@@ -115,6 +115,9 @@ class SelectionTest(unittest.TestCase):
             len(pl.select(self.universe, ["compiler"], 0.0001, 1)["compiler"]), 1
         )
 
+    def test_a_runner_that_could_not_be_listed_selects_nothing(self):
+        self.assertEqual(pl.select({"compiler": None}, ["compiler"]), {"compiler": []})
+
     def test_unknown_runner(self):
         with self.assertRaises(ValueError):
             pl.parse_spec("nope:A")
@@ -172,6 +175,24 @@ class ScriptedTest(unittest.TestCase):
             (["hereby :: x"], ["hereby :: y"]),
         )
         self.assertEqual(pl.parse_spec("tsc-watch"), ("tsc-watch", None))
+
+    def test_a_run_that_prints_only_some_cases_is_an_error(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "run-hereby-oracle.py"), "w") as f:
+                f.write("print('ok   a')\nprint('FAIL b')\n")
+            old = scripted.SCRIPTS
+            scripted.SCRIPTS = d
+            try:
+                cases = [scripted.Case("hereby", n) for n in "abc"]
+                out, error = scripted.run_cases(
+                    "hereby", cases, sys.executable, "jsse", 1, 60, {}
+                )
+            finally:
+                scripted.SCRIPTS = old
+        self.assertEqual(out, {("a", "passing"): 1, ("b", "failing"): 1})
+        self.assertIn("1 of 3 cases printed no result", error)
 
     def test_availability(self):
         self.assertIsNone(scripted.unavailable("hereby", {}))
@@ -298,6 +319,12 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.parse_not_passing(text), entries)
         self.assertEqual(
             len([line for line in text.splitlines() if not line.startswith("#")]), 2
+        )
+
+    def test_not_passing_ids_with_unicode_line_separators_round_trip(self):
+        entries = {("compiler", "A", "a\u2028b\u0085c\x0bd\x1ce :: t"): "#1"}
+        self.assertEqual(
+            store.parse_not_passing(store.dump_not_passing(entries)), entries
         )
 
     def test_malformed_not_passing_lines(self):

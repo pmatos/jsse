@@ -103,6 +103,13 @@ def run_cases(runner, cases, python, jsse, jobs, timeout, env):
     if not results:
         tail = (text + err.decode("utf-8", "replace"))[-1500:]
         return outcomes, f"{runner}: exit {code}, no results; output tail:\n{tail}"
+    missing = [n for n in names if n not in results]
+    if missing:
+        return (
+            outcomes,
+            f"{runner}: exit {code}, {len(missing)} of {len(names)} cases printed no result "
+            f"(timeout or killed?), first: {missing[0]}",
+        )
     return outcomes, None
 
 
