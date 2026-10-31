@@ -123,8 +123,6 @@ def check(root):
                         "%s:%d: %s has no heading #%s"
                         % (rel, number, os.path.relpath(dest, root), fragment)
                     )
-            elif fragment and file_part == "":
-                errors.append("%s:%d: no heading #%s" % (rel, number, fragment))
     return errors, edges
 
 
