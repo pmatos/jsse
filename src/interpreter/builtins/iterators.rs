@@ -2,6 +2,12 @@ use super::super::*;
 use crate::interpreter::bytecode::vm::Resume;
 use crate::interpreter::gc::RootedSlots;
 
+mod close;
+use close::{
+    close_iterator_for_error, iterator_close_all, iterator_close_getter,
+    iterator_close_with_completion,
+};
+
 type ZipState = Rc<
     RefCell<(
         Vec<(JsValue, JsValue)>,
@@ -323,32 +329,6 @@ fn get_iterator_direct_getter(
     }
 }
 
-// IteratorClose that uses get_object_property for .return (invokes getters)
-fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result<(), JsValue> {
-    if let Some(io_id) = iterator.as_object_id() {
-        let return_method = match interp.get_object_property(io_id, "return", iterator) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
-            _ => return Ok(()),
-        };
-        if return_method.is_nullish() {
-            return Ok(());
-        }
-        match interp.call_function(&return_method, iterator, &[]) {
-            Completion::Normal(inner_result) => {
-                if !inner_result.is_object() {
-                    return Err(interp.create_type_error("Iterator result is not an object"));
-                }
-                Ok(())
-            }
-            Completion::Throw(e) => Err(e),
-            _ => Ok(()),
-        }
-    } else {
-        Ok(())
-    }
-}
-
 /// The current iterator an iterator helper is drawing from, paired with that
 /// iterator's `next` method — a two-slot [`RootedSlots`] (see `CONTEXT.md`).
 /// Rooted once on the helper via `Interpreter::set_helper_gc_roots`, then
@@ -384,17 +364,6 @@ impl RootedPair {
     fn clear(&self, interp: &Interpreter) {
         self.set(interp, JsValue::UNDEFINED, JsValue::UNDEFINED);
     }
-}
-
-fn close_iterator_for_error(
-    interp: &mut Interpreter,
-    iterator: &JsValue,
-    error: JsValue,
-) -> JsValue {
-    interp.gc_root_value(&error);
-    let _ = iterator_close_getter(interp, iterator);
-    interp.gc_unroot_value(&error);
-    error
 }
 
 /// The prologue shared by every `%IteratorPrototype%` helper that takes a
@@ -577,70 +546,6 @@ fn get_iterator_getter(
         return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
     }
     get_iterator_direct_getter(interp, &iterator)
-}
-
-// IteratorClose per spec, taking a completion and returning updated completion.
-// If completion is Err (throw), the original error is preserved even if .return() throws.
-fn iterator_close_with_completion(
-    interp: &mut Interpreter,
-    iterator: &JsValue,
-    completion: Result<(), JsValue>,
-) -> Result<(), JsValue> {
-    if let Some(io_id) = iterator.as_object_id() {
-        let return_method = match interp.get_object_property(io_id, "return", iterator) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => {
-                // Step 5: If completion is a throw completion, return ? completion.
-                if let Err(orig) = completion {
-                    return Err(orig);
-                }
-                return Err(e);
-            }
-            _ => JsValue::UNDEFINED,
-        };
-        if return_method.is_nullish() {
-            return completion;
-        }
-        let inner_result = interp.call_function(&return_method, iterator, &[]);
-        match inner_result {
-            Completion::Normal(v) => {
-                // Step 5: If completion is throw, return completion
-                if let Err(e) = completion {
-                    return Err(e);
-                }
-                // Step 7: If innerResult.[[Value]] is not an Object, throw TypeError
-                if !v.is_object() {
-                    return Err(interp.create_type_error("Iterator result is not an object"));
-                }
-                // Step 8: Return completion
-                completion
-            }
-            Completion::Throw(e) => {
-                // Step 5: If completion is throw, return original completion
-                if let Err(orig) = completion {
-                    return Err(orig);
-                }
-                // Step 6: innerResult is throw, return it
-                Err(e)
-            }
-            _ => completion,
-        }
-    } else {
-        completion
-    }
-}
-
-// IteratorCloseAll per spec: close iterators in reverse order, accumulating errors
-fn iterator_close_all(
-    interp: &mut Interpreter,
-    open_iters: &[(JsValue, JsValue)],
-    initial_completion: Result<(), JsValue>,
-) -> Result<(), JsValue> {
-    let mut completion = initial_completion;
-    for (iter, _) in open_iters.iter().rev() {
-        completion = iterator_close_with_completion(interp, iter, completion);
-    }
-    completion
 }
 
 impl Interpreter {
@@ -1203,7 +1108,7 @@ impl Interpreter {
                             &JsValue::UNDEFINED,
                             &[value, JsValue::number(counter)],
                         ) {
-                            let _ = iterator_close_getter(interp, &iter);
+                            let e = close_iterator_for_error(interp, &iter, e);
                             break Completion::Throw(e);
                         }
                         counter += 1.0;
@@ -1324,6 +1229,7 @@ impl Interpreter {
                             &[value.clone(), JsValue::number(counter)],
                         ) {
                             Completion::Normal(v) if interp.to_boolean_val(&v) => {
+                                interp.gc_root_value(&value);
                                 if let Err(e) = iterator_close_getter(interp, &iter) {
                                     break Completion::Throw(e);
                                 }
@@ -1474,7 +1380,7 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => accumulator = v,
                                 Completion::Throw(e) => {
-                                    let _ = iterator_close_getter(interp, &iter);
+                                    let e = close_iterator_for_error(interp, &iter, e);
                                     break 'reduce Completion::Throw(e);
                                 }
                                 _ => {}
@@ -1618,7 +1524,7 @@ impl Interpreter {
                                         ),
                                         Completion::Throw(e) => {
                                             state_next.borrow_mut().4 = false;
-                                            let _ = iterator_close_getter(interp, &iter);
+                                            let e = close_iterator_for_error(interp, &iter, e);
                                             Completion::Throw(e)
                                         }
                                         _ => Completion::Normal(
@@ -1741,7 +1647,7 @@ impl Interpreter {
                                                 }
                                             Completion::Throw(e) => {
                                                 state_next.borrow_mut().4 = false;
-                                                let _ = iterator_close_getter(interp, &iter);
+                                                let e = close_iterator_for_error(interp, &iter, e);
                                                 return Completion::Throw(e);
                                             }
                                             _ => {}
@@ -1825,7 +1731,7 @@ impl Interpreter {
                     Ok(n) => n,
                     Err(e) => {
                         // Close underlying iterator before propagating error
-                        let _ = iterator_close_getter(interp, this);
+                        let e = close_iterator_for_error(interp, this, e);
                         return Completion::Throw(e);
                     }
                 };
@@ -1985,7 +1891,7 @@ impl Interpreter {
                 let num_limit = match interp.to_number_value(&limit_val) {
                     Ok(n) => n,
                     Err(e) => {
-                        let _ = iterator_close_getter(interp, this);
+                        let e = close_iterator_for_error(interp, this, e);
                         return Completion::Throw(e);
                     }
                 };
@@ -2438,7 +2344,7 @@ impl Interpreter {
                                                 Ok(v) => v,
                                                 Err(e) => {
                                                     state_next.borrow_mut().4 = false;
-                                                    let _ = iterator_close_getter(interp, &outer_iter);
+                                                    let e = close_iterator_for_error(interp, &outer_iter, e);
                                                     return Completion::Throw(e);
                                                 }
                                             };
@@ -2452,7 +2358,7 @@ impl Interpreter {
                                         }
                                         Err(e) => {
                                             state_next.borrow_mut().4 = false;
-                                            let _ = iterator_close_getter(interp, &outer_iter);
+                                            let e = close_iterator_for_error(interp, &outer_iter, e);
                                             return Completion::Throw(e);
                                         }
                                     }
@@ -2484,14 +2390,14 @@ impl Interpreter {
                                                     }
                                                     Err(e) => {
                                                         state_next.borrow_mut().4 = false;
-                                                        let _ = iterator_close_getter(interp, &outer_iter);
+                                                        let e = close_iterator_for_error(interp, &outer_iter, e);
                                                         return Completion::Throw(e);
                                                     }
                                                 }
                                             }
                                             Completion::Throw(e) => {
                                                 state_next.borrow_mut().4 = false;
-                                                let _ = iterator_close_getter(interp, &outer_iter);
+                                                let e = close_iterator_for_error(interp, &outer_iter, e);
                                                 return Completion::Throw(e);
                                             }
                                             _ => {
