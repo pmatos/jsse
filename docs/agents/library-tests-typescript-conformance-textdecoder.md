@@ -51,7 +51,7 @@ Node's own tests observe it.
   on Node: `node tests/node_textdecoder_1527/probe.js > tests/node_textdecoder_1527/expected.txt`.
 - The web streams oracle (`./scripts/run-node-webstreams-oracle.sh`) runs Node's
   `test-stream-consumers` and `test-whatwg-encoding-custom-fatal-streaming`, and
-  its corpus has the `TextDecoderStream` bad-label observation.
+  its corpus has the `TextDecoderStream` bad-label, bad-options and fatal utf-16le flush observations.
 - `tests/node_prelude.rs` keeps `TextDecoder` undefined without `--node`.
 
 ## Not covered

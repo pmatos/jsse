@@ -233,6 +233,16 @@ scenario("text encoder and decoder streams", function () {
   })();
 });
 
+scenario("text decoder stream errors", function () {
+  attempt("bad label", function () { return new TextDecoderStream("nope"); });
+  attempt("bad options", function () { return new TextDecoderStream("utf-8", 1); });
+  return (async function () {
+    var s = new ReadableStream({ start: function (c) { c.enqueue(new Uint8Array([0])); c.close(); } });
+    var r = s.pipeThrough(new TextDecoderStream("utf-16le", { fatal: true })).getReader();
+    await settle("fatal flush", r.read());
+  })();
+});
+
 scenario("compression streams", function () {
   return (async function () {
     attempt("bad format", function () { return new CompressionStream("zip"); });
