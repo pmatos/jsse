@@ -244,6 +244,26 @@ pub(super) fn readdir_tree(base: &[u8]) -> Result<Tree, AsyncError> {
     Ok(tree)
 }
 
+/// A pool job's outcome as the synchronous floor reports it.
+pub(super) fn settle_reply(interp: &mut Interpreter, outcome: Outcome) -> Res<Reply> {
+    outcome.map_err(|e| throw(interp, &e))
+}
+
+pub(super) fn settle(interp: &mut Interpreter, outcome: Outcome) -> Res<JsValue> {
+    settle_reply(interp, outcome).map(|_| JsValue::UNDEFINED)
+}
+
+/// The operand of `chmod`/`chown`/`utimes`: a descriptor, or a path that must
+/// not contain a null byte.
+pub(super) fn target_arg(interp: &mut Interpreter, args: &[JsValue], fd: bool) -> Res<Target> {
+    if fd {
+        return Ok(Target::Fd(int(interp, arg(args, 0))? as i32));
+    }
+    let bytes = path_bytes(interp, arg(args, 0))?;
+    cpath(interp, &bytes)?;
+    Ok(Target::Path(bytes))
+}
+
 fn throw(interp: &mut Interpreter, e: &AsyncError) -> JsValue {
     uv_error(
         interp,

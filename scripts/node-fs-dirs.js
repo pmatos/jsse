@@ -53,20 +53,9 @@
     return normalize((isAbsolute(from) ? from : process.cwd() + "/" + from) + "/" + to);
   }
 
-  function isDirectoryFollowing(path) {
-    try {
-      var st = host.stat(path, 0, false);
-      return (st[1] & S.S_IFMT) === S.hostConstants.S_IFDIR;
-    } catch (e) {
-      return false;
-    }
-  }
-
   // ---- readdir -------------------------------------------------------------
 
   var DIRENT_UNKNOWN = 0;
-  var DIRENT_DIR = 2;
-  var DIRENT_LINK = 3;
 
   function getDirent(path, name, type) {
     if (type === DIRENT_UNKNOWN) {

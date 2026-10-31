@@ -124,7 +124,7 @@ writev[kCustomPromisifyArgsSymbol] = ['bytesWritten', 'buffer'];
 function openAsBlob(path, options) {
   path = S.getValidatedPath(path);
   if (options !== undefined) S.validateObject(options, 'options');
-  const { type = '' } = options || {};
+  const type = (options && options.type) || '';
   if (typeof type !== 'string') {
     throw S.invalidArgType('options.type', 'of type string', type);
   }

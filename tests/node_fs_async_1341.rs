@@ -246,3 +246,71 @@ fn the_new_calls_survive_gc_stress() {
         );
     }
 }
+
+#[test]
+fn an_abort_is_delivered_when_it_happens_not_when_the_read_ends() {
+    let dir = scratch("abort");
+    let fifo = dir.join("pipe");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let script = format!(
+        "const fs = require('fs'); const ac = new AbortController();
+         fs.readFile({:?}, {{ signal: ac.signal }}, (e) => {{
+           console.log(e.name, e.code);
+           process.exit(0);
+         }});
+         setTimeout(() => ac.abort(), 50);",
+        fifo
+    );
+    let (out, err, rc) = run(&script);
+    assert_eq!((out.as_str(), rc), ("AbortError ABORT_ERR", 0), "{err}");
+}
+
+#[test]
+fn a_relative_realpath_uses_the_directory_of_the_call() {
+    let dir = scratch("cwd");
+    std::fs::create_dir_all(dir.join("a/sub")).unwrap();
+    std::fs::create_dir_all(dir.join("b")).unwrap();
+    let script = format!(
+        "const fs = require('fs'); const root = fs.realpathSync({:?});
+         process.chdir(root + '/a');
+         fs.realpath('sub', (e, p) => console.log(e, p.slice(root.length)));
+         process.chdir(root + '/b');",
+        dir
+    );
+    let (out, err, rc) = run(&script);
+    assert_eq!((out.as_str(), rc), ("null /a/sub", 0), "{err}");
+}
+
+#[test]
+fn options_changed_after_the_call_are_not_seen_by_later_steps() {
+    let dir = scratch("opts");
+    std::fs::create_dir_all(dir.join("t/inner")).unwrap();
+    let script = format!(
+        "const fs = require('fs'); const options = {{ recursive: true }};
+         fs.rm({:?} + '/t', options, (e) => console.log(e, fs.existsSync({:?} + '/t')));
+         options.recursive = false;",
+        dir, dir
+    );
+    let (out, err, rc) = run(&script);
+    assert_eq!((out.as_str(), rc), ("null false", 0), "{err}");
+}
+
+#[test]
+fn a_getter_that_calls_fs_while_a_call_is_validated_does_not_disturb_it() {
+    let dir = scratch("reentrant");
+    std::fs::write(dir.join("f"), "abc").unwrap();
+    let script = format!(
+        "const fs = require('fs'); const f = {:?} + '/f';
+         const options = {{ get encoding() {{ fs.stat(f, () => {{}}); return 'utf8'; }} }};
+         fs.readFile(f, options, (e, d) => console.log(e, d));",
+        dir
+    );
+    let (out, err, rc) = run(&script);
+    assert_eq!((out.as_str(), rc), ("null abc", 0), "{err}");
+}

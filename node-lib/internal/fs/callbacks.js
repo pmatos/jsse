@@ -41,7 +41,6 @@ let probeHit = null;
 let script = null;
 let scriptIndex = 0;
 const stubs = {};
-const saved = {};
 for (const name of PROBED) {
   stubs[name] = function() {
     if (scriptIndex < script.length) {
@@ -59,26 +58,30 @@ for (const name of PROBED) {
 }
 
 // Run `syncFn` once with the floor calls in `steps` replayed; `hit` is the
-// next floor call it made (null if it ran to completion with `value`).
+// next floor call it made (null if it ran to completion with `value`). The
+// state is saved and restored so a getter that calls `fs` while the function
+// runs does not disturb it.
 function execute(syncFn, args, steps) {
+  const outer = { probeHit, script, scriptIndex };
+  const originals = {};
   probeHit = null;
   script = steps;
   scriptIndex = 0;
   for (const name of PROBED) {
-    saved[name] = host[name];
+    originals[name] = host[name];
     host[name] = stubs[name];
   }
   let value;
+  let hit;
   try {
     value = syncFn(...args);
   } catch (e) {
     if (e !== STOP) throw e;
   } finally {
-    for (const name of PROBED) host[name] = saved[name];
-    script = null;
+    hit = probeHit;
+    for (const name of PROBED) host[name] = originals[name];
+    ({ probeHit, script, scriptIndex } = outer);
   }
-  const hit = probeHit;
-  probeHit = null;
   return { hit, value };
 }
 
@@ -105,7 +108,14 @@ function submit(hit, done) {
   });
 }
 
+// Every run reads its arguments again, so a plain options object is copied once
+// (its getters run once) and a later change by the caller is not seen.
+const snapshot = (value) => (
+  value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype ?
+    { ...value } : value);
+
 function run(syncFn, args, cb, extra) {
+  args = args.map(snapshot);
   const steps = [];
   const advance = (first) => {
     let outcome;
@@ -122,10 +132,19 @@ function run(syncFn, args, cb, extra) {
       else settle(cb, value, extra);
       return;
     }
-    submit(hit, (error, raw) => {
+    const done = (error, raw) => {
       steps.push(error ? { failed: true, error } : { failed: false, raw });
       advance(false);
-    });
+    };
+    if (first) {
+      submit(hit, done);
+      return;
+    }
+    try {
+      submit(hit, done);
+    } catch (e) {
+      cb(e);
+    }
   };
   advance(true);
 }
@@ -162,7 +181,16 @@ function withSignal(name, args, cb) {
     return null;
   }
   if (name !== 'readFile') return cb;
-  return (error, ...rest) => (signal.aborted ? cb(aborted()) : cb(error, ...rest));
+  let finished = false;
+  const finish = (...result) => {
+    if (finished) return;
+    finished = true;
+    signal.removeEventListener('abort', onAbort);
+    cb(...result);
+  };
+  const onAbort = () => finish(aborted());
+  signal.addEventListener('abort', onAbort, { once: true });
+  return (error, ...rest) => (signal.aborted ? finish(aborted()) : finish(error, ...rest));
 }
 
 function define(name, syncFn, options) {
@@ -240,6 +268,7 @@ define('realpath', sync.realpathSync, {
         args[0] += '';
       }
     }
+    args[0] = S.path.resolve(process.cwd(), args[0]);
     return args;
   },
 }).native =
