@@ -199,9 +199,9 @@ fn date_to_locale_string(
     let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
         Some(v) => v,
         None => {
-            return Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(
-                tv,
-            ))));
+            return Completion::Normal(JsValue::string(JsString::from_str(
+                &interp.date_string(tv),
+            )));
         }
     };
 
@@ -228,7 +228,7 @@ fn date_to_locale_string(
             _ => Completion::Normal(JsValue::UNDEFINED),
         }
     } else {
-        Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(tv))))
+        Completion::Normal(JsValue::string(JsString::from_str(&interp.date_string(tv))))
     }
 }
 
@@ -852,7 +852,7 @@ impl Interpreter {
                             "Invalid Date",
                         )));
                     }
-                    Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(t))))
+                    Completion::Normal(JsValue::string(JsString::from_str(&interp.date_string(t))))
                 }),
             ),
             (
@@ -886,9 +886,7 @@ impl Interpreter {
                             "Invalid Date",
                         )));
                     }
-                    Completion::Normal(JsValue::string(JsString::from_str(
-                        &format_time_only_string(t),
-                    )))
+                    Completion::Normal(JsValue::string(JsString::from_str(&interp.time_string(t))))
                 }),
             ),
             (
@@ -1115,7 +1113,7 @@ impl Interpreter {
                 if interp.new_target.is_none() {
                     let t = now_ms();
                     return Completion::Normal(JsValue::string(JsString::from_str(
-                        &format_date_string(t),
+                        &interp.date_string(t),
                     )));
                 }
 
