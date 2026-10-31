@@ -9153,7 +9153,7 @@ impl Interpreter {
                                         }
                                     }
                                     if let Some(d) = decl.declarations.first() {
-                                        match self.bind_pattern(
+                                        match self.bind_head(
                                             &d.pattern,
                                             value,
                                             match decl.kind {

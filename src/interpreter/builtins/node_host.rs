@@ -43,6 +43,11 @@ pub(crate) struct NodeHostState {
     pub(crate) pattern_src: Option<std::rc::Rc<str>>,
     /// The call-stack depth of each open `bind_pattern` (under `--node` only).
     pub(crate) pattern_frames: Vec<usize>,
+    /// Whether each open `bind_pattern` is an object pattern.
+    pub(crate) pattern_kinds: Vec<bool>,
+    /// The text V8 prints for the initializer of the pattern binding open at
+    /// the call depth, with that depth.
+    pub(crate) pattern_origin: Option<(usize, super::node_host_pattern_origin::PatternOrigin)>,
     /// The error object `not_iterable_error` made last, with the call-stack
     /// depth it was made at; a for-of or spread at that depth rewords it.
     pub(crate) iterable_error: Option<(u64, usize)>,

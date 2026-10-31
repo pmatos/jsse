@@ -40,9 +40,9 @@ fn node_contains(node: &AstNode, pred: fn(&Expression) -> bool) -> bool {
 
 fn head_binding_contains(head: &HeadBinding, pred: fn(&Expression) -> bool) -> bool {
     match head {
-        HeadBinding::Declare { pattern, .. } | HeadBinding::Assign { pattern } => {
-            pattern_has_poison(pattern, pred)
-        }
+        HeadBinding::Declare { pattern, .. }
+        | HeadBinding::Catch { pattern }
+        | HeadBinding::Assign { pattern } => pattern_has_poison(pattern, pred),
     }
 }
 

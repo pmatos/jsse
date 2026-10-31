@@ -74,6 +74,7 @@ mod node_host_operand_errors;
 mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
+pub(crate) mod node_host_pattern_origin;
 pub(crate) mod node_host_private;
 mod node_host_process;
 mod node_host_process_metrics;

@@ -6,6 +6,7 @@
 
 use super::super::*;
 use super::node_host_expr_text::expr_text;
+use super::node_host_pattern_origin::PatternOrigin;
 use crate::ast::{
     Expression, ObjectPatternProperty, Pattern, Property, PropertyKey, PropertyKind,
     VariableDeclarator,
@@ -57,16 +58,25 @@ impl Interpreter {
             _ if is_array => return self.not_iterable_error(value),
             _ => {
                 let shown = source.map_or_else(|| self.v8_call_site_text(value), expr_text);
-                let what = if value.is_null() { "null" } else { "undefined" };
-                match first {
-                    Some(name) => format!(
-                        "Cannot destructure property '{name}' of '{shown}' as it is {what}."
-                    ),
-                    None => format!("Cannot destructure '{shown}' as it is {what}."),
-                }
+                Self::destructure_message(first, &shown, value)
             }
         };
         self.create_type_error(&text)
+    }
+
+    /// `Cannot destructure property 'a' of 'shown' as it is null.`
+    pub(super) fn destructure_message(
+        first: Option<String>,
+        shown: &str,
+        value: &JsValue,
+    ) -> String {
+        let what = if value.is_null() { "null" } else { "undefined" };
+        match first {
+            Some(name) => {
+                format!("Cannot destructure property '{name}' of '{shown}' as it is {what}.")
+            }
+            None => format!("Cannot destructure '{shown}' as it is {what}."),
+        }
     }
 
     /// `bind_pattern` for a declarator: under `--node` a null or undefined
@@ -98,7 +108,23 @@ impl Interpreter {
             }
         }
         let top = value.clone();
-        let bound = self.bind_pattern(&declarator.pattern, value, kind, env);
+        let bound = match (&declarator.pattern, &declarator.init) {
+            (
+                Pattern::Object(_),
+                Some(
+                    init @ (Expression::Identifier(_)
+                    | Expression::Member(..)
+                    | Expression::Call(..)
+                    | Expression::Object(..)),
+                ),
+            ) if self.node_host.stack.installed => {
+                let origin = PatternOrigin::Init(expr_text(init).into());
+                self.with_pattern_origin(origin, |i| {
+                    i.bind_pattern(&declarator.pattern, value, kind, env)
+                })
+            }
+            _ => self.bind_pattern(&declarator.pattern, value, kind, env),
+        };
         match (&declarator.pattern, &declarator.init, bound) {
             (
                 Pattern::Array(_),
@@ -118,7 +144,7 @@ impl Interpreter {
 
     /// Whether the not-iterable error made last was for `value` itself, not
     /// for a value nested inside it.
-    fn iterable_error_was_for(&self, value: &JsValue) -> bool {
+    pub(super) fn iterable_error_was_for(&self, value: &JsValue) -> bool {
         self.node_host
             .iterable_value
             .as_ref()
@@ -164,6 +190,7 @@ impl Interpreter {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
                 _ if nested => "Cannot convert undefined or null to object".to_string(),
+                first if self.is_for_head_here() => Self::destructure_message(first, ".for", value),
                 first => {
                     return Completion::Throw(self.destructure_error(first, false, None, value));
                 }
@@ -185,10 +212,18 @@ impl Interpreter {
             return self.bind_pattern_at(pattern, value, kind, env);
         }
         let frame = self.call_depth;
+        let site = self.array_pattern_site(pattern, &value);
         self.node_host.pattern_frames.push(frame);
+        self.node_host
+            .pattern_kinds
+            .push(matches!(pattern, Pattern::Object(_)));
         let done = self.bind_pattern_at(pattern, value, kind, env);
         self.node_host.pattern_frames.pop();
-        done
+        self.node_host.pattern_kinds.pop();
+        match site {
+            Some(site) => self.reword_array_pattern(done, site),
+            None => done,
+        }
     }
 
     /// `{...} = source` / `[...] = source` once `value` is evaluated.

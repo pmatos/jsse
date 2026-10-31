@@ -2451,7 +2451,7 @@ impl Interpreter {
                             .bindings
                             .push_unique(atom.clone(), Binding::new(val, *binding_kind, true));
                     } else if let Some(d) = decl.declarations.first() {
-                        match self.bind_pattern(&d.pattern, val, kind, bind_env) {
+                        match self.bind_head(&d.pattern, val, kind, bind_env) {
                             Completion::Normal(_) => {}
                             Completion::Throw(e) => {
                                 self.iterator_close(iterator, e.clone());

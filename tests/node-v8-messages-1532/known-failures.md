@@ -7,7 +7,6 @@ stdout of `node` and `jsse --node`.
 | --- | --- | --- |
 | operator (`1 in 1`, `x instanceof 1`, `Symbol() + ''`, `BigInt(1) + 1`), identifier (`x is not defined`), TDZ, const-assignment (`c = 2`), class heritage, `o.x.y += 1`, `o.x.y++`, `delete null.x`, `new a.b.c()` and `o?.a.b` positions | frame at the statement or call, V8 at the operator, identifier or sub-expression | #1511 |
 | position of call spread, array pattern, nested pattern and `for-of` destructuring errors | frame at the statement, V8 at the operand or initializer | #1511 |
-| `for (const [a] of [5])`, `var { a: [b] } = { a: 5 }`, `var { a: [b] } = { a: null }` | V8 prints `.for is not iterable` and `{(intermediate value)} is not iterable ...` (its CallPrinter state at that point) | #1545 |
 
 ## Why #1511 is open
 
