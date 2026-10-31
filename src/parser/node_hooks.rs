@@ -155,7 +155,7 @@ impl<'a> Parser<'a> {
         if inferred_names::enabled()
             && before.ends_with("await")
             && !before[..before.len() - 5]
-                .ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+                .ends_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'))
         {
             return self.error(
                 "await is only valid in async functions and the top level bodies of modules",

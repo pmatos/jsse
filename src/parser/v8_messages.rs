@@ -285,6 +285,27 @@ pub(crate) fn node_message(message: String) -> String {
     }
 }
 
+impl ParseError {
+    /// The message of the `SyntaxError` `eval`, `Function` and `$262.evalScript`
+    /// throw: `SyntaxError: ...` as the engine words it, V8's text under `--node`.
+    pub(crate) fn js(&self) -> String {
+        if inferred_names::enabled() {
+            node_message(self.message.clone())
+        } else {
+            self.to_string()
+        }
+    }
+
+    /// The same without the prefix, for the module loader.
+    pub(crate) fn js_bare(&self) -> String {
+        if inferred_names::enabled() {
+            node_message(self.message.clone())
+        } else {
+            self.message.clone()
+        }
+    }
+}
+
 /// V8's message for a regexp literal that does not compile: the flags are part
 /// of the printed literal and a few reasons are worded differently.
 pub(crate) fn regexp_literal_message(msg: &str, flags: &str) -> String {

@@ -77,7 +77,6 @@ mod node_host_receiver;
 mod node_host_signal;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
-mod node_host_syntax_errors;
 mod node_host_throw;
 #[cfg(unix)]
 pub(crate) mod node_host_tty;

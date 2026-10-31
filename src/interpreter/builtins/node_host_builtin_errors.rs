@@ -124,7 +124,7 @@ pub(crate) fn static_text(msg: &str) -> Option<Cow<'static, str>> {
 
 impl Interpreter {
     pub(crate) fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
-        let msg = self.node_error_message_for(name, msg);
+        let msg = self.node_error_message(msg);
         let ctor = self.get_global_var(name);
         let error_proto_id: Option<u64> = ctor.and_then(|v| {
             let constructor_id = v.as_object_id()?;

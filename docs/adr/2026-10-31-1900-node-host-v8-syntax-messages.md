@@ -15,17 +15,20 @@ the first caller's error object to every later `import()`.
 ## Decision
 
 1. **One table, three entry points.** V8's text for a message that needs no
-   parser state lives in `parser/v8_messages.rs::static_text`. `create_error`
-   applies it to any `SyntaxError` under `--node` (this covers the lexer, which
-   has no parser state, and `ParseError`s built without a `Parser`), `vm.Script`
-   applies it to its failure, and `Parser::error` applies it first. Messages that
-   depend on the offending token are reworded by `Parser::v8_text`, which reads
-   the current token; the other `Expected ...` messages become `Unexpected
-   <token>`. A table keyed on the message leaves the ~230 `self.error` sites, and
-   the size-capped parser files, untouched.
+   parser state lives in `parser/v8_messages.rs::static_text`. `Parser::error`
+   applies it first; `ParseError::js` / `js_bare` apply it where a `ParseError`
+   becomes a JavaScript `SyntaxError` (`eval`, `Function`, `$262.evalScript`, the
+   module loader), which also covers errors built without a `Parser` (the lexer,
+   regexp literals); `vm.Script` applies it to its failure. It is not applied in
+   `create_error`: the same raw string can mean something else for a builtin
+   (`new RegExp("a", "gg")` is `Invalid flags supplied to RegExp constructor`).
+   Messages that depend on the offending token are reworded by
+   `Parser::v8_text`, which reads the current token; the other `Expected ...`
+   messages become `Unexpected <token>`. A table keyed on the message leaves the
+   ~230 `self.error` sites, and the size-capped parser files, untouched.
 2. **Default mode is untouched**, including the doubled prefix of `eval` and
-   `Function` messages: the strip happens in `create_error` only when the stack
-   hooks are installed. Changing default mode text needs a ruling.
+   `Function` messages: `ParseError::js` strips it only when the stack hooks are
+   installed. Changing default mode text needs a ruling.
 3. **Export-from link errors.** `ExportSpecifier` records the offset and the
    width of `local as exported`; `link_reexport` runs the existing resolution
    under `with_import_name`, so the error shares the import path

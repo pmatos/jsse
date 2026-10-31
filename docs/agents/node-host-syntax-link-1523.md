@@ -8,11 +8,11 @@ Design record: [`docs/adr/2026-10-31-1900-node-host-v8-syntax-messages.md`](../a
 
 | What | Where |
 | --- | --- |
-| Messages that need no parser state (`Octal literals ... strict mode.`, `Invalid or unexpected token` for every lexer failure, regexp flags, numeric separators, `Cannot use import statement outside a module`, ...) | `static_text` in `src/parser/v8_messages.rs`, applied by `create_error` (`node_host_syntax_errors.rs`), by `vm.Script` (`node_message`) and by `Parser::error` |
+| Messages that need no parser state (`Octal literals ... strict mode.`, `Invalid or unexpected token` for every lexer failure, regexp flags, numeric separators, `Cannot use import statement outside a module`, ...) | `static_text` in `src/parser/v8_messages.rs`, applied by `Parser::error`, by `ParseError::js` / `js_bare` where a `ParseError` becomes a JavaScript `SyntaxError` (`eval`, `new Function`, `$262.evalScript`, the module loader) and by `vm.Script` (`node_message`) |
 | Messages that depend on the token the parser stopped at (`Function statements require a function name`, every `Expected ...` as `Unexpected <token>`, template escapes read from the raw text, `await is only valid in async functions ...`) | `Parser::v8_text` (same file); `v8_unexpected` in `node_hooks.rs` words the token |
 | `++x` / `x++`, `for (1 of x)` | `validate_update_target`, `for_head` (`v8_messages.rs`) |
 | Regexp literals that do not compile (`/pattern/flags: reason`) | `regexp_literal_message`, called by `validate_regexp_literal` |
-| The doubled `SyntaxError: ` prefix of `eval`, `new Function`, `$262.evalScript`, the module loader | stripped in `node_error_message_for` (`create_error`, `--node` only) |
+| The doubled `SyntaxError: ` prefix of `eval`, `new Function`, `$262.evalScript`, the module loader | `ParseError::js` (`--node` only; default mode keeps `SyntaxError: <message>`) |
 | Export-from and star-export link errors, load errors that are retried | `src/interpreter/builtins/node_host_stack/link_errors.rs` |
 | `import(spec)` position for a variable or property specifier | `import_call` in `parser/node_hooks.rs` |
 
