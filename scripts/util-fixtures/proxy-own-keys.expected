@@ -1,0 +1,10 @@
+lenless THROW TypeError
+arr true ownKeys:undefined getOwnPropertyDescriptor:length
+arr-rhs true ownKeys:undefined getOwnPropertyDescriptor:length
+keys true ownKeys gopd:length gopd:Symbol(s) gopd:x gopd:4294967295 gopd:01 gopd:x gopd:4294967295 gopd:01 gopd:Symbol(s)
+loose true ownKeys:undefined getOwnPropertyDescriptor:length getOwnPropertyDescriptor:x getOwnPropertyDescriptor:x
+dup THROW TypeError ownKeys
+plain true ownKeys:undefined getOwnPropertyDescriptor:length
+revoked THROW TypeError
+revoked-rhs THROW TypeError
+inspect Proxy([ 1, 2 ])
