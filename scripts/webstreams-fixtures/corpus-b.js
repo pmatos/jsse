@@ -417,6 +417,7 @@ scenario("FileHandle.readableWebStream and openAsBlob", function () {
       var streamed = 0;
       for await (var part of blob.stream()) streamed += part.byteLength;
       out("blob stream", streamed, (await blob.arrayBuffer()).byteLength);
+      out("blob ctor", await new Blob([blob.slice(0, 3), "-"]).text(), typeof Blob, typeof File);
       fs.appendFileSync(file, "more");
       await settle("changed", blob.text());
       await settle("changed slice", blob.slice(0, 4).arrayBuffer());

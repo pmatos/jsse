@@ -59,7 +59,6 @@ const {
 
 const {
   AbortError,
-  ErrnoException,
   codes: {
     ERR_INVALID_ARG_TYPE,
     ERR_INVALID_ARG_VALUE,

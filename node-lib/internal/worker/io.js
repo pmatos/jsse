@@ -1,7 +1,6 @@
 'use strict';
 
-// Only the web-stream transfer paths construct a MessageChannel, and nothing
-// reaches them without a message port, so this is a placeholder.
+// Placeholder: only the web-stream transfer paths construct one (#1528).
 
 const { codes: { ERR_METHOD_NOT_IMPLEMENTED } } = require('internal/errors');
 

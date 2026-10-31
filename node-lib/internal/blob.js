@@ -101,41 +101,83 @@ class Blob {
     };
   }
 
-  static #readRange(file, from, length) {
+  static #unreadable() {
+    return lazyDOMException('The blob could not be read', 'NotReadableError');
+  }
+
+  static #changed(file, stat) {
+    return stat.size !== file.fileSize || stat.mtimeMs !== file.mtimeMs;
+  }
+
+  // The constructor copies its parts synchronously, so a file-backed part is
+  // read here with blocking calls; every other read is asynchronous.
+  static #readSync(file) {
     const fs = require('fs');
     let fd;
     try {
       fd = fs.openSync(file.path, 'r');
-      const stat = fs.fstatSync(fd);
-      if (stat.size !== file.fileSize || stat.mtimeMs !== file.mtimeMs) {
-        throw new Error('The file changed');
-      }
-      const out = new Uint8Array(length);
+      if (Blob.#changed(file, fs.fstatSync(fd))) throw new Error('The file changed');
+      const out = new Uint8Array(file.size);
       let at = 0;
-      while (at < length) {
-        const count = fs.readSync(fd, out, at, length - at, file.start + from + at);
+      while (at < file.size) {
+        const count = fs.readSync(fd, out, at, file.size - at, file.start + at);
         if (count === 0) throw new Error('Unexpected end of file');
         at += count;
       }
       return out;
     } catch {
-      throw lazyDOMException('The blob could not be read', 'NotReadableError');
+      throw Blob.#unreadable();
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
   }
 
-  #data() {
-    return this.#bytes ?? Blob.#readRange(this.#file, 0, this.#file.size);
+  static async #open(file) {
+    let handle;
+    try {
+      handle = await require('fs').promises.open(file.path, 'r');
+      if (Blob.#changed(file, await handle.stat())) throw new Error('The file changed');
+      return handle;
+    } catch {
+      await handle?.close();
+      throw Blob.#unreadable();
+    }
   }
 
-  static #settle(blob, convert) {
-    if (!Blob.#is(blob)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
+  static async #readFrom(handle, file, from, length) {
+    const out = new Uint8Array(length);
+    let at = 0;
     try {
-      return PromiseResolve(convert(blob.#data()));
-    } catch (error) {
-      return PromiseReject(error);
+      while (at < length) {
+        const { bytesRead } = await handle.read(out, at, length - at, file.start + from + at);
+        if (bytesRead === 0) throw new Error('Unexpected end of file');
+        at += bytesRead;
+      }
+    } catch {
+      throw Blob.#unreadable();
     }
+    return out;
+  }
+
+  static async #readAll(file) {
+    const handle = await Blob.#open(file);
+    try {
+      return await Blob.#readFrom(handle, file, 0, file.size);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  #data() {
+    return this.#bytes ?? Blob.#readSync(this.#file);
+  }
+
+  static #settle(blob, convert, copies) {
+    if (!Blob.#is(blob)) return PromiseReject(new ERR_INVALID_THIS('Blob'));
+    if (blob.#bytes !== undefined) {
+      return PromiseResolve(convert(copies ? blob.#bytes.slice() : blob.#bytes));
+    }
+    return Blob.#readAll(blob.#file).then(convert);
   }
 
   constructor(sources = [], options = kEmptyObject) {
@@ -221,7 +263,7 @@ class Blob {
   }
 
   arrayBuffer() {
-    return Blob.#settle(this, (bytes) => (this.#bytes === undefined ? bytes : bytes.slice()).buffer);
+    return Blob.#settle(this, (bytes) => bytes.buffer, true);
   }
 
   text() {
@@ -230,11 +272,11 @@ class Blob {
                   bytes[2] === 0xbf ? 3 : 0;
       return Buffer.from(bytes.buffer, bytes.byteOffset + bom, bytes.length - bom)
         .toString('utf8');
-    });
+    }, false);
   }
 
   bytes() {
-    return Blob.#settle(this, (bytes) => (this.#bytes === undefined ? bytes : bytes.slice()));
+    return Blob.#settle(this, (bytes) => bytes, true);
   }
 
   stream() {
@@ -243,19 +285,35 @@ class Blob {
     const bytes = this.#bytes;
     const file = this.#file;
     let at = 0;
+    let handle;
     const { ReadableStream } = require('internal/webstreams/readablestream');
     return new ReadableStream({
       type: 'bytes',
-      pull(controller) {
+      async pull(controller) {
         if (at >= size) {
           controller.close();
           controller.byobRequest?.respond(0);
+          await handle?.close();
           return;
         }
-        const length = bytes === undefined ? MathMin(kChunkSize, size - at) : size;
-        const chunk = bytes === undefined ? Blob.#readRange(file, at, length) : bytes.slice();
-        at += length;
-        controller.enqueue(chunk);
+        if (bytes !== undefined) {
+          at = size;
+          controller.enqueue(bytes.slice());
+          return;
+        }
+        try {
+          handle ??= await Blob.#open(file);
+          const length = MathMin(kChunkSize, size - at);
+          const chunk = await Blob.#readFrom(handle, file, at, length);
+          at += length;
+          controller.enqueue(chunk);
+        } catch (error) {
+          await handle?.close();
+          throw error;
+        }
+      },
+      async cancel() {
+        await handle?.close();
       },
     });
   }
@@ -336,6 +394,4 @@ function resolveObjectURL(url) {
   return undefined;
 }
 
-module.exports = {
-  Blob, File, createFileBackedBlob: (...args) => createFileBackedBlob(...args), isBlob, resolveObjectURL,
-};
+module.exports = { Blob, File, createFileBackedBlob, isBlob, resolveObjectURL };

@@ -341,6 +341,8 @@
     ["internal/event_target", "CustomEvent"],
     ["internal/abort_controller", "AbortController"],
     ["internal/abort_controller", "AbortSignal"],
+    ["internal/blob", "Blob"],
+    ["internal/blob", "File"],
     ["internal/per_context/domexception", "DOMException"],
     ["perf_hooks", "performance"],
     ["perf_hooks", "PerformanceEntry"],
