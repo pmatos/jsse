@@ -6,7 +6,7 @@ use super::node_host_cjs_lexer::{Lexer, is_ident};
 
 impl Lexer<'_> {
     pub(super) fn add_export(&mut self, name: String) {
-        if !self.exports.contains(&name) {
+        if self.seen_exports.insert(name.clone()) {
             self.exports.push(name);
         }
     }

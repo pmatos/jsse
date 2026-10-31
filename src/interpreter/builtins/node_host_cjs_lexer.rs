@@ -7,7 +7,7 @@
 //! Node. See `docs/adr/2026-10-26-2300-node-esm-interop.md`.
 
 use super::super::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) struct CjsNames {
     pub exports: Vec<String>,
@@ -35,6 +35,7 @@ pub(super) struct Lexer<'a> {
     pub(super) s: &'a [u8],
     pub(super) pos: usize,
     pub(super) exports: Vec<String>,
+    pub(super) seen_exports: HashSet<String>,
     pub(super) reexports: Vec<String>,
     pub(super) star_map: HashMap<String, String>,
 }
@@ -393,6 +394,7 @@ pub(crate) fn lex_cjs_names(source: &str) -> CjsNames {
         s: source.as_bytes(),
         pos: 0,
         exports: Vec::new(),
+        seen_exports: HashSet::new(),
         reexports: Vec::new(),
         star_map: HashMap::new(),
     };

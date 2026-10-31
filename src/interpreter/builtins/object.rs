@@ -967,9 +967,7 @@ impl Interpreter {
                             .and_then(|obj| {
                                 let b = obj.borrow();
                                 let ns = b.module_namespace()?;
-                                Some(key.as_str().is_some_and(|key| {
-                                    ns.export_names.iter().any(|name| name == key)
-                                }))
+                                Some(key.as_str().is_some_and(|k| ns.export_names.contains(k)))
                             })
                             .unwrap_or(false);
                         if is_export {
