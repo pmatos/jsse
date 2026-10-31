@@ -328,7 +328,7 @@ def main(argv=None):
         universe = list_universe(work, ts_dir, node, list(dict.fromkeys(runners)))
         problems = universe_problems(universe, args.oracle_json)
         doc, np, source = load_baseline(args.baseline_ref, args.data_dir)
-        cases = grow.load(source, args.baseline_ref, args.data_dir, ROOT)
+        cases = grow.load(source, args.data_dir, ROOT)
         known = grow.resolved(doc, cases, legacy)
         problems += grow.bucket_problems(doc, universe, known)
         chosen = pl.select(universe, args.specs, args.sample, args.seed)
@@ -401,7 +401,7 @@ def main(argv=None):
 
 def update(args, chosen, universe, run, legacy):
     doc, np, source = load_baseline(None, args.data_dir)
-    cases = grow.load(source, None, args.data_dir, ROOT)
+    cases = grow.load(source, args.data_dir, ROOT)
     complete = {}
     for runner, suites in chosen.items():
         have = collections.defaultdict(list)

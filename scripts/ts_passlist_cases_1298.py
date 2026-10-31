@@ -63,7 +63,10 @@ def dump_cases(cases):
     """Stable text: one case name per line, sorted."""
     buckets = {
         runner: {
-            name: {k: sorted(e[k]) for k in ("added", "cases") if k == "cases" or e[k]}
+            name: {
+                **({"added": sorted(e["added"])} if e["added"] else {}),
+                "cases": sorted(e["cases"]),
+            }
             for name, e in sorted(table.items())
         }
         for runner, table in sorted(cases.items())
@@ -133,7 +136,7 @@ def growth(base, head):
     return grown, problems
 
 
-def load(source, ref, data_dir, root):
+def load(source, data_dir, root):
     """The case lists next to the baseline the gate loaded: `source` is what scripts/run-ts-pass-list.py's
     load_baseline reported (a git ref, "working tree" or "none")."""
     if source == "none":
