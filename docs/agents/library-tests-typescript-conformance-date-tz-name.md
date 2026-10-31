@@ -36,13 +36,18 @@ Part of the TypeScript epic (#1214). ESLint's html formatter prints
 
 ## Known remaining differences from V8
 
-- V8 names `Date.prototype.toString` by the zone's DST flag and its current
-  metazone, not by the instant: for eras whose offset is not the zone's
-  standard or daylight offset (Europe/London 1970, British Standard Time) V8
-  prints `(Greenwich Mean Time)`; jsse prints the ICU4X offset form
-  `(GMT+01:00)`, which is what V8's `Intl.DateTimeFormat` prints too.
-  Europe/Dublin in 1970 likewise prints `Irish Standard Time` against V8's
-  `Greenwich Mean Time` in `Date.prototype.toString`.
+- V8 names `Date.prototype.toString` by the zone's daylight flag and its
+  current metazone, not by the instant (Europe/London in 1970 prints
+  `Greenwich Mean Time`). jsse does the same: `current_metazone_name` takes the
+  daylight flag from the offset against the year's smaller January/July
+  offset, and reads the name at a 2025 reference instant with the same flag.
+  A name that is still an offset form (`GMT+01:00`) falls back to the tzdata
+  abbreviation. A sweep of every `Intl.supportedValuesOf('timeZone')` zone at
+  seven instants against Node 26 leaves 68 zones with a modern difference,
+  all from zones that no longer observe DST (V8 still prints the metazone's
+  daylight name for Moscow 2001, Cancun 2001; jsse has no reference instant
+  to read it from) or from tzdata versions that disagree with Node's ICU
+  (Canadian zones in 2042, Chile, Kazakhstan, Casablanca).
 - V8 formats `Intl.DateTimeFormat` with a plain space before `AM`/`PM` where
   jsse (ICU4X, CLDR 42+) prints U+202F; unrelated to this issue and left as is.
 - Option sets ICU4X cannot express (year-only, month-only or era with a zone)

@@ -58,6 +58,15 @@ fn new_york_long_names() {
 }
 
 #[test]
+fn london_names_follow_the_daylight_flag_not_the_era() {
+    expect(
+        "Europe/London",
+        "Thu Jan 01 1970 01:00:00 GMT+0100 (Greenwich Mean Time)",
+        "Sun Sep 09 2001 02:46:40 GMT+0100 (British Summer Time)",
+    );
+}
+
+#[test]
 fn utc_and_half_hour_zones() {
     expect(
         "UTC",

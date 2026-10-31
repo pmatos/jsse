@@ -1,9 +1,9 @@
 use super::super::super::*;
 use super::super::temporal::canonicalize_iana_tz;
 use crate::interpreter::helpers::{
-    date_from_time, hour_from_time, long_time_zone_name, min_from_time, month_from_time,
-    ms_from_time, named_time_zone_offset_secs, named_time_zone_timestamp, now_ms,
-    resolve_named_time_zone, sec_from_time, week_day, year_from_time,
+    date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time,
+    named_time_zone_offset_secs, named_time_zone_timestamp, now_ms, resolve_named_time_zone,
+    sec_from_time, week_day, year_from_time,
 };
 
 mod zone_glue;
@@ -4256,10 +4256,7 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
                 match style {
                     "short" | "shortGeneric" => return abbr,
                     "long" | "longGeneric" => {
-                        if let Some(name) = long_time_zone_name(&tz_str, epoch_ms, offset_secs) {
-                            return name;
-                        }
-                        return abbr;
+                        return zone_glue::long_name_or_offset(&tz_str, epoch_ms, offset_secs);
                     }
                     _ => return abbr,
                 }
