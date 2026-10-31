@@ -34,6 +34,25 @@ var wrapper = Iterator.from({
 assert.sameValue(typeof wrapper.next, "function", "wrapper inherits next");
 assert.sameValue(typeof wrapper.return, "function", "wrapper inherits return");
 
+var nextCalls = 0;
+var proxied = Iterator.from({
+  [Symbol.iterator]() {
+    return new Proxy({
+      next() {
+        nextCalls++;
+        return { done: true, value: undefined };
+      }
+    }, {
+      getPrototypeOf(target) {
+        $262.gc();
+        return Object.prototype;
+      }
+    });
+  }
+});
+assert.sameValue(proxied.next().done, true, "the iterator record survives the getPrototypeOf trap");
+assert.sameValue(nextCalls, 1, "the wrapper delegates to the original next");
+
 var result = wrapper.return();
 assert.sameValue(result.done, true, "return() reports done");
 assert.sameValue(result.value, undefined, "return() reports an undefined value");

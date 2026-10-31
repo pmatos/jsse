@@ -31,9 +31,9 @@ pub(super) fn promise_construct(interp: &mut Interpreter, args: &[JsValue]) -> C
         }
         let promise_id = promise.as_object_id().unwrap_or_default();
         let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
-        // The resolving functions capture only the promise id, so the executor (which
-        // can collect at any statement boundary) would otherwise free the promise.
-        interp.gc_root_value(&promise);
+        // An executor that ignores its second parameter leaves `reject_fn` held only
+        // here, yet it is called if the executor throws after a collection; it also
+        // pins the promise, which the resolving functions reference by id only.
         interp.gc_root_value(&reject_fn);
         let result = interp.call_function(
             &executor,

@@ -2459,55 +2459,17 @@ impl Interpreter {
 
         wrap_valid::define_wrap_valid_methods(self, wrap_valid_proto_id);
 
-        let wvp_for_from: Option<u64> = Some(wrap_valid_proto_id);
         let iterator_ctor_for_from = iterator_ctor.clone();
         let from_fn = self.create_function(JsFunction::native(
             "from".to_string(),
             1,
             move |interp, _this, args| {
-                let obj = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-
-                // Use GetIteratorFlattenable(obj, iterate-strings) per spec
-                let (iter_val, next_method) = match get_iterator_flattenable(interp, &obj, false) {
-                    Ok(pair) => pair,
-                    Err(e) => return Completion::Throw(e),
-                };
-
-                // OrdinaryHasInstance(%Iterator%, iteratorRecord.[[Iterator]])
-                let has_iter_proto =
-                    match interp.ordinary_has_instance(&iterator_ctor_for_from, &iter_val) {
-                        Completion::Normal(v) => v.as_boolean() == Some(true),
-                        _ => false,
-                    };
-
-                if has_iter_proto {
-                    return Completion::Normal(iter_val);
-                }
-
-                // Create wrapper with shared WrapForValidIteratorPrototype
-                let wrapper_id = interp.create_object_id();
-                interp
-                    .get_object_cell_expect(wrapper_id)
-                    .borrow_mut()
-                    .prototype_id = wvp_for_from;
-                interp
-                    .get_object_cell_expect(wrapper_id)
-                    .borrow_mut()
-                    .class_name = "Iterator";
-                {
-                    let mut wrapper = interp.get_object_cell_expect(wrapper_id).borrow_mut();
-                    wrapper.kind = crate::interpreter::types::ObjectKind::IterHelper(
-                        crate::interpreter::types::IterHelperData::Delegation {
-                            iter: iter_val.clone(),
-                            next: next_method.clone(),
-                        },
-                    );
-                    wrapper
-                        .gc_native_roots_mut()
-                        .extend([iter_val, next_method]);
-                }
-
-                Completion::Normal(JsValue::object(wrapper_id))
+                wrap_valid::iterator_from(
+                    interp,
+                    args,
+                    &iterator_ctor_for_from,
+                    wrap_valid_proto_id,
+                )
             },
         ));
 

@@ -3723,69 +3723,6 @@ impl Interpreter {
     }
 
     /// Iterate using a known iterator function, collecting all values.
-    pub(crate) fn iterate_with_function(
-        &mut self,
-        source: &JsValue,
-        iter_fn: &JsValue,
-    ) -> Result<Vec<JsValue>, Completion> {
-        if !self.is_callable(iter_fn) {
-            return Err(Completion::Throw(
-                self.create_type_error("@@iterator is not a function"),
-            ));
-        }
-        let iter = match self.call_function(iter_fn, source, &[]) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(Completion::Throw(e)),
-            _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
-        };
-        if !iter.is_object() {
-            return Err(Completion::Throw(self.create_type_error(
-                "Result of the Symbol.iterator method is not an object",
-            )));
-        }
-        // Cache `next` once per IteratorRecord (spec §7.4.5 GetIteratorFromMethod step 3).
-        let next_fn = if let Some(io) = iter.as_object_id() {
-            match self.get_object_property(io, "next", &iter) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(Completion::Throw(e)),
-                _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
-            }
-        } else {
-            return Err(Completion::Throw(self.create_type_error("bad iterator")));
-        };
-        let mut values = Vec::new();
-        while iter.is_object() {
-            let result = match self.call_function(&next_fn, &iter, &[]) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(Completion::Throw(e)),
-                _ => break,
-            };
-            if !result.is_object() {
-                return Err(Completion::Throw(
-                    self.create_type_error("Iterator result is not an object"),
-                ));
-            }
-            if let Some(ro) = result.as_object_id() {
-                let done = match self.get_object_property(ro, "done", &result) {
-                    Completion::Normal(v) => self.to_boolean_val(&v),
-                    _ => true,
-                };
-                if done {
-                    break;
-                }
-                let value = match self.get_object_property(ro, "value", &result) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(Completion::Throw(e)),
-                    _ => JsValue::UNDEFINED,
-                };
-                values.push(value);
-            } else {
-                break;
-            }
-        }
-        Ok(values)
-    }
-
     pub(crate) fn collect_iterable_or_arraylike(
         &mut self,
         val: &JsValue,

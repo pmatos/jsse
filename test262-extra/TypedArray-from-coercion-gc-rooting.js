@@ -60,6 +60,23 @@ assert.sameValue(fromArrayLike[0], 1);
 assert.sameValue(fromArrayLike[1], 5);
 assert.sameValue(fromArrayLike[2], 3);
 
+var steps = 0;
+var collectingIterable = {
+  [Symbol.iterator]() {
+    return {
+      next() {
+        collect();
+        steps++;
+        return steps <= 3 ? { done: false, value: { valueOf() { return steps * 10; } } } : { done: true };
+      }
+    };
+  }
+};
+var fromCollectingIterator = Int32Array.from(collectingIterable);
+assert.sameValue(fromCollectingIterator.length, 3, "next() that collects keeps earlier values alive");
+assert.sameValue(fromCollectingIterator[0], 40, "values coerce lazily, after iteration finishes");
+assert.sameValue(fromCollectingIterator[2], 40);
+
 var mapped = Int32Array.from([1, 2, 3], function(v) {
   collect();
   return v * 2;

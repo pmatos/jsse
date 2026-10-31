@@ -3,14 +3,6 @@
 use super::*;
 use crate::interpreter::helpers::to_integer_or_infinity;
 
-fn is_callable_object(interp: &Interpreter, value: &JsValue) -> bool {
-    value.as_object_id().is_some_and(|o| {
-        interp
-            .get_object_cell(o)
-            .is_some_and(|obj| obj.borrow().callable.is_some())
-    })
-}
-
 /// TypedArrayCreateFromConstructor plus the checks the element writes depend on.
 /// The target stays rooted until the enclosing root scope closes.
 fn create_target(
@@ -88,6 +80,63 @@ fn array_like_length(interp: &mut Interpreter, array_like: &JsValue) -> Result<u
     })
 }
 
+/// IteratorToList over `iter_fn.call(source)`. The iterator, its cached `next` and
+/// every collected value stay rooted for the enclosing root scope, because
+/// `next()` and the `done`/`value` getters run user code.
+fn collect_iterable(
+    interp: &mut Interpreter,
+    source: &JsValue,
+    iter_fn: &JsValue,
+) -> Result<Vec<JsValue>, Completion> {
+    if !interp.is_callable(iter_fn) {
+        return Err(Completion::Throw(
+            interp.create_type_error("@@iterator is not a function"),
+        ));
+    }
+    let iter = match interp.call_function(iter_fn, source, &[]) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let Some(iter_id) = iter.as_object_id() else {
+        return Err(Completion::Throw(interp.create_type_error(
+            "Result of the Symbol.iterator method is not an object",
+        )));
+    };
+    interp.gc_root_value(&iter);
+    let next_fn = match interp.get_object_property(iter_id, "next", &iter) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    interp.gc_root_value(&next_fn);
+    let mut values = Vec::new();
+    loop {
+        let result = match interp.call_function(&next_fn, &iter, &[]) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let Some(result_id) = result.as_object_id() else {
+            return Err(Completion::Throw(
+                interp.create_type_error("Iterator result is not an object"),
+            ));
+        };
+        interp.gc_root_value(&result);
+        let done = match interp.get_object_property(result_id, "done", &result) {
+            Completion::Normal(v) => interp.to_boolean_val(&v),
+            _ => true,
+        };
+        if done {
+            return Ok(values);
+        }
+        let value = match interp.get_object_property(result_id, "value", &result) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(Completion::Throw(e)),
+            _ => JsValue::UNDEFINED,
+        };
+        interp.gc_root_value(&value);
+        values.push(value);
+    }
+}
+
 fn from_iterable(
     interp: &mut Interpreter,
     ctor: &JsValue,
@@ -95,10 +144,7 @@ fn from_iterable(
     iter_fn: &JsValue,
     map: Option<(&JsValue, &JsValue)>,
 ) -> Result<JsValue, Completion> {
-    let values = interp.iterate_with_function(source, iter_fn)?;
-    for v in &values {
-        interp.gc_root_value(v);
-    }
+    let values = collect_iterable(interp, source, iter_fn)?;
     let target = create_target(interp, ctor, values.len())?;
     for (k, val) in values.into_iter().enumerate() {
         map_and_store(interp, map, &target, k, val)?;
@@ -149,13 +195,13 @@ pub(super) fn typed_array_from(
     let map_fn = args.get(1).filter(|mf| !mf.is_undefined());
     let this_arg = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
 
-    if !is_callable_object(interp, this_val) {
+    if !interp.is_constructor(this_val) {
         return Completion::Throw(
             interp.create_type_error("TypedArray.from requires a constructor"),
         );
     }
     if let Some(mf) = map_fn
-        && !is_callable_object(interp, mf)
+        && !interp.is_callable(mf)
     {
         return Completion::Throw(interp.create_type_error("mapfn is not a function"));
     }

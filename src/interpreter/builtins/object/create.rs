@@ -45,6 +45,7 @@ pub(super) fn object_create(interp: &mut Interpreter, args: &[JsValue]) -> Compl
                     Err(e) => return Completion::Throw(e),
                 };
                 for key_val in all_keys {
+                    let frame = interp.gc_root_frame();
                     let key = to_property_key_string(&key_val);
                     // Check enumerability via [[GetOwnProperty]]
                     let desc_check = match interp.proxy_get_own_property_descriptor(d_id, &key) {
@@ -58,13 +59,17 @@ pub(super) fn object_create(interp: &mut Interpreter, args: &[JsValue]) -> Compl
                     if let Ok(chk) = interp.to_property_descriptor(&desc_check)
                         && chk.enumerable == Some(false)
                     {
+                        interp.gc_unroot_frame(frame);
                         continue;
                     }
                     let prop_desc_val = match interp.get_object_property(d_id, &key, &props_obj_val)
                     {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => continue,
+                        _ => {
+                            interp.gc_unroot_frame(frame);
+                            continue;
+                        }
                     };
                     interp.gc_root_value(&prop_desc_val);
                     match interp.to_property_descriptor(&prop_desc_val) {
@@ -84,6 +89,7 @@ pub(super) fn object_create(interp: &mut Interpreter, args: &[JsValue]) -> Compl
                             );
                         }
                     }
+                    interp.gc_unroot_frame(frame);
                 }
             }
         }
