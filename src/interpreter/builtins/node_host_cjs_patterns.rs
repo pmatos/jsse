@@ -6,13 +6,13 @@ use super::node_host_cjs_lexer::{Lexer, is_ident};
 
 impl Lexer<'_> {
     pub(super) fn add_export(&mut self, name: String) {
-        if !self.exports.contains(&name) {
+        if self.seen_exports.insert(name.clone()) {
             self.exports.push(name);
         }
     }
 
     pub(super) fn add_reexport(&mut self, name: String) {
-        if !self.reexports.contains(&name) {
+        if self.seen_reexports.insert(name.clone()) {
             self.reexports.push(name);
         }
     }

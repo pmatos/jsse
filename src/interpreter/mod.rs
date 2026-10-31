@@ -51,6 +51,7 @@ mod fuzz_host;
 mod gc;
 pub(crate) mod global_access;
 mod module_host;
+mod module_namespace_data;
 mod node_esm;
 pub(crate) use global_access::GlobalHint;
 pub(crate) mod generator_analysis;
@@ -4230,160 +4231,20 @@ impl Interpreter {
     }
 
     fn create_module_namespace(&mut self, module: &Rc<RefCell<LoadedModule>>) -> JsValue {
-        use crate::interpreter::types::ModuleNamespaceData;
-
         // Per §16.2.1.5.2 GetModuleNamespace: return cached namespace if present
         if let Some(cached) = module.borrow().cached_namespace.clone() {
             return cached;
         }
-
-        let obj_id = self.create_object_id();
-        let (env, export_bindings, module_path, export_names) = {
-            let module_ref = module.borrow();
-            let env = module_ref.env.clone();
-            let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.is_empty() {
-                None
-            } else {
-                Some(module_ref.path.clone())
-            };
-            let mut export_names: Vec<String> = module_ref
-                .exports
-                .keys()
-                .filter(|k| {
-                    module_ref
-                        .export_bindings
-                        .get(*k)
-                        .is_none_or(|b| b != "*ambiguous*")
-                })
-                .cloned()
-                .collect();
-            export_names.sort();
-            (env, export_bindings, module_path, export_names)
-        }; // module_ref borrow dropped here
-
-        // Set module namespace data for live bindings
-        self.get_object_cell_expect(obj_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::ModuleNamespace(Box::new(ModuleNamespaceData {
-                env: env.clone(),
-                export_names: export_names.clone(),
-                export_to_binding: export_bindings,
-                module_path,
-                deferred: false,
-            }));
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module";
-        self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .prototype_id = None; // Module namespaces have null prototype
-
-        // Add property descriptors for each export (values will be looked up dynamically)
-        for name in &export_names {
-            // Exports: writable=true, enumerable=true, configurable=false
-            // Value is left as undefined - will be looked up dynamically
-            self.get_object_cell_expect(obj_id)
-                .borrow_mut()
-                .insert_property(
-                    name.clone(),
-                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
-                );
-        }
-
-        // Set Symbol.toStringTag to "Module"
-        // writable=false, enumerable=false, configurable=false
-        let sym_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .insert_property(
-                sym_key,
-                PropertyDescriptor::data(
-                    JsValue::string(JsString::from_str("Module")),
-                    false,
-                    false,
-                    false,
-                ),
-            );
-
-        let id = obj_id;
-        let ns = JsValue::object(id);
+        let ns = self.build_module_namespace(module, false);
         module.borrow_mut().cached_namespace = Some(ns.clone());
         ns
     }
 
     fn create_deferred_module_namespace(&mut self, module: &Rc<RefCell<LoadedModule>>) -> JsValue {
-        use crate::interpreter::types::ModuleNamespaceData;
-
         if let Some(cached) = module.borrow().cached_deferred_namespace.clone() {
             return cached;
         }
-
-        let obj_id = self.create_object_id();
-        let (env, export_bindings, module_path, export_names) = {
-            let module_ref = module.borrow();
-            let env = module_ref.env.clone();
-            let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.is_empty() {
-                None
-            } else {
-                Some(module_ref.path.clone())
-            };
-            let mut export_names: Vec<String> = module_ref
-                .exports
-                .keys()
-                .filter(|k| {
-                    module_ref
-                        .export_bindings
-                        .get(*k)
-                        .is_none_or(|b| b != "*ambiguous*")
-                })
-                .cloned()
-                .collect();
-            export_names.sort();
-            (env, export_bindings, module_path, export_names)
-        };
-
-        self.get_object_cell_expect(obj_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::ModuleNamespace(Box::new(ModuleNamespaceData {
-                env: env.clone(),
-                export_names: export_names.clone(),
-                export_to_binding: export_bindings,
-                module_path,
-                deferred: true,
-            }));
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module";
-        self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .prototype_id = None;
-
-        for name in &export_names {
-            self.get_object_cell_expect(obj_id)
-                .borrow_mut()
-                .insert_property(
-                    name.clone(),
-                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
-                );
-        }
-
-        let sym_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .insert_property(
-                sym_key,
-                PropertyDescriptor::data(
-                    JsValue::string(JsString::from_str("Deferred Module")),
-                    false,
-                    false,
-                    false,
-                ),
-            );
-
-        let id = obj_id;
-        let ns = JsValue::object(id);
+        let ns = self.build_module_namespace(module, true);
         module.borrow_mut().cached_deferred_namespace = Some(ns.clone());
         ns
     }

@@ -388,10 +388,7 @@ impl Interpreter {
                     {
                         return Completion::Throw(e);
                     }
-                    if key
-                        .as_str()
-                        .is_some_and(|key| export_names.iter().any(|name| name == key))
-                    {
+                    if key.as_str().is_some_and(|key| export_names.contains(key)) {
                         if env.borrow().strict {
                             return Completion::Throw(self.create_type_error(&format!(
                                 "Cannot delete property '{key}' of module namespace"
