@@ -55,7 +55,7 @@ None of the TypeScript jobs is a required check; the required checks are `build`
 | --- | --- | --- |
 | `ts-suite-pass-list.yml` | pass-list ratchet on PRs touching the list | [pass list](library-tests-typescript-pass-list-1296.md) |
 | `ts-suite-nightly-smoke.yml` | 0.2% sample of the gate, on PRs touching the engine or scripts | [nightly](library-tests-typescript-nightly-1298.md) |
-| `nightly-ts-suite-1298.yml` | the whole gate, 20 shards, 01:45 UTC; non-blocking until `TS_SUITE_BLOCKING` is flipped | [nightly](library-tests-typescript-nightly-1298.md) |
+| `nightly-ts-suite-1298.yml` | the whole gate, 20 shards, 01:45 UTC; blocking (`TS_SUITE_BLOCKING: "true"`: a regression fails the run) | [nightly](library-tests-typescript-nightly-1298.md) |
 | `ts-suite-budget-smoke.yml`, `nightly-ts-suite-budget.yml` | RSS cap (6x Node) and wall-time record | [budget](library-tests-typescript-budget.md) |
 | `tsc-selfcompile-smoke.yml`, `nightly-tsc-selfcompile.yml` | compile TypeScript's `src/` with tsc on jsse | [oracles](library-tests-typescript-oracles.md) |
 

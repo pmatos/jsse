@@ -83,7 +83,7 @@ class PartitionTest(unittest.TestCase):
 
     def test_every_nightly_runner_has_a_weight(self):
         self.assertTrue(set(nightly.DEFAULT_RUNNERS) <= set(nightly.WEIGHT))
-        self.assertNotIn("tsc-projects", nightly.DEFAULT_RUNNERS)
+        self.assertIn("tsc-projects", nightly.DEFAULT_RUNNERS)
 
     def test_a_shard_out_of_range_is_refused(self):
         for shard, shards in ((3, 3), (-1, 3), (0, 0)):
@@ -254,7 +254,7 @@ class WorkflowTest(unittest.TestCase):
         text = self.text(NIGHTLY)
         self.assertEqual(len(re.findall(r'^\s*TS_SUITE_BLOCKING: "', text, re.M)), 1)
         head = text.split("\njobs:")[0]
-        self.assertRegex(head, r'TS_SUITE_BLOCKING: "(true|false)"')
+        self.assertRegex(head, r'TS_SUITE_BLOCKING: "true"')
         self.assertIn("blocking", head.split("TS_SUITE_BLOCKING")[0].lower())
 
 
