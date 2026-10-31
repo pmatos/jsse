@@ -34,6 +34,15 @@ const KEYWORDS: [&str; 19] = [
     "with", "await", "yield", "new", "throw", "else", "do", "case",
 ];
 
+/// V8 prints a `super` base as an unnamed intermediate value.
+fn word_text(word: &str) -> &str {
+    if word == "super" {
+        "(intermediate value)"
+    } else {
+        word
+    }
+}
+
 /// The text V8 prints for the key inside `[...]`: `.name` for a string
 /// literal, `[1]` or `[i]` for a number or a plain name chain, `None` else.
 fn render_index(inner: &str) -> Option<String> {
@@ -69,11 +78,7 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
             if KEYWORDS.contains(&word) {
                 return None;
             }
-            parts.push(if word == "super" {
-                "(intermediate value)".into()
-            } else {
-                word.into()
-            });
+            parts.push(word_text(word).into());
             i = s;
             head = true;
         } else if last == b']' {
@@ -130,11 +135,7 @@ fn chain_after_new(src: &str, at: usize) -> Option<String> {
         if s == i {
             return None;
         }
-        out.push_str(if &src[s..i] == "super" {
-            "(intermediate value)"
-        } else {
-            &src[s..i]
-        });
+        out.push_str(word_text(&src[s..i]));
         loop {
             let k = skip_ws_fwd(b, i);
             match b.get(k) {
