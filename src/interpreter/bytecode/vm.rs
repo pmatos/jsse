@@ -20,7 +20,7 @@ mod name_store;
 mod spread;
 mod switch;
 
-use call_operands::{release_call_operands, take_call_operands};
+use call_operands::{call_operands, release_call_operands, take_call_operands};
 use iteration::{
     bind_head_op, drop_below, end_finally, iteration_close, iteration_close_throw, iteration_head,
     iteration_step,
@@ -1804,10 +1804,9 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     };
                 }
                 Op::Call | Op::ReturnCall => {
-                    let argc = decode_u16(chunk, pc) as usize;
-                    pc += 2;
-                    let site_id = CallSiteId(decode_u32(chunk, pc), 0);
-                    pc += 4;
+                    let (argc, site, next) = call_operands(interp, chunk, pc);
+                    pc = next;
+                    let site_id = CallSiteId(site, 0);
                     // Counted before the tail-call return below, which leaves
                     // the VM without reaching the dispatch site: strict tail calls
                     // stay in `calls_from_vm`.
@@ -1868,10 +1867,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 4;
                 }
                 Op::Construct => {
-                    let argc = decode_u16(chunk, pc) as usize;
-                    pc += 2;
-                    let _site_id = CallSiteId(decode_u32(chunk, pc), 0);
-                    pc += 4;
+                    let (argc, _site, next) = call_operands(interp, chunk, pc);
+                    pc = next;
                     assert!(stack.len() > argc, "stack underflow on construct operands");
                     let base = stack.len() - argc - 1;
                     let callee = stack[base].clone();

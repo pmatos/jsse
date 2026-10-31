@@ -1,6 +1,6 @@
 //! Decoding bytecode into `(op, operands)` for the compiler tests.
 
-use super::chunk::Chunk;
+use super::chunk::{CALL_POS_FLAG, Chunk};
 use super::op::Op;
 
 /// Byte widths of an op's operands, in order (1 = u8, 2 = u16/i16, 4 = u32).
@@ -70,6 +70,15 @@ pub(super) fn decode_ops(chunk: &Chunk) -> Vec<(Op, Vec<u16>)> {
                 _ => u16::from(chunk.code[pc]) | (u16::from(chunk.code[pc + 1]) << 8),
             });
             pc += width;
+        }
+        // A call op folding its `--node` position (#1492): flag in the count,
+        // position after the site id.
+        if matches!(op, Op::Call | Op::ReturnCall | Op::Construct)
+            && operands[0] & CALL_POS_FLAG != 0
+        {
+            operands[0] &= !CALL_POS_FLAG;
+            operands.push(u16::from(chunk.code[pc]) | (u16::from(chunk.code[pc + 1]) << 8));
+            pc += 4;
         }
         out.push((op, operands));
     }

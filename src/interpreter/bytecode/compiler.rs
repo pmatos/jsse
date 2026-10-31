@@ -1532,10 +1532,7 @@ impl Compiler {
         for arg in args {
             self.compile_expr(arg)?;
         }
-        self.emit_call_pos(site_id);
-        self.emit(op);
-        self.emit_u16(argc);
-        self.emit_u32(site_id.0);
+        self.emit_call_op(op, argc, site_id);
         self.pop_n(argc + 2);
         if matches!(op, Op::Call | Op::ReturnCall) {
             self.push_n(1);

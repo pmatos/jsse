@@ -16,6 +16,7 @@
 use super::{CompileError, Compiler};
 use crate::ast::{CallSiteId, Expression};
 use crate::interpreter::builtins::node_host_stack::call_positions_enabled;
+use crate::interpreter::bytecode::chunk::CALL_POS_FLAG;
 use crate::interpreter::bytecode::op::Op;
 
 pub(super) fn has_spread(args: &[Expression]) -> bool {
@@ -37,6 +38,23 @@ impl Compiler {
     pub(super) fn emit_call_pos(&mut self, site_id: CallSiteId) {
         if site_id.1 != 0 && call_positions_enabled() {
             self.emit(Op::SetCallPos);
+            self.emit_u32(site_id.1);
+        }
+    }
+
+    /// `Call`, `ReturnCall` or `Construct` with its operands. Under the `--node`
+    /// hooks the source position travels in the op itself (`CALL_POS_FLAG` in
+    /// the argument count, the position after the site id) instead of in a
+    /// `SetCallPos` op before it (#1492); default chunks are unchanged.
+    pub(super) fn emit_call_op(&mut self, op: Op, argc: u16, site_id: CallSiteId) {
+        let folded = argc < CALL_POS_FLAG && site_id.1 != 0 && call_positions_enabled();
+        if !folded {
+            self.emit_call_pos(site_id);
+        }
+        self.emit(op);
+        self.emit_u16(if folded { argc | CALL_POS_FLAG } else { argc });
+        self.emit_u32(site_id.0);
+        if folded {
             self.emit_u32(site_id.1);
         }
     }
@@ -132,10 +150,7 @@ impl Compiler {
         for arg in args {
             self.compile_expr(arg)?;
         }
-        self.emit_call_pos(site_id);
-        self.emit(Op::Construct);
-        self.emit_u16(argc);
-        self.emit_u32(site_id.0);
+        self.emit_call_op(Op::Construct, argc, site_id);
         self.pop_n(argc + 1);
         self.push_n(1);
         Ok(())
