@@ -1301,11 +1301,7 @@ impl Interpreter {
             Pattern::Identifier(name) => {
                 if kind == BindingKind::Var {
                     let var_scope = Environment::find_var_scope(env);
-                    let already_declared = {
-                        let vs = var_scope.borrow();
-                        vs.global_object_id.is_some() || vs.bindings.contains_key(name)
-                    };
-                    if !already_declared {
+                    if Self::var_scope_lacks(&var_scope, name) {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
@@ -1338,7 +1334,12 @@ impl Interpreter {
                         } else {
                             env.clone()
                         };
-                        if !target.borrow().bindings.contains_key(name) {
+                        let lacks = if kind == BindingKind::Var {
+                            Self::var_scope_lacks(&target, name)
+                        } else {
+                            !target.borrow().bindings.contains_key(name)
+                        };
+                        if lacks {
                             target.borrow_mut().bindings.insert(
                                 name,
                                 Binding {
@@ -1518,7 +1519,7 @@ impl Interpreter {
                                 let v = propagate!(interp.access_property_on_value(&val, name));
                                 if kind == BindingKind::Var {
                                     let var_scope = Environment::find_var_scope(env);
-                                    if !var_scope.borrow().bindings.contains_key(name) {
+                                    if Interpreter::var_scope_lacks(&var_scope, name) {
                                         var_scope.borrow_mut().declare(name, kind);
                                     }
                                     propagate!(interp.env_set(env, name, v));
@@ -1573,17 +1574,7 @@ impl Interpreter {
                                 {
                                     // Step 2: ResolveBinding(bindingId, environment)
                                     let var_scope = Environment::find_var_scope(env);
-                                    let already = {
-                                        let gid = var_scope.borrow().global_object_id;
-                                        let vs = var_scope.borrow();
-                                        vs.bindings.contains_key(binding_name)
-                                            || gid
-                                                .and_then(|id| interp.get_object_cell(id))
-                                                .is_some_and(|g| {
-                                                    g.borrow().properties.contains_key(binding_name)
-                                                })
-                                    };
-                                    if !already {
+                                    if Interpreter::var_scope_lacks(&var_scope, binding_name) {
                                         var_scope.borrow_mut().declare(binding_name, kind);
                                     }
                                     let resolved = if interp.with_scope_depth > 0

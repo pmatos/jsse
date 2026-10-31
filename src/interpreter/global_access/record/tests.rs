@@ -146,7 +146,9 @@ fn check_reads_writes_and_delete(bytecode: bool) {
         "has:nope",
         "set:acc",
         "get:acc",
+        "getOwnPropertyDescriptor:b",
         "deleteProperty:b",
+        "getOwnPropertyDescriptor:nope",
     ] {
         position(&log, entry);
     }

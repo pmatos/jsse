@@ -126,9 +126,16 @@ impl Interpreter {
         })
     }
 
+    /// Whether a `var` initializer has to declare `name` in `var_scope` first:
+    /// never at global level, where the global object holds every `var` name.
+    pub(crate) fn var_scope_lacks(var_scope: &EnvRef, name: &str) -> bool {
+        let scope = var_scope.borrow();
+        scope.global_object_id.is_none() && !scope.bindings.contains_key(name)
+    }
+
     /// `delete name` that resolved to the global environment (§9.1.1.4.7
     /// DeleteBinding): a declarative binding is not deletable, otherwise the
-    /// global object's [[Delete]] answers if it has the name.
+    /// global object's [[Delete]] answers if it has the name as an own property.
     pub(crate) fn delete_global_binding(&mut self, name: &str) -> Result<bool, JsValue> {
         let env = self.realm().global_env.clone();
         let gid = {
@@ -141,7 +148,7 @@ impl Interpreter {
         let Some(gid) = gid else {
             return Ok(true);
         };
-        if !self.proxy_has_property(gid, name)? {
+        if self.proxy_get_own_property_native(gid, name)?.is_none() {
             return Ok(true);
         }
         self.proxy_delete_property(gid, name)
@@ -237,13 +244,19 @@ impl Interpreter {
         let Some(gid) = env.borrow().global_object_id else {
             return Ok(());
         };
-        for stmt in stmts {
+        let mut seen = HashSet::new();
+        let mut functions = Vec::new();
+        for stmt in stmts.iter().rev() {
             if let Some(f) = super::super::hoisting::unwrap_labeled_function(stmt)
+                && seen.insert(f.name.as_str())
                 && f.phase != DeclPhase::CopyOnly
             {
-                let value = self.hoisted_function_value(f, env);
-                self.create_global_function_binding(gid, &f.name, value, false)?;
+                functions.push(f);
             }
+        }
+        for f in functions.into_iter().rev() {
+            let value = self.hoisted_function_value(f, env);
+            self.create_global_function_binding(gid, &f.name, value, false)?;
         }
         self.create_global_var_bindings(stmts, env)
     }

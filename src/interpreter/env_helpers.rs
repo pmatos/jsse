@@ -1,7 +1,7 @@
-//! Interpreter-side wrappers around the slim `Environment` methods. They
-//! re-introduce the global-object mirroring that PR 1b.4 removed from
-//! `Environment::set/get/has/declare_global_*` so those methods could be
-//! free of `Rc<RefCell<JsObjectData>>` field access.
+//! Interpreter-side wrappers around the slim `Environment` methods: the
+//! global-object fall-through of lookups and the `[[Set]]` of a name no
+//! declarative scope binds (the Object Environment Record half of the global
+//! environment; see `global_access/record.rs`).
 //!
 //! Borrow-ordering rule: every wrapper drops all `RefCell` borrows on `env`
 //! before invoking `proxy_set` / `set_property_value` on the global object.
@@ -125,15 +125,6 @@ impl Interpreter {
             }
             if let Some(gid) = e.global_object_id {
                 drop(e);
-                if self.get_proxy_info(gid).is_some() {
-                    if !self.proxy_has_property(gid, name).ok()? {
-                        return None;
-                    }
-                    return match self.get_object_property(gid, name, &JsValue::object(gid)) {
-                        Completion::Normal(v) => Some(v),
-                        _ => None,
-                    };
-                }
                 if let Some(go) = self.get_object_cell(gid)
                     && let Some(v) = go.borrow().own_property_lookup(name)
                 {
@@ -159,9 +150,6 @@ impl Interpreter {
             }
             if let Some(gid) = e.global_object_id {
                 drop(e);
-                if self.get_proxy_info(gid).is_some() {
-                    return self.proxy_has_property(gid, name).unwrap_or(false);
-                }
                 if let Some(go) = self.get_object_cell(gid) {
                     return go.borrow().own_has_property(name).unwrap_or(false);
                 }
