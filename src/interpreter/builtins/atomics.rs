@@ -1124,7 +1124,7 @@ fn validate_integer_typed_array(
         let is_bigint = kind.is_bigint();
         return Ok((kind, buffer, byte_offset, element_size, is_bigint));
     }
-    Err(interp.atomics_array_error(ta_val, waitable))
+    Err(interp.atomics_arg_error(ta_val, waitable))
 }
 
 fn validate_atomic_access(

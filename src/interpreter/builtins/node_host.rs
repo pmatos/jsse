@@ -39,11 +39,11 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// Initializer text of the object pattern whose read is about to fail.
     pub(crate) pattern_src: Option<std::rc::Rc<str>>,
-    /// How many `bind_pattern` calls are open (counted under `--node` only).
-    pub(crate) pattern_depth: u32,
-    /// The error object `not_iterable_error` made last; a for-of or spread
-    /// that finds it rewords it with its operand's text.
-    pub(crate) iterable_error: Option<u64>,
+    /// The call-stack depth of each open `bind_pattern` (under `--node` only).
+    pub(crate) pattern_frames: Vec<usize>,
+    /// The error object `not_iterable_error` made last, with the call-stack
+    /// depth it was made at; a for-of or spread at that depth rewords it.
+    pub(crate) iterable_error: Option<(u64, usize)>,
     /// What the launch runs as its main program; read by `__host_main_kind`.
     pub(crate) main_kind: crate::cli_node::NodeMainKind,
     /// `--expose-internals`: user `require` may name `internal/...` builtins.

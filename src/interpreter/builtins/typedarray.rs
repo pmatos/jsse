@@ -3036,7 +3036,7 @@ impl Interpreter {
                     // §23.2.5.1 step 2: If NewTarget is undefined, throw TypeError
                     if interp.new_target.is_none() {
                         return Completion::Throw(
-                            interp.create_type_error(&format!("{} is not a constructor", kind.name())),
+                            interp.requires_new_error(kind.name()),
                         );
                     }
                     // Helper closure to get prototype from NewTarget's realm (deferred)

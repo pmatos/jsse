@@ -109,7 +109,7 @@ fn split_top<'a>(s: &'a str, sep: &str) -> Vec<&'a str> {
             depth += 1;
         } else if matches!(c, b')' | b']' | b'}') {
             depth -= 1;
-        } else if depth == 0 && s[at..].starts_with(sep) {
+        } else if depth == 0 && b[at..].starts_with(sep.as_bytes()) {
             parts.push(&s[from..at]);
             at += sep.len();
             from = at;

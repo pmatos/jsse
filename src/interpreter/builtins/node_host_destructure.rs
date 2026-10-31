@@ -130,13 +130,15 @@ impl Interpreter {
     ) -> Completion {
         if self.node_host.stack.installed && value.is_nullish() {
             let first = first_pattern_name(props);
+            let nested = matches!(
+                self.node_host.pattern_frames.as_slice(),
+                [.., outer, inner] if outer == inner
+            );
             let error = match first {
-                Some(name) if self.node_host.pattern_depth > 1 => {
+                Some(name) if nested => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
-                _ if self.node_host.pattern_depth > 1 => {
-                    "Cannot convert undefined or null to object".to_string()
-                }
+                _ if nested => "Cannot convert undefined or null to object".to_string(),
                 first => {
                     return Completion::Throw(self.destructure_error(first, false, None, value));
                 }
@@ -157,9 +159,10 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return self.bind_pattern_at(pattern, value, kind, env);
         }
-        self.node_host.pattern_depth += 1;
+        let frame = self.call_depth;
+        self.node_host.pattern_frames.push(frame);
         let done = self.bind_pattern_at(pattern, value, kind, env);
-        self.node_host.pattern_depth -= 1;
+        self.node_host.pattern_frames.pop();
         done
     }
 
@@ -210,7 +213,7 @@ impl Interpreter {
     /// `error` from `GetIterator` on the value of `source`, worded with
     /// `source`'s text when it is the builtin not-iterable error.
     pub(crate) fn reword_iterable(&mut self, error: JsValue, source: &Expression) -> JsValue {
-        if self.node_host.iterable_error.take() == error.as_object_id() && error.is_object() {
+        if self.iterable_error_here(&error) {
             let text = Self::iterable_message(source);
             return self.create_type_error(&text);
         }
@@ -225,10 +228,16 @@ impl Interpreter {
         pc: usize,
     ) -> JsValue {
         match chunk.pattern_src_at(pc) {
-            Some(text) if self.node_host.iterable_error.take() == error.as_object_id() => {
-                self.create_type_error(text)
-            }
+            Some(text) if self.iterable_error_here(&error) => self.create_type_error(text),
             _ => error,
         }
+    }
+
+    /// Whether `error` is the not-iterable error the `GetIterator` of the
+    /// current call frame made, not one raised inside user code it ran.
+    fn iterable_error_here(&mut self, error: &JsValue) -> bool {
+        let made = self.node_host.iterable_error.take();
+        let here = self.call_depth;
+        error.as_object_id().is_some() && made == error.as_object_id().map(|id| (id, here))
     }
 }

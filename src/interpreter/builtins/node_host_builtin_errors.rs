@@ -66,20 +66,6 @@ const EXACT: &[(&str, &str)] = &[
     ),
 ];
 
-const TYPED_ARRAYS: [&str; 11] = [
-    "Int8Array",
-    "Uint8Array",
-    "Uint8ClampedArray",
-    "Int16Array",
-    "Uint16Array",
-    "Int32Array",
-    "Uint32Array",
-    "Float32Array",
-    "Float64Array",
-    "BigInt64Array",
-    "BigUint64Array",
-];
-
 const REGEXP_GETTERS: [&str; 9] = [
     "global",
     "ignoreCase",
@@ -111,11 +97,6 @@ pub(crate) fn static_text(msg: &str) -> Option<Cow<'static, str>> {
         return Some(Cow::Owned(format!(
             "{head} requires that 'this' be a {class}"
         )));
-    }
-    if let Some(name) = msg.strip_suffix(" is not a constructor")
-        && TYPED_ARRAYS.contains(&name)
-    {
-        return Some(Cow::Owned(format!("Constructor {name} requires 'new'")));
     }
     if let Some(getter) = msg
         .strip_prefix("RegExp.prototype.")

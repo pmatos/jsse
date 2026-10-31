@@ -1,3 +1,8 @@
 RangeError: mine too
 SyntaxError
 SyntaxError
+TypeError: café is not a function
+TypeError: Cannot destructure property 'x' of 'undefined' as it is undefined.
+TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+TypeError: 'set' on proxy: trap returned falsish for property 'q'
+TypeError: Uint8Array is not a constructor

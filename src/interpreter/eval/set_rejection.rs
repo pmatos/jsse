@@ -78,7 +78,8 @@ impl Interpreter {
                 b.has_own_property(key),
             )
         };
-        let desc = if is_proxy || self.has_proxy_in_prototype_chain(obj_id) {
+        let in_chain = is_proxy || self.has_proxy_in_prototype_chain(obj_id);
+        let desc = if in_chain {
             None
         } else {
             self.get_property_descriptor_on_id(obj_id, key)
@@ -86,7 +87,7 @@ impl Interpreter {
         Some(SetRejection {
             is_module_namespace,
             has_own,
-            is_proxy,
+            is_proxy: in_chain,
             desc,
         })
     }

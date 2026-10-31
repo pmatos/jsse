@@ -11,9 +11,11 @@ impl Interpreter {
             format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
         });
         let error = self.create_type_error(&text);
+        let frame = self.call_depth;
         self.node_host.iterable_error = error
             .as_object_id()
-            .filter(|_| self.node_host.stack.installed);
+            .filter(|_| self.node_host.stack.installed)
+            .map(|id| (id, frame));
         error
     }
 
@@ -49,7 +51,19 @@ impl Interpreter {
 
     /// `Atomics` on something that is not an integer (or waitable) typed array.
     pub(crate) fn atomics_array_error(&mut self, value: &JsValue, waitable: bool) -> JsValue {
-        let engine = "Atomics operations require integer typed arrays";
+        self.atomics_error(
+            value,
+            waitable,
+            "Atomics operations require integer typed arrays",
+        )
+    }
+
+    /// The same for an argument that is no typed array at all.
+    pub(crate) fn atomics_arg_error(&mut self, value: &JsValue, waitable: bool) -> JsValue {
+        self.atomics_error(value, waitable, "first argument must be a typed array")
+    }
+
+    fn atomics_error(&mut self, value: &JsValue, waitable: bool, engine: &str) -> JsValue {
         let text = self.v8_message(engine, |i| {
             let kind = if waitable {
                 "an int32 or BigInt64"
@@ -139,5 +153,13 @@ impl Interpreter {
             format!("{what} of {kind} should be a multiple of {bpe}")
         });
         self.create_range_error(&text)
+    }
+
+    /// A typed array constructor called without `new`.
+    pub(crate) fn requires_new_error(&mut self, name: &str) -> JsValue {
+        let text = self.v8_message(&format!("{name} is not a constructor"), |_| {
+            format!("Constructor {name} requires 'new'")
+        });
+        self.create_type_error(&text)
     }
 }
