@@ -126,7 +126,7 @@ impl Interpreter {
         holder.and_then(|h| self.wording_own_function(h, name)) == Some(func)
     }
 
-    fn incompatible(&self, label: &str, receiver: &JsValue) -> String {
+    pub(super) fn incompatible(&self, label: &str, receiver: &JsValue) -> String {
         format!(
             "Method {label} called on incompatible receiver {}",
             self.v8_plain_text(receiver)
@@ -257,7 +257,7 @@ impl Interpreter {
             {
                 Some("ArrayBuffer.prototype.resize: Invalid length parameter".to_string())
             }
-            _ => None,
+            _ => self.symbol_frame_wording(msg, name, &receiver),
         }
     }
 

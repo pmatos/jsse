@@ -1,0 +1,143 @@
+A.callM(empty) -> TypeError: Receiver must be an instance of class A
+A.callM(number) -> TypeError: Receiver must be an instance of class A
+A.callM(string) -> TypeError: Receiver must be an instance of class A
+A.callM(null) -> TypeError: Cannot read properties of null (reading 'A')
+A.callM(undefined) -> TypeError: Cannot read properties of undefined (reading 'A')
+A.callM(function) -> TypeError: Receiver must be an instance of class A
+A.callM(symbol) -> TypeError: Receiver must be an instance of class A
+A.callSm(empty) -> TypeError: Receiver must be class A
+A.callSm(number) -> TypeError: Receiver must be class A
+A.callSm(string) -> TypeError: Receiver must be class A
+A.callSm(null) -> TypeError: Receiver must be class A
+A.callSm(undefined) -> TypeError: Receiver must be class A
+A.callSm(function) -> TypeError: Receiver must be class A
+A.callSm(symbol) -> TypeError: Receiver must be class A
+A.readG(empty) -> TypeError: Receiver must be an instance of class A
+A.readG(number) -> TypeError: Receiver must be an instance of class A
+A.readG(string) -> TypeError: Receiver must be an instance of class A
+A.readG(null) -> TypeError: Cannot read properties of null (reading 'A')
+A.readG(undefined) -> TypeError: Cannot read properties of undefined (reading 'A')
+A.readG(function) -> TypeError: Receiver must be an instance of class A
+A.readG(symbol) -> TypeError: Receiver must be an instance of class A
+A.writeW(empty) -> TypeError: Receiver must be an instance of class A
+A.writeW(number) -> TypeError: Receiver must be an instance of class A
+A.writeW(string) -> TypeError: Receiver must be an instance of class A
+A.writeW(null) -> TypeError: Cannot read properties of null (reading 'A')
+A.writeW(undefined) -> TypeError: Cannot read properties of undefined (reading 'A')
+A.writeW(function) -> TypeError: Receiver must be an instance of class A
+A.writeW(symbol) -> TypeError: Receiver must be an instance of class A
+A.readSg(empty) -> TypeError: Receiver must be class A
+A.readSg(number) -> TypeError: Receiver must be class A
+A.readSg(string) -> TypeError: Receiver must be class A
+A.readSg(null) -> TypeError: Receiver must be class A
+A.readSg(undefined) -> TypeError: Receiver must be class A
+A.readSg(function) -> TypeError: Receiver must be class A
+A.readSg(symbol) -> TypeError: Receiver must be class A
+A.readF(empty) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.readF(number) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.readF(string) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.readF(null) -> TypeError: Cannot read properties of null (reading '#f')
+A.readF(undefined) -> TypeError: Cannot read properties of undefined (reading '#f')
+A.readF(function) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.readF(symbol) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.writeF(empty) -> TypeError: Cannot write private member #f to an object whose class did not declare it
+A.writeF(number) -> TypeError: Cannot write private member #f to an object whose class did not declare it
+A.writeF(string) -> TypeError: Cannot write private member #f to an object whose class did not declare it
+A.writeF(null) -> TypeError: Cannot set properties of null (setting '#f')
+A.writeF(undefined) -> TypeError: Cannot set properties of undefined (setting '#f')
+A.writeF(function) -> TypeError: Cannot write private member #f to an object whose class did not declare it
+A.writeF(symbol) -> TypeError: Cannot write private member #f to an object whose class did not declare it
+A.bumpF(empty) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.bumpF(number) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.bumpF(string) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.bumpF(null) -> TypeError: Cannot read properties of null (reading '#f')
+A.bumpF(undefined) -> TypeError: Cannot read properties of undefined (reading '#f')
+A.bumpF(function) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.bumpF(symbol) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+A.readSf(empty) -> TypeError: Cannot read private member #sf from an object whose class did not declare it
+A.readSf(number) -> TypeError: Cannot read private member #sf from an object whose class did not declare it
+A.readSf(string) -> TypeError: Cannot read private member #sf from an object whose class did not declare it
+A.readSf(null) -> TypeError: Cannot read properties of null (reading '#sf')
+A.readSf(undefined) -> TypeError: Cannot read properties of undefined (reading '#sf')
+A.readSf(function) -> TypeError: Cannot read private member #sf from an object whose class did not declare it
+A.readSf(symbol) -> TypeError: Cannot read private member #sf from an object whose class did not declare it
+A.writeSf(empty) -> TypeError: Cannot write private member #sf to an object whose class did not declare it
+A.writeSf(number) -> TypeError: Cannot write private member #sf to an object whose class did not declare it
+A.writeSf(string) -> TypeError: Cannot write private member #sf to an object whose class did not declare it
+A.writeSf(null) -> TypeError: Cannot set properties of null (setting '#sf')
+A.writeSf(undefined) -> TypeError: Cannot set properties of undefined (setting '#sf')
+A.writeSf(function) -> TypeError: Cannot write private member #sf to an object whose class did not declare it
+A.writeSf(symbol) -> TypeError: Cannot write private member #sf to an object whose class did not declare it
+A.writeM(empty) -> TypeError: Receiver must be an instance of class A
+A.writeM(number) -> TypeError: Receiver must be an instance of class A
+A.writeM(string) -> TypeError: Receiver must be an instance of class A
+A.writeM(null) -> TypeError: Cannot read properties of null (reading 'A')
+A.writeM(undefined) -> TypeError: Cannot read properties of undefined (reading 'A')
+A.writeM(function) -> TypeError: Receiver must be an instance of class A
+A.writeM(symbol) -> TypeError: Receiver must be an instance of class A
+A.writeSm(empty) -> TypeError: Receiver must be class A
+A.writeSm(number) -> TypeError: Receiver must be class A
+A.writeSm(string) -> TypeError: Receiver must be class A
+A.writeSm(null) -> TypeError: Receiver must be class A
+A.writeSm(undefined) -> TypeError: Receiver must be class A
+A.writeSm(function) -> TypeError: Receiver must be class A
+A.writeSm(symbol) -> TypeError: Receiver must be class A
+A.hasM(empty) -> ok
+A.hasM(number) -> TypeError: Cannot use 'in' operator to search for 'A' in 1
+A.hasM(string) -> TypeError: Cannot use 'in' operator to search for 'A' in abc
+A.hasM(null) -> TypeError: Cannot use 'in' operator to search for 'A' in null
+A.hasM(undefined) -> TypeError: Cannot use 'in' operator to search for 'A' in undefined
+A.hasM(function) -> ok
+A.hasM(symbol) -> TypeError: Cannot use 'in' operator to search for 'A' in Symbol(q)
+A.hasSm(empty) -> ok
+A.hasSm(number) -> TypeError: Cannot use 'in' operator to search for '#sm' in 1
+A.hasSm(string) -> TypeError: Cannot use 'in' operator to search for '#sm' in abc
+A.hasSm(null) -> TypeError: Cannot use 'in' operator to search for '#sm' in null
+A.hasSm(undefined) -> TypeError: Cannot use 'in' operator to search for '#sm' in undefined
+A.hasSm(function) -> ok
+A.hasSm(symbol) -> TypeError: Cannot use 'in' operator to search for '#sm' in Symbol(q)
+A.hasG(empty) -> ok
+A.hasG(number) -> TypeError: Cannot use 'in' operator to search for 'A' in 1
+A.hasG(string) -> TypeError: Cannot use 'in' operator to search for 'A' in abc
+A.hasG(null) -> TypeError: Cannot use 'in' operator to search for 'A' in null
+A.hasG(undefined) -> TypeError: Cannot use 'in' operator to search for 'A' in undefined
+A.hasG(function) -> ok
+A.hasG(symbol) -> TypeError: Cannot use 'in' operator to search for 'A' in Symbol(q)
+A.hasF(empty) -> ok
+A.hasF(number) -> TypeError: Cannot use 'in' operator to search for '#f' in 1
+A.hasF(string) -> TypeError: Cannot use 'in' operator to search for '#f' in abc
+A.hasF(null) -> TypeError: Cannot use 'in' operator to search for '#f' in null
+A.hasF(undefined) -> TypeError: Cannot use 'in' operator to search for '#f' in undefined
+A.hasF(function) -> ok
+A.hasF(symbol) -> TypeError: Cannot use 'in' operator to search for '#f' in Symbol(q)
+A.hasSf(empty) -> ok
+A.hasSf(number) -> TypeError: Cannot use 'in' operator to search for '#sf' in 1
+A.hasSf(string) -> TypeError: Cannot use 'in' operator to search for '#sf' in abc
+A.hasSf(null) -> TypeError: Cannot use 'in' operator to search for '#sf' in null
+A.hasSf(undefined) -> TypeError: Cannot use 'in' operator to search for '#sf' in undefined
+A.hasSf(function) -> ok
+A.hasSf(symbol) -> TypeError: Cannot use 'in' operator to search for '#sf' in Symbol(q)
+Anon.callM({}) -> TypeError: Receiver must be an instance of class anonymous
+Anon.callM(1) -> TypeError: Receiver must be an instance of class anonymous
+Anon.callM(null) -> TypeError: Cannot read properties of null (reading 'anonymous')
+Anon.readF({}) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+Anon.readF(1) -> TypeError: Cannot read private member #f from an object whose class did not declare it
+Anon.readF(null) -> TypeError: Cannot read properties of null (reading '#f')
+Anon.hasM({}) -> ok
+Anon.hasM(1) -> TypeError: Cannot use 'in' operator to search for 'anonymous' in 1
+Anon.hasM(null) -> TypeError: Cannot use 'in' operator to search for 'anonymous' in null
+Anon.hasF({}) -> ok
+Anon.hasF(1) -> TypeError: Cannot use 'in' operator to search for '#f' in 1
+Anon.hasF(null) -> TypeError: Cannot use 'in' operator to search for '#f' in null
+AnonStatic.call({}) -> TypeError: Receiver must be class .
+AnonStatic.call(null) -> TypeError: Receiver must be class .
+Inner.viaInner({}) -> TypeError: Receiver must be an instance of class Inner
+Inner.viaOuter({}) -> TypeError: Receiver must be an instance of class Outer
+Derived.call(new Outer()) -> TypeError: Receiver must be an instance of class Derived
+Derived.call(Proxy) -> TypeError: Receiver must be an instance of class Derived
+Pair.bump({}) -> TypeError: Cannot read private member #x from an object whose class did not declare it
+Pair.bump(null) -> TypeError: Cannot read properties of null (reading '#x')
+Pair.nested({}) -> TypeError: Cannot write private member #x to an object whose class did not declare it
+Pair.nested(null) -> TypeError: Cannot set properties of null (setting '#x')
+Pair.optional(null) -> ok
+Pair.optional({}) -> TypeError: Cannot read private member #x from an object whose class did not declare it

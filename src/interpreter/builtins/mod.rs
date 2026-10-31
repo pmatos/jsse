@@ -74,6 +74,7 @@ mod node_host_operand_errors;
 mod node_host_os;
 mod node_host_os_constants;
 mod node_host_os_sys;
+pub(crate) mod node_host_private;
 mod node_host_process;
 mod node_host_process_metrics;
 mod node_host_proxy_errors;
@@ -84,6 +85,7 @@ mod node_host_signal;
 mod node_host_spread_errors;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+mod node_host_symbol_wording;
 mod node_host_throw;
 #[cfg(unix)]
 pub(crate) mod node_host_tty;

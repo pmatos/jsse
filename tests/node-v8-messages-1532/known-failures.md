@@ -7,10 +7,6 @@ stdout of `node` and `jsse --node`.
 | --- | --- | --- |
 | operator (`1 in 1`, `x instanceof 1`, `Symbol() + ''`, `BigInt(1) + 1`), identifier (`x is not defined`), TDZ, const-assignment (`c = 2`), class heritage, `o.x.y += 1`, `o.x.y++`, `delete null.x`, `new a.b.c()` and `o?.a.b` positions | frame at the statement or call, V8 at the operator, identifier or sub-expression | #1511 |
 | position of call spread, array pattern, nested pattern and `for-of` destructuring errors | frame at the statement, V8 at the operand or initializer | #1511 |
-| `class A { #m() {} static t(o) { o.#m(); } } A.t({})` and `#x in 1` | `Receiver must be an instance of class A`, `Cannot use 'in' operator to search for '#x' in 1`: the engine's `PrivateId` carries neither the class nor the name | #1544 |
-| `Promise.prototype.finally.call(1, f)` | `undefined is not a function` | #1544 |
-| `String.prototype[Symbol.iterator].call(null)`, `Date.prototype[Symbol.toPrimitive].call(1)`, `Symbol.prototype[Symbol.toPrimitive].call(1)` | symbol-keyed method names (`String.prototype[Symbol.iterator] called on null or undefined`, `Method Date.prototype [ @@toPrimitive ] called ...`) | #1544 |
-| `new Uint8Array({ [Symbol.iterator]: 1 })`, `Array.prototype.with(i, v)` out of range | `TypedArray's constructor requires that the property of the first argument, items[Symbol.iterator], when exists, be a function`; `Invalid index : <value>` | #1544 |
 | `for (const [a] of [5])`, `var { a: [b] } = { a: 5 }`, `var { a: [b] } = { a: null }` | V8 prints `.for is not iterable` and `{(intermediate value)} is not iterable ...` (its CallPrinter state at that point) | #1545 |
 
 ## Why #1511 is open

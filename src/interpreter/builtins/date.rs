@@ -1053,7 +1053,7 @@ impl Interpreter {
                     "string" | "default" => "string",
                     "number" => "number",
                     _ => {
-                        let e = interp.create_type_error("Invalid hint");
+                        let e = interp.invalid_hint_error(args);
                         return Completion::Throw(e);
                     }
                 };

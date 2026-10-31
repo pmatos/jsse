@@ -3751,9 +3751,7 @@ impl Interpreter {
             } else if self.is_callable(&iter_fn) {
                 Some(iter_fn)
             } else {
-                return Err(Completion::Throw(
-                    self.create_type_error("@@iterator is not a function"),
-                ));
+                return Err(Completion::Throw(self.typed_array_iterator_error(true)));
             };
 
             if let Some(iter_fn) = using_iterator {
