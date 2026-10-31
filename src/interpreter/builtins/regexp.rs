@@ -8751,8 +8751,8 @@ fn rsi_next_step(
         Err(e) => return Completion::Throw(e),
     };
     if match_str.is_empty() {
-        let matcher_val2 = JsValue::object(mid);
-        let li_val = match interp.get_object_property(mid, "lastIndex", &matcher_val2) {
+        let matcher_val = JsValue::object(mid);
+        let li_val = match interp.get_object_property(mid, "lastIndex", &matcher_val) {
             Completion::Normal(v) => v,
             other => return other,
         };
