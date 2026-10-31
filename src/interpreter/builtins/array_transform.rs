@@ -122,7 +122,7 @@ pub(super) fn transform(
                     } else {
                         "map callback is not a function"
                     };
-                    return Completion::Throw(interp.create_type_error(message));
+                    return Completion::Throw(interp.callback_error(&callback, message));
                 }
                 (object, length, Elements::Array, callback)
             }

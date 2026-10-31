@@ -29,10 +29,16 @@ impl Interpreter {
             2,
             move |interp, _this, args| {
                 if !interp.is_callable(_this) {
+                    let engine = "Function.prototype.apply called on non-callable";
+                    let text = interp.not_function_target_message(
+                        "Function.prototype.apply",
+                        _this,
+                        engine,
+                    );
                     return Completion::Throw(interp.create_error_in_realm(
                         fn_proto_realm_id,
                         "TypeError",
-                        "Function.prototype.apply called on non-callable",
+                        &text,
                     ));
                 }
                 let this_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);

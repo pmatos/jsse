@@ -553,7 +553,7 @@ fn get_iterator_getter(
                 _ => JsValue::UNDEFINED,
             }
         } else {
-            return Err(interp.create_type_error("is not iterable"));
+            return Err(interp.not_iterable_error(obj));
         }
     } else if obj.is_string() {
         // For strings, use the string prototype's @@iterator
@@ -562,10 +562,10 @@ fn get_iterator_getter(
             Err(e) => Err(e),
         };
     } else {
-        return Err(interp.create_type_error("is not iterable"));
+        return Err(interp.not_iterable_error(obj));
     };
     if method.is_nullish() {
-        return Err(interp.create_type_error("is not iterable"));
+        return Err(interp.not_iterable_error(obj));
     }
     // Call the method
     let iterator = match interp.call_function(&method, obj, &[]) {
@@ -4004,16 +4004,16 @@ impl Interpreter {
     pub(crate) fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let sym_key = self.get_symbol_iterator_key();
         let Some(key) = &sym_key else {
-            return Err(self.create_type_error("is not iterable"));
+            return Err(self.not_iterable_error(obj));
         };
         if obj.is_nullish() {
-            return Err(self.create_type_error("Cannot convert undefined or null to object"));
+            return Err(self.nullish_iterable_error(obj));
         }
         // GetMethod(obj, @@iterator): GetV passes a primitive as the receiver.
         let iter_fn = match self.access_property_on_value(obj, key) {
             Completion::Normal(v) if !v.is_nullish() => v,
             Completion::Throw(e) => return Err(e),
-            _ => return Err(self.create_type_error("is not iterable")),
+            _ => return Err(self.not_iterable_error(obj)),
         };
         self.get_iterator_from_method(&iter_fn, obj)
     }
@@ -4041,7 +4041,7 @@ impl Interpreter {
                 }
             }
             Completion::Throw(e) => Err(e),
-            _ => Err(self.create_type_error("is not iterable")),
+            _ => Err(self.not_iterable_error(obj)),
         }
     }
 

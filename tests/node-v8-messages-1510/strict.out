@@ -1,0 +1,158 @@
+## assignFrozen
+TypeError: Cannot assign to read only property 'a' of object '#<Object>'
+## addFrozen
+TypeError: Cannot add property b, object is not extensible
+## addNoext
+TypeError: Cannot add property b, object is not extensible
+## deleteSealed
+TypeError: Cannot delete property 'a' of #<Object>
+## deleteFrozen
+TypeError: Cannot delete property 'a' of #<Object>
+## setGetterOnly
+TypeError: Cannot set property x of #<G> which has only a getter
+## setStaticGetterOnly
+TypeError: Cannot set property y of class G { get x() { return 1; } static get y() { return 1; } } which has only a getter
+## frozenArrPush
+TypeError: Cannot add property 1, object is not extensible
+## frozenArrIdx
+TypeError: Cannot assign to read only property '0' of object '[object Array]'
+## frozenArrLen
+TypeError: Cannot assign to read only property 'length' of object '[object Array]'
+## setPrimitive
+TypeError: Cannot create property 'foo' on string 'abc'
+## setPrimitiveNum
+TypeError: Cannot create property 'foo' on number '1'
+## setStrIdx
+TypeError: Cannot assign to read only property '0' of string 'abc'
+## setStrLen
+TypeError: Cannot assign to read only property 'length' of string 'abc'
+## undefinedAssign
+ReferenceError: undeclared_variable_xyz is not defined
+## defineNonConfig
+TypeError: Cannot redefine property: a
+## defineFrozen
+TypeError: Cannot define property z, object is not extensible
+## defineSealedNew
+TypeError: Cannot define property z, object is not extensible
+## setProtoFrozen
+TypeError: #<Object> is not extensible
+## setProtoNoext
+TypeError: #<Object> is not extensible
+## protoCycle
+TypeError: Cyclic __proto__ value
+## protoAssignCycle
+TypeError: Cyclic __proto__ value
+## callDeleteArgs
+no error
+## fnNameAssign
+TypeError: Cannot assign to read only property 'name' of function 'function f() { f.name = 1; }'
+## constAssign
+TypeError: Assignment to constant variable.
+## constAssignInc
+TypeError: Assignment to constant variable.
+## classCtorCall
+TypeError: Class constructor A cannot be invoked without 'new'
+## superNotCalled
+ReferenceError: Must call super constructor in derived class before accessing 'this' or returning from derived constructor
+## superTwice
+ReferenceError: Super constructor may only be called once
+## newTargetUndef
+TypeError: Cannot read properties of undefined (reading 'name')
+## privateMissing
+TypeError: Cannot read private member #x from an object whose class did not declare it
+## privateWrite
+TypeError: Cannot write private member #x to an object whose class did not declare it
+## symbolToNumber
+TypeError: Cannot convert a Symbol value to a number
+## symbolTemplate
+TypeError: Cannot convert a Symbol value to a string
+## bigintMixed
+TypeError: Cannot mix BigInt and other types, use explicit conversions
+## bigintDivZero
+RangeError: Division by zero
+## bigintToNumber
+TypeError: Cannot convert a BigInt value to a number
+## bigintExp
+RangeError: Exponent must be positive
+## bigintShift
+TypeError: BigInts have no unsigned right shift, use >> instead
+## invalidDate
+RangeError: Invalid time value
+## stackOverflow
+RangeError: Maximum call stack size exceeded
+## instanceofBad
+no error
+## inBad
+TypeError: Cannot use 'in' operator to search for 'a' in abc
+## newSymbolFn
+TypeError: Symbol is not a constructor
+## newMath
+TypeError: Math.max is not a constructor
+## getterThrow
+Error: boom
+## tdz
+ReferenceError: Cannot access 'x' before initialization
+## tdzTypeof
+ReferenceError: Cannot access 'y' before initialization
+## tdzClass
+ReferenceError: Cannot access 'K' before initialization
+## undefinedVar
+ReferenceError: notDefinedAnywhere is not defined
+## undefinedVarCall
+ReferenceError: notDefinedFn is not defined
+## defineWriteGetter
+TypeError: Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, #<Object>
+## defineGetterNotFn
+TypeError: Getter must be a function: 1
+## defineSetterNotFn
+TypeError: Setter must be a function: 1
+## reduceEmpty
+TypeError: Reduce of empty array with no initial value
+## reduceRightEmpty
+TypeError: Reduce of empty array with no initial value
+## lengthInvalid
+RangeError: Invalid array length
+## lengthInvalid2
+RangeError: Invalid array length
+## repeatNeg
+RangeError: Invalid count value: -1
+## fromCharCodeBad
+RangeError: Invalid code point 1.5
+## padBad
+RangeError: Invalid string length
+## toStringRadix
+RangeError: toString() radix argument must be between 2 and 36
+## toPrecisionBad
+RangeError: toPrecision() argument must be between 1 and 100
+## toExponentialBad
+RangeError: toExponential() argument must be between 0 and 100
+## parseJsonBad
+SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+## parseJsonTrailing
+SyntaxError: Unexpected token ']', "[1,]" is not valid JSON
+## parseJsonLong
+SyntaxError: Unexpected token '}', ..."aaaaa": tr}" is not valid JSON
+## genRunning
+TypeError: Generator is already running
+## genReturnThrow
+Error: t
+## weakSetBadAdd
+TypeError: Invalid value used in weak set
+## weakMapBadKey
+TypeError: Invalid value used as weak map key
+## structuredCloneFn
+DataCloneError: () => {} could not be cloned.
+## structuredCloneSym
+DataCloneError: Symbol() could not be cloned.
+## atomicsBad
+TypeError: [object Float64Array] is not an integer typed array.
+## atomicsWait
+TypeError: [object Int32Array] is not a shared typed array.
+## dataViewRange
+RangeError: Offset is outside the bounds of the DataView
+## typedFrom
+TypeError: number 1 is not a function
+## typedSet
+RangeError: offset is out of bounds
+## typedSetOffset
+RangeError: offset is out of bounds

@@ -22,9 +22,10 @@ fn this_map(
     {
         return Ok((o, obj));
     }
-    Err(Completion::Throw(interp.create_type_error(&format!(
-        "Map.prototype.{method} requires a Map"
-    ))))
+    Err(Completion::Throw(interp.bad_this(
+        this,
+        &format!("Map.prototype.{method} requires a Map"),
+    )))
 }
 
 /// §24.2.3 RequireInternalSlot(S, [[SetData]]): confirm `this` is a Set receiver
@@ -44,9 +45,10 @@ fn this_set(
     {
         return Ok((o, obj));
     }
-    Err(Completion::Throw(interp.create_type_error(&format!(
-        "Set.prototype.{method} requires a Set"
-    ))))
+    Err(Completion::Throw(interp.bad_this(
+        this,
+        &format!("Set.prototype.{method} requires a Set"),
+    )))
 }
 
 /// The next live entry of `obj`'s [[MapData]] or [[SetData]] (whichever `data`
@@ -303,7 +305,7 @@ impl Interpreter {
                     return Completion::Normal(this.clone());
                 }
             }
-            let err = interp.create_type_error("Map.prototype.set requires a Map");
+            let err = interp.bad_this(this, "Map.prototype.set requires a Map");
             Completion::Throw(err)
         });
 
@@ -520,7 +522,7 @@ impl Interpreter {
 
                         // value should be [key, value] — must be Object
                         if !value.is_object() {
-                            let err = interp.create_type_error("Iterator value is not an object");
+                            let err = interp.entry_object_error(&value);
                             let _ = interp.iterator_close(&iterator, err.clone());
                             return Completion::Throw(err);
                         }
@@ -1509,7 +1511,7 @@ impl Interpreter {
                     return Completion::Normal(found.unwrap_or(JsValue::UNDEFINED));
                 }
             }
-            let err = interp.create_type_error("WeakMap.prototype.get requires a WeakMap");
+            let err = interp.bad_this(this, "WeakMap.prototype.get requires a WeakMap");
             Completion::Throw(err)
         });
 
@@ -1536,7 +1538,7 @@ impl Interpreter {
                     return Completion::Normal(this.clone());
                 }
             }
-            let err = interp.create_type_error("WeakMap.prototype.set requires a WeakMap");
+            let err = interp.bad_this(this, "WeakMap.prototype.set requires a WeakMap");
             Completion::Throw(err)
         });
 
@@ -1561,7 +1563,7 @@ impl Interpreter {
                     return Completion::Normal(JsValue::boolean(found));
                 }
             }
-            let err = interp.create_type_error("WeakMap.prototype.has requires a WeakMap");
+            let err = interp.bad_this(this, "WeakMap.prototype.has requires a WeakMap");
             Completion::Throw(err)
         });
 
@@ -1585,7 +1587,7 @@ impl Interpreter {
                     return Completion::Normal(JsValue::boolean(removed));
                 }
             }
-            let err = interp.create_type_error("WeakMap.prototype.delete requires a WeakMap");
+            let err = interp.bad_this(this, "WeakMap.prototype.delete requires a WeakMap");
             Completion::Throw(err)
         });
 
@@ -1613,7 +1615,7 @@ impl Interpreter {
                     return Completion::Normal(result);
                 }
             }
-            let err = interp.create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");
+            let err = interp.bad_this(this, "WeakMap.prototype.getOrInsert requires a WeakMap");
             Completion::Throw(err)
         });
 
@@ -1660,8 +1662,10 @@ impl Interpreter {
                     return Completion::Normal(value);
                 }
             }
-            let err = interp
-                .create_type_error("WeakMap.prototype.getOrInsertComputed requires a WeakMap");
+            let err = interp.bad_this(
+                this,
+                "WeakMap.prototype.getOrInsertComputed requires a WeakMap",
+            );
             Completion::Throw(err)
         });
 
@@ -1740,7 +1744,7 @@ impl Interpreter {
 
                         // §24.3.1.1 step 9e: If value is not Object, close iterator + throw
                         let Some(val_id) = value.as_object_id() else {
-                            let err = interp.create_type_error("Iterator value is not an object");
+                            let err = interp.entry_object_error(&value);
                             let e2 = interp.iterator_close(&iterator, err);
                             return Completion::Throw(e2);
                         };
@@ -1837,7 +1841,7 @@ impl Interpreter {
                     return Completion::Normal(this.clone());
                 }
             }
-            let err = interp.create_type_error("WeakSet.prototype.add requires a WeakSet");
+            let err = interp.bad_this(this, "WeakSet.prototype.add requires a WeakSet");
             Completion::Throw(err)
         });
 
@@ -1862,7 +1866,7 @@ impl Interpreter {
                     return Completion::Normal(JsValue::boolean(found));
                 }
             }
-            let err = interp.create_type_error("WeakSet.prototype.has requires a WeakSet");
+            let err = interp.bad_this(this, "WeakSet.prototype.has requires a WeakSet");
             Completion::Throw(err)
         });
 
@@ -1886,7 +1890,7 @@ impl Interpreter {
                     return Completion::Normal(JsValue::boolean(removed));
                 }
             }
-            let err = interp.create_type_error("WeakSet.prototype.delete requires a WeakSet");
+            let err = interp.bad_this(this, "WeakSet.prototype.delete requires a WeakSet");
             Completion::Throw(err)
         });
 

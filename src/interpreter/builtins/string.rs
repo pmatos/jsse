@@ -595,7 +595,7 @@ impl Interpreter {
                     let count = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let n = propagate!(interp.to_integer_or_infinity_value(&count));
                     if n < 0.0 || n == f64::INFINITY {
-                        return Completion::Throw(interp.create_range_error("Invalid count value"));
+                        return Completion::Throw(interp.repeat_count_error(&count));
                     }
                     if s.is_empty() || n == 0.0 {
                         return Completion::Normal(JsValue::string(JsString::default()));

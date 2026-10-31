@@ -89,7 +89,7 @@ fn classify(interp: &Interpreter, id: u64) -> Shape {
 }
 
 impl Interpreter {
-    fn data_clone_error(&mut self, message: &str) -> JsValue {
+    pub(crate) fn data_clone_error(&mut self, message: &str) -> JsValue {
         self.create_dom_exception("DataCloneError", 25, message)
     }
 
@@ -152,7 +152,7 @@ impl Cloner {
 
     fn clone_object(&mut self, interp: &mut Interpreter, id: u64) -> CloneResult {
         let clone = match classify(interp, id) {
-            Shape::Reject(class) => return Err(interp.uncloneable(class)),
+            Shape::Reject(class) => return Err(interp.uncloneable_object(class, id)),
             Shape::Wrapper(prim) => {
                 let Completion::Normal(wrapper) = interp.to_object(&prim) else {
                     return Err(interp.uncloneable("Object"));

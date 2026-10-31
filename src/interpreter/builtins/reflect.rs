@@ -32,9 +32,7 @@ impl Interpreter {
             |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if !interp.is_callable(&target) {
-                    return Completion::Throw(
-                        interp.create_type_error("Reflect.apply requires a function target"),
-                    );
+                    return Completion::Throw(interp.reflect_apply_error(&target));
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let args_list = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
@@ -62,9 +60,7 @@ impl Interpreter {
             |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if !interp.is_constructor(&target) {
-                    return Completion::Throw(
-                        interp.create_type_error("Reflect.construct requires a constructor"),
-                    );
+                    return Completion::Throw(interp.reflect_construct_error(&target));
                 }
                 let args_list = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let new_target = args.get(2).cloned().unwrap_or(target.clone());

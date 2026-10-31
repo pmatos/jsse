@@ -21,6 +21,7 @@ pub(crate) use literals::{
 };
 mod modules;
 mod operand;
+mod set_rejection;
 
 use generator_runtime::ForOfUnwindOutcome;
 pub(crate) use operand::Operand;
@@ -85,17 +86,6 @@ const CALL_GENERATOR: u8 = 1 << 2;
 const CALL_ASYNC: u8 = 1 << 3;
 const CALL_USES_ARGUMENTS: u8 = 1 << 4;
 const CALL_SIMPLE_PARAMS: u8 = 1 << 5;
-
-/// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
-/// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
-/// discarded its reason by the time a message is needed, so the assignment
-/// paths re-derive it here rather than each walking the prototype chain again.
-struct SetRejection {
-    is_module_namespace: bool,
-    has_own: bool,
-    /// `None` when the lookup was skipped because a proxy is involved.
-    desc: Option<PropertyDescriptor>,
-}
 
 /// Pre-evaluated lref for destructuring assignment targets.
 /// ToPropertyKey is deferred to PutValue time per spec §13.15.5.
@@ -760,15 +750,9 @@ impl Interpreter {
                     };
                     // TypeError for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot delete property '{}' of {}",
-                            key,
-                            if obj_val.is_null() {
-                                "null"
-                            } else {
-                                "undefined"
-                            }
-                        )));
+                        return Completion::Throw(
+                            self.delete_nullish_error(&key.to_string(), &obj_val),
+                        );
                     }
                     self.eval_delete_on_object(&obj_val, &key, env)
                 }
@@ -2363,9 +2347,7 @@ impl Interpreter {
                 };
                 if lnum.is_bigint() || rnum.is_bigint() {
                     if op == BinaryOp::URShift {
-                        return Completion::Throw(self.create_type_error(
-                            "Cannot mix BigInt and other types, use explicit conversions",
-                        ));
+                        return Completion::Throw(self.bigint_urshift_error());
                     }
                     if let Some(completion) = self.bigint_binary(op, &lnum, &rnum) {
                         completion
@@ -3781,97 +3763,6 @@ impl Interpreter {
             return Err(self.read_only_assignment_error(base_id, &key));
         }
         Ok(outcome)
-    }
-
-    /// The strict-mode TypeError for a [[Set]] rejected at OrdinarySet's
-    /// "Receiver is not an Object" step (§10.1.9.2 step 3): no own property can
-    /// be created on a primitive, so the write simply cannot land.
-    fn non_object_receiver_error(&mut self, receiver: &JsValue, key: &JsPropertyKey) -> JsValue {
-        self.create_type_error(&format!("Cannot create property '{key}' on {receiver}"))
-    }
-
-    /// Builds the strict-mode TypeError for a rejected [[Set]] on `obj_id`,
-    /// preserving the diagnostic distinctions this assignment path historically
-    /// produced: a module-namespace target, a getter-only accessor (own or
-    /// inherited), or a plain read-only data property. Descriptor re-inspection
-    /// is skipped when a proxy sits on the object or its prototype chain, so no
-    /// trap is re-invoked on the error path.
-    fn read_only_assignment_error(&mut self, obj_id: u64, key: &JsPropertyKey) -> JsValue {
-        let facts = self.set_rejection_facts(obj_id, key);
-        self.read_only_assignment_error_from(facts.as_ref(), key)
-    }
-
-    /// Reads, exactly once, every fact the two rejection formatters below
-    /// select a message from. Returns `None` when `obj_id` names no live
-    /// object, which both formatters report as the undecorated message.
-    ///
-    /// `desc` is deliberately left `None` when a proxy sits on the object or
-    /// its prototype chain, so no trap is re-invoked on the error path.
-    fn set_rejection_facts(&mut self, obj_id: u64, key: &JsPropertyKey) -> Option<SetRejection> {
-        let cell = self.get_object_cell(obj_id)?;
-        let (is_module_namespace, is_proxy, has_own) = {
-            let b = cell.borrow();
-            (
-                b.module_namespace().is_some(),
-                b.is_proxy() || b.is_proxy_revoked(),
-                b.has_own_property(key),
-            )
-        };
-        let desc = if is_proxy || self.has_proxy_in_prototype_chain(obj_id) {
-            None
-        } else {
-            self.get_property_descriptor_on_id(obj_id, key)
-        };
-        Some(SetRejection {
-            is_module_namespace,
-            has_own,
-            desc,
-        })
-    }
-
-    fn read_only_assignment_error_from(
-        &mut self,
-        facts: Option<&SetRejection>,
-        key: &JsPropertyKey,
-    ) -> JsValue {
-        match facts {
-            Some(f) if f.is_module_namespace => self.create_type_error(&format!(
-                "Cannot assign to read only property '{key}' of module namespace"
-            )),
-            Some(f) if f.desc.as_ref().is_some_and(|d| d.is_accessor_descriptor()) => self
-                .create_type_error(&format!(
-                    "Cannot set property '{key}' which has only a getter"
-                )),
-            _ => self.create_type_error(&format!("Cannot assign to read only property '{key}'")),
-        }
-    }
-
-    /// Preserve the host-compatible diagnostics historically produced by the
-    /// plain member-assignment dispatcher after canonical [[Set]] rejects.
-    /// The rejection itself and all observable descriptor/proxy work have
-    /// already happened inside `property.rs`; this only formats the TypeError.
-    fn member_assignment_error(&mut self, base: &JsValue, key: &JsPropertyKey) -> JsValue {
-        let Some(obj_id) = base.as_object_id() else {
-            return self.non_object_receiver_error(base, key);
-        };
-        let facts = self.set_rejection_facts(obj_id, key);
-        if let Some(f) = &facts {
-            if f.is_module_namespace {
-                return self.create_type_error(&format!(
-                    "Cannot assign to read only property '{key}' of object '[object Module]'"
-                ));
-            }
-            if !f.has_own
-                && f.desc
-                    .as_ref()
-                    .is_some_and(|d| d.is_data_descriptor() && d.writable == Some(false))
-            {
-                return self.create_type_error(&format!(
-                    "Cannot assign to read only property '{key}' of object '#<Object>'"
-                ));
-            }
-        }
-        self.read_only_assignment_error_from(facts.as_ref(), key)
     }
 
     fn set_member_property(

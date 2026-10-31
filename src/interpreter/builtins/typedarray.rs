@@ -735,7 +735,7 @@ impl Interpreter {
                     );
                 }
                 let len_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = match interp.to_index(&len_val) {
+                let len = match interp.to_index_for(&len_val, 2) {
                     Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
@@ -1193,7 +1193,7 @@ impl Interpreter {
                     );
                 }
                 let len_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let len = match interp.to_index(&len_val) {
+                let len = match interp.to_index_for(&len_val, 2) {
                     Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
@@ -2736,7 +2736,7 @@ impl Interpreter {
                     });
                     if !is_callable {
                         return Completion::Throw(
-                            interp.create_type_error("mapfn is not a function"),
+                            interp.callback_error(mf, "mapfn is not a function"),
                         );
                     }
                     true
@@ -3277,8 +3277,7 @@ impl Interpreter {
                             Completion::Throw(interp.create_type_error("invalid argument"))
                         }
                         _ => {
-                            // §23.2.5.1 step 6c: ToIndex before AllocateTypedArray
-                            let len_val = match interp.to_index(first) {
+                            let len_val = match interp.to_index_for(first, 1) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => return Completion::Normal(JsValue::UNDEFINED),

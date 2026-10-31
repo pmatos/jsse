@@ -81,9 +81,8 @@ impl Interpreter {
                     1,
                     Rc::new(|interp, _this, args| {
                         let Some(sym) = args.first().and_then(JsValue::as_symbol) else {
-                            let err = interp
-                                .create_type_error("Symbol.keyFor requires a symbol argument");
-                            return Completion::Throw(err);
+                            let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                            return Completion::Throw(interp.not_symbol_error(&arg));
                         };
                         for (key, reg_sym) in &interp.global_symbol_registry {
                             if reg_sym.id() == sym.id() {

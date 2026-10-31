@@ -300,9 +300,7 @@ impl Interpreter {
             // Step 3: IsSharedArrayBuffer check — before index/value/timeout
             let sab_info = get_sab_info(interp, &ta_val);
             if sab_info.is_none() {
-                return Completion::Throw(
-                    interp.create_type_error("Atomics.wait requires a shared typed array"),
-                );
+                return Completion::Throw(interp.atomics_shared_error(&ta_val, "wait"));
             }
             let (sab, _ta_byte_offset) = sab_info.unwrap();
             let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
@@ -509,9 +507,7 @@ impl Interpreter {
                 false
             };
             if !buffer_is_shared {
-                return Completion::Throw(
-                    interp.create_type_error("Atomics.waitAsync requires a shared typed array"),
-                );
+                return Completion::Throw(interp.atomics_shared_error(&ta_val, "waitAsync"));
             }
             let _ = kind;
             let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
@@ -1109,7 +1105,7 @@ fn validate_integer_typed_array(
                 | TypedArrayKind::Float64
                 | TypedArrayKind::Uint8Clamped
         ) {
-            return Err(interp.create_type_error("Atomics operations require integer typed arrays"));
+            return Err(interp.atomics_array_error(ta_val, waitable));
         }
         // ValidateTypedArray(..., ~write~): block ops on immutable buffers before
         // argument coercion so callers observe no side effects on TypeError.
@@ -1128,7 +1124,7 @@ fn validate_integer_typed_array(
         let is_bigint = kind.is_bigint();
         return Ok((kind, buffer, byte_offset, element_size, is_bigint));
     }
-    Err(interp.create_type_error("first argument must be a typed array"))
+    Err(interp.atomics_array_error(ta_val, waitable))
 }
 
 fn validate_atomic_access(
