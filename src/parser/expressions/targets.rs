@@ -91,16 +91,7 @@ impl<'a> Parser<'a> {
                     }
                     if let Expression::Spread(target) = &prop.value {
                         saw_rest = true;
-                        // AssignmentRestProperty : ... DestructuringAssignmentTarget
-                        // must not be an ArrayLiteral or ObjectLiteral.
-                        if matches!(
-                            target.as_ref(),
-                            Expression::Array(..) | Expression::Object(..)
-                        ) {
-                            return Err(self.error(
-                                "`...` must be followed by an assignable reference in assignment contexts",
-                            ));
-                        }
+                        check_object_rest_target(target)?;
                     }
                     match prop.kind {
                         PropertyKind::Get | PropertyKind::Set => {

@@ -13,7 +13,10 @@ Sources the parser used to accept although the grammar or an early-error rule re
 
 ## Arrow parameter refinement
 
-The parenthesised list is first parsed as expressions (it cannot be known to be arrow parameters until `)` `=>` is seen), then `expr_to_pattern` converts it. That conversion is permissive, so `arrow_params_from_cover` also rewinds to the token after `(` (`TokenMark`: a cloned lexer plus the current token) and parses the same tokens as `FormalParameters`, which is what the specification does. The re-parse only validates; the converted patterns are kept. `refining_arrow_params` stops nested arrows inside defaults from re-parsing again, so nesting costs a constant factor per arrow, not an exponential one.
+The parenthesised list is first parsed as expressions (it cannot be known to be arrow parameters until `)` `=>` is seen), then `expr_to_pattern` converts it. That conversion is permissive, so `arrow_params_from_cover` also rewinds to the opening parenthesis (`TokenMark`: a cloned lexer plus the `(` token, no allocation) and parses the same tokens as `FormalParameters`, which is what the specification does. The re-parse only validates; the converted patterns are kept and the re-parse's own error is reported. Two guards keep it cheap and side-effect free:
+
+- a list of nothing but identifiers and commas (`(a, b) =>`) is not re-parsed (`is_plain_identifier_list`);
+- `refining_arrow_params` stops nested arrows in defaults from re-parsing again, so nesting costs a constant factor per arrow, not an exponential one, and stops `infer_assigned_name` recording `--node` stack names a second time (`tests/node_arrow_param_name_inference_1547.rs`).
 
 ## Error text
 

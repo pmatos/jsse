@@ -1197,6 +1197,7 @@ impl<'a> Parser<'a> {
             }
             Token::LeftParen => {
                 let paren_start = self.current_token_start;
+                let list_start = self.token_mark();
                 self.advance()?;
                 let saved_no_in = self.no_in;
                 self.no_in = false;
@@ -1258,7 +1259,6 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                let list_start = self.token_mark();
                 let expr = self.parse_assignment_expression()?;
                 if self.current == Token::Comma || self.current == Token::RightParen {
                     let mut exprs = vec![expr];
@@ -1993,6 +1993,7 @@ impl<'a> Parser<'a> {
 
     fn parse_async_arrow_params(&mut self, source_start: usize) -> Result<Expression, ParseError> {
         // Current token is '(' — parse params, check for '=>'
+        let list_start = self.token_mark();
         self.advance()?; // consume '('
         if self.current == Token::RightParen {
             self.advance()?;
@@ -2063,7 +2064,6 @@ impl<'a> Parser<'a> {
                 info: Default::default(),
             }));
         }
-        let list_start = self.token_mark();
         let expr = self.parse_assignment_expression()?;
         if self.current == Token::Comma || self.current == Token::RightParen {
             let mut exprs = vec![expr];

@@ -10,6 +10,7 @@
 use super::*;
 
 /// Token-stream position, enough to resume parsing from a token boundary.
+/// Taken at the opening parenthesis, so it holds no allocation.
 pub(super) struct TokenMark<'a> {
     lexer: Lexer<'a>,
     current: Token,
@@ -41,12 +42,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Converts the elements of a cover list into the parameters of an arrow
-    /// function. `list_start` is the mark taken right after the opening
-    /// parenthesis; the current token is the one after `=>`.
+    /// function. `open_paren` is the mark taken at the opening parenthesis;
+    /// the current token is the one after `=>`.
     pub(super) fn arrow_params_from_cover(
         &mut self,
         exprs: Vec<Expression>,
-        list_start: TokenMark<'a>,
+        open_paren: TokenMark<'a>,
         is_async: bool,
     ) -> Result<Vec<Pattern>, ParseError> {
         if is_async {
@@ -75,6 +76,9 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        if !self.is_plain_identifier_list(&open_paren) {
+            self.reparse_as_formal_parameters(open_paren)?;
+        }
         let params: Vec<Pattern> = exprs
             .into_iter()
             .map(expr_to_pattern)
@@ -83,17 +87,38 @@ impl<'a> Parser<'a> {
             self.check_strict_params(&params)?;
         }
         self.check_duplicate_params_strict(&params)?;
-        self.reparse_as_formal_parameters(list_start)?;
         Ok(params)
     }
 
-    /// Parses the tokens from `list_start` up to the closing parenthesis as
+    /// `(a, b)`: nothing but identifiers and commas up to the closing
+    /// parenthesis, so there is no binding element to refine.
+    fn is_plain_identifier_list(&self, open_paren: &TokenMark<'a>) -> bool {
+        let rest = &self.source.as_bytes()[open_paren.current_token_end..];
+        for &byte in rest {
+            match byte {
+                b')' => return true,
+                b'a'..=b'z'
+                | b'A'..=b'Z'
+                | b'0'..=b'9'
+                | b'_'
+                | b'$'
+                | b','
+                | b' '
+                | b'\t'
+                | b'\n' => {}
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Parses the tokens after `open_paren` up to the closing parenthesis as
     /// FormalParameters, then resumes at the current token. Nested arrows
     /// inside the list were refined when the list was first parsed, so they
     /// are not refined again.
     fn reparse_as_formal_parameters(
         &mut self,
-        list_start: TokenMark<'a>,
+        open_paren: TokenMark<'a>,
     ) -> Result<(), ParseError> {
         if self.refining_arrow_params {
             return Ok(());
@@ -105,10 +130,12 @@ impl<'a> Parser<'a> {
             self.last_obj_had_proto_dup,
             self.no_in,
         );
-        self.rewind_to(list_start);
+        self.rewind_to(open_paren);
         self.refining_arrow_params = true;
         self.no_in = false;
-        let result = self.parse_parameter_list_tail();
+        let result = self
+            .advance()
+            .and_then(|_| self.parse_parameter_list_tail());
         self.refining_arrow_params = false;
         (
             self.last_expr_parenthesized,
@@ -117,7 +144,7 @@ impl<'a> Parser<'a> {
             self.no_in,
         ) = saved_flags;
         self.rewind_to(resume);
-        result.map_err(|_| self.error("Invalid destructuring assignment target"))
+        result
     }
 
     fn parse_parameter_list_tail(&mut self) -> Result<(), ParseError> {
