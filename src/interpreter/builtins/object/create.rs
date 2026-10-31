@@ -8,9 +8,7 @@ pub(super) fn object_create(interp: &mut Interpreter, args: &[JsValue]) -> Compl
     interp.with_gc_root_scope(|interp| {
         let proto_arg = args.first().cloned().unwrap_or(JsValue::NULL);
         if !proto_arg.is_object() && !proto_arg.is_null() {
-            return Completion::Throw(
-                interp.create_type_error("Object prototype may only be an Object or null"),
-            );
+            return Completion::Throw(interp.proto_value_error(&proto_arg));
         }
         let new_obj_id = interp.create_object_id();
         interp.gc_root_id(new_obj_id);
@@ -84,9 +82,7 @@ pub(super) fn object_create(interp: &mut Interpreter, args: &[JsValue]) -> Compl
                         }
                         Err(Some(e)) => return Completion::Throw(e),
                         Err(None) => {
-                            return Completion::Throw(
-                                interp.create_type_error("Property description must be an object"),
-                            );
+                            return Completion::Throw(interp.descriptor_error(&prop_desc_val));
                         }
                     }
                     interp.gc_unroot_frame(frame);

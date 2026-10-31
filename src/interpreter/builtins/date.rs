@@ -1,5 +1,4 @@
 use super::super::*;
-use super::errors::error_class_name;
 
 /// The pure core shared by every `Date.prototype.get*` component accessor: given
 /// a Date's time value `t`, an invalid Date (`t` is NaN) yields NaN without ever
@@ -1417,32 +1416,6 @@ impl Interpreter {
 
     pub(crate) fn create_reference_error(&mut self, msg: &str) -> JsValue {
         self.create_error("ReferenceError", msg)
-    }
-
-    pub(crate) fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
-        let ctor = self.get_global_var(name);
-        let error_proto_id: Option<u64> = ctor.and_then(|v| {
-            let constructor_id = v.as_object_id()?;
-            self.get_property_on_id(constructor_id, "prototype")
-                .as_object_id()
-        });
-        let obj_id = self.create_object_id();
-        {
-            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = error_class_name(name);
-            if let Some(proto_id) = error_proto_id {
-                o.prototype_id = Some(proto_id);
-            }
-            o.insert_builtin(
-                "message".to_string(),
-                JsValue::string(JsString::from_str(msg)),
-            );
-            o.insert_builtin(
-                "name".to_string(),
-                JsValue::string(JsString::from_str(name)),
-            );
-        }
-        self.node_capture_error(obj_id)
     }
 }
 

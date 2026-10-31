@@ -877,9 +877,7 @@ impl Interpreter {
                                     match interp.array_define_own_property(target_id as usize, &key, desc) {
                                         Ok(true) => {}
                                         Ok(false) => {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot define property, object is not extensible or property is non-configurable",
-                                            ));
+                                            return Completion::Throw(interp.define_rejected_error(target_id, &key));
                                         }
                                         Err(e) => return Completion::Throw(e),
                                     }
@@ -887,23 +885,17 @@ impl Interpreter {
                                     match interp.typed_array_define_own_property(target_id, &key, &desc) {
                                         Ok(Some(true)) => {}
                                         Ok(Some(false)) => {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot define property, object is not extensible or property is non-configurable",
-                                            ));
+                                            return Completion::Throw(interp.define_rejected_error(target_id, &key));
                                         }
                                         Ok(None) => {
-                                            if !obj.borrow_mut().define_own_property(key, desc) {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "Cannot define property, object is not extensible or property is non-configurable",
-                                                ));
+                                            if !obj.borrow_mut().define_own_property(key.clone(), desc) {
+                                                return Completion::Throw(interp.define_rejected_error(target_id, &key));
                                             }
                                         }
                                         Err(e) => return Completion::Throw(e),
                                     }
-                                } else if !obj.borrow_mut().define_own_property(key, desc) {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot define property, object is not extensible or property is non-configurable",
-                                    ));
+                                } else if !obj.borrow_mut().define_own_property(key.clone(), desc) {
+                                    return Completion::Throw(interp.define_rejected_error(target_id, &key));
                                 }
                             }
                             Err(Some(e)) => return Completion::Throw(e),
@@ -2068,9 +2060,7 @@ impl Interpreter {
                     let proto = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     // Step 3: If Type(proto) is neither Object nor Null, throw TypeError
                     if !proto.is_object() && !proto.is_null() {
-                        return Completion::Throw(interp.create_type_error(
-                            "Object prototype may only be an Object or null",
-                        ));
+                        return Completion::Throw(interp.proto_value_error(&proto));
                     }
                     if let Some(target_id) = target.as_object_id()
                         && let Some(obj) = interp.get_object_cell(target_id)
@@ -2114,9 +2104,7 @@ impl Interpreter {
                             || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
                         if !same {
                             if !obj.borrow().extensible {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Object.setPrototypeOf called on non-extensible object",
-                                ));
+                                return Completion::Throw(interp.proto_not_extensible_error(&target));
                             }
                             // Circular check
                             if let Some(new_pid) = new_proto_id {
@@ -2296,7 +2284,7 @@ impl Interpreter {
                         interp.gc_root_value(&next_item);
                         // Step d: If Type(nextItem) is not Object, close and throw TypeError
                         let Some(item_id) = next_item.as_object_id() else {
-                            let err = interp.create_type_error("Iterator value is not an object");
+                            let err = interp.entry_object_error(&next_item);
                             interp.iterator_close(&iterator, err.clone());
                             return Completion::Throw(err);
                         };

@@ -62,7 +62,7 @@ pub(super) fn reduce(
                 Reduction::ArrayRight => "reduceRight callback is not a function",
                 Reduction::TypedArray | Reduction::TypedArrayRight => "callback is not a function",
             };
-            return Completion::Throw(interp.create_type_error(message));
+            return Completion::Throw(interp.callback_error(&callback, message));
         }
 
         // Some(undefined) is an explicit initial value; None still needs a seed.

@@ -267,15 +267,13 @@ struct Compiler {
     /// Open `try` blocks (and `catch` blocks with a `finally`): a call here is
     /// never in tail position.
     no_tail: u32,
-    /// Constant-pool index of each finalizer completion kind used so far.
     kind_constants: Vec<(u16, u16)>,
-    /// Code ranges `[start, end)` of the `IterClose` an exit emits for the
-    /// cleanup at the given index. An exit is logically a completion leaving
-    /// the construct, so a `return()` error it raises belongs to the code
-    /// *around* that construct, and handlers of the constructs it just left
-    /// must not see it (see `push_handler`).
+    /// `[start, end)` of the `IterClose` an exit emits for the cleanup at the
+    /// given index; its `return()` errors belong to the code around the
+    /// construct, not its own handlers (see `push_handler`).
     unwind_segments: Vec<(usize, usize, usize)>,
     member_pos: Vec<(u32, u32)>,
+    pattern_src: Vec<(u32, std::rc::Rc<str>)>,
     /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
     /// handed to the tree-walker must not contain one (it could not suspend).
     generator: bool,
@@ -327,6 +325,7 @@ impl Compiler {
             kind_constants: Vec::new(),
             unwind_segments: Vec::new(),
             member_pos: Vec::new(),
+            pattern_src: Vec::new(),
         }
     }
 
@@ -2708,6 +2707,7 @@ impl Compiler {
             self.compile_expr(right)?;
             self.close_scope();
         }
+        self.note_iterable_source(right, is_of);
         self.emit(if is_of {
             Op::GetIterator
         } else {
@@ -3086,6 +3086,7 @@ impl Compiler {
             fallback_reasons: self.fallback_reasons,
             trivial_private_getter: None,
             member_pos: self.member_pos,
+            pattern_src: self.pattern_src,
         }
     }
 }

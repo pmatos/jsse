@@ -1,0 +1,137 @@
+## voidCall
+TypeError: (void 0) is not a function
+at Object.voidCall (<dir>/callees.js:14:13)
+## commaCall
+TypeError: (0 , o.f) is not a function
+at Object.commaCall (<dir>/callees.js:17:13)
+## commaCallThree
+TypeError: (0 , f , o.f) is not a function
+at Object.commaCallThree (<dir>/callees.js:20:16)
+## logicalCall
+TypeError: (o.f || o.g) is not a function
+at Object.logicalCall (<dir>/callees.js:23:17)
+## typeofCall
+TypeError: (typeof num) is not a function
+at Object.typeofCall (<dir>/callees.js:26:17)
+## parenthesizedLiteral
+TypeError: 1 is not a function
+at Object.parenthesizedLiteral (<dir>/callees.js:29:8)
+## stringCall
+TypeError: "abc" is not a function
+at Object.stringCall (<dir>/callees.js:32:10)
+## numberCall
+TypeError: 5 is not a function
+at Object.numberCall (<dir>/callees.js:35:6)
+## nullCall
+TypeError: null is not a function
+at Object.nullCall (<dir>/callees.js:38:9)
+## objectLiteralCall
+TypeError: {} is not a function
+at Object.objectLiteralCall (<dir>/callees.js:41:9)
+## functionResultCall
+TypeError: (intermediate value)(...) is not a function
+at Object.functionResultCall (<dir>/callees.js:44:23)
+## arrowResultCall
+TypeError: (intermediate value)(...) is not a function
+at Object.arrowResultCall (<dir>/callees.js:47:16)
+## callResultCall
+TypeError: f(...) is not a function
+at Object.callResultCall (<dir>/callees.js:50:8)
+## newComma
+TypeError: (0 , o.F) is not a constructor
+at Object.newComma (<dir>/callees.js:53:5)
+## newVoid
+TypeError: (void 0) is not a constructor
+at Object.newVoid (<dir>/callees.js:56:5)
+## newCall
+TypeError: f(...) is not a constructor
+at Object.newCall (<dir>/callees.js:59:5)
+## newArrow
+TypeError: (intermediate value) is not a constructor
+at Object.newArrow (<dir>/callees.js:62:5)
+## newGenerator
+TypeError: (intermediate value) is not a constructor
+at Object.newGenerator (<dir>/callees.js:65:5)
+## destructureNullLiteral
+TypeError: Cannot destructure property 'a' of 'null' as it is null.
+## destructureVariable
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+## destructureUndefined
+TypeError: Cannot destructure property 'a' of 'u' as it is undefined.
+## destructureMember
+TypeError: Cannot destructure property 'a' of 'o.p' as it is undefined.
+## destructureCall
+TypeError: Cannot destructure property 'a' of 'f(...)' as it is undefined.
+## destructureLet
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+## destructureConst
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+## destructureNoProperty
+TypeError: Cannot destructure 'n' as it is null.
+## destructureRest
+TypeError: Cannot destructure 'n' as it is null.
+## destructureComputed
+TypeError: Cannot destructure 'n' as it is null.
+## destructureStringKey
+TypeError: Cannot destructure property 's' of 'n' as it is null.
+## destructureAssign
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+## destructureAssignMember
+TypeError: Cannot destructure property 'a' of 'o.p' as it is undefined.
+## destructureParameter
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+## destructureParameterNull
+TypeError: Cannot destructure property 'a' of 'object null' as it is null.
+## destructureArrow
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+## destructureNested
+TypeError: Cannot read properties of null (reading 'b')
+## arrayNullLiteral
+TypeError: null is not iterable
+## arrayVariable
+TypeError: n is not iterable
+## arrayUndefined
+TypeError: u is not iterable
+## arrayMember
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+## arrayCall
+TypeError: f is not a function or its return value is not iterable
+at Object.arrayCall (<dir>/callees.js:135:15)
+## arrayEmpty
+TypeError: n is not iterable
+## arrayAssign
+TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+## arrayParameter
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+## forOfLiteral
+TypeError: 5 is not iterable
+## forOfVariable
+TypeError: num is not iterable
+## forOfNull
+TypeError: n is not iterable
+## forOfObject
+TypeError: o is not iterable
+## forOfMember
+TypeError: o.p is not iterable
+## forOfCall
+TypeError: f is not a function or its return value is not iterable
+at Object.forOfCall (<dir>/callees.js:163:21)
+## forOfObjectLiteral
+TypeError: {} is not iterable
+## forOfVar
+TypeError: num is not iterable
+## forOfAssign
+TypeError: num is not iterable
+## spreadLiteral
+TypeError: 5 is not iterable
+## spreadVariable
+TypeError: num is not iterable
+## spreadObject
+TypeError: o is not iterable
+## spreadNull
+TypeError: n is not iterable
+## spreadMember
+TypeError: o.p is not iterable
+## spreadCall
+TypeError: f is not a function or its return value is not iterable
+at Object.spreadCall (<dir>/callees.js:191:16)

@@ -1222,10 +1222,10 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                 } else {
-                    propagate!(self.bind_pattern(&d.pattern, val, kind, env));
+                    propagate!(self.bind_declarator(d, val, kind, env));
                 }
             } else {
-                propagate!(self.bind_pattern(&d.pattern, val, kind, env));
+                propagate!(self.bind_declarator(d, val, kind, env));
             }
         }
         Completion::Normal(JsValue::UNDEFINED)
@@ -1290,7 +1290,7 @@ impl Interpreter {
     /// being silently discarded — see issue #727. `Throw` and (for array
     /// patterns) the iterator-close bookkeeping are otherwise unchanged from
     /// the pre-#727 `Result`-returning version.
-    pub(crate) fn bind_pattern(
+    pub(crate) fn bind_pattern_at(
         &mut self,
         pat: &Pattern,
         val: JsValue,
@@ -1304,7 +1304,6 @@ impl Interpreter {
                     if Self::var_scope_lacks(&var_scope, name) {
                         var_scope.borrow_mut().declare(name, kind);
                     }
-                    // For var initializers inside with-scopes, write through with-object
                     let result = if self.with_scope_depth > 0 || self.has_ever_entered_with {
                         match self.resolve_with_has_binding(name, env) {
                             Ok(Some(obj_id)) => {
@@ -1327,7 +1326,6 @@ impl Interpreter {
             }
             Pattern::Assign(inner, default) => {
                 let v = if val.is_undefined() {
-                    // Pre-declare as TDZ before evaluating default so self-references throw
                     if let Pattern::Identifier(ref name) = **inner {
                         let target = if kind == BindingKind::Var {
                             Environment::find_var_scope(env)
@@ -1500,7 +1498,7 @@ impl Interpreter {
             Pattern::Object(props) => {
                 // RequireObjectCoercible; properties are read with GetV on
                 // `val` itself so accessors see a primitive receiver.
-                propagate!(self.require_object_coercible(&val));
+                propagate!(self.require_destructurable(props, &val));
                 // val is otherwise only a Rust local for the rest of this
                 // pattern's binding: property gets, default-value
                 // initializers, and with-scope/Proxy binding resolution can
@@ -2300,7 +2298,7 @@ impl Interpreter {
         } else {
             match self.get_iterator(&iterable) {
                 Ok(iter) => iter,
-                Err(e) => return Completion::Throw(e),
+                Err(e) => return Completion::Throw(self.reword_iterable(e, &fo.right)),
             }
         };
 

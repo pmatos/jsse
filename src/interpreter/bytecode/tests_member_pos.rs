@@ -48,3 +48,39 @@ fn only_a_hooked_thread_records_member_positions() {
     assert!(hooked.windows(2).all(|w| w[0].0 < w[1].0), "{hooked:?}");
     assert!(hooked.iter().all(|&(_, pos)| pos != 0), "{hooked:?}");
 }
+
+fn pattern_sources(source: &str) -> Vec<String> {
+    let program = Parser::new(source)
+        .and_then(|mut p| p.parse_program())
+        .expect("parse");
+    let chunk = compile_function_body(
+        program.body.as_slice(),
+        &FrameShape {
+            arguments_slot: false,
+            simple_params: &[],
+            separate_body_env: false,
+        },
+    )
+    .expect("compile");
+    chunk.pattern_src.iter().map(|e| e.1.to_string()).collect()
+}
+
+#[test]
+fn only_a_hooked_thread_records_pattern_sources() {
+    let source = "{ const { a } = o.p; for (const x of f()) ; }";
+    assert!(on_fresh_thread(|| pattern_sources(source)).is_empty());
+    let hooked = on_fresh_thread(|| {
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.set_node_host_argv("jsse".into(), "/bin/jsse".into(), None, Vec::new());
+        interp.load_node_prelude().expect("prelude loads");
+        pattern_sources(source)
+    });
+    assert_eq!(
+        hooked,
+        [
+            "o.p",
+            "f is not a function or its return value is not iterable"
+        ]
+    );
+}

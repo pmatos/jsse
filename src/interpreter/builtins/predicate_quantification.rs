@@ -65,7 +65,7 @@ pub(super) fn quantify(
                     "callback is not a function"
                 }
             };
-            return Completion::Throw(interp.create_type_error(message));
+            return Completion::Throw(interp.callback_error(&callback, message));
         }
         let this_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
         let stop = matches!(method, Quantifier::ArraySome | Quantifier::TypedArraySome);

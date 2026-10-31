@@ -408,9 +408,7 @@ pub(crate) fn sort_compare_fn_arg(
         None => Ok(None),
         Some(cf) if cf.is_undefined() => Ok(None),
         Some(cf) if interp.is_callable(cf) => Ok(Some(cf.clone())),
-        Some(_) => Err(Completion::Throw(
-            interp.create_type_error("compareFn is not a function"),
-        )),
+        Some(cf) => Err(Completion::Throw(interp.compare_fn_error(cf))),
     }
 }
 
@@ -888,9 +886,7 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
                 .is_some_and(|desc| desc.configurable == Some(false))
         });
         if non_configurable {
-            return Err(
-                interp.create_type_error(&format!("Cannot delete property '{key}' of object"))
-            );
+            return Err(interp.delete_rejected_error(&JsValue::object(obj_id), key));
         }
     }
     obj_delete(interp, o, key);
@@ -954,7 +950,7 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
 
 fn require_callable(interp: &mut Interpreter, val: &JsValue, msg: &str) -> Result<(), Completion> {
     if !interp.is_callable(val) {
-        Err(Completion::Throw(interp.create_type_error(msg)))
+        Err(Completion::Throw(interp.callback_error(val, msg)))
     } else {
         Ok(())
     }
@@ -2538,7 +2534,7 @@ impl Interpreter {
                 {
                     if !interp.is_callable(mf) {
                         return Completion::Throw(
-                            interp.create_type_error("Array.from mapFn is not a function"),
+                            interp.callback_error(mf, "Array.from mapFn is not a function"),
                         );
                     }
                     true

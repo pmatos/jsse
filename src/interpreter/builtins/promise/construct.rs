@@ -13,8 +13,7 @@ pub(super) fn promise_construct(interp: &mut Interpreter, args: &[JsValue]) -> C
         // Step 2: If IsCallable(executor) is false, throw a TypeError
         let executor = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
         if !interp.is_callable(&executor) {
-            let err = interp.create_type_error("Promise resolver is not a function");
-            return Completion::Throw(err);
+            return Completion::Throw(interp.promise_resolver_error(&executor));
         }
         // OrdinaryCreateFromConstructor — realm-aware prototype
         let proto =

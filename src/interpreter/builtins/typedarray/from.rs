@@ -203,7 +203,7 @@ pub(super) fn typed_array_from(
     if let Some(mf) = map_fn
         && !interp.is_callable(mf)
     {
-        return Completion::Throw(interp.create_type_error("mapfn is not a function"));
+        return Completion::Throw(interp.callback_error(mf, "mapfn is not a function"));
     }
     if source.is_nullish() {
         return Completion::Throw(

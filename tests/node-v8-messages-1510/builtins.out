@@ -1,0 +1,194 @@
+## repeat
+RangeError: Invalid count value: -1
+## repeatInf
+RangeError: Invalid count value: Infinity
+## map5
+TypeError: number 5 is not a function
+## forEachU
+TypeError: undefined is not a function
+## forEachObj
+TypeError: object is not a function
+## filter
+TypeError: string "x" is not a function
+## reduce
+TypeError: Reduce of empty array with no initial value
+## reduceNF
+TypeError: number 1 is not a function
+## find
+TypeError: object null is not a function
+## some
+TypeError: bigint is not a function
+## sortBad
+TypeError: The comparison function must be either a function or undefined: 5
+## promise
+TypeError: Promise resolver 1 is not a function
+## promiseU
+TypeError: Promise resolver undefined is not a function
+## ownKeys
+TypeError: Reflect.ownKeys called on non-object
+## setProto
+TypeError: Object prototype may only be an Object or null: undefined
+## setProto2
+TypeError: Object prototype may only be an Object or null: 1
+## jsonParse
+SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+## jsonParse2
+SyntaxError: Unexpected end of JSON input
+## jsonParse3
+SyntaxError: Expected double-quoted property name in JSON at position 7 (line 1 column 8)
+## jsonParse4
+SyntaxError: Unexpected token 'a', "abc" is not valid JSON
+## jsonParse5
+SyntaxError: "undefined" is not valid JSON
+## deleteNull
+TypeError: Cannot convert undefined or null to object
+## objectKeysNull
+TypeError: Cannot convert undefined or null to object
+## objectAssign
+TypeError: Cannot convert undefined or null to object
+## defineProp
+TypeError: Object.defineProperty called on non-object
+## defineProp2
+TypeError: Property description must be an object: 1
+## defineProp3
+TypeError: Cannot define property a, object is not extensible
+## getProto
+TypeError: Cannot convert undefined or null to object
+## create
+TypeError: Object prototype may only be an Object or null: 1
+## arrayLen
+RangeError: Invalid array length
+## arrayLen2
+RangeError: Invalid array length
+## toFixed
+RangeError: toFixed() digits argument must be between 0 and 100
+## toString
+RangeError: toString() radix argument must be between 2 and 36
+## bigint
+RangeError: The number 1.5 cannot be converted to a BigInt because it is not an integer
+## bigint2
+SyntaxError: Cannot convert x to a BigInt
+## bigintMix
+TypeError: Cannot mix BigInt and other types, use explicit conversions
+## symStr
+TypeError: Cannot convert a Symbol value to a string
+## symNum
+TypeError: Cannot convert a Symbol value to a number
+## newSymbol
+TypeError: Symbol is not a constructor
+## strRepeatBig
+RangeError: Invalid string length
+## normalize
+RangeError: The normalization form should be one of NFC, NFD, NFKC, NFKD.
+## fromCodePoint
+RangeError: Invalid code point -1
+## padEnd
+RangeError: Invalid string length
+## mapCall
+TypeError: Constructor Map requires 'new'
+## setNew
+TypeError: number 1 is not iterable (cannot read property Symbol(Symbol.iterator))
+## mapNew
+TypeError: Iterator value 1 is not an entry object
+## weakMapKey
+TypeError: Invalid value used as weak map key
+## weakSetAdd
+TypeError: Invalid value used in weak set
+## weakRef
+TypeError: WeakRef: invalid target
+## proxyNew
+TypeError: Cannot create proxy with a non-object as target or handler
+## proxyCall
+TypeError: Constructor Proxy requires 'new'
+## reflectGet
+TypeError: Reflect.get called on non-object
+## reflectApply
+TypeError: Function.prototype.apply was called on 1, which is a number and not a function
+## reflectConstruct
+TypeError: 1 is not a constructor
+## fnApply
+TypeError: Function.prototype.apply was called on 1, which is a number and not a function
+## bind
+TypeError: Bind must be called on a function
+## dateIso
+RangeError: Invalid time value
+## regexp
+SyntaxError: Invalid regular expression: /[/: Unterminated character class
+## regexpFlags
+SyntaxError: Invalid flags supplied to RegExp constructor 'zz'
+## typedArr
+RangeError: Invalid typed array length: -1
+## typedCall
+TypeError: Constructor Uint8Array requires 'new'
+## abBad
+RangeError: Invalid array buffer length
+## dvBad
+TypeError: First argument to DataView constructor must be an ArrayBuffer
+## dvRange
+RangeError: Offset is outside the bounds of the DataView
+## atomics
+TypeError: 1 is not an integer typed array.
+## iterFrom
+TypeError: number 1 is not a function
+## structuredClone
+DataCloneError: ()=>{} could not be cloned.
+## getterOnNonObject
+TypeError: Cannot convert undefined or null to object
+## entries
+TypeError: Cannot convert undefined or null to object
+## fromEntries
+TypeError: number 1 is not iterable (cannot read property Symbol(Symbol.iterator))
+## fromEntries2
+TypeError: Iterator value 1 is not an entry object
+## hasOwn
+TypeError: Cannot convert undefined or null to object
+## symbolFor
+TypeError: 1 is not a symbol
+## valueOf
+TypeError: Cannot convert undefined or null to object
+## numberToString
+TypeError: Number.prototype.toString requires that 'this' be a Number
+## setProtoThis
+TypeError: Method Set.prototype.add called on incompatible receiver 1
+## mapProtoThis
+TypeError: Method Map.prototype.get called on incompatible receiver #<Object>
+## promiseThen
+TypeError: Method Promise.prototype.then called on incompatible receiver 1
+## promiseResolve
+TypeError: PromiseResolve called on non-object
+## fnToString
+TypeError: Function.prototype.toString requires that 'this' be a Function
+## dateThis
+TypeError: this is not a Date object.
+## symbolThis
+TypeError: Symbol.prototype.toString requires that 'this' be a Symbol
+## getterThis
+TypeError: Method get Map.prototype.size called on incompatible receiver 1
+## bigIntThis
+TypeError: BigInt.prototype.toString requires that 'this' be a BigInt
+## jsonBig
+TypeError: Do not know how to serialize a BigInt
+## atNull
+TypeError: Cannot convert undefined or null to object
+## toSorted
+TypeError: The comparison function must be either a function or undefined: 1
+## flatMap
+TypeError: number 1 is not a function
+## join
+TypeError: Cannot convert undefined or null to object
+## arrayIncludes
+TypeError: Cannot convert undefined or null to object
+## matchAll
+TypeError: String.prototype.matchAll called with a non-global RegExp argument
+## replaceAll
+TypeError: String.prototype.replaceAll called with a non-global RegExp argument
+## startsWith
+TypeError: First argument to String.prototype.startsWith must not be a regular expression
+## includes
+TypeError: First argument to String.prototype.includes must not be a regular expression
+## getOwnPropertyNames
+TypeError: Cannot convert undefined or null to object
+## defineProperties
+TypeError: Object.defineProperties called on non-object
+## proxyRev
+TypeError: Cannot perform 'get' on a proxy that has been revoked
