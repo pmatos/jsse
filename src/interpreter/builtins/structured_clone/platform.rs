@@ -11,8 +11,8 @@
 
 use super::super::super::*;
 use super::{CloneResult, Cloner, get_or_throw};
-use rustc_hash::FxHashSet;
 use crate::interpreter::types::{PrivateElement, PrivateId};
+use rustc_hash::FxHashSet;
 
 pub(super) const TRANSFERABLE: u8 = 1;
 pub(super) const CLONEABLE: u8 = 2;
