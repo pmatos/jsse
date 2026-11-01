@@ -86,7 +86,6 @@ fn array_pattern_text(init: &Expression) -> Option<String> {
         | Expression::Literal(_)
         | Expression::Call(..)
         | Expression::New(..)
-        | Expression::TaggedTemplate(..)
         | Expression::Object(..)
         | Expression::This
         | Expression::Unary(..)
@@ -239,6 +238,18 @@ impl Interpreter {
                     [.., outer, inner] if outer == inner
                 );
             let error = match (lead, self.head_text_here()) {
+                (lead, _) if !defaulted && self.default_text_for(props).is_some() => {
+                    let text = self.default_text_for(props).unwrap_or_default();
+                    match lead {
+                        Some(Lead::Read(name)) => {
+                            self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
+                        }
+                        lead => {
+                            let name = lead.as_ref().and_then(Lead::name).map(str::to_string);
+                            Self::destructure_message(name, &text, value)
+                        }
+                    }
+                }
                 (Some(Lead::Named(name) | Lead::Read(name)), _) if nested => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
@@ -294,11 +305,14 @@ impl Interpreter {
         }
         let frame = self.call_depth;
         let site = self.array_pattern_site(pattern, &value);
+        let nested = self.node_host.pattern_frames.last() == Some(&frame);
         self.node_host.pattern_frames.push(frame);
         self.node_host.pattern_kinds.push(PatternKind::of(pattern));
+        let noted = nested && self.note_default_pattern(pattern);
         let done = self.bind_pattern_at(pattern, value, kind, env);
         self.node_host.pattern_frames.pop();
         self.node_host.pattern_kinds.pop();
+        let done = self.finish_default_pattern(pattern, noted, nested, done);
         match site {
             Some(site) => self.reword_array_pattern(done, site),
             None => done,

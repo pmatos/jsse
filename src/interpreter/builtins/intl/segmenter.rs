@@ -244,7 +244,6 @@ impl Interpreter {
                         PropertyDescriptor::data(breaks_arr, false, false, false),
                     );
 
-                // containing(index) method
                 let containing_fn = interp.create_function(JsFunction::native(
                     "containing".to_string(),
                     1,
@@ -262,7 +261,8 @@ impl Interpreter {
                             false
                         };
                         if !is_segments {
-                            return Completion::Throw(interp.create_type_error(
+                            return Completion::Throw(interp.bad_this(
+                                this,
                                 "%Segments.prototype%.containing called on incompatible receiver",
                             ));
                         }

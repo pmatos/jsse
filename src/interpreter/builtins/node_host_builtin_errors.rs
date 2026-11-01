@@ -165,6 +165,7 @@ impl Interpreter {
             .frame_wording(msg)
             .or_else(|| self.proxy_wording(msg))
             .or_else(|| self.define_wording(msg))
+            .or_else(|| self.intl_wording(msg))
             .or_else(|| self.wording_1558(msg))
         {
             return Cow::Owned(text);

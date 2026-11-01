@@ -11,7 +11,8 @@
 //!   'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.`
 
 use super::super::*;
-use crate::ast::ObjectPatternProperty;
+use super::node_host_expr_text::expr_text;
+use crate::ast::{ObjectPatternProperty, PropertyKey};
 
 /// V8 prints a conditional as three unnamed values.
 pub(super) const CONDITIONAL: &str = "(intermediate value)(intermediate value)(intermediate value)";
@@ -35,19 +36,43 @@ impl PatternKind {
     }
 }
 
-/// Whether V8 reads the property list of this object pattern parameter as
-/// the position of a later parameter's failure: no property has a default or
-/// a pattern of its own.
-fn leaks_position(props: &[ObjectPatternProperty]) -> bool {
-    props.iter().all(|prop| match prop {
-        ObjectPatternProperty::Shorthand(_) | ObjectPatternProperty::Rest(_) => true,
-        ObjectPatternProperty::KeyValue(_, target) => {
-            matches!(
-                target,
-                Pattern::Identifier(_) | Pattern::MemberExpression(_)
-            )
+/// What an earlier parameter leaves in V8's printer for the array pattern
+/// parameter after it.
+#[derive(Clone)]
+pub(crate) enum Leak {
+    /// The value's own text.
+    Plain,
+    /// The desugared conditional of a parameter with a default.
+    Defaulted,
+    /// The default of a nested pattern (`{ a: { c } = {} }` leaves `{}`).
+    Text(String),
+    /// A call default: `f is not iterable (...)`.
+    Callee(String),
+}
+
+/// What V8 reads as the position of a later parameter's failure in this object
+/// pattern parameter. A computed key or a default on a plain name ends the
+/// effect, except that a call default names its callee.
+fn leaks_position(props: &[ObjectPatternProperty]) -> Option<Leak> {
+    let mut leak = Leak::Plain;
+    for prop in props {
+        let ObjectPatternProperty::KeyValue(key, target) = prop else {
+            continue;
+        };
+        if matches!(key, PropertyKey::Computed(_)) {
+            return None;
         }
-    })
+        if let Pattern::Assign(inner, default) = target {
+            if !matches!(**inner, Pattern::Identifier(_)) {
+                leak = Leak::Text(expr_text(default));
+            } else if let Expression::Call(callee, ..) = &**default {
+                return Some(Leak::Callee(expr_text(callee)));
+            } else {
+                return None;
+            }
+        }
+    }
+    Some(leak)
 }
 
 /// The pattern a parameter binds, and whether it has a default.
@@ -103,13 +128,18 @@ impl Interpreter {
         if !matches!(pattern, Pattern::Array(_)) {
             return false;
         }
-        if let Pattern::Assign(_, default) = &params[index]
-            && !matches!(
+        if let Pattern::Assign(_, default) = &params[index] {
+            if let Expression::Call(callee, ..) = &**default {
+                let at = std::ptr::from_ref(pattern) as usize;
+                self.node_host.param_leak = Some((at, Leak::Callee(expr_text(callee))));
+                return true;
+            }
+            if !matches!(
                 **default,
                 Expression::Literal(_) | Expression::Void(_) | Expression::Object(..)
-            )
-        {
-            return false;
+            ) {
+                return false;
+            }
         }
         let earlier = params[..index].iter().rev().find_map(|param| {
             let (pattern, defaulted) = unwrap_default(param);
@@ -120,7 +150,12 @@ impl Interpreter {
             return false;
         };
         let at = std::ptr::from_ref(pattern) as usize;
-        self.node_host.param_leak = leaks_position(props).then_some((at, defaulted));
+        let leak = if defaulted {
+            Some(Leak::Defaulted)
+        } else {
+            leaks_position(props)
+        };
+        self.node_host.param_leak = leak.map(|leak| (at, leak));
         self.node_host.param_leak.is_some()
     }
 
@@ -131,14 +166,20 @@ impl Interpreter {
         addr: usize,
         value: &JsValue,
     ) -> Option<String> {
-        let (at, defaulted) = self.node_host.param_leak?;
-        if at != addr {
+        let (at, leak) = self.node_host.param_leak.as_ref()?;
+        if *at != addr {
             return None;
         }
-        let shown = if defaulted {
-            CONDITIONAL.to_string()
-        } else {
-            self.v8_call_site_text(value)
+        let defaulted = matches!(leak, Leak::Defaulted);
+        let shown = match leak {
+            Leak::Defaulted => CONDITIONAL.to_string(),
+            Leak::Text(text) => text.clone(),
+            Leak::Callee(callee) => {
+                return Some(format!(
+                    "{callee} is not iterable (cannot read property Symbol(Symbol.iterator))"
+                ));
+            }
+            Leak::Plain => self.v8_call_site_text(value),
         };
         if value.is_nullish() {
             Some(Self::iterator_read_message(&shown, value))

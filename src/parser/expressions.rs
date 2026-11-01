@@ -736,11 +736,7 @@ impl<'a> Parser<'a> {
                             return Ok((false, false, false));
                         }
                         tokens.advance()?;
-                        Ok((
-                            false,
-                            !tokens.line_terminator_before() && tokens.current() == &Token::Arrow,
-                            false,
-                        ))
+                        self.arrow_after_async_param(tokens)
                     })?;
 
                 self.advance()?; // async
