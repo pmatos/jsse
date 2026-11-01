@@ -7,7 +7,10 @@
 //! expression and classified the way V8 would. Default mode is untouched.
 
 use crate::parser::arrow_params::TokenMark;
-use crate::parser::*;
+use crate::parser::{
+    AssignOp, ExprBox, Expression, MemberProperty, ParseError, Parser, Pattern, PropertyKey, Token,
+    inferred_names,
+};
 
 const INVALID_TARGET: &str = "Invalid destructuring assignment target";
 const ILLEGAL_PROPERTY: &str = "Illegal property in declaration context";
