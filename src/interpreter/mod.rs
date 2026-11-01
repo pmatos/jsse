@@ -44,6 +44,7 @@ pub(crate) use binding_map::BindingName;
 pub(crate) use element_vec::ElementVec;
 mod body_memo;
 mod env_helpers;
+pub(crate) mod env_trim;
 mod eval;
 mod event_loop;
 mod exec;
@@ -1744,9 +1745,8 @@ impl Interpreter {
         }
     }
 
-    /// A fresh block environment under `parent`, reusing a pooled one when
-    /// available. Block and function scopes share the pool, which holds only
-    /// environments in the canonical state `Environment::release_to_pool` leaves.
+    /// A fresh block environment under `parent`, from the pool shared with
+    /// function scopes when it has one (`Environment::release_to_pool` state).
     pub(crate) fn acquire_block_environment(
         &mut self,
         parent: EnvRef,

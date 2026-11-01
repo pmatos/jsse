@@ -88,7 +88,7 @@ impl Interpreter {
         {
             self.perf.calls_to_user += 1;
         }
-        let (result, func_env) = self.with_realm(function_realm, |interp| {
+        let (result, func_env, may_trim) = self.with_realm(function_realm, |interp| {
             let func_env =
                 interp.acquire_function_environment(closure, call.params.len().saturating_add(2));
             let sloppy_record = {
@@ -120,8 +120,11 @@ impl Interpreter {
                     interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
                 },
             );
-            (result, func_env)
+            (result, func_env, !sloppy_record)
         });
+        if may_trim && Rc::strong_count(&func_env) > 1 {
+            env_trim::trim_exited_environment(&func_env, frame, &call.params, &call.body);
+        }
         self.recycle_environment(func_env);
         self.finish_user_call(result)
     }
@@ -147,7 +150,7 @@ impl Interpreter {
         {
             self.perf.calls_to_user += 1;
         }
-        let (result, func_env) = self.with_realm(function_realm, |interp| {
+        let (result, func_env, may_trim) = self.with_realm(function_realm, |interp| {
             let func_env =
                 interp.acquire_function_environment(closure, call.params.len().saturating_add(2));
             let closure_strict = {
@@ -182,8 +185,11 @@ impl Interpreter {
                     interp.run_compiled_body(func_obj_id, &call.chunk, &call.body, frame, &func_env)
                 },
             );
-            (result, func_env)
+            (result, func_env, !mapped)
         });
+        if may_trim && Rc::strong_count(&func_env) > 1 {
+            env_trim::trim_exited_environment(&func_env, frame, &call.params, &call.body);
+        }
         self.recycle_environment(func_env);
         self.finish_user_call(result)
     }
@@ -267,6 +273,14 @@ impl Interpreter {
                 return Completion::Throw(error);
             }
         };
+        env_trim::trim_activation_scopes(
+            &func_env,
+            &exec_env,
+            separate_body_env,
+            frame,
+            &call.params,
+            &call.body,
+        );
         if separate_body_env {
             self.recycle_environment(exec_env);
         } else {

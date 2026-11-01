@@ -5366,8 +5366,6 @@ impl Interpreter {
                             {
                                 interp.perf.calls_to_user += 1;
                             }
-                            // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
-
                             if is_async && !is_generator {
                                 let result = interp.call_async_function(
                                     o.id,
@@ -5387,7 +5385,6 @@ impl Interpreter {
                                 return CallOutcome::Ready(result);
                             }
                             if is_async && is_generator {
-                                // Create persistent function environment
                                 let func_env = Environment::new_function_scope_with_capacity(
                                     Some(closure.clone()),
                                     params.len().saturating_add(2),
@@ -5500,7 +5497,6 @@ impl Interpreter {
                                 )));
                             }
                             if is_generator {
-                                // Create persistent function environment
                                 let func_env = Environment::new_function_scope_with_capacity(
                                     Some(closure.clone()),
                                     params.len().saturating_add(2),
@@ -5631,7 +5627,6 @@ impl Interpreter {
                             let mut call_frame_arguments = CallFrameArguments::None;
                             if !is_arrow {
                                 if interp.constructing_derived {
-                                    // Derived constructor: this is in TDZ until super() is called
                                     let mut fe = func_env.borrow_mut();
                                     fe.declare_this_uninit(env_new_target);
                                     fe.is_derived_constructor_scope = true;
@@ -5731,6 +5726,9 @@ impl Interpreter {
                             if was_construct {
                                 interp.last_call_this_value = func_env.borrow().get_this();
                             }
+                            let unmapped = is_arrow || !is_simple || is_strict || closure_strict;
+                            let scopes = (&func_env, &exec_env, separate_body_env);
+                            env_trim::trim_general_call(unmapped, scopes, &frame, &params, &body);
 
                             CallOutcome::Executed(result, func_env, exec_env, separate_body_env)
                         }
