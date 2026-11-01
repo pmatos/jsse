@@ -14,14 +14,15 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return;
         }
-        let name = msg.strip_suffix(" is not defined").or_else(|| {
+        let missing = msg.strip_suffix(" is not defined");
+        let name = missing.or_else(|| {
             msg.strip_prefix("Cannot access '")?
                 .strip_suffix("' before initialization")
         });
         if let Some(name) = name {
             self.node_host.ident_error = Some((id, name.into()));
             let store = self.node_host.assign_pos;
-            if store != 0 && msg.ends_with(" is not defined") {
+            if store != 0 && missing.is_some() {
                 self.node_host.call_pos = store;
                 self.node_capture_stack(id, 0, None, true);
             }
