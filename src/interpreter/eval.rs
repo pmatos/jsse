@@ -6520,9 +6520,7 @@ impl Interpreter {
         new_target: JsValue,
     ) -> Completion {
         if !self.is_constructor(parent) {
-            return Completion::Throw(
-                self.create_type_error("Super constructor is not a constructor"),
-            );
+            return Completion::Throw(self.super_constructor_error(parent));
         }
         self.construct_with_new_target(parent, args, new_target)
     }

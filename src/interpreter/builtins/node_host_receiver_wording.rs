@@ -90,7 +90,28 @@ const EXACT_1532: [(&str, &str); 5] = [
     ),
 ];
 
-const PROMISE_STATIC: [&str; 5] = ["all", "allSettled", "any", "race", "reject"];
+const PROMISE_STATIC: [&str; 6] = [
+    "all",
+    "allSettled",
+    "any",
+    "race",
+    "reject",
+    "withResolvers",
+];
+
+/// The `Class.prototype.method` V8 names for an iterator or generator
+/// `next`/`return`/`throw` called on the wrong receiver.
+fn iterator_label(msg: &str) -> Option<String> {
+    for kind in ["Map", "Set"] {
+        if msg == format!("{kind} Iterator.prototype.next requires a {kind} Iterator") {
+            return Some(format!("{kind} Iterator.prototype.next"));
+        }
+    }
+    let method = msg
+        .strip_prefix("Generator.prototype.")?
+        .strip_suffix(" called on non-object")?;
+    Some(format!("[Generator].prototype.{method}"))
+}
 
 impl Interpreter {
     fn wording_own_function(&self, object: u64, key: &str) -> Option<u64> {
@@ -142,11 +163,20 @@ impl Interpreter {
         let (func, receiver) = self.top_native()?;
         let name = self.own_data_string(func, "name")?;
         let name = name.as_str();
+        if let Some(label) = iterator_label(msg) {
+            return Some(self.incompatible(&label, &receiver));
+        }
         if let Some(head) = msg
             .strip_prefix("RegExp.prototype")
             .and_then(|rest| rest.split_once(" requires that 'this' be a"))
             .map(|(head, _)| head)
         {
+            if head == ".flags" && name == "get flags" {
+                return Some(format!(
+                    "RegExp.prototype.flags getter called on non-object {}",
+                    self.v8_plain_text(&receiver)
+                ));
+            }
             let (shown, frame) = match head.strip_prefix("[@@").and_then(|h| h.strip_suffix(']')) {
                 Some(sym) => (format!(".@@{sym}"), format!("[Symbol.{sym}]")),
                 None => (head.to_string(), head.trim_start_matches('.').to_string()),
@@ -180,6 +210,11 @@ impl Interpreter {
                         "Object.prototype.toLocaleString called on null or undefined".to_string(),
                     );
                 }
+                if name == "set __proto__" {
+                    return Some(
+                        "set Object.prototype.__proto__ called on null or undefined".to_string(),
+                    );
+                }
                 (name == "catch" && self.is_builtin_member(func, "Promise", name, false))
                     .then(|| format!("Cannot read properties of {} (reading 'then')", receiver))
             }
@@ -188,6 +223,25 @@ impl Interpreter {
                     && self.is_builtin_member(func, "ArrayBuffer", name, false) =>
             {
                 Some(self.incompatible(&format!("ArrayBuffer.prototype.{name}"), &receiver))
+            }
+            "not an ArrayBuffer" | "not a DataView" | "not a TypedArray"
+                if name.starts_with("get ") =>
+            {
+                let class = match msg {
+                    "not an ArrayBuffer" => "ArrayBuffer",
+                    "not a DataView" => "DataView",
+                    _ => "TypedArray",
+                };
+                Some(self.incompatible(&format!("get {class}.prototype.{}", &name[4..]), &receiver))
+            }
+            "TypedArray.from requires a constructor" | "not a constructor"
+                if ["from", "of"].contains(&name)
+                    && self.is_builtin_member(func, "%TypedArray%", name, true) =>
+            {
+                Some(format!(
+                    "{} is not a constructor",
+                    self.v8_plain_text(&receiver)
+                ))
             }
             "not a DataView" if self.is_builtin_member(func, "DataView", name, false) => {
                 Some(self.incompatible(&format!("DataView.prototype.{name}"), &receiver))

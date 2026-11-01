@@ -97,3 +97,39 @@ mod tests {
         assert_eq!(at("class B extends"), None);
     }
 }
+
+impl Interpreter {
+    /// The TypeError of a `super()` call whose parent is not a constructor;
+    /// under `--node`, V8's `Super constructor null of A is not a
+    /// constructor`.
+    pub(crate) fn super_constructor_error(
+        &mut self,
+        parent: &crate::types::JsValue,
+    ) -> crate::types::JsValue {
+        if self.node_host.stack.installed {
+            let named = |interp: &Self, id: u64| {
+                interp
+                    .own_data_string(id, "name")
+                    .map(|name| name.to_string())
+                    .filter(|name| !name.is_empty())
+            };
+            let class = self
+                .call_stack_frames
+                .last()
+                .and_then(|frame| named(self, frame.func_obj_id))
+                .map_or_else(
+                    || "of anonymous class".to_string(),
+                    |name| format!("of {name}"),
+                );
+            let shown = match parent.as_object_id() {
+                Some(id) if self.is_callable(parent) => {
+                    named(self, id).unwrap_or_else(|| "null".to_string())
+                }
+                _ => self.v8_plain_text(parent),
+            };
+            let text = format!("Super constructor {shown} {class} is not a constructor");
+            return self.create_type_error(&text);
+        }
+        self.create_type_error("Super constructor is not a constructor")
+    }
+}
