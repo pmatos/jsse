@@ -55,7 +55,7 @@ impl Interpreter {
                         other => return other,
                     }
                 } else {
-                    match self.eval_expr(init, env) {
+                    match self.eval_decl(d, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     }

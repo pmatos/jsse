@@ -331,9 +331,7 @@ impl Interpreter {
                 match self.proxy_delete_property(o.id, &key) {
                     Ok(false) => {
                         if env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot delete property '{key}' of object"
-                            )));
+                            return Completion::Throw(self.delete_rejected_error(&obj_val, &key));
                         }
                         return Completion::Normal(JsValue::boolean(false));
                     }

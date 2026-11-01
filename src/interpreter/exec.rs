@@ -2192,7 +2192,7 @@ impl Interpreter {
             env.clone()
         };
 
-        let iterable = match self.eval_expr(&fo.right, &eval_env) {
+        let iterable = match self.eval_for_head(fo, &eval_env) {
             Completion::Normal(v) => v,
             other => return other,
         };

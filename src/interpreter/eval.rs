@@ -348,9 +348,7 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().has_private_field(*name) {
-                            return Err(
-                                self.create_type_error("Cannot add private method to object twice")
-                            );
+                            return Err(self.method_twice_error(*name));
                         }
                         obj.borrow_mut()
                             .private_fields_mut()
@@ -365,8 +363,7 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().has_private_field(*name) {
-                            return Err(self
-                                .create_type_error("Cannot add private accessor to object twice"));
+                            return Err(self.accessor_twice_error(*name));
                         }
                         obj.borrow_mut().private_fields_mut().insert(
                             *name,
@@ -411,9 +408,7 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().has_private_field(*name) {
-                            return Err(self.create_type_error(
-                                "Cannot initialize private field twice on the same object",
-                            ));
+                            return Err(self.field_twice_error(*name));
                         }
                         obj.borrow_mut()
                             .private_fields_mut()
@@ -3157,7 +3152,7 @@ impl Interpreter {
                 })
             }
             Expression::Array(..) | Expression::Object(..) if op == AssignOp::Assign => {
-                let rval = match self.eval_expr(right, env) {
+                let rval = match self.eval_source(left, right, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
@@ -4804,7 +4799,7 @@ impl Interpreter {
                     break;
                 }
                 let value = args.get(index).cloned().unwrap_or(JsValue::UNDEFINED);
-                interp.bind_pattern_or_throw(param, value, BindingKind::Var, func_env)?;
+                interp.bind_param(params, index, value, func_env)?;
             }
             Ok(())
         })
@@ -5756,9 +5751,7 @@ impl Interpreter {
                 return result;
             }
         }
-        let desc = self.not_callable_message(func_val);
-        let err = self.create_type_error(&desc);
-        Completion::Throw(err)
+        Completion::Throw(self.not_callable_error(func_val))
     }
 
     #[inline]
@@ -6850,7 +6843,12 @@ impl Interpreter {
         match self.resolve_proxy_trap(proxy_id, trap_name)? {
             (_, None) => Ok(None),
             (_, Some((handler_val, trap_val))) => {
-                match self.call_function(&trap_val, &handler_val, &args) {
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&JsValue::object(proxy_id));
+                args.iter().for_each(|arg| self.gc_root_value(arg));
+                let called = self.call_function(&trap_val, &handler_val, &args);
+                self.gc_unroot_frame(gc_frame);
+                match called {
                     Completion::Normal(v) => {
                         self.note_proxy_trap(trap_name, &args, &v);
                         Ok(Some(v))
@@ -6951,9 +6949,7 @@ impl Interpreter {
                 }
                 for key in &target_keys {
                     if !trap_set.contains(key) {
-                        return Err(self.create_type_error(
-                            "'ownKeys' on proxy: trap result did not include all own keys of non-extensible proxy target",
-                        ));
+                        return Err(self.proxy_missing_target_key_error(key));
                     }
                 }
             }
