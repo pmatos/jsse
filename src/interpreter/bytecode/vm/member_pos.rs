@@ -14,8 +14,14 @@ pub(super) fn note(interp: &mut Interpreter, chunk: &Chunk, stack: &[JsValue], p
         return;
     }
     let depth = match Op::from_u8(chunk.code[pc]) {
-        Some(Op::GetProp | Op::LoadMethod) => 1,
-        Some(Op::GetElement | Op::LoadMethodElement | Op::SetProp) => 2,
+        Some(Op::GetProp | Op::LoadMethod | Op::UpdateProp) => 1,
+        Some(
+            Op::GetElement
+            | Op::LoadMethodElement
+            | Op::SetProp
+            | Op::UpdateElement
+            | Op::ToPrimitiveKey,
+        ) => 2,
         Some(Op::SetElement) => 3,
         _ => return,
     };
@@ -27,6 +33,18 @@ pub(super) fn note(interp: &mut Interpreter, chunk: &Chunk, stack: &[JsValue], p
             interp.node_host.call_pos = pos;
         }
         interp.node_host.pattern_src = chunk.pattern_src_at(pc).cloned();
+    }
+}
+
+/// A store or update is about to take its by-name path: a constant
+/// assignment it throws is reported at the position the compiler recorded
+/// for the instruction ending at `pc` (#1511).
+#[inline]
+pub(super) fn note_store(interp: &mut Interpreter, chunk: &Chunk, pc: usize) {
+    if !chunk.binary_pos.is_empty()
+        && let Some(pos) = chunk.binary_pos_at(pc)
+    {
+        interp.node_host.assign_pos = pos;
     }
 }
 

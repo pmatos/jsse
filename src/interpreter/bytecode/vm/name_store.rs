@@ -1,7 +1,9 @@
 //! The by-name store paths of the name ops: `StoreLocal`'s fallback and
 //! `StoreResolvedName` through the reference `ResolveName` created.
 
-use super::hinted_writable;
+use super::{hinted_writable, member_pos};
+use crate::ast::UpdateOp;
+use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::eval::IdentifierRef;
 use crate::interpreter::types::{BindingKind, Completion};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
@@ -17,8 +19,9 @@ pub(super) fn store_local(
     target: &EnvRef,
     env: &EnvRef,
     value: &JsValue,
-    hint: Option<&GlobalHint>,
+    (chunk, idx, pc): (&Chunk, u16, usize),
 ) -> Result<(), JsValue> {
+    let hint = chunk.global_hint(idx);
     let stored = match hinted_writable(&mut target.borrow_mut(), name, slot) {
         Some(binding) => {
             binding.value = value.clone();
@@ -38,10 +41,32 @@ pub(super) fn store_local(
         interp.perf.local_slot_misses += 1;
     }
     let id_ref = interp.resolve_identifier_ref_hinted(name, env, hint)?;
-    match interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint) {
+    let done = {
+        member_pos::note_store(interp, chunk, pc);
+        interp.put_value_by_ref_hinted(name, value.clone(), &id_ref, env, hint)
+    };
+    interp.node_host.assign_pos = 0;
+    match done {
         Completion::Throw(e) => Err(e),
         _ => Ok(()),
     }
+}
+
+/// `UpdateLocal`/`UpdateName`'s by-name update, reporting a constant
+/// assignment at the position the compiler recorded for the op.
+#[inline(always)]
+pub(super) fn update_slow(
+    interp: &mut Interpreter,
+    (chunk, pc): (&Chunk, usize),
+    (op, prefix): (UpdateOp, bool),
+    name: &Atom,
+    env: &EnvRef,
+    hint: Option<&GlobalHint>,
+) -> Completion {
+    member_pos::note_store(interp, chunk, pc);
+    let done = interp.eval_identifier_update_hinted(op, prefix, name, env, hint);
+    interp.node_host.assign_pos = 0;
+    done
 }
 
 /// `StoreResolvedName`'s store through the reference `ResolveName` created.
@@ -53,6 +78,7 @@ pub(super) fn store_resolved_name(
     env: &EnvRef,
     value: &JsValue,
     hint: Option<&GlobalHint>,
+    (chunk, pc): (&Chunk, usize),
 ) -> Result<(), JsValue> {
     let local_store = if let IdentifierRef::SpecificEnv(local_env) = id_ref {
         let mut scope = local_env.borrow_mut();
@@ -75,11 +101,13 @@ pub(super) fn store_resolved_name(
     } else {
         false
     };
-    if !local_store
-        && let Completion::Throw(e) =
-            interp.put_value_by_ref_hinted(name, value.clone(), id_ref, env, hint)
-    {
-        return Err(e);
+    if !local_store {
+        member_pos::note_store(interp, chunk, pc);
+        let done = interp.put_value_by_ref_hinted(name, value.clone(), id_ref, env, hint);
+        interp.node_host.assign_pos = 0;
+        if let Completion::Throw(e) = done {
+            return Err(e);
+        }
     }
     Ok(())
 }

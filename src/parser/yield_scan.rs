@@ -22,10 +22,10 @@ impl<'a> Parser<'a> {
             }
             Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
-            | Expression::Assign(_, left, right) => {
+            | Expression::Assign(_, left, right, _) => {
                 Self::expr_contains_yield_expression(left) || Self::expr_contains_yield_expression(right)
             }
-            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
+            Expression::Unary(_, operand) | Expression::Update(.., operand, _) => {
                 Self::expr_contains_yield_expression(operand)
             }
             Expression::Conditional(test, consequent, alternate) => {

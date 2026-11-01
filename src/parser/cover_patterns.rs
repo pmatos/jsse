@@ -20,7 +20,7 @@ pub(crate) fn check_object_rest_target(target: &Expression) -> Result<(), ParseE
 pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
     match expr {
         Expression::Identifier(name) => Ok(Pattern::Identifier(name)),
-        Expression::Assign(AssignOp::Assign, left, right) => {
+        Expression::Assign(AssignOp::Assign, left, right, _) => {
             let pat = expr_to_pattern(left.into_expression())?;
             Ok(Pattern::Assign(Box::new(pat), right))
         }
@@ -36,7 +36,7 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                 let pat = e
                     .map(|e| {
                         if let Expression::Spread(inner) = e {
-                            if let Expression::Assign(AssignOp::Assign, _, _) = *inner {
+                            if let Expression::Assign(AssignOp::Assign, _, _, _) = *inner {
                                 return Err(ParseError {
                                     message: "Rest element may not have a default initializer"
                                         .to_string(),
@@ -80,7 +80,8 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                         pat_props.push(ObjectPatternProperty::Rest(pat));
                     } else if prop.shorthand {
                         if let PropertyKey::Identifier(ref name) = prop.key {
-                            if let Expression::Assign(AssignOp::Assign, left, right) = prop.value {
+                            if let Expression::Assign(AssignOp::Assign, left, right, _) = prop.value
+                            {
                                 let pat = expr_to_pattern(left.into_expression())?;
                                 pat_props.push(ObjectPatternProperty::KeyValue(
                                     prop.key,
@@ -176,6 +177,7 @@ pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
             AssignOp::Assign,
             ExprBox::new(pattern_to_expr(*pat)),
             default,
+            0,
         ),
         Pattern::MemberExpression(expr) => expr.into_expression(),
     }

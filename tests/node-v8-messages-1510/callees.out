@@ -101,6 +101,7 @@ at Object.arrayCall (<dir>/callees.js:135:15)
 TypeError: n is not iterable
 ## arrayAssign
 TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+at Object.arrayAssign (<dir>/callees.js:142:9)
 ## arrayParameter
 TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
 ## forOfLiteral

@@ -117,10 +117,10 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         | Expression::NewTarget
         | Expression::PrivateIdentifier(_) => {}
         Expression::Unary(_, e)
-        | Expression::Update(_, _, e)
+        | Expression::Update(.., e, _)
         | Expression::Spread(e)
         | Expression::PreIterated(e)
-        | Expression::ClassProtoParent(e)
+        | Expression::ClassProtoParent(e, _)
         | Expression::Await(e, _)
         | Expression::Typeof(e)
         | Expression::Void(e)
@@ -130,7 +130,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         }
         Expression::Binary(_, l, r, _)
         | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r)
+        | Expression::Assign(_, l, r, _)
         | Expression::BoundCallee(l, r)
         | Expression::ResolvedHeritage(l, r)
         | Expression::OptionalChain(l, r) => {

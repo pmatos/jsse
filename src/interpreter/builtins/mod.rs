@@ -25,6 +25,7 @@ mod math;
 mod merge_sort;
 pub(crate) mod node_host;
 mod node_host_assign_errors;
+pub(crate) mod node_host_assign_pos;
 mod node_host_brotli_ctx;
 mod node_host_buffer_errors;
 mod node_host_builtin_errors;
@@ -65,7 +66,7 @@ mod node_host_fs_more;
 mod node_host_fs_ops;
 #[cfg(unix)]
 mod node_host_fs_watch;
-mod node_host_heritage;
+pub(crate) mod node_host_heritage;
 mod node_host_idna;
 mod node_host_json_cycle;
 mod node_host_loop;

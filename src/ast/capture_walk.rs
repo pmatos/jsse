@@ -231,10 +231,10 @@ impl<'a> CaptureWalk<'a> {
                 }
             }
             Expression::Unary(_, e)
-            | Expression::Update(_, _, e)
+            | Expression::Update(.., e, _)
             | Expression::Spread(e)
             | Expression::PreIterated(e)
-            | Expression::ClassProtoParent(e)
+            | Expression::ClassProtoParent(e, _)
             | Expression::Await(e, _)
             | Expression::Typeof(e)
             | Expression::Void(e)
@@ -246,7 +246,7 @@ impl<'a> CaptureWalk<'a> {
             }
             Expression::Binary(_, l, r, _)
             | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r)
+            | Expression::Assign(_, l, r, _)
             | Expression::BoundCallee(l, r)
             | Expression::ResolvedHeritage(l, r)
             | Expression::OptionalChain(l, r) => {

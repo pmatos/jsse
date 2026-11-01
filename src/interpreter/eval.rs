@@ -585,8 +585,10 @@ impl Interpreter {
                 self.in_tail_position = tail;
                 self.eval_logical(*op, left, right, env)
             }
-            Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
-            Expression::Assign(op, left, right) => self.eval_assign(*op, left, right, env),
+            Expression::Update(op, prefix, arg, at) => {
+                self.eval_update(*op, *prefix, arg, *at, env)
+            }
+            Expression::Assign(op, left, right, at) => self.eval_assign(*op, left, right, *at, env),
             Expression::Conditional(test, cons, alt) => {
                 let test_val = match self.eval_expr(test, env) {
                     Completion::Normal(v) => v,
@@ -674,7 +676,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
             Expression::Delete(expr) => match expr.as_ref() {
-                Expression::Member(obj_expr, prop, _) => {
+                Expression::Member(obj_expr, prop, site) => {
                     // §13.5.1.2 step 5a: delete on SuperReference is always ReferenceError.
                     // §13.3.7.1: SuperProperty evaluation calls GetThisBinding() (step 2)
                     // before evaluating the key expression (step 3).
@@ -718,6 +720,7 @@ impl Interpreter {
                     };
                     // TypeError for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
+                        self.note_last_pos(obj_expr, prop, *site);
                         return Completion::Throw(
                             self.delete_nullish_error(&key.to_string(), &obj_val),
                         );
@@ -800,8 +803,8 @@ impl Interpreter {
             Expression::BoundCallee(func, _)
             | Expression::PreIterated(func)
             | Expression::ResolvedHeritage(func, _) => self.eval_expr(func, env),
-            Expression::ClassProtoParent(heritage) => match self.eval_expr(heritage, env) {
-                Completion::Normal(sv) => self.class_proto_parent(&sv),
+            Expression::ClassProtoParent(heritage, at) => match self.eval_expr(heritage, env) {
+                Completion::Normal(sv) => self.class_proto_parent(&sv, *at),
                 other => other,
             },
             Expression::Yield(expr, delegate) => {
@@ -2490,11 +2493,12 @@ impl Interpreter {
         op: UpdateOp,
         prefix: bool,
         arg: &Expression,
+        at: u32,
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
-            self.eval_identifier_update(op, prefix, name, env)
-        } else if let Expression::Member(obj_expr, prop, _) = arg {
+            self.update_identifier_at(at, (op, prefix), name, env)
+        } else if let Expression::Member(obj_expr, prop, site) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)
                 && !matches!(prop, MemberProperty::Private(_))
@@ -2577,6 +2581,7 @@ impl Interpreter {
                 match prop {
                     MemberProperty::Dot(name) => {
                         if obj_val.is_nullish() {
+                            this.note_last_pos(obj_expr, prop, *site);
                             return Completion::Throw(this.create_type_error(&format!(
                                 "Cannot read properties of {obj_val} (reading '{name}')"
                             )));
@@ -2588,6 +2593,7 @@ impl Interpreter {
                         let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
                         if obj_val.is_nullish() {
+                            this.note_last_pos(obj_expr, prop, *site);
                             return Completion::Throw(this.nullish_read_error(&obj_val, &v));
                         }
                         this.update_member_computed(&obj_val, &v, op, prefix, strict)
@@ -2775,6 +2781,7 @@ impl Interpreter {
         op: AssignOp,
         left: &Expression,
         right: &Expression,
+        at: u32,
         env: &EnvRef,
     ) -> Completion {
         // Logical assignments are short-circuit
@@ -2782,7 +2789,7 @@ impl Interpreter {
             op,
             AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign
         ) {
-            return self.eval_logical_assign(op, left, right, env);
+            return self.eval_logical_assign(op, left, right, at, env);
         }
 
         match left {
@@ -2802,7 +2809,7 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            match self.env_set(env, name, rval.clone()) {
+                            match self.env_set_at(at, env, name, rval.clone()) {
                                 Ok(()) => return Completion::Normal(rval),
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -2838,7 +2845,7 @@ impl Interpreter {
                         }
                         v
                     };
-                    return self.put_value_by_ref(name, rval, &id_ref, env);
+                    return self.put_ref_at(at, name, rval, &id_ref, env);
                 }
                 // Fast path: compound assignment on a local binding (no with)
                 {
@@ -2864,7 +2871,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        match self.env_set(env, name, final_val.clone()) {
+                        match self.env_set_at(at, env, name, final_val.clone()) {
                             Ok(()) => return Completion::Normal(final_val),
                             Err(e) => return Completion::Throw(e),
                         }
@@ -2887,7 +2894,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                self.put_value_by_ref(name, final_val, &id_ref, env)
+                self.put_ref_at(at, name, final_val, &id_ref, env)
             }
             Expression::Member(obj_expr, prop, site) => {
                 // §13.3.7.1: super[expr] = val — special evaluation order
@@ -3040,7 +3047,7 @@ impl Interpreter {
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
                         if obj_val.is_null() || obj_val.is_undefined() {
-                            interp.note_member_pos(*site);
+                            interp.note_last_pos(obj_expr, prop, *site);
                             let error = match key_val.as_ref() {
                                 Some(k) => interp.nullish_read_error(&obj_val, k),
                                 None => {
@@ -3152,6 +3159,9 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                if at != 0 && matches!(left, Expression::Array(..)) {
+                    self.node_host.call_pos = at;
+                }
                 let done = self.assign_pattern_value(left, right, &rval, env);
                 match done {
                     Completion::Normal(_) => Completion::Normal(rval),
@@ -3179,10 +3189,10 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    self.put_value_by_ref(name, rval, &id_ref, env)
+                    self.put_ref_at(at, name, rval, &id_ref, env)
                 } else {
                     // Parenthesized member expression or other — delegate
-                    self.eval_assign(op, &exprs[0], right, env)
+                    self.eval_assign(op, &exprs[0], right, at, env)
                 }
             }
             _ => {
@@ -3200,6 +3210,7 @@ impl Interpreter {
         op: AssignOp,
         left: &Expression,
         right: &Expression,
+        at: u32,
         env: &EnvRef,
     ) -> Completion {
         match left {
@@ -3228,7 +3239,7 @@ impl Interpreter {
                 if right.is_anonymous_function_definition() {
                     self.set_function_name(&rval, name);
                 }
-                self.put_value_by_ref(name, rval, &id_ref, env)
+                self.put_ref_at(at, name, rval, &id_ref, env)
             }
             Expression::Member(obj_expr, MemberProperty::Private(name), _) => {
                 let obj_val = match self.eval_expr(obj_expr, env) {
@@ -3907,6 +3918,7 @@ impl Interpreter {
                 AssignOp::Assign,
                 ExprBox::new(Self::pattern_to_assignment_expr(inner)),
                 default.clone(),
+                0,
             ),
             Pattern::Rest(inner) => {
                 Expression::Spread(ExprBox::new(Self::pattern_to_assignment_expr(inner)))
@@ -3942,7 +3954,7 @@ impl Interpreter {
                 self.destructure_array_assignment(elements, &val, env)
             }
             Expression::Object(props, _) => self.destructure_object_assignment(props, &val, env),
-            Expression::Assign(AssignOp::Assign, inner_target, default) => {
+            Expression::Assign(AssignOp::Assign, inner_target, default, _) => {
                 let v = if val.is_undefined() {
                     match self.eval_expr(default, env) {
                         Completion::Normal(v) => v,
@@ -4193,7 +4205,7 @@ impl Interpreter {
                 Some(expr) => {
                     // Extract target and default
                     let (target, default_expr) =
-                        if let Expression::Assign(AssignOp::Assign, target, default) = expr {
+                        if let Expression::Assign(AssignOp::Assign, target, default, _) = expr {
                             (target.as_ref(), Some(default.as_ref()))
                         } else {
                             (expr, None)
@@ -4379,7 +4391,7 @@ impl Interpreter {
 
                         // §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
                         let (target, default_expr) =
-                            if let Expression::Assign(AssignOp::Assign, target, default) =
+                            if let Expression::Assign(AssignOp::Assign, target, default, _) =
                                 &prop.value
                             {
                                 (target.as_ref(), Some(default.as_ref()))
@@ -9735,244 +9747,13 @@ fn compare_bigint_number(
 }
 
 #[cfg(test)]
-mod identifier_reference_read_tests {
-    use super::*;
-
-    fn assert_number(completion: Completion, expected: f64) {
-        match completion {
-            Completion::Normal(value) => assert_eq!(value.as_number(), Some(expected)),
-            other => panic!("expected {expected}, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn captured_identifier_read_preserves_environment_and_live_imports() {
-        let mut interp = Interpreter::new();
-        let outer = Environment::new(None);
-        outer.borrow_mut().declare("value", BindingKind::Let);
-        outer
-            .borrow_mut()
-            .initialize_binding("value", JsValue::number(7.0));
-        let inner = Environment::new(Some(outer.clone()));
-        let reference = interp.resolve_identifier_ref("value", &inner).unwrap();
-        inner.borrow_mut().declare("value", BindingKind::Let);
-        inner
-            .borrow_mut()
-            .initialize_binding("value", JsValue::number(99.0));
-        assert_number(
-            interp.get_identifier_value_by_ref_hinted("value", &reference, &inner, None),
-            7.0,
-        );
-
-        let imports = Environment::new(Some(inner));
-        imports
-            .borrow_mut()
-            .create_import_binding("value", outer.clone(), "value".into());
-        let reference = interp.resolve_identifier_ref("value", &imports).unwrap();
-        outer
-            .borrow_mut()
-            .initialize_binding("value", JsValue::number(8.0));
-        assert_number(
-            interp.get_identifier_value_by_ref_hinted("value", &reference, &imports, None),
-            8.0,
-        );
-
-        outer.borrow_mut().declare("pending", BindingKind::Let);
-        imports
-            .borrow_mut()
-            .create_import_binding("pending", outer.clone(), "pending".into());
-        for (name, base) in [("pending", outer), ("pending", imports.clone())] {
-            let reference = IdentifierRef::SpecificEnv(base);
-            assert!(matches!(
-                interp.get_identifier_value_by_ref_hinted(name, &reference, &imports, None),
-                Completion::Throw(_)
-            ));
-        }
-        assert!(matches!(
-            interp.get_identifier_value_by_ref_hinted(
-                "value",
-                &IdentifierRef::Unresolvable,
-                &imports,
-                None
-            ),
-            Completion::Throw(_)
-        ));
-    }
-
-    #[test]
-    fn identifier_assignment_reads_import_before_shadowed_global() {
-        let mut interp = Interpreter::new();
-        let global = interp.realm().global_env.clone();
-        let global_id = global.borrow().global_object_id.unwrap();
-        interp
-            .get_object_cell_expect(global_id)
-            .borrow_mut()
-            .insert_property(
-                "imported",
-                PropertyDescriptor::data(JsValue::number(0.0), true, true, true),
-            );
-        let source = Environment::new(None);
-        source.borrow_mut().declare("value", BindingKind::Let);
-        source
-            .borrow_mut()
-            .initialize_binding("value", JsValue::number(42.0));
-        let imports = Environment::new(Some(global));
-        imports.borrow_mut().strict = true;
-        imports
-            .borrow_mut()
-            .create_import_binding("imported", source, "value".into());
-        let target = Expression::Identifier("imported".into());
-        let rhs = Expression::Literal(Literal::Number(1.0));
-
-        // A truthy import must short-circuit ||= even though the global is falsy.
-        assert_number(
-            interp.eval_logical_assign(AssignOp::LogicalOrAssign, &target, &rhs, &imports),
-            42.0,
-        );
-        let parenthesized = Expression::Sequence(vec![target.clone()]);
-        assert_number(
-            interp.eval_logical_assign(AssignOp::LogicalOrAssign, &parenthesized, &rhs, &imports),
-            42.0,
-        );
-    }
-}
+mod identifier_reference_read_tests;
 
 #[cfg(test)]
-mod destructuring_reference_scope_tests {
-    use super::*;
-
-    #[test]
-    fn roots_and_finalizes_a_captured_member_reference() {
-        let mut interp = Interpreter::new();
-        let object_id = interp.create_object_id();
-        let env = Environment::new(None);
-        let baseline = interp.gc_root_frame();
-        let reference = DestructLRef::Member(
-            JsValue::object(object_id),
-            JsValue::string(JsString::from_str("answer")),
-        );
-
-        let completion =
-            interp.with_destruct_lref(Some(reference), &Expression::This, &env, |interp| {
-                assert!(
-                    interp.gc_temp_roots.contains(&object_id),
-                    "captured member base must stay rooted while the body runs"
-                );
-                Completion::Normal(JsValue::number(42.0))
-            });
-
-        assert!(matches!(completion, Completion::Empty));
-        assert_eq!(
-            interp.gc_root_frame(),
-            baseline,
-            "reference roots must be released after finalization"
-        );
-        let descriptor = interp
-            .get_object_cell_expect(object_id)
-            .borrow()
-            .get_own_property_full("answer")
-            .expect("captured reference must receive the body value");
-        assert_eq!(
-            descriptor.value.and_then(|value| value.as_number()),
-            Some(42.0)
-        );
-    }
-}
+mod destructuring_reference_scope_tests;
 
 #[cfg(test)]
-mod relational_bigint_tests {
-    use super::compare_bigint_number;
-    use num_bigint::BigInt;
-
-    fn big(n: i64) -> BigInt {
-        BigInt::from(n)
-    }
-
-    // Expected values below were cross-checked against Node's evaluation of the
-    // corresponding `<` expressions, an independent source of truth.
-
-    #[test]
-    fn bigint_left_finite_number() {
-        // 1n < 1.5 -> true
-        assert_eq!(compare_bigint_number(&big(1), 1.5, true), Some(true));
-        // 2n < 1.5 -> false
-        assert_eq!(compare_bigint_number(&big(2), 1.5, true), Some(false));
-    }
-
-    #[test]
-    fn bigint_left_nan_is_undefined() {
-        // 1n < NaN -> undefined
-        assert_eq!(compare_bigint_number(&big(1), f64::NAN, true), None);
-    }
-
-    #[test]
-    fn bigint_left_infinities() {
-        // 1n < Infinity -> true; 1n < -Infinity -> false
-        assert_eq!(
-            compare_bigint_number(&big(1), f64::INFINITY, true),
-            Some(true)
-        );
-        assert_eq!(
-            compare_bigint_number(&big(1), f64::NEG_INFINITY, true),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn bigint_left_negative_fraction_tiebreak() {
-        // -1n < -0.5 -> true; -1n < -1.5 -> false; 0n < -0.5 -> false
-        assert_eq!(compare_bigint_number(&big(-1), -0.5, true), Some(true));
-        assert_eq!(compare_bigint_number(&big(-1), -1.5, true), Some(false));
-        assert_eq!(compare_bigint_number(&big(0), -0.5, true), Some(false));
-    }
-
-    #[test]
-    fn number_left_finite_number() {
-        // 1.5 < 2n -> true; 1.5 < 1n -> false
-        assert_eq!(compare_bigint_number(&big(2), 1.5, false), Some(true));
-        assert_eq!(compare_bigint_number(&big(1), 1.5, false), Some(false));
-    }
-
-    #[test]
-    fn number_left_equal_integer_parts() {
-        // 2.0 < 2n -> false; 1.9 < 2n -> true; -0.5 < 0n -> true
-        assert_eq!(compare_bigint_number(&big(2), 2.0, false), Some(false));
-        assert_eq!(compare_bigint_number(&big(2), 1.9, false), Some(true));
-        assert_eq!(compare_bigint_number(&big(0), -0.5, false), Some(true));
-    }
-
-    #[test]
-    fn number_left_nan_and_infinities() {
-        // NaN < 1n -> undefined; Infinity < 1n -> false; -Infinity < 1n -> true
-        assert_eq!(compare_bigint_number(&big(1), f64::NAN, false), None);
-        assert_eq!(
-            compare_bigint_number(&big(1), f64::INFINITY, false),
-            Some(false)
-        );
-        assert_eq!(
-            compare_bigint_number(&big(1), f64::NEG_INFINITY, false),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn precision_beyond_f64_integer_range() {
-        // 2^53 = 9007199254740992 is exactly representable; 2^53 + 1 is not and
-        // rounds to 2^53 as an f64 literal, but the BigInt stays exact.
-        let two_53 = 9_007_199_254_740_992.0_f64;
-        let two_53_plus_1 = big(9_007_199_254_740_993);
-        // 9007199254740993n < 9007199254740992 -> false
-        assert_eq!(
-            compare_bigint_number(&two_53_plus_1, two_53, true),
-            Some(false)
-        );
-        // 9007199254740993 (rounds to 2^53) < 9007199254740993n -> true
-        assert_eq!(
-            compare_bigint_number(&two_53_plus_1, two_53, false),
-            Some(true)
-        );
-    }
-}
+mod relational_bigint_tests;
 
 // Declared last, as in `compiler.rs` and `vm.rs`: measured layout-neutral (#1105).
 pub(super) mod async_chunk;

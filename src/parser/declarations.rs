@@ -229,7 +229,7 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
         let prev_super_property = self.allow_super_property;
-        self.set_strict(true); // class bodies are always strict
+        self.set_strict(true); // always strict
         self.allow_super_property = true;
         self.push_private_scope();
         let mut elements = Vec::new();
@@ -458,10 +458,10 @@ impl<'a> Parser<'a> {
             }
             Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
-            | Expression::Assign(_, left, right) => {
+            | Expression::Assign(_, left, right, _) => {
                 Self::expr_has_direct_super(left) || Self::expr_has_direct_super(right)
             }
-            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
+            Expression::Unary(_, operand) | Expression::Update(.., operand, _) => {
                 Self::expr_has_direct_super(operand)
             }
             Expression::Conditional(test, consequent, alternate) => {

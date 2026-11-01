@@ -4,13 +4,13 @@ use super::chunk::{
     FunctionTemplate, Handler, HeadBinding, NO_ESCAPE_TABLE, NO_INIT_SLOT, ObjectShape,
     RegExpTemplate, ShapeProperty,
 };
-use super::op::{Op, UPDATE_DISCARD};
+use super::op::Op;
 use super::switch_table::SwitchTable;
 use crate::ast::{
     AssignOp, BinaryOp, CallSiteId, CatchClause, DeclPhase, DoWhileStatement, Expression,
     ForInOfLeft, ForInit, ForStatement, Literal, LogicalOp, MemberProperty, Pattern, Property,
-    PropertyKey, PropertyKind, Statement, TryStatement, UnaryOp, UpdateOp, VarKind,
-    VariableDeclaration, WhileStatement,
+    PropertyKey, PropertyKind, Statement, TryStatement, UnaryOp, VarKind, VariableDeclaration,
+    WhileStatement,
 };
 use crate::interpreter::GlobalHint;
 use crate::interpreter::eval::LiteralPropertySpec;
@@ -23,6 +23,7 @@ mod binary;
 mod block_scope;
 mod calls;
 mod for_of;
+mod ident_store;
 mod lexical;
 mod loop_scope;
 mod member_pos;
@@ -809,15 +810,15 @@ impl Compiler {
             // NamedEvaluation (sec-runtime-semantics-namedevaluation) applies
             // at the assignment: function/arrow literals are named as made;
             // an anonymous class needs the tree-walker.
-            Expression::Assign(_, target, value)
+            Expression::Assign(_, target, value, _)
                 if matches!(target.as_ref(), Expression::Identifier(_))
                     && is_anonymous_class(value) =>
             {
                 Err(CompileError::Unsupported("anonymous class assignment"))
             }
-            Expression::Assign(op, target, value) => match target.as_ref() {
+            Expression::Assign(op, target, value, at) => match target.as_ref() {
                 Expression::Identifier(name) => {
-                    self.compile_identifier_assign(*op, name, value, false)
+                    self.compile_identifier_assign(*op, name, value, false, *at)
                 }
                 Expression::Member(obj, prop, site) => match prop {
                     MemberProperty::Dot(name) => {
@@ -835,7 +836,7 @@ impl Compiler {
                             // pop their own copy; it is evaluated once.
                             self.compile_expr(obj)?;
                             self.emit_dup_n(1);
-                            self.emit_member(Op::GetProp, *site);
+                            self.emit_member(Op::GetProp, Self::read_site(obj, prop, *site));
                             self.emit_u16(idx);
                             self.compile_expr(value)?;
                             self.emit(Self::compound_binary_op(*op)?);
@@ -860,9 +861,9 @@ impl Compiler {
                             // ToPrimitiveKey coerces the key once, after the
                             // base-nullish check; base and key are then
                             // duplicated for GetElement and SetElement.
-                            self.emit(Op::ToPrimitiveKey);
+                            self.emit_member(Op::ToPrimitiveKey, Self::read_site(obj, prop, *site));
                             self.emit_dup_n(2);
-                            self.emit_member(Op::GetElement, *site);
+                            self.emit_member(Op::GetElement, Self::read_site(obj, prop, *site));
                             self.pop_n(2);
                             self.push_n(1);
                             self.compile_expr(value)?;
@@ -905,8 +906,8 @@ impl Compiler {
                 },
                 _ => Err(CompileError::Unsupported("assign target")),
             },
-            Expression::Update(op, prefix, target) => {
-                self.compile_update(*op, *prefix, target, false)
+            Expression::Update(op, prefix, target, at) => {
+                self.compile_update(*op, *prefix, target, false, *at)
             }
             Expression::Logical(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
@@ -1213,19 +1214,19 @@ impl Compiler {
     /// into the store/update op instead of a trailing `Pop`.
     fn compile_effect(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
-            Expression::Assign(op, target, value) => {
+            Expression::Assign(op, target, value, at) => {
                 // An anonymous class value needs NamedEvaluation, which
                 // `compile_expr` hands to the tree-walker.
                 if let Expression::Identifier(name) = target.as_ref()
                     && !is_anonymous_class(value)
                 {
-                    return self.compile_identifier_assign(*op, name, value, true);
+                    return self.compile_identifier_assign(*op, name, value, true, *at);
                 }
             }
-            Expression::Update(op, prefix, target)
+            Expression::Update(op, prefix, target, at)
                 if matches!(target.as_ref(), Expression::Identifier(_)) =>
             {
-                return self.compile_update(*op, *prefix, target, true);
+                return self.compile_update(*op, *prefix, target, true, *at);
             }
             Expression::Sequence(exprs) | Expression::Comma(exprs) if !exprs.is_empty() => {
                 for e in exprs {
@@ -1245,126 +1246,6 @@ impl Compiler {
         self.emit(Op::Pop);
         self.pop_n(1);
         Ok(())
-    }
-
-    /// `name = value` / `name op= value`. Leaves the assigned value on the
-    /// operand stack, or nothing when `discard`.
-    fn compile_identifier_assign(
-        &mut self,
-        op: AssignOp,
-        name: &str,
-        value: &Expression,
-        discard: bool,
-    ) -> Result<(), CompileError> {
-        let idx = self.name_site(name)?;
-        if let Some(slot) = self.local_slot(name) {
-            // A local of this frame: no `with`, closure or direct eval can
-            // change what the name resolves to while the right-hand side
-            // runs, so the reference needs no early resolution.
-            if op == AssignOp::Assign
-                && discard
-                && let Some(src) = self.local_ref(value)
-            {
-                self.emit_move_local(src, (idx, slot));
-                return Ok(());
-            }
-            if op == AssignOp::Assign {
-                self.compile_named_value(value, name)?;
-            } else if let Expression::Literal(Literal::Number(k)) = value {
-                self.emit_local_bin_const(name, slot, Self::compound_binary_op(op)?, *k)?;
-            } else if let Some(src) = self.local_ref(value) {
-                self.emit_local_local_bin((idx, slot), src, Self::compound_binary_op(op)?);
-            } else {
-                self.compile_load_name(name)?;
-                self.compile_expr(value)?;
-                self.emit(Self::compound_binary_op(op)?);
-                self.pop_n(2);
-                self.push_n(1);
-            }
-            self.emit_store_local(idx, slot, discard);
-        } else {
-            self.emit_resolve_name(idx);
-            if op == AssignOp::Assign {
-                self.compile_named_value(value, name)?;
-            } else {
-                self.emit(Op::LoadResolvedName);
-                self.emit_u16(idx);
-                self.push_n(1);
-                if let Expression::Literal(Literal::Number(k)) = value {
-                    self.emit_bin_const(Self::compound_binary_op(op)?, *k)?;
-                } else {
-                    self.compile_expr(value)?;
-                    self.emit(Self::compound_binary_op(op)?);
-                    self.pop_n(2);
-                    self.push_n(1);
-                }
-            }
-            self.emit_store_resolved_name(idx, discard);
-        }
-        Ok(())
-    }
-
-    /// `x++`, `o.p++`, `o[k]--` and friends. The mode byte's bit 2 means "do
-    /// not push the result", which effect context sets for identifiers: the
-    /// discarded value is unobservable.
-    fn compile_update(
-        &mut self,
-        op: UpdateOp,
-        prefix: bool,
-        target: &Expression,
-        discard: bool,
-    ) -> Result<(), CompileError> {
-        let mode = match (op, prefix) {
-            (UpdateOp::Increment, false) => 0,
-            (UpdateOp::Increment, true) => 1,
-            (UpdateOp::Decrement, false) => 2,
-            (UpdateOp::Decrement, true) => 3,
-        };
-        match target {
-            Expression::Identifier(name) => {
-                let idx = self.name_site(name)?;
-                if let Some(slot) = self.local_slot(name) {
-                    self.emit(Op::UpdateLocal);
-                    self.emit_u16(idx);
-                    self.emit_u16(slot);
-                } else {
-                    self.emit(Op::UpdateName);
-                    self.emit_u16(idx);
-                }
-                self.code
-                    .push(if discard { mode | UPDATE_DISCARD } else { mode });
-                if !discard {
-                    self.push_n(1);
-                }
-                Ok(())
-            }
-            Expression::Member(obj, MemberProperty::Dot(name), _) if !discard => {
-                self.compile_expr(obj)?;
-                let idx = self.add_name(name)?;
-                self.emit(Op::UpdateProp);
-                self.emit_u16(idx);
-                self.code.push(mode);
-                Ok(())
-            }
-            Expression::Member(obj, MemberProperty::Private(name), _) if !discard => {
-                self.compile_expr(obj)?;
-                let idx = self.add_private_name(name)?;
-                self.emit(Op::UpdatePrivate);
-                self.emit_u16(idx);
-                self.code.push(mode);
-                Ok(())
-            }
-            Expression::Member(obj, MemberProperty::Computed(key), _) if !discard => {
-                self.compile_expr(obj)?;
-                self.compile_expr(key)?;
-                self.emit(Op::UpdateElement);
-                self.code.push(mode);
-                self.pop_n(2);
-                self.push_n(1);
-                Ok(())
-            }
-            _ => Err(CompileError::Unsupported("update target")),
-        }
     }
 
     fn is_comparison(op: BinaryOp) -> bool {
