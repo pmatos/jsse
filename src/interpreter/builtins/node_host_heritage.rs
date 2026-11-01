@@ -26,16 +26,14 @@ pub(crate) fn heritage_offset(text: &str) -> Option<usize> {
         }
     }
     let mut at = skip_trivia(text, end);
-    let mut parenthesised = false;
+    let mut inside = Vec::new();
     while text[at..].starts_with('(') {
         at = skip_trivia(text, at + 1);
-        parenthesised = true;
+        inside.push(at);
     }
-    Some(
-        sequence_tail(text, at)
-            .filter(|_| parenthesised)
-            .unwrap_or(at),
-    )
+    // The comma expression may sit in any of the parentheses.
+    let tail = inside.iter().find_map(|&start| sequence_tail(text, start));
+    Some(tail.unwrap_or(at))
 }
 
 /// The offset plus one of the heritage expression of the class whose source

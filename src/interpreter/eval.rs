@@ -554,7 +554,7 @@ impl Interpreter {
                 self.last_identifier_with_base = None;
                 let resolved = self.resolve_identifier(name, env, strict);
                 if let Completion::Throw(thrown) = &resolved {
-                    self.node_place_ident_error(thrown, name, *at);
+                    self.node_move_ident_error(thrown, name, *at);
                 }
                 resolved
             }
@@ -679,7 +679,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
             Expression::Delete(expr) => match expr.as_ref() {
-                Expression::Member(obj_expr, prop, site) => {
+                Expression::Member(obj_expr, prop, _) => {
                     // §13.5.1.2 step 5a: delete on SuperReference is always ReferenceError.
                     // §13.3.7.1: SuperProperty evaluation calls GetThisBinding() (step 2)
                     // before evaluating the key expression (step 3).
@@ -723,7 +723,7 @@ impl Interpreter {
                     };
                     // TypeError for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
-                        self.note_last_pos(obj_expr, prop, *site);
+                        self.note_last_pos(obj_expr, prop);
                         return Completion::Throw(
                             self.delete_nullish_error(&key.to_string(), &obj_val),
                         );
@@ -2501,7 +2501,7 @@ impl Interpreter {
     ) -> Completion {
         if let Expression::Identifier(name, _) = arg {
             self.update_identifier_at(at, (op, prefix), name, env)
-        } else if let Expression::Member(obj_expr, prop, site) = arg {
+        } else if let Expression::Member(obj_expr, prop, _) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)
                 && !matches!(prop, MemberProperty::Private(_))
@@ -2584,7 +2584,7 @@ impl Interpreter {
                 match prop {
                     MemberProperty::Dot(name) => {
                         if obj_val.is_nullish() {
-                            this.note_last_pos(obj_expr, prop, *site);
+                            this.note_last_pos(obj_expr, prop);
                             return Completion::Throw(this.create_type_error(&format!(
                                 "Cannot read properties of {obj_val} (reading '{name}')"
                             )));
@@ -2596,7 +2596,7 @@ impl Interpreter {
                         let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
                         if obj_val.is_nullish() {
-                            this.note_last_pos(obj_expr, prop, *site);
+                            this.note_last_pos(obj_expr, prop);
                             return Completion::Throw(this.nullish_read_error(&obj_val, &v));
                         }
                         this.update_member_computed(&obj_val, &v, op, prefix, strict)
@@ -3050,7 +3050,7 @@ impl Interpreter {
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
                         if obj_val.is_null() || obj_val.is_undefined() {
-                            interp.note_last_pos(obj_expr, prop, *site);
+                            interp.note_last_pos(obj_expr, prop);
                             let error = match key_val.as_ref() {
                                 Some(k) => interp.nullish_read_error(&obj_val, k),
                                 None => {

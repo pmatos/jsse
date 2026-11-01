@@ -60,6 +60,12 @@ show("elementDeclarationPattern", () => {
 show("commaHeritage", () => {
   class B extends (1, num) {}
 });
+show("nestedCommaHeritage", () => {
+  class B extends ((1, num), 2) {}
+});
+show("doubleParenthesisedCommaHeritage", () => {
+  class B extends ((1, num)) {}
+});
 show("commaHeritageOfCalls", () => {
   class B extends (f(), 1) {}
 });

@@ -80,6 +80,9 @@ impl Compiler {
     pub(super) fn compile_ident_load(&mut self, name: &str, at: u32) -> Result<(), CompileError> {
         if at != 0 && call_positions_enabled() {
             let pc = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            while self.member_pos.last().is_some_and(|entry| entry.0 >= pc) {
+                self.member_pos.pop();
+            }
             self.member_pos.push((pc, at));
         }
         self.compile_load_name(name)

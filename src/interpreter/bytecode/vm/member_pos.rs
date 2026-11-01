@@ -94,7 +94,7 @@ pub(super) fn place_ident_error(
                 chunk.code[start + 1],
                 chunk.code[start + 2],
             ]));
-            interp.node_place_ident_error(thrown, chunk.names[idx].as_str(), at);
+            interp.node_move_ident_error(thrown, chunk.names[idx].as_str(), at);
             return;
         }
     }

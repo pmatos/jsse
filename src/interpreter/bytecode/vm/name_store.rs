@@ -68,7 +68,7 @@ pub(super) fn update_slow(
     let done = interp.eval_identifier_update_hinted(op, prefix, name, env, hint);
     interp.node_host.assign_pos = 0;
     if let Completion::Throw(thrown) = &done {
-        interp.node_move_ident_error(thrown, prior);
+        interp.node_move_ident_error(thrown, name.as_str(), prior);
     }
     done
 }

@@ -73,8 +73,6 @@ fn tick_clock(clock: &mut u64) -> u64 {
     *clock
 }
 
-impl StoreEntry {}
-
 impl IcStore {
     pub(crate) fn new() -> Self {
         Self::with_capacity(DEFAULT_CAPACITY)

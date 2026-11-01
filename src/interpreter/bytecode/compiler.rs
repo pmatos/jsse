@@ -23,6 +23,7 @@ mod array_literal;
 mod binary;
 mod block_scope;
 mod calls;
+mod drop_below;
 mod for_of;
 mod ident_store;
 mod lexical;
@@ -684,6 +685,7 @@ impl Compiler {
         self.code.truncate(snap.code_len);
         let kept = u32::try_from(snap.code_len).unwrap_or(u32::MAX);
         self.binary_pos.retain(|entry| entry.0 <= kept);
+        self.member_pos.retain(|entry| entry.0 < kept);
         self.last_op_at = snap.last_op_at;
         self.current_stack = snap.current_stack;
         self.current_refs = snap.current_refs;
@@ -1815,12 +1817,6 @@ impl Compiler {
         debug_assert!(*cur_scope >= target, "unwinding to a deeper scope");
         self.emit_pop_env(cur_scope.saturating_sub(target));
         *cur_scope = target.min(*cur_scope);
-    }
-
-    fn emit_drop_below(&mut self, has_value: bool, count: u8) {
-        self.emit(Op::DropBelow);
-        self.code.push(u8::from(has_value));
-        self.code.push(count);
     }
 
     /// Emits the exit from the innermost of the `from_entry` open cleanups

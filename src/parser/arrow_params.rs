@@ -167,7 +167,11 @@ impl<'a> Parser<'a> {
         self.rewind_to(resume);
         let mut params = result?;
         for param in &mut params {
-            if let Pattern::Array(elems) = param {
+            let inner = match param {
+                Pattern::Assign(inner, _) => &mut **inner,
+                other => other,
+            };
+            if let Pattern::Array(elems) = inner {
                 elems.at = paren;
             }
         }

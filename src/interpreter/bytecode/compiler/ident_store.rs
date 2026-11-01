@@ -17,7 +17,7 @@ impl Compiler {
     ) -> PropSiteId {
         PropSiteId(
             site.0,
-            crate::interpreter::builtins::node_host_assign_pos::last_member_pos(obj, prop, site),
+            crate::interpreter::builtins::node_host_assign_pos::last_member_pos(obj, prop),
         )
     }
 

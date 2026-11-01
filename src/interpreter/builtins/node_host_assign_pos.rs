@@ -5,7 +5,7 @@
 
 use super::super::eval::IdentifierRef;
 use super::super::{EnvRef, Interpreter};
-use crate::ast::{AssignOp, Expression, MemberProperty, PropSiteId, UpdateOp};
+use crate::ast::{AssignOp, Expression, MemberProperty, UpdateOp};
 use crate::interpreter::BindingName;
 use crate::interpreter::types::Completion;
 use crate::types::JsValue;
@@ -58,7 +58,7 @@ impl Interpreter {
         let done =
             self.with_assign_pos(at, |this| this.eval_identifier_update(op, prefix, key, env));
         if let Completion::Throw(thrown) = &done {
-            self.node_move_ident_error(thrown, prior);
+            self.node_move_ident_error(thrown, key.as_name(), prior);
         }
         done
     }
@@ -81,13 +81,8 @@ impl Interpreter {
     /// update or a `delete`: V8 reports the last position emitted by the
     /// operands, the key's if it has one, else the base's, else the statement
     /// start, which the frame already has.
-    pub(crate) fn note_last_pos(
-        &mut self,
-        base: &Expression,
-        prop: &MemberProperty,
-        site: PropSiteId,
-    ) {
-        let at = last_member_pos(base, prop, site);
+    pub(crate) fn note_last_pos(&mut self, base: &Expression, prop: &MemberProperty) {
+        let at = last_member_pos(base, prop);
         if at != 0 {
             self.node_host.call_pos = at;
         }
@@ -96,7 +91,7 @@ impl Interpreter {
 
 /// The position V8 reports for a failed read of `base[prop]` that is the
 /// target of a compound assignment or update.
-pub(crate) fn last_member_pos(base: &Expression, prop: &MemberProperty, _site: PropSiteId) -> u32 {
+pub(crate) fn last_member_pos(base: &Expression, prop: &MemberProperty) -> u32 {
     let key = match prop {
         MemberProperty::Computed(key) => last_pos(key),
         _ => 0,

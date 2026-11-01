@@ -28,26 +28,14 @@ impl Interpreter {
         }
     }
 
-    /// `thrown` came out of the evaluation of the identifier at `at` (offset
-    /// plus one, 0: unknown) named `name`: when it is the error noted above,
-    /// its stack moves to that position.
-    pub(crate) fn node_place_ident_error(&mut self, thrown: &JsValue, name: &str, at: u32) {
-        if self
-            .node_host
-            .ident_error
-            .as_ref()
-            .is_some_and(|e| *e.1 == *name)
-        {
-            self.node_move_ident_error(thrown, at);
-        }
-    }
-
-    /// Moves the error noted above, if `thrown` is it, to `at`.
-    pub(crate) fn node_move_ident_error(&mut self, thrown: &JsValue, at: u32) {
-        let Some((id, _)) = &self.node_host.ident_error else {
+    /// Moves the error noted above, if `thrown` is it and it names `name`
+    /// (the id of a collected error may be reused), to `at` (offset plus
+    /// one, 0: unknown).
+    pub(crate) fn node_move_ident_error(&mut self, thrown: &JsValue, name: &str, at: u32) {
+        let Some((id, noted)) = &self.node_host.ident_error else {
             return;
         };
-        if at == 0 || thrown.as_object_id() != Some(*id) {
+        if at == 0 || thrown.as_object_id() != Some(*id) || **noted != *name {
             return;
         }
         let id = *id;

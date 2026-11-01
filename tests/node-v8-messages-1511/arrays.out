@@ -34,18 +34,24 @@ at <dir>/arrays.js:56:10
 ## commaHeritage
 TypeError: Class extends value 5 is not a constructor or null
 at <dir>/arrays.js:61:23
+## nestedCommaHeritage
+TypeError: Class extends value 2 is not a constructor or null
+at <dir>/arrays.js:64:30
+## doubleParenthesisedCommaHeritage
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/arrays.js:67:24
 ## commaHeritageOfCalls
 TypeError: Class extends value 1 is not a constructor or null
-at <dir>/arrays.js:64:25
+at <dir>/arrays.js:70:25
 ## parenthesisedHeritage
 TypeError: Class extends value 5 is not a constructor or null
-at <dir>/arrays.js:67:20
+at <dir>/arrays.js:73:20
 ## mathHeritage
 TypeError: Class extends value #<Object> is not a constructor or null
-at <dir>/arrays.js:70:19
+at <dir>/arrays.js:76:19
 ## loneCallSpread
 TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
-at <dir>/arrays.js:75:3
+at <dir>/arrays.js:81:3
 ## loneNewSpread
 TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
-at <dir>/arrays.js:78:3
+at <dir>/arrays.js:84:3
