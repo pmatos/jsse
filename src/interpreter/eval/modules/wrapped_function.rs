@@ -23,7 +23,7 @@ impl Interpreter {
             let fp_id = interp.realms[caller_realm_id].function_prototype;
             let mut o = interp.get_object_cell_expect(func_id).borrow_mut();
             o.set_proto(fp_id);
-            o.class_name = "Function";
+            o.set_class("Function");
             o.set_function_realm(caller_realm_id);
             o.callable = Some(Box::new(JsFunction::native(
                 "".to_string(),

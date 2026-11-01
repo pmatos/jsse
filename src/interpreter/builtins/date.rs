@@ -24,7 +24,7 @@ fn this_time_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
         && let Some(obj) = interp.get_object_cell(object_id)
     {
         let object = obj.borrow();
-        if object.class_name == "Date" {
+        if object.is_class("Date") {
             return object.primitive_value().and_then(JsValue::as_number);
         }
     }
@@ -236,7 +236,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Date";
+            .set_class("Date");
         // Date.prototype does NOT have [[DateValue]] per spec
 
         // Guard wrapper around `date_field_value`: brand-check `this` as a Date
@@ -1006,7 +1006,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .class_name = "Temporal.Instant";
+                        .set_class("Temporal.Instant");
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                         interp
                             .get_object_cell_expect(obj_id)
@@ -1122,7 +1122,7 @@ impl Interpreter {
                     let v = &args[0];
                     if let Some(object_id) = v.as_object_id()
                         && let Some(obj) = interp.get_object_cell(object_id)
-                        && obj.borrow().class_name == "Date"
+                        && obj.borrow().is_class("Date")
                         && let Some(time) =
                             obj.borrow().primitive_value().and_then(JsValue::as_number)
                     {
@@ -1215,7 +1215,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let mut b = interp.get_object_cell_expect(object_id).borrow_mut();
-                    b.class_name = "Date";
+                    b.set_class("Date");
                     b.set_primitive_value(JsValue::number(time_val));
                     b.set_proto(Some(proto));
                 }

@@ -33,7 +33,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Temporal.Instant";
+                    .set_class("Temporal.Instant");
                 if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                     interp
                         .get_object_cell_expect(obj_id)
@@ -129,7 +129,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Temporal.ZonedDateTime";
+                    .set_class("Temporal.ZonedDateTime");
                 if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
                     interp
                         .get_object_cell_expect(obj_id)

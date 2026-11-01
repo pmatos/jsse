@@ -5,7 +5,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakRef";
+            .set_class("WeakRef");
 
         // WeakRef.prototype.deref
         self.define_method(proto_id, "deref", 0, |interp, this, _args| {
@@ -49,7 +49,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakRef";
+                    .set_class("WeakRef");
                 if let Some(p) = proto {
                     interp
                         .get_object_cell_expect(obj_id)
@@ -96,7 +96,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "FinalizationRegistry";
+            .set_class("FinalizationRegistry");
 
         // FinalizationRegistry.prototype.register
         self.define_method(proto_id, "register", 2,
@@ -107,7 +107,7 @@ impl Interpreter {
                     // Check [[Cells]] internal slot: class_name + map_data.is_some()
                     let has_cells = {
                         let b = obj.borrow();
-                        b.class_name == "FinalizationRegistry"
+                        b.is_class("FinalizationRegistry")
                             && b.finalization_registry().is_some()
                     };
                     if has_cells {
@@ -166,7 +166,7 @@ impl Interpreter {
                 {
                     let has_cells = {
                         let b = obj.borrow();
-                        b.class_name == "FinalizationRegistry"
+                        b.is_class("FinalizationRegistry")
                             && b.finalization_registry().is_some()
                     };
                     if has_cells {
@@ -212,7 +212,7 @@ impl Interpreter {
             {
                 let has_cells = {
                     let b = obj.borrow();
-                    b.class_name == "FinalizationRegistry" && b.finalization_registry().is_some()
+                    b.is_class("FinalizationRegistry") && b.finalization_registry().is_some()
                 };
                 if has_cells {
                     return Completion::Normal(JsValue::UNDEFINED);
@@ -261,7 +261,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "FinalizationRegistry";
+                    .set_class("FinalizationRegistry");
                 if let Some(p) = proto {
                     interp
                         .get_object_cell_expect(obj_id)

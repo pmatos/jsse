@@ -138,7 +138,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = error_class_name(name);
+            o.set_class(error_class_name(name));
             if let Some(proto_id) = error_proto_id {
                 o.set_proto(Some(proto_id));
             }
@@ -202,7 +202,7 @@ impl Interpreter {
                 _ => "function () { [native code] }".to_string(),
             };
         }
-        let class = obj.borrow().class_name.to_string();
+        let class = obj.borrow().class_str().to_string();
         if class == "Error" {
             let name = self.data_property_string(id, "name").unwrap_or_default();
             let message = self.data_property_string(id, "message").unwrap_or_default();

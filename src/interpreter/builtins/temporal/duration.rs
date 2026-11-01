@@ -1618,7 +1618,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.Duration";
+            .set_class("Temporal.Duration");
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Temporal.Duration");
@@ -2876,7 +2876,7 @@ pub(crate) fn create_duration_result(
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.Duration";
+        .set_class("Temporal.Duration");
     if let Some(proto_id) = interp.realm().temporal_duration_prototype {
         interp
             .get_object_cell_expect(obj_id)

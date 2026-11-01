@@ -234,21 +234,21 @@ impl Interpreter {
                         "Array"
                     } else if let Some(obj) = interp.get_object(obj_id) {
                         let ob = obj.borrow();
-                        if ob.class_name == "Arguments" {
+                        if ob.is_class("Arguments") {
                             "Arguments"
                         } else if ob.callable.is_some() {
                             "Function"
-                        } else if super::error_data::has_error_data_slot(ob.class_name) {
+                        } else if super::error_data::has_error_data_slot(ob.class_str()) {
                             "Error"
-                        } else if ob.class_name == "Boolean" && ob.primitive_value().is_some() {
+                        } else if ob.is_class("Boolean") && ob.primitive_value().is_some() {
                             "Boolean"
-                        } else if ob.class_name == "Number" && ob.primitive_value().is_some() {
+                        } else if ob.is_class("Number") && ob.primitive_value().is_some() {
                             "Number"
-                        } else if ob.class_name == "String" && ob.primitive_value().is_some() {
+                        } else if ob.is_class("String") && ob.primitive_value().is_some() {
                             "String"
-                        } else if ob.class_name == "Date" {
+                        } else if ob.is_class("Date") {
                             "Date"
-                        } else if ob.class_name == "RegExp" {
+                        } else if ob.is_class("RegExp") {
                             "RegExp"
                         } else {
                             "Object"
@@ -871,7 +871,7 @@ impl Interpreter {
                         }
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
-                                let is_array = obj.borrow().class_name == "Array";
+                                let is_array = obj.borrow().is_class("Array");
                                 let is_ta = obj.borrow().typed_array_info().is_some();
                                 if is_array {
                                     match interp.array_define_own_property(target_id as usize, &key, desc) {

@@ -1289,19 +1289,19 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.set_primitive_value(val.clone());
         if val.is_string() {
-            obj_data.class_name = "String";
+            obj_data.set_class("String");
             obj_data.set_proto(self.realm().string_prototype);
         } else if val.is_number() {
-            obj_data.class_name = "Number";
+            obj_data.set_class("Number");
             obj_data.set_proto(self.realm().number_prototype);
         } else if val.is_boolean() {
-            obj_data.class_name = "Boolean";
+            obj_data.set_class("Boolean");
             obj_data.set_proto(self.realm().boolean_prototype);
         } else if val.is_symbol() {
-            obj_data.class_name = "Symbol";
+            obj_data.set_class("Symbol");
             obj_data.set_proto(self.realm().symbol_prototype);
         } else if val.is_bigint() {
-            obj_data.class_name = "BigInt";
+            obj_data.set_class("BigInt");
             obj_data.set_proto(self.realm().bigint_prototype);
         } else {
             unreachable!();
@@ -5444,7 +5444,7 @@ impl Interpreter {
                                 interp
                                     .get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .class_name = "AsyncGenerator";
+                                    .set_class("AsyncGenerator");
                                 let exec_env = interp.hosted_body_env(
                                     &func_env,
                                     &params,
@@ -5555,7 +5555,7 @@ impl Interpreter {
                                 interp
                                     .get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .class_name = "Generator";
+                                    .set_class("Generator");
                                 let exec_env = interp.hosted_body_env(
                                     &func_env,
                                     &params,
@@ -5821,7 +5821,7 @@ impl Interpreter {
             format!("\"{preview}\"")
         } else if let Some(id) = val.as_object_id() {
             match self.get_object_cell(id) {
-                Some(obj) => format!("#<{}>", obj.borrow().class_name),
+                Some(obj) => format!("#<{}>", obj.borrow().class_str()),
                 None => "#<Object>".to_string(),
             }
         } else {

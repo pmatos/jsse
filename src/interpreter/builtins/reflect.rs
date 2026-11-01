@@ -155,7 +155,7 @@ impl Interpreter {
                                 }
                             } else {
                                 // Array [[DefineOwnProperty]] §10.4.2.1
-                                let is_array = obj.borrow().class_name == "Array";
+                                let is_array = obj.borrow().is_class("Array");
                                 if is_array {
                                     match interp.array_define_own_property(
                                         target_id as usize,
@@ -233,7 +233,7 @@ impl Interpreter {
                     // character indices are non-configurable.
                     {
                         let b = obj.borrow();
-                        if b.class_name == "String"
+                        if b.is_class("String")
                             && let Some(s) = b.primitive_value().and_then(JsValue::as_string)
                             && (key.as_str() == Some("length")
                                 || crate::interpreter::types::string_exotic_index(&key, s.len())
@@ -812,7 +812,7 @@ impl Interpreter {
                                 set: None,
                             };
                             // Array [[DefineOwnProperty]] §10.4.2.1
-                            let is_array = recv_obj.borrow().class_name == "Array";
+                            let is_array = recv_obj.borrow().is_class("Array");
                             if is_array {
                                 match interp.array_define_own_property(
                                     receiver_id as usize,

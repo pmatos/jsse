@@ -1278,9 +1278,7 @@ impl Interpreter {
                     // class — routing every existing-element write (e.g. `a[0]++`)
                     // through descriptor allocation regressed a 200k-iteration
                     // increment loop by ~1.7-2x.
-                    if key.as_property_key_bytes() == b"length"
-                        && obj.borrow().class_name == "Array"
-                    {
+                    if key.as_property_key_bytes() == b"length" && obj.borrow().is_class("Array") {
                         // Call ArraySetLength directly with a native descriptor —
                         // round-tripping through from_property_descriptor +
                         // to_property_descriptor would build a JS object whose
@@ -1467,7 +1465,7 @@ impl Interpreter {
             // String exotic [[Delete]]: "length" and valid indices are non-configurable
             {
                 let borrow = obj.borrow();
-                if borrow.class_name == "String"
+                if borrow.is_class("String")
                     && let Some(len) = borrow
                         .primitive_value()
                         .and_then(|v| v.with_string(|s| s.len()))
@@ -1907,7 +1905,7 @@ impl Interpreter {
 
             // String exotic objects (§10.4.3.3): virtual char indices included
             let is_string_wrapper =
-                b.class_name == "String" && b.primitive_value().is_some_and(JsValue::is_string);
+                b.is_class("String") && b.primitive_value().is_some_and(JsValue::is_string);
             let string_len = if is_string_wrapper {
                 b.primitive_value()
                     .and_then(|v| v.with_string(|s| s.len()))

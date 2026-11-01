@@ -145,7 +145,7 @@ impl Interpreter {
                     }
                     obj.borrow_mut()
                         .set_primitive_value(JsValue::string(js_str.clone()));
-                    obj.borrow_mut().class_name = "String";
+                    obj.borrow_mut().set_class("String");
                 }
                 Completion::Normal(JsValue::string(js_str))
             }),
@@ -263,7 +263,7 @@ impl Interpreter {
                     };
                     let mut b = obj.borrow_mut();
                     b.set_primitive_value(JsValue::number(n));
-                    b.class_name = "Number";
+                    b.set_class("Number");
                     if let Some(p) = proto {
                         b.set_proto(Some(p));
                     }
@@ -403,7 +403,7 @@ impl Interpreter {
                     };
                     let mut bo = obj.borrow_mut();
                     bo.set_primitive_value(JsValue::boolean(b));
-                    bo.class_name = "Boolean";
+                    bo.set_class("Boolean");
                     if let Some(p) = proto {
                         bo.set_proto(Some(p));
                     }

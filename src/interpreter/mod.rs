@@ -1063,7 +1063,7 @@ impl Interpreter {
         {
             let mut obj = self.get_object_cell_expect(source_id).borrow_mut();
             obj.set_proto(proto_id);
-            obj.class_name = "AbstractModuleSource";
+            obj.set_class("AbstractModuleSource");
         }
         let source_val = JsValue::object(source_id);
 
@@ -1852,7 +1852,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "Arguments";
+            o.set_class("Arguments");
             o.properties.reserve(args.len() + 3);
 
             o.push_fresh_property(
@@ -4586,7 +4586,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
-                        o.class_name = "SharedArrayBuffer";
+                        o.set_class("SharedArrayBuffer");
                         o.set_proto(sab_proto);
                         o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                             crate::interpreter::types::ArrayBufferData {

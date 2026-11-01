@@ -1841,7 +1841,7 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_map_data = JsObjectData::new();
-        weak_map_data.class_name = "WeakMap";
+        weak_map_data.set_class("WeakMap");
         weak_map_data.kind = ObjectKind::Map(Box::default());
         let weak_map = interp.alloc_object(weak_map_data);
         interp.gc_root_id(weak_map);
@@ -1886,7 +1886,7 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_set_data = JsObjectData::new();
-        weak_set_data.class_name = "WeakSet";
+        weak_set_data.set_class("WeakSet");
         weak_set_data.kind = ObjectKind::Set(Box::default());
         let weak_set = interp.alloc_object(weak_set_data);
         interp.gc_root_id(weak_set);
@@ -2461,7 +2461,7 @@ mod tests {
     /// collection has put into card tracking with every card clean.
     fn tenured_map(interp: &mut Interpreter, cards: usize) -> u64 {
         let mut data = JsObjectData::new();
-        data.class_name = "Map";
+        data.set_class("Map");
         let mut entries = KeyedEntries::default();
         for i in 0..cards * CARD_ELEMENTS {
             entries.upsert((JsValue::number(i as f64), JsValue::number(0.0)), |_, _| {});
@@ -2477,7 +2477,7 @@ mod tests {
 
     fn tenured_set(interp: &mut Interpreter, cards: usize) -> u64 {
         let mut data = JsObjectData::new();
-        data.class_name = "Set";
+        data.set_class("Set");
         let mut entries = KeyedEntries::default();
         for i in 0..cards * CARD_ELEMENTS {
             entries.upsert(JsValue::number(i as f64), |_, _| {});
@@ -2654,7 +2654,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let mut data = JsObjectData::new();
-        data.class_name = "Map";
+        data.set_class("Map");
         data.kind = ObjectKind::Map(Box::default());
         let map = interp.alloc_object(data);
         interp.gc_root_id(map);

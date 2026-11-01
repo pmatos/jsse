@@ -94,7 +94,7 @@ impl Interpreter {
                 module_path,
                 deferred,
             }));
-            obj.class_name = "Module";
+            obj.set_class("Module");
             obj.extensible = false;
             obj.set_proto(None);
             // writable=true, enumerable=true, configurable=false; the value is

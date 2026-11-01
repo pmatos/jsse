@@ -258,7 +258,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Symbol";
+            .set_class("Symbol");
 
         fn this_symbol_value(
             interp: &Interpreter,
@@ -270,7 +270,7 @@ impl Interpreter {
             let object_id = this.as_object_id()?;
             interp.get_object_cell(object_id).and_then(|obj| {
                 let object = obj.borrow();
-                if object.class_name == "Symbol" {
+                if object.is_class("Symbol") {
                     object.primitive_value().and_then(JsValue::as_symbol)
                 } else {
                     None
@@ -388,7 +388,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Number";
+            .set_class("Number");
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .set_primitive_value(JsValue::number(0.0));
@@ -400,7 +400,7 @@ impl Interpreter {
             let object_id = this.as_object_id()?;
             interp.get_object_cell(object_id).and_then(|obj| {
                 let object = obj.borrow();
-                if object.class_name == "Number" {
+                if object.is_class("Number") {
                     object.primitive_value().and_then(JsValue::as_number)
                 } else {
                     None
@@ -658,7 +658,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Boolean";
+            .set_class("Boolean");
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .set_primitive_value(JsValue::FALSE);
@@ -670,7 +670,7 @@ impl Interpreter {
             let object_id = this.as_object_id()?;
             interp.get_object_cell(object_id).and_then(|obj| {
                 let object = obj.borrow();
-                if object.class_name == "Boolean" {
+                if object.is_class("Boolean") {
                     object.primitive_value().and_then(JsValue::as_boolean)
                 } else {
                     None

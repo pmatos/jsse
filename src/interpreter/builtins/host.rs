@@ -100,7 +100,7 @@ impl Interpreter {
         let id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(id).borrow_mut();
-            o.class_name = "Error";
+            o.set_class("Error");
             o.set_proto(proto);
             o.insert_builtin("message".to_string(), JsValue::from_str(message));
             o.insert_builtin("name".to_string(), JsValue::from_str(name));

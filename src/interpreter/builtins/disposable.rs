@@ -41,7 +41,7 @@ impl Interpreter {
             let disposed = if let Some(object_id) = this.as_object_id() {
                 interp.get_object_cell(object_id).and_then(|cell| {
                     let b = cell.borrow();
-                    if b.class_name == "DisposableStack"
+                    if b.is_class("DisposableStack")
                         && let Some(ds) = b.disposable_stack()
                     {
                         Some(ds.disposed)
@@ -73,7 +73,7 @@ impl Interpreter {
                 }
                 let probe = {
                     let b = interp.get_object_cell_expect(object_id).borrow();
-                    if b.class_name != "DisposableStack" {
+                    if !b.is_class("DisposableStack") {
                         Probe::NotStack
                     } else {
                         match b.disposable_stack() {
@@ -292,7 +292,7 @@ impl Interpreter {
                 let probe = {
                     let cell = interp.get_object_cell_expect(object_id);
                     let mut b = cell.borrow_mut();
-                    if b.class_name != "DisposableStack" {
+                    if !b.is_class("DisposableStack") {
                         Probe::NotStack
                     } else {
                         match b.disposable_stack_mut() {
@@ -338,7 +338,7 @@ impl Interpreter {
                 }
                 {
                     let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
-                    b.class_name = "DisposableStack";
+                    b.set_class("DisposableStack");
                     b.kind = crate::interpreter::types::ObjectKind::DisposableStack(Box::new(
                         DisposableStackData {
                             stack,
@@ -378,7 +378,7 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        b.class_name = "DisposableStack";
+                        b.set_class("DisposableStack");
                         if let Some(p) = proto {
                             b.set_proto(Some(p));
                         }
@@ -432,7 +432,7 @@ impl Interpreter {
             let probe = {
                 let cell = self.get_object_cell_expect(object_id);
                 let mut b = cell.borrow_mut();
-                if b.class_name != "DisposableStack" {
+                if !b.is_class("DisposableStack") {
                     Probe::NotStack
                 } else {
                     match b.disposable_stack_mut() {
@@ -547,7 +547,7 @@ impl Interpreter {
             let disposed = if let Some(object_id) = this.as_object_id() {
                 interp.get_object_cell(object_id).and_then(|cell| {
                     let b = cell.borrow();
-                    if b.class_name == "AsyncDisposableStack"
+                    if b.is_class("AsyncDisposableStack")
                         && let Some(ds) = b.disposable_stack()
                     {
                         Some(ds.disposed)
@@ -579,7 +579,7 @@ impl Interpreter {
                 }
                 let probe = {
                     let b = interp.get_object_cell_expect(object_id).borrow();
-                    if b.class_name != "AsyncDisposableStack" {
+                    if !b.is_class("AsyncDisposableStack") {
                         Probe::NotStack
                     } else {
                         match b.disposable_stack() {
@@ -805,7 +805,7 @@ impl Interpreter {
                 let probe = {
                     let cell = interp.get_object_cell_expect(object_id);
                     let mut b = cell.borrow_mut();
-                    if b.class_name != "AsyncDisposableStack" {
+                    if !b.is_class("AsyncDisposableStack") {
                         Probe::NotStack
                     } else {
                         match b.disposable_stack_mut() {
@@ -844,7 +844,7 @@ impl Interpreter {
                 }
                 {
                     let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
-                    b.class_name = "AsyncDisposableStack";
+                    b.set_class("AsyncDisposableStack");
                     b.kind = crate::interpreter::types::ObjectKind::DisposableStack(Box::new(
                         DisposableStackData {
                             stack,
@@ -886,7 +886,7 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        b.class_name = "AsyncDisposableStack";
+                        b.set_class("AsyncDisposableStack");
                         if let Some(p) = proto {
                             b.set_proto(Some(p));
                         }
@@ -967,7 +967,7 @@ impl Interpreter {
         };
         let taken = {
             let mut b = cell.borrow_mut();
-            if b.class_name != "AsyncDisposableStack" {
+            if !b.is_class("AsyncDisposableStack") {
                 None
             } else {
                 b.disposable_stack_mut().map(|ds| {

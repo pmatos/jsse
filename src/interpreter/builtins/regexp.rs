@@ -8549,7 +8549,7 @@ fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
         return false;
     };
     let b = obj.borrow();
-    if b.class_name != "RegExp" {
+    if !b.is_class("RegExp") {
         return false;
     }
     // Must not have own "exec" property (overriding prototype's)
@@ -8671,7 +8671,7 @@ pub(super) fn regexp_exec_abstract(
     } else {
         // If R does not have a [[RegExpMatcher]] internal slot, throw TypeError
         let is_regexp = if let Some(obj) = interp.get_object_cell(rx_id) {
-            obj.borrow().class_name == "RegExp"
+            obj.borrow().is_class("RegExp")
         } else {
             false
         };
@@ -9099,7 +9099,7 @@ impl Interpreter {
                     }
                 };
                 if let Some(obj) = interp.get_object_cell(obj_id)
-                    && obj.borrow().class_name != "RegExp"
+                    && !obj.borrow().is_class("RegExp")
                 {
                     return Completion::Throw(interp.create_type_error(
                         "RegExp.prototype.exec requires that 'this' be a RegExp object",
@@ -9213,7 +9213,7 @@ impl Interpreter {
                 };
                 // 2. Perform ? RequireInternalSlot(O, [[RegExpMatcher]]).
                 if let Some(obj) = interp.get_object_cell(obj_id) {
-                    if obj.borrow().class_name != "RegExp" {
+                    if !obj.borrow().is_class("RegExp") {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.compile requires that 'this' be a RegExp object",
                         ));
@@ -9241,7 +9241,7 @@ impl Interpreter {
                 let pattern_is_regexp = if let Some(po_id) = pattern_arg.as_object_id() {
                     interp
                         .get_object_cell(po_id)
-                        .map(|o| o.borrow().class_name == "RegExp")
+                        .map(|o| o.borrow().is_class("RegExp"))
                         .unwrap_or(false)
                 } else {
                     false
@@ -10439,7 +10439,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(iter_obj_id)
                         .borrow_mut()
-                        .class_name = "RegExp String Iterator";
+                        .set_class("RegExp String Iterator");
                     if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
                         interp
                             .get_object_cell_expect(iter_obj_id)
@@ -10475,7 +10475,7 @@ impl Interpreter {
         let rsi_proto_id = self.create_object_id();
         self.get_object_cell_expect(rsi_proto_id)
             .borrow_mut()
-            .class_name = "RegExp String Iterator";
+            .set_class("RegExp String Iterator");
         if let Some(ip_id) = self.realm().iterator_prototype {
             self.get_object_cell_expect(rsi_proto_id)
                 .borrow_mut()
@@ -10586,7 +10586,7 @@ impl Interpreter {
                         Some(o) => o,
                         None => return Completion::Normal(JsValue::UNDEFINED),
                     };
-                    if obj.borrow().class_name != "RegExp" {
+                    if !obj.borrow().is_class("RegExp") {
                         if obj_ref_id == regexp_proto_id {
                             return Completion::Normal(JsValue::UNDEFINED);
                         }
@@ -10638,7 +10638,7 @@ impl Interpreter {
                 Some(o) => o,
                 None => return Completion::Normal(JsValue::UNDEFINED),
             };
-            if obj.borrow().class_name != "RegExp" {
+            if !obj.borrow().is_class("RegExp") {
                 if obj_ref_id == regexp_proto_id {
                     return Completion::Normal(JsValue::string(JsString::from_str("(?:)")));
                 }
@@ -10681,13 +10681,13 @@ impl Interpreter {
                         } else {
                             // Symbol.match is undefined, check [[RegExpMatcher]]
                             if let Some(obj) = interp.get_object_cell(pat_id) {
-                                obj.borrow().class_name == "RegExp"
+                                obj.borrow().is_class("RegExp")
                             } else {
                                 false
                             }
                         }
                     } else if let Some(obj) = interp.get_object_cell(pat_id) {
-                        obj.borrow().class_name == "RegExp"
+                        obj.borrow().is_class("RegExp")
                     } else {
                         false
                     }
@@ -10723,7 +10723,7 @@ impl Interpreter {
                 let has_regexp_matcher = if let Some(pat_id) = pattern_arg.as_object_id() {
                     interp
                         .get_object_cell(pat_id)
-                        .is_some_and(|obj| obj.borrow().class_name == "RegExp")
+                        .is_some_and(|obj| obj.borrow().is_class("RegExp"))
                 } else {
                     false
                 };
@@ -10849,7 +10849,7 @@ impl Interpreter {
 
                 let mut obj = JsObjectData::new();
                 obj.set_proto(proto.or(Some(regexp_proto_rc_id)));
-                obj.class_name = "RegExp";
+                obj.set_class("RegExp");
                 // Store internal slots ([[OriginalSource]], [[OriginalFlags]])
                 obj.kind = crate::interpreter::types::ObjectKind::RegExp(Box::new(
                     crate::interpreter::types::RegExpData::new(

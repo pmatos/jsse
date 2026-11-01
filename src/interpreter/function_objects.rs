@@ -146,7 +146,7 @@ impl Interpreter {
             2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype),
         ));
         obj_data.set_proto(proto_id.or(self.realm().object_prototype));
-        obj_data.class_name = class_name;
+        obj_data.set_class(class_name);
         obj_data.set_function_realm(self.current_realm_id);
         obj_data.callable = Some(Box::new(func));
 

@@ -106,7 +106,7 @@ pub(super) fn iterator_from(
     interp
         .get_object_cell_expect(wrapper_id)
         .borrow_mut()
-        .class_name = "Iterator";
+        .set_class("Iterator");
     {
         let mut wrapper = interp.get_object_cell_expect(wrapper_id).borrow_mut();
         wrapper.kind = crate::interpreter::types::ObjectKind::IterHelper(Box::new(

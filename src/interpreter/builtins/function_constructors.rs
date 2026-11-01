@@ -598,7 +598,7 @@ impl Interpreter {
             let af_proto_id = self.create_object_id();
             self.get_object_cell_expect(af_proto_id)
                 .borrow_mut()
-                .class_name = "AsyncFunction";
+                .set_class("AsyncFunction");
 
             // [[Prototype]] = Function.prototype_id
             if let Some(func_val) = self.get_global_var("Function")

@@ -130,7 +130,7 @@ impl Interpreter {
         let Some(obj) = self.get_object(obj_id) else {
             return Ok(false);
         };
-        if obj.borrow().class_name == "Array" {
+        if obj.borrow().is_class("Array") {
             self.array_define_own_property(obj_id as usize, &key, desc)
         } else {
             Ok(obj.borrow_mut().define_own_property(key, desc))

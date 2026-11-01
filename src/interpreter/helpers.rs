@@ -250,7 +250,7 @@ fn string_to_number(s: &JsString) -> f64 {
 }
 
 /// The NumericValue of a BigInt literal's source text (12.9.3): decimal, or a
-/// `0x`/`0o`/`0b` prefixed radix form, with the trailing `n` already removed.
+/// `0x`/`0o`/`0b` radix form, with the trailing `n` already removed.
 pub(crate) fn parse_bigint_literal(text: &str) -> num_bigint::BigInt {
     use num_bigint::BigInt;
     let radix_digits = |lower: &str, upper: &str| {
@@ -475,7 +475,7 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
         } else {
             None
         };
-        (b.is_proxy_revoked(), b.is_proxy(), tid, b.class_name)
+        (b.is_proxy_revoked(), b.is_proxy(), tid, b.class_str())
     });
     if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
         if is_revoked {

@@ -277,7 +277,7 @@ fn foreign_buffer(interp: &mut Interpreter, ptr: *mut u8, len: usize) -> JsValue
     let id = interp.create_object_id();
     let proto = interp.realm().arraybuffer_prototype;
     let mut ab = interp.get_object_cell_expect(id).borrow_mut();
-    ab.class_name = "ArrayBuffer";
+    ab.set_class("ArrayBuffer");
     ab.set_proto(proto);
     ab.kind = ObjectKind::ArrayBuffer(Box::new(ArrayBufferData {
         data: Rc::new(RefCell::new(BufferData::Foreign(bytes))),

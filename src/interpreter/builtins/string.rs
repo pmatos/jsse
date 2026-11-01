@@ -289,7 +289,7 @@ fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result
     }
     Ok(interp
         .get_object_cell(obj_id)
-        .map(|obj| obj.borrow().class_name == "RegExp")
+        .map(|obj| obj.borrow().is_class("RegExp"))
         .unwrap_or(false))
 }
 
@@ -311,7 +311,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "String";
+            .set_class("String");
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .set_primitive_value(JsValue::string(JsString::from_str("")));
@@ -780,7 +780,7 @@ impl Interpreter {
                                 }
                                 Completion::Normal(_) => interp
                                     .get_object_cell(object_id)
-                                    .map(|obj| obj.borrow().class_name == "RegExp")
+                                    .map(|obj| obj.borrow().is_class("RegExp"))
                                     .unwrap_or(false),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
@@ -788,7 +788,7 @@ impl Interpreter {
                         } else {
                             interp
                                 .get_object_cell(object_id)
-                                .map(|obj| obj.borrow().class_name == "RegExp")
+                                .map(|obj| obj.borrow().is_class("RegExp"))
                                 .unwrap_or(false)
                         };
                         if is_regexp {
@@ -1021,7 +1021,7 @@ impl Interpreter {
                                 }
                                 Completion::Normal(_) => interp
                                     .get_object_cell(object_id)
-                                    .map(|obj| obj.borrow().class_name == "RegExp")
+                                    .map(|obj| obj.borrow().is_class("RegExp"))
                                     .unwrap_or(false),
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
@@ -1029,7 +1029,7 @@ impl Interpreter {
                         } else {
                             interp
                                 .get_object_cell(object_id)
-                                .map(|obj| obj.borrow().class_name == "RegExp")
+                                .map(|obj| obj.borrow().is_class("RegExp"))
                                 .unwrap_or(false)
                         };
                         if is_regexp {
@@ -1209,7 +1209,7 @@ impl Interpreter {
                     }
                     if let Some(object_id) = this_val.as_object_id()
                         && let Some(obj) = interp.get_object_cell(object_id)
-                        && obj.borrow().class_name == "String"
+                        && obj.borrow().is_class("String")
                         && let Some(primitive) = obj.borrow().primitive_value()
                     {
                         return Completion::Normal(primitive.clone());
@@ -1234,7 +1234,7 @@ impl Interpreter {
                     }
                     if let Some(object_id) = this_val.as_object_id()
                         && let Some(obj) = interp.get_object_cell(object_id)
-                        && obj.borrow().class_name == "String"
+                        && obj.borrow().is_class("String")
                         && let Some(primitive) = obj.borrow().primitive_value()
                     {
                         return Completion::Normal(primitive.clone());

@@ -32,7 +32,7 @@ impl Interpreter {
                 if let Some(space_id) = space_val.as_object_id()
                     && let Some(obj) = interp.get_object_cell(space_id)
                 {
-                    let cn = obj.borrow().class_name;
+                    let cn = obj.borrow().class_str();
                     if cn == "Number" {
                         match interp.to_number_value(&space_val) {
                             Ok(n) => space_val = JsValue::number(n),

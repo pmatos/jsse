@@ -389,7 +389,7 @@ impl Interpreter {
             {
                 let obj_b = obj.borrow();
                 if let Some(s) = obj_b.primitive_value().and_then(JsValue::as_string)
-                    && obj_b.class_name == "String"
+                    && obj_b.is_class("String")
                 {
                     let is_exotic = key.eq_str("length")
                         || crate::interpreter::types::string_exotic_index(&key, s.len()).is_some();

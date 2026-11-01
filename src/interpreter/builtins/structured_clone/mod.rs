@@ -64,7 +64,7 @@ fn classify(interp: &Interpreter, id: u64) -> Shape {
     };
     let b = cell.borrow();
     if b.callable.is_some() || b.proxy().is_some() {
-        return Shape::Reject(b.class_name);
+        return Shape::Reject(b.class_str());
     }
     match &b.kind {
         ObjectKind::RegExp(data) => Shape::RegExp(data.source.clone(), data.flags.clone()),
@@ -79,7 +79,7 @@ fn classify(interp: &Interpreter, id: u64) -> Shape {
         }
         ObjectKind::Array(_) => Shape::Array,
         ObjectKind::Ordinary | ObjectKind::PrimitiveWrapper(_) => {
-            match (b.class_name, b.primitive_value()) {
+            match (b.class_str(), b.primitive_value()) {
                 ("Date", Some(t)) if t.is_number() => Shape::Date(t.clone()),
                 ("String" | "Number" | "Boolean" | "BigInt", Some(p)) => Shape::Wrapper(p.clone()),
                 ("Object" | "Math", _) if matches!(b.kind, ObjectKind::Ordinary) => Shape::Plain,
@@ -88,7 +88,7 @@ fn classify(interp: &Interpreter, id: u64) -> Shape {
                 (name, _) => Shape::Reject(name),
             }
         }
-        _ => Shape::Reject(b.class_name),
+        _ => Shape::Reject(b.class_str()),
     }
 }
 
@@ -109,7 +109,7 @@ impl Interpreter {
     ) -> u64 {
         let id = self.create_object_id();
         let mut o = self.get_object_cell_expect(id).borrow_mut();
-        o.class_name = class_name;
+        o.set_class(class_name);
         o.set_proto(proto);
         o.kind = kind;
         drop(o);

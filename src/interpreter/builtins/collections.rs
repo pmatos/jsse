@@ -16,7 +16,7 @@ fn this_map(
         && let Some(obj) = interp.get_object(o)
         && {
             let b = obj.borrow();
-            b.map_data().is_some() && b.class_name == "Map"
+            b.map_data().is_some() && b.is_class("Map")
         }
     {
         return Ok((o, obj));
@@ -39,7 +39,7 @@ fn this_set(
         && let Some(obj) = interp.get_object(o)
         && {
             let b = obj.borrow();
-            b.set_data().is_some() && b.class_name != "WeakSet"
+            b.set_data().is_some() && !b.is_class("WeakSet")
         }
     {
         return Ok((o, obj));
@@ -169,7 +169,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Map";
+            .set_class("Map");
 
         // Map iterator prototype
         let map_iter_proto_id = self.create_object_id();
@@ -178,7 +178,7 @@ impl Interpreter {
             .set_proto(self.realm().iterator_prototype);
         self.get_object_cell_expect(map_iter_proto_id)
             .borrow_mut()
-            .class_name = "Map Iterator";
+            .set_class("Map Iterator");
 
         self.define_to_string_tag(map_iter_proto_id, "Map Iterator");
 
@@ -223,7 +223,7 @@ impl Interpreter {
                     .or(interp.realm().iterator_prototype)
                     .or(interp.realm().object_prototype),
             );
-            obj_data.class_name = "Map Iterator";
+            obj_data.set_class("Map Iterator");
             obj_data.set_iterator_state(IteratorState::MapIterator {
                 map_id,
                 index: 0,
@@ -291,7 +291,7 @@ impl Interpreter {
             {
                 let has_map = {
                     let b = obj.borrow();
-                    b.map_data().is_some() && b.class_name == "Map"
+                    b.map_data().is_some() && b.is_class("Map")
                 };
                 if has_map {
                     let key = canonicalize_key(args.first().cloned().unwrap_or(JsValue::UNDEFINED));
@@ -478,7 +478,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Map";
+                    .set_class("Map");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Map(Box::default());
                 let this_val = JsValue::object(obj_id);
@@ -653,7 +653,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
-                            .class_name = "Map";
+                            .set_class("Map");
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
@@ -754,7 +754,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Set";
+            .set_class("Set");
 
         // Set iterator prototype
         let set_iter_proto_id = self.create_object_id();
@@ -763,7 +763,7 @@ impl Interpreter {
             .set_proto(self.realm().iterator_prototype);
         self.get_object_cell_expect(set_iter_proto_id)
             .borrow_mut()
-            .class_name = "Set Iterator";
+            .set_class("Set Iterator");
 
         self.define_to_string_tag(set_iter_proto_id, "Set Iterator");
 
@@ -807,7 +807,7 @@ impl Interpreter {
                     .or(interp.realm().iterator_prototype)
                     .or(interp.realm().object_prototype),
             );
-            obj_data.class_name = "Set Iterator";
+            obj_data.set_class("Set Iterator");
             obj_data.set_iterator_state(IteratorState::SetIterator {
                 set_id,
                 index: 0,
@@ -1130,7 +1130,7 @@ impl Interpreter {
             interp
                 .get_object_cell_expect(new_obj_id)
                 .borrow_mut()
-                .class_name = "Set";
+                .set_class("Set");
             interp.get_object_cell_expect(new_obj_id).borrow_mut().kind =
                 crate::interpreter::types::ObjectKind::Set(Box::new(entries));
             let id = new_obj_id;
@@ -1380,7 +1380,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Set";
+                    .set_class("Set");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Set(Box::default());
                 let this_val = JsValue::object(obj_id);
@@ -1491,7 +1491,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakMap";
+            .set_class("WeakMap");
 
         // WeakMap.prototype.get
         self.define_method(proto_id, "get", 1, |interp, this, args| {
@@ -1500,7 +1500,7 @@ impl Interpreter {
             {
                 let is_weakmap = {
                     let b = obj.borrow();
-                    b.class_name == "WeakMap" && b.map_data().is_some()
+                    b.is_class("WeakMap") && b.map_data().is_some()
                 };
                 if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1524,7 +1524,7 @@ impl Interpreter {
                 && let Some(obj) = interp.get_object_cell(o)
             {
                 let has_map = obj.borrow().map_data().is_some();
-                if has_map && obj.borrow().class_name == "WeakMap" {
+                if has_map && obj.borrow().is_class("WeakMap") {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&key) {
                         let err = interp.create_type_error("Invalid value used as weak map key");
@@ -1552,7 +1552,7 @@ impl Interpreter {
             {
                 let is_weakmap = {
                     let b = obj.borrow();
-                    b.class_name == "WeakMap" && b.map_data().is_some()
+                    b.is_class("WeakMap") && b.map_data().is_some()
                 };
                 if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1575,7 +1575,7 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakmap = obj.borrow().class_name == "WeakMap";
+                let is_weakmap = obj.borrow().is_class("WeakMap");
                 let has_map = obj.borrow().map_data().is_some();
                 if is_weakmap && has_map {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1600,7 +1600,7 @@ impl Interpreter {
                 && let Some(obj) = interp.get_object_cell(o)
             {
                 let is_weakmap =
-                    obj.borrow().map_data().is_some() && obj.borrow().class_name == "WeakMap";
+                    obj.borrow().map_data().is_some() && obj.borrow().is_class("WeakMap");
                 if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1628,7 +1628,7 @@ impl Interpreter {
                 && let Some(obj) = interp.get_object_cell(o)
             {
                 let is_weakmap =
-                    obj.borrow().map_data().is_some() && obj.borrow().class_name == "WeakMap";
+                    obj.borrow().map_data().is_some() && obj.borrow().is_class("WeakMap");
                 if is_weakmap {
                     let key = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let callbackfn = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1703,7 +1703,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakMap";
+                    .set_class("WeakMap");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Map(Box::default());
                 let this_val = JsValue::object(obj_id);
@@ -1823,15 +1823,14 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakSet";
+            .set_class("WeakSet");
 
         // WeakSet.prototype.add
         self.define_method(proto_id, "add", 1, |interp, this, args| {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let has_set =
-                    obj.borrow().set_data().is_some() && obj.borrow().class_name == "WeakSet";
+                let has_set = obj.borrow().set_data().is_some() && obj.borrow().is_class("WeakSet");
                 if has_set {
                     let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if !interp.can_be_held_weakly(&value) {
@@ -1855,7 +1854,7 @@ impl Interpreter {
             {
                 let is_weakset = {
                     let b = obj.borrow();
-                    b.class_name == "WeakSet" && b.set_data().is_some()
+                    b.is_class("WeakSet") && b.set_data().is_some()
                 };
                 if is_weakset {
                     let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1878,7 +1877,7 @@ impl Interpreter {
             if let Some(o) = (this).as_object_id()
                 && let Some(obj) = interp.get_object_cell(o)
             {
-                let is_weakset = obj.borrow().class_name == "WeakSet";
+                let is_weakset = obj.borrow().is_class("WeakSet");
                 let has_set = obj.borrow().set_data().is_some();
                 if is_weakset && has_set {
                     let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
@@ -1928,7 +1927,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakSet";
+                    .set_class("WeakSet");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Set(Box::default());
                 let this_val = JsValue::object(obj_id);

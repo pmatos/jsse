@@ -125,7 +125,7 @@ impl Interpreter {
                 .array_prototype
                 .or(self.realm().object_prototype),
         );
-        obj_data.class_name = "Array";
+        obj_data.set_class("Array");
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(Box::default());
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_property(
@@ -167,7 +167,7 @@ impl Interpreter {
                 .regexp_prototype
                 .or(self.realm().object_prototype),
         );
-        obj.class_name = "RegExp";
+        obj.set_class("RegExp");
         obj.kind = crate::interpreter::types::ObjectKind::RegExp(Box::new(
             crate::interpreter::types::RegExpData::new(source, flags),
         ));
@@ -213,7 +213,7 @@ impl Interpreter {
                 .regexp_prototype
                 .or(self.realm().object_prototype),
         );
-        obj.class_name = "RegExp";
+        obj.set_class("RegExp");
         let source = if pattern.is_empty() {
             JsString::from_str("(?:)")
         } else {

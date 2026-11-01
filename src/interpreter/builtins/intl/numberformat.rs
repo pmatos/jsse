@@ -2940,7 +2940,7 @@ impl Interpreter {
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.NumberFormat";
+            .set_class("Intl.NumberFormat");
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.NumberFormat");
@@ -4436,7 +4436,7 @@ impl Interpreter {
                 };
                 let obj_id = interp.create_object_id();
                 interp.get_object_cell_expect(obj_id).borrow_mut().set_proto(Some(proto));
-                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.NumberFormat";
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_class("Intl.NumberFormat");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::NumberFormat {
                     locale,
                     numbering_system,

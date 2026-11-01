@@ -556,7 +556,7 @@ impl Interpreter {
         let iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
-            .class_name = "Iterator";
+            .set_class("Iterator");
 
         // %IteratorPrototype%[@@iterator]() returns this
         let iter_self_fn = self.create_function(JsFunction::native(
@@ -826,7 +826,7 @@ impl Interpreter {
             .set_proto(Some(iter_proto_id));
         self.get_object_cell_expect(arr_iter_proto_id)
             .borrow_mut()
-            .class_name = "Array Iterator";
+            .set_class("Array Iterator");
 
         let array_next = self.define_method(arr_iter_proto_id, "next", 0, |interp, this, _args| {
             let Some(this_id) = this.as_object_id() else {
@@ -849,7 +849,7 @@ impl Interpreter {
             .set_proto(Some(iter_proto_id));
         self.get_object_cell_expect(str_iter_proto_id)
             .borrow_mut()
-            .class_name = "String Iterator";
+            .set_class("String Iterator");
 
         let string_next =
             self.define_method(str_iter_proto_id, "next", 0, |interp, this, _args| {
@@ -896,7 +896,7 @@ impl Interpreter {
             .set_proto(self.realm().iterator_prototype);
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Iterator Helper";
+            .set_class("Iterator Helper");
 
         // next() — reads next + gen_state from this object's IterHelperData::Helper
         self.define_method(proto_id, "next", 0, |interp, this, args| {
@@ -1034,7 +1034,9 @@ impl Interpreter {
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
             .set_proto(self.realm().iterator_helper_prototype);
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Iterator Helper";
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .set_class("Iterator Helper");
         {
             let mut obj = self.get_object_cell_expect(obj_id).borrow_mut();
             obj.kind = crate::interpreter::types::ObjectKind::IterHelper(Box::new(
@@ -3219,7 +3221,7 @@ impl Interpreter {
                 .or(self.realm().iterator_prototype)
                 .or(self.realm().object_prototype),
         );
-        obj_data.class_name = "Array Iterator";
+        obj_data.set_class("Array Iterator");
         obj_data.set_iterator_state(IteratorState::ArrayIterator {
             array_id,
             index: 0,
@@ -3309,7 +3311,7 @@ impl Interpreter {
         };
         let mut obj_data = JsObjectData::new();
         obj_data.set_proto(self.realm().for_in_iterator_prototype);
-        obj_data.class_name = "For-In Iterator";
+        obj_data.set_class("For-In Iterator");
         obj_data.set_iterator_state(IteratorState::ForInEnumerator {
             obj_id,
             keys,
@@ -3330,7 +3332,7 @@ impl Interpreter {
                 .or(self.realm().iterator_prototype)
                 .or(self.realm().object_prototype),
         );
-        obj_data.class_name = "Array Iterator";
+        obj_data.set_class("Array Iterator");
         obj_data.set_iterator_state(IteratorState::TypedArrayIterator {
             typed_array_id,
             index: 0,
@@ -3349,7 +3351,7 @@ impl Interpreter {
                 .or(self.realm().iterator_prototype)
                 .or(self.realm().object_prototype),
         );
-        obj_data.class_name = "String Iterator";
+        obj_data.set_class("String Iterator");
         obj_data.set_iterator_state(IteratorState::StringIterator {
             string,
             position: 0,
@@ -3363,7 +3365,7 @@ impl Interpreter {
         let gen_proto_id = self.create_object_id();
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
-            .class_name = "Generator";
+            .set_class("Generator");
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
             .set_proto(self.realm().iterator_prototype);
@@ -3442,7 +3444,7 @@ impl Interpreter {
         let gf_proto_id = self.create_object_id();
         self.get_object_cell_expect(gf_proto_id)
             .borrow_mut()
-            .class_name = "GeneratorFunction";
+            .set_class("GeneratorFunction");
 
         // [[Prototype]] = Function.prototype_id
         // Get Function.prototype from global Function
@@ -3484,7 +3486,7 @@ impl Interpreter {
         let async_iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(async_iter_proto_id)
             .borrow_mut()
-            .class_name = "AsyncIterator";
+            .set_class("AsyncIterator");
 
         let async_iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.asyncIterator]".to_string(),
@@ -3669,7 +3671,7 @@ impl Interpreter {
             .set_proto(Some(async_iter_proto_id));
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
-            .class_name = "AsyncGenerator";
+            .set_class("AsyncGenerator");
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3728,7 +3730,7 @@ impl Interpreter {
         let agf_proto_id = self.create_object_id();
         self.get_object_cell_expect(agf_proto_id)
             .borrow_mut()
-            .class_name = "AsyncGeneratorFunction";
+            .set_class("AsyncGeneratorFunction");
         // prototype property points to AsyncGenerator.prototype_id
         self.get_object_cell_expect(agf_proto_id)
             .borrow_mut()
