@@ -192,9 +192,8 @@ function decorate(error) {
   }
 }
 
-// The stack of a SyntaxError the ES module loader made for the entry point
-// (#1484): the source excerpt, then the error, with none of Node's internal
-// loader frames. util.inspect would bracket it, as it does a frameless error.
+// A SyntaxError of the ES module loader (#1484): the stack is the excerpt and
+// the error, without Node's internal frames, so inspect would bracket it.
 const LOADER_STACK = /^[^\n]+:\d+\n[^\n]*\n[ \t]*\^*\n\n?SyntaxError: /;
 
 function loaderStack(error) {

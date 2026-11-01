@@ -1,10 +1,5 @@
-//! What `jsse --node` prints when the ES module entry point does not parse or
-//! link (issue #1484), in the bytecode VM, the tree-walker and under GC stress.
-//! `scripts/node-stack-fixtures-1484/expected-*.txt` is Node v26's own stderr for
-//! each entry, with the fixture directory removed from paths and the lines of
-//! Node's internal loader frames (`node:internal`, `node:diagnostics`) dropped,
-//! because the embedded loader has none; regenerate one by running the entry
-//! with `node` and applying the same normalisation
+//! `jsse --node` output for an ES module entry point that does not parse or link
+//! (issue #1484) against Node v26's stderr in `scripts/node-stack-fixtures-1484/`
 //! (docs/agents/library-tests-typescript-conformance-module-errors-1484.md).
 
 use std::path::PathBuf;
@@ -67,6 +62,7 @@ fn entry_module_that_does_not_parse_reports_like_node() {
         "parse-eof",
         "parse-wide",
         "parse-crlf",
+        "parse-ls",
         "parse-multiline",
         "parse-unicode",
         "parse-tab",

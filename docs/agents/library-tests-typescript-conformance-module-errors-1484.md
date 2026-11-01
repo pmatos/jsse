@@ -13,7 +13,7 @@ dependency of it) went through a different path and still differed:
   (`SyntaxError: ParseError { message: "Unexpected token '='" }`), exit status 2, with no location.
   `Interpreter::node_entry_syntax_error` (`builtins/node_host_stack/entry_errors.rs`, called from `run_source_with_interp`)
   now builds the `SyntaxError` and delivers it through the entry-point failure path Node uses
-  (`node_uncaught_entry`): `file:///f.mjs:LINE`, the source line (tabs kept, CRLF and non-ASCII handled), carets under
+  (`node_uncaught_entry`): `file:///f.mjs:LINE`, the source line (tabs kept; CRLF, U+2028 and non-ASCII handled), carets under
   the token the parser stopped at (none at the end of input), a blank line, then the error. Exit status 1.
 - A static dependency that does not parse (`import "./dep.mjs"`) printed `[SyntaxError: ...]` without the excerpt. The
   loader (`parse_failure`, same file) gives it the same excerpt, unless an `import()` is loading it: Node's `stack` has no
@@ -27,7 +27,7 @@ Nothing here is observable through ECMAScript, only through the host's report, s
 
 ## Verification
 
-`scripts/node-stack-fixtures-1484/` holds 14 entry modules (7 parse failures, a dependency that does not parse, 5 link
+`scripts/node-stack-fixtures-1484/` holds 15 entry modules (8 parse failures, a dependency that does not parse, 5 link
 errors, a throwing dependency) with `expected-*.txt`: Node v26.8.2's stderr with `file://<dir>/` and `<dir>/` removed
 and the lines containing `node:internal` or `node:diagnostics` dropped (the embedded loader has no such frames, and every
 oracle drops them). Regenerate one by running the entry with `node` from any directory and applying that. `tests/
@@ -56,9 +56,10 @@ node_module_errors_1484.rs` replays them under the VM, the tree-walker and `JSSE
 
 - An uncaught **missing dependency** of the entry (`import "./nope.mjs"`) lacks the `node:internal/modules/esm/resolve:272`
   source excerpt (`throw new ERR_MODULE_NOT_FOUND(` and its caret) that Node's report prints from its own library source.
-- The caret of a parse failure covers the token the parser stopped at. V8 covers the offending lexeme: when the error is
-  about an earlier token (`let = = 2`, V8 marks `let`) or the lexer rejected the token (`"abc;`, `12abc`) the line is right
-  and the carets are not. `ParseError` carries no position.
+- The excerpt locates the token the parser stopped at, because `ParseError` carries no position. V8 marks the offending
+  lexeme: when the error is about an earlier token (`let = = 2` marks `let`), is an early error found later (a duplicate
+  declaration) or comes from the lexer (`"abc;`, `12abc`, whose position is the previous token's) the line, and so the
+  carets, may be wrong.
 - A CommonJS main script that does not parse still prints no excerpt (the loader that compiles it is the embedded
   `Module._compile`).
 - **#1524 item 3.** Data for whoever takes it. V8 reports the last source position its bytecode generator emitted before the

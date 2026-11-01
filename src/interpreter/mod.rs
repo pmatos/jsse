@@ -2637,7 +2637,7 @@ impl Interpreter {
             let program = match parser.parse_program_as_module() {
                 Ok(program) => program,
                 Err(error) => {
-                    return Err(self.parse_failure(path, &source, &parser, &error));
+                    return Err(self.parse_failure(key, &source, &parser, &error));
                 }
             };
             self.node_note_module_origin(&canon_path, parser.source_origin());
