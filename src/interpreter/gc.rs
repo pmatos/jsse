@@ -1,274 +1,11 @@
 use super::*;
 
 mod module_roots;
+mod pacer;
 
-/// Allocation-pressure pacing for the garbage collector.
-///
-/// Owns the accounting that decides *when* to collect: how many objects and
-/// bytes have been charged since the last collection, how many off-heap bytes
-/// are currently live, and the adaptive byte budget that grows with the live
-/// set. The mark/sweep mechanics stay in [`Interpreter::gc_safepoint`]; this is
-/// purely the "should we collect now?" heuristic, exercised through the small
-/// interface below rather than by poking counters on the interpreter.
-pub(crate) struct GcPacer {
-    /// Object allocations currently charged to the nursery.
-    nursery_alloc_count: usize,
-    /// Approximate bytes currently charged to the nursery.
-    nursery_bytes: usize,
-    /// Heap + off-heap allocation debt since the last major collection.
-    major_bytes_since_gc: usize,
-    /// Live off-heap bytes currently tracked (e.g. ArrayBuffer backing stores).
-    external_bytes: usize,
-    /// Adaptive major byte budget; exceeding it requests a full collection.
-    major_threshold_bytes: usize,
-    /// A minor collection has been requested and not yet performed.
-    minor_requested: bool,
-    /// A full collection has been requested and not yet performed.
-    major_requested: bool,
-    /// A dense remembered set made routine minor collection counterproductive.
-    /// Run a major after the next nursery budget.
-    minor_suppressed: bool,
-    /// Debug stress mode: force a collection every `stress_period` safepoints
-    /// that would otherwise not collect. Zero disables it.
-    stress_period: u32,
-    /// `major_requested | minor_requested | (stress_period != 0)`, kept in
-    /// step by every writer so the VM's safepoint poll is one load and test.
-    poll: bool,
-    /// A step budget is installed, so every safepoint must tick it.
-    budget_active: bool,
-    /// Safepoints seen while stress mode is on. Every `stress_period`th one
-    /// collects, alternating major (finds missing roots) and minor (finds
-    /// missing write barriers).
-    pub(crate) stress_count: u64,
-    /// Every `begin_collection()` call, unconditionally — one per production
-    /// `Interpreter::gc_safepoint()`, plus one per direct `begin_collection()`
-    /// call from this module's own unit tests below. Unlike `stress_count`
-    /// (which `begin_collection` skips incrementing whenever a major/minor
-    /// collection is already pending), this never resets and is never
-    /// skipped, so tests can assert exact deltas across calls. Test-only.
-    #[cfg(test)]
-    safepoint_calls: u64,
-}
-
-/// Environment variable that enables the GC stress mode: a collection is
-/// forced at every Nth safepoint. Unset, `0` or unparsable leaves it off.
-pub(crate) const GC_STRESS_ENV: &str = "JSSE_GC_STRESS";
-
-/// In-crate unit tests never read the variable, so their exact-result pacer
-/// assertions hold under `JSSE_GC_STRESS`; they opt in with `set_stress_period`.
-fn stress_period_from_env() -> u32 {
-    if cfg!(test) {
-        return 0;
-    }
-    std::env::var(GC_STRESS_ENV)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(0)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CollectionKind {
-    Minor,
-    Major,
-}
-
-impl GcPacer {
-    pub(crate) fn new() -> Self {
-        let stress_period = stress_period_from_env();
-        GcPacer {
-            nursery_alloc_count: 0,
-            nursery_bytes: 0,
-            major_bytes_since_gc: 0,
-            external_bytes: 0,
-            major_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
-            minor_requested: false,
-            major_requested: false,
-            minor_suppressed: false,
-            stress_period,
-            poll: stress_period != 0,
-            stress_count: 0,
-            budget_active: false,
-            #[cfg(test)]
-            safepoint_calls: 0,
-        }
-    }
-
-    #[inline(always)]
-    fn sync_poll(&mut self) {
-        self.poll = self.wanted_poll();
-    }
-
-    fn wanted_poll(&self) -> bool {
-        self.major_requested | self.minor_requested | (self.stress_period != 0) | self.budget_active
-    }
-
-    pub(crate) fn set_budget_active(&mut self, active: bool) {
-        self.budget_active = active;
-        self.sync_poll();
-    }
-
-    #[inline(always)]
-    fn mark_major(&mut self) {
-        self.major_requested = true;
-        self.poll = true;
-    }
-
-    #[inline(always)]
-    fn mark_minor(&mut self) {
-        self.minor_requested = true;
-        self.poll = true;
-    }
-
-    pub(crate) fn set_stress_period(&mut self, period: u32) {
-        self.stress_period = period;
-        self.stress_count = 0;
-        self.sync_poll();
-    }
-
-    /// Charge one object allocation. Reused logical slots still hold a full
-    /// live payload and therefore carry full major-collection pressure.
-    pub(crate) fn charge_object(&mut self, _reused: bool) {
-        self.nursery_alloc_count += 1;
-        self.nursery_bytes += GC_OBJECT_OVERHEAD;
-        self.major_bytes_since_gc += GC_OBJECT_OVERHEAD;
-        if self.nursery_bytes >= GC_NURSERY_THRESHOLD_BYTES {
-            if self.minor_suppressed {
-                self.mark_major();
-            } else {
-                self.mark_minor();
-            }
-        }
-        if self.major_bytes_since_gc >= self.major_threshold_bytes {
-            self.mark_major();
-        }
-    }
-
-    /// Charge newly tracked off-heap bytes against the budget.
-    pub(crate) fn track_external(&mut self, bytes: usize) {
-        self.external_bytes += bytes;
-        self.major_bytes_since_gc += bytes;
-        if self.major_bytes_since_gc >= self.major_threshold_bytes {
-            self.mark_major();
-        }
-    }
-
-    /// Release previously tracked off-heap bytes (saturating at zero).
-    pub(crate) fn release_external(&mut self, bytes: usize) {
-        self.external_bytes = self.external_bytes.saturating_sub(bytes);
-    }
-
-    /// Force a collection at the next safepoint.
-    pub(crate) fn request(&mut self) {
-        self.mark_major();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn request_minor(&mut self) {
-        self.mark_minor();
-    }
-
-    /// Whether a safepoint has anything to do: a pending request, or stress
-    /// mode, whose counter must tick at every safepoint. Under `cfg(test)`
-    /// it is always true so `safepoint_calls` still counts every poll.
-    #[inline(always)]
-    pub(crate) fn safepoint_pending(&self) -> bool {
-        debug_assert_eq!(self.poll, self.wanted_poll());
-        cfg!(test) || self.poll
-    }
-
-    /// Consume the highest-priority pending request at a safepoint.
-    pub(crate) fn begin_collection(&mut self) -> Option<CollectionKind> {
-        #[cfg(test)]
-        {
-            self.safepoint_calls += 1;
-        }
-        if self.major_requested {
-            self.major_requested = false;
-            self.minor_requested = false;
-            self.sync_poll();
-            Some(CollectionKind::Major)
-        } else if self.minor_requested {
-            self.minor_requested = false;
-            self.sync_poll();
-            Some(CollectionKind::Minor)
-        } else if self.stress_period != 0 {
-            self.stress_count += 1;
-            let period = u64::from(self.stress_period);
-            if !self.stress_count.is_multiple_of(period) {
-                return None;
-            }
-            Some(if (self.stress_count / period) % 2 == 1 {
-                CollectionKind::Major
-            } else {
-                CollectionKind::Minor
-            })
-        } else {
-            None
-        }
-    }
-
-    /// Reset the nursery cycle after a minor collection. High survival does not
-    /// switch to major pacing: a minor costs about the same per nursery
-    /// whatever the live-set size, while forcing a major every nursery traced
-    /// the whole growing heap per 8,192 allocations (#908). Majors stay on the
-    /// live-set-proportional byte budget.
-    pub(crate) fn end_minor_collection(&mut self) {
-        self.nursery_alloc_count = 0;
-        self.nursery_bytes = 0;
-    }
-
-    /// Pause minor collection after an unproductive scavenge. Nursery objects
-    /// remain allocated until the next budget requests a major collection.
-    pub(crate) fn suppress_minor_temporarily(&mut self) {
-        self.minor_requested = false;
-        self.sync_poll();
-        self.minor_suppressed = true;
-        self.nursery_alloc_count = 0;
-        self.nursery_bytes = 0;
-    }
-
-    /// Re-pace after a full collection: grow the next byte budget from the
-    /// surviving live set and reset both allocation cycles.
-    pub(crate) fn end_major_collection(&mut self, live_object_count: usize) {
-        let live_bytes = live_object_count * GC_OBJECT_OVERHEAD + self.external_bytes;
-        let growth_debt = live_bytes.saturating_mul(GC_GROWTH_FACTOR.saturating_sub(1));
-        self.major_threshold_bytes = std::cmp::max(GC_MAJOR_MIN_THRESHOLD_BYTES, growth_debt);
-        self.major_bytes_since_gc = 0;
-        self.nursery_alloc_count = 0;
-        self.nursery_bytes = 0;
-        self.minor_suppressed = false;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_requested(&self) -> bool {
-        self.minor_requested || self.major_requested
-    }
-
-    #[cfg(test)]
-    pub(crate) fn safepoint_calls(&self) -> u64 {
-        self.safepoint_calls
-    }
-
-    #[cfg(test)]
-    pub(crate) fn alloc_count(&self) -> usize {
-        self.nursery_alloc_count
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bytes_since_gc(&self) -> usize {
-        self.major_bytes_since_gc
-    }
-
-    #[cfg(test)]
-    pub(crate) fn external_bytes(&self) -> usize {
-        self.external_bytes
-    }
-
-    #[cfg(test)]
-    pub(crate) fn threshold_bytes(&self) -> usize {
-        self.major_threshold_bytes
-    }
-}
+#[cfg(feature = "perf-counters")]
+use super::perf_counters::gc_minor as profile;
+pub(crate) use pacer::{CollectionKind, GcPacer};
 
 #[path = "gc_rooted_slots.rs"]
 mod rooted_slots;
@@ -502,6 +239,7 @@ impl Interpreter {
                 #[cfg(feature = "perf-counters")]
                 let start = std::time::Instant::now();
                 self.gc_collect_minor();
+                self.gc.retune_nursery(self.env_registry.len());
                 #[cfg(feature = "perf-counters")]
                 {
                     let nanos = start.elapsed().as_nanos();
@@ -514,6 +252,7 @@ impl Interpreter {
                 #[cfg(feature = "perf-counters")]
                 let start = std::time::Instant::now();
                 self.gc_collect_major();
+                self.gc.retune_nursery(self.env_registry.len());
                 #[cfg(feature = "perf-counters")]
                 {
                     self.perf.gc_major += 1;
@@ -616,18 +355,40 @@ impl Interpreter {
 
         // A minor collection's only view of old environments written since
         // the last collection; a major one scans everything.
+        #[cfg(feature = "perf-counters")]
+        let registry_start = std::time::Instant::now();
+        #[cfg(feature = "perf-counters")]
+        if minor {
+            self.perf.gc_minor_profile.sizes[profile::REGISTRY_TOTAL] +=
+                self.env_registry.len() as u64;
+        }
         if minor {
             self.env_registry.retain(|weak| {
-                let Some(env) = weak.upgrade() else {
+                if weak.strong_count() == 0 {
                     return false;
+                }
+                // SAFETY: a strong reference keeps the allocation live and no
+                // environment is borrowed mutably at a safepoint. Reading
+                // through the pointer writes neither the strong count nor the
+                // borrow flag of every registered environment (#1490).
+                let clean = unsafe {
+                    (*weak.as_ptr())
+                        .try_borrow_unguarded()
+                        .is_ok_and(Environment::is_clean)
                 };
-                if !env.borrow().is_clean() {
+                if !clean && let Some(env) = weak.upgrade() {
                     Self::collect_env_roots(&env, &mut roots, &mut seen_envs);
                 }
                 true
             });
         } else {
             self.env_registry.retain(|weak| weak.strong_count() > 0);
+        }
+        #[cfg(feature = "perf-counters")]
+        if minor {
+            self.perf
+                .gc_minor_profile
+                .lap(profile::REGISTRY, registry_start);
         }
 
         (roots, seen_envs)
@@ -857,8 +618,25 @@ impl Interpreter {
             return;
         }
 
+        #[cfg(feature = "perf-counters")]
+        let mut phase_clock = std::time::Instant::now();
+        #[cfg(feature = "perf-counters")]
+        let registry_before = self.perf.gc_minor_profile.phase_nanos[profile::REGISTRY];
         let (roots, mut seen_envs) = self.collect_gc_roots(true);
+        #[cfg(feature = "perf-counters")]
+        {
+            phase_clock = self
+                .perf
+                .gc_minor_profile
+                .lap_roots(phase_clock, registry_before);
+        }
         let remembered = self.objects.take_remembered();
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.gc_minor_profile.sizes[profile::REMEMBERED_TOTAL] += remembered.len() as u64;
+            self.perf.gc_minor_profile.sizes[profile::NURSERY_TOTAL] +=
+                self.objects.nursery_ids().len() as u64;
+        }
         let mut young = std::mem::take(&mut self.gc_young);
         young.fill(self.objects.nursery_ids(), self.objects.capacity());
         let mut worklist = Vec::new();
@@ -910,6 +688,13 @@ impl Interpreter {
             if elements_young || !retained_cards.is_empty() {
                 handle.remember_elements_if_old();
             }
+        }
+        #[cfg(feature = "perf-counters")]
+        {
+            phase_clock = self
+                .perf
+                .gc_minor_profile
+                .lap(profile::REMEMBERED, phase_clock);
         }
         self.trace_young_worklist(
             &mut worklist,
@@ -1000,6 +785,10 @@ impl Interpreter {
             self.debug_assert_old_closure_envs_are_tracked(seen_envs.epoch());
         }
 
+        #[cfg(feature = "perf-counters")]
+        {
+            phase_clock = self.perf.gc_minor_profile.lap(profile::TRACE, phase_clock);
+        }
         let nursery = self.objects.take_nursery();
         let mut survivors = Vec::with_capacity(nursery.len());
         for &id in &nursery {
@@ -1020,8 +809,19 @@ impl Interpreter {
         }
         young.clear(&nursery);
         self.gc_young = young;
+        #[cfg(feature = "perf-counters")]
+        {
+            phase_clock = self.perf.gc_minor_profile.lap(profile::SWEEP, phase_clock);
+            self.perf.gc_minor_profile.sizes[profile::SURVIVORS_TOTAL] += survivors.len() as u64;
+            self.perf.gc_minor_profile.sizes[profile::SCANNED_ENVS_TOTAL] +=
+                seen_envs.scanned.len() as u64;
+        }
         self.objects.replace_nursery(survivors);
         self.settle_scanned_envs(&mut seen_envs);
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.gc_minor_profile.lap(profile::SETTLE, phase_clock);
+        }
         self.gc.end_minor_collection();
         #[cfg(feature = "perf-counters")]
         self.perf.note_env_visits(&seen_envs);
@@ -1854,270 +1654,6 @@ mod tests {
             Interpreter::collect_env_roots(&env, &mut worklist, &mut EnvVisits::new(false));
             assert_eq!(worklist, vec![36]);
         }
-    }
-
-    // GcPacer — the allocation-pressure heuristic that decides when to collect.
-    // Tested through its public interface; expected budgets are hand-computed
-    // literals (independent of the pacer's own arithmetic).
-
-    #[test]
-    fn safepoint_poll_flag_tracks_requests_and_stress_mode() {
-        let mut pacer = GcPacer::new();
-        pacer.set_stress_period(0);
-        assert!(!pacer.poll);
-
-        pacer.request();
-        assert!(pacer.poll);
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-        assert!(!pacer.poll);
-
-        pacer.request_minor();
-        assert!(pacer.poll);
-        pacer.suppress_minor_temporarily();
-        assert!(!pacer.poll);
-
-        pacer.request_minor();
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
-        assert!(!pacer.poll);
-
-        pacer.set_stress_period(3);
-        assert!(pacer.poll);
-        pacer.request();
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-        assert!(pacer.poll, "stress mode keeps every safepoint live");
-        pacer.set_stress_period(0);
-        assert!(!pacer.poll);
-    }
-
-    #[test]
-    fn stress_period_zero_never_collects() {
-        let mut pacer = GcPacer::new();
-        pacer.set_stress_period(0);
-        for _ in 0..1000 {
-            assert_eq!(pacer.begin_collection(), None);
-        }
-    }
-
-    #[test]
-    fn stress_period_fires_every_nth_safepoint_alternating_major_and_minor() {
-        let mut pacer = GcPacer::new();
-        pacer.set_stress_period(3);
-        let fired: Vec<_> = (1..=12).map(|_| pacer.begin_collection()).collect();
-        assert_eq!(
-            fired,
-            vec![
-                None,
-                None,
-                Some(CollectionKind::Major),
-                None,
-                None,
-                Some(CollectionKind::Minor),
-                None,
-                None,
-                Some(CollectionKind::Major),
-                None,
-                None,
-                Some(CollectionKind::Minor),
-            ]
-        );
-    }
-
-    #[test]
-    fn stress_period_one_collects_at_every_safepoint() {
-        let mut pacer = GcPacer::new();
-        pacer.set_stress_period(1);
-        for _ in 0..4 {
-            assert!(pacer.begin_collection().is_some());
-        }
-    }
-
-    #[test]
-    fn real_requests_take_priority_over_stress_and_do_not_advance_it() {
-        let mut pacer = GcPacer::new();
-        pacer.set_stress_period(2);
-        assert_eq!(pacer.begin_collection(), None);
-        pacer.request();
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-        assert_eq!(
-            pacer.begin_collection(),
-            Some(CollectionKind::Major),
-            "the pending request did not consume a stress tick"
-        );
-    }
-
-    #[test]
-    fn fresh_pacer_requests_no_collection() {
-        let mut pacer = GcPacer::new();
-        assert!(!pacer.is_requested());
-        assert_eq!(pacer.begin_collection(), None);
-    }
-
-    #[test]
-    fn nursery_threshold_requests_minor_collection() {
-        let mut pacer = GcPacer::new();
-        // Raise the major threshold so only nursery pressure can fire.
-        pacer.end_major_collection(100_000);
-        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
-        for _ in 0..nursery_objects - 1 {
-            pacer.charge_object(true);
-        }
-        assert!(!pacer.is_requested(), "not yet at the nursery threshold");
-        pacer.charge_object(true);
-        assert_eq!(
-            pacer.begin_collection(),
-            Some(CollectionKind::Minor),
-            "reaching the nursery threshold requests a minor collection"
-        );
-    }
-
-    #[test]
-    fn byte_threshold_requests_collection() {
-        let mut pacer = GcPacer::new();
-        pacer.track_external(1024);
-        assert!(
-            !pacer.is_requested(),
-            "a small allocation stays under budget"
-        );
-
-        let mut pacer = GcPacer::new();
-        pacer.track_external(GC_INITIAL_THRESHOLD_BYTES);
-        assert!(
-            pacer.is_requested(),
-            "crossing the byte budget requests a collection"
-        );
-    }
-
-    #[test]
-    fn request_forces_a_collection() {
-        let mut pacer = GcPacer::new();
-        pacer.request();
-        assert!(pacer.is_requested());
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-    }
-
-    #[test]
-    fn release_external_saturates_at_zero() {
-        let mut pacer = GcPacer::new();
-        pacer.track_external(1000);
-        assert_eq!(pacer.external_bytes(), 1000);
-        pacer.release_external(4000);
-        assert_eq!(pacer.external_bytes(), 0);
-    }
-
-    #[test]
-    fn minor_collection_resets_nursery_count_when_finished() {
-        let mut pacer = GcPacer::new();
-        pacer.end_major_collection(100_000);
-        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
-        for _ in 0..nursery_objects {
-            pacer.charge_object(true);
-        }
-        assert!(pacer.is_requested());
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
-        assert_eq!(pacer.alloc_count(), nursery_objects);
-        pacer.end_minor_collection();
-        assert_eq!(
-            pacer.alloc_count(),
-            0,
-            "the nursery allocation counter resets"
-        );
-        assert!(!pacer.is_requested());
-        assert!(
-            pacer.begin_collection().is_none(),
-            "the request is consumed, not repeated"
-        );
-    }
-
-    #[test]
-    fn end_major_collection_grows_threshold_from_live_set() {
-        // Empty live sets use the 8 MiB major floor.
-        let mut pacer = GcPacer::new();
-        pacer.end_major_collection(0);
-        assert_eq!(pacer.threshold_bytes(), 8_388_608);
-
-        // Growth factor 2 permits one additional live-set worth of debt:
-        // 100,000 live objects × 512B overhead = 51,200,000.
-        let mut pacer = GcPacer::new();
-        pacer.end_major_collection(100_000);
-        assert_eq!(pacer.threshold_bytes(), 51_200_000);
-
-        // Tracked off-heap bytes feed the live-set estimate:
-        // (0 objects + 10,000,000 external) × one live-set debt = 10,000,000.
-        let mut pacer = GcPacer::new();
-        pacer.track_external(10_000_000);
-        pacer.end_major_collection(0);
-        assert_eq!(pacer.threshold_bytes(), 10_000_000);
-    }
-
-    #[test]
-    fn end_major_collection_resets_byte_counter() {
-        let mut pacer = GcPacer::new();
-        pacer.track_external(GC_INITIAL_THRESHOLD_BYTES);
-        assert_eq!(pacer.bytes_since_gc(), GC_INITIAL_THRESHOLD_BYTES);
-        pacer.begin_collection();
-        pacer.end_major_collection(0);
-        assert_eq!(pacer.bytes_since_gc(), 0);
-    }
-
-    #[test]
-    fn major_request_takes_priority_over_minor_request() {
-        let mut pacer = GcPacer::new();
-        pacer.request_minor();
-        pacer.request();
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-        assert_eq!(pacer.begin_collection(), None);
-    }
-
-    #[test]
-    fn suppressing_minor_collection_preserves_debt_and_requests_major() {
-        let mut pacer = GcPacer::new();
-        pacer.end_major_collection(100_000);
-        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
-        for _ in 0..nursery_objects {
-            pacer.charge_object(true);
-        }
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
-        let debt = pacer.bytes_since_gc();
-
-        pacer.suppress_minor_temporarily();
-        assert_eq!(pacer.alloc_count(), 0);
-        for _ in 0..nursery_objects - 1 {
-            pacer.charge_object(true);
-        }
-        assert_eq!(pacer.begin_collection(), None);
-        pacer.charge_object(true);
-
-        assert!(pacer.bytes_since_gc() > debt);
-        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
-    }
-
-    #[test]
-    fn high_nursery_survival_keeps_minor_pacing_and_major_budget() {
-        // #908: saturated minors used to force a major every nursery, tracing
-        // the whole growing heap per 8,192 allocations. Majors now come only
-        // from the live-set-proportional budget.
-        let mut pacer = GcPacer::new();
-        pacer.end_major_collection(100_000);
-        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
-        let mut majors = 0;
-        let mut minors = 0;
-        while majors == 0 {
-            pacer.charge_object(false);
-            match pacer.begin_collection() {
-                Some(CollectionKind::Minor) => {
-                    minors += 1;
-                    pacer.end_minor_collection();
-                }
-                Some(CollectionKind::Major) => majors += 1,
-                None => {}
-            }
-        }
-        assert!(!pacer.minor_suppressed);
-        let budget_objects = 100_000 * (GC_GROWTH_FACTOR - 1);
-        assert!(
-            minors >= budget_objects / nursery_objects - 1,
-            "the major waits for the live-set budget, got {minors} minors first"
-        );
     }
 
     #[test]

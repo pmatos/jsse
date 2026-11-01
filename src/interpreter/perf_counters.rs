@@ -10,6 +10,9 @@
 //! workload must produce identical output regardless of host load.
 
 use crate::interpreter::bytecode::op::Op;
+#[path = "perf_counters_gc.rs"]
+pub(crate) mod gc_minor;
+use gc_minor::GcMinorProfile;
 use rustc_hash::FxHashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
@@ -65,20 +68,18 @@ pub(crate) struct PerfCounters {
     pub(crate) calls_to_native: u64,
     pub(crate) trivial_getter_hits: u64,
     pub(crate) calls_to_user: u64,
-    /// GC collections, and the wall time inside them. Collections are rare
-    /// enough (thousands, not millions) that timing them adds no measurable
-    /// distortion, unlike timing a per-opcode or per-call boundary.
+    /// GC collections and their wall time (rare enough to time).
     pub(crate) gc_minor: u64,
     pub(crate) gc_major: u64,
-    /// Environment walk entries during collections, and how many were the
-    /// first visit of their collection (the rest stopped a parent walk).
+    /// Environment walk entries, and the first visits among them.
     pub(crate) gc_env_probes: u64,
     pub(crate) gc_env_first_visits: u64,
-    /// Minor-collection walk entries that skipped a clean environment.
+    /// Minor walk entries that skipped a clean environment.
     pub(crate) gc_env_clean_skips: u64,
     pub(crate) gc_nanos: u128,
     /// The share of `gc_nanos` spent in minor collections.
     pub(crate) gc_minor_nanos: u128,
+    pub(crate) gc_minor_profile: GcMinorProfile,
     /// Local-slot ops (`LoadLocal`/`StoreLocal`/`StoreLocalPop`/`UpdateLocal`/
     /// `LocalBinConst`) whose slot hint matched, and those that fell back to
     /// by-name resolution (#898).
@@ -140,6 +141,7 @@ impl Default for PerfCounters {
             gc_env_clean_skips: 0,
             gc_nanos: 0,
             gc_minor_nanos: 0,
+            gc_minor_profile: GcMinorProfile::default(),
             local_slot_hits: 0,
             local_slot_misses: 0,
             global_prop_fast_hits: 0,
@@ -285,6 +287,7 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tgc_env_clean_skips\t{}", self.gc_env_clean_skips);
         let _ = writeln!(out, "PERF\tgc_ms\t{}", self.gc_nanos / 1_000_000);
         let _ = writeln!(out, "PERF\tgc_minor_us\t{}", self.gc_minor_nanos / 1_000);
+        self.gc_minor_profile.report(&mut out);
         let _ = writeln!(out, "PERF\tlocal_slot_hits\t{}", self.local_slot_hits);
         let _ = writeln!(out, "PERF\tlocal_slot_misses\t{}", self.local_slot_misses);
         let _ = writeln!(out, "PERF\tast_fallback_execs\t{}", self.ast_fallback_execs);
