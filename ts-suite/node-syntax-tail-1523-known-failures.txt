@@ -4,7 +4,7 @@
 # Supersedes the earlier lists (the 19 sources of scripts/node-stack-fixtures-1523-tail/ all agree now).
 # Each row is the shortest source of one class found by running the 4,454 negative parse tests of
 # test262/test/language through Node and `jsse --node` (docs/agents/library-tests-typescript-conformance-residual-1523.md);
-# 262 of them still differ in wording, in about 60 classes, and Node accepts the `new import.source(..)` forms.
+# 256 of them still differ in wording, in about 55 classes, and Node accepts the `new import.source(..)` forms.
 # The first row stands for 112 tests (the delete of a private name that no class declares), the hashbang row for 37.
 script	"class C {\n  #x;\n  x = delete (this.#m);\n}"	SyntaxError: Private field '#m' must be declared in an enclosing class	SyntaxError: Private fields can not be deleted
 script	"new import('').prop;"	parses	SyntaxError: Cannot use new with import
@@ -24,11 +24,8 @@ module	"function fn(x = await 1) {\n  return x;\n}"	SyntaxError: Unexpected rese
 script	"\\u0061sync function f(){}"	SyntaxError: Keyword must not contain escaped characters	SyntaxError: Unexpected token 'function'
 script	"{\n  using x = null, [] = null;\n}"	SyntaxError: Missing initializer in using declaration	SyntaxError: Unexpected token '['
 script	"{\n  using x = null, {} = null;\n}"	SyntaxError: Missing initializer in using declaration	SyntaxError: Unexpected token '{'
-script	"async function fn() {\n  const obj = { [Symbol.dispose]() {} };\n  for await (using x = obj of []) {}\n}"	SyntaxError: for-await-of loop variable declaration may not have an initializer.	SyntaxError: Unexpected token 'of'
-script	"const obj = { [Symbol.dispose]() { } };\nfor (using x = obj of []) {}"	SyntaxError: for-of loop variable declaration may not have an initializer.	SyntaxError: Unexpected token 'of'
 script	"var af = ()\n=> {};"	SyntaxError: Unexpected token '=>'	SyntaxError: Unexpected token ')'
 script	"(async function* await() { });"	SyntaxError: Unexpected reserved word	SyntaxError: 'await' is not allowed as a function name in async functions
-script	"var C = class st\\u0061tic {};"	SyntaxError: Unexpected strict mode reserved word	SyntaxError: Unexpected identifier 'static'
 module	"import.m\\u0065ta;"	SyntaxError: 'import.meta' must not contain escaped characters	SyntaxError: Unexpected identifier 'meta'
 script	"class C {\n  #field;\n  constructor() {\n    for (#field in value;;) break;\n  }\n}"	SyntaxError: Unexpected identifier '#field'	SyntaxError: Unexpected token ';'
 script	"class C {\n  #field;\n  m() {\n    for (#field in []) ;\n  }\n}"	SyntaxError: Unexpected identifier '#field'	SyntaxError: Invalid left-hand side in for-loop

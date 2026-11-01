@@ -174,3 +174,16 @@ script "f = (...x = []) => 1" SyntaxError: Rest parameter may not have a default
 script "([...x = 1]) => 1" SyntaxError: Invalid destructuring assignment target
 script "var [...x = []] = a" SyntaxError: Invalid destructuring assignment target
 script "function f([...x = 1]){}" SyntaxError: Invalid destructuring assignment target
+script "function* g(){ class yi\\u0065ld {} }" SyntaxError: Unexpected identifier 'yield'
+script "function* g(){ x = class st\\u0061tic {} }" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var st\\u0061tic" SyntaxError: Keyword must not contain escaped characters
+script "class A { m(){ var st\\u0061tic } }" SyntaxError: Keyword must not contain escaped characters
+script "var C = class st\\u0061tic {};" SyntaxError: Unexpected strict mode reserved word
+script "for (using x = 1 of y);" SyntaxError: for-of loop variable declaration may not have an initializer.
+script "async function f() { for await (using x = 1 of y); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "async function f() { for (await using x = 1 of y); }" SyntaxError: for-of loop variable declaration may not have an initializer.
+script "async function f() { for await (await using x = 1 of y); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "async function f(){ for await (const [a, b] = ; ; ); }" SyntaxError: Unexpected token ';'
+script "async function f(){ for await (const {a} = {b: ; ; ); }" SyntaxError: Unexpected token ';'
+script "async function f(){ for await (const [a, b] of z); }" parses
+script "async function* f(){ var yi\\u0065ld }" SyntaxError: Unexpected identifier 'yield'

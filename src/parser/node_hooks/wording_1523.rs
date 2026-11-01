@@ -85,8 +85,18 @@ impl<'a> Parser<'a> {
             && self.in_for_await_head()
     }
 
-    pub(in crate::parser) fn for_await_binding_error(&self) -> ParseError {
-        self.error("Invalid left-hand side in for-await-of loop: Must have a single binding.")
+    /// `error` of a binding pattern in a `for await` head, which V8 words as
+    /// one error whatever went wrong inside the pattern.
+    pub(in crate::parser) fn for_await_error(
+        &self,
+        in_pattern: bool,
+        error: ParseError,
+    ) -> ParseError {
+        if in_pattern {
+            return self
+                .error("Invalid left-hand side in for-await-of loop: Must have a single binding.");
+        }
+        error
     }
 
     /// A private element named `#constructor`: V8 words a method apart from a
@@ -109,12 +119,12 @@ impl<'a> Parser<'a> {
             return self.error("Expected class name");
         }
         match &self.current {
+            Token::IdentifierWithEscape(name) if name == "yield" && self.in_generator => {
+                self.error("Unexpected identifier 'yield'")
+            }
             Token::IdentifierWithEscape(name)
-                if name != "await"
-                    && !(name == "yield" && self.in_generator)
-                    && (name == "let"
-                        || name == "yield"
-                        || super::super::v8_messages::STRICT_WORDS.contains(&name.as_str())) =>
+                if name == "yield"
+                    || super::super::v8_messages::STRICT_WORDS.contains(&name.as_str()) =>
             {
                 self.error("Unexpected strict mode reserved word")
             }
@@ -123,5 +133,32 @@ impl<'a> Parser<'a> {
             }
             _ => self.error(self.v8_unexpected()),
         }
+    }
+
+    /// The first initializer of `for (using x = init; ...)`. Under `--node`
+    /// an `of` after it is V8's initializer error.
+    pub(in crate::parser) fn using_for_init(&mut self) -> Result<Expression, ParseError> {
+        self.no_in = true;
+        let init = self.parse_assignment_expression()?;
+        self.no_in = false;
+        if inferred_names::enabled() && self.current == Token::Keyword(Keyword::Of) {
+            let kind = if self.in_for_await_head() {
+                "-await"
+            } else {
+                ""
+            };
+            return Err(self.error(format!(
+                "for{kind}-of loop variable declaration may not have an initializer"
+            )));
+        }
+        Ok(init)
+    }
+
+    /// A class declaration named by an escaped word that is reserved.
+    pub(in crate::parser) fn escaped_class_name(&self, name: &str) -> ParseError {
+        if name == "yield" && self.in_generator && inferred_names::enabled() {
+            return self.error("Unexpected identifier 'yield'");
+        }
+        self.error(format!("Unexpected strict mode reserved word '{name}'"))
     }
 }

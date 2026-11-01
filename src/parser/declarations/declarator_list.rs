@@ -44,12 +44,7 @@ impl<'a> Parser<'a> {
         let after_let = self.source_before_prev_token("let").is_some();
         let after_const = self.source_before_prev_token("const").is_some();
         self.reserved_let(after_let)?;
-        let await_pattern = self.for_await_pattern();
-        let decls = self.parse_declarators(true, after_const);
-        if await_pattern && decls.is_err() {
-            return Err(self.for_await_binding_error());
-        }
-        decls
+        self.parse_declarators(true, after_const)
     }
 
     fn parse_declarators(
@@ -59,7 +54,10 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<VariableDeclarator>, ParseError> {
         let mut decls = Vec::new();
         loop {
-            let mut pattern = self.parse_binding_pattern()?;
+            let await_pattern = for_head && self.for_await_pattern();
+            let mut pattern = self
+                .parse_binding_pattern()
+                .map_err(|e| self.for_await_error(await_pattern, e))?;
             if let Pattern::Array(elems) = &mut pattern {
                 elems.at = 0;
             }
@@ -85,7 +83,8 @@ impl<'a> Parser<'a> {
                 let for_binding =
                     for_head && matches!(self.current, Token::Keyword(Keyword::In | Keyword::Of));
                 if !matches!(pattern, Pattern::Identifier(_)) && !for_binding {
-                    return Err(self.error("Missing initializer in destructuring declaration"));
+                    let error = self.error("Missing initializer in destructuring declaration");
+                    return Err(self.for_await_error(await_pattern, error));
                 }
                 if is_const && self.current == Token::Comma {
                     return Err(self.error("Missing initializer in const declaration"));

@@ -562,9 +562,7 @@ impl<'a> Parser<'a> {
                 return Err(self.using_missing_init(false));
             }
             self.advance()?;
-            self.no_in = true;
-            let first_init = self.parse_assignment_expression()?;
-            self.no_in = false;
+            let first_init = self.using_for_init()?;
             let mut decls = vec![VariableDeclarator::new(
                 Pattern::Identifier(ident),
                 Some(first_init),
@@ -672,9 +670,7 @@ impl<'a> Parser<'a> {
                 return Err(self.using_missing_init(true));
             }
             self.advance()?;
-            self.no_in = true;
-            let first_init = self.parse_assignment_expression()?;
-            self.no_in = false;
+            let first_init = self.using_for_init()?;
             let mut decls = vec![VariableDeclarator::new(
                 Pattern::Identifier(ident),
                 Some(first_init),

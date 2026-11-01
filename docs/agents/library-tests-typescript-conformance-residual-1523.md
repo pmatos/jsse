@@ -40,18 +40,21 @@ error was thrown. `Interpreter::assign_to_for_left` runs the call and throws, li
 
 `Parser::using_not_allowed` skips `using` (`await using`) and reports the binding like V8 (`Unexpected identifier 'x'`);
 `using_missing_init` words `using x` as `Missing initializer in using declaration` (`await using`: `... in await using
-declaration`) and `for (using x in y)` as `Invalid 'using' in for-in loop`.
+declaration`) and `for (using x in y)` as `Invalid 'using' in for-in loop`; `for (using x = 1 of y)` is `for-of loop variable declaration may not have an initializer.`
+(`using_for_init`).
 
 ## Sweep of the negative parse tests
 
 A differential driver (`scripts/node-stack-fixtures-1523-tail/syntax-tail.mjs`, one source per line) ran the 4,454
 `negative: phase: parse, type: SyntaxError` tests of `test262/test/language` through Node v26.8.2 and `jsse --node`.
-Before this pass 517 differed (475 wording, 42 accepted by Node); now 304 do (262 wording, 42 accepted by Node).
+Before this pass 517 differed (475 wording, 42 accepted by Node); now 298 do (256 wording, 42 accepted by Node).
 Fixed, with the V8 text each gets (`scripts/node-stack-fixtures-1523-residual/residual.tsv` has a source for each):
 
 - `for await (const [...x = []] of y)` and every other error inside the pattern of a `for await` declaration:
   `Invalid left-hand side in for-await-of loop: Must have a single binding.` (72 tests; V8 reads the head again as an
-  expression and words any failure alike; `for_await_pattern`, in `parse_for_declaration_list`).
+  expression and words any failure inside the pattern alike, not one of the initializer; `for_await_error`, in
+  `parse_declarators`; `in_for_await_head` finds the head by scanning the source for its `(`, so a `(` in a comment
+  inside the head fools it).
 - A class expression named `yield`, `let`, `static`, `implements`, ...: `Unexpected strict mode reserved word` (the
   declaration form already did); in a generator `Unexpected identifier 'yield'`; a name with an escape is a strict word.
   A strict `yield` outside a class name wins over the generator reading.
@@ -80,7 +83,7 @@ jsse's text. The larger ones:
 - 42 tests: V8 accepts `new import.source(x)`; jsse says `Cannot use new with import`.
 - Escaped keywords in labels, `async`, `of`, `as`, `from`, `meta`, `target`; regexp `\k<..>` and `(?i-)` reasons; numeric
   literals followed by an escape; `for (a ? b : c in d;;)` (V8 checks the head before the `)`).
-- `for (using x = 1 of y)` and `using x = null, [] = null`, the run-time `using` TypeError text
+- `using x = null, [] = null`, the run-time `using` TypeError text
   (`An object is expected with `using` declarations`) and the source-phase `import source x from` link error.
 
 These keep the issue open as a long tail; none of them is an acceptance difference except the 42 above.

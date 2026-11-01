@@ -158,15 +158,14 @@ fn default_mode_suspending_loops_reject_a_call_target_like_plain_loops() {
     "#;
     let expected = [
         "f",
-        "Invalid left-hand side in for-of loop",
+        "Invalid left-hand side in for-in/of loop",
         "f",
-        "Invalid left-hand side in for-of loop",
+        "Invalid left-hand side in for-in/of loop",
         "f",
-        "Invalid left-hand side in for-of loop",
+        "Invalid left-hand side in for-in/of loop",
     ]
     .join("|");
     for flags in [&[][..], &["--no-bytecode"][..]] {
-        let got = default_mode(probe, flags).replace("for-in", "for-of");
-        assert_eq!(got, expected, "{flags:?}");
+        assert_eq!(default_mode(probe, flags), expected, "{flags:?}");
     }
 }

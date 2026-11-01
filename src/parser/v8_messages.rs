@@ -14,7 +14,7 @@ mod regexp_reason;
 
 use exact::{EXACT, INVALID_TOKEN};
 
-pub(super) const STRICT_WORDS: [&str; 7] = [
+pub(super) const STRICT_WORDS: [&str; 8] = [
     "implements",
     "interface",
     "let",
@@ -22,6 +22,7 @@ pub(super) const STRICT_WORDS: [&str; 7] = [
     "private",
     "protected",
     "public",
+    "static",
 ];
 
 fn quoted<'a>(msg: &'a str, prefix: &str) -> Option<&'a str> {

@@ -191,7 +191,7 @@ impl<'a> Parser<'a> {
                 if let Token::IdentifierWithEscape(n) = &self.current {
                     let n = n.clone();
                     self.set_strict(prev_strict);
-                    return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
+                    return Err(self.escaped_class_name(&n));
                 }
                 return Err(self.class_name_error(prev_strict));
             }
