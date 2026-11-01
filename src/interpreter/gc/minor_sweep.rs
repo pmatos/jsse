@@ -11,9 +11,8 @@ const PREFETCH_OWNED_AHEAD: usize = 4;
 
 /// Live objects from which the sweep prefetches. Below it the blocks of a
 /// nursery are recycled from a small address range and stay in cache between
-/// collections, so the lookahead only costs instructions (+0.5% to +1.2% Ir on
-/// the closure-creating micro benchmarks); a heap of this many objects spans
-/// tens of megabytes, where a nursery's blocks are cold.
+/// collections, so the lookahead only costs instructions; a heap of this many
+/// objects spans tens of megabytes, where a nursery's blocks are cold.
 const PREFETCH_MIN_LIVE_OBJECTS: usize = 1 << 16;
 
 impl Interpreter {
