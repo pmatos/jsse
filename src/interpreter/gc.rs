@@ -1066,13 +1066,12 @@ impl Interpreter {
         crate::thp::after_major_collection();
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
-        // Everything that survived is old now, so every environment the mark
-        // walked is clean; one the walk missed is not reachable from any heap
-        // object.
+        // Everything that survived is old now: every environment walked is clean.
         for env in std::mem::take(&mut seen_envs.scanned) {
             self.env_registry.register(&env);
             env.borrow().mark_clean();
         }
+        self.env_registry.end_major();
         #[cfg(feature = "perf-counters")]
         self.perf.note_env_visits(&seen_envs);
     }

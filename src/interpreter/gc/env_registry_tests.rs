@@ -121,7 +121,7 @@ fn one_interpreters_drain_leaves_the_other_interpreters_environments_queued() {
 }
 
 #[test]
-fn a_major_collection_spends_the_queue_of_its_own_interpreter_only() {
+fn a_major_collection_spends_the_queue_of_environments_it_settled() {
     let mine = EnvRegistry::new();
     let theirs = EnvRegistry::new();
     let own = registered_clean(&mine);
@@ -130,6 +130,24 @@ fn a_major_collection_spends_the_queue_of_its_own_interpreter_only() {
     write(&other);
 
     mine.begin_major();
+    own.borrow().mark_clean();
+    mine.end_major();
     assert!(mine.take_dirty().is_empty());
     assert_eq!(theirs.take_dirty().len(), 1);
+}
+
+#[test]
+fn a_major_collection_keeps_queued_an_environment_it_did_not_settle() {
+    let registry = EnvRegistry::new();
+    let missed = registered_clean(&registry);
+    let settled = registered_clean(&registry);
+    write(&missed);
+    write(&settled);
+
+    registry.begin_major();
+    settled.borrow().mark_clean();
+    registry.end_major();
+    let dirty = registry.take_dirty();
+    assert_eq!(dirty.len(), 1);
+    assert!(Rc::ptr_eq(&dirty[0], &missed));
 }

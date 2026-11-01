@@ -98,9 +98,8 @@ impl EnvRegistry {
         })
     }
 
-    /// A major collection's start: it scans and settles every environment it
-    /// can reach, so this interpreter's queue is spent, and the slots of
-    /// environments that died without releasing theirs are freed.
+    /// A major collection's start: frees the slots of environments that died
+    /// without releasing theirs.
     pub(crate) fn begin_major(&self) {
         SLAB.with_borrow_mut(|slab| {
             for slot in 0..slab.entries.len() {
@@ -113,11 +112,21 @@ impl EnvRegistry {
                     slab.live -= 1;
                 }
             }
+        });
+    }
+
+    /// A major collection's end: it settled every environment it reached, so
+    /// this interpreter's queue keeps only the entries of environments that are
+    /// alive and still not clean (one the walk missed), which bounds the queue
+    /// when minor collections are suppressed.
+    pub(crate) fn end_major(&self) {
+        SLAB.with_borrow_mut(|slab| {
             let Slab { entries, dirty, .. } = &mut *slab;
             dirty.retain(|&slot| {
-                entries[slot as usize]
-                    .as_ref()
-                    .is_some_and(|entry| entry.owner != self.owner)
+                entries[slot as usize].as_ref().is_some_and(|entry| {
+                    entry.owner != self.owner
+                        || (entry.env.strong_count() > 0 && !env_is_clean(&entry.env))
+                })
             });
         });
     }
@@ -135,6 +144,17 @@ impl EnvRegistry {
     }
 }
 
+/// Reads the clean mark of a live environment without borrowing it.
+pub(crate) fn env_is_clean(env: &Weak<RefCell<Environment>>) -> bool {
+    // SAFETY: callers hold the environment alive (`strong_count() > 0`) and no
+    // environment is borrowed mutably at a safepoint.
+    unsafe {
+        (*env.as_ptr())
+            .try_borrow_unguarded()
+            .is_ok_and(Environment::is_clean)
+    }
+}
+
 /// The write barrier's slow path: the environment at `slot` was clean and is
 /// not any more.
 #[cold]
@@ -145,9 +165,11 @@ pub(crate) fn note_dirty(slot: u32) {
         return;
     }
     let _ = SLAB.try_with(|slab| {
-        if let Ok(mut slab) = slab.try_borrow_mut() {
-            slab.dirty.push(slot);
-        }
+        let Ok(mut slab) = slab.try_borrow_mut() else {
+            debug_assert!(false, "a dirty-list push lost to a borrow of the slab");
+            return;
+        };
+        slab.dirty.push(slot);
     });
 }
 
