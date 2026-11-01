@@ -11,7 +11,7 @@ impl<'a> Parser<'a> {
             && self.is_using_declaration()
         {
             if (!self.in_block_or_function && !self.is_module) || self.in_switch_case {
-                return Err(self.error("using declaration is not allowed in this position"));
+                return Err(self.using_not_allowed(false));
             }
             return self.parse_using_declaration();
         }
@@ -20,7 +20,7 @@ impl<'a> Parser<'a> {
             && self.is_await_using_declaration()
         {
             if (!self.in_block_or_function && !self.is_module) || self.in_switch_case {
-                return Err(self.error("await using declaration is not allowed in this position"));
+                return Err(self.using_not_allowed(true));
             }
             return self.parse_await_using_declaration();
         }
@@ -569,7 +569,7 @@ impl<'a> Parser<'a> {
             }
             // for (using x = init; test; update)
             if self.current != Token::Assign {
-                return Err(self.error("using declaration requires an initializer"));
+                return Err(self.using_missing_init(false));
             }
             self.advance()?;
             self.no_in = true;
@@ -586,7 +586,7 @@ impl<'a> Parser<'a> {
                     .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
                 self.advance()?;
                 if self.current != Token::Assign {
-                    return Err(self.error("using declaration requires an initializer"));
+                    return Err(self.using_missing_init(false));
                 }
                 self.advance()?;
                 self.no_in = true;
@@ -679,7 +679,7 @@ impl<'a> Parser<'a> {
             }
             // for (await using x = init; test; update)
             if self.current != Token::Assign {
-                return Err(self.error("await using declaration requires an initializer"));
+                return Err(self.using_missing_init(true));
             }
             self.advance()?;
             self.no_in = true;
@@ -696,7 +696,7 @@ impl<'a> Parser<'a> {
                     .ok_or_else(|| self.error("Expected identifier in await using declaration"))?;
                 self.advance()?;
                 if self.current != Token::Assign {
-                    return Err(self.error("await using declaration requires an initializer"));
+                    return Err(self.using_missing_init(true));
                 }
                 self.advance()?;
                 self.no_in = true;
@@ -826,7 +826,7 @@ impl<'a> Parser<'a> {
                         let right = self.parse_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
-                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
+                        let left = if self.call_target(&expr) {
                             ForInOfLeft::Expression(expr)
                         } else {
                             let pat = self.for_head(expr)?;
@@ -848,7 +848,7 @@ impl<'a> Parser<'a> {
                         let (right, right_at) = self.parse_for_of_right()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
-                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
+                        let left = if self.call_target(&expr) {
                             ForInOfLeft::Expression(expr)
                         } else {
                             let pat = self.for_head(expr)?;
@@ -1040,7 +1040,7 @@ impl<'a> Parser<'a> {
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
+                    let left = if self.call_target(&expr) {
                         ForInOfLeft::Expression(expr)
                     } else {
                         let pat = self.for_head(expr)?;
@@ -1070,7 +1070,7 @@ impl<'a> Parser<'a> {
                     let (right, right_at) = self.parse_for_of_right()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
+                    let left = if self.call_target(&expr) {
                         ForInOfLeft::Expression(expr)
                     } else {
                         let pat = self.for_head(expr)?;
@@ -1318,7 +1318,7 @@ impl<'a> Parser<'a> {
 
     fn parse_using_declaration(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // using
-        let declarations = self.parse_using_binding_list()?;
+        let declarations = self.parse_using_binding_list(false)?;
         self.eat_semicolon()?;
         Ok(Statement::Variable(VariableDeclaration {
             kind: VarKind::Using,
@@ -1329,7 +1329,7 @@ impl<'a> Parser<'a> {
     fn parse_await_using_declaration(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // await
         self.advance()?; // using
-        let declarations = self.parse_using_binding_list()?;
+        let declarations = self.parse_using_binding_list(true)?;
         self.eat_semicolon()?;
         Ok(Statement::Variable(VariableDeclaration {
             kind: VarKind::AwaitUsing,
@@ -1337,7 +1337,10 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_using_binding_list(&mut self) -> Result<Vec<VariableDeclarator>, ParseError> {
+    fn parse_using_binding_list(
+        &mut self,
+        await_using: bool,
+    ) -> Result<Vec<VariableDeclarator>, ParseError> {
         let mut decls = Vec::new();
         loop {
             let name = self
@@ -1345,7 +1348,7 @@ impl<'a> Parser<'a> {
                 .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
             self.advance()?;
             if self.current != Token::Assign {
-                return Err(self.error("using declaration requires an initializer"));
+                return Err(self.using_missing_init(await_using));
             }
             self.advance()?;
             let init = self.parse_assignment_expression()?;

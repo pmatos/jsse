@@ -9,6 +9,18 @@ pub(super) const EXACT: &[(&str, &str)] = &[
         "'let' is not allowed as a variable name in lexical declarations",
         "let is disallowed as a lexically bound name",
     ),
+    (
+        "Rest element may not have a default initializer",
+        "Invalid destructuring assignment target",
+    ),
+    (
+        "'let' is not allowed as a binding name in lexical declarations",
+        "let is disallowed as a lexically bound name",
+    ),
+    (
+        "#constructor is not a valid private name",
+        "Private field '#constructor' must be declared in an enclosing class",
+    ),
     ("Expected decorator expression after '@'", INVALID_TOKEN),
     ("Expected 'class' after decorator", INVALID_TOKEN),
     (

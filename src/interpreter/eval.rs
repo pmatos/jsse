@@ -2604,11 +2604,7 @@ impl Interpreter {
                 Completion::Normal(_) => {}
                 other => return other,
             }
-            Completion::Throw(
-                self.create_reference_error(
-                    "Invalid left-hand side expression in update expression",
-                ),
-            )
+            Completion::Throw(self.invalid_update_target(prefix))
         } else {
             Completion::Normal(JsValue::number(f64::NAN))
         }
@@ -9130,15 +9126,11 @@ impl Interpreter {
                                         Ok(())
                                     }
                                 }
-                                ForInOfLeft::Pattern(p) => {
-                                    match self.assign_to_for_pattern(p, value, &bind_env) {
-                                        Completion::Normal(_) | Completion::Empty => Ok(()),
+                                ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => {
+                                    match self.assign_to_for_left(left, value, &bind_env) {
                                         Completion::Throw(e) => Err(e),
                                         _ => Ok(()),
                                     }
-                                }
-                                ForInOfLeft::Expression(e) => {
-                                    self.assign_to_expr(e, value, &bind_env)
                                 }
                             };
                             if let Err(e) = bind_result {

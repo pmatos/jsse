@@ -44,7 +44,12 @@ impl<'a> Parser<'a> {
         let after_let = self.source_before_prev_token("let").is_some();
         let after_const = self.source_before_prev_token("const").is_some();
         self.reserved_let(after_let)?;
-        self.parse_declarators(true, after_const)
+        let await_pattern = self.for_await_pattern();
+        let decls = self.parse_declarators(true, after_const);
+        if await_pattern && decls.is_err() {
+            return Err(self.for_await_binding_error());
+        }
+        decls
     }
 
     fn parse_declarators(

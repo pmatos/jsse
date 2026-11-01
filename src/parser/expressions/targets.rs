@@ -30,7 +30,7 @@ impl<'a> Parser<'a> {
             }
             return Ok(());
         }
-        if allow_call && !self.strict && matches!(expr, Expression::Call(_, _, _)) {
+        if allow_call && self.call_target(expr) {
             return Ok(());
         }
         Err(self.error("Invalid left-hand side in assignment"))

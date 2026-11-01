@@ -1,23 +1,68 @@
-# Differences between Node v26.8.2 and `jsse --node` for the sources of scripts/node-stack-fixtures-1523-tail/ that remain after #1523 (second pass).
+# Differences between Node v26.8.2 and `jsse --node` for early errors that remain after #1523 (third pass).
 # Format: <goal> <TAB> <source as JSON> <TAB> Node message <TAB> jsse message.
-# 'parses' / 'loads' means one engine accepts a source the other rejects: parser bugs, V8 web compatibility or a feature V8 does not ship, not message wording.
-# Supersedes the script and module rows of ts-suite/node-syntax-link-1523-known-failures.txt; its stack rows still apply (#1524).
-module	"import defer * as ns from './lib.mjs'"	Unexpected token '*'	loads
-script	"({ 1n })"	Unexpected number	Unexpected string
-script	"using x = 1"	Unexpected identifier 'x'	using declaration is not allowed in this position
-script	"x = { a = 1 }"	Invalid shorthand property initializer	parses
-script	"f({ a = 1 })"	Invalid shorthand property initializer	parses
-script	"[{ a = 1 }]"	Invalid shorthand property initializer	parses
-script	"'use strict'; for (f() of c);"	parses	Invalid left-hand side in for-loop
-script	"for (let of of c);"	parses	Unexpected token 'of'
-script	"async function f() { for await (var a = 1 of b); }"	for-await-of loop variable declaration may not have an initializer.	for-of loop variable declaration may not have an initializer.
-script	"x = class { async x }"	Unexpected token '}'	parses
-script	"x = class { *x }"	Unexpected token '}'	parses
-script	"x = /[\\c]/u"	Invalid regular expression: /[\c]/u: Invalid Unicode escape	Invalid regular expression: /[\c]/u: Invalid escape
-module	"new import.meta"	TypeError: (intermediate value) is not a constructor	TypeError: import.meta is not a constructor
-module	"let await"	Unexpected reserved word	Unexpected strict mode reserved word
-module	"<!-- comment"	HTML comments are not allowed in modules	loads
-module	"/* */ --> comment"	HTML comments are not allowed in modules	loads
-script	"x = async a\n=> 1"	Unexpected token '=>'	Unexpected identifier 'a'
-script	"function* g() { class yield {} }"	Unexpected identifier 'yield'	Unexpected strict mode reserved word
-script	"async a\n=> 1"	Unexpected token '=>'	Unexpected identifier 'a'
+# 'parses' / 'loads' means one engine accepts a source the other rejects.
+# Supersedes the earlier lists (the 19 sources of scripts/node-stack-fixtures-1523-tail/ all agree now).
+# Each row is the shortest source of one class found by running the 4,454 negative parse tests of
+# test262/test/language through Node and `jsse --node` (docs/agents/library-tests-typescript-conformance-residual-1523.md);
+# 262 of them still differ in wording, in about 60 classes, and Node accepts the `new import.source(..)` forms.
+# The first row stands for 112 tests (the delete of a private name that no class declares), the hashbang row for 37.
+script	"class C {\n  #x;\n  x = delete (this.#m);\n}"	SyntaxError: Private field '#m' must be declared in an enclosing class	SyntaxError: Private fields can not be deleted
+script	"new import('').prop;"	parses	SyntaxError: Cannot use new with import
+script	"\\u003B;"	SyntaxError: Invalid or unexpected token	SyntaxError: Invalid Unicode escape sequence
+script	"function *gen() {\n  void yi\\u0065ld;\n}"	SyntaxError: Unexpected identifier 'yield'	SyntaxError: Keyword must not contain escaped characters
+script	"for ('' in {} ? 0 : 0; false; ) ;"	SyntaxError: Invalid left-hand side in for-loop	SyntaxError: Unexpected token ';'
+script	"class C extends () => {} {\n}"	SyntaxError: Unexpected token '=>'	SyntaxError: Arrow function is not allowed in class heritage
+script	"class C extends (o) => [o.#foo]\n{\n  #foo;\n}"	SyntaxError: Unexpected token '=>'	SyntaxError: Private field '#foo' must be declared in an enclosing class
+script	"for (let [x, x] in {}) {}"	SyntaxError: Identifier 'x' has already been declared	SyntaxError: Duplicate binding 'x' in for-in loop
+script	"class C {\n  async * constructor() {}\n}"	SyntaxError: Class constructor may not be a generator	SyntaxError: Class constructor may not be an async method
+script	"function arguments() { 'use strict'; }"	SyntaxError: Unexpected eval or arguments in strict mode	SyntaxError: 'arguments' is not allowed as a function name in strict mode
+script	"function eval() { 'use strict'; }"	SyntaxError: Unexpected eval or arguments in strict mode	SyntaxError: 'eval' is not allowed as a function name in strict mode
+script	"function invalid() { \"\\8\"; \"use strict\"; }"	SyntaxError: \8 and \9 are not allowed in strict mode.	SyntaxError: Octal escape sequences are not allowed in strict mode.
+module	"var x;\nexport { x };\nimport { x as arguments } from './early-import-as-arguments.js';"	SyntaxError: Unexpected eval or arguments in strict mode	SyntaxError: 'arguments' cannot be used as an import binding in module code
+module	"var x;\nexport { x };\nimport { x as eval } from './early-import-as-eval.js';"	SyntaxError: Unexpected eval or arguments in strict mode	SyntaxError: 'eval' cannot be used as an import binding in module code
+module	"function fn(x = await 1) {\n  return x;\n}"	SyntaxError: Unexpected reserved word	SyntaxError: Illegal await-expression in formal parameters of async function
+script	"\\u0061sync function f(){}"	SyntaxError: Keyword must not contain escaped characters	SyntaxError: Unexpected token 'function'
+script	"{\n  using x = null, [] = null;\n}"	SyntaxError: Missing initializer in using declaration	SyntaxError: Unexpected token '['
+script	"{\n  using x = null, {} = null;\n}"	SyntaxError: Missing initializer in using declaration	SyntaxError: Unexpected token '{'
+script	"async function fn() {\n  const obj = { [Symbol.dispose]() {} };\n  for await (using x = obj of []) {}\n}"	SyntaxError: for-await-of loop variable declaration may not have an initializer.	SyntaxError: Unexpected token 'of'
+script	"const obj = { [Symbol.dispose]() { } };\nfor (using x = obj of []) {}"	SyntaxError: for-of loop variable declaration may not have an initializer.	SyntaxError: Unexpected token 'of'
+script	"var af = ()\n=> {};"	SyntaxError: Unexpected token '=>'	SyntaxError: Unexpected token ')'
+script	"(async function* await() { });"	SyntaxError: Unexpected reserved word	SyntaxError: 'await' is not allowed as a function name in async functions
+script	"var C = class st\\u0061tic {};"	SyntaxError: Unexpected strict mode reserved word	SyntaxError: Unexpected identifier 'static'
+module	"import.m\\u0065ta;"	SyntaxError: 'import.meta' must not contain escaped characters	SyntaxError: Unexpected identifier 'meta'
+script	"class C {\n  #field;\n  constructor() {\n    for (#field in value;;) break;\n  }\n}"	SyntaxError: Unexpected identifier '#field'	SyntaxError: Unexpected token ';'
+script	"class C {\n  #field;\n  m() {\n    for (#field in []) ;\n  }\n}"	SyntaxError: Unexpected identifier '#field'	SyntaxError: Invalid left-hand side in for-loop
+script	"class C {\n  #field;\n  constructor() {\n    #field in () => {};\n  }\n}"	SyntaxError: Malformed arrow function parameter list	SyntaxError: Invalid right-hand side in 'in' expression
+script	"function f() {\n    new.t\\u0061rget;\n}"	SyntaxError: 'new.target' must not contain escaped characters	SyntaxError: Keyword must not contain escaped characters
+module	"export var a = 0;\nimport {a \\u0061s b} from \"./escaped-as-import-specifier.js\";"	SyntaxError: Identifier 'a' has already been declared	SyntaxError: Unexpected identifier 'as'
+module	"import* \\u0061s self from \"./escaped-as-namespace-import.js\";"	SyntaxError: 'as' must not contain escaped characters	SyntaxError: Unexpected identifier 'as'
+module	"import {} \\u0066rom \"./escaped-from.js\";"	SyntaxError: 'from' must not contain escaped characters	SyntaxError: Unexpected identifier 'from'
+script	"break = 1;"	SyntaxError: Unexpected token '='	SyntaxError: Illegal break statement
+script	"continue = 1;"	SyntaxError: Unexpected token '='	SyntaxError: Illegal continue statement: no surrounding iteration statement
+script	"1\\u005F0123456789n;"	SyntaxError: Invalid or unexpected token	SyntaxError: Unexpected identifier '_0123456789n'
+script	"0\\u00620;"	SyntaxError: Invalid or unexpected token	SyntaxError: Unexpected identifier 'b0'
+script	"0\\u006f0;"	SyntaxError: Invalid or unexpected token	SyntaxError: Unexpected identifier 'o0'
+script	"1\\u005F0123456789"	SyntaxError: Invalid or unexpected token	SyntaxError: Unexpected identifier '_0123456789'
+script	"/(?ms-i)/;"	SyntaxError: Invalid regular expression: /(?ms-i)/: Invalid group	SyntaxError: Invalid regular expression: /(?ms-i)/: Invalid modifier group
+script	"/(?-s)/;"	SyntaxError: Invalid regular expression: /(?-s)/: Invalid group	SyntaxError: Invalid regular expression: /(?-s)/: Invalid modifier group
+script	"/(?i-)/;"	SyntaxError: Invalid regular expression: /(?i-)/: Invalid group	SyntaxError: Invalid regular expression: /(?i-)/: Invalid modifier group
+script	"/(?<a>.)\\k<a/u;"	SyntaxError: Invalid regular expression: /(?<a>.)\k<a/u: Invalid capture group name	SyntaxError: Invalid regular expression: /(?<a>.)\k<a/u: Invalid named capture referenced
+script	"/(?<a>.)\\k<a/;"	SyntaxError: Invalid regular expression: /(?<a>.)\k<a/: Invalid capture group name	SyntaxError: Invalid regular expression: /(?<a>.)\k<a/: Invalid named capture referenced
+script	"/(?<a>.)\\k<>/u;"	SyntaxError: Invalid regular expression: /(?<a>.)\k<>/u: Invalid capture group name	SyntaxError: Invalid regular expression: /(?<a>.)\k<>/u: Invalid named capture referenced
+script	"/(?<a>.)\\k<>/;"	SyntaxError: Invalid regular expression: /(?<a>.)\k<>/: Invalid capture group name	SyntaxError: Invalid regular expression: /(?<a>.)\k<>/: Invalid named capture referenced
+script	"/\\k<a(?<a>a)/;"	SyntaxError: Invalid regular expression: /\k<a(?<a>a)/: Invalid capture group name	SyntaxError: Invalid regular expression: /\k<a(?<a>a)/: Invalid named capture referenced
+script	"/\\k<a(?<a>.)/;"	SyntaxError: Invalid regular expression: /\k<a(?<a>.)/: Invalid capture group name	SyntaxError: Invalid regular expression: /\k<a(?<a>.)/: Invalid named capture referenced
+script	"/\\k(?<a>.)/;"	SyntaxError: Invalid regular expression: /\k(?<a>.)/: Invalid named reference	SyntaxError: Invalid regular expression: /\k(?<a>.)/: Invalid escape
+script	"/\\k<>/u;"	SyntaxError: Invalid regular expression: /\k<>/u: Invalid capture group name	SyntaxError: Invalid regular expression: /\k<>/u: Invalid named capture referenced
+script	"/\\k<a/u;"	SyntaxError: Invalid regular expression: /\k<a/u: Invalid capture group name	SyntaxError: Invalid regular expression: /\k<a/u: Invalid named capture referenced
+script	"/(?<a>.)\\k/;"	SyntaxError: Invalid regular expression: /(?<a>.)\k/: Invalid named reference	SyntaxError: Invalid regular expression: /(?<a>.)\k/: Invalid escape
+script	"/(?<a\\u{110000}>.)/u;"	SyntaxError: Invalid regular expression: /(?<a\u{110000}>.)/u: Invalid Unicode escape	SyntaxError: Invalid regular expression: /(?<a\u{110000}>.)/u: Invalid capture group name
+module	"export { \"\u263f\" as \"\\uD83D\" } from \"./export-expname_FIXTURE.js\";"	SyntaxError: String literal module export names must be followed by a 'from' clause	SyntaxError: Invalid module export name: contains unpaired surrogate
+script	"class C {\n    \\u0061sync* m(){}\n};"	SyntaxError: Keyword must not contain escaped characters	SyntaxError: Unexpected token '*'
+script	"class C {\n    \\u0061sync m(){}\n};"	SyntaxError: Keyword must not contain escaped characters	SyntaxError: Unexpected identifier 'm'
+script	"async function* f() {\n  for await (var x o\\u0066 []) ;\n}"	SyntaxError: Keyword must not contain escaped characters	SyntaxError: Unexpected identifier 'of'
+script	"for (var x o\\u0066 []) ;"	SyntaxError: Unexpected token 'of'	SyntaxError: Unexpected identifier 'of'
+script	"var arr = [];\nfor({var index=0; index+=1;} index++<=10; index*2;) {\tarr.add(\"\"+index);};"	SyntaxError: Unexpected identifier 'index'	SyntaxError: Unexpected token 'var'
+script	"try { } catch ([x, x]) {}"	SyntaxError: Identifier 'x' has already been declared	SyntaxError: Duplicate binding 'x' in catch clause
+script	"class C {\n  static {\n    var {await} = {};\n  }\n}"	SyntaxError: Unexpected reserved word	SyntaxError: 'await' is not allowed as a binding identifier in class static blocks
+script	"with ({}) class C {}"	SyntaxError: Unexpected token 'class'	SyntaxError: Class declaration not allowed in statement position

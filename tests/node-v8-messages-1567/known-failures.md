@@ -13,15 +13,9 @@ Differences from Node 26.8 that the fixtures here and
 | `for await (x of new f())`, `yield* new f()` with a non-constructor | `(intermediate value) is not a constructor` | `f is not a constructor` | The `new` scanner (`chain_after_new`) prints the callee; V8 prints the unnamed value in an iteration head. |
 | `var [[c, [d]] = nul] = []`, `({ a: { c } = nul } = {})` | the default's text | the value form | Nested array patterns with nested patterns under a default, and the assignment form of a nested default, skip `bind_pattern`. |
 
-## Early errors (`scripts/node-stack-fixtures-1523-tail/` rows)
+## Early errors
 
-| Source | V8 | jsse | Why it stays |
-| --- | --- | --- | --- |
-| `x = { a = 1 }`, `f({ a = 1 })`, `[{ a = 1 }]` | `Invalid shorthand property initializer` | parses | A default-mode parser bug: a CoverInitializedName that never becomes a pattern is accepted. |
-| `x = class { async x }`, `x = class { *x }` | `Unexpected token '}'` | parses | Default-mode parser bug: a method without parameters and body is accepted. |
-| module `<!-- comment`, `/* */ --> comment` | `HTML comments are not allowed in modules` | loads | Default-mode bug: the module loader tokenizes HTML-like comments. |
-| `for (let of of c);` | parses | `Unexpected token 'of'` | A default-mode parser bug: `let of` is a valid ForDeclaration. |
-| `/[\b-\d]/u` | `Invalid character class` | accepted | Default-mode regexp parser bug. |
-| `'use strict'; for (f() of c);` | parses (a runtime ReferenceError) | `Invalid left-hand side in for-loop` | V8 web compatibility; the spec makes it an early error. |
-| module `import defer * as ns from './lib.mjs'` | `Unexpected token '*'` | loads | V8 does not ship import defer; gating a test262 feature off for `--node` is not wording. |
-| `using x = 1` | `Unexpected identifier 'x'` | `using declaration is not allowed in this position` | V8 does not ship explicit resource management. |
+The 19 sources of `scripts/node-stack-fixtures-1523-tail/` that still differed after #1523 (second pass) all agree with
+Node now (#1574 for the parser bugs, #1523 third pass for the rest; see
+`docs/agents/library-tests-typescript-conformance-residual-1523.md`). What differs on the larger sweep is in
+`ts-suite/node-syntax-tail-1523-known-failures.txt`.

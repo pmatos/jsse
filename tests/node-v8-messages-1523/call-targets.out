@@ -1,0 +1,23 @@
+assign ReferenceError: Invalid left-hand side in assignment f
+assign strict ReferenceError: Invalid left-hand side in assignment f
+compound ReferenceError: Invalid left-hand side in assignment f
+compound strict ReferenceError: Invalid left-hand side in assignment f
+paren strict ReferenceError: Invalid left-hand side in assignment f
+postfix ReferenceError: Invalid left-hand side expression in postfix operation f
+postfix strict ReferenceError: Invalid left-hand side expression in postfix operation f
+prefix ReferenceError: Invalid left-hand side expression in prefix operation f
+prefix strict ReferenceError: Invalid left-hand side expression in prefix operation f
+for-of ReferenceError: Invalid left-hand side in for-loop f
+for-of strict ReferenceError: Invalid left-hand side in for-loop f
+for-of empty strict no error
+for-of closes the iterator ReferenceError: Invalid left-hand side in for-loop f,return
+for-in ReferenceError: Invalid left-hand side in for-loop f
+for-in strict ReferenceError: Invalid left-hand side in for-loop f
+for-in empty strict no error
+operand first ReferenceError: Invalid left-hand side in assignment arg
+generator ReferenceError: Invalid left-hand side in for-loop f
+async for-of ReferenceError: Invalid left-hand side in for-loop f,f
+async for-in ReferenceError: Invalid left-hand side in for-loop f
+for await ReferenceError: Invalid left-hand side in for-loop f
+strict async for-of ReferenceError: Invalid left-hand side in for-loop f
+strict for await ReferenceError: Invalid left-hand side in for-loop f

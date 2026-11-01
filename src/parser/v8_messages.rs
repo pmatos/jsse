@@ -291,6 +291,12 @@ impl<'a> Parser<'a> {
             {
                 "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.".to_string()
             }
+            "Declaration not allowed in statement position of iteration statement"
+                if self.current == Token::Keyword(Keyword::Async) =>
+            {
+                "Async functions can only be declared at the top level or inside a block."
+                    .to_string()
+            }
             _ if single_statement
                 && matches!(
                     self.current,

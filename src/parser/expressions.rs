@@ -676,13 +676,13 @@ impl<'a> Parser<'a> {
                             self.advance()?;
                             Ok(Expression::ImportMeta)
                         }
-                        Token::Identifier(name) if name == "defer" || name == "source" => {
+                        Token::Identifier(name) if self.import_phase(name) => {
                             let is_defer = name == "defer";
                             self.advance()?;
-                            self.eat(&Token::LeftParen)?;
+                            self.eat_phase_paren()?;
                             let old_no_in = self.no_in;
                             self.no_in = false;
-                            let source = self.parse_assignment_expression()?;
+                            let source = self.import_specifier()?;
                             let options = self.parse_import_options()?;
                             self.no_in = old_no_in;
                             self.eat(&Token::RightParen)?;
@@ -692,9 +692,7 @@ impl<'a> Parser<'a> {
                                 Ok(Expression::ImportSource(ExprBox::new(source), options))
                             }
                         }
-                        _ => {
-                            Err(self.error("Expected 'meta', 'defer', or 'source' after 'import.'"))
-                        }
+                        _ => Err(self.import_dot_error()),
                     }
                 } else if self.current == Token::LeftParen {
                     self.advance()?;
@@ -1850,7 +1848,7 @@ impl<'a> Parser<'a> {
         {
             match self.current_identifier_name() {
                 Some(n) => Some(self.class_binding(n)?),
-                None => None,
+                None => self.class_expression_name(prev_strict)?,
             }
         } else {
             None
