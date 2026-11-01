@@ -117,7 +117,7 @@ fn name_function(expr: &Expression, prefix: &str) {
             name_function(right, prefix);
             return;
         }
-        Expression::Assign(_, _, right) => {
+        Expression::Assign(_, _, right, _) => {
             name_function(right, prefix);
             return;
         }

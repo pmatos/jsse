@@ -4,12 +4,16 @@ use undefined_check::undefined_check_condition;
 
 use crate::ast::*;
 use crate::interpreter::atom::Atom;
+use crate::interpreter::builtins::node_host_heritage::heritage_pos;
 use crate::interpreter::generator_analysis::*;
 use crate::interpreter::hoisting::block_declares_lexical;
 use crate::parser::{expr_to_pattern, pattern_to_expr};
 use crate::types::JsValue;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+
+mod class_hoist;
+use class_hoist::hoist_class_suspensions;
 
 /// Which transform built a [`GeneratorStateMachine`], so a memoised machine is
 /// only reused for the same kind of function.
@@ -1129,73 +1133,6 @@ fn in_class_scope(expr: &Expression, class_name: Option<&str>, is_async: bool) -
     Expression::Call(ExprBox::new(arrow), Vec::new(), CallSiteId::UNASSIGNED)
 }
 
-/// Capture, in source order, every part of a class heritage clause and its
-/// computed element keys that ClassDefinitionEvaluation (§15.7.14) evaluates
-/// up to and including the last one containing a `yield`/`await`, then point
-/// the rebuilt class at the captured temps. The heritage is bound to a temp;
-/// each such key is bound to a temp and converted with `ToPropertyKey` at once,
-/// so the suspension belongs to the enclosing generator and nothing the class
-/// runs later is observable before it. Keys after the last suspension stay in
-/// the class: they are evaluated when it is built, in order, after every temp.
-///
-/// When a key is captured, the heritage checks (IsConstructor, the `prototype`
-/// read) run right after the heritage, before any key, and the rebuilt class
-/// takes the resulting `protoParent` instead of reading `prototype` again.
-fn hoist_class_suspensions(
-    class_name: Option<&str>,
-    super_class: &mut Option<Box<Expression>>,
-    elements: &mut [ClassElement],
-    ctx: &mut TransformContext,
-) {
-    let is_async = ctx.is_async;
-    let last_key = elements.iter().rposition(|e| {
-        e.computed_key()
-            .is_some_and(|k| expr_has_suspension(k, is_async))
-    });
-    let heritage_suspends = super_class
-        .as_deref()
-        .is_some_and(|sc| expr_has_suspension(sc, is_async));
-    if last_key.is_none() && !heritage_suspends {
-        return;
-    }
-    if let Some(sc) = super_class
-        && !matches!(**sc, Expression::Literal(_))
-    {
-        let temp_var = ctx.new_temp_var("class_heritage");
-        let expr = in_class_scope(sc, class_name, is_async);
-        bind_expression_to_temp(&expr, &temp_var, ctx);
-        **sc = Expression::Identifier(temp_var);
-    }
-    let Some(last_key) = last_key else {
-        return;
-    };
-    if let Some(sc) = super_class
-        && !matches!(**sc, Expression::Literal(Literal::Null))
-    {
-        let proto_var = ctx.new_temp_var("class_proto_parent");
-        let check = Expression::ClassProtoParent(ExprBox::new((**sc).clone()));
-        bind_expression_to_temp(&check, &proto_var, ctx);
-        **sc = Expression::ResolvedHeritage(
-            ExprBox::new((**sc).clone()),
-            ExprBox::new(Expression::Identifier(proto_var)),
-        );
-    }
-    for key in elements[..=last_key]
-        .iter_mut()
-        .filter_map(ClassElement::key_mut)
-    {
-        if let PropertyKey::Computed(e) = key
-            && !matches!(**e, Expression::Literal(_))
-        {
-            let temp_var = ctx.new_temp_var("class_key");
-            let expr = in_class_scope(e, class_name, is_async);
-            bind_expression_to_temp(&expr, &temp_var, ctx);
-            hoist_to_property_key(&temp_var, ctx);
-            **e = Expression::Identifier(temp_var);
-        }
-    }
-}
-
 /// Clone of `class_expr` with its heritage and the computed keys up to the last
 /// suspending one captured in temps via `hoist_class_suspensions`, so the
 /// result is safe to re-embed in a non-suspending position (a plain `emit_statement`/`emit_expression_with_binding`
@@ -1208,6 +1145,7 @@ fn suspension_free_class_expr(class_expr: &ClassExpr, ctx: &mut TransformContext
         class_expr.name.as_deref(),
         &mut class_expr.super_class,
         &mut class_expr.body,
+        heritage_pos(&class_expr.source_text),
         ctx,
     );
     class_expr
@@ -1342,6 +1280,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                 Some(&class_decl.name),
                 &mut class_decl.super_class,
                 &mut class_decl.body,
+                heritage_pos(&class_decl.source_text),
                 ctx,
             );
             ctx.emit_statement(Statement::ClassDeclaration(class_decl));
@@ -1466,6 +1405,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     AssignOp::Assign,
                     ExprBox::new(Expression::Identifier(with_var.clone())),
                     ExprBox::new(expr.clone()),
+                    0,
                 )));
             }
             if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await) {
@@ -1542,6 +1482,7 @@ fn transform_yielding_expression(
                         AssignOp::Assign,
                         ExprBox::new(Expression::Identifier(temp_var.clone())),
                         ExprBox::new(inner.clone().into_expression()),
+                        0,
                     )));
                     Some(Expression::Identifier(temp_var))
                 } else {
@@ -1746,7 +1687,7 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Assign(op, left, right)
+        Expression::Assign(op, left, right, _)
             if *op == AssignOp::Assign
                 && matches!(
                     left.as_ref(),
@@ -1765,17 +1706,18 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&Expression::Identifier(source), &binding, ctx);
         }
 
-        Expression::Assign(op, left, right) => {
+        Expression::Assign(op, left, right, at) => {
             let right_suspends = expr_has_suspension(right, ctx.is_async);
             let target = lower_reference_operand(left, right_suspends, ctx);
             if !right_suspends {
-                let combined = Expression::Assign(*op, ExprBox::new(target), right.clone());
+                let combined = Expression::Assign(*op, ExprBox::new(target), right.clone(), *at);
                 emit_expression_with_binding(&combined, &binding, ctx);
             } else if let Some(logical_op) = op.logical_op() {
                 let store = Expression::Assign(
                     AssignOp::Assign,
                     ExprBox::new(target.clone()),
                     right.clone(),
+                    *at,
                 );
                 let combined =
                     Expression::Logical(logical_op, ExprBox::new(target), ExprBox::new(store));
@@ -1806,7 +1748,7 @@ fn transform_yielding_expression(
                     assign_op = AssignOp::Assign;
                 }
                 let combined =
-                    Expression::Assign(assign_op, ExprBox::new(target), ExprBox::new(value));
+                    Expression::Assign(assign_op, ExprBox::new(target), ExprBox::new(value), *at);
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
@@ -1974,9 +1916,9 @@ fn transform_yielding_expression(
             }
         },
 
-        Expression::Update(op, prefix, inner) => {
+        Expression::Update(op, prefix, inner, at) => {
             let target = lower_reference_operand(inner, false, ctx);
-            let combined = Expression::Update(*op, *prefix, ExprBox::new(target));
+            let combined = Expression::Update(*op, *prefix, ExprBox::new(target), *at);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -2162,6 +2104,7 @@ fn emit_expression_with_binding(
                 AssignOp::Assign,
                 ExprBox::new(Expression::Identifier(name.clone())),
                 ExprBox::new(value),
+                0,
             );
             ctx.emit_statement(Statement::Expression(assign));
         }
@@ -2251,6 +2194,7 @@ fn hoist_suspending_pattern_assignment(
         AssignOp::Assign,
         ExprBox::new(pattern_to_expr(pattern.clone())),
         ExprBox::new(Expression::Identifier(temp.clone())),
+        0,
     ));
     Some((Pattern::Identifier(temp), synth))
 }
@@ -2260,6 +2204,7 @@ fn emit_temp_assignment(temp: &str, value: Expression, ctx: &mut TransformContex
         AssignOp::Assign,
         ExprBox::new(Expression::Identifier(temp.to_string())),
         ExprBox::new(value),
+        0,
     )));
 }
 
@@ -2776,6 +2721,7 @@ fn assign_captured_or_recurse(
                 AssignOp::Assign,
                 ExprBox::new(captured_ref),
                 ExprBox::new(Expression::Identifier(value_tmp.to_string())),
+                0,
             )));
         }
         None => lower_pattern_assignment(pattern, value_tmp, ctx),
@@ -2801,6 +2747,7 @@ fn emit_pattern_assignment(pattern: Pattern, source: &str, ctx: &mut TransformCo
         AssignOp::Assign,
         ExprBox::new(pattern_to_expr(pattern)),
         ExprBox::new(Expression::Identifier(source.to_string())),
+        0,
     )));
 }
 
@@ -2851,6 +2798,7 @@ fn lower_pattern_assignment_property(
             AssignOp::Assign,
             ExprBox::new(captured_ref),
             ExprBox::new(Expression::Identifier(value_temp)),
+            0,
         )));
         return;
     }
@@ -4629,10 +4577,10 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             ExprBox::new(rewrite_expr(l)),
             ExprBox::new(rewrite_expr(r)),
         ),
-        Expression::Update(op, prefix, e) => {
-            Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)))
+        Expression::Update(op, prefix, e, at) => {
+            Expression::Update(*op, *prefix, ExprBox::new(rewrite_expr(e)), *at)
         }
-        Expression::Assign(op, l, r) => {
+        Expression::Assign(op, l, r, at) => {
             // A destructuring-assignment LHS is not a suspension boundary the
             // tree-walker can split: leave any `await` in it to pattern lowering.
             let new_l = if *op == AssignOp::Assign
@@ -4642,7 +4590,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             } else {
                 ExprBox::new(rewrite_expr(l))
             };
-            Expression::Assign(*op, new_l, ExprBox::new(rewrite_expr(r)))
+            Expression::Assign(*op, new_l, ExprBox::new(rewrite_expr(r)), *at)
         }
         Expression::Conditional(t, c, a) => Expression::Conditional(
             ExprBox::new(rewrite_expr(t)),
@@ -4676,8 +4624,8 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
         Expression::Spread(e) => Expression::Spread(ExprBox::new(rewrite_expr(e))),
         Expression::PreIterated(e) => Expression::PreIterated(ExprBox::new(rewrite_expr(e))),
-        Expression::ClassProtoParent(e) => {
-            Expression::ClassProtoParent(ExprBox::new(rewrite_expr(e)))
+        Expression::ClassProtoParent(e, at) => {
+            Expression::ClassProtoParent(ExprBox::new(rewrite_expr(e)), *at)
         }
         Expression::BoundCallee(func, this) => Expression::BoundCallee(
             ExprBox::new(rewrite_expr(func)),
@@ -5342,7 +5290,7 @@ mod tests {
         state.body.as_slice().iter().any(|stmt| {
             matches!(
                 stmt,
-                Statement::Expression(Expression::Assign(_, _, rhs))
+                Statement::Expression(Expression::Assign(_, _, rhs, _))
                     if matches!(&**rhs, Expression::Member(..))
             )
         })

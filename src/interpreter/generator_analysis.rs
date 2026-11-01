@@ -1,6 +1,9 @@
 use crate::ast::*;
 use std::collections::HashSet;
 
+mod head_await;
+use head_await::for_in_of_variable_head_contains_await;
+
 #[derive(Debug, Clone)]
 pub(crate) struct GeneratorAnalysis {
     pub yield_points: Vec<YieldPoint>,
@@ -530,11 +533,11 @@ fn analyze_expression(
             analyze_expression(right, analysis, ctx, true);
         }
 
-        Expression::Update(_, _, inner) => {
+        Expression::Update(.., inner, _) => {
             analyze_expression(inner, analysis, ctx, true);
         }
 
-        Expression::Assign(_, left, right) => {
+        Expression::Assign(_, left, right, _) => {
             analyze_expression(left, analysis, ctx, true);
             analyze_expression(right, analysis, ctx, true);
         }
@@ -579,7 +582,7 @@ fn analyze_expression(
 
         Expression::Spread(inner)
         | Expression::PreIterated(inner)
-        | Expression::ClassProtoParent(inner) => {
+        | Expression::ClassProtoParent(inner, _) => {
             analyze_expression(inner, analysis, ctx, true);
         }
 
@@ -844,8 +847,8 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         | Expression::Delete(e)
         | Expression::Spread(e)
         | Expression::PreIterated(e)
-        | Expression::ClassProtoParent(e)
-        | Expression::Update(_, _, e) => expr_contains(e, target),
+        | Expression::ClassProtoParent(e, _)
+        | Expression::Update(.., e, _) => expr_contains(e, target),
         Expression::Import(e, opts, _)
         | Expression::ImportDefer(e, opts)
         | Expression::ImportSource(e, opts) => {
@@ -853,7 +856,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         }
         Expression::Binary(_, l, r, _)
         | Expression::Logical(_, l, r)
-        | Expression::Assign(_, l, r)
+        | Expression::Assign(_, l, r, _)
         | Expression::BoundCallee(l, r)
         | Expression::ResolvedHeritage(l, r) => {
             expr_contains(l, target) || expr_contains(r, target)
@@ -904,28 +907,6 @@ fn for_in_of_head_contains_yield(left: &ForInOfLeft) -> bool {
             .iter()
             .any(|d| pattern_contains_yield(&d.pattern)),
         ForInOfLeft::Pattern(pattern) => pattern_contains_yield(pattern),
-        ForInOfLeft::Expression(_) => false,
-    }
-}
-
-/// Like `for_in_of_head_contains_yield`, but `await`-only and shape-gated via
-/// `pattern_needs_await_lowering` -- an unsupported shape (an object rest
-/// beside a suspending sibling, issue #771; array patterns are supported
-/// since issue #774) must not force the compiled state machine. The
-/// `Pattern` (assignment-form) arm mirrors the `Variable` arm since issue
-/// #788: before that fix this unconditionally returned `false`, so an
-/// assignment-form head's only `await` (e.g. `for ([a = await x] of it)`)
-/// was invisible to `contains_suspension`, leaving the whole statement
-/// tree-walked through the blocking `await_value` fallback with no
-/// suspend/resume awareness -- the same gap ADR-2026-09-30-2230 closed for a
-/// `yield` in this position, left open for `await` pending issue #725/#788.
-fn for_in_of_variable_head_contains_await(left: &ForInOfLeft) -> bool {
-    match left {
-        ForInOfLeft::Variable(decl) => decl
-            .declarations
-            .iter()
-            .any(|d| pattern_needs_await_lowering(&d.pattern)),
-        ForInOfLeft::Pattern(pattern) => pattern_needs_await_lowering(pattern),
         ForInOfLeft::Expression(_) => false,
     }
 }
@@ -2047,8 +2028,10 @@ mod tests {
             other => panic!("expected an expression statement, got {other:?}"),
         };
         match expr {
-            Expression::Assign(_, lhs, _) => crate::parser::expr_to_pattern(lhs.into_expression())
-                .expect("valid assignment pattern"),
+            Expression::Assign(_, lhs, _, _) => {
+                crate::parser::expr_to_pattern(lhs.into_expression())
+                    .expect("valid assignment pattern")
+            }
             other => panic!("expected an assignment expression, got {other:?}"),
         }
     }

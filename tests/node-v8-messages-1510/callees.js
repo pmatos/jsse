@@ -216,7 +216,6 @@ const messageOnly = new Set([
   "arrayUndefined",
   "arrayMember",
   "arrayEmpty",
-  "arrayAssign",
   "arrayParameter",
   "forOfLiteral",
   "forOfVariable",

@@ -842,7 +842,7 @@ impl<'a> Parser<'a> {
                                 self.error("for await...in is not valid; use for await...of")
                             );
                         }
-                        if matches!(&expr, Expression::Assign(_, _, _)) {
+                        if matches!(&expr, Expression::Assign(..)) {
                             return Err(self.error("Invalid left-hand side in for-in loop"));
                         }
                         self.advance()?;
@@ -1061,7 +1061,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error("for await...in is not valid; use for await...of"));
                     }
                     // Reject assignment expressions as for-in LHS
-                    if matches!(&expr, Expression::Assign(_, _, _)) {
+                    if matches!(&expr, Expression::Assign(..)) {
                         return Err(self.error("Invalid left-hand side in for-in loop"));
                     }
                     self.advance()?;

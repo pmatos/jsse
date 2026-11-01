@@ -8,6 +8,8 @@ mod targets;
 
 use regexp::validate_regexp_literal;
 
+mod new_expr;
+
 impl<'a> Parser<'a> {
     pub(crate) fn parse_expression(&mut self) -> Result<Expression, ParseError> {
         let expr = self.parse_assignment_expression()?;
@@ -113,6 +115,7 @@ impl<'a> Parser<'a> {
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
             let mut left = left;
             self.retarget_store_site(&mut left, op);
+            let at = self.op_pos();
             self.advance()?;
             let right_start = self.current_token_start;
             let right = self.parse_assignment_expression()?;
@@ -127,6 +130,7 @@ impl<'a> Parser<'a> {
                 op,
                 ExprBox::new(left),
                 ExprBox::new(right),
+                at,
             ))
         } else {
             // Not a destructuring assignment — deferred __proto__ dup error
@@ -319,9 +323,10 @@ impl<'a> Parser<'a> {
                     UpdateOp::Decrement
                 };
                 self.advance()?;
+                let at = self.op_pos();
                 let expr = self.parse_unary()?;
                 self.validate_update_target(&expr, true)?;
-                Ok(Expression::Update(op, true, ExprBox::new(expr)))
+                Ok(Expression::Update(op, true, ExprBox::new(expr), at))
             }
             Token::Keyword(Keyword::Await)
                 if self.in_async || (self.is_module && self.in_function == 0) =>
@@ -351,8 +356,9 @@ impl<'a> Parser<'a> {
             };
             if let Some(op) = op {
                 self.validate_update_target(&expr, false)?;
+                let at = self.op_pos();
                 self.advance()?;
-                return Ok(Expression::Update(op, false, ExprBox::new(expr)));
+                return Ok(Expression::Update(op, false, ExprBox::new(expr), at));
             }
         }
         Ok(expr)
@@ -506,22 +512,21 @@ impl<'a> Parser<'a> {
                     loop {
                         match &self.current {
                             Token::Dot => {
+                                let at = self.current_token_start;
                                 self.advance()?;
                                 let mp = self.parse_dot_member_property()?;
-                                prop = Expression::Member(
-                                    ExprBox::new(prop),
-                                    mp,
-                                    PropSiteId::UNASSIGNED,
-                                );
+                                prop =
+                                    Expression::Member(ExprBox::new(prop), mp, PropSiteId::at(at));
                             }
                             Token::LeftBracket => {
+                                let at = self.current_token_start;
                                 self.advance()?;
                                 let p = self.parse_expression()?;
                                 self.eat(&Token::RightBracket)?;
                                 prop = Expression::Member(
                                     ExprBox::new(prop),
                                     MemberProperty::Computed(ExprBox::new(p)),
-                                    PropSiteId::UNASSIGNED,
+                                    PropSiteId::at(at),
                                 );
                             }
                             Token::LeftParen => {
@@ -542,93 +547,6 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(expr)
-    }
-
-    fn parse_new_expression(&mut self) -> Result<Expression, ParseError> {
-        // Depth guard: `new new … X` recurses here, bypassing
-        // parse_assignment_expression, so it needs its own bound.
-        self.enter_recursion()?;
-        let r = self.parse_new_expression_inner();
-        self.exit_recursion();
-        r
-    }
-
-    fn parse_new_expression_inner(&mut self) -> Result<Expression, ParseError> {
-        let new_pos = self.current_token_start;
-        self.advance()?; // new
-        if self.current == Token::Dot {
-            self.advance()?; // .
-            let is_target = match &self.current {
-                Token::Identifier(n) => n == "target",
-                Token::IdentifierWithEscape(n) if n == "target" => {
-                    return Err(self.error("Keyword must not contain escaped characters"));
-                }
-                _ => false,
-            };
-            if is_target {
-                if self.in_non_arrow_function == 0 {
-                    return Err(self.error("new.target expression is not allowed here"));
-                }
-                self.advance()?; // target
-                return Ok(Expression::NewTarget);
-            }
-            return Err(self.error("Expected 'target' after 'new.'"));
-        }
-        let mut callee = if self.current == Token::Keyword(Keyword::New) {
-            self.parse_new_expression()?
-        } else {
-            // `new import(...)` is an error; `new (import(...))` is valid.
-            let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
-            let primary = self.parse_primary_expression()?;
-            if is_direct_import
-                && matches!(
-                    &primary,
-                    Expression::Import(_, _, _)
-                        | Expression::ImportDefer(_, _)
-                        | Expression::ImportSource(_, _)
-                )
-            {
-                return Err(self.error("Cannot use 'new' with import()"));
-            }
-            primary
-        };
-        loop {
-            match &self.current {
-                Token::OptionalChain => {
-                    return Err(self.error("Invalid optional chain from new expression"));
-                }
-                Token::Dot => {
-                    self.advance()?;
-                    let prop = self.parse_dot_member_property()?;
-                    callee = Expression::Member(ExprBox::new(callee), prop, PropSiteId::UNASSIGNED);
-                }
-                Token::LeftBracket => {
-                    self.advance()?;
-                    let prop = self.parse_expression()?;
-                    self.eat(&Token::RightBracket)?;
-                    callee = Expression::Member(
-                        ExprBox::new(callee),
-                        MemberProperty::Computed(ExprBox::new(prop)),
-                        PropSiteId::UNASSIGNED,
-                    );
-                }
-                Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
-                    let tmpl = self.parse_template_literal_expr(true)?;
-                    callee = Expression::TaggedTemplate(ExprBox::new(callee), tmpl);
-                }
-                _ => break,
-            }
-        }
-        let args = if self.current == Token::LeftParen {
-            self.parse_arguments()?
-        } else {
-            Vec::new()
-        };
-        Ok(Expression::New(
-            ExprBox::new(callee),
-            args,
-            CallSiteId::at(new_pos),
-        ))
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
@@ -1260,7 +1178,7 @@ impl<'a> Parser<'a> {
                 p.shorthand
                     && matches!(
                         &p.value,
-                        Expression::Assign(AssignOp::Assign, left, _) if matches!(&**left, Expression::Identifier(_))
+                        Expression::Assign(AssignOp::Assign, left, _, _) if matches!(&**left, Expression::Identifier(_))
                     )
             })
         } else {
@@ -1667,6 +1585,7 @@ impl<'a> Parser<'a> {
                     AssignOp::Assign,
                     ExprBox::new(Expression::Identifier(ident)),
                     ExprBox::new(default_value),
+                    0,
                 ),
                 kind: PropertyKind::Init,
                 computed: false,

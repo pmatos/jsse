@@ -243,7 +243,7 @@ impl ModuleKey {
         !self.0.is_absolute() && self.0.to_str().is_some_and(|s| s.starts_with("node:"))
     }
 
-    /// Return the backing file path, or `None` for a host-provided module.
+    /// The backing file path, `None` for a host-provided module.
     fn file_path(&self) -> Option<&Path> {
         (!self.is_module_source() && !self.is_builtin()).then_some(self.0.as_path())
     }
@@ -3460,11 +3460,11 @@ impl Interpreter {
             Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => false,
             Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
-            | Expression::Assign(_, left, right) => {
+            | Expression::Assign(_, left, right, _) => {
                 Self::expr_has_await(left) || Self::expr_has_await(right)
             }
             Expression::Unary(_, operand)
-            | Expression::Update(_, _, operand)
+            | Expression::Update(.., operand, _)
             | Expression::Typeof(operand)
             | Expression::Void(operand)
             | Expression::Delete(operand)

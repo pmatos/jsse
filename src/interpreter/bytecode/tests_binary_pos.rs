@@ -35,7 +35,7 @@ fn on_fresh_thread<T: Send>(f: impl FnOnce() -> T + Send) -> T {
 
 #[test]
 fn only_a_hooked_thread_records_binary_positions() {
-    let source = "r = a + b; q = a in b; if (a < 1) { r = a * 2; }";
+    let source = "f(a + b); f(a in b); if (a < 1) { f(a * 2); }";
     assert!(on_fresh_thread(|| binary_positions(source)).is_empty());
     let hooked = on_fresh_thread(|| {
         let mut interp = Interpreter::new();
@@ -46,7 +46,7 @@ fn only_a_hooked_thread_records_binary_positions() {
     });
     assert_eq!(hooked.len(), 4, "{hooked:?}");
     assert!(hooked.windows(2).all(|w| w[0].0 < w[1].0), "{hooked:?}");
-    let operator_offsets = [6, 17, 29, 42];
+    let operator_offsets = ["+", "in b", "<", "*"].map(|op| source.find(op).unwrap() as u32);
     for (&(_, pos), offset) in hooked.iter().zip(operator_offsets) {
         assert_eq!(pos, offset + 1, "{hooked:?}");
     }

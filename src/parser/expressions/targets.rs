@@ -53,14 +53,16 @@ impl<'a> Parser<'a> {
                         if let Expression::Spread(inner) = e {
                             saw_rest = true;
                             // Rest element cannot have initializer: [...x = 1]
-                            if matches!(inner.as_ref(), Expression::Assign(AssignOp::Assign, _, _))
-                            {
+                            if matches!(
+                                inner.as_ref(),
+                                Expression::Assign(AssignOp::Assign, _, _, _)
+                            ) {
                                 return Err(
                                     self.error("Rest element may not have a default initializer")
                                 );
                             }
                             self.validate_destructuring_target(inner)?;
-                        } else if let Expression::Assign(AssignOp::Assign, target, _) = e {
+                        } else if let Expression::Assign(AssignOp::Assign, target, _, _) = e {
                             self.validate_destructuring_target(target)?;
                         } else {
                             self.validate_destructuring_target(e)?;
@@ -98,7 +100,8 @@ impl<'a> Parser<'a> {
                             return Err(self.error("Invalid destructuring assignment target"));
                         }
                         PropertyKind::Init => {
-                            if let Expression::Assign(AssignOp::Assign, target, _) = &prop.value {
+                            if let Expression::Assign(AssignOp::Assign, target, _, _) = &prop.value
+                            {
                                 self.validate_destructuring_target(target)?;
                             } else if prop.shorthand {
                                 // Shorthand { eval }/{ arguments } invalid in strict

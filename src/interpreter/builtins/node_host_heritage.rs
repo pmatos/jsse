@@ -1,7 +1,8 @@
 //! V8's error position for a class heritage that is not a constructor or null
 //! (#1511): the heritage expression, which the AST does not carry an offset
 //! for. The class's own source text starts at `class`, so the offset is found
-//! by reading its header: `class`, an optional name, `extends`.
+//! by reading its header: `class`, an optional name, `extends`, and any
+//! parentheses around the expression (V8 points inside them).
 
 use super::super::Interpreter;
 use crate::ast::SourceText;
@@ -59,7 +60,26 @@ pub(crate) fn heritage_offset(text: &str) -> Option<usize> {
             return None;
         }
     }
-    Some(skip_trivia(text, end))
+    let mut at = skip_trivia(text, end);
+    while text[at..].starts_with('(') {
+        at = skip_trivia(text, at + 1);
+    }
+    Some(at)
+}
+
+/// The offset plus one of the heritage expression of the class whose source
+/// text is `class`, 0 outside `--node` or when it has none.
+pub(crate) fn heritage_pos(class: &Option<SourceText>) -> u32 {
+    if !crate::interpreter::builtins::node_host_stack::call_positions_enabled() {
+        return 0;
+    }
+    class
+        .as_ref()
+        .and_then(|text| {
+            let at = text.origin().1 + heritage_offset(text.as_str())? + 1;
+            u32::try_from(at).ok()
+        })
+        .unwrap_or(0)
 }
 
 impl Interpreter {
@@ -124,7 +144,8 @@ mod tests {
     fn finds_the_heritage_expression() {
         let at = |t: &str| heritage_offset(t).and_then(|i| t[i..].chars().next());
         assert_eq!(at("class B extends num {}"), Some('n'));
-        assert_eq!(at("class extends (f()) {}"), Some('('));
+        assert_eq!(at("class extends (f()) {}"), Some('f'));
+        assert_eq!(at("class extends ( /* c */ (n)) {}"), Some('n'));
         assert_eq!(
             at("class /* extends */ B // x\n extends /* c */ Z {}"),
             Some('Z')

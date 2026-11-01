@@ -1,0 +1,81 @@
+## constAssign
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:22:5
+## constAssignExpr
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:25:12
+## constCompound
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:28:5
+## constPostfix
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:31:4
+## constPrefix
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:34:5
+## constPostfixValue
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:37:11
+## constAssignAfterCall
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:41:5
+## constLocal
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:45:5
+## constLocalCompound
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:49:5
+## constLocalUpdate
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:53:4
+## constClosureCall
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:58:7
+## constMultiLine
+TypeError: Assignment to constant variable.
+at <dir>/assign.js:63:5
+## compoundNullDot
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/assign.js:67:5
+## compoundNullElement
+TypeError: Cannot read properties of null (reading 'k')
+at <dir>/assign.js:70:9
+## compoundNullBase
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/assign.js:73:7
+## assignNullDot
+TypeError: Cannot set properties of null (setting 'y')
+at <dir>/assign.js:76:9
+## updateNullDot
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/assign.js:79:5
+## updatePrefixNullDot
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/assign.js:82:7
+## updateNullElement
+TypeError: Cannot read properties of null (reading 'k')
+at <dir>/assign.js:85:9
+## deleteNullMember
+TypeError: Cannot convert undefined or null to object
+at <dir>/assign.js:88:12
+## deleteUndefinedElement
+TypeError: Cannot convert undefined or null to object
+at <dir>/assign.js:91:23
+## newChain
+TypeError: Cannot read properties of undefined (reading 'b')
+at <dir>/assign.js:94:11
+## newChainDepth
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/assign.js:97:11
+## optionalChain
+TypeError: Cannot read properties of undefined (reading 'b')
+at <dir>/assign.js:100:14
+## optionalChainElement
+TypeError: Cannot read properties of undefined (reading 'k')
+at <dir>/assign.js:103:14
+## optionalChainCall
+TypeError: Cannot read properties of undefined (reading 'b')
+at <dir>/assign.js:106:14
+## optionalChainLong
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/assign.js:109:26

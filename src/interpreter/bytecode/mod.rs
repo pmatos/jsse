@@ -15,6 +15,8 @@ mod tests_hook_isolation;
 #[cfg(test)]
 mod tests_member_pos;
 #[cfg(test)]
+mod tests_store_pos;
+#[cfg(test)]
 mod tests_switch_table;
 
 use std::rc::Rc;

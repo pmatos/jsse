@@ -39,6 +39,8 @@ pub(crate) struct NodeHostState {
     pub(crate) private_notes: super::node_host_private::PrivateNotes,
     /// Source offset plus one of the call this frame is making (0 = unknown).
     pub(crate) call_pos: u32,
+    /// Offset plus one of the `=` or `++` whose store is running (0 = none).
+    pub(crate) assign_pos: u32,
     /// Initializer text of the object pattern whose read is about to fail.
     pub(crate) pattern_src: Option<std::rc::Rc<str>>,
     /// The call-stack depth of each open `bind_pattern` (under `--node` only).

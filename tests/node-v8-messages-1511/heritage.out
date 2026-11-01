@@ -1,0 +1,24 @@
+## parenthesised
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/heritage.js:20:20
+## parenthesisedCall
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/heritage.js:23:20
+## doubleParenthesised
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/heritage.js:26:21
+## commentAndSpaces
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/heritage.js:29:30
+## call
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/heritage.js:32:19
+## yieldHeritage
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/heritage.js:36:22
+## yieldHeritageExpression
+TypeError: Class extends value #<Object> is not a constructor or null
+at <dir>/heritage.js:43:32
+## awaitHeritage
+TypeError: Class extends value 1 is not a constructor or null
+at awaited (<dir>/heritage.js:49:20)

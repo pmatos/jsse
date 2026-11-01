@@ -66,3 +66,6 @@ field on `Expression::Assign` and `Update` (76 pattern sites) and a statement
 position for identifier errors; #1511 stays open for them. test262 cannot
 observe any of this (default mode is unchanged), so the regression coverage is
 the Node oracle above rather than `test262-extra/`.
+
+Stage 2 (assignment, update, nullish compound targets, `new` chains, optional
+chains, lowered heritage): [library-tests-typescript-conformance-v8-messages-1511-stage2.md](library-tests-typescript-conformance-v8-messages-1511-stage2.md).

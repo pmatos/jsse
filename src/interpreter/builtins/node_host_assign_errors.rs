@@ -7,6 +7,10 @@ use super::super::*;
 
 impl Interpreter {
     pub(crate) fn const_assign_error(&mut self, name: &str, scope: &EnvRef) -> JsValue {
+        match std::mem::take(&mut self.node_host.assign_pos) {
+            0 => {}
+            at => self.node_host.call_pos = at,
+        }
         let engine = "Assignment to constant variable.";
         let global_value =
             matches!(name, "undefined" | "NaN" | "Infinity") && scope.borrow().parent.is_none();
