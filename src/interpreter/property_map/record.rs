@@ -271,35 +271,22 @@ impl PropertyRecord {
 
     /// The attribute bits and value of a complete data property (value,
     /// writable, enumerable and configurable all present), the only kind a
-    /// shape can describe.
+    /// shape can describe; gives the record back when it is anything else.
     #[inline]
-    pub(super) fn as_plain(&self) -> Option<(u8, &JsValue)> {
+    pub(super) fn into_plain(self) -> Result<(u8, JsValue), Self> {
         const COMPLETE: u16 = HAS_VALUE | HAS_WRITABLE | HAS_ENUMERABLE | HAS_CONFIGURABLE;
         match self {
-            Self::Data { flags, value } if flags & COMPLETE == COMPLETE => Some((
+            Self::Data { flags, value } if flags & COMPLETE == COMPLETE => Ok((
                 (u8::from(flags & IS_WRITABLE != 0) * ATTR_WRITABLE)
                     | (u8::from(flags & IS_ENUMERABLE != 0) * ATTR_ENUMERABLE)
                     | (u8::from(flags & IS_CONFIGURABLE != 0) * ATTR_CONFIGURABLE),
                 value,
             )),
-            _ => None,
+            other => Err(other),
         }
     }
 
-    /// [`Self::as_plain`], taking the value out; gives the record back when it
-    /// is anything else.
-    #[inline]
-    pub(super) fn into_plain(self) -> Result<(u8, JsValue), Self> {
-        match self.as_plain() {
-            Some((attrs, _)) => match self {
-                Self::Data { value, .. } => Ok((attrs, value)),
-                Self::Wide { .. } => unreachable!("a wide record is not plain"),
-            },
-            None => Err(self),
-        }
-    }
-
-    /// The record of the complete data property `as_plain` described.
+    /// The record of the complete data property `into_plain` described.
     #[inline]
     pub(super) fn from_plain(attrs: u8, value: JsValue) -> Self {
         Self::data(
