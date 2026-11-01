@@ -5,12 +5,24 @@
 
 use super::super::eval::IdentifierRef;
 use super::super::{EnvRef, Interpreter};
-use crate::ast::{Expression, MemberProperty, PropSiteId};
+use crate::ast::{Expression, MemberProperty, PropSiteId, UpdateOp};
 use crate::interpreter::BindingName;
 use crate::interpreter::types::Completion;
 use crate::types::JsValue;
 
 impl Interpreter {
+    /// Runs `store` with `at` as the position a constant assignment it throws
+    /// is reported at; 0 (default mode) runs it as is.
+    fn with_assign_pos<T>(&mut self, at: u32, store: impl FnOnce(&mut Self) -> T) -> T {
+        if at == 0 {
+            return store(self);
+        }
+        self.node_host.assign_pos = at;
+        let done = store(self);
+        self.node_host.assign_pos = 0;
+        done
+    }
+
     /// `put_value_by_ref`, reporting a constant assignment at `at`.
     pub(in crate::interpreter) fn put_ref_at<N: BindingName + ?Sized>(
         &mut self,
@@ -20,13 +32,7 @@ impl Interpreter {
         id_ref: &IdentifierRef,
         env: &EnvRef,
     ) -> Completion {
-        if at == 0 {
-            return self.put_value_by_ref(key, value, id_ref, env);
-        }
-        self.node_host.assign_pos = at;
-        let done = self.put_value_by_ref(key, value, id_ref, env);
-        self.node_host.assign_pos = 0;
-        done
+        self.with_assign_pos(at, |this| this.put_value_by_ref(key, value, id_ref, env))
     }
 
     /// `env_set`, reporting a constant assignment at `at`.
@@ -37,30 +43,18 @@ impl Interpreter {
         key: &N,
         value: JsValue,
     ) -> Result<(), JsValue> {
-        if at == 0 {
-            return self.env_set(env, key, value);
-        }
-        self.node_host.assign_pos = at;
-        let done = self.env_set(env, key, value);
-        self.node_host.assign_pos = 0;
-        done
+        self.with_assign_pos(at, |this| this.env_set(env, key, value))
     }
 
     /// `x++` and friends on an identifier, reporting a constant assignment at `at`.
     pub(crate) fn update_identifier_at<N: BindingName + ?Sized>(
         &mut self,
         at: u32,
-        (op, prefix): (crate::ast::UpdateOp, bool),
+        (op, prefix): (UpdateOp, bool),
         key: &N,
         env: &EnvRef,
     ) -> Completion {
-        if at == 0 {
-            return self.eval_identifier_update(op, prefix, key, env);
-        }
-        self.node_host.assign_pos = at;
-        let done = self.eval_identifier_update(op, prefix, key, env);
-        self.node_host.assign_pos = 0;
-        done
+        self.with_assign_pos(at, |this| this.eval_identifier_update(op, prefix, key, env))
     }
 
     /// The reading of a nullish base failed in a compound assignment, an
