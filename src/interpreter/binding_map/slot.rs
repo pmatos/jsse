@@ -25,6 +25,17 @@ impl BindingMap {
         }
     }
 
+    /// The collector's: a scan found no nursery object here. The environment
+    /// must be registered first, or its next write could not queue it.
+    pub(crate) fn mark_clean(&self) {
+        debug_assert_ne!(
+            self.slot.get(),
+            NO_SLOT,
+            "a clean environment is registered"
+        );
+        self.clean.set(true);
+    }
+
     #[inline]
     pub(crate) fn slot(&self) -> u32 {
         self.slot.get()

@@ -365,12 +365,7 @@ impl Interpreter {
         }
         if minor {
             for env in self.env_registry.take_dirty() {
-                // SAFETY: nothing borrows an environment mutably at a safepoint.
-                let clean = unsafe {
-                    (*Rc::as_ptr(&env))
-                        .try_borrow_unguarded()
-                        .is_ok_and(Environment::is_clean)
-                };
+                let clean = env.try_borrow().is_ok_and(|env| env.is_clean());
                 if !clean {
                     Self::collect_env_roots(&env, &mut roots, &mut seen_envs);
                 }

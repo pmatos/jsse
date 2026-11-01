@@ -411,10 +411,6 @@ impl BindingMap {
         self.clean.get()
     }
 
-    pub(crate) fn mark_clean(&self) {
-        self.clean.set(true);
-    }
-
     /// For a write the map cannot see, to the environment's other state.
     #[inline]
     pub(crate) fn mark_written(&self) {
@@ -727,6 +723,7 @@ mod tests {
             ("remove", Box::new(|m| drop(m.remove("other")))),
             ("clear", Box::new(|m| m.clear())),
         ];
+        map.set_slot(0);
         for (name, mutate) in mutators {
             map.mark_clean();
             let _ = (map.get("a"), map.entry_at(0), map.contains_key("a"));
@@ -741,6 +738,7 @@ mod tests {
     #[test]
     fn fill_distinct_clears_the_clean_mark() {
         let mut map = BindingMap::new();
+        map.set_slot(0);
         map.mark_clean();
         let atoms = [Atom::intern("x"), Atom::intern("y")];
         let filter = BindingMap::filter_of(&atoms);

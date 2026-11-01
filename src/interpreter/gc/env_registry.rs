@@ -29,7 +29,8 @@ struct Slab {
     entries: Vec<Option<Entry>>,
     free: Vec<u32>,
     dirty: Vec<u32>,
-    live: usize,
+    /// Registered environments per owner, indexed by owner.
+    live: Vec<usize>,
     owners: u32,
 }
 
@@ -46,14 +47,15 @@ impl EnvRegistry {
     pub(crate) fn new() -> Self {
         let owner = SLAB.with_borrow_mut(|slab| {
             slab.owners += 1;
+            slab.live.resize(slab.owners as usize + 1, 0);
             slab.owners
         });
         EnvRegistry { owner }
     }
 
-    /// Environments registered on this thread.
+    /// Environments registered by this interpreter.
     pub(crate) fn len(&self) -> usize {
-        SLAB.with_borrow(|slab| slab.live)
+        SLAB.with_borrow(|slab| slab.live[self.owner as usize])
     }
 
     /// Registers `env` unless it already is.
@@ -63,7 +65,7 @@ impl EnvRegistry {
         }
         let weak = std::rc::Rc::downgrade(env);
         let slot = SLAB.with_borrow_mut(|slab| {
-            slab.live += 1;
+            slab.live[self.owner as usize] += 1;
             let entry = Some(Entry {
                 owner: self.owner,
                 env: weak,
@@ -107,9 +109,9 @@ impl EnvRegistry {
                     .as_ref()
                     .is_some_and(|entry| entry.env.strong_count() == 0)
                 {
-                    slab.entries[slot] = None;
+                    let owner = slab.entries[slot].take().map_or(0, |entry| entry.owner);
                     slab.free.push(slot as u32);
-                    slab.live -= 1;
+                    slab.live[owner as usize] -= 1;
                 }
             }
         });
@@ -125,7 +127,10 @@ impl EnvRegistry {
             dirty.retain(|&slot| {
                 entries[slot as usize].as_ref().is_some_and(|entry| {
                     entry.owner != self.owner
-                        || (entry.env.strong_count() > 0 && !env_is_clean(&entry.env))
+                        || entry
+                            .env
+                            .upgrade()
+                            .is_some_and(|env| env.try_borrow().is_ok_and(|env| !env.is_clean()))
                 })
             });
         });
@@ -144,17 +149,6 @@ impl EnvRegistry {
     }
 }
 
-/// Reads the clean mark of a live environment without borrowing it.
-pub(crate) fn env_is_clean(env: &Weak<RefCell<Environment>>) -> bool {
-    // SAFETY: callers hold the environment alive (`strong_count() > 0`) and no
-    // environment is borrowed mutably at a safepoint.
-    unsafe {
-        (*env.as_ptr())
-            .try_borrow_unguarded()
-            .is_ok_and(Environment::is_clean)
-    }
-}
-
 /// The write barrier's slow path: the environment at `slot` was clean and is
 /// not any more.
 #[cold]
@@ -165,11 +159,12 @@ pub(crate) fn note_dirty(slot: u32) {
         return;
     }
     let _ = SLAB.try_with(|slab| {
-        let Ok(mut slab) = slab.try_borrow_mut() else {
-            debug_assert!(false, "a dirty-list push lost to a borrow of the slab");
-            return;
-        };
-        slab.dirty.push(slot);
+        // A lost push would hide a written environment from every later minor
+        // collection; no slab code runs a write barrier, so this cannot happen.
+        slab.try_borrow_mut()
+            .expect("the slab is not borrowed across a write barrier")
+            .dirty
+            .push(slot);
     });
 }
 
@@ -182,9 +177,9 @@ pub(crate) fn release(slot: u32) {
         if let Some(entry) = slab.entries.get_mut(slot as usize)
             && entry.as_ref().is_some_and(|e| e.env.strong_count() == 0)
         {
-            *entry = None;
+            let owner = entry.take().map_or(0, |entry| entry.owner);
             slab.free.push(slot);
-            slab.live -= 1;
+            slab.live[owner as usize] -= 1;
         }
     });
 }
