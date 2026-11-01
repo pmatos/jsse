@@ -2963,10 +2963,10 @@ impl Interpreter {
                     ExportDeclaration::Default(expr) => {
                         stmts.push(Statement::Variable(VariableDeclaration {
                             kind: VarKind::Let,
-                            declarations: vec![VariableDeclarator {
-                                pattern: Pattern::Identifier("*default*".to_string()),
-                                init: Some(*expr.clone()),
-                            }],
+                            declarations: vec![VariableDeclarator::new(
+                                Pattern::Identifier("*default*".to_string()),
+                                Some(*expr.clone()),
+                            )],
                         }));
                     }
                     ExportDeclaration::DefaultClass(c) => {

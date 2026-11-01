@@ -109,12 +109,21 @@ impl Interpreter {
         }
     }
 
-    /// The position V8 reports while a sync `yield*` delegates to a call: the
-    /// call's own.
-    pub(crate) fn delegate_site(operand: &Option<Expression>) -> u32 {
+    /// The position V8 reports while a sync `yield*` delegates: the call's own
+    /// if the operand is one, else the `yield` keyword (`at`).
+    pub(crate) fn delegate_site(operand: &Option<Expression>, at: u32) -> u32 {
         match operand {
             Some(Expression::Call(_, _, site)) => site.1,
-            _ => 0,
+            _ => at,
+        }
+    }
+
+    /// An async generator reaching a `yield`: V8's last recorded position from
+    /// here on, which a `yield*` delegation parks at and a disposal after the
+    /// `yield` reports (issue #1548). An inline yield has none (0).
+    pub(crate) fn node_note_yield_pos(&mut self, gen_id: u64, at: u32) {
+        if at != 0 {
+            self.node_note_generator_pos(gen_id, at);
         }
     }
 
@@ -186,7 +195,8 @@ impl Interpreter {
     /// `await_then` for a closure-based `await` of async generator `gen_id`
     /// (`yield*`, a disposer's). The continuation registered on `awaited` is
     /// marked as the generator's, so the `at async` walk can see it, and the
-    /// position of the park is unknown. PromiseResolve may have awaited another
+    /// park keeps the generator's last noted position (the `yield*`, or the
+    /// `yield` a disposal follows). PromiseResolve may have awaited another
     /// promise instead; then nothing is marked.
     pub(crate) fn await_then_in_generator(
         &mut self,
@@ -199,7 +209,6 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return;
         }
-        self.node_note_generator_pos(gen_id, 0);
         if self.node_reaction_count(awaited) != before + 1 {
             return;
         }

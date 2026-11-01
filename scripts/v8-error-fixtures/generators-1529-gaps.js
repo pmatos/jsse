@@ -1,9 +1,9 @@
-// What `generators-1529.js` leaves out (issue #1529): shapes whose frames
-// `jsse --node` prints but at a position that differs from Node's, because the
-// AST records no offset for `yield`, `yield*` or a statement. Not replayed by any
-// test; the differences are listed in
-// docs/agents/library-tests-typescript-conformance-generator-frames-1529.md.
-// Run `diff <(node f.js) <(jsse --node f.js)` to see them.
+// What `generators-1529.js` left out (issues #1529, #1548): shapes whose frames
+// V8 reports at a keyword or statement the AST used to record no offset for
+// (`yield*`, `break`, the initializer of a declaration). Replayed against
+// `expected-generators-1529-gaps.txt`, Node 26.8's output, by
+// tests/node_stack_frames_1548.rs; see
+// docs/agents/library-tests-typescript-conformance-generator-positions-1548.md.
 const path = require("node:path");
 const dir = path.dirname(__filename);
 

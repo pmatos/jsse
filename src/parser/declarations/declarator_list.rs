@@ -19,8 +19,12 @@ impl<'a> Parser<'a> {
         let mut decls = Vec::new();
         loop {
             let pattern = self.parse_binding_pattern()?;
+            let mut init_at = 0;
             let init = if self.current == Token::Assign {
                 self.advance()?;
+                if matches!(pattern, Pattern::Identifier(_)) {
+                    init_at = self.op_pos();
+                }
                 Some(self.parse_assignment_expression()?)
             } else {
                 // A BindingPattern declarator needs an Initializer unless it is
@@ -32,7 +36,11 @@ impl<'a> Parser<'a> {
                 }
                 None
             };
-            decls.push(VariableDeclarator { pattern, init });
+            decls.push(VariableDeclarator {
+                pattern,
+                init,
+                init_at,
+            });
             if self.current == Token::Comma {
                 self.advance()?;
             } else {
