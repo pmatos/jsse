@@ -51,25 +51,29 @@ pub(crate) enum Leak {
 }
 
 /// What V8 reads as the position of a later parameter's failure in this object
-/// pattern parameter. A computed key or a default on a plain name ends the
-/// effect, except that a call default names its callee.
+/// pattern parameter. A computed key, a pattern without a default and a
+/// default on a plain name or an array pattern end the effect (a call default
+/// on a plain name names its callee); an object pattern with a default leaves
+/// the text of the default.
 fn leaks_position(props: &[ObjectPatternProperty]) -> Option<Leak> {
     let mut leak = Leak::Plain;
     for prop in props {
         let ObjectPatternProperty::KeyValue(key, target) = prop else {
             continue;
         };
-        if matches!(key, PropertyKey::Computed(_)) {
+        if matches!(key, PropertyKey::Computed(k) if !matches!(**k, Expression::Literal(_))) {
             return None;
         }
-        if let Pattern::Assign(inner, default) = target {
-            if !matches!(**inner, Pattern::Identifier(_)) {
-                leak = Leak::Text(expr_text(default));
-            } else if let Expression::Call(callee, ..) = &**default {
-                return Some(Leak::Callee(expr_text(callee)));
-            } else {
-                return None;
-            }
+        match target {
+            Pattern::Identifier(_) | Pattern::MemberExpression(_) => {}
+            Pattern::Assign(inner, default) => match (&**inner, &**default) {
+                (Pattern::Object(_), _) => leak = Leak::Text(expr_text(default)),
+                (Pattern::Identifier(_), Expression::Call(callee, ..)) => {
+                    return Some(Leak::Callee(expr_text(callee)));
+                }
+                _ => return None,
+            },
+            _ => return None,
         }
     }
     Some(leak)
