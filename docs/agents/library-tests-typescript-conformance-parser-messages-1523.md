@@ -10,12 +10,12 @@ pins it). Triage of the issue's rows against main at 9bb21a87:
 | `let let = 1` -> `let is disallowed as a lexically bound name` | met (#1550) |
 | `@` -> `Invalid or unexpected token` | met (#1550) |
 | doubled `SyntaxError: ` prefix of `eval`, `new Function`, `$262.evalScript` | met (#1550, `ParseError::js`) |
-| the long tail of `self.error` sites, "each checked against V8 by hand" | audited again here with 750 more sources |
+| the long tail of `self.error` sites, "each checked against V8 by hand" | audited again here with 766 more sources |
 
 ## What changed
 
 A differential driver (`vm.Script` for the script goal, `import()` of a temp file for the module goal, one
-`goal<TAB>json-source` line per input) ran about 750 sources through Node v26.8.2 and `jsse --node`; 720 now agree
+`goal<TAB>json-source` line per input) ran 766 sources through Node v26.8.2 and `jsse --node`; 747 now agree
 (`scripts/node-stack-fixtures-1523-tail/`), 19 are listed in `ts-suite/node-syntax-tail-1523-known-failures.txt`.
 
 - **Destructuring** (`src/parser/v8_messages/patterns.rs`). V8 parses an element of a binding pattern as an expression and
@@ -42,7 +42,7 @@ A differential driver (`vm.Script` for the script goal, `import()` of a temp fil
   mode, where a module accepted `class C { static { await 1 } }`), `<!--` and `-->` in module code say so.
 - **Regular expressions**: `Invalid quantifier` after a lookbehind, `Incomplete quantifier` for `a{1` in unicode mode,
   `Invalid Unicode escape` for `\c`, V8's modifier-group reasons, `Invalid character class` for `[\d-a]`, and a backslash
-  after the flags (`/a/g`) is `Invalid regular expression flags`. Default mode keeps the old reasons (`regexp_error`).
+  after the flags is `Invalid regular expression flags`. Default mode keeps the old reasons (`regexp_error`).
 - **Acceptance bugs fixed in every mode** (engine behaviour, `test262-extra/`): `^*`, `$+`, `\b+`, `\B*` and an unmatched
   `)` in a non-unicode pattern are SyntaxErrors (the validator took them for atoms); `(...a)\n=> 1` is rejected; `class
   eval {}` and `class arguments {}` are rejected (class code is strict); `await` in a static block.
@@ -51,7 +51,7 @@ A differential driver (`vm.Script` for the script goal, `import()` of a temp fil
 
 ## Fixtures and guard
 
-`tests/node_syntax_tail_1523.rs` runs `scripts/node-stack-fixtures-1523-tail/syntax-tail.mjs tail-N.tsv` (N = 1..5, 720
+`tests/node_syntax_tail_1523.rs` runs `scripts/node-stack-fixtures-1523-tail/syntax-tail.mjs tail-N.tsv` (N = 1..5, 747
 sources) on the bytecode VM, the tree-walker and under `JSSE_GC_STRESS=7` against `expected-tail-N.txt`, which is Node
 v26.8.2's own output (the temp directory removed from module messages). Regenerate by running the driver on Node and
 `jsse --node`, keeping the sources both print identically, and writing Node's lines. It also pins default mode's wording.

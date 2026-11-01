@@ -37,8 +37,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// One element of an array or object pattern, or an arrow parameter, with
-    /// its default.
     pub(in crate::parser) fn pattern_element(&mut self, site: Site) -> Result<Pattern, ParseError> {
         if !inferred_names::enabled() {
             return self.pattern_with_default();
@@ -49,7 +47,6 @@ impl<'a> Parser<'a> {
             .map_err(|e| self.reclassify(mark, site, e))
     }
 
-    /// The target of `...` in an array or object pattern.
     pub(in crate::parser) fn rest_element(&mut self, object: bool) -> Result<Pattern, ParseError> {
         if !inferred_names::enabled() {
             return self.parse_binding_pattern();
@@ -71,7 +68,6 @@ impl<'a> Parser<'a> {
             .map_err(|e| self.reclassify(mark, Site::Rest, e))
     }
 
-    /// The target of `...` in a parameter list.
     pub(in crate::parser) fn rest_parameter(&mut self) -> Result<Pattern, ParseError> {
         let pat = self.parse_binding_pattern()?;
         if inferred_names::enabled() {
@@ -88,7 +84,6 @@ impl<'a> Parser<'a> {
         Ok(pat)
     }
 
-    /// `(...a)` only is an arrow function when `=>` follows on the same line.
     pub(in crate::parser) fn arrow_after_rest(&mut self) -> Result<(), ParseError> {
         if self.current != Token::Arrow {
             return Err(if inferred_names::enabled() {
@@ -103,8 +98,6 @@ impl<'a> Parser<'a> {
         self.advance().map(drop)
     }
 
-    /// A rest parameter of an arrow list: V8 reports the `...` of one that is
-    /// not followed by `)`.
     pub(in crate::parser) fn arrow_rest_parameter(&mut self) -> Result<Pattern, ParseError> {
         let pat = self.rest_parameter()?;
         if inferred_names::enabled() && self.current != Token::RightParen {
@@ -113,7 +106,6 @@ impl<'a> Parser<'a> {
         Ok(pat)
     }
 
-    /// The error of `(a, ...b)` or `(a,)` that is not followed by `=>`.
     pub(in crate::parser) fn arrow_only_error(&self, exprs: &[Expression]) -> ParseError {
         if inferred_names::enabled() && matches!(exprs.last(), Some(Expression::Spread(..))) {
             return self.error("Unexpected token '...'");
@@ -121,7 +113,6 @@ impl<'a> Parser<'a> {
         self.error("Unexpected token ')'")
     }
 
-    /// V8's text for the token that is not `:` after a property key.
     pub(in crate::parser) fn colon_after(&mut self, key: &PropertyKey) -> Result<(), ParseError> {
         if self.current != Token::Colon && inferred_names::enabled() {
             match key {
@@ -134,7 +125,6 @@ impl<'a> Parser<'a> {
         self.eat(&Token::Colon)
     }
 
-    /// A private name as a key of an object literal.
     pub(in crate::parser) fn object_private_key(&self, key: &PropertyKey) -> ParseError {
         match key {
             PropertyKey::Private(name) if inferred_names::enabled() => {

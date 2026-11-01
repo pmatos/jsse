@@ -60,7 +60,10 @@ impl<'a> Parser<'a> {
         }
         if is_async {
             for e in &exprs {
-                if self.in_async && Self::expr_contains_await_expression(e) {
+                if self.in_async
+                    && inferred_names::enabled()
+                    && Self::expr_contains_await_expression(e)
+                {
                     return Err(self.error(
                         "Await expression is not allowed in formal parameters of an async function",
                     ));

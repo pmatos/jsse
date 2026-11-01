@@ -4,38 +4,59 @@
 use super::*;
 
 impl<'a> Parser<'a> {
-    /// A name exported twice. V8 words two exports that both declare the name
-    /// (`export default` twice, a function and a class; not two `var`s) as a redeclaration of
-    /// it, `default` being the hidden binding `.default` (`--node` only).
+    /// A name exported twice. V8 words two exports whose local bindings clash
+    /// (`export default` of two expressions, a function and a class of one
+    /// name; not two `var`s) as a redeclaration, the anonymous default being
+    /// the hidden binding `.default` (`--node` only).
     pub(super) fn duplicate_export(
         &self,
         name: &str,
         earlier: &[ModuleItem],
         item: &ModuleItem,
     ) -> ParseError {
-        let declares = |export: &ExportDeclaration| {
-            let lexical = match export {
-                ExportDeclaration::Default(_)
-                | ExportDeclaration::DefaultFunction(_)
-                | ExportDeclaration::DefaultClass(_) => true,
+        let binding = |item: &ModuleItem| -> Option<(String, bool)> {
+            let ModuleItem::ExportDeclaration(export) = item else {
+                return None;
+            };
+            if !self.get_exported_names(export).iter().any(|n| n == name) {
+                return None;
+            }
+            let local = |declared: &str| {
+                if declared.is_empty() {
+                    ".default"
+                } else {
+                    declared
+                }
+                .to_string()
+            };
+            match export {
+                ExportDeclaration::Default(_) => Some((".default".to_string(), true)),
+                ExportDeclaration::DefaultFunction(f) => Some((local(&f.name), true)),
+                ExportDeclaration::DefaultClass(c) => Some((local(&c.name), true)),
                 ExportDeclaration::Named {
                     declaration: Some(decl),
                     ..
-                } => !matches!(
-                    **decl,
-                    Statement::Variable(VariableDeclaration {
-                        kind: VarKind::Var,
-                        ..
-                    })
-                ),
-                _ => false,
-            };
-            lexical && self.get_exported_names(export).iter().any(|n| n == name)
+                } => {
+                    let var = matches!(
+                        **decl,
+                        Statement::Variable(VariableDeclaration {
+                            kind: VarKind::Var,
+                            ..
+                        })
+                    );
+                    Some((name.to_string(), !var))
+                }
+                _ => None,
+            }
         };
-        let declaring = |item: &ModuleItem| matches!(item, ModuleItem::ExportDeclaration(export) if declares(export));
-        if inferred_names::enabled() && declaring(item) && earlier.iter().any(declaring) {
-            let shown = if name == "default" { ".default" } else { name };
-            return self.error(format!("Identifier '{shown}' has already been declared"));
+        if inferred_names::enabled()
+            && let Some((local, lexical)) = binding(item)
+            && earlier
+                .iter()
+                .filter_map(binding)
+                .any(|(other, other_lexical)| other == local && (lexical || other_lexical))
+        {
+            return self.error(format!("Identifier '{local}' has already been declared"));
         }
         self.error(format!("Duplicate export of '{name}'"))
     }

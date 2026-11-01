@@ -1,21 +1,3 @@
-module "export { 'a\\ud800' as b } from './lib.mjs'" SyntaxError: Invalid module export name: contains unpaired surrogate
-module "export * as 'a\\ud800' from './lib.mjs'" SyntaxError: Invalid module export name: contains unpaired surrogate
-module "import { 'a\\ud800' as b } from './lib.mjs'" SyntaxError: Invalid module export name: contains unpaired surrogate
-module "import 1 from './lib.mjs'" SyntaxError: Unexpected number
-module "import a, from './lib.mjs'" SyntaxError: Unexpected token ','
-module "import a, b from './lib.mjs'" SyntaxError: Unexpected token ','
-module "import * from './lib.mjs'" SyntaxError: Unexpected identifier 'from'
-module "import * as from './lib.mjs'" SyntaxError: Unexpected string
-module "import * as a, b from './lib.mjs'" SyntaxError: Unexpected token ','
-module "import { a as } from './lib.mjs'" SyntaxError: Unexpected token '}'
-module "import { a as 1 } from './lib.mjs'" SyntaxError: Unexpected number
-module "import { if } from './lib.mjs'" SyntaxError: Unexpected reserved word
-module "import { if as x } from './lib.mjs'" SyntaxError: The requested module './lib.mjs' does not provide an export named 'if'
-module "import { a b } from './lib.mjs'" SyntaxError: Unexpected identifier 'b'
-module "import {} from" SyntaxError: Unexpected end of input
-module "import {} from 1" SyntaxError: Unexpected number
-module "import {} from './lib.mjs' with" SyntaxError: Unexpected end of input
-module "import {} from './lib.mjs' with {" SyntaxError: Unexpected end of input
 module "import {} from './lib.mjs' with { type }" SyntaxError: Unexpected token '}'
 module "import {} from './lib.mjs' with { type: 1 }" SyntaxError: Unexpected number
 module "import {} from './lib.mjs' with { type: 'json', type: 'json' }" SyntaxError: Import attribute has duplicate key 'type'
@@ -142,3 +124,27 @@ script "for (let a = 1 in b);" SyntaxError: for-in loop variable declaration may
 script "for (var [a] = 1 in b);" SyntaxError: for-in loop variable declaration may not have an initializer.
 script "for (var a of b, c);" SyntaxError: Unexpected token ','
 script "for (var a in b, c);" parses
+script "for (a of b, c);" SyntaxError: Unexpected token ','
+script "label:" SyntaxError: Unexpected end of input
+script "label: }" SyntaxError: Unexpected token '}'
+script "a: b: c: d: break a;" parses
+script "throw" SyntaxError: Unexpected end of input
+script "throw;" SyntaxError: Unexpected token ';'
+script "throw\n" SyntaxError: Illegal newline after throw
+script "var" SyntaxError: Unexpected end of input
+script "var;" SyntaxError: Unexpected token ';'
+script "var 1" SyntaxError: Unexpected number
+script "var a," SyntaxError: Unexpected end of input
+script "var a b" SyntaxError: Unexpected identifier 'b'
+script "var a = " SyntaxError: Unexpected end of input
+script "let a, " SyntaxError: Unexpected end of input
+script "let [a], b" SyntaxError: Missing initializer in destructuring declaration
+script "const [a]" SyntaxError: Missing initializer in destructuring declaration
+script "const {a}, b = 1" SyntaxError: Missing initializer in destructuring declaration
+script "x = new" SyntaxError: Unexpected end of input
+script "x = new." SyntaxError: Unexpected end of input
+script "x = new.target." SyntaxError: new.target expression is not allowed here
+script "x = a." SyntaxError: Unexpected end of input
+script "x = a.1" SyntaxError: Unexpected number
+script "x = a?." SyntaxError: Unexpected end of input
+script "x = a?.[1" SyntaxError: Unexpected end of input

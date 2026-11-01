@@ -1,6 +1,6 @@
-//! The flags of a regular expression literal. V8 words a backslash right after
-//! them (`/a/g`) as invalid flags, not as the identifier that follows
-//! (`--node` only, issue #1523).
+//! The flags of a regular expression literal. V8 words a unicode escape right
+//! after them as invalid flags, not as the identifier that follows (`--node`
+//! only, issue #1523).
 
 use super::{LexError, Lexer};
 

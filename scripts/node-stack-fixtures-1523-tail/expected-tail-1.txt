@@ -142,3 +142,9 @@ script "var [f().x]" SyntaxError: Illegal property in declaration context
 script "var [a.b[0]]" SyntaxError: Invalid destructuring assignment target
 script "var [a[0].b]" SyntaxError: Invalid destructuring assignment target
 script "var [a.b()]" SyntaxError: Invalid destructuring assignment target
+script "var [new a.b]" SyntaxError: Invalid destructuring assignment target
+script "var [super.x]" SyntaxError: 'super' keyword unexpected here
+script "var [a.b++]" SyntaxError: Invalid destructuring assignment target
+script "var [a.b, 1]" SyntaxError: Illegal property in declaration context
+script "var [1, a.b]" SyntaxError: Invalid destructuring assignment target
+script "var [a.b, ...c, d]" SyntaxError: Illegal property in declaration context

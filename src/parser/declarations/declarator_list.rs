@@ -18,8 +18,10 @@ impl<'a> Parser<'a> {
         self.parse_declarators(false, kind == VarKind::Const)
     }
 
-    /// In strict code `let` that does not start a declaration is a reserved word.
     fn reserved_let(&self, is_let: bool) -> Result<(), ParseError> {
+        if !(is_let && self.strict && inferred_names::enabled()) {
+            return Ok(());
+        }
         let binding_start = self.current_identifier_name().is_some()
             || matches!(self.current, Token::LeftBracket | Token::LeftBrace);
         let exported = self
@@ -27,7 +29,7 @@ impl<'a> Parser<'a> {
             .get(..self.prev_token_end)
             .and_then(|source| source.strip_suffix("let"))
             .is_some_and(|before| before.trim_end().ends_with("export"));
-        if is_let && self.strict && !binding_start && !exported && inferred_names::enabled() {
+        if !binding_start && !exported {
             return Err(self.error("Unexpected strict mode reserved word"));
         }
         Ok(())
@@ -42,8 +44,12 @@ impl<'a> Parser<'a> {
             .source_text_source
             .get(..self.prev_token_end)
             .is_some_and(|source| source.ends_with("let"));
+        let after_const = self
+            .source_text_source
+            .get(..self.prev_token_end)
+            .is_some_and(|source| source.ends_with("const"));
         self.reserved_let(after_let)?;
-        self.parse_declarators(true, false)
+        self.parse_declarators(true, after_const)
     }
 
     fn parse_declarators(

@@ -202,7 +202,6 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// `for (var a, b in c)`.
     pub(super) fn var_for_in_error(&self, decls: &[VariableDeclarator]) -> ParseError {
         if inferred_names::enabled() {
             return self.for_binding_error(decls, "in");
@@ -236,15 +235,10 @@ impl<'a> Parser<'a> {
         self.error(self.v8_unexpected())
     }
 
-    /// `await` directly in a class static block is a reserved word, also in a
-    /// module (§15.7.1: ContainsAwait is an early error there); V8 reports it
-    /// at the keyword, whatever follows.
     pub(super) fn reserved_await(&self) -> bool {
         self.in_static_block && !self.in_async
     }
 
-    /// The name of a class: class code is strict, so `eval` and `arguments`
-    /// cannot be bound (§15.7.1, §13.1.1).
     pub(super) fn class_binding(&mut self, name: String) -> Result<String, ParseError> {
         if matches!(name.as_str(), "eval" | "arguments") {
             return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
@@ -253,8 +247,6 @@ impl<'a> Parser<'a> {
         Ok(name)
     }
 
-    /// The `{` of `import a, { b }`; V8 reports the comma when `*` or `{`
-    /// does not follow it.
     pub(super) fn eat_named_imports(&mut self) -> Result<(), ParseError> {
         if self.current != Token::LeftBrace && inferred_names::enabled() {
             return Err(self.error("Unexpected token ','"));
@@ -262,8 +254,6 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftBrace)
     }
 
-    /// The `@` of a decorator. V8 (Node 26) ships no decorators and reads the
-    /// character as an invalid token.
     pub(super) fn eat_at(&mut self) -> Result<(), ParseError> {
         if inferred_names::enabled() {
             return Err(self.error("Expected decorator expression after '@'"));
@@ -271,7 +261,6 @@ impl<'a> Parser<'a> {
         self.advance().map(drop)
     }
 
-    /// `[eval] = x` in strict code: V8 calls the nested name an invalid target.
     pub(super) fn nested_eval_error(&self) -> ParseError {
         if inferred_names::enabled() {
             return self.error("Invalid destructuring assignment target");
@@ -287,7 +276,6 @@ impl<'a> Parser<'a> {
         error
     }
 
-    /// The specifier of `import(...)`.
     pub(super) fn import_specifier(&mut self) -> Result<Expression, ParseError> {
         if self.current == Token::RightParen && inferred_names::enabled() {
             return Err(self.error("import() requires a specifier"));
@@ -295,7 +283,6 @@ impl<'a> Parser<'a> {
         self.parse_assignment_expression()
     }
 
-    /// The `)` that ends the argument list of an `async (...)` call.
     pub(super) fn eat_args_end(&mut self) -> Result<(), ParseError> {
         if self.current != Token::RightParen {
             return Err(self.unterminated_arguments());

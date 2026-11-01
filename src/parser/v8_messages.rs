@@ -166,22 +166,29 @@ pub(crate) fn regexp_literal_message(msg: &str, flags: &str) -> String {
     format!("Invalid regular expression: /{pattern}/{flags}: {reason}")
 }
 
-/// Why V8 rejects the first `(?flags-flags:` group of `pattern`.
+/// Why V8 rejects the first `(?flags-flags:` group of `pattern` that is not
+/// well formed; it reads the flags left to right and stops at the first fault.
 fn modifier_group_reason(pattern: &str) -> &'static str {
-    let flags = pattern
-        .split_once("(?")
-        .map_or("", |(_, rest)| rest.split(':').next().unwrap_or(""));
-    let letters: Vec<char> = flags.chars().filter(|c| *c != '-').collect();
-    let repeated = (1..letters.len()).any(|i| letters[..i].contains(&letters[i]));
-    if flags.chars().any(|c| !"ims-".contains(c)) {
-        "Invalid group"
-    } else if flags.matches('-').count() > 1 {
-        "Multiple dashes in flag group"
-    } else if repeated {
-        "Repeated flag in flag group"
-    } else {
-        "Invalid flag group"
+    for (at, _) in pattern.match_indices("(?") {
+        let flags = &pattern[at + 2..];
+        if flags.starts_with([':', '=', '!', '<']) {
+            continue;
+        }
+        let (mut seen, mut dash) = (String::new(), false);
+        for flag in flags.chars().take_while(|c| !matches!(c, ':' | ')')) {
+            match flag {
+                '-' if dash => return "Multiple dashes in flag group",
+                '-' => dash = true,
+                'i' | 'm' | 's' if seen.contains(flag) => return "Repeated flag in flag group",
+                'i' | 'm' | 's' => seen.push(flag),
+                _ => return "Invalid group",
+            }
+        }
+        if seen.is_empty() {
+            return "Invalid flag group";
+        }
     }
+    "Invalid flag group"
 }
 
 /// The message V8 gives for the first bad escape of a template's raw text.
