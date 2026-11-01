@@ -11,7 +11,7 @@
 
 use crate::interpreter::bytecode::op::Op;
 #[path = "perf_counters_gc.rs"]
-mod gc_minor;
+pub(crate) mod gc_minor;
 use gc_minor::GcMinorProfile;
 use rustc_hash::FxHashMap;
 use std::fmt::Write as _;
@@ -74,7 +74,7 @@ pub(crate) struct PerfCounters {
     /// Environment walk entries, and the first visits among them.
     pub(crate) gc_env_probes: u64,
     pub(crate) gc_env_first_visits: u64,
-    /// Minor-collection walk entries that skipped a clean environment.
+    /// Minor walk entries that skipped a clean environment.
     pub(crate) gc_env_clean_skips: u64,
     pub(crate) gc_nanos: u128,
     /// The share of `gc_nanos` spent in minor collections.

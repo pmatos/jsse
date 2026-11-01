@@ -3,6 +3,8 @@ use super::*;
 mod module_roots;
 mod pacer;
 
+#[cfg(feature = "perf-counters")]
+use super::perf_counters::gc_minor as profile;
 pub(crate) use pacer::{CollectionKind, GcPacer};
 
 #[path = "gc_rooted_slots.rs"]
@@ -357,19 +359,18 @@ impl Interpreter {
         let registry_start = std::time::Instant::now();
         #[cfg(feature = "perf-counters")]
         if minor {
-            self.perf.gc_minor_profile.sizes[0] += self.env_registry.len() as u64;
+            self.perf.gc_minor_profile.sizes[profile::REGISTRY_TOTAL] +=
+                self.env_registry.len() as u64;
         }
         if minor {
             self.env_registry.retain(|weak| {
                 if weak.strong_count() == 0 {
                     return false;
                 }
-                // SAFETY: a strong reference exists, so the allocation is live,
-                // and the collector runs between statements with no environment
-                // borrowed mutably. Reading the mark through the pointer leaves
-                // the strong count and the borrow flag alone: this loop visits
-                // every registered environment, so each write it made would
-                // dirty a cache line.
+                // SAFETY: a strong reference keeps the allocation live and no
+                // environment is borrowed mutably at a safepoint. Reading
+                // through the pointer writes neither the strong count nor the
+                // borrow flag of every registered environment (#1490).
                 let clean = unsafe {
                     (*weak.as_ptr())
                         .try_borrow_unguarded()
@@ -385,7 +386,9 @@ impl Interpreter {
         }
         #[cfg(feature = "perf-counters")]
         if minor {
-            self.perf.gc_minor_profile.phase_nanos[1] += registry_start.elapsed().as_nanos();
+            self.perf
+                .gc_minor_profile
+                .lap(profile::REGISTRY, registry_start);
         }
 
         (roots, seen_envs)
@@ -618,20 +621,21 @@ impl Interpreter {
         #[cfg(feature = "perf-counters")]
         let mut phase_clock = std::time::Instant::now();
         #[cfg(feature = "perf-counters")]
-        let registry_before = self.perf.gc_minor_profile.phase_nanos[1];
+        let registry_before = self.perf.gc_minor_profile.phase_nanos[profile::REGISTRY];
         let (roots, mut seen_envs) = self.collect_gc_roots(true);
         #[cfg(feature = "perf-counters")]
         {
-            let total = phase_clock.elapsed().as_nanos();
-            let registry = self.perf.gc_minor_profile.phase_nanos[1] - registry_before;
-            self.perf.gc_minor_profile.phase_nanos[0] += total.saturating_sub(registry);
-            phase_clock = std::time::Instant::now();
+            phase_clock = self
+                .perf
+                .gc_minor_profile
+                .lap_roots(phase_clock, registry_before);
         }
         let remembered = self.objects.take_remembered();
         #[cfg(feature = "perf-counters")]
         {
-            self.perf.gc_minor_profile.sizes[1] += remembered.len() as u64;
-            self.perf.gc_minor_profile.sizes[2] += self.objects.nursery_ids().len() as u64;
+            self.perf.gc_minor_profile.sizes[profile::REMEMBERED_TOTAL] += remembered.len() as u64;
+            self.perf.gc_minor_profile.sizes[profile::NURSERY_TOTAL] +=
+                self.objects.nursery_ids().len() as u64;
         }
         let mut young = std::mem::take(&mut self.gc_young);
         young.fill(self.objects.nursery_ids(), self.objects.capacity());
@@ -687,8 +691,10 @@ impl Interpreter {
         }
         #[cfg(feature = "perf-counters")]
         {
-            self.perf.gc_minor_profile.phase_nanos[2] += phase_clock.elapsed().as_nanos();
-            phase_clock = std::time::Instant::now();
+            phase_clock = self
+                .perf
+                .gc_minor_profile
+                .lap(profile::REMEMBERED, phase_clock);
         }
         self.trace_young_worklist(
             &mut worklist,
@@ -781,8 +787,7 @@ impl Interpreter {
 
         #[cfg(feature = "perf-counters")]
         {
-            self.perf.gc_minor_profile.phase_nanos[3] += phase_clock.elapsed().as_nanos();
-            phase_clock = std::time::Instant::now();
+            phase_clock = self.perf.gc_minor_profile.lap(profile::TRACE, phase_clock);
         }
         let nursery = self.objects.take_nursery();
         let mut survivors = Vec::with_capacity(nursery.len());
@@ -806,16 +811,16 @@ impl Interpreter {
         self.gc_young = young;
         #[cfg(feature = "perf-counters")]
         {
-            self.perf.gc_minor_profile.phase_nanos[4] += phase_clock.elapsed().as_nanos();
-            phase_clock = std::time::Instant::now();
-            self.perf.gc_minor_profile.sizes[3] += survivors.len() as u64;
-            self.perf.gc_minor_profile.sizes[4] += seen_envs.scanned.len() as u64;
+            phase_clock = self.perf.gc_minor_profile.lap(profile::SWEEP, phase_clock);
+            self.perf.gc_minor_profile.sizes[profile::SURVIVORS_TOTAL] += survivors.len() as u64;
+            self.perf.gc_minor_profile.sizes[profile::SCANNED_ENVS_TOTAL] +=
+                seen_envs.scanned.len() as u64;
         }
         self.objects.replace_nursery(survivors);
         self.settle_scanned_envs(&mut seen_envs);
         #[cfg(feature = "perf-counters")]
         {
-            self.perf.gc_minor_profile.phase_nanos[5] += phase_clock.elapsed().as_nanos();
+            self.perf.gc_minor_profile.lap(profile::SETTLE, phase_clock);
         }
         self.gc.end_minor_collection();
         #[cfg(feature = "perf-counters")]
