@@ -1,7 +1,7 @@
 //! Class names of ordinary and exotic objects, stored as one byte (#1401).
 //!
 //! `JsObjectData` used to hold a 16-byte `&'static str`. Every name the engine
-//! assigns is in [`NAMES`]; a name outside the table (none today) is interned
+//! assigns is in [`NAMES`]; a name outside the table is interned
 //! in a per-thread overflow list so that behaviour never depends on the table
 //! being complete. Object data never leaves its interpreter's thread.
 
@@ -12,7 +12,7 @@ use std::cell::RefCell;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ClassId(u8);
 
-static NAMES: [&str; 84] = [
+static NAMES: [&str; 85] = [
     "Object",
     "Array",
     "ArrayBuffer",
@@ -97,6 +97,7 @@ static NAMES: [&str; 84] = [
     "Segmenter String Iterator",
     "Set Iterator",
     "String Iterator",
+    "For-In Iterator",
 ];
 
 thread_local! {
@@ -190,6 +191,7 @@ fn known(name: &str) -> Option<u8> {
         "Segmenter String Iterator" => Some(81),
         "Set Iterator" => Some(82),
         "String Iterator" => Some(83),
+        "For-In Iterator" => Some(84),
         _ => None,
     }
 }

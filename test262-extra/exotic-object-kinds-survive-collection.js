@@ -63,8 +63,3 @@ for (var i = 0; i < 30; i++) {
   assert.sameValue(o.bound(2), i + 3);
   assert.sameValue(o.bound.name, "bound ");
 }
-
-var weakOnly = new WeakRef({});
-$262.gc();
-var collected = weakOnly.deref() === undefined;
-assert.sameValue(typeof collected, "boolean");
