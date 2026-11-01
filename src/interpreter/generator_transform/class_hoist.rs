@@ -2,7 +2,7 @@ use super::{
     TransformContext, bind_expression_to_temp, expr_has_suspension, hoist_to_property_key,
     in_class_scope,
 };
-use crate::ast::{ClassElement, ExprBox, Expression, Literal, PropertyKey};
+use crate::ast::{ClassElement, ExprBox, Expression, Literal, PropertyKey, ident};
 
 /// Capture, in source order, every part of a class heritage clause and its
 /// computed element keys that ClassDefinitionEvaluation (§15.7.14) evaluates
@@ -40,7 +40,7 @@ pub(super) fn hoist_class_suspensions(
         let temp_var = ctx.new_temp_var("class_heritage");
         let expr = in_class_scope(sc, class_name, is_async);
         bind_expression_to_temp(&expr, &temp_var, ctx);
-        **sc = Expression::Identifier(temp_var);
+        **sc = ident(temp_var);
     }
     let Some(last_key) = last_key else {
         return;
@@ -53,7 +53,7 @@ pub(super) fn hoist_class_suspensions(
         bind_expression_to_temp(&check, &proto_var, ctx);
         **sc = Expression::ResolvedHeritage(
             ExprBox::new((**sc).clone()),
-            ExprBox::new(Expression::Identifier(proto_var)),
+            ExprBox::new(ident(proto_var)),
         );
     }
     for key in elements[..=last_key]
@@ -67,7 +67,7 @@ pub(super) fn hoist_class_suspensions(
             let expr = in_class_scope(e, class_name, is_async);
             bind_expression_to_temp(&expr, &temp_var, ctx);
             hoist_to_property_key(&temp_var, ctx);
-            **e = Expression::Identifier(temp_var);
+            **e = ident(temp_var);
         }
     }
 }

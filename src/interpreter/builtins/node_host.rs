@@ -41,6 +41,9 @@ pub(crate) struct NodeHostState {
     pub(crate) call_pos: u32,
     /// Offset plus one of the `=` or `++` whose store is running (0 = none).
     pub(crate) assign_pos: u32,
+    /// The reference error `create_error` made last for a missing or
+    /// uninitialised binding, with the name (see `node_host_ident_pos`).
+    pub(crate) ident_error: Option<(u64, Box<str>)>,
     /// Initializer text of the object pattern whose read is about to fail.
     pub(crate) pattern_src: Option<std::rc::Rc<str>>,
     /// The call-stack depth of each open `bind_pattern` (under `--node` only).

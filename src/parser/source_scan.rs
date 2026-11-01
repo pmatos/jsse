@@ -35,3 +35,39 @@ pub(crate) fn word_end(text: &str, at: usize) -> usize {
         .sum();
     at + word
 }
+
+/// Inside a parenthesised expression whose text starts at `at`: the offset of
+/// its last operand when it is a comma expression, found by scanning to the
+/// closing parenthesis (strings, templates and comments are skipped; a regular
+/// expression literal holding a bracket or comma is not).
+pub(crate) fn sequence_tail(text: &str, at: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut tail = None;
+    let mut i = at;
+    while i < text.len() {
+        i = skip_trivia(text, i);
+        let rest = &text[i..];
+        let c = rest.chars().next()?;
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => return tail.map(|t| skip_trivia(text, t)),
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => tail = Some(i + 1),
+            '"' | '\'' | '`' => {
+                let mut chars = rest.char_indices().skip(1);
+                i += loop {
+                    match chars.next()? {
+                        (_, '\\') => {
+                            chars.next();
+                        }
+                        (j, q) if q == c => break j,
+                        _ => {}
+                    }
+                };
+            }
+            _ => {}
+        }
+        i += c.len_utf8();
+    }
+    None
+}

@@ -3,7 +3,7 @@ use super::*;
 impl<'a> Parser<'a> {
     pub(super) fn is_directive_prologue(&self, stmt: &Statement) -> Option<String> {
         match stmt {
-            Statement::Expression(Expression::Literal(Literal::String(s))) => {
+            Statement::Expression(Expression::Literal(Literal::String(s)), _) => {
                 if self.last_string_literal_has_escape {
                     None
                 } else {
@@ -17,7 +17,7 @@ impl<'a> Parser<'a> {
     pub(super) fn is_string_literal_statement(stmt: &Statement) -> bool {
         matches!(
             stmt,
-            Statement::Expression(Expression::Literal(Literal::String(_)))
+            Statement::Expression(Expression::Literal(Literal::String(_)), _)
         )
     }
 }

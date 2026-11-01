@@ -66,3 +66,36 @@ pub(super) fn note_binary(interp: &mut Interpreter, chunk: &Chunk, pc: usize) {
         interp.node_host.call_pos = pos;
     }
 }
+
+/// A reference error for a missing or uninitialised binding is thrown at `pc`
+/// (after the instruction): when that is a name load the compiler recorded a
+/// position for, the error is reported there (#1511).
+#[inline]
+pub(super) fn place_ident_error(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    pc: usize,
+    thrown: &JsValue,
+) {
+    if interp.node_host.ident_error.is_none() {
+        return;
+    }
+    for len in [3, 5] {
+        let Some(start) = pc.checked_sub(len) else {
+            continue;
+        };
+        let loads = match Op::from_u8(chunk.code[start]) {
+            Some(Op::LoadName) => len == 3,
+            Some(Op::LoadLocal) => len == 5,
+            _ => false,
+        };
+        if let Some(at) = chunk.member_pos_at(start).filter(|_| loads) {
+            let idx = usize::from(u16::from_le_bytes([
+                chunk.code[start + 1],
+                chunk.code[start + 2],
+            ]));
+            interp.node_place_ident_error(thrown, chunk.names[idx].as_str(), at);
+            return;
+        }
+    }
+}

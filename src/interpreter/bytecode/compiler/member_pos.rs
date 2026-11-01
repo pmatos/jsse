@@ -75,6 +75,16 @@ impl Compiler {
         self.emit_member_at(op, site.1);
     }
 
+    /// The load of `name` read at `at` (offset plus one, 0: unknown), which a
+    /// missing or uninitialised binding reports there (`place_ident_error`).
+    pub(super) fn compile_ident_load(&mut self, name: &str, at: u32) -> Result<(), CompileError> {
+        if at != 0 && call_positions_enabled() {
+            let pc = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            self.member_pos.push((pc, at));
+        }
+        self.compile_load_name(name)
+    }
+
     /// `emit(op)` for a member op that reports `pos` (0: none).
     pub(super) fn emit_member_at(&mut self, op: Op, pos: u32) {
         if call_positions_enabled() {

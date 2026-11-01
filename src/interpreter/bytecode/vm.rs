@@ -12,6 +12,8 @@ use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
 
 mod binary_slow;
+mod frame_plain;
+use frame_plain::is_plain_declarative;
 mod call_operands;
 mod equality_op;
 use equality_op::loose_equality_op;
@@ -132,13 +134,6 @@ fn block_target<'a>(frame_env: &'a EnvRef, scopes: &'a [EnvRef], slot: u16) -> (
         Some(env) => (env, slot & 0xff),
         None => (frame_env, NO_LOCAL_SLOT),
     }
-}
-
-fn is_plain_declarative(env: &EnvRef) -> bool {
-    let scope = env.borrow();
-    scope.with_object.is_none()
-        && scope.indirect_bindings.is_none()
-        && scope.global_object_id.is_none()
 }
 
 #[inline(always)]
@@ -954,6 +949,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
     macro_rules! throw {
         ($l:lifetime, $e:expr) => {{
             let thrown = $e;
+            member_pos::place_ident_error(interp, chunk, pc, &thrown);
             if chunk.handlers.is_empty() {
                 return Completion::Throw(thrown);
             }

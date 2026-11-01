@@ -17,6 +17,7 @@ use crate::ast::{Body, CallSiteId, PropSiteId};
 use crate::interpreter::Interpreter;
 use crate::interpreter::ic::{CallIcSlot, PropIcSlot};
 use crate::interpreter::literal_frame::LiteralFrame;
+mod mark_entered;
 
 /// Maximum number of inactive per-Body stores retained by default. Active
 /// stores can temporarily take the table above this limit when call nesting
@@ -72,15 +73,7 @@ fn tick_clock(clock: &mut u64) -> u64 {
     *clock
 }
 
-impl StoreEntry {
-    fn mark_entered(&mut self, tick: u64) {
-        self.last_used = tick;
-        self.in_flight = self
-            .in_flight
-            .checked_add(1)
-            .expect("IcStore in-flight count overflowed");
-    }
-}
+impl StoreEntry {}
 
 impl IcStore {
     pub(crate) fn new() -> Self {
@@ -507,11 +500,14 @@ mod tests {
 
     #[test]
     fn assign_ic_sites_sized_store() {
-        let mut body = Body::new(vec![Statement::Expression(crate::ast::Expression::Call(
-            ExprBox::new(crate::ast::Expression::Identifier("f".to_string())),
-            vec![],
-            CallSiteId::UNASSIGNED,
-        ))]);
+        let mut body = Body::new(vec![Statement::Expression(
+            crate::ast::Expression::Call(
+                ExprBox::new(crate::ast::Expression::Identifier("f".to_string(), 0)),
+                vec![],
+                CallSiteId::UNASSIGNED,
+            ),
+            0,
+        )]);
         ast::assign_ic_sites(&mut body);
         let mut store = IcStore::new();
         let h = store.enter_body(&body);

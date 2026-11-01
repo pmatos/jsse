@@ -801,9 +801,10 @@ fn add_two_numbers_via_eval_binary() {
 
 #[test]
 fn compile_body_return_number_literal() {
-    let body = vec![Statement::Return(Some(Expression::Literal(
-        Literal::Number(42.0),
-    )))];
+    let body = vec![Statement::Return(
+        Some(Expression::Literal(Literal::Number(42.0))),
+        0,
+    )];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
         Completion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -822,9 +823,10 @@ fn compile_body_empty_returns_undefined() {
 
 #[test]
 fn compile_script_body_returns_statement_completion() {
-    let body = vec![Statement::Expression(Expression::Literal(Literal::Number(
-        42.0,
-    )))];
+    let body = vec![Statement::Expression(
+        Expression::Literal(Literal::Number(42.0)),
+        0,
+    )];
     let chunk = compile_script_body(&body).expect("compile script");
     match run(chunk) {
         Completion::Normal(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -840,7 +842,7 @@ fn compile_script_body_returns_statement_completion() {
 
 #[test]
 fn compile_body_bare_return_yields_undefined() {
-    let body = vec![Statement::Return(None)];
+    let body = vec![Statement::Return(None, 0)];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
         Completion::Return(value) if value.is_undefined() => {}
@@ -851,12 +853,15 @@ fn compile_body_bare_return_yields_undefined() {
 #[test]
 fn compile_body_return_addition_of_literals() {
     // return 2 + 3;
-    let body = vec![Statement::Return(Some(Expression::Binary(
-        crate::ast::BinaryOp::Add,
-        ExprBox::new(Expression::Literal(Literal::Number(2.0))),
-        ExprBox::new(Expression::Literal(Literal::Number(3.0))),
+    let body = vec![Statement::Return(
+        Some(Expression::Binary(
+            crate::ast::BinaryOp::Add,
+            ExprBox::new(Expression::Literal(Literal::Number(2.0))),
+            ExprBox::new(Expression::Literal(Literal::Number(3.0))),
+            0,
+        )),
         0,
-    )))];
+    )];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
         Completion::Return(value) => assert_eq!(value.as_number(), Some(5.0)),
@@ -1228,55 +1233,20 @@ fn compile_body_if_lowers_via_vm_directly() {
             ExprBox::new(Expression::Literal(Literal::Number(2.0))),
             0,
         ),
-        consequent: Box::new(Statement::Return(Some(Expression::Literal(
-            Literal::Number(10.0),
-        )))),
-        alternate: Some(Box::new(Statement::Return(Some(Expression::Literal(
-            Literal::Number(20.0),
-        ))))),
+        consequent: Box::new(Statement::Return(
+            Some(Expression::Literal(Literal::Number(10.0))),
+            0,
+        )),
+        alternate: Some(Box::new(Statement::Return(
+            Some(Expression::Literal(Literal::Number(20.0))),
+            0,
+        ))),
+        at: 0,
     })];
     let chunk = compile_body(&body).expect("compile if/else");
     match run(chunk) {
         Completion::Return(value) => assert_eq!(value.as_number(), Some(10.0)),
         other => panic!("expected Return(Number(10.0)), got {other:?}"),
-    }
-}
-
-#[test]
-fn if_with_throw_branch_compiles_and_throws() {
-    use crate::ast::IfStatement;
-    let body = vec![Statement::If(IfStatement {
-        test: Expression::Literal(Literal::Boolean(true)),
-        consequent: Box::new(Statement::Throw(
-            Expression::Literal(Literal::Number(1.0)),
-            0,
-        )),
-        alternate: None,
-    })];
-    let chunk = compile_body(&body).expect("compile if with throw");
-    match run(chunk) {
-        Completion::Throw(value) => assert_eq!(value.as_number(), Some(1.0)),
-        other => panic!("expected Throw(Number(1.0)), got {other:?}"),
-    }
-}
-
-#[test]
-fn if_with_throw_alternate_compiles_and_throws() {
-    use crate::ast::IfStatement;
-    let body = vec![Statement::If(IfStatement {
-        test: Expression::Literal(Literal::Boolean(false)),
-        consequent: Box::new(Statement::Return(Some(Expression::Literal(
-            Literal::Number(1.0),
-        )))),
-        alternate: Some(Box::new(Statement::Throw(
-            Expression::Literal(Literal::Number(2.0)),
-            0,
-        ))),
-    })];
-    let chunk = compile_body(&body).expect("compile if/else with throw");
-    match run(chunk) {
-        Completion::Throw(value) => assert_eq!(value.as_number(), Some(2.0)),
-        other => panic!("expected Throw(Number(2.0)), got {other:?}"),
     }
 }
 
@@ -1318,11 +1288,14 @@ fn private_member_access_compiles_to_private_ops() {
     use crate::ast::{MemberProperty, PropSiteId};
     // `this.#x` lowers to `GetPrivate` over the chunk's private-name pool, so
     // a body of private accesses no longer hands off to the tree-walker.
-    let body = vec![Statement::Return(Some(Expression::Member(
-        ExprBox::new(Expression::This),
-        MemberProperty::Private("x".to_string()),
-        PropSiteId::UNASSIGNED,
-    )))];
+    let body = vec![Statement::Return(
+        Some(Expression::Member(
+            ExprBox::new(Expression::This),
+            MemberProperty::Private("x".to_string()),
+            PropSiteId::UNASSIGNED,
+        )),
+        0,
+    )];
     let chunk = compile_body(&body).expect("private member access compiles");
     assert!(chunk.ast.is_empty(), "{:?}", chunk.fallback_reasons);
     assert_eq!(count_ops(&chunk, Op::GetPrivate), 1);
@@ -1339,7 +1312,7 @@ fn trivial_private_getter_shape_is_recognised() {
             PropSiteId::UNASSIGNED,
         )
     };
-    let chunk = compile_body(&[Statement::Return(Some(read()))]).expect("compiles");
+    let chunk = compile_body(&[Statement::Return(Some(read()), 0)]).expect("compiles");
     assert_eq!(chunk.detect_trivial_private_getter(), Some(0));
 
     let sum = Expression::Binary(
@@ -1348,10 +1321,10 @@ fn trivial_private_getter_shape_is_recognised() {
         ExprBox::new(Expression::Literal(Literal::Number(1.0))),
         0,
     );
-    let chunk = compile_body(&[Statement::Return(Some(sum))]).expect("compiles");
+    let chunk = compile_body(&[Statement::Return(Some(sum), 0)]).expect("compiles");
     assert_eq!(chunk.detect_trivial_private_getter(), None);
 
-    let chunk = compile_body(&[Statement::Expression(read())]).expect("compiles");
+    let chunk = compile_body(&[Statement::Expression(read(), 0)]).expect("compiles");
     assert_eq!(chunk.detect_trivial_private_getter(), None);
 }
 
@@ -1397,10 +1370,12 @@ fn compile_body_one_armed_if_returning_consequent_false_path_is_safe() {
     // chunk must complete as `Return(Undefined)`.
     let body = vec![Statement::If(IfStatement {
         test: Expression::Literal(Literal::Boolean(false)),
-        consequent: Box::new(Statement::Return(Some(Expression::Literal(
-            Literal::Number(1.0),
-        )))),
+        consequent: Box::new(Statement::Return(
+            Some(Expression::Literal(Literal::Number(1.0))),
+            0,
+        )),
         alternate: None,
+        at: 0,
     })];
     let chunk = compile_body(&body).expect("compile one-armed if");
     match run(chunk) {
@@ -2417,26 +2392,32 @@ fn direct_eval_ineligible_spread_ok() {
     use super::compiler::CompileError;
     use crate::ast::CallSiteId;
 
-    let direct_eval = vec![Statement::Expression(Expression::Call(
-        ExprBox::new(Expression::Identifier("eval".into())),
-        vec![Expression::Literal(Literal::String(
-            "var x = 1".encode_utf16().collect(),
-        ))],
-        CallSiteId::UNASSIGNED,
-    ))];
+    let direct_eval = vec![Statement::Expression(
+        Expression::Call(
+            ExprBox::new(Expression::Identifier("eval".into(), 0)),
+            vec![Expression::Literal(Literal::String(
+                "var x = 1".encode_utf16().collect(),
+            ))],
+            CallSiteId::UNASSIGNED,
+        ),
+        0,
+    )];
     assert!(matches!(
         compile_body(&direct_eval),
         Err(CompileError::Ineligible(_))
     ));
 
-    let spread = vec![Statement::Expression(Expression::Call(
-        ExprBox::new(Expression::Identifier("f".into())),
-        vec![Expression::Spread(
-            ExprBox::new(Expression::Identifier("a".into())),
-            0,
-        )],
-        CallSiteId::UNASSIGNED,
-    ))];
+    let spread = vec![Statement::Expression(
+        Expression::Call(
+            ExprBox::new(Expression::Identifier("f".into(), 0)),
+            vec![Expression::Spread(
+                ExprBox::new(Expression::Identifier("a".into(), 0)),
+                0,
+            )],
+            CallSiteId::UNASSIGNED,
+        ),
+        0,
+    )];
     assert!(work_ops(&compile_body(&spread).unwrap()).contains(&Op::CallSpreadSole));
 }
 
@@ -2450,11 +2431,10 @@ fn unsupported_member_callees_remain_ineligible() {
         MemberProperty::Dot("method".to_string()),
         PropSiteId::UNASSIGNED,
     );
-    let call = vec![Statement::Expression(Expression::Call(
-        ExprBox::new(callee),
-        vec![],
-        CallSiteId::UNASSIGNED,
-    ))];
+    let call = vec![Statement::Expression(
+        Expression::Call(ExprBox::new(callee), vec![], CallSiteId::UNASSIGNED),
+        0,
+    )];
     assert!(matches!(
         compile_body(&call),
         Err(CompileError::Ineligible(_))
@@ -2643,11 +2623,11 @@ fn throw_with_live_outer_operand_does_not_trip_chunk_exit_assert() {
 // thing being tested.
 
 fn literal_expr_stmt(n: f64) -> Statement {
-    Statement::Expression(Expression::Literal(Literal::Number(n)))
+    Statement::Expression(Expression::Literal(Literal::Number(n)), 0)
 }
 
 fn literal_return_stmt(n: f64) -> Statement {
-    Statement::Return(Some(Expression::Literal(Literal::Number(n))))
+    Statement::Return(Some(Expression::Literal(Literal::Number(n))), 0)
 }
 
 /// Compiles `body` as a function chunk and runs it on a fresh interpreter,

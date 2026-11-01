@@ -6,7 +6,7 @@
 
 use super::super::Interpreter;
 use crate::ast::SourceText;
-use crate::parser::source_scan::{skip_trivia, word_end};
+use crate::parser::source_scan::{sequence_tail, skip_trivia, word_end};
 
 /// The offset in `text` of the heritage expression of the class it starts
 /// with, if the header has that shape.
@@ -26,10 +26,16 @@ pub(crate) fn heritage_offset(text: &str) -> Option<usize> {
         }
     }
     let mut at = skip_trivia(text, end);
+    let mut parenthesised = false;
     while text[at..].starts_with('(') {
         at = skip_trivia(text, at + 1);
+        parenthesised = true;
     }
-    Some(at)
+    Some(
+        sequence_tail(text, at)
+            .filter(|_| parenthesised)
+            .unwrap_or(at),
+    )
 }
 
 /// The offset plus one of the heritage expression of the class whose source

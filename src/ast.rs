@@ -11,11 +11,13 @@ mod export_specifier;
 mod expr_box;
 mod for_of;
 mod node_sites;
+mod pattern_elems;
 mod pattern_props;
 pub(crate) use capture_walk::CaptureWalk;
 pub(crate) use export_specifier::ExportSpecifier;
 pub(crate) use expr_box::ExprBox;
-pub(crate) use node_sites::YieldKind;
+pub(crate) use node_sites::{YieldKind, ident};
+pub(crate) use pattern_elems::PatternElems;
 pub(crate) use pattern_props::PatternProps;
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
@@ -194,50 +196,8 @@ pub(crate) fn assign_ic_sites_for_body(body: &mut Body) -> (u32, u32) {
     )
 }
 
-/// Assign dense IC site ids to all call/new/member sites in a module-level
-/// program. The module's top-level items are not stored in a `Body`, but they
-/// share a single dense namespace keyed by the program's `body` field. This
-/// keeps IC sites on module top-level executable expressions valid while the
-/// interpreter is executing module items.
-pub(crate) fn assign_ic_sites_for_module(program: &mut Program) {
-    if program.source_type == SourceType::Script {
-        assign_ic_sites(&mut program.body);
-        return;
-    }
-
-    let mut call_id = 0u32;
-    let mut prop_id = 0u32;
-    for item in program.module_items.iter_mut() {
-        assign_module_item_sites(item, &mut call_id, &mut prop_id);
-    }
-    program.body.ic.call_site_count = call_id;
-    program.body.ic.prop_site_count = prop_id;
-    program.body.ic.assigned = true;
-}
-
-fn assign_module_item_sites(item: &mut ModuleItem, call_id: &mut u32, prop_id: &mut u32) {
-    match item {
-        ModuleItem::Statement(stmt) => assign_stmt_sites(stmt, call_id, prop_id),
-        ModuleItem::ImportDeclaration(_) => {}
-        ModuleItem::ExportDeclaration(export) => assign_export_sites(export, call_id, prop_id),
-    }
-}
-
-fn assign_export_sites(export: &mut ExportDeclaration, call_id: &mut u32, prop_id: &mut u32) {
-    match export {
-        ExportDeclaration::Named { declaration, .. } => {
-            if let Some(decl) = declaration.as_mut() {
-                assign_stmt_sites(decl, call_id, prop_id);
-            }
-        }
-        ExportDeclaration::Default(expr) => assign_expr_sites(expr, call_id, prop_id),
-        ExportDeclaration::DefaultFunction(f) => {
-            assign_ic_sites(&mut f.body);
-        }
-        ExportDeclaration::DefaultClass(c) => assign_class_sites(c, call_id, prop_id),
-        ExportDeclaration::All { .. } => {}
-    }
-}
+mod module_sites;
+pub(crate) use module_sites::assign_ic_sites_for_module;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Program {
@@ -296,7 +256,8 @@ pub(crate) enum ExportDeclaration {
 #[derive(Clone, Debug)]
 pub(crate) enum Statement {
     Empty,
-    Expression(Expression),
+    /// The expression and, under `--node`, the statement's start plus one.
+    Expression(Expression, u32),
     Block(Vec<Statement>),
     Variable(VariableDeclaration),
     If(IfStatement),
@@ -305,7 +266,7 @@ pub(crate) enum Statement {
     For(ForStatement),
     ForIn(ForInStatement),
     ForOf(ForOfStatement),
-    Return(Option<Expression>),
+    Return(Option<Expression>, u32),
     Break(Option<String>, u32),
     Continue(Option<String>),
     Throw(Expression, u32),
@@ -343,7 +304,7 @@ pub(crate) struct VariableDeclarator {
 #[derive(Clone, Debug)]
 pub(crate) enum Pattern {
     Identifier(String),
-    Array(Vec<Option<ArrayPatternElement>>),
+    Array(PatternElems),
     Object(PatternProps),
     Assign(Box<Pattern>, ExprBox),
     Rest(Box<Pattern>),
@@ -422,7 +383,8 @@ impl Pattern {
 #[derive(Clone, Debug)]
 pub(crate) enum Expression {
     Literal(Literal),
-    Identifier(String),
+    /// The name and, under `--node`, the identifier's offset plus one.
+    Identifier(String, u32),
     This,
     Super,
     Array(Vec<Option<Expression>>, bool),
@@ -652,6 +614,7 @@ pub(crate) struct IfStatement {
     pub test: Expression,
     pub consequent: Box<Statement>,
     pub alternate: Option<Box<Statement>>,
+    pub at: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -808,6 +771,7 @@ pub(crate) struct CatchClause {
 pub(crate) struct SwitchStatement {
     pub discriminant: Expression,
     pub cases: Vec<SwitchCase>,
+    pub at: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -1085,7 +1049,7 @@ pub(crate) fn stmts_use_arguments(stmts: &[Statement]) -> bool {
 
 fn stmt_uses_arguments(stmt: &Statement) -> bool {
     match stmt {
-        Statement::Expression(e) => expr_uses_arguments(e),
+        Statement::Expression(e, _) => expr_uses_arguments(e),
         Statement::Block(stmts) => stmts.iter().any(stmt_uses_arguments),
         Statement::Variable(decl) => decl.declarations.iter().any(|d| {
             pattern_uses_arguments(&d.pattern) || d.init.as_ref().is_some_and(expr_uses_arguments)
@@ -1118,7 +1082,7 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
                 || expr_uses_arguments(&f.right)
                 || stmt_uses_arguments(&f.body)
         }
-        Statement::Return(e) => e.as_ref().is_some_and(expr_uses_arguments),
+        Statement::Return(e, _) => e.as_ref().is_some_and(expr_uses_arguments),
         Statement::Throw(e, _) => expr_uses_arguments(e),
         Statement::Try(t) => {
             stmts_use_arguments(&t.block)
@@ -1162,7 +1126,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
     let mut stack = vec![expr];
     while let Some(e) = stack.pop() {
         match e {
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 if name == "arguments" {
                     return true;
                 }
@@ -1189,7 +1153,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
                 }
                 let body = a.body.body();
                 match body.statements.as_slice() {
-                    [Statement::Return(Some(e))] => stack.push(e),
+                    [Statement::Return(Some(e), _)] => stack.push(e),
                     stmts => {
                         if stmts_use_arguments(stmts) {
                             return true;
@@ -1232,7 +1196,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             }
             Expression::Call(callee, args, _) => {
                 // A direct `eval(...)` call can itself reference `arguments`.
-                if matches!(&**callee, Expression::Identifier(name) if name == "eval") {
+                if matches!(&**callee, Expression::Identifier(name, _) if name == "eval") {
                     return true;
                 }
                 stack.push(callee);
@@ -1308,7 +1272,7 @@ fn for_in_of_left_uses_arguments(left: &ForInOfLeft) -> bool {
 /// Predicate for the `ContainsArguments` static semantic: an unqualified
 /// reference to the `arguments` identifier.
 pub(crate) fn is_arguments_reference(expr: &Expression) -> bool {
-    matches!(expr, Expression::Identifier(name) if name == "arguments")
+    matches!(expr, Expression::Identifier(name, _) if name == "arguments")
 }
 
 /// Predicate for the `Contains SuperCall` static semantic: a `super(...)` call.
@@ -1346,11 +1310,11 @@ fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) 
         | Statement::Debugger
         | Statement::Break(..)
         | Statement::Continue(_)
-        | Statement::Return(None)
+        | Statement::Return(None, _)
         // Nested functions own their `arguments`/`super`; opaque.
         | Statement::FunctionDeclaration(_) => false,
-        Statement::Expression(e) | Statement::Throw(e, _) => expr_contains_matching(e, pred),
-        Statement::Return(Some(e)) => expr_contains_matching(e, pred),
+        Statement::Expression(e, _) | Statement::Throw(e, _) => expr_contains_matching(e, pred),
+        Statement::Return(Some(e), _) => expr_contains_matching(e, pred),
         Statement::Block(stmts) => stmts_contain_matching(stmts, pred),
         Statement::Variable(decl) => decl
             .declarations
@@ -1428,7 +1392,7 @@ pub(crate) fn expr_contains_matching(
         // Leaves with no in-scope child expressions, plus nested regular
         // functions (opaque to `arguments`/`super`).
         Expression::Literal(_)
-        | Expression::Identifier(_)
+        | Expression::Identifier(_, _)
         | Expression::This
         | Expression::Super
         | Expression::NewTarget
@@ -1502,7 +1466,7 @@ pub(crate) fn expr_contains_matching(
         // Arrow functions inherit `arguments`/`super`, so the body executes in
         // the enclosing scope and IS traversed.
         Expression::ArrowFunction(af) => match af.body.body().statements.as_slice() {
-            [Statement::Return(Some(e))] => expr_contains_matching(e, pred),
+            [Statement::Return(Some(e), _)] => expr_contains_matching(e, pred),
             stmts => stmts_contain_matching(stmts, pred),
         },
         // Method/field bodies are opaque, but `extends` and computed element
@@ -1514,7 +1478,7 @@ pub(crate) fn expr_contains_matching(
 
 fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32) {
     match stmt {
-        Statement::Expression(e) => assign_expr_sites(e, call_id, prop_id),
+        Statement::Expression(e, _) => assign_expr_sites(e, call_id, prop_id),
         Statement::Block(stmts) => {
             for s in stmts.iter_mut() {
                 assign_stmt_sites(s, call_id, prop_id);
@@ -1597,7 +1561,7 @@ fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32)
             assign_expr_sites(&mut f.right, call_id, prop_id);
             assign_stmt_sites(&mut f.body, call_id, prop_id);
         }
-        Statement::Return(e) => {
+        Statement::Return(e, _) => {
             if let Some(e) = e.as_mut() {
                 assign_expr_sites(e, call_id, prop_id);
             }
@@ -1882,7 +1846,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
                 stack.push(SiteWork::Expr(spec));
             }
             Expression::Literal(_)
-            | Expression::Identifier(_)
+            | Expression::Identifier(_, _)
             | Expression::This
             | Expression::Super
             | Expression::ImportMeta
@@ -1983,7 +1947,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
                 }
             }
             Expression::Literal(_)
-            | Expression::Identifier(_)
+            | Expression::Identifier(_, _)
             | Expression::This
             | Expression::Super
             | Expression::ImportMeta
@@ -2036,7 +2000,7 @@ fn clear_class_def_ic_sites(super_class: Option<&mut Expression>, body: &mut [Cl
 /// left intact — they execute under their own stores.
 fn clear_stmt_ic_sites(stmt: &mut Statement) {
     match stmt {
-        Statement::Expression(e) => clear_expr_ic_sites(e),
+        Statement::Expression(e, _) => clear_expr_ic_sites(e),
         Statement::Block(stmts) => {
             for s in stmts.iter_mut() {
                 clear_stmt_ic_sites(s);
@@ -2097,7 +2061,7 @@ fn clear_stmt_ic_sites(stmt: &mut Statement) {
             clear_expr_ic_sites(&mut f.right);
             clear_stmt_ic_sites(&mut f.body);
         }
-        Statement::Return(e) => {
+        Statement::Return(e, _) => {
             if let Some(e) = e.as_mut() {
                 clear_expr_ic_sites(e);
             }

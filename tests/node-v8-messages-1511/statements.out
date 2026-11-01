@@ -1,0 +1,144 @@
+## undeclaredOperand
+ReferenceError: x is not defined
+at <dir>/statements.js:27:3
+## undeclaredCall
+ReferenceError: x is not defined
+at <dir>/statements.js:30:3
+## undeclaredNew
+ReferenceError: x is not defined
+at <dir>/statements.js:33:3
+## undeclaredAfterStatement
+ReferenceError: x is not defined
+at <dir>/statements.js:37:3
+## undeclaredInIf
+ReferenceError: x is not defined
+at <dir>/statements.js:40:3
+## undeclaredInElseIf
+ReferenceError: x is not defined
+at <dir>/statements.js:45:10
+## undeclaredInSwitch
+ReferenceError: x is not defined
+at <dir>/statements.js:49:3
+## undeclaredInThrow
+ReferenceError: x is not defined
+at <dir>/statements.js:53:3
+## undeclaredInBlock
+ReferenceError: x is not defined
+at <dir>/statements.js:57:5
+## undeclaredInLabel
+ReferenceError: x is not defined
+at <dir>/statements.js:61:6
+## undeclaredInTry
+ReferenceError: x is not defined
+at <dir>/statements.js:65:5
+## undeclaredInCatch
+ReferenceError: x is not defined
+at <dir>/statements.js:73:5
+## undeclaredUpdate
+ReferenceError: x is not defined
+at <dir>/statements.js:78:3
+## undeclaredStrictAssign
+ReferenceError: x is not defined
+at <dir>/statements.js:82:5
+## deleteNull
+TypeError: Cannot convert undefined or null to object
+at <dir>/statements.js:85:3
+## deleteNullAfterStatement
+TypeError: Cannot convert undefined or null to object
+at <dir>/statements.js:89:3
+## deleteNullReturn
+TypeError: Cannot convert undefined or null to object
+at <dir>/statements.js:92:3
+## nullishCompound
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/statements.js:95:3
+## nullishUpdate
+TypeError: Cannot read properties of null (reading '0')
+at <dir>/statements.js:98:3
+## nullishDelete
+TypeError: Cannot convert undefined or null to object
+at <dir>/statements.js:101:3
+## nullishAfterDeclaration
+TypeError: Cannot read properties of null (reading 'y')
+at <dir>/statements.js:105:3
+## symbolLeft
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/statements.js:109:3
+## symbolLeftBigInt
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/statements.js:113:3
+## symbolUnary
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/statements.js:116:3
+## symbolTemplate
+TypeError: Cannot convert a Symbol value to a string
+at <dir>/statements.js:119:3
+## symbolBinary
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/statements.js:122:5
+## symbolRight
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/statements.js:129:8
+## symbolRightBigInt
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/statements.js:133:8
+## tdzInitializer
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:136:11
+## tdzInitializerSum
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:139:15
+## tdzReturnSum
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:142:14
+## tdzArgument
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:146:8
+## tdzMemberStore
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:150:9
+## tdzArray
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:154:7
+## tdzFirstInStatement
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:158:3
+## tdzFirstInIf
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:162:3
+## tdzFirstInReturn
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:167:3
+## tdzFirstAssignment
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:172:3
+## tdzClosure
+ReferenceError: Cannot access 'later' before initialization
+at g (<dir>/statements.js:176:19)
+## tdzDeclarationWithCall
+ReferenceError: Cannot access 'z' before initialization
+at <dir>/statements.js:180:19
+## undeclaredInitializerSum
+ReferenceError: x is not defined
+at <dir>/statements.js:184:15
+## undeclaredCallee
+ReferenceError: x is not defined
+at <dir>/statements.js:187:3
+## conciseArrowSum
+ReferenceError: x is not defined
+at <dir>/statements.js:189:33
+## conciseArrowCall
+ReferenceError: x is not defined
+at <dir>/statements.js:190:32
+## conciseArrowIdentifier
+ReferenceError: x is not defined
+at <dir>/statements.js:191:38
+## generatorUndeclared
+ReferenceError: q is not defined
+at g (<dir>/statements.js:197:5)
+## generatorTdz
+ReferenceError: Cannot access 'z' before initialization
+at g (<dir>/statements.js:206:17)
+## generatorNullish
+TypeError: Cannot read properties of null (reading 'y')
+at g (<dir>/statements.js:217:7)

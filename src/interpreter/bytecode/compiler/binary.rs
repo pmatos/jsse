@@ -23,7 +23,7 @@ impl Compiler {
             // The literal folds into the op: no `LoadConst` dispatch.
             // The left operand is still evaluated first and the
             // constant has no effects, so evaluation order holds.
-            if let Expression::Identifier(name) = lhs
+            if let Expression::Identifier(name, _) = lhs
                 && let Some(slot) = self.local_slot(name)
             {
                 self.emit_local_bin_const(name, slot, bop, *k)?;

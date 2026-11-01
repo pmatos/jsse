@@ -5,7 +5,7 @@
 
 use super::super::eval::IdentifierRef;
 use super::super::{EnvRef, Interpreter};
-use crate::ast::{Expression, MemberProperty, PropSiteId, UpdateOp};
+use crate::ast::{AssignOp, Expression, MemberProperty, PropSiteId, UpdateOp};
 use crate::interpreter::BindingName;
 use crate::interpreter::types::Completion;
 use crate::types::JsValue;
@@ -54,13 +54,33 @@ impl Interpreter {
         key: &N,
         env: &EnvRef,
     ) -> Completion {
-        self.with_assign_pos(at, |this| this.eval_identifier_update(op, prefix, key, env))
+        let prior = self.node_host.call_pos;
+        let done =
+            self.with_assign_pos(at, |this| this.eval_identifier_update(op, prefix, key, env));
+        if let Completion::Throw(thrown) = &done {
+            self.node_move_ident_error(thrown, prior);
+        }
+        done
+    }
+
+    /// `apply_compound_assign` for `target op= value`, failing at `compound_pos`.
+    pub(crate) fn apply_compound_at(
+        &mut self,
+        (op, value): (AssignOp, &Expression),
+        lval: JsValue,
+        rval: JsValue,
+    ) -> Completion {
+        match compound_pos(value) {
+            0 => {}
+            at => self.node_host.call_pos = at,
+        }
+        self.apply_compound_assign(op, lval, rval)
     }
 
     /// The reading of a nullish base failed in a compound assignment, an
     /// update or a `delete`: V8 reports the last position emitted by the
-    /// operands, the key's if it has one, else the base's, else (as it
-    /// reports the statement start, which the AST does not carry) the access's.
+    /// operands, the key's if it has one, else the base's, else the statement
+    /// start, which the frame already has.
     pub(crate) fn note_last_pos(
         &mut self,
         base: &Expression,
@@ -76,15 +96,24 @@ impl Interpreter {
 
 /// The position V8 reports for a failed read of `base[prop]` that is the
 /// target of a compound assignment or update.
-pub(crate) fn last_member_pos(base: &Expression, prop: &MemberProperty, site: PropSiteId) -> u32 {
+pub(crate) fn last_member_pos(base: &Expression, prop: &MemberProperty, _site: PropSiteId) -> u32 {
     let key = match prop {
         MemberProperty::Computed(key) => last_pos(key),
         _ => 0,
     };
-    [key, last_pos(base), site.1]
+    [key, last_pos(base)]
         .into_iter()
         .find(|at| *at != 0)
         .unwrap_or(0)
+}
+
+/// Where V8 reports the failure of the operator of `target op= value`: the
+/// last position the evaluation of `value` emitted (an identifier's included).
+pub(crate) fn compound_pos(value: &Expression) -> u32 {
+    match value {
+        Expression::Identifier(_, at) => *at,
+        other => last_pos(other),
+    }
 }
 
 /// The position V8 emits last while evaluating `expr`, 0 when it emits none.

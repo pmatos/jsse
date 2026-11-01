@@ -11,8 +11,10 @@ mod catch_param;
 mod cover_patterns;
 mod declarations;
 pub(crate) mod dynamic_function;
+mod eval_flags;
 mod expressions;
 pub(crate) mod inferred_names;
+mod lead_ident;
 mod module_early_errors;
 mod modules;
 mod node_hooks;
@@ -479,10 +481,6 @@ impl<'a> Parser<'a> {
         result
     }
 
-    pub(crate) fn set_eval_allow_super_property(&mut self) {
-        self.allow_super_property = true;
-    }
-
     pub(crate) fn set_eval_allow_super_call(&mut self) {
         self.allow_super_call = true;
     }
@@ -725,7 +723,7 @@ impl<'a> Parser<'a> {
     pub(super) fn expr_contains_await_identifier(expr: &Expression) -> bool {
         use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
         match expr {
-            Expression::Identifier(name) => name == "await",
+            Expression::Identifier(name, _) => name == "await",
             Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_identifier)),
@@ -777,7 +775,7 @@ impl<'a> Parser<'a> {
                 af.params.iter().any(Self::pattern_contains_await_identifier)
                     || match &af.body {
                                             ArrowBody::Expression(body) => {
-                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
+                                                if let Statement::Return(Some(e), _) = &body.as_slice()[0] {
                                                     Self::expr_contains_await_identifier(e)
                                                 } else {
                                                     false
@@ -816,7 +814,7 @@ impl<'a> Parser<'a> {
         match chain {
             // Optional-chain tails use identifiers for static property names and
             // as placeholders for computed access and optional calls.
-            Expression::Identifier(_) => false,
+            Expression::Identifier(_, _) => false,
             Expression::Member(base, property, _) => {
                 Self::optional_chain_contains_await_identifier(base)
                     || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_await_identifier(e))
@@ -897,7 +895,7 @@ impl<'a> Parser<'a> {
                 af.params.iter().any(Self::pattern_contains_await_expression)
                     || match &af.body {
                                             ArrowBody::Expression(body) => {
-                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
+                                                if let Statement::Return(Some(e), _) = &body.as_slice()[0] {
                                                     Self::expr_contains_await_expression(e)
                                                 } else {
                                                     false

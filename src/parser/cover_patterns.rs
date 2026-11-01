@@ -19,7 +19,7 @@ pub(crate) fn check_object_rest_target(target: &Expression) -> Result<(), ParseE
 
 pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
     match expr {
-        Expression::Identifier(name) => Ok(Pattern::Identifier(name)),
+        Expression::Identifier(name, _) => Ok(Pattern::Identifier(name)),
         Expression::Assign(AssignOp::Assign, left, right, _) => {
             let pat = expr_to_pattern(left.into_expression())?;
             Ok(Pattern::Assign(Box::new(pat), right))
@@ -61,7 +61,7 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                     message: "Rest element must be last element".to_string(),
                 });
             }
-            Ok(Pattern::Array(pats))
+            Ok(Pattern::Array(pats.into()))
         }
         Expression::Object(props, trailing_comma_after_spread) => {
             let mut pat_props = Vec::new();
@@ -125,7 +125,7 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
 
 pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
     match pat {
-        Pattern::Identifier(name) => Expression::Identifier(name),
+        Pattern::Identifier(name) => Expression::Identifier(name, 0),
         Pattern::Rest(inner) => Expression::Spread(ExprBox::new(pattern_to_expr(*inner)), 0),
         Pattern::Array(elements) => {
             let exprs: Vec<Option<Expression>> = elements
@@ -155,7 +155,7 @@ pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
                     },
                     ObjectPatternProperty::Shorthand(name) => Property {
                         key: PropertyKey::Identifier(name.clone()),
-                        value: Expression::Identifier(name),
+                        value: Expression::Identifier(name, 0),
                         kind: PropertyKind::Init,
                         computed: false,
                         shorthand: true,

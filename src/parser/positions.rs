@@ -10,9 +10,8 @@ impl Parser<'_> {
     /// for a property named like a reserved word (`it.return(`).
     pub(super) fn call_site(&self, callee: &Expression) -> CallSiteId {
         let name: &str = match callee {
-            Expression::Identifier(name) | Expression::Member(_, MemberProperty::Dot(name), _) => {
-                name.as_ref()
-            }
+            Expression::Identifier(name, _)
+            | Expression::Member(_, MemberProperty::Dot(name), _) => name.as_ref(),
             _ => return CallSiteId::at(self.current_token_start),
         };
         if Self::is_reserved_identifier(name, false) {

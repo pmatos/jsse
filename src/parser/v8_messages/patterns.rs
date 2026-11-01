@@ -163,14 +163,16 @@ fn target_error(expr: &Expression, parenthesized: bool, site: Site) -> Option<&'
         ILLEGAL_PROPERTY
     };
     match expr {
-        Expression::Identifier(_) if parenthesized => Some(INVALID_TARGET),
-        Expression::Identifier(_) | Expression::Array(..) | Expression::Object(..) => None,
+        Expression::Identifier(_, _) if parenthesized => Some(INVALID_TARGET),
+        Expression::Identifier(_, _) | Expression::Array(..) | Expression::Object(..) => None,
         Expression::Member(..) if dotted(expr) => Some(property),
         Expression::Assign(AssignOp::Assign, target, ..) if site != Site::Rest => {
             let target: &Expression = target;
             match target {
                 Expression::Member(..) if dotted(target) => Some(property),
-                Expression::Identifier(_) | Expression::Array(..) | Expression::Object(..) => None,
+                Expression::Identifier(_, _) | Expression::Array(..) | Expression::Object(..) => {
+                    None
+                }
                 _ => Some(INVALID_TARGET),
             }
         }

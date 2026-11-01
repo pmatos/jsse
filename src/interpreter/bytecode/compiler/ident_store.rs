@@ -21,6 +21,20 @@ impl Compiler {
         )
     }
 
+    /// The binary op of `target op= value`: V8 reports its failure at the last
+    /// position `value` recorded, the identifier included (#1511).
+    pub(super) fn emit_compound_op(
+        &mut self,
+        op: AssignOp,
+        value: &Expression,
+    ) -> Result<(), CompileError> {
+        self.emit(Self::compound_binary_op(op)?);
+        self.note_binary_pos(
+            crate::interpreter::builtins::node_host_assign_pos::compound_pos(value),
+        );
+        Ok(())
+    }
+
     /// `name = value` / `name op= value`. Leaves the assigned value on the
     /// operand stack, or nothing when `discard`.
     pub(super) fn compile_identifier_assign(
@@ -53,7 +67,7 @@ impl Compiler {
             } else {
                 self.compile_load_name(name)?;
                 self.compile_expr(value)?;
-                self.emit(Self::compound_binary_op(op)?);
+                self.emit_compound_op(op, value)?;
                 self.pop_n(2);
                 self.push_n(1);
             }
@@ -71,7 +85,7 @@ impl Compiler {
                     self.emit_bin_const(Self::compound_binary_op(op)?, *k)?;
                 } else {
                     self.compile_expr(value)?;
-                    self.emit(Self::compound_binary_op(op)?);
+                    self.emit_compound_op(op, value)?;
                     self.pop_n(2);
                     self.push_n(1);
                 }
@@ -100,7 +114,7 @@ impl Compiler {
             (UpdateOp::Decrement, true) => 3,
         };
         match target {
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 let idx = self.name_site(name)?;
                 if let Some(slot) = self.local_slot(name) {
                     self.emit(Op::UpdateLocal);

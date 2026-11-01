@@ -1,3 +1,4 @@
+mod do_while;
 mod try_statement;
 mod with_switch;
 
@@ -397,9 +398,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if_statement(&mut self) -> Result<Statement, ParseError> {
+        let at = self.op_pos();
         self.advance()?; // if
         self.eat(&Token::LeftParen)?;
-        let test = self.parse_expression()?;
+        let mut test = self.parse_expression()?;
+        Self::clear_lead_ident(&mut test);
         self.eat(&Token::RightParen)?;
         let consequent = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
             // B.3.4: function declaration in if-body (sloppy mode)
@@ -448,6 +451,7 @@ impl<'a> Parser<'a> {
             test,
             consequent,
             alternate,
+            at,
         }))
     }
 
@@ -492,20 +496,6 @@ impl<'a> Parser<'a> {
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
         Ok(Statement::While(WhileStatement { test, body }))
-    }
-
-    fn parse_do_while_statement(&mut self) -> Result<Statement, ParseError> {
-        self.advance()?; // do
-        let body = self.parse_iteration_body()?;
-        self.eat(&Token::Keyword(Keyword::While))?;
-        self.eat(&Token::LeftParen)?;
-        let test = self.parse_expression()?;
-        self.eat(&Token::RightParen)?;
-        // §12.9.1 special ASI rule: semicolon after do-while's `)` is always auto-inserted
-        if self.current == Token::Semicolon {
-            self.advance()?;
-        }
-        Ok(Statement::DoWhile(DoWhileStatement { test, body }))
     }
 
     fn parse_for_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1076,7 +1066,7 @@ impl<'a> Parser<'a> {
                     // Escaped forms (\u0061sync) and parenthesized (async) are allowed
                     if !is_await
                         && is_literal_async
-                        && matches!(&expr, Expression::Identifier(n) if n == "async")
+                        && matches!(&expr, Expression::Identifier(n, _) if n == "async")
                     {
                         return Err(self.error("The identifier 'async' is disallowed as a left-hand side expression of a for-of loop"));
                     }
@@ -1155,6 +1145,7 @@ impl<'a> Parser<'a> {
         if self.in_function == 0 {
             return Err(self.error("Illegal return statement"));
         }
+        let at = self.op_pos();
         self.advance()?; // return
         let value = if self.current == Token::Semicolon
             || self.current == Token::RightBrace
@@ -1163,10 +1154,12 @@ impl<'a> Parser<'a> {
         {
             None
         } else {
-            Some(self.parse_expression()?)
+            let mut value = self.parse_expression()?;
+            Self::clear_lead_ident(&mut value);
+            Some(value)
         };
         self.eat_semicolon()?;
-        Ok(Statement::Return(value))
+        Ok(Statement::Return(value, at))
     }
 
     fn parse_break_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1208,7 +1201,8 @@ impl<'a> Parser<'a> {
         if self.prev_line_terminator {
             return Err(self.error("Illegal newline after throw"));
         }
-        let expr = self.parse_expression()?;
+        let mut expr = self.parse_expression()?;
+        Self::clear_lead_ident(&mut expr);
         self.eat_semicolon()?;
         Ok(Statement::Throw(expr, at))
     }
@@ -1289,9 +1283,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression_statement(&mut self) -> Result<Statement, ParseError> {
-        let expr = self.parse_expression()?;
+        let at = self.op_pos();
+        let mut expr = self.parse_expression()?;
+        Self::clear_lead_ident(&mut expr);
         self.eat_semicolon()?;
-        Ok(Statement::Expression(expr))
+        Ok(Statement::Expression(expr, at))
     }
 
     fn is_using_binding(token: &Token) -> bool {

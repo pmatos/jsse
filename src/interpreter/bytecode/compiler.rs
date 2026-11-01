@@ -26,6 +26,7 @@ mod calls;
 mod for_of;
 mod ident_store;
 mod lexical;
+mod local_pair;
 mod loop_scope;
 mod member_pos;
 mod switch;
@@ -555,19 +556,11 @@ impl Compiler {
     /// `(name index, slot)` of a function-local name; `None` for any other
     /// expression or a name that is not a frame or block local.
     fn local_ref(&mut self, expr: &Expression) -> Option<(u16, u16)> {
-        let Expression::Identifier(name) = expr else {
+        let Expression::Identifier(name, _) = expr else {
             return None;
         };
         let slot = self.local_slot(name)?;
         Some((self.add_name(name).ok()?, slot))
-    }
-
-    fn local_pair(
-        &mut self,
-        lhs: &Expression,
-        rhs: &Expression,
-    ) -> Option<((u16, u16), (u16, u16))> {
-        Some((self.local_ref(lhs)?, self.local_ref(rhs)?))
     }
 
     fn emit_local_ref(&mut self, (idx, slot): (u16, u16)) {
@@ -766,7 +759,7 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
-            Expression::Identifier(name) => self.compile_load_name(name),
+            Expression::Identifier(name, at) => self.compile_ident_load(name, *at),
             Expression::Unary(op, operand) => {
                 self.compile_expr(operand)?;
                 let bop = match op {
@@ -781,7 +774,7 @@ impl Compiler {
             }
             Expression::Typeof(operand) => {
                 match operand.as_ref() {
-                    Expression::Identifier(name) if self.local_slot(name).is_none() => {
+                    Expression::Identifier(name, _) if self.local_slot(name).is_none() => {
                         let idx = self.name_site(name)?;
                         self.emit(Op::TypeofName);
                         self.emit_u16(idx);
@@ -814,13 +807,13 @@ impl Compiler {
             // at the assignment: function/arrow literals are named as made;
             // an anonymous class needs the tree-walker.
             Expression::Assign(_, target, value, _)
-                if matches!(target.as_ref(), Expression::Identifier(_))
+                if matches!(target.as_ref(), Expression::Identifier(_, _))
                     && is_anonymous_class(value) =>
             {
                 Err(CompileError::Unsupported("anonymous class assignment"))
             }
             Expression::Assign(op, target, value, at) => match target.as_ref() {
-                Expression::Identifier(name) => {
+                Expression::Identifier(name, _) => {
                     self.compile_identifier_assign(*op, name, value, false, *at)
                 }
                 Expression::Member(obj, prop, site) => match prop {
@@ -842,7 +835,7 @@ impl Compiler {
                             self.emit_member(Op::GetProp, Self::read_site(obj, prop, *site));
                             self.emit_u16(idx);
                             self.compile_expr(value)?;
-                            self.emit(Self::compound_binary_op(*op)?);
+                            self.emit_compound_op(*op, value)?;
                             self.pop_n(2);
                             self.push_n(1);
                             self.emit(Op::SetProp);
@@ -870,7 +863,7 @@ impl Compiler {
                             self.pop_n(2);
                             self.push_n(1);
                             self.compile_expr(value)?;
-                            self.emit(Self::compound_binary_op(*op)?);
+                            self.emit_compound_op(*op, value)?;
                             self.pop_n(2);
                             self.push_n(1);
                             self.emit(Op::SetElement);
@@ -896,7 +889,7 @@ impl Compiler {
                             self.emit(Op::GetPrivate);
                             self.emit_u16(idx);
                             self.compile_expr(value)?;
-                            self.emit(Self::compound_binary_op(*op)?);
+                            self.emit_compound_op(*op, value)?;
                             self.pop_n(2);
                             self.push_n(1);
                             self.emit(Op::SetPrivate);
@@ -1176,14 +1169,14 @@ impl Compiler {
             Expression::Assign(op, target, value, at) => {
                 // An anonymous class value needs NamedEvaluation, which
                 // `compile_expr` hands to the tree-walker.
-                if let Expression::Identifier(name) = target.as_ref()
+                if let Expression::Identifier(name, _) = target.as_ref()
                     && !is_anonymous_class(value)
                 {
                     return self.compile_identifier_assign(*op, name, value, true, *at);
                 }
             }
             Expression::Update(op, prefix, target, at)
-                if matches!(target.as_ref(), Expression::Identifier(_)) =>
+                if matches!(target.as_ref(), Expression::Identifier(_, _)) =>
             {
                 return self.compile_update(*op, *prefix, target, true, *at);
             }
@@ -1245,10 +1238,10 @@ impl Compiler {
             // runtime, in which case it needs the caller's lexical
             // environment. Keep the whole Body on the tree-walker rather than
             // changing direct-eval semantics.
-            Expression::Identifier(name) if name == "eval" => {
+            Expression::Identifier(name, _) if name == "eval" => {
                 return Err(CompileError::Ineligible("direct eval call"));
             }
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 let name_idx = self.name_site(name)?;
                 self.emit(Op::LoadCalleeName);
                 self.emit_u16(name_idx);
@@ -1576,9 +1569,10 @@ impl Compiler {
 
     fn compile_statement_native(&mut self, stmt: &Statement) -> Result<(), CompileError> {
         let at_top_level = std::mem::take(&mut self.at_function_top_level);
+        self.emit_leading_pos(stmt);
         match stmt {
             Statement::Empty => Ok(()),
-            Statement::Expression(expr) => {
+            Statement::Expression(expr, _) => {
                 if self.goal == CompileGoal::Script {
                     // The value is the statement's completion value.
                     self.compile_expr(expr)?;
@@ -1663,10 +1657,10 @@ impl Compiler {
             }
             Statement::Break(label, _) => self.compile_break(label.as_deref()),
             Statement::Continue(label) => self.compile_continue(label.as_deref()),
-            Statement::Return(_) if self.goal == CompileGoal::Script => {
+            Statement::Return(_, _) if self.goal == CompileGoal::Script => {
                 Err(CompileError::Unsupported("return in script"))
             }
-            Statement::Return(None) => {
+            Statement::Return(None, _) => {
                 if self.cleanups.is_empty() {
                     self.emit(Op::ReturnUndefined);
                 } else {
@@ -1677,7 +1671,7 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Statement::Return(Some(expr)) => {
+            Statement::Return(Some(expr), _) => {
                 if self.tail_call_allowed() && contains_tail_call(expr) {
                     return self.compile_tail_return(expr);
                 }
@@ -2267,7 +2261,9 @@ impl Compiler {
             }
             ForInOfLeft::Pattern(Pattern::Identifier(name)) => Head::AssignName(name.clone()),
             ForInOfLeft::Pattern(pattern) => Head::AssignPattern(pattern),
-            ForInOfLeft::Expression(Expression::Identifier(name)) => Head::AssignName(name.clone()),
+            ForInOfLeft::Expression(Expression::Identifier(name, _)) => {
+                Head::AssignName(name.clone())
+            }
             ForInOfLeft::Expression(_) => {
                 return Err(CompileError::Unsupported("for-in/of expression target"));
             }
@@ -2707,7 +2703,7 @@ fn collect_escaping_jumps(
     out: &mut Vec<EscapingJump>,
 ) {
     match stmt {
-        Statement::Return(_) => out.push(EscapingJump::Return),
+        Statement::Return(_, _) => out.push(EscapingJump::Return),
         Statement::Break(None, _) if loops == 0 && switches == 0 => {
             out.push(EscapingJump::Break(None));
         }
@@ -2920,7 +2916,7 @@ pub(crate) fn is_direct_eval_call(expr: &Expression) -> bool {
     matches!(
         expr,
         Expression::Call(callee, _, _)
-            if matches!(callee.as_ref(), Expression::Identifier(name) if name == "eval")
+            if matches!(callee.as_ref(), Expression::Identifier(name, _) if name == "eval")
     )
 }
 

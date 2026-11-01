@@ -14,10 +14,9 @@ thread_local! {
         let statements = vec![Statement::Expression(Expression::Call(
             ExprBox::new(Expression::Super),
             vec![Expression::Spread(ExprBox::new(Expression::Identifier(
-                "args".into(),
-            )), 0)],
+                "args".into(), 0)), 0)],
             CallSiteId::UNASSIGNED,
-        ))];
+        ), 0)];
         debug_assert!(!stmts_use_arguments(&statements));
         let params = vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))];
         (Rc::new(params), Body::new(statements), Rc::default())

@@ -73,7 +73,10 @@ fn parse_function_declaration() {
 #[test]
 fn parse_expression_statement() {
     let prog = parse("1 + 2 * 3;");
-    assert!(matches!(&prog.body.as_slice()[0], Statement::Expression(_)));
+    assert!(matches!(
+        &prog.body.as_slice()[0],
+        Statement::Expression(_, _)
+    ));
 }
 
 #[test]
