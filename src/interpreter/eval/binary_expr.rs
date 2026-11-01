@@ -47,8 +47,7 @@ impl Interpreter {
             }
         };
         self.gc_root_value(&rval);
-        let numeric = lval.is_number() && rval.is_number();
-        if pos != 0 && (!numeric || matches!(op, BinaryOp::In | BinaryOp::Instanceof)) {
+        if pos != 0 {
             self.node_host.call_pos = pos;
         }
         let result = if op == BinaryOp::Instanceof {

@@ -28,8 +28,8 @@ compiles and runs exactly as before.
   allocator class up.) The productions from `|` down to `*` moved to
   `parser/expressions/binary_ops.rs` and record it (`op_pos`).
 - Tree-walker: `eval/binary_expr.rs` (the old `Expression::Binary` arm) sets
-  the frame's position to it before the operator runs, unless both operands
-  are Numbers (`in` and `instanceof` always). A throw
+  the frame's position to it before the operator runs (only `--node` parses a
+  nonzero offset, so default mode pays one compare). A throw
   from the operator, or from a `valueOf` it calls, then reports V8's column,
   and so does the caller's frame in the stack.
 - VM: `compiler/binary.rs` records `Chunk::binary_pos`, keyed by the offset
