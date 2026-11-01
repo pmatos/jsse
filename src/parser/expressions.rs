@@ -31,7 +31,13 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
         // Depth guard: every nested sub-expression funnels through here.
         self.enter_recursion()?;
-        let r = self.parse_assignment_expression_inner();
+        let cover = self.begin_cover_scope();
+        let mut r = self.parse_assignment_expression_inner();
+        if let Ok(e) = &r
+            && let Err(err) = self.end_cover_scope(cover, e)
+        {
+            r = Err(err);
+        }
         self.exit_recursion();
         r
     }
@@ -93,6 +99,7 @@ impl<'a> Parser<'a> {
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
             let mut left = left;
             self.retarget_store_site(&mut left, op);
+            self.claim_cover_for_pattern(op, &left);
             let at = self.assign_pos(&left, op, left_start);
             self.advance()?;
             let right_start = self.current_token_start;
@@ -390,22 +397,6 @@ impl<'a> Parser<'a> {
         if matches!(expr, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
             self.arrow_held_token = Some(std::mem::replace(&mut self.current, Token::Eof));
             return Ok(expr);
-        }
-
-        // Object with CoverInitializedName ({a = 0}) used as member base ({a = 0}.x)
-        // is not a destructuring pattern — reject CoverInitializedName
-        if Self::has_cover_initialized_name(&expr)
-            && matches!(
-                self.current,
-                Token::Dot
-                    | Token::LeftBracket
-                    | Token::LeftParen
-                    | Token::OptionalChain
-                    | Token::NoSubstitutionTemplate(_, _)
-                    | Token::TemplateHead(_, _)
-            )
-        {
-            return Err(self.error("Invalid shorthand property initializer"));
         }
 
         let mut called = false;
@@ -1001,7 +992,8 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                let expr = self.parse_assignment_expression()?;
+                let outer_cover = self.begin_cover_list();
+                let expr = self.parse_cover_element()?;
                 if self.current == Token::Comma || self.current == Token::RightParen {
                     let mut exprs = vec![expr];
                     let mut arrow_only = false;
@@ -1018,11 +1010,13 @@ impl<'a> Parser<'a> {
                             arrow_only = true;
                             break;
                         }
-                        exprs.push(self.parse_assignment_expression()?);
+                        exprs.push(self.parse_cover_element()?);
                     }
                     self.eat(&Token::RightParen)?;
                     self.no_in = saved_no_in;
-                    if self.current == Token::Arrow && !self.prev_line_terminator {
+                    let arrow = self.current == Token::Arrow && !self.prev_line_terminator;
+                    self.end_cover_list(outer_cover, arrow)?;
+                    if arrow {
                         self.advance()?;
                         let params = self.arrow_params_from_cover(exprs, list_start, false)?;
                         let (body, body_is_strict) = if self.current == Token::LeftBrace {
@@ -1052,9 +1046,6 @@ impl<'a> Parser<'a> {
                     // Just a parenthesized expression
                     if exprs.len() == 1 {
                         let e = exprs.into_iter().next().unwrap();
-                        if Self::has_cover_initialized_name(&e) {
-                            return Err(self.error("Invalid shorthand property initializer"));
-                        }
                         self.last_expr_parenthesized = true;
                         self.parenthesized_arrow = matches!(e, Expression::ArrowFunction(_));
                         // Sequence marker: validate_destructuring_target rejects it
@@ -1068,18 +1059,10 @@ impl<'a> Parser<'a> {
                         }
                         return Ok(e);
                     }
-                    for e in &exprs {
-                        if Self::has_cover_initialized_name(e) {
-                            return Err(self.error("Invalid shorthand property initializer"));
-                        }
-                    }
                     return Ok(Expression::Sequence(exprs));
                 }
                 self.eat(&Token::RightParen)?;
                 self.no_in = saved_no_in;
-                if Self::has_cover_initialized_name(&expr) {
-                    return Err(self.error("Invalid shorthand property initializer"));
-                }
                 Ok(expr)
             }
             Token::LeftBracket => {
@@ -1130,9 +1113,9 @@ impl<'a> Parser<'a> {
             let is_spread = self.current == Token::Ellipsis;
             if is_spread {
                 self.advance()?;
-                elements.push(Some(self.parse_spread_operand()?));
+                elements.push(Some(self.parse_cover_spread()?));
             } else {
-                elements.push(Some(self.parse_assignment_expression()?));
+                elements.push(Some(self.parse_cover_element()?));
             }
             if self.current == Token::Comma {
                 self.advance()?;
@@ -1148,20 +1131,6 @@ impl<'a> Parser<'a> {
         Ok(Expression::Array(elements, trailing_comma_after_spread))
     }
 
-    fn has_cover_initialized_name(expr: &Expression) -> bool {
-        if let Expression::Object(props, _) = expr {
-            props.iter().any(|p| {
-                p.shorthand
-                    && matches!(
-                        &p.value,
-                        Expression::Assign(AssignOp::Assign, left, _, _) if matches!(&**left, Expression::Identifier(_))
-                    )
-            })
-        } else {
-            false
-        }
-    }
-
     fn parse_object_literal(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // {
         let saved_no_in = self.no_in;
@@ -1172,7 +1141,7 @@ impl<'a> Parser<'a> {
             let is_spread = self.current == Token::Ellipsis;
             if is_spread {
                 self.advance()?;
-                let expr = self.parse_assignment_expression()?;
+                let expr = self.parse_cover_element()?;
                 props.push(Property {
                     key: PropertyKey::Identifier("".into()),
                     value: Expression::Spread(ExprBox::new(expr), 0),
@@ -1555,6 +1524,7 @@ impl<'a> Parser<'a> {
             }
             self.advance()?; // consume '='
             let default_value = self.parse_assignment_expression()?;
+            self.note_cover_initialized_name();
             return Ok(Property {
                 key,
                 value: Expression::Assign(
@@ -1614,7 +1584,7 @@ impl<'a> Parser<'a> {
 
         // Regular: { key: value }
         self.colon_after(&key)?;
-        let value = self.parse_assignment_expression()?;
+        let value = self.parse_cover_element()?;
         Ok(Property {
             key,
             value,
@@ -1806,7 +1776,8 @@ impl<'a> Parser<'a> {
                 info: Default::default(),
             }));
         }
-        let expr = self.parse_assignment_expression()?;
+        let outer_cover = self.begin_cover_list();
+        let expr = self.parse_cover_element()?;
         if self.current == Token::Comma || self.current == Token::RightParen {
             let mut exprs = vec![expr];
             while self.current == Token::Comma {
@@ -1820,10 +1791,12 @@ impl<'a> Parser<'a> {
                 if self.current == Token::RightParen {
                     break;
                 }
-                exprs.push(self.parse_assignment_expression()?);
+                exprs.push(self.parse_cover_element()?);
             }
             self.eat(&Token::RightParen)?;
-            if self.current == Token::Arrow && !self.prev_line_terminator {
+            let arrow = self.current == Token::Arrow && !self.prev_line_terminator;
+            self.end_cover_list(outer_cover, arrow)?;
+            if arrow {
                 self.advance()?;
                 let params = self.arrow_params_from_cover(exprs, list_start, true)?;
                 let prev_async = self.in_async;
@@ -1884,7 +1857,7 @@ impl<'a> Parser<'a> {
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
-            let heritage = self.parse_left_hand_side_expression()?;
+            let heritage = self.parse_heritage_expression()?;
             if matches!(heritage, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
                 return Err(self.error("Arrow function is not allowed in class heritage"));
             }

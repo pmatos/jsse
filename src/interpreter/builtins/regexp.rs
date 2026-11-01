@@ -4203,7 +4203,8 @@ fn resolve_class_escape(chars: &[char], i: &mut usize, unicode: bool) -> Option<
                         Some('c' as u32)
                     }
                 }
-                'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' => None,
+                'd' | 'D' | 'w' | 'W' | 's' | 'S' => None,
+                'b' => Some(8),
                 'p' | 'P' if unicode => {
                     if *i < chars.len() && chars[*i] == '{' {
                         *i += 1;
@@ -4217,7 +4218,6 @@ fn resolve_class_escape(chars: &[char], i: &mut usize, unicode: bool) -> Option<
                     None
                 }
                 '1'..='7' => {
-                    // Octal escape (Annex B): \1, \12, \123, etc.
                     let mut val = (next as u32) - ('0' as u32);
                     if *i < chars.len() && ('0'..='7').contains(&chars[*i]) {
                         val = val * 8 + (chars[*i] as u32 - '0' as u32);
