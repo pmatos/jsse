@@ -1,0 +1,144 @@
+script "for (a of b, c);" SyntaxError: Unexpected token ','
+script "label:" SyntaxError: Unexpected end of input
+script "label: }" SyntaxError: Unexpected token '}'
+script "a: b: c: d: break a;" parses
+script "throw" SyntaxError: Unexpected end of input
+script "throw;" SyntaxError: Unexpected token ';'
+script "throw\n" SyntaxError: Illegal newline after throw
+script "var" SyntaxError: Unexpected end of input
+script "var;" SyntaxError: Unexpected token ';'
+script "var 1" SyntaxError: Unexpected number
+script "var a," SyntaxError: Unexpected end of input
+script "var a b" SyntaxError: Unexpected identifier 'b'
+script "var a = " SyntaxError: Unexpected end of input
+script "let a, " SyntaxError: Unexpected end of input
+script "let [a], b" SyntaxError: Missing initializer in destructuring declaration
+script "const [a]" SyntaxError: Missing initializer in destructuring declaration
+script "const {a}, b = 1" SyntaxError: Missing initializer in destructuring declaration
+script "x = new" SyntaxError: Unexpected end of input
+script "x = new." SyntaxError: Unexpected end of input
+script "x = new.target." SyntaxError: new.target expression is not allowed here
+script "x = a." SyntaxError: Unexpected end of input
+script "x = a.1" SyntaxError: Unexpected number
+script "x = a?." SyntaxError: Unexpected end of input
+script "x = a?.[1" SyntaxError: Unexpected end of input
+script "x = a?.(1" SyntaxError: missing ) after argument list
+script "x = a[" SyntaxError: Unexpected end of input
+script "x = a[1" SyntaxError: Unexpected end of input
+script "x = a(1" SyntaxError: missing ) after argument list
+script "x = a(1," SyntaxError: Unexpected end of input
+script "x = a(,)" SyntaxError: Unexpected token ','
+script "x = a(1,,2)" SyntaxError: Unexpected token ','
+script "x = a(...)" SyntaxError: Unexpected token ')'
+script "x = typeof" SyntaxError: Unexpected end of input
+script "x = void" SyntaxError: Unexpected end of input
+script "x = ++" SyntaxError: Unexpected end of input
+script "x = a++ ++" SyntaxError: Unexpected token '++'
+script "x = a++b" SyntaxError: Unexpected identifier 'b'
+script "x = !" SyntaxError: Unexpected end of input
+script "x = a ? b : c : d" SyntaxError: Unexpected token ':'
+script "x = a ?" SyntaxError: Unexpected end of input
+script "x = a ? b c" SyntaxError: Unexpected identifier 'c'
+script "x = (a, b" SyntaxError: Unexpected end of input
+script "x = (a" SyntaxError: Unexpected end of input
+script "x = a => " SyntaxError: Unexpected end of input
+script "x = a =>" SyntaxError: Unexpected end of input
+script "x = (a) => {" SyntaxError: Unexpected end of input
+script "x = (a) => {} ()" SyntaxError: Unexpected token '('
+script "x = a => {} + 1" SyntaxError: Unexpected token '+'
+script "x = () => {} ? 1 : 2" SyntaxError: Unexpected token '?'
+script "x = async a => " SyntaxError: Unexpected end of input
+script "x = async (a) =>" SyntaxError: Unexpected end of input
+script "x = async\n(a) => 1" SyntaxError: Malformed arrow function parameter list
+script "x = (a, b)\n=> 1" SyntaxError: Unexpected token '=>'
+script "x = a\n=> 1" SyntaxError: Unexpected token '=>'
+script "x = yield => 1; function* g() { yield => 1 }" SyntaxError: Unexpected token '=>'
+script "function* g() { yield\n=> 1 }" SyntaxError: Unexpected token '=>'
+script "function* g() { x = yield * }" SyntaxError: Unexpected token '}'
+script "function* g() { (yield) = 1 }" SyntaxError: Invalid left-hand side in assignment
+script "function* g() { yield++ }" SyntaxError: Unexpected token '}'
+script "function* g() { yield ? 1 : 2 }" SyntaxError: Unexpected token '?'
+script "async function f() { await }" SyntaxError: Unexpected token '}'
+script "async function f() { await ** 2 }" SyntaxError: Unexpected token '**'
+script "async function f() { -await 1 ** 2 }" SyntaxError: Unary operator used immediately before exponentiation expression. Parenthesis must be used to disambiguate operator precedence
+script "async function f() { (await) }" SyntaxError: Unexpected token ')'
+script "function f() { yield: 1 }" parses
+script "function* g() { yield: 1 }" SyntaxError: Unexpected token ':'
+script "async function f() { await: 1 }" SyntaxError: Unexpected token ':'
+script "function* g() { function* yield() {} }" SyntaxError: Unexpected identifier 'yield'
+script "function* g() { var o = { yield } }" SyntaxError: Unexpected identifier 'yield'
+script "'use strict'; var o = { yield }" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var o = { static }" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var o = { let }" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; yield: 1" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; interface: 1" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; ({ interface })" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; function interface() {}" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; (interface) => 1" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; class C { m(interface) {} }" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; try {} catch (interface) {}" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var [interface] = []" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var {interface} = {}" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var {a: interface} = {}" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; for (interface of x);" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; ({ a: interface } = {})" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; [interface] = []" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; eval => 1" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; (eval) => 1" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; (a, eval) => 1" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; ({ eval } = {})" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; [eval] = []" SyntaxError: Invalid destructuring assignment target
+script "'use strict'; ({ a: eval } = {})" SyntaxError: Invalid destructuring assignment target
+script "'use strict'; eval++" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; --arguments" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; for (eval in x);" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; function f(eval) {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; function f(...eval) {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; var {eval} = {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; ({ eval }) => 1" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; ({ set a(eval) {} })" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; try {} catch (eval) {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; class eval {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; label: eval: 1" parses
+script "'use strict'; eval: 1" parses
+script "f(a) => 1" SyntaxError: Malformed arrow function parameter list
+script "a.b => 1" SyntaxError: Malformed arrow function parameter list
+script "1 => 1" SyntaxError: Malformed arrow function parameter list
+script "(a)(b) => 1" SyntaxError: Malformed arrow function parameter list
+script "async(a)(b) => 1" SyntaxError: Malformed arrow function parameter list
+script "async\n(a) => 1" SyntaxError: Malformed arrow function parameter list
+script "async (a)\n=> 1" SyntaxError: Unexpected token '=>'
+script "async function f() { async (a)\n=> 1 }" SyntaxError: Unexpected token '=>'
+script "'use strict'; x = class eval {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "class eval {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "class arguments {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "'use strict'; class arguments {}" SyntaxError: Unexpected eval or arguments in strict mode
+script "class C extends eval {}" parses
+script "class static {}" SyntaxError: Unexpected strict mode reserved word
+script "class C { static { await 1 } }" SyntaxError: Unexpected reserved word
+module "class C { static { await 1 } }" SyntaxError: Unexpected reserved word
+script "class C { static { await } }" SyntaxError: Unexpected reserved word
+script "class C { static { (await) => 1 } }" SyntaxError: Unexpected reserved word
+script "let = 1" parses
+script "'use strict'; let = 1" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; let + 1" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; let;" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; let\nx" parses
+script "'use strict'; let [" SyntaxError: Unexpected end of input
+script "'use strict'; for (let;;);" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; for (let in x);" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; for (let of x);" SyntaxError: Unexpected identifier 'x'
+script "module" parses
+module "let;" SyntaxError: Unexpected strict mode reserved word
+module "let\nx" loads
+module "let: 1" SyntaxError: Unexpected strict mode reserved word
+module "for (let;;);" SyntaxError: Unexpected strict mode reserved word
+module "var x = <!-- y" SyntaxError: HTML comments are not allowed in modules
+module "x\n--> y" SyntaxError: HTML comments are not allowed in modules
+module "x = 1; <!-- y" SyntaxError: HTML comments are not allowed in modules
+module "import a, * as b, c from './lib.mjs'" SyntaxError: Unexpected token ','
+module "import a, 1 from './lib.mjs'" SyntaxError: Unexpected token ','
+module "import a, {} b from './lib.mjs'" SyntaxError: Unexpected identifier 'b'
+module "import a b from './lib.mjs'" SyntaxError: Unexpected identifier 'b'
+module "import {a}, b from './lib.mjs'" SyntaxError: Unexpected token ','
+module "import * as a, {b} from './lib.mjs'" SyntaxError: Unexpected token ','

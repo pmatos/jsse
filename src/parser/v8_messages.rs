@@ -8,6 +8,11 @@
 use super::*;
 use std::borrow::Cow;
 
+mod exact;
+pub(in crate::parser) mod patterns;
+
+use exact::{EXACT, INVALID_TOKEN};
+
 pub(super) const STRICT_WORDS: [&str; 7] = [
     "implements",
     "interface",
@@ -16,177 +21,6 @@ pub(super) const STRICT_WORDS: [&str; 7] = [
     "private",
     "protected",
     "public",
-];
-
-const INVALID_TOKEN: &str = "Invalid or unexpected token";
-
-const EXACT: &[(&str, &str)] = &[
-    (
-        "'let' is not allowed as a variable name in lexical declarations",
-        "let is disallowed as a lexically bound name",
-    ),
-    ("Expected decorator expression after '@'", INVALID_TOKEN),
-    ("Expected 'class' after decorator", INVALID_TOKEN),
-    (
-        "Illegal continue statement",
-        "Illegal continue statement: no surrounding iteration statement",
-    ),
-    (
-        "Delete of an unqualified identifier in strict mode",
-        "Delete of an unqualified identifier in strict mode.",
-    ),
-    (
-        "Assignment to 'eval' or 'arguments' in strict mode",
-        "Unexpected eval or arguments in strict mode",
-    ),
-    (
-        "Octal literals are not allowed in strict mode",
-        "Octal literals are not allowed in strict mode.",
-    ),
-    (
-        "Octal escape sequences are not allowed in strict mode",
-        "Octal escape sequences are not allowed in strict mode.",
-    ),
-    (
-        "In strict mode code, functions can only be declared at top level or inside a block",
-        "In strict mode code, functions can only be declared at top level or inside a block.",
-    ),
-    (
-        "Async function declaration cannot appear in a single-statement context",
-        "Async functions can only be declared at the top level or inside a block.",
-    ),
-    (
-        "Generators can only be declared at the top level or inside a block",
-        "Generators can only be declared at the top level or inside a block.",
-    ),
-    (
-        "The identifier 'async' is disallowed as a left-hand side expression of a for-of loop",
-        "The left-hand side of a for-of loop may not be 'async'.",
-    ),
-    (
-        "for-of loop variable declaration may not have an initializer",
-        "for-of loop variable declaration may not have an initializer.",
-    ),
-    (
-        "for-in loop variable declaration may not have an initializer",
-        "for-in loop variable declaration may not have an initializer.",
-    ),
-    (
-        "for await...of is only valid in async functions or at module top level",
-        "Unexpected reserved word",
-    ),
-    (
-        "Getter must not have any formal parameters",
-        "Getter must not have any formal parameters.",
-    ),
-    (
-        "Setter must have exactly one formal parameter",
-        "Setter must have exactly one formal parameter.",
-    ),
-    (
-        "Class fields and methods cannot be named '#constructor'",
-        "Classes may not have a field named 'constructor'",
-    ),
-    (
-        "Class field initializer cannot reference 'arguments'",
-        "'arguments' is not allowed in class field initializer or static initialization block",
-    ),
-    (
-        "'arguments' is not allowed in class static blocks",
-        "'arguments' is not allowed in class field initializer or static initialization block",
-    ),
-    (
-        "Applying the 'delete' operator to a private name is not allowed",
-        "Private fields can not be deleted",
-    ),
-    (
-        "Tagged template cannot be used in an optional chain",
-        "Invalid tagged template on optional chain",
-    ),
-    (
-        "Await expression is not allowed in formal parameters of an async function",
-        "Illegal await-expression in formal parameters of async function",
-    ),
-    (
-        "Yield expression is not allowed in formal parameters of a generator function",
-        "Yield expression not allowed in formal parameter",
-    ),
-    (
-        "'await' is not allowed in async arrow formal parameters",
-        "'await' is not a valid identifier name in an async function",
-    ),
-    (
-        "Octal escape sequences are not allowed in template literals",
-        "Octal escape sequences are not allowed in template strings.",
-    ),
-    (
-        "\\8 and \\9 are not allowed in template literals",
-        "\\8 and \\9 are not allowed in template strings.",
-    ),
-    (
-        "\\8 and \\9 are not allowed in strict mode",
-        "\\8 and \\9 are not allowed in strict mode.",
-    ),
-    (
-        "Unary operator used immediately before exponentiation expression. Parenthesization is required",
-        "Unary operator used immediately before exponentiation expression. Parenthesis must be used to disambiguate operator precedence",
-    ),
-    (
-        "Cannot use 'new' with import()",
-        "Cannot use new with import",
-    ),
-    (
-        "import.meta is only valid in module code",
-        "Cannot use 'import.meta' outside a module",
-    ),
-    ("Unexpected token )", "Unexpected token ')'"),
-    (
-        "An imported name that is not a valid binding identifier requires 'as'",
-        "Unexpected reserved word",
-    ),
-    (
-        "Invalid destructuring target",
-        "Invalid destructuring assignment target",
-    ),
-    (
-        "Unexpected 'import'",
-        "Cannot use import statement outside a module",
-    ),
-    (
-        "A switch statement may only have one default clause",
-        "More than one default clause in switch statement",
-    ),
-    (
-        "Expected '}' after template substitution",
-        "Missing } in template expression",
-    ),
-    ("Invalid Unicode escape", "Invalid Unicode escape sequence"),
-    (
-        "Unterminated Unicode escape",
-        "Invalid Unicode escape sequence",
-    ),
-    ("Invalid hex escape", "Invalid hexadecimal escape sequence"),
-    (
-        "Unicode code point out of range",
-        "Undefined Unicode code-point",
-    ),
-    ("Unterminated template literal", "Unexpected end of input"),
-    (
-        "Unterminated regular expression",
-        "Invalid regular expression: missing /",
-    ),
-    (
-        "Numeric separator must be exactly one underscore",
-        "Only one underscore is allowed as numeric separator",
-    ),
-    (
-        "Trailing numeric separator",
-        "Numeric separators are not allowed at the end of numeric literals",
-    ),
-    (
-        "Numeric separator cannot appear after leading 0",
-        "Numeric separator can not be used after leading 0.",
-    ),
 ];
 
 fn quoted<'a>(msg: &'a str, prefix: &str) -> Option<&'a str> {
@@ -199,6 +33,7 @@ pub(crate) fn static_text(msg: &str) -> Option<Cow<'_, str>> {
     }
     if msg.starts_with("Assignment to '") && msg.ends_with("' in strict mode")
         || msg.ends_with("can't be used as a binding identifier in strict mode")
+        || msg.ends_with("can't be used as a parameter name in strict mode")
     {
         return Some(Cow::Borrowed("Unexpected eval or arguments in strict mode"));
     }
@@ -302,6 +137,17 @@ impl ParseError {
     }
 }
 
+/// An invalid pattern's message, with V8's `reason` under `--node`.
+pub(crate) fn regexp_error(source: &str, ours: &str, v8: &str) -> String {
+    let reason = if inferred_names::enabled() { v8 } else { ours };
+    format!("Invalid regular expression: /{source}/ : {reason}")
+}
+
+/// A quantifier after a lookbehind, or a lookahead in unicode mode.
+pub(crate) fn lookaround_quantifier(source: &str) -> String {
+    regexp_error(source, "Nothing to repeat", "Invalid quantifier")
+}
+
 /// V8's message for a regexp literal that does not compile: the flags are part
 /// of the printed literal and a few reasons are worded differently.
 pub(crate) fn regexp_literal_message(msg: &str, flags: &str) -> String {
@@ -312,10 +158,30 @@ pub(crate) fn regexp_literal_message(msg: &str, flags: &str) -> String {
         return msg.to_string();
     };
     let reason = match reason {
+        "Invalid flags in modifier group" => modifier_group_reason(pattern),
         "Invalid named reference" => "Invalid named capture referenced",
+        "Invalid class escape in range" => "Invalid character class",
         other => other,
     };
     format!("Invalid regular expression: /{pattern}/{flags}: {reason}")
+}
+
+/// Why V8 rejects the first `(?flags-flags:` group of `pattern`.
+fn modifier_group_reason(pattern: &str) -> &'static str {
+    let flags = pattern
+        .split_once("(?")
+        .map_or("", |(_, rest)| rest.split(':').next().unwrap_or(""));
+    let letters: Vec<char> = flags.chars().filter(|c| *c != '-').collect();
+    let repeated = (1..letters.len()).any(|i| letters[..i].contains(&letters[i]));
+    if flags.chars().any(|c| !"ims-".contains(c)) {
+        "Invalid group"
+    } else if flags.matches('-').count() > 1 {
+        "Multiple dashes in flag group"
+    } else if repeated {
+        "Repeated flag in flag group"
+    } else {
+        "Invalid flag group"
+    }
 }
 
 /// The message V8 gives for the first bad escape of a template's raw text.

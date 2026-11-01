@@ -1,0 +1,144 @@
+script "var [new a.b]" SyntaxError: Invalid destructuring assignment target
+script "var [super.x]" SyntaxError: 'super' keyword unexpected here
+script "var [a.b++]" SyntaxError: Invalid destructuring assignment target
+script "var [a.b, 1]" SyntaxError: Illegal property in declaration context
+script "var [1, a.b]" SyntaxError: Invalid destructuring assignment target
+script "var [a.b, ...c, d]" SyntaxError: Illegal property in declaration context
+script "var [a,,b.c]" SyntaxError: Illegal property in declaration context
+script "var [function(){}]" SyntaxError: Invalid destructuring assignment target
+script "var [[a.b]]" SyntaxError: Illegal property in declaration context
+script "var [{a: b.c}]" SyntaxError: Illegal property in declaration context
+script "var [{a: 1}]" SyntaxError: Invalid destructuring assignment target
+script "var [1 = 2]" SyntaxError: Invalid left-hand side in assignment
+script "var [a.b = 1, 2]" SyntaxError: Illegal property in declaration context
+script "var [a=1=2]" SyntaxError: Invalid left-hand side in assignment
+script "var [a, b c]" SyntaxError: Unexpected identifier 'c'
+script "var [a b]" SyntaxError: Unexpected identifier 'b'
+script "var {a b}" SyntaxError: Unexpected identifier 'b'
+script "var {a: b c}" SyntaxError: Unexpected identifier 'c'
+script "var [a.b c]" SyntaxError: Illegal property in declaration context
+script "(...1) => 1" SyntaxError: Unexpected number
+script "(...[a.b]) => 1" SyntaxError: Illegal property in declaration context
+script "(...{a: 1}) => 1" SyntaxError: Invalid destructuring assignment target
+script "function f(...a.b) {}" SyntaxError: Unexpected token '.'
+script "(a = 1, ...b = 2) => 1" SyntaxError: Rest parameter may not have a default initializer
+script "([a.b] = 1) => 1" SyntaxError: Illegal property in declaration context
+script "(a, [b.c]) => 1" SyntaxError: Illegal property in declaration context
+script "(a.b, c) => 1" SyntaxError: Invalid destructuring assignment target
+script "(a, b.c, d) => 1" SyntaxError: Invalid destructuring assignment target
+script "([a], 1) => 1" SyntaxError: Invalid destructuring assignment target
+script "async ([a.b]) => 1" SyntaxError: Illegal property in declaration context
+script "async (a, ...b, c) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "x = (...a, b)" SyntaxError: Rest parameter must be last formal parameter
+script "x = (a, ...b)" SyntaxError: Unexpected token '...'
+script "(...a)" SyntaxError: Unexpected token '...'
+script "(...a) + 1" SyntaxError: Unexpected token '...'
+script "x = (...a) \n => 1" SyntaxError: Unexpected token '=>'
+script "(yield) => 1" parses
+script "function* g() { (a = yield) => 1 }" SyntaxError: Yield expression not allowed in formal parameter
+script "function* g() { (a, yield) => 1 }" SyntaxError: Invalid destructuring assignment target
+script "function* g() { (yield 1) => 1 }" SyntaxError: Invalid destructuring assignment target
+script "async function f() { (await) => 1 }" SyntaxError: Unexpected token ')'
+script "async function f() { (a = await 1) => 1 }" SyntaxError: Illegal await-expression in formal parameters of async function
+script "async function f() { (await 1) => 1 }" SyntaxError: Invalid destructuring assignment target
+script "async function f() { async (await) => 1 }" SyntaxError: Unexpected token ')'
+script "async function f() { async (a = await 1) => 1 }" SyntaxError: Illegal await-expression in formal parameters of async function
+script "async (await) => 1" SyntaxError: 'await' is not a valid identifier name in an async function
+script "async (a = await) => 1" SyntaxError: 'await' is not a valid identifier name in an async function
+script "async (await 1)" SyntaxError: missing ) after argument list
+script "f(a = await 1)" SyntaxError: missing ) after argument list
+script "({ #a })" SyntaxError: Unexpected identifier '#a'
+script "({ #a() {} })" SyntaxError: Unexpected identifier '#a'
+script "({ 1 })" SyntaxError: Unexpected number
+script "({ \"a\", b })" SyntaxError: Unexpected string
+script "({ [a], b })" SyntaxError: Unexpected token '['
+script "({ a, 1 })" SyntaxError: Unexpected number
+script "({ a: 1, [b] })" SyntaxError: Unexpected token '['
+script "({ a b })" SyntaxError: Unexpected identifier 'b'
+script "x = /(?<=a)+/" SyntaxError: Invalid regular expression: /(?<=a)+/: Invalid quantifier
+script "x = /(?=a)+/u" SyntaxError: Invalid regular expression: /(?=a)+/u: Invalid quantifier
+script "x = /(?!a)*/u" SyntaxError: Invalid regular expression: /(?!a)*/u: Invalid quantifier
+script "x = /(?<!a){2}/" SyntaxError: Invalid regular expression: /(?<!a){2}/: Invalid quantifier
+script "x = /(?<=a)+/v" SyntaxError: Invalid regular expression: /(?<=a)+/v: Invalid quantifier
+script "x = /(?<=a)?/u" SyntaxError: Invalid regular expression: /(?<=a)?/u: Invalid quantifier
+script "x = /(?=a){2,3}/u" SyntaxError: Invalid regular expression: /(?=a){2,3}/u: Invalid quantifier
+script "x = /(?:a)++/" SyntaxError: Invalid regular expression: /(?:a)++/: Nothing to repeat
+script "x = /a**/" SyntaxError: Invalid regular expression: /a**/: Nothing to repeat
+script "x = /+/" SyntaxError: Invalid regular expression: /+/: Nothing to repeat
+script "x = /(?<=a)\\1+/" parses
+script "x = /^*/" SyntaxError: Invalid regular expression: /^*/: Nothing to repeat
+script "x = /$+/u" SyntaxError: Invalid regular expression: /$+/u: Nothing to repeat
+script "x = /\\b+/u" SyntaxError: Invalid regular expression: /\b+/u: Nothing to repeat
+script "x = /\\B*/" SyntaxError: Invalid regular expression: /\B*/: Nothing to repeat
+script "async function f() { var \\u0061wait; }" SyntaxError: Unexpected reserved word
+script "async function f() { \\u0061wait; }" SyntaxError: Keyword must not contain escaped characters
+script "async function f() { let \\u0061wait; }" SyntaxError: Unexpected reserved word
+script "async function f(\\u0061wait) {}" SyntaxError: Unexpected reserved word
+script "function* g() { var yi\\u0065ld; }" SyntaxError: Unexpected identifier 'yield'
+script "function* g() { yi\\u0065ld; }" SyntaxError: Keyword must not contain escaped characters
+script "var yi\\u0065ld; function* g() { yi\\u0065ld }" SyntaxError: Keyword must not contain escaped characters
+script "\"use strict\"; var yi\\u0065ld;" SyntaxError: Unexpected strict mode reserved word
+script "\"use strict\"; var l\\u0065t;" SyntaxError: Keyword must not contain escaped characters
+script "var v\\u0061r;" SyntaxError: Keyword must not contain escaped characters
+script "var \\u0069f;" SyntaxError: Keyword must not contain escaped characters
+script "class C { static { var \\u0061wait; } }" SyntaxError: Unexpected reserved word
+script "x = { \\u0069f: 1 }; x.\\u0069f" parses
+script "\\u0069f (1) ;" SyntaxError: Keyword must not contain escaped characters
+script "({ \\u0069f })" SyntaxError: Keyword must not contain escaped characters
+script "class C { constructor() {} 'constructor'() {} }" SyntaxError: A class may only have one constructor
+script "class C { get constructor() {} }" SyntaxError: Class constructor may not be an accessor
+script "class C { static prototype = 1 }" SyntaxError: Classes may not have a static property named 'prototype'
+script "class C { constructor = 1 }" SyntaxError: Classes may not have a field named 'constructor'
+script "class C { 'constructor' = 1 }" SyntaxError: Classes may not have a field named 'constructor'
+script "class C { #constructor = 1 }" SyntaxError: Classes may not have a field named 'constructor'
+script "class C { static async *constructor() {} }" parses
+script "await using x = 1" SyntaxError: await is only valid in async functions and the top level bodies of modules
+script "{ using x = 1 }" parses
+script "for (using x of y);" parses
+script "label: label: ;" SyntaxError: Label 'label' has already been declared
+script "a: { a: ; }" SyntaxError: Label 'a' has already been declared
+script "break a;" SyntaxError: Undefined label 'a'
+script "continue a;" SyntaxError: Undefined label 'a'
+script "a: { continue a; }" SyntaxError: Illegal continue statement: 'a' does not denote an iteration statement
+script "return" SyntaxError: Illegal return statement
+script "new.target" SyntaxError: new.target expression is not allowed here
+script "function f() { new.target = 1 }" SyntaxError: Invalid left-hand side in assignment
+script "function f() { new.foo }" SyntaxError: Unexpected identifier 'foo'
+script "new.target.x = 1" SyntaxError: new.target expression is not allowed here
+script "super.x" SyntaxError: 'super' keyword unexpected here
+script "class C { m() { super() } }" SyntaxError: 'super' keyword unexpected here
+script "class C extends D { constructor() { super.#a } }" SyntaxError: Unexpected private field
+script "class C { #a; m() { super.#a } }" SyntaxError: Unexpected private field
+script "class C { m() { delete super.x } }" parses
+script "({ __proto__: 1, '__proto__': 2 })" SyntaxError: Duplicate __proto__ fields are not allowed in object literals
+script "({ __proto__: 1, __proto__ })" parses
+script "({ a = 1 })" SyntaxError: Invalid shorthand property initializer
+script "a ?. b = 1" SyntaxError: Invalid left-hand side in assignment
+script "new a?.b" SyntaxError: Invalid optional chain from new expression
+script "new a?.()" SyntaxError: Invalid optional chain from new expression
+script "a?.b`x`" SyntaxError: Invalid tagged template on optional chain
+script "a?.`x`" SyntaxError: Invalid tagged template on optional chain
+script "for (a?.b of c);" SyntaxError: Invalid left-hand side in for-loop
+script "for (a?.b in c);" SyntaxError: Invalid left-hand side in for-loop
+script "for (1 in c);" SyntaxError: Invalid left-hand side in for-loop
+script "for (f() in c);" parses
+script "for (f() of c);" parses
+script "for (a + b in c);" SyntaxError: Invalid left-hand side in for-loop
+script "for (let x = 1, y of c);" SyntaxError: Invalid left-hand side in for-of loop: Must have a single binding.
+script "for (let x, y of c);" SyntaxError: Invalid left-hand side in for-of loop: Must have a single binding.
+script "for (var x, y in c);" SyntaxError: Invalid left-hand side in for-in loop: Must have a single binding.
+script "for (let.x of c);" SyntaxError: The left-hand side of a for-of loop may not start with 'let'.
+script "for (let in c);" parses
+script "for await (a of b);" SyntaxError: Unexpected reserved word
+script "async function f() { for await (a in b); }" SyntaxError: Unexpected token 'in'
+script "async function f() { for await (a;;); }" SyntaxError: Unexpected token ';'
+script "if (1) label: function f() {}" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "while (1) label: function f() {}" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "label: function* g() {}" SyntaxError: Generators can only be declared at the top level or inside a block.
+script "'use strict'; label: function f() {}" SyntaxError: In strict mode code, functions can only be declared at top level or inside a block.
+script "with (a) label: function f() {}" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "with (a) function f() {}" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "do function f() {} while (0)" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "for (;;) function f() {}" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "if (1) class C {}" SyntaxError: Unexpected token 'class'
+script "if (1) function* g() {}" SyntaxError: Generators can only be declared at the top level or inside a block.

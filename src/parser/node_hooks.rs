@@ -77,11 +77,29 @@ impl<'a> Parser<'a> {
             .unwrap_or("")
     }
 
+    /// The current token is the `<` of `<!--` or the `>` of `-->`, which the
+    /// lexer leaves to the parser in module code.
+    fn html_comment_in_module(&self) -> bool {
+        let src = &self.source_text_source;
+        self.is_module
+            && (src
+                .get(self.current_token_start..)
+                .is_some_and(|s| s.starts_with("<!--"))
+                || self
+                    .current_token_start
+                    .checked_sub(2)
+                    .and_then(|from| src.get(from..))
+                    .is_some_and(|s| s.starts_with("-->")))
+    }
+
     /// V8's message for the current token, which the grammar has no place for.
     pub(super) fn v8_unexpected(&self) -> String {
         let raw = self.raw_current();
         match &self.current {
             Token::Eof => "Unexpected end of input".to_string(),
+            _ if self.html_comment_in_module() => {
+                "HTML comments are not allowed in modules".to_string()
+            }
             Token::Keyword(Keyword::Let | Keyword::Static | Keyword::Yield) if self.strict => {
                 "Unexpected strict mode reserved word".to_string()
             }
@@ -94,8 +112,8 @@ impl<'a> Parser<'a> {
                 "Unexpected reserved word".to_string()
             }
             Token::At => "Invalid or unexpected token".to_string(),
+            Token::IdentifierWithEscape(name) => self.escaped_identifier_text(name),
             Token::Identifier(_)
-            | Token::IdentifierWithEscape(_)
             | Token::PrivateName(_)
             | Token::Keyword(Keyword::Let | Keyword::Static | Keyword::Yield) => {
                 format!("Unexpected identifier '{raw}'")
@@ -112,6 +130,23 @@ impl<'a> Parser<'a> {
             Token::RegExpLiteral { .. } => "Unexpected regular expression".to_string(),
             _ => format!("Unexpected token '{raw}'"),
         }
+    }
+
+    /// V8's text for an identifier written with a unicode escape (`await`).
+    fn escaped_identifier_text(&self, name: &str) -> String {
+        let text = match name {
+            "let" => "Keyword must not contain escaped characters",
+            "await" => "Unexpected reserved word",
+            "yield" if self.strict => "Unexpected strict mode reserved word",
+            _ if Self::is_reserved_identifier(name, false) => {
+                "Keyword must not contain escaped characters"
+            }
+            _ if self.strict && super::v8_messages::STRICT_WORDS.contains(&name) => {
+                "Unexpected strict mode reserved word"
+            }
+            _ => return format!("Unexpected identifier '{name}'"),
+        };
+        text.to_string()
     }
 
     /// The error for a token that is not allowed here. `fallback` is the
@@ -138,11 +173,141 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `let` as a single statement that goes on with `[`, or, as V8 reads it,
+    /// with an identifier or `{` on the same line: a lexical declaration.
+    pub(super) fn let_starts_declaration(&self) -> bool {
+        let node = inferred_names::enabled();
+        self.lookahead(|tokens| {
+            tokens.advance().is_ok()
+                && match tokens.current() {
+                    Token::LeftBracket => true,
+                    Token::LeftBrace | Token::Identifier(_) => {
+                        node && !tokens.line_terminator_before()
+                    }
+                    _ => false,
+                }
+        })
+    }
+
+    /// A declaration in a for-in / for-of head with an initializer or several
+    /// bindings; V8 words the second as its own error.
+    pub(super) fn for_binding_error(&self, decls: &[VariableDeclarator], kind: &str) -> ParseError {
+        if decls.len() != 1 {
+            if inferred_names::enabled() {
+                return self.error(format!(
+                    "Invalid left-hand side in for-{kind} loop: Must have a single binding."
+                ));
+            }
+            if kind == "in" {
+                return self.error("Invalid left-hand side in for-in loop");
+            }
+        }
+        self.error(format!(
+            "for-{kind} loop variable declaration may not have an initializer"
+        ))
+    }
+
+    /// The head of a for-of loop starts with the token `let` (§14.7.5: the
+    /// left-hand side cannot, so `for (let.x of y)` is rejected as well).
+    pub(super) fn head_is_let(&self, head_start: usize) -> bool {
+        self.source_text_source
+            .get(head_start..)
+            .and_then(|rest| rest.strip_prefix("let"))
+            .is_some_and(|rest| {
+                !rest.starts_with(|c: char| c.is_alphanumeric() || "_$\\".contains(c))
+            })
+    }
+
+    /// `for (let of x)`: V8 reads `of` as the declared name and stops at `x`.
+    pub(super) fn let_of_error(&mut self, head_start: usize) -> ParseError {
+        if !inferred_names::enabled() {
+            return self.error(
+                "The identifier 'let' is disallowed as a left-hand side expression of a for-of loop",
+            );
+        }
+        let head = self.source_text_source.get(head_start..self.prev_token_end);
+        if head.is_some_and(|head| head.trim() != "let") {
+            return self.error("The left-hand side of a for-of loop may not start with 'let'.");
+        }
+        let _ = self.advance();
+        self.error(self.v8_unexpected())
+    }
+
+    /// `await` directly in a class static block is a reserved word, also in a
+    /// module (§15.7.1: ContainsAwait is an early error there); V8 reports it
+    /// at the keyword, whatever follows.
+    pub(super) fn reserved_await(&self) -> bool {
+        self.in_static_block && !self.in_async
+    }
+
+    /// The name of a class: class code is strict, so `eval` and `arguments`
+    /// cannot be bound (§15.7.1, §13.1.1).
+    pub(super) fn class_binding(&mut self, name: String) -> Result<String, ParseError> {
+        if matches!(name.as_str(), "eval" | "arguments") {
+            return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
+        }
+        self.advance()?;
+        Ok(name)
+    }
+
+    /// The `{` of `import a, { b }`; V8 reports the comma when `*` or `{`
+    /// does not follow it.
+    pub(super) fn eat_named_imports(&mut self) -> Result<(), ParseError> {
+        if self.current != Token::LeftBrace && inferred_names::enabled() {
+            return Err(self.error("Unexpected token ','"));
+        }
+        self.eat(&Token::LeftBrace)
+    }
+
+    /// The `@` of a decorator. V8 (Node 26) ships no decorators and reads the
+    /// character as an invalid token.
+    pub(super) fn eat_at(&mut self) -> Result<(), ParseError> {
+        if inferred_names::enabled() {
+            return Err(self.error("Expected decorator expression after '@'"));
+        }
+        self.advance().map(drop)
+    }
+
+    /// `[eval] = x` in strict code: V8 calls the nested name an invalid target.
+    pub(super) fn nested_eval_error(&self) -> ParseError {
+        if inferred_names::enabled() {
+            return self.error("Invalid destructuring assignment target");
+        }
+        self.error("Assignment to 'eval' or 'arguments' in strict mode")
+    }
+
+    /// `class let {}`: the class is strict while its name is read, so V8
+    /// words the token as a reserved word before the caller's mode returns.
+    pub(super) fn class_name_error(&mut self, outer_strict: bool) -> ParseError {
+        let error = self.v8_error("Expected class name");
+        self.set_strict(outer_strict);
+        error
+    }
+
+    /// The specifier of `import(...)`.
+    pub(super) fn import_specifier(&mut self) -> Result<Expression, ParseError> {
+        if self.current == Token::RightParen && inferred_names::enabled() {
+            return Err(self.error("import() requires a specifier"));
+        }
+        self.parse_assignment_expression()
+    }
+
+    /// The `)` that ends the argument list of an `async (...)` call.
+    pub(super) fn eat_args_end(&mut self) -> Result<(), ParseError> {
+        if self.current != Token::RightParen {
+            return Err(self.unterminated_arguments());
+        }
+        self.advance().map(drop)
+    }
+
     pub(super) fn expected_error(&self, expected: &Token) -> ParseError {
         self.v8_error(&format!("Expected {expected:?}, got {:?}", self.current))
     }
 
     pub(super) fn expected_semicolon(&self) -> ParseError {
+        if inferred_names::enabled() && self.current == Token::Arrow && !self.prev_line_terminator {
+            return self.error("Malformed arrow function parameter list");
+        }
         let before = self.source_text_source[..self.prev_token_end].trim_end();
         if inferred_names::enabled()
             && before.ends_with("await")

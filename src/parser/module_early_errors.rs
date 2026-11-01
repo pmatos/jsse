@@ -4,6 +4,42 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// A name exported twice. V8 words two exports that both declare the name
+    /// (`export default` twice, a function and a class; not two `var`s) as a redeclaration of
+    /// it, `default` being the hidden binding `.default` (`--node` only).
+    pub(super) fn duplicate_export(
+        &self,
+        name: &str,
+        earlier: &[ModuleItem],
+        item: &ModuleItem,
+    ) -> ParseError {
+        let declares = |export: &ExportDeclaration| {
+            let lexical = match export {
+                ExportDeclaration::Default(_)
+                | ExportDeclaration::DefaultFunction(_)
+                | ExportDeclaration::DefaultClass(_) => true,
+                ExportDeclaration::Named {
+                    declaration: Some(decl),
+                    ..
+                } => !matches!(
+                    **decl,
+                    Statement::Variable(VariableDeclaration {
+                        kind: VarKind::Var,
+                        ..
+                    })
+                ),
+                _ => false,
+            };
+            lexical && self.get_exported_names(export).iter().any(|n| n == name)
+        };
+        let declaring = |item: &ModuleItem| matches!(item, ModuleItem::ExportDeclaration(export) if declares(export));
+        if inferred_names::enabled() && declaring(item) && earlier.iter().any(declaring) {
+            let shown = if name == "default" { ".default" } else { name };
+            return self.error(format!("Identifier '{shown}' has already been declared"));
+        }
+        self.error(format!("Duplicate export of '{name}'"))
+    }
+
     /// §16.2.1.1 Static Semantics: Early Errors for Module
     pub(super) fn validate_module_early_errors(
         &self,

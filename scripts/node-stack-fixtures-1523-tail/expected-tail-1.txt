@@ -1,0 +1,144 @@
+script "if (1) let x = 1" SyntaxError: Lexical declaration cannot appear in a single-statement context
+script "for (let of x) ;" SyntaxError: Unexpected identifier 'x'
+script "let [...a,] = []" SyntaxError: Rest element must be last element
+script "function f(...a, b) {}" SyntaxError: Rest parameter must be last formal parameter
+script "function f(...a = []) {}" SyntaxError: Rest parameter may not have a default initializer
+script "(...a, b) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "(a, ...b,) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "({ #a: 1 })" SyntaxError: Unexpected identifier '#a'
+script "async (a = await 1) => 1" SyntaxError: missing ) after argument list
+script "yield => 1; function* g() { (yield) => 1 }" SyntaxError: Invalid destructuring assignment target
+script "var \\u0061wait; async function f() { var \\u0061wait; }" SyntaxError: Unexpected reserved word
+script "var x = /(?<=a)+/u" SyntaxError: Invalid regular expression: /(?<=a)+/u: Invalid quantifier
+script "var x = { 1 }" SyntaxError: Unexpected number
+script "var x = { 'a' }" SyntaxError: Unexpected string
+script "var x = { [a] }" SyntaxError: Unexpected token '['
+script "import()" SyntaxError: import() requires a specifier
+script "class let {}" SyntaxError: Unexpected strict mode reserved word
+script "class yield {}" SyntaxError: Unexpected strict mode reserved word
+script "([a.b]) => 1" SyntaxError: Illegal property in declaration context
+script "({a: b.c}) => 1" SyntaxError: Illegal property in declaration context
+script "((a)) => 1" SyntaxError: Invalid destructuring assignment target
+script "var {1}" SyntaxError: Unexpected number
+script "var {a: 1}" SyntaxError: Invalid destructuring assignment target
+script "var {'a'}" SyntaxError: Unexpected string
+script "var {[a]}" SyntaxError: Unexpected token '['
+script "var {...a, b}" SyntaxError: Rest element must be last element
+script "var [...a, b]" SyntaxError: Rest element must be last element
+script "var [...a = 1]" SyntaxError: Invalid destructuring assignment target
+script "var [1]" SyntaxError: Invalid destructuring assignment target
+script "var [a.b]" SyntaxError: Illegal property in declaration context
+script "const a," SyntaxError: Missing initializer in const declaration
+script "'use strict'; let" SyntaxError: Unexpected strict mode reserved word
+script "x = (...a)" SyntaxError: Unexpected token '...'
+script "x = (...a) + 1" SyntaxError: Unexpected token '...'
+script "x = /a/\\u0067" SyntaxError: Invalid regular expression flags
+script "x = function* () { (yield) => 1 }" SyntaxError: Invalid destructuring assignment target
+script "x = async function () { async (a = await 1) => 1 }" SyntaxError: Illegal await-expression in formal parameters of async function
+script "for (let [a+b] of c);" SyntaxError: Invalid destructuring assignment target
+module "export default 1; export default 2;" SyntaxError: Identifier '.default' has already been declared
+module "export" SyntaxError: Unexpected token 'export'
+module "export default function () {} export default 1" SyntaxError: Identifier '.default' has already been declared
+script "var [a[0]]" SyntaxError: Invalid destructuring assignment target
+script "var [a()]" SyntaxError: Invalid destructuring assignment target
+script "var [a+b]" SyntaxError: Invalid destructuring assignment target
+script "var [(a)]" SyntaxError: Invalid destructuring assignment target
+script "var [a, (b)]" SyntaxError: Invalid destructuring assignment target
+script "var [{a}.b]" SyntaxError: Illegal property in declaration context
+script "var [a.b] = []" SyntaxError: Illegal property in declaration context
+script "var [a.b = 1]" SyntaxError: Illegal property in declaration context
+script "var [a = 1, b.c]" SyntaxError: Illegal property in declaration context
+script "var {a: b.c}" SyntaxError: Illegal property in declaration context
+script "var {a: (b)}" SyntaxError: Invalid destructuring assignment target
+script "var {a: [1]}" SyntaxError: Invalid destructuring assignment target
+script "var {a: 1} = {}" SyntaxError: Invalid destructuring assignment target
+script "var {a: b+c}" SyntaxError: Invalid destructuring assignment target
+script "var {a: b()}" SyntaxError: Invalid destructuring assignment target
+script "var {1n}" SyntaxError: Unexpected number
+script "var {1, a}" SyntaxError: Unexpected number
+script "var {'a', b}" SyntaxError: Unexpected string
+script "var {[a], b}" SyntaxError: Unexpected token '['
+script "var {[a]: b, c.d}" SyntaxError: Unexpected token '.'
+script "var {a.b}" SyntaxError: Unexpected token '.'
+script "var {a, b.c}" SyntaxError: Unexpected token '.'
+script "var {...[a]}" SyntaxError: `...` must be followed by an identifier in declaration contexts
+script "var {...{a}}" SyntaxError: `...` must be followed by an identifier in declaration contexts
+script "var {...a.b}" SyntaxError: Illegal property in declaration context
+script "var {...a = 1}" SyntaxError: `...` must be followed by an identifier in declaration contexts
+script "var [...a.b]" SyntaxError: Illegal property in declaration context
+script "var [...[a], b]" SyntaxError: Rest element must be last element
+script "var [...a = 1, b]" SyntaxError: Invalid destructuring assignment target
+script "var [...a,]" SyntaxError: Rest element must be last element
+script "var [...]" SyntaxError: Unexpected token ']'
+script "var {...}" SyntaxError: Unexpected token '}'
+script "var {...a,}" SyntaxError: Rest element must be last element
+script "function f([a.b]) {}" SyntaxError: Illegal property in declaration context
+script "function f({a: 1}) {}" SyntaxError: Invalid destructuring assignment target
+script "function f([1]) {}" SyntaxError: Invalid destructuring assignment target
+script "function f(...a,) {}" SyntaxError: Rest parameter must be last formal parameter
+script "function f(...[a], b) {}" SyntaxError: Rest parameter must be last formal parameter
+script "function f(...a = 1) {}" SyntaxError: Rest parameter may not have a default initializer
+script "function f(...a = 1, b) {}" SyntaxError: Rest parameter may not have a default initializer
+script "function f(...) {}" SyntaxError: Unexpected token ')'
+script "function f(...1) {}" SyntaxError: Unexpected number
+script "(...a,) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "(...a = 1) => 1" SyntaxError: Rest parameter may not have a default initializer
+script "(...a = 1, b) => 1" SyntaxError: Rest parameter may not have a default initializer
+script "(a, ...b, c) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "(...[a], b) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "(...a.b) => 1" SyntaxError: Unexpected token '...'
+script "(a.b) => 1" SyntaxError: Invalid destructuring assignment target
+script "(a, b.c) => 1" SyntaxError: Invalid destructuring assignment target
+script "(1) => 1" SyntaxError: Invalid destructuring assignment target
+script "(a + b) => 1" SyntaxError: Invalid destructuring assignment target
+script "(a()) => 1" SyntaxError: Invalid destructuring assignment target
+script "(a, (b)) => 1" SyntaxError: Invalid destructuring assignment target
+script "([(a)]) => 1" SyntaxError: Invalid destructuring assignment target
+script "({a: (b)}) => 1" SyntaxError: Invalid destructuring assignment target
+script "({a: 1}) => 1" SyntaxError: Invalid destructuring assignment target
+script "({1}) => 1" SyntaxError: Unexpected number
+script "({'a'}) => 1" SyntaxError: Unexpected string
+script "({[a]}) => 1" SyntaxError: Unexpected token '['
+script "({a: b, ...c, d}) => 1" SyntaxError: Rest element must be last element
+script "([...a, b]) => 1" SyntaxError: Rest element must be last element
+script "async (...a, b) => 1" SyntaxError: Rest parameter must be last formal parameter
+script "async (a.b) => 1" SyntaxError: Invalid destructuring assignment target
+script "async ((a)) => 1" SyntaxError: Invalid destructuring assignment target
+script "async (1) => 1" SyntaxError: Invalid destructuring assignment target
+script "async function f(...a, b) {}" SyntaxError: Rest parameter must be last formal parameter
+script "async function f(a.b) {}" SyntaxError: Unexpected token '.'
+script "function* g(...a, b) {}" SyntaxError: Rest parameter must be last formal parameter
+script "({ m(...a, b) {} })" SyntaxError: Rest parameter must be last formal parameter
+script "({ m(a.b) {} })" SyntaxError: Unexpected token '.'
+script "({ m(1) {} })" SyntaxError: Unexpected number
+script "class C { m(...a, b) {} }" SyntaxError: Rest parameter must be last formal parameter
+script "class C { m(a.b) {} }" SyntaxError: Unexpected token '.'
+script "var x = { set a(...b) {} }" SyntaxError: Setter function argument must not be a rest parameter
+script "try {} catch ([a.b]) {}" SyntaxError: Illegal property in declaration context
+script "try {} catch ({a: 1}) {}" SyntaxError: Invalid destructuring assignment target
+script "try {} catch (a.b) {}" SyntaxError: Unexpected token '.'
+script "try {} catch (1) {}" SyntaxError: Unexpected number
+script "try {} catch (...a) {}" SyntaxError: Unexpected token '...'
+script "for (let [a.b] of c);" SyntaxError: Illegal property in declaration context
+script "for (let {a: 1} of c);" SyntaxError: Invalid destructuring assignment target
+script "for (var [1] in c);" SyntaxError: Invalid destructuring assignment target
+script "for (const [a+b] of c);" SyntaxError: Invalid destructuring assignment target
+script "let [a.b] = c" SyntaxError: Illegal property in declaration context
+script "const [a.b] = c" SyntaxError: Illegal property in declaration context
+script "let {a: 1} = c" SyntaxError: Invalid destructuring assignment target
+script "let [...a, b] = c" SyntaxError: Rest element must be last element
+script "const {...a, b} = c" SyntaxError: Rest element must be last element
+script "let [...a = 1] = c" SyntaxError: Invalid destructuring assignment target
+script "let {...a = 1} = c" SyntaxError: `...` must be followed by an identifier in declaration contexts
+script "let {...[a]} = c" SyntaxError: `...` must be followed by an identifier in declaration contexts
+script "let {1} = c" SyntaxError: Unexpected number
+script "var x, [a.b] = c" SyntaxError: Illegal property in declaration context
+script "var x = 1, {1}" SyntaxError: Unexpected number
+script "var [a.b.c]" SyntaxError: Illegal property in declaration context
+script "var [a?.b]" SyntaxError: Invalid destructuring assignment target
+script "var [a[\"x\"]]" SyntaxError: Invalid destructuring assignment target
+script "var [this.x]" SyntaxError: Illegal property in declaration context
+script "var [f().x]" SyntaxError: Illegal property in declaration context
+script "var [a.b[0]]" SyntaxError: Invalid destructuring assignment target
+script "var [a[0].b]" SyntaxError: Invalid destructuring assignment target
+script "var [a.b()]" SyntaxError: Invalid destructuring assignment target

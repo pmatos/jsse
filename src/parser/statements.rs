@@ -106,10 +106,7 @@ impl<'a> Parser<'a> {
                     self.error("Lexical declaration cannot appear in a single-statement context")
                 );
             }
-            let next_is_bracket = self.lookahead(|tokens| {
-                tokens.advance().is_ok() && tokens.current() == &Token::LeftBracket
-            });
-            if next_is_bracket {
+            if self.let_starts_declaration() {
                 return Err(
                     self.error("Lexical declaration cannot appear in a single-statement context")
                 );
@@ -756,14 +753,12 @@ impl<'a> Parser<'a> {
                     }
                     // var for-in: initializer only allowed for simple binding in sloppy mode (Annex B)
                     if decls.len() != 1 {
-                        return Err(self.error("Invalid left-hand side in for-in loop"));
+                        return Err(self.for_binding_error(&decls, "in"));
                     }
                     if decls[0].init.is_some() {
                         let is_simple = matches!(&decls[0].pattern, Pattern::Identifier(_));
                         if !is_simple || self.strict {
-                            return Err(self.error(
-                                "for-in loop variable declaration may not have an initializer",
-                            ));
+                            return Err(self.for_binding_error(&decls, "in"));
                         }
                     }
                     self.advance()?;
@@ -782,9 +777,7 @@ impl<'a> Parser<'a> {
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     if decls.len() != 1 || decls[0].init.is_some() {
-                        return Err(self.error(
-                            "for-of loop variable declaration may not have an initializer",
-                        ));
+                        return Err(self.for_binding_error(&decls, "of"));
                     }
                     let at = self.advance_past_of(head_start)?;
                     let right = self.parse_assignment_expression()?;
@@ -864,8 +857,8 @@ impl<'a> Parser<'a> {
                         }));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
-                        if matches!(&expr, Expression::Identifier(n) if n == "let") {
-                            return Err(self.error("The identifier 'let' is disallowed as a left-hand side expression of a for-of loop"));
+                        if self.head_is_let(head_start) {
+                            return Err(self.let_of_error(head_start));
                         }
                         let at = self.advance_past_of(head_start)?;
                         let right = self.parse_assignment_expression()?;
@@ -902,9 +895,7 @@ impl<'a> Parser<'a> {
                             );
                         }
                         if decls.len() != 1 || decls[0].init.is_some() {
-                            return Err(self.error(
-                                "for-in loop variable declaration may not have an initializer",
-                            ));
+                            return Err(self.for_binding_error(&decls, "in"));
                         }
                         self.advance()?;
                         let right = self.parse_expression()?;
@@ -923,9 +914,7 @@ impl<'a> Parser<'a> {
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
                         if decls.len() != 1 || decls[0].init.is_some() {
-                            return Err(self.error(
-                                "for-of loop variable declaration may not have an initializer",
-                            ));
+                            return Err(self.for_binding_error(&decls, "of"));
                         }
                         let at = self.advance_past_of(head_start)?;
                         let right = self.parse_assignment_expression()?;
@@ -980,9 +969,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error("for await...in is not valid; use for await...of"));
                     }
                     if decls.len() != 1 || decls[0].init.is_some() {
-                        return Err(self.error(
-                            "for-in loop variable declaration may not have an initializer",
-                        ));
+                        return Err(self.for_binding_error(&decls, "in"));
                     }
                     self.advance()?;
                     let right = self.parse_expression()?;
@@ -1001,9 +988,7 @@ impl<'a> Parser<'a> {
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     if decls.len() != 1 || decls[0].init.is_some() {
-                        return Err(self.error(
-                            "for-of loop variable declaration may not have an initializer",
-                        ));
+                        return Err(self.for_binding_error(&decls, "of"));
                     }
                     let at = self.advance_past_of(head_start)?;
                     let right = self.parse_assignment_expression()?;
@@ -1083,8 +1068,8 @@ impl<'a> Parser<'a> {
                     }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
-                    if matches!(&expr, Expression::Identifier(n) if n == "let") {
-                        return Err(self.error("The identifier 'let' is disallowed as a left-hand side expression of a for-of loop"));
+                    if self.head_is_let(head_start) {
+                        return Err(self.let_of_error(head_start));
                     }
                     // §14.7.1.1: `for (async of ...)` is a SyntaxError (only with literal `async` keyword)
                     // Escaped forms (\u0061sync) and parenthesized (async) are allowed

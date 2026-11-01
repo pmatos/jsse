@@ -26,7 +26,7 @@ impl<'a> Parser<'a> {
             _ => return Err(self.error("Expected let or const")),
         };
         self.advance()?;
-        let declarations = self.parse_variable_declaration_list()?;
+        let declarations = self.lexical_declarators(kind)?;
         for d in &declarations {
             // const declarations must have an initializer (§14.3.1.1)
             if kind == VarKind::Const && d.init.is_none() {
@@ -113,7 +113,7 @@ impl<'a> Parser<'a> {
     /// We parse them for syntax validity but do not yet implement decorator semantics.
     pub(super) fn parse_decorator_list(&mut self) -> Result<(), ParseError> {
         while self.current == Token::At {
-            self.advance()?; // consume @
+            self.eat_at()?;
             self.parse_decorator_expression()?;
         }
         Ok(())
@@ -184,10 +184,7 @@ impl<'a> Parser<'a> {
         let prev_strict = self.strict;
         self.set_strict(true);
         let name = match self.current_identifier_name() {
-            Some(n) => {
-                self.advance()?;
-                n
-            }
+            Some(n) => self.class_binding(n)?,
             None => {
                 // Check if token is an escaped reserved word
                 if let Token::IdentifierWithEscape(n) = &self.current {
@@ -195,8 +192,7 @@ impl<'a> Parser<'a> {
                     self.set_strict(prev_strict);
                     return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
                 }
-                self.set_strict(prev_strict);
-                return Err(self.v8_error("Expected class name"));
+                return Err(self.class_name_error(prev_strict));
             }
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
@@ -972,7 +968,7 @@ impl<'a> Parser<'a> {
         while self.current != Token::RightParen {
             if self.current == Token::Ellipsis {
                 self.advance()?;
-                let pat = self.parse_binding_pattern()?;
+                let pat = self.rest_parameter()?;
                 params.push(Pattern::Rest(Box::new(pat)));
                 break;
             }

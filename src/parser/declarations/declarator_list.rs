@@ -4,7 +4,33 @@ impl<'a> Parser<'a> {
     pub(in crate::parser) fn parse_variable_declaration_list(
         &mut self,
     ) -> Result<Vec<VariableDeclarator>, ParseError> {
-        self.parse_declarators(false)
+        self.parse_declarators(false, false)
+    }
+
+    /// The declarators of `let` / `const`. V8 reports a `const` without
+    /// initializer as soon as its declarator ends, and a strict `let` that
+    /// starts no declaration as the reserved word it is (`--node` only).
+    pub(in crate::parser) fn lexical_declarators(
+        &mut self,
+        kind: VarKind,
+    ) -> Result<Vec<VariableDeclarator>, ParseError> {
+        self.reserved_let(kind == VarKind::Let)?;
+        self.parse_declarators(false, kind == VarKind::Const)
+    }
+
+    /// In strict code `let` that does not start a declaration is a reserved word.
+    fn reserved_let(&self, is_let: bool) -> Result<(), ParseError> {
+        let binding_start = self.current_identifier_name().is_some()
+            || matches!(self.current, Token::LeftBracket | Token::LeftBrace);
+        let exported = self
+            .source_text_source
+            .get(..self.prev_token_end)
+            .and_then(|source| source.strip_suffix("let"))
+            .is_some_and(|before| before.trim_end().ends_with("export"));
+        if is_let && self.strict && !binding_start && !exported && inferred_names::enabled() {
+            return Err(self.error("Unexpected strict mode reserved word"));
+        }
+        Ok(())
     }
 
     /// The declaration list of a `for (var|let|const ...` head, where a
@@ -12,10 +38,19 @@ impl<'a> Parser<'a> {
     pub(in crate::parser) fn parse_for_declaration_list(
         &mut self,
     ) -> Result<Vec<VariableDeclarator>, ParseError> {
-        self.parse_declarators(true)
+        let after_let = self
+            .source_text_source
+            .get(..self.prev_token_end)
+            .is_some_and(|source| source.ends_with("let"));
+        self.reserved_let(after_let)?;
+        self.parse_declarators(true, false)
     }
 
-    fn parse_declarators(&mut self, for_head: bool) -> Result<Vec<VariableDeclarator>, ParseError> {
+    fn parse_declarators(
+        &mut self,
+        for_head: bool,
+        is_const: bool,
+    ) -> Result<Vec<VariableDeclarator>, ParseError> {
         let mut decls = Vec::new();
         loop {
             let pattern = self.parse_binding_pattern()?;
@@ -29,6 +64,9 @@ impl<'a> Parser<'a> {
                     for_head && matches!(self.current, Token::Keyword(Keyword::In | Keyword::Of));
                 if !matches!(pattern, Pattern::Identifier(_)) && !for_binding {
                     return Err(self.error("Missing initializer in destructuring declaration"));
+                }
+                if is_const && self.current == Token::Comma {
+                    return Err(self.error("Missing initializer in const declaration"));
                 }
                 None
             };

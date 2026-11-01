@@ -7,6 +7,7 @@
 //! parsed a second time as FormalParameters, which is the refinement the
 //! specification describes.
 
+use super::v8_messages::patterns::Site;
 use super::*;
 
 /// Token-stream position, enough to resume parsing from a token boundary.
@@ -32,7 +33,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn rewind_to(&mut self, mark: TokenMark<'a>) {
+    pub(super) fn rewind_to(&mut self, mark: TokenMark<'a>) {
         self.lexer = mark.lexer;
         self.current = mark.current;
         self.current_token_start = mark.current_token_start;
@@ -50,8 +51,20 @@ impl<'a> Parser<'a> {
         open_paren: TokenMark<'a>,
         is_async: bool,
     ) -> Result<Vec<Pattern>, ParseError> {
+        if inferred_names::enabled()
+            && exprs
+                .iter()
+                .any(|e| matches!(e, Expression::Yield(..) | Expression::Await(..)))
+        {
+            return Err(self.error("Invalid destructuring assignment target"));
+        }
         if is_async {
             for e in &exprs {
+                if self.in_async && Self::expr_contains_await_expression(e) {
+                    return Err(self.error(
+                        "Await expression is not allowed in formal parameters of an async function",
+                    ));
+                }
                 if Self::expr_contains_await_identifier(e)
                     || Self::expr_contains_await_expression(e)
                 {
@@ -151,14 +164,10 @@ impl<'a> Parser<'a> {
         while self.current != Token::RightParen {
             if self.current == Token::Ellipsis {
                 self.advance()?;
-                self.parse_binding_pattern()?;
+                self.arrow_rest_parameter()?;
                 break;
             }
-            self.parse_binding_pattern()?;
-            if self.current == Token::Assign {
-                self.advance()?;
-                self.parse_assignment_expression()?;
-            }
+            self.pattern_element(Site::ArrowParam)?;
             if self.current != Token::Comma {
                 break;
             }

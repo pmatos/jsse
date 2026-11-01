@@ -164,9 +164,7 @@ impl<'a> Parser<'a> {
                         && let Expression::Identifier(name) = expr
                         && (name == "eval" || name == "arguments")
                     {
-                        return Err(
-                            self.error("Assignment to 'eval' or 'arguments' in strict mode")
-                        );
+                        return Err(self.nested_eval_error());
                     }
                     Ok(())
                 } else {

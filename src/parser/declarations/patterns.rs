@@ -1,3 +1,4 @@
+use super::v8_messages::patterns::Site;
 use super::*;
 
 impl<'a> Parser<'a> {
@@ -25,18 +26,11 @@ impl<'a> Parser<'a> {
             }
             if self.current == Token::Ellipsis {
                 self.advance()?;
-                let rest = self.parse_binding_pattern()?;
+                let rest = self.rest_element(false)?;
                 elements.push(Some(ArrayPatternElement::Rest(rest)));
                 break;
             }
-            let pat = self.parse_binding_pattern()?;
-            let pat = if self.current == Token::Assign {
-                self.advance()?;
-                let default = self.parse_assignment_expression()?;
-                Pattern::Assign(Box::new(pat), ExprBox::new(default))
-            } else {
-                pat
-            };
+            let pat = self.pattern_element(Site::Element)?;
             elements.push(Some(ArrayPatternElement::Pattern(pat)));
             if self.current != Token::Comma {
                 break;
@@ -58,25 +52,25 @@ impl<'a> Parser<'a> {
                     return Err(self
                         .error("`...` must be followed by an identifier in declaration contexts"));
                 }
-                let rest = self.parse_binding_pattern()?;
+                let rest = self.rest_element(true)?;
                 props.push(ObjectPatternProperty::Rest(rest));
                 break;
             }
+            let key_text = inferred_names::enabled().then(|| self.v8_unexpected());
             let key = self.parse_property_key_for_pattern()?;
             if self.current == Token::Colon {
                 self.advance()?;
-                let mut pat = self.parse_binding_pattern()?;
-                if self.current == Token::Assign {
-                    self.advance()?;
-                    let default = self.parse_assignment_expression()?;
-                    pat = Pattern::Assign(Box::new(pat), ExprBox::new(default));
-                }
+                let pat = self.pattern_element(Site::Element)?;
                 props.push(ObjectPatternProperty::KeyValue(key, pat));
             } else {
                 // Shorthand: { x } or { x = default }
                 let name = match &key {
                     PropertyKey::Identifier(n) => n.clone(),
-                    _ => return Err(self.error("Expected identifier for shorthand pattern")),
+                    _ => {
+                        return Err(self.error(
+                            key_text.unwrap_or("Expected identifier for shorthand pattern".into()),
+                        ));
+                    }
                 };
                 // `async` followed by something that looks like a method name/modifier
                 if name == "async"

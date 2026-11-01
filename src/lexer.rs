@@ -1,4 +1,5 @@
 use std::fmt;
+mod regex_flags;
 use std::str::Chars;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1086,14 +1087,7 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
-        let mut flags = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_ascii_alphabetic() {
-                flags.push(self.advance().unwrap());
-            } else {
-                break;
-            }
-        }
+        let flags = self.regex_flags()?;
         let pattern = if self.pua_undo {
             crate::interpreter::decode_source_text(&pattern)
                 .as_units()
