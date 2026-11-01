@@ -84,7 +84,7 @@ impl Parser<'_> {
             let name = name.clone();
             self.use_private_name(&name)?;
             self.advance()?;
-            if matches!(self.current, Token::Keyword(Keyword::In)) {
+            if self.current == Token::Keyword(Keyword::In) && !self.no_in {
                 Expression::PrivateIdentifier(name)
             } else {
                 return Err(ParseError {

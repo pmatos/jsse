@@ -11,6 +11,7 @@ use std::borrow::Cow;
 mod exact;
 pub(in crate::parser) mod patterns;
 mod regexp_reason;
+mod tail_1523;
 
 use exact::{EXACT, INVALID_TOKEN};
 
@@ -32,6 +33,9 @@ fn quoted<'a>(msg: &'a str, prefix: &str) -> Option<&'a str> {
 pub(crate) fn static_text(msg: &str) -> Option<Cow<'_, str>> {
     if let Some((_, v8)) = EXACT.iter().find(|(ours, _)| *ours == msg) {
         return Some(Cow::Borrowed(v8));
+    }
+    if let Some(text) = tail_1523::text(msg) {
+        return Some(text);
     }
     if msg.starts_with("Assignment to '") && msg.ends_with("' in strict mode")
         || msg.ends_with("can't be used as a binding identifier in strict mode")
@@ -167,9 +171,13 @@ pub(crate) fn regexp_literal_message(msg: &str, flags: &str) -> String {
     };
     let reason = match reason {
         "Invalid flags in modifier group" => modifier_group_reason(pattern),
-        "Invalid named reference" => "Invalid named capture referenced",
+        "Invalid modifier group" => "Invalid group",
+        "Invalid named reference" => tail_1523::named_reference_reason(pattern),
+        "Invalid capture group name" => tail_1523::group_name_reason(pattern),
         "Invalid class escape in range" => "Invalid character class",
-        "Invalid escape" => regexp_reason::unicode_escape_reason(pattern, flags).unwrap_or(reason),
+        "Invalid escape" => regexp_reason::unicode_escape_reason(pattern, flags)
+            .or_else(|| tail_1523::bare_k_reason(pattern))
+            .unwrap_or(reason),
         other => other,
     };
     format!("Invalid regular expression: /{pattern}/{flags}: {reason}")
@@ -262,6 +270,9 @@ impl<'a> Parser<'a> {
         {
             return "Decimals with leading zeros are not allowed in strict mode.".to_string();
         }
+        if msg == "Octal escape sequences are not allowed in strict mode" {
+            return self.strict_escape_text().to_string();
+        }
         if let Some(text) = static_text(&msg) {
             return text.into_owned();
         }
@@ -290,7 +301,7 @@ impl<'a> Parser<'a> {
             "Declaration not allowed in statement position of iteration statement"
                 if self.current == Token::Keyword(Keyword::Function) =>
             {
-                "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.".to_string()
+                self.function_in_statement_position().to_string()
             }
             "Declaration not allowed in statement position of iteration statement"
                 if self.current == Token::Keyword(Keyword::Async) =>

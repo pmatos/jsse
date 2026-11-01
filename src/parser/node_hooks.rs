@@ -7,6 +7,7 @@
 use super::*;
 
 mod wording_1523;
+mod wording_1523_tail;
 
 impl<'a> Parser<'a> {
     /// `import(spec)`: the position V8 reports for the call, which follows the
@@ -116,6 +117,11 @@ impl<'a> Parser<'a> {
 
     /// V8's text for an identifier written with a unicode escape (`await`).
     fn escaped_identifier_text(&self, name: &str) -> String {
+        if name == "of"
+            && let Some(text) = self.escaped_of_text()
+        {
+            return text.to_string();
+        }
         let text = match name {
             "let" => "Keyword must not contain escaped characters",
             "await" => "Unexpected reserved word",
@@ -288,7 +294,7 @@ impl<'a> Parser<'a> {
     /// `class let {}`: the class is strict while its name is read, so V8
     /// words the token as a reserved word before the caller's mode returns.
     pub(super) fn class_name_error(&mut self, outer_strict: bool) -> ParseError {
-        let error = self.class_name_text();
+        let error = self.class_name_text(outer_strict);
         self.set_strict(outer_strict);
         error
     }

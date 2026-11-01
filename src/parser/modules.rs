@@ -369,7 +369,8 @@ impl<'a> Parser<'a> {
 
             let exported = if self.is_as_keyword() {
                 self.advance()?;
-                self.parse_module_export_name()?
+                let name = self.parse_module_export_name();
+                name.map_err(|e| self.string_local_surrogate(e, is_string))?
             } else {
                 local.clone()
             };
@@ -527,7 +528,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok(())
         } else {
-            Err(self.error("Expected 'as'"))
+            Err(self.expected_contextual("as"))
         }
     }
 
@@ -540,7 +541,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok(())
         } else {
-            Err(self.error("Expected 'from'"))
+            Err(self.expected_contextual("from"))
         }
     }
 }
