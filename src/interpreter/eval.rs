@@ -346,7 +346,7 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().has_private_field(*name) {
-                            return Err(self.private_twice_error(*name, true));
+                            return Err(self.method_twice_error(*name));
                         }
                         obj.borrow_mut()
                             .private_fields_mut()
@@ -361,7 +361,7 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().has_private_field(*name) {
-                            return Err(self.private_twice_error(*name, true));
+                            return Err(self.accessor_twice_error(*name));
                         }
                         obj.borrow_mut().private_fields_mut().insert(
                             *name,
@@ -406,7 +406,7 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().has_private_field(*name) {
-                            return Err(self.private_twice_error(*name, false));
+                            return Err(self.field_twice_error(*name));
                         }
                         obj.borrow_mut()
                             .private_fields_mut()

@@ -5,6 +5,14 @@
 
 use super::super::*;
 
+/// What a private name initialized twice names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrivateKind {
+    Field,
+    Method,
+    Accessor,
+}
+
 const SHARED_BUFFER_MEMBER: [&str; 5] = [
     "grow",
     "slice",
@@ -112,11 +120,10 @@ impl Interpreter {
     /// The SyntaxError for a pattern that does not compile: V8 prints the
     /// flags after the pattern.
     pub(crate) fn regexp_error(&mut self, msg: &str, flags: &str) -> JsValue {
-        let text = self.v8_message(msg, |_| match msg.rsplit_once("/: ") {
-            Some((head, reason)) if head.starts_with("Invalid regular expression: /") => {
-                format!("{head}/{flags}: {reason}")
-            }
-            _ => crate::parser::v8_messages::regexp_literal_message(msg, flags),
+        const TRAILING_ESCAPE: &str = "/: \\ at end of pattern";
+        let text = self.v8_message(msg, |_| match msg.strip_suffix(TRAILING_ESCAPE) {
+            Some(head) => format!("{head}/{flags}: \\ at end of pattern"),
+            None => crate::parser::v8_messages::regexp_literal_message(msg, flags),
         });
         self.create_error("SyntaxError", &text)
     }
@@ -155,15 +162,29 @@ impl Interpreter {
         error
     }
 
-    /// `Cannot initialize #y twice on the same object`: a private name of a
-    /// class initialized on an object that has it already. `method` is for a
-    /// private method or accessor.
-    pub(crate) fn private_twice_error(&mut self, name: PrivateId, method: bool) -> JsValue {
-        let engine = if method {
-            "Cannot add private method to object twice"
-        } else {
-            "Cannot initialize private field twice on the same object"
+    /// `Cannot initialize #y twice on the same object`: a private field of a
+    /// class initialized on an object that has it already.
+    pub(crate) fn field_twice_error(&mut self, name: PrivateId) -> JsValue {
+        self.private_twice_error(name, PrivateKind::Field)
+    }
+
+    /// The same for a private method.
+    pub(crate) fn method_twice_error(&mut self, name: PrivateId) -> JsValue {
+        self.private_twice_error(name, PrivateKind::Method)
+    }
+
+    /// The same for a private accessor.
+    pub(crate) fn accessor_twice_error(&mut self, name: PrivateId) -> JsValue {
+        self.private_twice_error(name, PrivateKind::Accessor)
+    }
+
+    fn private_twice_error(&mut self, name: PrivateId, kind: PrivateKind) -> JsValue {
+        let engine = match kind {
+            PrivateKind::Field => "Cannot initialize private field twice on the same object",
+            PrivateKind::Method => "Cannot add private method to object twice",
+            PrivateKind::Accessor => "Cannot add private accessor to object twice",
         };
+        let method = kind != PrivateKind::Field;
         let text = self.v8_message(engine, |i| i.private_twice_text(name, method, engine));
         self.create_type_error(&text)
     }

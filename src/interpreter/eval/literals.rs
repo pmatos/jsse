@@ -1160,7 +1160,7 @@ impl Interpreter {
                             ));
                         }
                         if func_obj.borrow().has_private_field(branded) {
-                            return Completion::Throw(self.private_twice_error(branded, false));
+                            return Completion::Throw(self.field_twice_error(branded));
                         }
                         func_obj
                             .borrow_mut()

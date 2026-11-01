@@ -71,6 +71,7 @@ impl Interpreter {
         if !self.node_host.stack.installed {
             return self.eval_expr(expr, env);
         }
+        self.node_host.iter_operand.not_callable = None;
         let saved = self.node_host.iter_operand.target;
         if let Expression::Assign(AssignOp::Assign, target, ..) = unparenthesized(expr)
             && let Expression::Array(elements, _) = &**target
@@ -143,7 +144,12 @@ impl Interpreter {
         let Some((id, depth, pos, shown)) = self.node_host.iter_operand.not_callable.take() else {
             return error;
         };
-        if error.as_object_id() != Some(id) || depth != self.call_depth + 1 || !iterated(pos) {
+        let plain = format!("{shown} is not a function");
+        if error.as_object_id() != Some(id)
+            || depth != self.call_depth + 1
+            || !iterated(pos)
+            || self.own_data_string(id, "message").as_deref() != Some(plain.as_str())
+        {
             self.node_host.iter_operand.not_callable = Some((id, depth, pos, shown));
             return error;
         }

@@ -68,10 +68,7 @@ enum Folded {
 /// `-`, `+` and `~` of one, and `!` of any literal while it parses.
 fn fold(expr: &Expression) -> Option<Folded> {
     use crate::types::number_ops as ops;
-    let number = |expr| match fold(expr)? {
-        Folded::Number(n) => Some(n),
-        Folded::Bool(_) => None,
-    };
+    let number = fold_number;
     Some(Folded::Number(match expr {
         Expression::Literal(Literal::Number(n)) => *n,
         Expression::Literal(Literal::Boolean(b)) => return Some(Folded::Bool(*b)),
@@ -88,28 +85,38 @@ fn fold(expr: &Expression) -> Option<Folded> {
         Expression::Unary(UnaryOp::Minus, operand) => -number(operand)?,
         Expression::Unary(UnaryOp::Plus, operand) => number(operand)?,
         Expression::Unary(UnaryOp::BitNot, operand) => ops::bitwise_not(number(operand)?),
-        Expression::Binary(op, left, right, _) => {
-            let (x, y) = (number(left)?, number(right)?);
-            let (i, j) = (ops::to_int32(x), ops::to_int32(y));
-            let shift = ops::to_uint32(y) & 31;
-            match op {
-                BinaryOp::Add => x + y,
-                BinaryOp::Sub => x - y,
-                BinaryOp::Mul => x * y,
-                BinaryOp::Div => x / y,
-                BinaryOp::Mod => x % y,
-                BinaryOp::Exp => ops::exponentiate(x, y),
-                BinaryOp::BitOr => f64::from(i | j),
-                BinaryOp::BitAnd => f64::from(i & j),
-                BinaryOp::BitXor => f64::from(i ^ j),
-                BinaryOp::LShift => f64::from(i << shift),
-                BinaryOp::RShift => f64::from(i >> shift),
-                BinaryOp::URShift => f64::from(ops::to_uint32(x) >> shift),
-                _ => return None,
-            }
-        }
+        Expression::Binary(op, left, right, _) => apply(*op, number(left)?, number(right)?)?,
         _ => return None,
     }))
+}
+
+fn fold_number(expr: &Expression) -> Option<f64> {
+    match fold(expr)? {
+        Folded::Number(n) => Some(n),
+        Folded::Bool(_) => None,
+    }
+}
+
+/// `x op y` for the operators V8 folds.
+fn apply(op: BinaryOp, x: f64, y: f64) -> Option<f64> {
+    use crate::types::number_ops as ops;
+    let (i, j) = (ops::to_int32(x), ops::to_int32(y));
+    let shift = ops::to_uint32(y) & 31;
+    Some(match op {
+        BinaryOp::Add => x + y,
+        BinaryOp::Sub => x - y,
+        BinaryOp::Mul => x * y,
+        BinaryOp::Div => x / y,
+        BinaryOp::Mod => x % y,
+        BinaryOp::Exp => ops::exponentiate(x, y),
+        BinaryOp::BitOr => f64::from(i | j),
+        BinaryOp::BitAnd => f64::from(i & j),
+        BinaryOp::BitXor => f64::from(i ^ j),
+        BinaryOp::LShift => f64::from(i << shift),
+        BinaryOp::RShift => f64::from(i >> shift),
+        BinaryOp::URShift => f64::from(ops::to_uint32(x) >> shift),
+        _ => return None,
+    })
 }
 
 /// The text V8 prints for `expr`, `(intermediate value)` for what it does
@@ -159,18 +166,30 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         Expression::Void(operand) => format!("(void {})", expr_text(operand)),
         Expression::Delete(operand) => format!("(delete {})", expr_text(operand)),
         Expression::Binary(op, left, right, _) => {
-            let mut operands = vec![expr_text(right)];
+            let mut rest = vec![&**right];
             let mut head: &Expression = left;
             while chains(*op)
                 && let Expression::Binary(inner, l, r, _) = head
                 && inner == op
-                && fold(head).is_none()
             {
-                operands.push(expr_text(r));
+                rest.push(r);
                 head = l;
             }
-            operands.push(expr_text(head));
-            operands.reverse();
+            rest.reverse();
+            let mut operands = Vec::new();
+            let mut taken = 0;
+            if let Some(mut acc) = fold_number(head) {
+                while let Some(next) = rest.get(taken).and_then(|r| fold_number(r))
+                    && let Some(folded) = apply(*op, acc, next)
+                {
+                    acc = folded;
+                    taken += 1;
+                }
+                operands.push(JsValue::number(acc).to_string());
+            } else {
+                operands.push(expr_text(head));
+            }
+            operands.extend(rest[taken..].iter().map(|operand| expr_text(operand)));
             format!("({})", operands.join(&format!(" {} ", binary_symbol(*op))))
         }
         Expression::Logical(op, left, right) => {

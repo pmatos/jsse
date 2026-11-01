@@ -50,7 +50,12 @@ impl Interpreter {
         handler: &JsValue,
         args: &[JsValue],
     ) -> Result<JsValue, JsValue> {
-        match self.call_function(function, handler, args) {
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(handler);
+        args.iter().for_each(|arg| self.gc_root_value(arg));
+        let called = self.call_function(function, handler, args);
+        self.gc_unroot_frame(gc_frame);
+        match called {
             Completion::Normal(v) => {
                 self.note_proxy_trap(trap, args, &v);
                 Ok(v)

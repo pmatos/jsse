@@ -3,9 +3,10 @@
 Differences from Node 26.8 that the fixtures here do not cover. Fixtures
 compare stdout of `node` and `jsse --node`. Everything listed is `--node` only;
 default mode keeps the engine's own wording. The rows are tracked as sub-issues
-of #1418.
+of #1418: #1566 (parameter error positions), #1567 (`for await`, `yield*` and
+the parameter-pattern anomalies), #1568 (Intl receivers, RegExp quantifier).
 
-## Destructuring and iteration (#1557)
+## Destructuring and iteration (#1557; #1566, #1567)
 
 | Case | V8 | jsse |
 | --- | --- | --- |
@@ -17,7 +18,7 @@ of #1418.
 | `var [x] = t\`a\`` where `t` returns `1` | `number 1 is not iterable (cannot read property Symbol(Symbol.iterator))` | `t is not a function or its return value is not iterable` |
 | a string key with an escape in a callee, `o['\\']()` | `o.\ is not a function` | `undefined is not a function` |
 
-## Builtins (#1558)
+## Builtins (#1558; #1568)
 
 | Case | V8 | jsse |
 | --- | --- | --- |

@@ -34,4 +34,8 @@ for (var i = 0; i < 20; i++) {
       "x"
     );
   }, "getOwnPropertyDescriptor trap result undefined for a non-configurable property");
+
+  assert.throws(TypeError, function () {
+    new Proxy(frozenX(), { set: function () { return true; } }).x = 2;
+  }, "set trap result true for a non-writable, non-configurable property");
 }

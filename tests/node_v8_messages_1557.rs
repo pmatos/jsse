@@ -124,6 +124,11 @@ t(function () {
   class B extends A { #y = 1; constructor(o) { super(o); } }
   var o = {}; new B(o); new B(o);
 });
+t(function () {
+  class A { constructor(o) { return o; } }
+  class B extends A { get #g() { return 1; } constructor(o) { super(o); } }
+  var o = {}; new B(o); new B(o);
+});
 t(function () { Object.prototype.__proto__ = {}; });
 t(function () { [][Symbol.iterator]().next.call(1); });
 t(function () { Iterator.from(5); });
@@ -146,6 +151,7 @@ print(r.join('|'));"#;
         "'setPrototypeOf' on proxy: trap returned falsish",
         "proxy handler's apply trap is not a function",
         "Cannot initialize private field twice on the same object",
+        "Cannot add private accessor to object twice",
         "Cyclic __proto__ value",
         "next called on non-object",
         "value is not an object",

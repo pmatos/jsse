@@ -336,7 +336,7 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
     }
     parts.reverse();
     let k = skip_ws_back(b, i);
-    if k >= 3 && &src[k - 3..k] == "new" && (k == 3 || !ident_byte(b[k - 4])) {
+    if k >= 3 && &b[k - 3..k] == b"new" && (k == 3 || !ident_byte(b[k - 4])) {
         let call = parts.iter().position(|part| part == "(...)")?;
         parts.splice(..=call, ["(intermediate value)".to_string()]);
         i = k - 3;
