@@ -9,7 +9,7 @@
 use super::*;
 use crate::interpreter::ModuleKey;
 
-const ARROW: PrivateId = PrivateId(u64::MAX - 6);
+pub(super) const ARROW: PrivateId = PrivateId(u64::MAX - 6);
 const LINK_ERROR: PrivateId = PrivateId(u64::MAX - 8);
 
 /// The import being linked: the specifier as written, the offset plus one and

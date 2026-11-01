@@ -1,0 +1,7 @@
+parse.mjs:1
+const = 1;
+      ^
+
+SyntaxError: Unexpected token '='
+
+Node.js v26.8.2

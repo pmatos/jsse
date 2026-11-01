@@ -175,8 +175,18 @@ fn run_source_with_interp(
 ) -> Result<(), EngineError> {
     let mut p = parser::Parser::new(source).map_err(|e| EngineError::Parse(format!("{e:?}")))?;
     let program = if is_module {
-        p.parse_program_as_module()
-            .map_err(|e| EngineError::Parse(format!("{e:?}")))?
+        match p.parse_program_as_module() {
+            Ok(program) => program,
+            Err(e) => {
+                let reported =
+                    path.is_some_and(|path| interp.node_entry_syntax_error(path, source, &p, &e));
+                return if reported {
+                    Ok(())
+                } else {
+                    Err(EngineError::Parse(format!("{e:?}")))
+                };
+            }
+        }
     } else {
         p.parse_program()
             .map_err(|e| EngineError::Parse(format!("{e:?}")))?
