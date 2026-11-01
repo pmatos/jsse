@@ -9,13 +9,14 @@ impl Interpreter {
     /// written, an object as `#<Class>`. Never runs user code.
     pub(super) fn v8_value_text(&self, value: &JsValue) -> String {
         // V8 names an object by its constructor, not its class (`#<Object>`
-        // for `Math`).
+        // for `Math`) and prints a function's source.
         let ctor = value
             .as_object_id()
             .and_then(|id| self.default_to_string_constructor(id));
         match (value.as_string(), ctor) {
             (Some(s), _) => s.to_string(),
             (None, Some(name)) => format!("#<{name}>"),
+            (None, None) if self.is_callable(value) => self.v8_plain_text(value),
             (None, None) => self.describe_non_callable(value),
         }
     }

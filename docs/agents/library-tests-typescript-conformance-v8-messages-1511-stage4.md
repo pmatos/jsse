@@ -105,7 +105,8 @@ See the table in `tests/node-v8-messages-1511/known-failures.md`: V8 quirks
 (constant folding of `1 && x` / `0 ? 1 : z`, the resumed generator's computed
 key, the arrow heritage past the end of the line), the `with (x)` statement
 start, comma expression statements (`1, x;` reports each operand), a parameter
-pattern that follows another parameter or has a default, and the `--no-bytecode`
-generator state machine's for-of head. test262 cannot observe any of this
+pattern that follows another parameter or has a default, an uninitialised
+local read by a fused local-local op (no identifier table), and the
+`--no-bytecode` generator state machine's for-of head. test262 cannot observe any of this
 (default mode is unchanged), so the regression coverage is the Node oracle above
 rather than `test262-extra/`.
