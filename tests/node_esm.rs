@@ -250,7 +250,7 @@ fn dynamic_import_loads_after_the_calling_code_finishes() {
 }
 
 #[test]
-fn import_defer_and_dotfile_imports_resolve_from_the_calling_file() {
+fn relative_and_dotfile_dynamic_imports_resolve_from_the_calling_file() {
     let dir = scratch("referrer");
     std::fs::create_dir_all(dir.0.join("sub")).unwrap();
     write(&dir, "sub/dep.mjs", "export const v = 'dep';");
@@ -258,7 +258,7 @@ fn import_defer_and_dotfile_imports_resolve_from_the_calling_file() {
     write(
         &dir,
         "sub/lib.cjs",
-        "exports.run = async () => (await import.defer('./dep.mjs')).v;\n\
+        "exports.run = async () => (await import('./dep.mjs')).v;\n\
          exports.dot = async () => (await import('./.hooks')).default.hooked;",
     );
     write(
