@@ -75,7 +75,7 @@ impl Interpreter {
                         ($o:expr) => {
                             $o.class_name = "Error".into();
                             if let Some(p) = proto {
-                                $o.prototype_id = Some(p);
+                                $o.set_proto(Some(p));
                             }
                             if let Some(ref ms) = msg_str {
                                 $o.insert_builtin("message".to_string(), ms.clone());
@@ -360,7 +360,7 @@ impl Interpreter {
                                 let mut o = obj.borrow_mut();
                                 o.class_name = "Test262Error";
                                 if let Some(ref ep) = error_proto_clone {
-                                    o.prototype_id = Some(ep.borrow().id.unwrap());
+                                    o.set_proto(Some(ep.id()));
                                 }
                                 if !(msg).is_undefined() {
                                     o.insert_builtin("message".to_string(), msg);
@@ -377,7 +377,7 @@ impl Interpreter {
                             let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                             o.class_name = "Test262Error";
                             if let Some(ref ep) = error_proto_clone {
-                                o.prototype_id = Some(ep.borrow().id.unwrap());
+                                o.set_proto(Some(ep.id()));
                             }
                             if !(msg).is_undefined() {
                                 o.insert_builtin("message".to_string(), msg);
@@ -412,7 +412,7 @@ impl Interpreter {
             if let Some(ref ep) = error_prototype {
                 self.get_object_cell_expect(native_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(ep.borrow().id.unwrap());
+                    .set_proto(Some(ep.id()));
             }
             self.get_object_cell_expect(native_proto_id)
                 .borrow_mut()
@@ -493,7 +493,7 @@ impl Interpreter {
                     macro_rules! init_native_error {
                         ($o:expr) => {
                             $o.class_name = error_class_name;
-                            $o.prototype_id = Some(proto);
+                            $o.set_proto(Some(proto));
                             if let Some(ref ms) = msg_str {
                                 $o.insert_builtin("message".to_string(), ms.clone());
                             }
@@ -555,7 +555,7 @@ impl Interpreter {
             if let Some(ref ep) = error_prototype {
                 self.get_object_cell_expect(suppressed_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(ep.borrow().id.unwrap());
+                    .set_proto(Some(ep.id()));
             }
             self.get_object_cell_expect(suppressed_proto_id)
                 .borrow_mut()
@@ -602,7 +602,7 @@ impl Interpreter {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.class_name = "SuppressedError";
                         if let Some(p) = proto {
-                            o.prototype_id = Some(p);
+                            o.set_proto(Some(p));
                         }
                         // Per spec: message first, then error, then suppressed
                         if let Some(msg_str) = msg_str {
@@ -645,7 +645,7 @@ impl Interpreter {
             if let Some(ref ep) = error_prototype {
                 self.get_object_cell_expect(agg_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(ep.borrow().id.unwrap());
+                    .set_proto(Some(ep.id()));
             }
             self.get_object_cell_expect(agg_proto_id)
                 .borrow_mut()
@@ -716,7 +716,7 @@ impl Interpreter {
                         macro_rules! init_agg_error {
                             ($o:expr) => {
                                 $o.class_name = "AggregateError".into();
-                                $o.prototype_id = Some(proto);
+                                $o.set_proto(Some(proto));
                                 if let Some(ref ms) = msg_str {
                                     $o.insert_builtin("message".to_string(), ms.clone());
                                 }

@@ -658,7 +658,7 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
         interp
             .get_object_cell_expect(obj_id)
             .borrow_mut()
-            .prototype_id = Some(proto_id);
+            .set_proto(Some(proto_id));
     }
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
         crate::interpreter::types::ObjectKind::Temporal(Box::new(TemporalData::ZonedDateTime {
@@ -2160,7 +2160,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(opts_obj_id)
                                 .borrow_mut()
-                                .prototype_id = Some(op_id);
+                                .set_proto(Some(op_id));
                         }
                         // Copy properties from user options if present
                         if let Some(o) = options_arg.as_object_id() {
@@ -2358,7 +2358,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(obj_id)
                             .borrow_mut()
-                            .prototype_id = Some(proto_id);
+                            .set_proto(Some(proto_id));
                     }
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                         crate::interpreter::types::ObjectKind::Temporal(Box::new(

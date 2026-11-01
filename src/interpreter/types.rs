@@ -1,5 +1,6 @@
 use crate::ast::*;
 mod buffer_data;
+mod compact_slots;
 mod function_props;
 use crate::interpreter::Atom;
 use crate::interpreter::binding_map::{BindingMap, BindingName};
@@ -2328,6 +2329,9 @@ pub(crate) enum OwnKeyFilter {
 /// Sentinel for an unset realm slot on `JsObjectData`.
 const NO_REALM: u32 = u32::MAX;
 
+/// Sentinel for a null [[Prototype]] on `JsObjectData`.
+const NO_PROTOTYPE: u32 = u32::MAX;
+
 /// See [`JsObjectData::extras`].
 #[derive(Default)]
 pub(crate) struct ObjectExtras {
@@ -2339,22 +2343,22 @@ pub(crate) struct ObjectExtras {
     /// Values the collector must keep alive on behalf of this object's native
     /// closures (see `Interpreter::pin_native_root`).
     pub(crate) gc_native_roots: Vec<JsValue>,
+    /// [[BooleanData]], [[NumberData]], [[StringData]], [[SymbolData]],
+    /// [[BigIntData]] or [[DateValue]], and a FinalizationRegistry's cleanup
+    /// callback. Wrappers and Dates are rare, so it lives here, not inline.
+    pub(crate) primitive_value: Option<JsValue>,
 }
 
 pub(crate) struct JsObjectData {
-    /// Slab index of this object. Set exactly once by
-    /// `Interpreter::alloc_object` at allocation time and never reassigned.
-    pub id: Option<u64>,
     /// Own properties in creation order.
     pub properties: PropertyMap,
-    pub prototype_id: Option<u64>,
+    prototype: u32,
     pub callable: Option<Box<JsFunction>>,
     pub class_name: &'static str,
     /// Realm the function object was created in; `None` when it was not
     /// built by `create_function` (the call path then keeps the caller's realm).
     function_realm: u32,
     pub extensible: bool,
-    pub primitive_value: Option<JsValue>,
     /// Rarely-used slots (class private elements, instance field
     /// definitions, native GC roots), allocated on first write so an ordinary
     /// object carries one pointer instead of the three containers.
@@ -2499,12 +2503,12 @@ pub(crate) fn fill_card_bits(bits: &mut Vec<u64>, len: usize, cards: &[usize]) {
 
 impl ArrayData {
     #[cfg(test)]
-    pub(crate) fn new(elements: Vec<JsValue>) -> Self {
-        Self {
+    pub(crate) fn new(elements: Vec<JsValue>) -> Box<Self> {
+        Box::new(Self {
             elements: elements.into(),
             extra_string_property_order: None,
             dirty_cards: None,
-        }
+        })
     }
 }
 
@@ -2526,10 +2530,10 @@ pub(crate) enum ObjectKind {
     #[default]
     Ordinary,
     Proxy(Box<ProxyData>),
-    RegExp(RegExpData),
+    RegExp(Box<RegExpData>),
     BoundFunction(Box<BoundFunctionData>),
-    WrappedFunction(WrappedFunctionData),
-    IterHelper(IterHelperData),
+    WrappedFunction(Box<WrappedFunctionData>),
+    IterHelper(Box<IterHelperData>),
     ArrayBuffer(Box<ArrayBufferData>),
     TypedArray(Box<TypedArrayInfo>),
     DataView(Box<DataViewInfo>),
@@ -2544,17 +2548,17 @@ pub(crate) enum ObjectKind {
     FinalizationRegistry(Box<FinalizationRegistryData>),
     /// [[WeakRefTarget]]. Held strongly by minor collections and cleared to
     /// `undefined` by the major collection that finds it unreachable.
-    WeakRef(JsValue),
+    WeakRef(Box<JsValue>),
     Iterator(Box<IteratorState>),
     /// `parameter_map` for an Arguments exotic object.
     #[allow(clippy::box_collection)] // keeps `ObjectKind` small
     Arguments(Box<ParameterMap>),
     /// Element storage and bounded named-property metadata for an Array exotic object.
-    Array(ArrayData),
+    Array(Box<ArrayData>),
     /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
-    PrimitiveWrapper(JsValue),
+    PrimitiveWrapper(Box<JsValue>),
     ModuleNamespace(Box<ModuleNamespaceData>),
-    DisposableStack(DisposableStackData),
+    DisposableStack(Box<DisposableStackData>),
     Temporal(Box<TemporalData>),
     /// Boxed because `IntlData` is the largest variant (~560 bytes). Boxing keeps
     /// `JsObjectData::kind` compact for the common Ordinary case at the cost of one
@@ -2868,14 +2872,12 @@ impl JsObjectData {
     #[inline]
     pub(crate) fn with_properties(properties: PropertyMap) -> Self {
         Self {
-            id: None,
             properties,
-            prototype_id: None,
+            prototype: NO_PROTOTYPE,
             callable: None,
             class_name: "Object",
             function_realm: NO_REALM,
             extensible: true,
-            primitive_value: None,
             extras: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
@@ -2895,7 +2897,7 @@ impl JsObjectData {
     kind_accessor!(boxed iterator_state, iterator_state_mut, Iterator, IteratorState);
     kind_accessor!(boxed promise_data, promise_data_mut, Promise, PromiseData);
     kind_accessor!(boxed parameter_map, parameter_map_mut, Arguments, ParameterMap);
-    kind_accessor!(array_data, array_data_mut, Array, ArrayData);
+    kind_accessor!(boxed array_data, array_data_mut, Array, ArrayData);
     kind_accessor!(
         boxed map_data,
         map_data_mut,
@@ -2904,10 +2906,10 @@ impl JsObjectData {
     );
     kind_accessor!(boxed set_data, set_data_mut, Set, KeyedEntries<JsValue>);
     kind_accessor!(boxed temporal_data, Temporal, TemporalData);
-    kind_accessor!(regexp, RegExp, RegExpData);
-    kind_accessor!(wrapped, WrappedFunction, WrappedFunctionData);
+    kind_accessor!(boxed regexp, RegExp, RegExpData);
+    kind_accessor!(boxed wrapped, WrappedFunction, WrappedFunctionData);
     kind_accessor!(boxed bound, BoundFunction, BoundFunctionData);
-    kind_accessor!(iter_helper, IterHelper, IterHelperData);
+    kind_accessor!(boxed iter_helper, IterHelper, IterHelperData);
     kind_accessor!(
         boxed module_namespace,
         module_namespace_mut,
@@ -2915,7 +2917,7 @@ impl JsObjectData {
         ModuleNamespaceData
     );
     kind_accessor!(
-        disposable_stack,
+        boxed disposable_stack,
         disposable_stack_mut,
         DisposableStack,
         DisposableStackData
@@ -3492,7 +3494,7 @@ impl JsObjectData {
     fn string_exotic_value<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
         let key = key.as_property_key_str()?;
         if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
         {
             let units = s.as_units();
             if key == "length" {
@@ -3567,7 +3569,7 @@ impl JsObjectData {
             }
             return None;
         }
-        if let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+        if let Some(s) = self.primitive_value().and_then(JsValue::as_string)
             && self.class_name == "String"
         {
             let units = s.as_units();
@@ -3680,7 +3682,7 @@ impl JsObjectData {
         }
         // String exotic: §10.4.3.1
         if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
         {
             if key.as_property_key_bytes() == b"length" {
                 return Some(PropertyDescriptor::data(
@@ -3726,7 +3728,7 @@ impl JsObjectData {
             return is_valid_integer_index(ta, index);
         }
         if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
         {
             if key.as_property_key_bytes() == b"length" {
                 return true;
@@ -3749,7 +3751,7 @@ impl JsObjectData {
         let key = intern_js_key(key.into());
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
             && let Some(idx) = string_exotic_index(&key, s.len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
@@ -4332,7 +4334,7 @@ impl JsObjectData {
         } else {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
             if self.class_name == "String"
-                && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+                && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
                 && (key.as_property_key_bytes() == b"length"
                     || string_exotic_index(key, s.len()).is_some())
             {
@@ -4432,10 +4434,7 @@ impl JsObjectData {
     #[inline]
     pub(crate) fn named_miss_is_ordinary(&self) -> bool {
         !self.kind.is_named_access_exotic()
-            && !self
-                .primitive_value
-                .as_ref()
-                .is_some_and(JsValue::is_string)
+            && !self.primitive_value().is_some_and(JsValue::is_string)
     }
 
     pub(crate) fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
@@ -4629,7 +4628,7 @@ impl JsObjectData {
             return None;
         }
         if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
         {
             let units = s.as_units();
             if key.as_property_key_bytes() == b"length" {
@@ -4684,10 +4683,7 @@ impl JsObjectData {
             || self.module_namespace().is_some()
             || self.typed_array_info().is_some()
             || (self.class_name == "String"
-                && self
-                    .primitive_value
-                    .as_ref()
-                    .is_some_and(JsValue::is_string))
+                && self.primitive_value().is_some_and(JsValue::is_string))
         {
             return None;
         }
@@ -4721,10 +4717,7 @@ impl JsObjectData {
             || self.module_namespace().is_some()
             || self.typed_array_info().is_some()
             || (self.class_name == "String"
-                && self
-                    .primitive_value
-                    .as_ref()
-                    .is_some_and(JsValue::is_string))
+                && self.primitive_value().is_some_and(JsValue::is_string))
         {
             return None;
         }
@@ -4808,7 +4801,7 @@ impl JsObjectData {
         let mut string_keys: Vec<JsPropertyKey> = Vec::new();
 
         if self.class_name == "String"
-            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
+            && let Some(s) = self.primitive_value().and_then(JsValue::as_string)
         {
             let utf16_len = s.len();
             for i in 0..utf16_len {
@@ -5519,14 +5512,14 @@ mod kind_accessor_tests {
 
     #[test]
     fn array_elements_mut_allows_push() {
-        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        let mut obj = obj_with_kind(ObjectKind::Array(Box::default()));
         obj.array_elements_mut().unwrap().push(JsValue::TRUE);
         assert_eq!(obj.array_elements().unwrap().len(), 1);
     }
 
     #[test]
     fn array_named_property_order_excludes_indices_and_symbols() {
-        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        let mut obj = obj_with_kind(ObjectKind::Array(Box::default()));
         obj.insert_property(
             "length",
             PropertyDescriptor::data(JsValue::number(1024.0), true, false, false),
@@ -5609,7 +5602,7 @@ mod kind_accessor_tests {
     }
 
     fn dense_array_with(elements: Vec<JsValue>, length: usize) -> JsObjectData {
-        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        let mut obj = obj_with_kind(ObjectKind::Array(Box::default()));
         obj.insert_property(
             "length",
             PropertyDescriptor::data(JsValue::number(length as f64), true, false, false),
@@ -5757,7 +5750,7 @@ mod kind_accessor_tests {
     fn ordinary_own_property_keys_declines_exotics() {
         let mut wrapper = JsObjectData::new();
         wrapper.class_name = "String";
-        wrapper.primitive_value = Some(JsValue::string(JsString::from_str("ab")));
+        wrapper.set_primitive_value(JsValue::string(JsString::from_str("ab")));
         assert!(
             wrapper
                 .ordinary_own_property_keys(OwnKeyFilter::AllKeys)
@@ -5768,7 +5761,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn ordinary_own_property_keys_merges_dense_elements_with_named_keys() {
-        let mut obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        let mut obj = obj_with_kind(ObjectKind::Array(Box::default()));
         obj.insert_property(
             "length",
             PropertyDescriptor::data(JsValue::number(3.0), true, false, false),
@@ -5808,7 +5801,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_none_for_non_set_kind() {
-        let obj = obj_with_kind(ObjectKind::Array(ArrayData::default()));
+        let obj = obj_with_kind(ObjectKind::Array(Box::default()));
         assert!(obj.set_data().is_none());
     }
 
@@ -5871,7 +5864,7 @@ mod kind_accessor_tests {
     #[test]
     fn regexp_some_for_regexp_kind() {
         let data = RegExpData::new(JsString::from_str("foo"), JsString::from_str(""));
-        let obj = obj_with_kind(ObjectKind::RegExp(data));
+        let obj = obj_with_kind(ObjectKind::RegExp(Box::new(data)));
         assert!(obj.regexp().is_some());
     }
 

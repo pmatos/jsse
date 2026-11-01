@@ -2936,7 +2936,7 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -3169,7 +3169,7 @@ impl Interpreter {
                                     interp
                                         .get_object_cell_expect(part_obj_id)
                                         .borrow_mut()
-                                        .prototype_id = Some(op_id);
+                                        .set_proto(Some(op_id));
                                 }
                                 interp
                                     .get_object_cell_expect(part_obj_id)
@@ -3502,7 +3502,7 @@ impl Interpreter {
                             let make_part = |interp: &mut Interpreter, typ: &str, val: &str, source: &str| -> JsValue {
                                 let part_id = interp.create_object_id();
                                 if let Some(op_id) = interp.realm().object_prototype {
-                                    interp.get_object_cell_expect(part_id).borrow_mut().prototype_id = Some(op_id);
+                                    interp.get_object_cell_expect(part_id).borrow_mut().set_proto(Some(op_id));
                                 }
                                 interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "type".to_string(),
@@ -3625,7 +3625,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(result_id)
                                 .borrow_mut()
-                                .prototype_id = Some(op_id);
+                                .set_proto(Some(op_id));
                         }
 
                         let mut props: Vec<(&str, JsValue)> = vec![
@@ -4435,7 +4435,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj_id = interp.create_object_id();
-                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_proto(Some(proto));
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.NumberFormat";
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::NumberFormat {
                     locale,

@@ -46,7 +46,7 @@ impl ObjectHandle {
         unsafe {
             allocation.as_ptr().write(ObjectAllocation {
                 strong: Cell::new(1),
-                id,
+                id: id as u32,
                 generation: Cell::new(Generation::Young),
                 nursery_age: Cell::new(0),
                 young_mark: Cell::new(false),
@@ -63,6 +63,12 @@ impl ObjectHandle {
         // SAFETY: a live handle contributes to `strong`, so the allocation is
         // initialized for the lifetime of the handle.
         unsafe { self.allocation.as_ref() }
+    }
+
+    /// Slab index of this object, fixed at allocation.
+    #[inline(always)]
+    pub(crate) fn id(&self) -> u64 {
+        u64::from(self.allocation().id)
     }
 
     #[inline(always)]
@@ -206,7 +212,7 @@ impl ObjectHandle {
                     .storage
                     .remembered_ids
                     .borrow_mut()
-                    .push(allocation.id);
+                    .push(u64::from(allocation.id));
             }
         }
     }
@@ -299,8 +305,8 @@ pub(crate) struct RememberedState {
 }
 
 struct ObjectAllocation {
-    strong: Cell<usize>,
-    id: u64,
+    strong: Cell<u32>,
+    id: u32,
     generation: Cell<Generation>,
     nursery_age: Cell<u8>,
     young_mark: Cell<bool>,
@@ -388,10 +394,9 @@ impl ObjectArena {
         }
     }
 
-    /// Allocate a slot for `data`. Writes `data.id = Some(id)` before placing
-    /// it in the physical arena. Returns `(id, was_reuse)` so callers can
+    /// Allocate a slot for `data` in the physical arena. Returns `(id, was_reuse)` so callers can
     /// distinguish logical slot reuse from fresh chunk growth.
-    pub(crate) fn alloc(&mut self, mut data: JsObjectData) -> (u64, bool) {
+    pub(crate) fn alloc(&mut self, data: JsObjectData) -> (u64, bool) {
         let (id, was_reuse) = if let Some(idx) = self.free_list.pop() {
             (idx, true)
         } else {
@@ -402,7 +407,7 @@ impl ObjectArena {
             self.next_slot += 1;
             (idx, false)
         };
-        data.id = Some(id);
+        assert!(id < u64::from(u32::MAX), "object id space exhausted");
         let handle = ObjectHandle::new(&self.storage, id, data);
         self.set_slot(id, Some(handle));
         self.live_count += 1;
@@ -573,130 +578,5 @@ impl Default for ObjectArena {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fresh_allocations_fill_current_chunk_before_growing() {
-        let mut arena = ObjectArena::new();
-
-        for expected in 0..CHUNK_SIZE as u64 {
-            let (id, was_reuse) = arena.alloc(JsObjectData::new());
-            assert_eq!(id, expected);
-            assert!(!was_reuse);
-            assert_eq!(arena.capacity(), CHUNK_SIZE as u64);
-        }
-
-        let (id, was_reuse) = arena.alloc(JsObjectData::new());
-        assert_eq!(id, CHUNK_SIZE as u64);
-        assert!(!was_reuse);
-        assert_eq!(arena.capacity(), (CHUNK_SIZE * 2) as u64);
-    }
-
-    #[test]
-    fn freed_slots_are_reused_before_next_fresh_slot() {
-        let mut arena = ObjectArena::new();
-        let (first, _) = arena.alloc(JsObjectData::new());
-        let (second, _) = arena.alloc(JsObjectData::new());
-
-        arena.free(first);
-
-        let (reused, was_reuse) = arena.alloc(JsObjectData::new());
-        assert_eq!(reused, first);
-        assert!(was_reuse);
-        assert_eq!(arena.live_count(), 2);
-
-        let (fresh, was_reuse) = arena.alloc(JsObjectData::new());
-        assert_eq!(fresh, second + 1);
-        assert!(!was_reuse);
-    }
-
-    #[test]
-    fn mutable_borrow_remembers_old_object_once() {
-        let mut arena = ObjectArena::new();
-        let (id, _) = arena.alloc(JsObjectData::new());
-        let handle = arena.get_cell_expect(id);
-        handle.promote();
-
-        // Promotion alone remembers nothing; the collector decides.
-        assert!(arena.take_remembered_ids().is_empty());
-        handle.borrow_mut().extensible = false;
-        handle.borrow_mut().extensible = true;
-        assert_eq!(arena.take_remembered_ids(), vec![id]);
-        assert!(arena.take_remembered_ids().is_empty());
-    }
-
-    #[test]
-    fn immutable_borrow_does_not_trigger_write_barrier() {
-        let mut arena = ObjectArena::new();
-        let (id, _) = arena.alloc(JsObjectData::new());
-        let handle = arena.get_cell_expect(id);
-        handle.promote();
-        arena.take_remembered_ids();
-
-        assert!(handle.borrow().extensible);
-        assert!(arena.take_remembered_ids().is_empty());
-    }
-
-    #[test]
-    fn object_payloads_are_allocated_in_chunks() {
-        let mut arena = ObjectArena::new();
-
-        for _ in 0..CHUNK_SIZE {
-            arena.alloc(JsObjectData::new());
-        }
-        assert_eq!(arena.storage_stats(), (1, CHUNK_SIZE, 0));
-
-        arena.alloc(JsObjectData::new());
-        assert_eq!(arena.storage_stats(), (2, CHUNK_SIZE + 1, 0));
-        assert_eq!(
-            std::mem::size_of::<ObjectHandle>(),
-            std::mem::size_of::<usize>()
-        );
-    }
-
-    #[test]
-    fn released_payload_blocks_are_reused() {
-        let mut arena = ObjectArena::new();
-        let (id, _) = arena.alloc(JsObjectData::new());
-        assert_eq!(arena.storage_stats(), (1, 1, 0));
-
-        arena.free(id);
-        assert_eq!(arena.storage_stats(), (1, 1, 1));
-
-        arena.alloc(JsObjectData::new());
-        assert_eq!(arena.storage_stats(), (1, 1, 0));
-    }
-
-    #[test]
-    fn cloned_handle_delays_physical_reuse_after_logical_free() {
-        let mut arena = ObjectArena::new();
-        let (id, _) = arena.alloc(JsObjectData::new());
-        let pinned = arena.get(id).unwrap();
-
-        arena.free(id);
-        assert_eq!(arena.storage_stats(), (1, 1, 0));
-
-        let (reused_id, was_reuse) = arena.alloc(JsObjectData::new());
-        assert_eq!(reused_id, id);
-        assert!(was_reuse);
-        assert_eq!(arena.storage_stats(), (1, 2, 0));
-
-        drop(pinned);
-        assert_eq!(arena.storage_stats(), (1, 2, 1));
-    }
-
-    #[test]
-    fn cloned_handle_keeps_storage_alive_after_arena_drop() {
-        let (id, pinned, storage) = {
-            let mut arena = ObjectArena::new();
-            let (id, _) = arena.alloc(JsObjectData::new());
-            (id, arena.get(id).unwrap(), Rc::clone(&arena.storage))
-        };
-
-        assert!(!storage.recycle_blocks.get());
-        assert_eq!(pinned.borrow().id, Some(id));
-        drop(pinned);
-        assert!(storage.state.borrow().free_list.is_empty());
-    }
-}
+#[path = "object_arena_tests.rs"]
+mod tests;

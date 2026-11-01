@@ -21,7 +21,7 @@ impl Interpreter {
         let meta_id = self.create_object_id();
         self.get_object_cell_expect(meta_id)
             .borrow_mut()
-            .prototype_id = None;
+            .set_proto(None);
         let meta_val = JsValue::object(meta_id);
         let file = module_path
             .as_ref()

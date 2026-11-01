@@ -6,7 +6,7 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(ds_proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
 
         // Symbol.toStringTag
@@ -106,7 +106,7 @@ impl Interpreter {
                         interp.create_type_error("Using requires an object or null/undefined"),
                     );
                 }
-                // GetMethod(V, @@dispose) - uses get_object_property to invoke getters
+                // GetMethod(V, @@dispose), invoking getters
                 let method = if let Some(key) = interp.get_symbol_key("dispose") {
                     if let Some(value_id) = value.as_object_id() {
                         match interp.get_object_property(value_id, &key, &value) {
@@ -332,19 +332,19 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(new_obj_id)
                                 .borrow_mut()
-                                .prototype_id = Some(prototype_id);
+                                .set_proto(Some(prototype_id));
                         }
                     }
                 }
                 {
                     let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                     b.class_name = "DisposableStack";
-                    b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                    b.kind = crate::interpreter::types::ObjectKind::DisposableStack(Box::new(
                         DisposableStackData {
                             stack,
                             disposed: false,
                         },
-                    );
+                    ));
                 }
                 let id = new_obj_id;
                 return Completion::Normal(JsValue::object(id));
@@ -380,14 +380,14 @@ impl Interpreter {
                         let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
                         b.class_name = "DisposableStack";
                         if let Some(p) = proto {
-                            b.prototype_id = Some(p);
+                            b.set_proto(Some(p));
                         }
-                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(Box::new(
                             DisposableStackData {
                                 stack: Vec::new(),
                                 disposed: false,
                             },
-                        );
+                        ));
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::object(id))
@@ -508,7 +508,7 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(ads_proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
 
         // Symbol.toStringTag
@@ -839,18 +839,18 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(new_obj_id)
                             .borrow_mut()
-                            .prototype_id = Some(pid);
+                            .set_proto(Some(pid));
                     }
                 }
                 {
                     let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                     b.class_name = "AsyncDisposableStack";
-                    b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                    b.kind = crate::interpreter::types::ObjectKind::DisposableStack(Box::new(
                         DisposableStackData {
                             stack,
                             disposed: false,
                         },
-                    );
+                    ));
                 }
                 let id = new_obj_id;
                 return Completion::Normal(JsValue::object(id));
@@ -888,14 +888,14 @@ impl Interpreter {
                         let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
                         b.class_name = "AsyncDisposableStack";
                         if let Some(p) = proto {
-                            b.prototype_id = Some(p);
+                            b.set_proto(Some(p));
                         }
-                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(Box::new(
                             DisposableStackData {
                                 stack: Vec::new(),
                                 disposed: false,
                             },
-                        );
+                        ));
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::object(id))

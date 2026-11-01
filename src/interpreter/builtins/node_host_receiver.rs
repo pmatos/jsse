@@ -82,7 +82,7 @@ impl Interpreter {
                     .get_own_property("constructor")
                     .and_then(|d| d.value)
                     .and_then(|v| v.as_object_id());
-                (ctor, b.prototype_id)
+                (ctor, b.proto_id())
             };
             if let Some(ctor) = ctor {
                 if let Some(name) = self.own_data_string(ctor, "name").filter(|n| !n.is_empty())
@@ -119,7 +119,7 @@ impl Interpreter {
                     .map(|s| s.to_string())
                     .filter(|s| !s.is_empty());
             }
-            id = b.prototype_id?;
+            id = b.proto_id()?;
         }
         None
     }

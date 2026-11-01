@@ -467,7 +467,7 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -576,7 +576,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(part_obj_id)
                                 .borrow_mut()
-                                .prototype_id = Some(op_id);
+                                .set_proto(Some(op_id));
                         }
                         interp
                             .get_object_cell_expect(part_obj_id)
@@ -643,7 +643,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(result_id)
                         .borrow_mut()
-                        .prototype_id = Some(op_id);
+                        .set_proto(Some(op_id));
                 }
 
                 let props = vec![
@@ -836,7 +836,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()

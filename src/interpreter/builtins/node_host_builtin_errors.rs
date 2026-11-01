@@ -140,7 +140,7 @@ impl Interpreter {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = error_class_name(name);
             if let Some(proto_id) = error_proto_id {
-                o.prototype_id = Some(proto_id);
+                o.set_proto(Some(proto_id));
             }
             o.insert_builtin(
                 "message".to_string(),
@@ -229,7 +229,7 @@ impl Interpreter {
             if let Some(desc) = b.get_own_property(key) {
                 return desc.value;
             }
-            id = b.prototype_id?;
+            id = b.proto_id()?;
         }
         None
     }

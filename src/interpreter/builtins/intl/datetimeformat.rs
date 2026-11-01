@@ -5569,7 +5569,7 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
@@ -5783,7 +5783,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(part_obj_id)
                                 .borrow_mut()
-                                .prototype_id = Some(op_id);
+                                .set_proto(Some(op_id));
                         }
                         interp
                             .get_object_cell_expect(part_obj_id)
@@ -6028,7 +6028,7 @@ impl Interpreter {
                     .map(|(ptype, value, source)| {
                         let part_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            interp.get_object_cell_expect(part_obj_id).borrow_mut().prototype_id = Some(op_id);
+                            interp.get_object_cell_expect(part_obj_id).borrow_mut().set_proto(Some(op_id));
                         }
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "type".to_string(),
@@ -6084,7 +6084,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(result_id)
                         .borrow_mut()
-                        .prototype_id = Some(op_id);
+                        .set_proto(Some(op_id));
                 }
 
                 // Properties in spec order
@@ -6548,7 +6548,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()

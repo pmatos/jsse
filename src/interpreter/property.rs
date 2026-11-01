@@ -189,7 +189,7 @@ impl Interpreter {
                         if !may_hold_index_key
                             && crate::interpreter::builtins::array_dense::proto_chain_without_index_keys(
                                 self,
-                                obj_borrow.prototype_id,
+                                obj_borrow.proto_id(),
                             )
                         {
                             return Some(JsValue::UNDEFINED);
@@ -276,7 +276,7 @@ impl Interpreter {
             let Some(plan) = obj_borrow.dense_array_set_plan(idx, value) else {
                 return false;
             };
-            (plan, obj_borrow.prototype_id, idx)
+            (plan, obj_borrow.proto_id(), idx)
         };
         if plan == DenseArraySet::Create
             && !crate::interpreter::builtins::array_dense::proto_chain_index_free(self, proto_id)
@@ -314,7 +314,7 @@ impl Interpreter {
             NamedStore::Bail => false,
             NamedStore::Absent => {
                 let addable = object.can_add_named_fast()
-                    && self.proto_chain_lacks_key(object.prototype_id, key);
+                    && self.proto_chain_lacks_key(object.proto_id(), key);
                 if addable {
                     object.add_named_fast(key, value);
                 }
@@ -357,7 +357,7 @@ impl Interpreter {
             if !proto.named_miss_is_ordinary() || proto.properties.contains_key(key) {
                 return false;
             }
-            next = proto.prototype_id;
+            next = proto.proto_id();
         }
         false
     }
@@ -397,7 +397,7 @@ impl Interpreter {
             if !object.named_miss_is_ordinary() {
                 return NamedGet::Slow;
             }
-            match object.prototype_id {
+            match object.proto_id() {
                 Some(proto_id) => object_id = proto_id,
                 None => return NamedGet::Value(JsValue::UNDEFINED),
             }
@@ -461,7 +461,7 @@ impl Interpreter {
                 }
 
                 // Own property not found — walk prototype chain
-                let proto = b.prototype_id;
+                let proto = b.proto_id();
                 drop(b);
                 if let Some(proto_rc) = proto {
                     let proto_id = proto_rc;
@@ -597,7 +597,7 @@ impl Interpreter {
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED)),
             None => {
                 let proto = if let Some(obj) = self.get_object_cell(obj_id) {
-                    obj.borrow().prototype_id
+                    obj.borrow().proto_id()
                 } else {
                     None
                 };
@@ -688,7 +688,7 @@ impl Interpreter {
                 return Ok(true);
             }
             // Walk prototype chain, checking for proxies
-            let proto = obj.borrow().prototype_id;
+            let proto = obj.borrow().proto_id();
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
                 return self.proxy_has_property_with_proxy_depth(proto_id, key, proxy_depth);
@@ -715,7 +715,7 @@ impl Interpreter {
             if let Some(v) = b.own_property_lookup(key) {
                 return v;
             }
-            let next = b.prototype_id;
+            let next = b.proto_id();
             drop(b);
             current = next;
         }
@@ -734,7 +734,7 @@ impl Interpreter {
             if let Some(d) = b.own_property_descriptor_lookup(key) {
                 return Some(d);
             }
-            let next = b.prototype_id;
+            let next = b.proto_id();
             drop(b);
             current = next;
         }
@@ -759,7 +759,7 @@ impl Interpreter {
             if let Some(result) = b.own_has_property(key) {
                 return result;
             }
-            let next = b.prototype_id;
+            let next = b.proto_id();
             drop(b);
             current = next;
         }
@@ -791,7 +791,7 @@ impl Interpreter {
             for k in shadow {
                 global_seen.insert(k);
             }
-            let next = b.prototype_id;
+            let next = b.proto_id();
             drop(b);
             current = next;
         }
@@ -801,14 +801,14 @@ impl Interpreter {
     fn own_keys_when_chain_is_not_enumerable(&self, start_id: u64) -> Option<Vec<JsPropertyKey>> {
         let mut next = {
             let b = self.get_object_cell(start_id)?.borrow();
-            b.prototype_id
+            b.proto_id()
         };
         while let Some(id) = next {
             let b = self.get_object_cell(id)?.borrow();
             if b.has_enumerable_string_key_hint() != Some(false) {
                 return None;
             }
-            next = b.prototype_id;
+            next = b.proto_id();
         }
         self.get_object_cell(start_id)?
             .borrow()
@@ -828,7 +828,7 @@ impl Interpreter {
             if b.proxy().is_some() || b.module_namespace().is_some() {
                 return true;
             }
-            current = b.prototype_id;
+            current = b.proto_id();
         }
         false
     }
@@ -1316,7 +1316,7 @@ impl Interpreter {
                 return Ok(SetOutcome::Rejected);
             }
             // No own property, walk prototype chain
-            let proto = obj.borrow().prototype_id;
+            let proto = obj.borrow().proto_id();
             if let Some(proto_rc) = proto {
                 let proto_id = proto_rc;
                 return self.proxy_set_with_outcome_and_proxy_depth(
@@ -1414,7 +1414,7 @@ impl Interpreter {
                 return false;
             };
             let b = obj.borrow();
-            current = b.prototype_id;
+            current = b.proto_id();
         }
         false
     }
@@ -1469,8 +1469,7 @@ impl Interpreter {
                 let borrow = obj.borrow();
                 if borrow.class_name == "String"
                     && let Some(len) = borrow
-                        .primitive_value
-                        .as_ref()
+                        .primitive_value()
                         .and_then(|v| v.with_string(|s| s.len()))
                 {
                     if key.as_property_key_bytes() == b"length" {
@@ -1907,11 +1906,10 @@ impl Interpreter {
             let b = obj.borrow();
 
             // String exotic objects (§10.4.3.3): virtual char indices included
-            let is_string_wrapper = b.class_name == "String"
-                && b.primitive_value.as_ref().is_some_and(JsValue::is_string);
+            let is_string_wrapper =
+                b.class_name == "String" && b.primitive_value().is_some_and(JsValue::is_string);
             let string_len = if is_string_wrapper {
-                b.primitive_value
-                    .as_ref()
+                b.primitive_value()
                     .and_then(|v| v.with_string(|s| s.len()))
                     .unwrap_or(0)
             } else {
@@ -2067,7 +2065,7 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
-            if let Some(id) = obj.borrow().prototype_id {
+            if let Some(id) = obj.borrow().proto_id() {
                 Ok(JsValue::object(id))
             } else {
                 Ok(JsValue::NULL)
@@ -2127,7 +2125,7 @@ impl Interpreter {
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             // OrdinarySetPrototypeOf
-            let current_proto_id = obj.borrow().prototype_id;
+            let current_proto_id = obj.borrow().proto_id();
             let new_proto_id = proto.as_object_id();
             let same = (proto.is_null() && current_proto_id.is_none())
                 || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
@@ -2146,15 +2144,15 @@ impl Interpreter {
                     }
                     check_id = self
                         .get_object_cell(cid)
-                        .and_then(|o| o.borrow().prototype_id.as_ref().copied());
+                        .and_then(|o| o.borrow().proto_id().as_ref().copied());
                 }
             }
             if proto.is_null() {
-                obj.borrow_mut().prototype_id = None;
+                obj.borrow_mut().set_proto(None);
             } else if let Some(new_id) = proto.as_object_id()
                 && let Some(po) = self.get_object_cell(new_id)
             {
-                obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
+                obj.borrow_mut().set_proto(Some(po.id()));
             }
             Ok(true)
         } else {

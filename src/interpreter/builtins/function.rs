@@ -233,7 +233,7 @@ impl Interpreter {
                     if let Some(target_id) = this_val.as_object_id()
                         && let Some(target_obj) = interp.get_object_cell(target_id)
                     {
-                        obj.borrow_mut().prototype_id = target_obj.borrow().prototype_id;
+                        obj.borrow_mut().set_proto(target_obj.borrow().proto_id());
                     }
                     // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();

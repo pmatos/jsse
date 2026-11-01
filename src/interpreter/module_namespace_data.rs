@@ -96,7 +96,7 @@ impl Interpreter {
             }));
             obj.class_name = "Module";
             obj.extensible = false;
-            obj.prototype_id = None;
+            obj.set_proto(None);
             // writable=true, enumerable=true, configurable=false; the value is
             // looked up dynamically from the live binding.
             for name in export_names.iter() {

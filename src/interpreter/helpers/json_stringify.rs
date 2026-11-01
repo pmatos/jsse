@@ -257,14 +257,14 @@ fn json_stringify_walk(
             "String" => value = JsValue::string(interp.to_js_string(&value)?),
             "Boolean" => {
                 if let Some(cell) = interp.get_object_cell(value_id)
-                    && let Some(pv) = cell.borrow().primitive_value.clone()
+                    && let Some(pv) = cell.borrow().primitive_value().cloned()
                 {
                     value = pv;
                 }
             }
             "BigInt" => {
                 if let Some(cell) = interp.get_object_cell(value_id)
-                    && let Some(pv) = cell.borrow().primitive_value.clone()
+                    && let Some(pv) = cell.borrow().primitive_value().cloned()
                 {
                     value = pv;
                 }
@@ -312,7 +312,7 @@ fn json_stringify_walk(
             if obj.borrow().callable.is_some() {
                 return Ok(false);
             }
-            let obj_id = obj.borrow().id.unwrap();
+            let obj_id = obj.id();
             if stack.contains(&obj_id) {
                 return Err(interp.json_cycle_error(stack, obj_id, key));
             }

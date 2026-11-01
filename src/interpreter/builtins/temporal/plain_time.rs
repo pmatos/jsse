@@ -864,7 +864,7 @@ pub(super) fn create_plain_time_result(
         interp
             .get_object_cell_expect(obj_id)
             .borrow_mut()
-            .prototype_id = Some(proto_id);
+            .set_proto(Some(proto_id));
     }
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
         crate::interpreter::types::ObjectKind::Temporal(Box::new(TemporalData::PlainTime {

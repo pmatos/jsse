@@ -347,7 +347,7 @@ impl Interpreter {
                     .module_namespace()
                     .as_ref()
                     .map(|ns| (ns.deferred, ns.export_names.clone()));
-                let ns_obj_id = obj.borrow().id.unwrap();
+                let ns_obj_id = obj.id();
                 if let Some((deferred, export_names)) = ns_info {
                     if deferred
                         && !Self::is_symbol_like_namespace_key(&key, true)
@@ -388,7 +388,7 @@ impl Interpreter {
             // String exotic: length and index properties are non-configurable (§10.4.3.4)
             {
                 let obj_b = obj.borrow();
-                if let Some(s) = obj_b.primitive_value.as_ref().and_then(JsValue::as_string)
+                if let Some(s) = obj_b.primitive_value().and_then(JsValue::as_string)
                     && obj_b.class_name == "String"
                 {
                     let is_exotic = key.eq_str("length")
@@ -453,7 +453,7 @@ impl Interpreter {
                 .get(key)
                 .and_then(|d| d.value().cloned()),
             PropIcKind::Missing { proto_id, .. } => {
-                if obj_rc.borrow().prototype_id == proto_id {
+                if obj_rc.borrow().proto_id() == proto_id {
                     Some(JsValue::UNDEFINED)
                 } else {
                     None
@@ -463,7 +463,7 @@ impl Interpreter {
                 proto_id,
                 proto_shape_id,
             } => {
-                if obj_rc.borrow().prototype_id == Some(proto_id)
+                if obj_rc.borrow().proto_id() == Some(proto_id)
                     && let Some(proto_rc) = self.get_object(proto_id)
                 {
                     let pb = proto_rc.borrow();
@@ -522,7 +522,7 @@ impl Interpreter {
         // null (depth-1 Missing) or the immediate prototype carries the
         // property as a plain data descriptor (depth-1 ProtoData). Anything
         // deeper stays uncached.
-        let proto_id = match obj.prototype_id {
+        let proto_id = match obj.proto_id() {
             None => {
                 return Some(PropIcEntry {
                     obj_id,

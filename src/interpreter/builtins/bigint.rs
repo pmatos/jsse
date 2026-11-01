@@ -47,7 +47,7 @@ impl Interpreter {
             interp.get_object_cell(object_id).and_then(|cell| {
                 let object = cell.borrow();
                 if object.class_name == "BigInt" {
-                    object.primitive_value.as_ref().and_then(JsValue::as_bigint)
+                    object.primitive_value().and_then(JsValue::as_bigint)
                 } else {
                     None
                 }

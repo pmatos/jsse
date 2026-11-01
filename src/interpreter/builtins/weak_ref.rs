@@ -54,11 +54,11 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(p);
+                        .set_proto(Some(p));
                 }
                 interp.keep_during_job(&target);
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::WeakRef(target);
+                    crate::interpreter::types::ObjectKind::WeakRef(Box::new(target));
                 Completion::Normal(JsValue::object(obj_id))
             },
         ));
@@ -266,12 +266,12 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(p);
+                        .set_proto(Some(p));
                 }
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .primitive_value = Some(callback);
+                    .set_primitive_value(callback);
                 // Initialize [[Cells]] as empty FinalizationRegistry slot data.
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::FinalizationRegistry(Box::default());
@@ -333,7 +333,7 @@ impl Interpreter {
         let Some(cell) = self.get_object_cell(registry_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
         };
-        let callback = cell.borrow().primitive_value.clone();
+        let callback = cell.borrow().primitive_value().cloned();
         if let Some(data) = cell.borrow_mut().finalization_registry_data_mut() {
             data.cleanup_queued = false;
         }

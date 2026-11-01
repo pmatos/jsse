@@ -115,7 +115,7 @@ impl Interpreter {
                     JsString::from_str("")
                 } else {
                     let val = &args[0];
-                    // §22.1.1.1 step 2a: only when NewTarget is undefined AND value is Symbol
+                    // §22.1.1.1 step 2a: NewTarget undefined and value a Symbol
                     if interp.new_target.is_none()
                         && let Some(sym) = val.as_symbol()
                     {
@@ -141,9 +141,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if let Some(proto_rc) = proto {
-                        obj.borrow_mut().prototype_id = Some(proto_rc);
+                        obj.borrow_mut().set_proto(Some(proto_rc));
                     }
-                    obj.borrow_mut().primitive_value = Some(JsValue::string(js_str.clone()));
+                    obj.borrow_mut()
+                        .set_primitive_value(JsValue::string(js_str.clone()));
                     obj.borrow_mut().class_name = "String";
                 }
                 Completion::Normal(JsValue::string(js_str))
@@ -261,10 +262,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let mut b = obj.borrow_mut();
-                    b.primitive_value = Some(JsValue::number(n));
+                    b.set_primitive_value(JsValue::number(n));
                     b.class_name = "Number";
                     if let Some(p) = proto {
-                        b.prototype_id = Some(p);
+                        b.set_proto(Some(p));
                     }
                 }
                 Completion::Normal(JsValue::number(n))
@@ -401,10 +402,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let mut bo = obj.borrow_mut();
-                    bo.primitive_value = Some(JsValue::boolean(b));
+                    bo.set_primitive_value(JsValue::boolean(b));
                     bo.class_name = "Boolean";
                     if let Some(p) = proto {
-                        bo.prototype_id = Some(p);
+                        bo.set_proto(Some(p));
                     }
                 }
                 Completion::Normal(JsValue::boolean(b))

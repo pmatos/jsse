@@ -314,7 +314,7 @@ impl Interpreter {
             .class_name = "String";
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .primitive_value = Some(JsValue::string(JsString::from_str("")));
+            .set_primitive_value(JsValue::string(JsString::from_str("")));
 
         #[allow(clippy::type_complexity)]
         let methods: Vec<(
@@ -1210,7 +1210,7 @@ impl Interpreter {
                     if let Some(object_id) = this_val.as_object_id()
                         && let Some(obj) = interp.get_object_cell(object_id)
                         && obj.borrow().class_name == "String"
-                        && let Some(ref primitive) = obj.borrow().primitive_value
+                        && let Some(primitive) = obj.borrow().primitive_value()
                     {
                         return Completion::Normal(primitive.clone());
                     }
@@ -1235,7 +1235,7 @@ impl Interpreter {
                     if let Some(object_id) = this_val.as_object_id()
                         && let Some(obj) = interp.get_object_cell(object_id)
                         && obj.borrow().class_name == "String"
-                        && let Some(ref primitive) = obj.borrow().primitive_value
+                        && let Some(primitive) = obj.borrow().primitive_value()
                     {
                         return Completion::Normal(primitive.clone());
                     }

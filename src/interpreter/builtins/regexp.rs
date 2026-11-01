@@ -8560,7 +8560,7 @@ fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
     let Some(realm_proto_id) = interp.realm().regexp_prototype else {
         return false;
     };
-    if b.prototype_id != Some(realm_proto_id) {
+    if b.proto_id() != Some(realm_proto_id) {
         return false;
     }
     drop(b);
@@ -8964,7 +8964,7 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
         interp
             .get_object_cell_expect(groups_obj_id)
             .borrow_mut()
-            .prototype_id = None;
+            .set_proto(None);
         for (name, m) in &resolved_named {
             let val = match m {
                 Some(m) => JsValue::string(m.text()),
@@ -9018,7 +9018,7 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
                 interp
                     .get_object_cell_expect(idx_groups_id)
                     .borrow_mut()
-                    .prototype_id = None;
+                    .set_proto(None);
                 for (name, m) in &resolved_named {
                     let val = match m {
                         Some(m) => {
@@ -9219,7 +9219,7 @@ impl Interpreter {
                         ));
                     }
                     // B.2.5.1 step 3: throw TypeError for subclass instances
-                    let proto_matches = obj.borrow().prototype_id == Some(compile_proto_id);
+                    let proto_matches = obj.borrow().proto_id() == Some(compile_proto_id);
                     if !proto_matches {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.compile cannot be used on RegExp subclass instances",
@@ -9337,10 +9337,10 @@ impl Interpreter {
                 // 5. Return ? RegExpInitialize(O, P, F).
                 if let Some(obj) = interp.get_object_cell(obj_id) {
                     obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::RegExp(
-                        crate::interpreter::types::RegExpData::new(
+                        Box::new(crate::interpreter::types::RegExpData::new(
                             source_js,
                             JsString::from_str(&flags_str),
-                        ),
+                        )),
                     );
                 }
                 // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
@@ -9721,7 +9721,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(groups_obj_id)
                                 .borrow_mut()
-                                .prototype_id = None;
+                                .set_proto(None);
                             for (name, capture) in named {
                                 let value = capture
                                     .map(|m| JsValue::string(m.text()))
@@ -10444,7 +10444,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(iter_obj_id)
                             .borrow_mut()
-                            .prototype_id = Some(rsi_proto_id);
+                            .set_proto(Some(rsi_proto_id));
                     }
 
                     interp
@@ -10479,7 +10479,7 @@ impl Interpreter {
         if let Some(ip_id) = self.realm().iterator_prototype {
             self.get_object_cell_expect(rsi_proto_id)
                 .borrow_mut()
-                .prototype_id = Some(ip_id);
+                .set_proto(Some(ip_id));
         }
 
         // %RegExpStringIteratorPrototype%.next
@@ -10848,15 +10848,15 @@ impl Interpreter {
                 };
 
                 let mut obj = JsObjectData::new();
-                obj.prototype_id = proto.or(Some(regexp_proto_rc_id));
+                obj.set_proto(proto.or(Some(regexp_proto_rc_id)));
                 obj.class_name = "RegExp";
                 // Store internal slots ([[OriginalSource]], [[OriginalFlags]])
-                obj.kind = crate::interpreter::types::ObjectKind::RegExp(
+                obj.kind = crate::interpreter::types::ObjectKind::RegExp(Box::new(
                     crate::interpreter::types::RegExpData::new(
                         source_js,
                         JsString::from_str(&flags_str),
                     ),
-                );
+                ));
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::number(0.0), true, false, false),

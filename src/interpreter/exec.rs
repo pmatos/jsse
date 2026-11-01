@@ -2762,7 +2762,7 @@ impl Interpreter {
                 if let Some(proto_obj_id) = proto.as_ref().and_then(JsValue::as_object_id) {
                     self.get_object_cell_expect(new_obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(proto_obj_id);
+                        .set_proto(Some(proto_obj_id));
                 }
             }
             let this_val = JsValue::object(new_obj_id);

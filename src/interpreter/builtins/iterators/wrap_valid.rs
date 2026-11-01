@@ -102,19 +102,19 @@ pub(super) fn iterator_from(
     interp
         .get_object_cell_expect(wrapper_id)
         .borrow_mut()
-        .prototype_id = Some(wrapper_proto);
+        .set_proto(Some(wrapper_proto));
     interp
         .get_object_cell_expect(wrapper_id)
         .borrow_mut()
         .class_name = "Iterator";
     {
         let mut wrapper = interp.get_object_cell_expect(wrapper_id).borrow_mut();
-        wrapper.kind = crate::interpreter::types::ObjectKind::IterHelper(
+        wrapper.kind = crate::interpreter::types::ObjectKind::IterHelper(Box::new(
             crate::interpreter::types::IterHelperData::Delegation {
                 iter: iter_val.clone(),
                 next: next_method.clone(),
             },
-        );
+        ));
         wrapper
             .gc_native_roots_mut()
             .extend([iter_val, next_method]);

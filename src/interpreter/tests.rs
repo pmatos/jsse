@@ -2912,7 +2912,7 @@ fn named_store_fast_declines_what_the_generic_path_must_decide() {
         .borrow_mut()
         .insert_value("x", JsValue::number(9.0));
     let mut child = JsObjectData::new();
-    child.prototype_id = Some(proto_id);
+    child.set_proto(Some(proto_id));
     let child_id = interp.alloc_object(child);
     assert!(
         !interp.named_store_fast(&JsValue::object(child_id), &key, &value, None),
@@ -2986,7 +2986,7 @@ fn set_prototype_via_chokepoint_bumps_shape() {
     let id = interp.alloc_object(JsObjectData::new());
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     interp.mutate_object_shape(id, |obj| {
-        obj.prototype_id = Some(proto_id);
+        obj.set_proto(Some(proto_id));
     });
     let after = interp.get_object(id).unwrap().borrow().shape_id;
     assert!(

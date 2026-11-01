@@ -25,7 +25,7 @@ fn this_time_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
     {
         let object = obj.borrow();
         if object.class_name == "Date" {
-            return object.primitive_value.as_ref().and_then(JsValue::as_number);
+            return object.primitive_value().and_then(JsValue::as_number);
         }
     }
     None
@@ -259,7 +259,7 @@ impl Interpreter {
             if let Some(object_id) = this.as_object_id()
                 && let Some(obj) = interp.get_object_cell(object_id)
             {
-                obj.borrow_mut().primitive_value = Some(JsValue::number(v));
+                obj.borrow_mut().set_primitive_value(JsValue::number(v));
             }
         }
 
@@ -1011,7 +1011,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(obj_id)
                             .borrow_mut()
-                            .prototype_id = Some(proto_id);
+                            .set_proto(Some(proto_id));
                     }
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                         crate::interpreter::types::ObjectKind::Temporal(Box::new(
@@ -1123,11 +1123,8 @@ impl Interpreter {
                     if let Some(object_id) = v.as_object_id()
                         && let Some(obj) = interp.get_object_cell(object_id)
                         && obj.borrow().class_name == "Date"
-                        && let Some(time) = obj
-                            .borrow()
-                            .primitive_value
-                            .as_ref()
-                            .and_then(JsValue::as_number)
+                        && let Some(time) =
+                            obj.borrow().primitive_value().and_then(JsValue::as_number)
                     {
                         time
                     } else {
@@ -1219,8 +1216,8 @@ impl Interpreter {
                     };
                     let mut b = interp.get_object_cell_expect(object_id).borrow_mut();
                     b.class_name = "Date";
-                    b.primitive_value = Some(JsValue::number(time_val));
-                    b.prototype_id = Some(proto);
+                    b.set_primitive_value(JsValue::number(time_val));
+                    b.set_proto(Some(proto));
                 }
                 Completion::Normal(this.clone())
             },

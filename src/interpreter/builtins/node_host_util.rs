@@ -33,7 +33,7 @@ fn function_kind(o: &JsObjectData) -> &'static str {
 }
 
 fn wrapper_kind(o: &JsObjectData) -> &'static str {
-    let Some(value) = o.primitive_value.as_ref() else {
+    let Some(value) = o.primitive_value() else {
         return "";
     };
     match o.class_name {
@@ -102,7 +102,7 @@ fn own_non_index_keys(
     let mut strings = Vec::new();
     let mut symbols = Vec::new();
     let is_string_wrapper =
-        o.class_name == "String" && o.primitive_value.as_ref().is_some_and(JsValue::is_string);
+        o.class_name == "String" && o.primitive_value().is_some_and(JsValue::is_string);
     if is_string_wrapper && !only_enumerable {
         strings.push(JsPropertyKey::from("length".to_string()));
     }

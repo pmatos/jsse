@@ -35,7 +35,7 @@ impl Interpreter {
         match &mut obj.kind {
             ObjectKind::WeakRef(target) => {
                 if dead(target) {
-                    *target = JsValue::UNDEFINED;
+                    **target = JsValue::UNDEFINED;
                 }
                 false
             }

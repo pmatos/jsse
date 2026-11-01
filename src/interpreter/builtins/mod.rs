@@ -191,8 +191,9 @@ impl Interpreter {
         // setup get the correct [[Prototype]]. It will be adopted by Function.prototype later.
         if self.realm().function_prototype.is_none() {
             let fp_id = self.create_object_id();
-            self.get_object_cell_expect(fp_id).borrow_mut().prototype_id =
-                self.realm().object_prototype;
+            self.get_object_cell_expect(fp_id)
+                .borrow_mut()
+                .set_proto(self.realm().object_prototype);
             self.get_object_cell_expect(fp_id).borrow_mut().callable =
                 Some(Box::new(JsFunction::native(String::new(), 0, |_, _, _| {
                     Completion::Normal(JsValue::UNDEFINED)

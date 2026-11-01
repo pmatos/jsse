@@ -1073,9 +1073,7 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "Array";
         self.get_object_cell_expect(proto_id).borrow_mut().kind =
-            crate::interpreter::types::ObjectKind::Array(
-                crate::interpreter::types::ArrayData::default(),
-            );
+            crate::interpreter::types::ObjectKind::Array(Box::default());
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
@@ -1122,7 +1120,7 @@ impl Interpreter {
                         && len_writable
                         && desc_len == Some(len)
                         && b.array_elements().map(|v| v.len()) == Some(len);
-                    (ok, b.prototype_id)
+                    (ok, b.proto_id())
                 };
                 // §23.1.3.25 push performs Set, which creates *present* data
                 // properties. In this engine a `JsValue::UNDEFINED` slot in
@@ -3041,7 +3039,7 @@ impl Interpreter {
             let unscopables_obj_id = self.create_object_id();
             self.get_object_cell_expect(unscopables_obj_id)
                 .borrow_mut()
-                .prototype_id = None;
+                .set_proto(None);
             let names = [
                 "at",
                 "copyWithin",
@@ -3080,14 +3078,13 @@ impl Interpreter {
 
     pub(crate) fn create_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .array_prototype
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "Array";
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
-            crate::interpreter::types::ArrayData::default(),
+        obj_data.set_proto(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
         );
+        obj_data.class_name = "Array";
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Box::default());
         // The element vector holds every non-undefined value; only an
         // undefined value needs its own descriptor, because the vector uses
         // undefined as its hole marker.
@@ -3111,14 +3108,13 @@ impl Interpreter {
     ) -> JsValue {
         let len = items.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .array_prototype
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "Array";
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
-            crate::interpreter::types::ArrayData::default(),
+        obj_data.set_proto(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
         );
+        obj_data.class_name = "Array";
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Box::default());
         let mut array_elements = Vec::with_capacity(len);
         for (i, item) in items.enumerate() {
             match item {
@@ -3144,14 +3140,13 @@ impl Interpreter {
 
     pub(crate) fn create_array_with_length(&mut self, len: usize) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .array_prototype
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "Array";
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
-            crate::interpreter::types::ArrayData::default(),
+        obj_data.set_proto(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
         );
+        obj_data.class_name = "Array";
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Box::default());
         obj_data.push_fresh_array_length(
             &self.common_keys.length,
             PropertyDescriptor::data(JsValue::number(len as f64), true, false, false),

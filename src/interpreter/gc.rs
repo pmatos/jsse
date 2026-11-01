@@ -18,7 +18,7 @@ fn object_ids<'a>(values: impl IntoIterator<Item = &'a JsValue>) -> impl Iterato
 
 /// The nursery as a bitmap indexed by object id, filled at the start of each
 /// minor collection and cleared (in O(nursery)) at its end, so the buffers
-/// persist across collections. Scanning a large remembered Array then asks one
+/// persist across collections. Scanning a large remembered Array asks one
 /// cache-resident bit per element whether it references a young object,
 /// instead of loading each referent's header.
 #[derive(Default)]
@@ -1090,7 +1090,7 @@ impl Interpreter {
         seen_envs: &mut EnvVisits,
         bulk: bool,
     ) {
-        if let Some(pid) = obj.prototype_id {
+        if let Some(pid) = obj.proto_id() {
             worklist.push(pid);
         }
         for desc in obj.properties.values() {
@@ -1109,7 +1109,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(ref v) = obj.primitive_value {
+        if let Some(v) = obj.primitive_value() {
             Self::collect_value_roots(v, worklist);
         }
         for elem in obj.private_field_values() {
@@ -1188,7 +1188,7 @@ impl Interpreter {
             ObjectKind::WrappedFunction(w) => {
                 worklist.push(w.target_id);
             }
-            ObjectKind::IterHelper(h) => match h {
+            ObjectKind::IterHelper(h) => match &**h {
                 IterHelperData::Delegation { iter, next } => {
                     Self::collect_value_roots(iter, worklist);
                     Self::collect_value_roots(next, worklist);
@@ -1492,7 +1492,7 @@ mod tests {
     #[test]
     fn trace_object_fields_roots_prototype_and_data_properties() {
         let mut data = JsObjectData::new();
-        data.prototype_id = Some(7);
+        data.set_proto(Some(7));
         data.properties.insert(
             "x".into(),
             PropertyDescriptor::data(obj(8), true, true, true),
@@ -1534,14 +1534,14 @@ mod tests {
     #[test]
     fn trace_object_fields_roots_disposable_stack_resources() {
         let mut data = JsObjectData::new();
-        data.kind = ObjectKind::DisposableStack(DisposableStackData {
+        data.kind = ObjectKind::DisposableStack(Box::new(DisposableStackData {
             stack: vec![DisposableResource {
                 value: obj(30),
                 hint: DisposeHint::Sync,
                 dispose_method: obj(31),
             }],
             disposed: false,
-        });
+        }));
 
         let mut worklist = Vec::new();
         Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new(false));

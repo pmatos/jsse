@@ -804,7 +804,7 @@ impl Interpreter {
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "ArrayBuffer";
-                    o.prototype_id = proto;
+                    o.set_proto(proto);
                     o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: buf_rc,
@@ -916,7 +916,7 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "ArrayBuffer";
-            o.prototype_id = ab_proto;
+            o.set_proto(ab_proto);
             o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                 crate::interpreter::types::ArrayBufferData {
                     data: buf_rc,
@@ -1258,7 +1258,7 @@ impl Interpreter {
                     let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "SharedArrayBuffer";
-                    o.prototype_id = proto;
+                    o.set_proto(proto);
                     o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: buf_rc,
@@ -2166,7 +2166,7 @@ impl Interpreter {
                 {
                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                     ab.class_name = "ArrayBuffer";
-                    ab.prototype_id = ab_proto;
+                    ab.set_proto(ab_proto);
                     ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: new_buf_rc,
@@ -2411,7 +2411,7 @@ impl Interpreter {
                 {
                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                     ab.class_name = "ArrayBuffer";
-                    ab.prototype_id = ab_proto;
+                    ab.set_proto(ab_proto);
                     ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                         crate::interpreter::types::ArrayBufferData {
                             data: new_buf_rc,
@@ -2820,7 +2820,7 @@ impl Interpreter {
             let type_proto_id = self.create_object_id();
             {
                 let mut p = self.get_object_cell_expect(type_proto_id).borrow_mut();
-                p.prototype_id = Some(ta_proto_clone_id);
+                p.set_proto(Some(ta_proto_clone_id));
                 p.class_name = kind.name();
                 p.insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
@@ -2993,7 +2993,7 @@ impl Interpreter {
                                     {
                                         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                                         ab.class_name = "ArrayBuffer";
-                                        ab.prototype_id = ab_proto;
+                                        ab.set_proto(ab_proto);
                                         ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(crate::interpreter::types::ArrayBufferData {
                                             data: new_buf_rc,
                                             detached: Some(new_detached),
@@ -3047,7 +3047,7 @@ impl Interpreter {
                                 {
                                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                                     ab.class_name = "ArrayBuffer";
-                                    ab.prototype_id = ab_proto;
+                                    ab.set_proto(ab_proto);
                                     ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(crate::interpreter::types::ArrayBufferData {
                                         data: new_buf_rc,
                                         detached: Some(new_detached),
@@ -3112,7 +3112,7 @@ impl Interpreter {
                 if let Some(ta_o) = ta_ctor_clone.as_object_id()
                     && let Some(ta_obj) = self.get_object_cell(ta_o)
                 {
-                    obj.borrow_mut().prototype_id = Some(ta_obj.borrow().id.unwrap());
+                    obj.borrow_mut().set_proto(Some(ta_obj.id()));
                 }
             }
 
@@ -3528,7 +3528,7 @@ impl Interpreter {
         {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
             ab.class_name = "ArrayBuffer";
-            ab.prototype_id = ab_proto;
+            ab.set_proto(ab_proto);
             ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                 crate::interpreter::types::ArrayBufferData {
                     data: buf_rc,
@@ -3560,7 +3560,7 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name();
-            o.prototype_id = proto;
+            o.set_proto(proto);
             o.kind = crate::interpreter::types::ObjectKind::TypedArray(Box::new(info));
         }
         obj_id
@@ -3579,7 +3579,7 @@ impl Interpreter {
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name();
-            o.prototype_id = Some(proto_id);
+            o.set_proto(Some(proto_id));
             o.kind = crate::interpreter::types::ObjectKind::TypedArray(Box::new(info));
         }
         obj_id
@@ -3654,7 +3654,7 @@ impl Interpreter {
                     {
                         let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer";
-                        ab.prototype_id = ab_proto;
+                        ab.set_proto(ab_proto);
                         ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                             crate::interpreter::types::ArrayBufferData {
                                 data: new_buf_rc.clone(),
@@ -3681,7 +3681,7 @@ impl Interpreter {
                     {
                         let mut r = self.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = kind.name();
-                        r.prototype_id = proto;
+                        r.set_proto(proto);
                         r.kind = crate::interpreter::types::ObjectKind::TypedArray(Box::new(ta));
                     }
                     let id = result_id;
@@ -4507,7 +4507,7 @@ impl Interpreter {
                     {
                         let mut r = interp.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = "DataView";
-                        r.prototype_id = Some(dv_proto);
+                        r.set_proto(Some(dv_proto));
                         r.kind = crate::interpreter::types::ObjectKind::DataView(Box::new(dv_info));
                     }
                     let id = result_id;
@@ -5116,7 +5116,7 @@ pub(crate) fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8
     {
         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
         ab.class_name = "ArrayBuffer";
-        ab.prototype_id = ab_proto;
+        ab.set_proto(ab_proto);
         ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
             crate::interpreter::types::ArrayBufferData {
                 data: buf_rc,

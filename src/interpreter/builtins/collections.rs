@@ -3,11 +3,10 @@ use super::super::*;
 /// §24.1.3 RequireInternalSlot(M, [[MapData]]): confirm `this` is a Map receiver
 /// — an object carrying Map data under the "Map" brand (a WeakMap shares the
 /// Map data kind but is branded "WeakMap", so it is rejected). It concentrates
-/// the receiver brand-check that every `Map.prototype` method would otherwise
-/// open-code, returning the receiver's object id and cell, or a
-/// TypeError completion naming the method. The cell is an owned handle (via
-/// `get_object`) so callers may re-enter the interpreter — e.g. `forEach`
-/// invoking a callback — while holding it.
+/// the brand-check every `Map.prototype` method would otherwise open-code,
+/// returning the receiver's object id and cell, or a TypeError completion
+/// naming the method. The cell is an owned handle (via `get_object`) so
+/// callers may re-enter the interpreter (`forEach`) while holding it.
 fn this_map(
     interp: &mut Interpreter,
     this: &JsValue,
@@ -63,7 +62,7 @@ fn next_live_entry<T: Clone>(
     data(&obj.borrow())?.next_live(cursor).cloned()
 }
 
-/// CanonicalizeKeyedCollectionKey: -0 is stored and compared as +0.
+/// CanonicalizeKeyedCollectionKey: -0 becomes +0.
 fn canonicalize_key(key: JsValue) -> JsValue {
     if key
         .as_number()
@@ -176,7 +175,7 @@ impl Interpreter {
         let map_iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(map_iter_proto_id)
             .borrow_mut()
-            .prototype_id = self.realm().iterator_prototype;
+            .set_proto(self.realm().iterator_prototype);
         self.get_object_cell_expect(map_iter_proto_id)
             .borrow_mut()
             .class_name = "Map Iterator";
@@ -217,11 +216,13 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype_id = interp
-                .realm()
-                .map_iterator_prototype
-                .or(interp.realm().iterator_prototype)
-                .or(interp.realm().object_prototype);
+            obj_data.set_proto(
+                interp
+                    .realm()
+                    .map_iterator_prototype
+                    .or(interp.realm().iterator_prototype)
+                    .or(interp.realm().object_prototype),
+            );
             obj_data.class_name = "Map Iterator";
             obj_data.set_iterator_state(IteratorState::MapIterator {
                 map_id,
@@ -473,7 +474,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
@@ -648,7 +649,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
-                            .prototype_id = Some(map_proto_for_groupby);
+                            .set_proto(Some(map_proto_for_groupby));
                         interp
                             .get_object_cell_expect(result_map_id)
                             .borrow_mut()
@@ -759,7 +760,7 @@ impl Interpreter {
         let set_iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(set_iter_proto_id)
             .borrow_mut()
-            .prototype_id = self.realm().iterator_prototype;
+            .set_proto(self.realm().iterator_prototype);
         self.get_object_cell_expect(set_iter_proto_id)
             .borrow_mut()
             .class_name = "Set Iterator";
@@ -799,11 +800,13 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype_id = interp
-                .realm()
-                .set_iterator_prototype
-                .or(interp.realm().iterator_prototype)
-                .or(interp.realm().object_prototype);
+            obj_data.set_proto(
+                interp
+                    .realm()
+                    .set_iterator_prototype
+                    .or(interp.realm().iterator_prototype)
+                    .or(interp.realm().object_prototype),
+            );
             obj_data.class_name = "Set Iterator";
             obj_data.set_iterator_state(IteratorState::SetIterator {
                 set_id,
@@ -1123,7 +1126,7 @@ impl Interpreter {
             interp
                 .get_object_cell_expect(new_obj_id)
                 .borrow_mut()
-                .prototype_id = interp.realm().set_prototype;
+                .set_proto(interp.realm().set_prototype);
             interp
                 .get_object_cell_expect(new_obj_id)
                 .borrow_mut()
@@ -1373,7 +1376,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
@@ -1696,7 +1699,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
@@ -1921,7 +1924,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()

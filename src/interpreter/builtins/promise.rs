@@ -799,7 +799,7 @@ impl Interpreter {
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
         let mut data = JsObjectData::new();
-        data.prototype_id = self.realm().promise_prototype;
+        data.set_proto(self.realm().promise_prototype);
         data.class_name = "Promise";
         data.kind = crate::interpreter::types::ObjectKind::Promise(Box::default());
         let id = self.alloc_object(data);
@@ -1947,7 +1947,7 @@ impl Interpreter {
         {
             let cell = self.get_object_cell_expect(id);
             let mut o = cell.borrow_mut();
-            o.prototype_id = None;
+            o.set_proto(None);
             for (k, v) in keys.iter().zip(values.iter()) {
                 o.insert_value(k.clone(), v.clone());
             }
@@ -2111,7 +2111,7 @@ impl Interpreter {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "AggregateError";
             if let Some(proto_id) = self.realm().aggregate_error_prototype {
-                o.prototype_id = Some(proto_id);
+                o.set_proto(Some(proto_id));
             }
             o.insert_builtin(
                 "message".to_string(),

@@ -184,7 +184,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = None;
+                    .set_proto(None);
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     let desc = PropertyDescriptor::data(

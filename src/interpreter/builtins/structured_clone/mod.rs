@@ -79,7 +79,7 @@ fn classify(interp: &Interpreter, id: u64) -> Shape {
         }
         ObjectKind::Array(_) => Shape::Array,
         ObjectKind::Ordinary | ObjectKind::PrimitiveWrapper(_) => {
-            match (b.class_name, &b.primitive_value) {
+            match (b.class_name, b.primitive_value()) {
                 ("Date", Some(t)) if t.is_number() => Shape::Date(t.clone()),
                 ("String" | "Number" | "Boolean" | "BigInt", Some(p)) => Shape::Wrapper(p.clone()),
                 ("Object" | "Math", _) if matches!(b.kind, ObjectKind::Ordinary) => Shape::Plain,
@@ -110,7 +110,7 @@ impl Interpreter {
         let id = self.create_object_id();
         let mut o = self.get_object_cell_expect(id).borrow_mut();
         o.class_name = class_name;
-        o.prototype_id = proto;
+        o.set_proto(proto);
         o.kind = kind;
         drop(o);
         id
@@ -175,7 +175,7 @@ impl Cloner {
                 interp
                     .get_object_cell_expect(clone)
                     .borrow_mut()
-                    .primitive_value = Some(time);
+                    .set_primitive_value(time);
                 self.register(interp, id, clone);
                 clone
             }

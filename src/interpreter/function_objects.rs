@@ -145,7 +145,7 @@ impl Interpreter {
         let mut obj_data = JsObjectData::with_properties(PropertyMap::with_exact_capacity(
             2 + 2 * usize::from(has_restricted_props) + usize::from(needs_prototype),
         ));
-        obj_data.prototype_id = proto_id.or(self.realm().object_prototype);
+        obj_data.set_proto(proto_id.or(self.realm().object_prototype));
         obj_data.class_name = class_name;
         obj_data.set_function_realm(self.current_realm_id);
         obj_data.callable = Some(Box::new(func));
@@ -231,7 +231,7 @@ impl Interpreter {
         }
         let (parent, writable) = prototype?;
         let mut proto_data = JsObjectData::new();
-        proto_data.prototype_id = parent;
+        proto_data.set_proto(parent);
         let proto_id = self.alloc_object(proto_data);
         obj_data.push_exact_data(
             &self.common_keys.prototype,
