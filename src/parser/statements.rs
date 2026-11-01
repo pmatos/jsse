@@ -83,6 +83,7 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
         // Depth guard: deep nesting is a catchable error, not a stack overflow.
         self.enter_recursion()?;
+        self.track_statement();
         let r = self.parse_statement_inner();
         self.exit_recursion();
         r
@@ -488,7 +489,7 @@ impl<'a> Parser<'a> {
     fn parse_while_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // while
         self.eat(&Token::LeftParen)?;
-        let test = self.parse_expression()?;
+        let test = self.parse_cond()?;
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
         Ok(Statement::While(WhileStatement { test, body }))
@@ -499,7 +500,7 @@ impl<'a> Parser<'a> {
         let body = self.parse_iteration_body()?;
         self.eat(&Token::Keyword(Keyword::While))?;
         self.eat(&Token::LeftParen)?;
-        let test = self.parse_expression()?;
+        let test = self.parse_cond()?;
         self.eat(&Token::RightParen)?;
         // §12.9.1 special ASI rule: semicolon after do-while's `)` is always auto-inserted
         if self.current == Token::Semicolon {
@@ -759,7 +760,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                     self.advance()?;
-                    let right = self.parse_expression()?;
+                    let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForIn(ForInStatement {
@@ -823,7 +824,7 @@ impl<'a> Parser<'a> {
                             return Err(self.error("Invalid left-hand side in for-in loop"));
                         }
                         self.advance()?;
-                        let right = self.parse_expression()?;
+                        let right = self.parse_cond()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
@@ -883,7 +884,7 @@ impl<'a> Parser<'a> {
                             return Err(self.for_binding_error(&decls, "in"));
                         }
                         self.advance()?;
-                        let right = self.parse_expression()?;
+                        let right = self.parse_cond()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         Self::check_for_in_of_early_errors(kind, &decls, &body)?;
@@ -958,7 +959,7 @@ impl<'a> Parser<'a> {
                         return Err(self.for_binding_error(&decls, "in"));
                     }
                     self.advance()?;
-                    let right = self.parse_expression()?;
+                    let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     Self::check_for_in_of_early_errors(kind, &decls, &body)?;
@@ -1037,7 +1038,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error("Invalid left-hand side in for-in loop"));
                     }
                     self.advance()?;
-                    let right = self.parse_expression()?;
+                    let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
@@ -1097,13 +1098,13 @@ impl<'a> Parser<'a> {
 
         self.eat(&Token::Semicolon)?;
         let test = if self.current != Token::Semicolon {
-            Some(self.parse_expression()?)
+            Some(self.parse_cond()?)
         } else {
             None
         };
         self.eat(&Token::Semicolon)?;
         let update = if self.current != Token::RightParen {
-            Some(self.parse_expression()?)
+            Some(self.parse_cond()?)
         } else {
             None
         };
@@ -1207,7 +1208,7 @@ impl<'a> Parser<'a> {
         while self.current != Token::RightBrace {
             let test = if self.current == Token::Keyword(Keyword::Case) {
                 self.advance()?;
-                let expr = self.parse_expression()?;
+                let expr = self.parse_cond()?;
                 self.eat(&Token::Colon)?;
                 Some(expr)
             } else {

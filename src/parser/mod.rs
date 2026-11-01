@@ -1,10 +1,10 @@
 use crate::ast::*;
-use crate::lexer::{Keyword, LexError, Lexer, Token};
+use crate::lexer::{Keyword, Lexer, Token};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::rc::Rc;
 
 pub(crate) use cover_patterns::{check_object_rest_target, expr_to_pattern, pattern_to_expr};
+pub(crate) use parse_error::ParseError;
 
 mod arrow_params;
 mod catch_param;
@@ -19,12 +19,14 @@ mod module_early_errors;
 mod module_start;
 mod modules;
 mod node_hooks;
+mod parse_error;
 mod positions;
 mod prologue;
 pub(crate) mod source_scan;
 mod statements;
 mod strict_patterns;
 pub(crate) mod v8_messages;
+pub(crate) mod v8_position;
 mod yield_scan;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,23 +34,6 @@ enum PrivateNameKind {
     Getter,
     Setter,
     Other,
-}
-
-#[derive(Debug)]
-pub(crate) struct ParseError {
-    pub message: String,
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SyntaxError: {}", self.message)
-    }
-}
-
-impl From<LexError> for ParseError {
-    fn from(e: LexError) -> Self {
-        ParseError { message: e.message }
-    }
 }
 
 /// Snapshot of the two Annex B.3.3 block-scoping flags
@@ -478,8 +463,10 @@ impl<'a> Parser<'a> {
         body: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
         let saved = self.save_function_context();
+        let outer = v8_position::enter_function();
         enter(self);
         let result = body(self);
+        v8_position::restore(outer);
         self.restore_function_context(saved);
         result
     }

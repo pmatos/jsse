@@ -59,6 +59,7 @@ impl<'a> Parser<'a> {
             let init = if self.current == Token::Assign {
                 self.advance()?;
                 init_at = self.op_pos();
+                self.track_statement();
                 let init = self.parse_assignment_expression()?;
                 // V8 words a parenthesized name by its value, not its name
                 // (#1557); a one-element sequence keeps the parentheses.

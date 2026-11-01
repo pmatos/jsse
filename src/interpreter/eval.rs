@@ -911,8 +911,7 @@ impl Interpreter {
             }
             Expression::ImportMeta => self.eval_import_meta(env),
             Expression::Import(source_expr, options_expr, at) => {
-                // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
-                self.node_host.call_pos = *at;
+                // §2.1.1.1 EvaluateImportCall
                 let source_val = match self.eval_expr(source_expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -922,6 +921,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                self.node_host.call_pos = crate::parser::v8_position::resolve(*at);
                 // Per spec: ToString(specifier) errors produce a rejected promise
                 let source = match self.to_string_lossy(&source_val) {
                     Ok(s) => s,

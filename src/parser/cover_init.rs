@@ -100,6 +100,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_for_head_expression(&mut self) -> Result<Expression, ParseError> {
         let outer = self.begin_cover_list();
         self.cover_init.defer = true;
+        self.track_statement();
         let expr = self.parse_expression()?;
         let pattern = matches!(self.current, Token::Keyword(Keyword::In | Keyword::Of));
         self.end_cover_list(outer, pattern)?;

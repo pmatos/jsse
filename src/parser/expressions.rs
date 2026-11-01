@@ -8,7 +8,9 @@ mod targets;
 
 use regexp::validate_regexp_literal;
 
+mod logical_ops;
 mod new_expr;
+mod optional_chain;
 mod pattern_pos;
 mod template_literal;
 mod yield_expr;
@@ -20,7 +22,7 @@ impl<'a> Parser<'a> {
             let mut exprs = vec![expr];
             while self.current == Token::Comma {
                 self.advance()?;
-                exprs.push(self.parse_assignment_expression()?);
+                exprs.push(self.parse_comma_operand()?);
             }
             Ok(Expression::Sequence(exprs))
         } else {
@@ -56,6 +58,7 @@ impl<'a> Parser<'a> {
         }
 
         let left_start = self.current_token_start;
+        let before = v8_position::snapshot();
         let left = self.parse_conditional_expression()?;
         let arrow_ended = match self.arrow_held_token.take() {
             Some(held) => {
@@ -99,11 +102,13 @@ impl<'a> Parser<'a> {
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
             let mut left = left;
             self.retarget_store_site(&mut left, op);
+            v8_position::store_target(&left, op, before);
             self.claim_cover_for_pattern(op, &left);
             let at = self.assign_pos(&left, op, left_start);
             self.advance()?;
             let right_start = self.current_token_start;
             let right = self.parse_assignment_expression()?;
+            v8_position::expression(at);
             self.infer_assigned_name(op, &left, &right, right_start);
             // When LHS is parenthesized, wrap in Sequence to prevent IsIdentifierRef
             let left = if lhs_parenthesized && matches!(left, Expression::Identifier(_)) {
@@ -131,6 +136,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_conditional_expression(&mut self) -> Result<Expression, ParseError> {
+        let start = v8_position::at(self.current_token_start);
         let expr = self.parse_nullish_coalescing()?;
         if self.current == Token::Question {
             self.advance()?;
@@ -142,6 +148,7 @@ impl<'a> Parser<'a> {
             self.eat(&Token::Colon)?;
             // alternate is AssignmentExpression[?In]
             let alternate = self.parse_assignment_expression()?;
+            v8_position::node(start);
             Ok(Expression::Conditional(
                 ExprBox::new(expr),
                 ExprBox::new(consequent),
@@ -150,61 +157,6 @@ impl<'a> Parser<'a> {
         } else {
             Ok(expr)
         }
-    }
-
-    fn parse_nullish_coalescing(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_bitwise_or()?;
-        match self.current {
-            Token::NullishCoalescing => {
-                while self.current == Token::NullishCoalescing {
-                    self.advance()?;
-                    let right = self.parse_bitwise_or()?;
-                    left = Expression::Logical(
-                        LogicalOp::NullishCoalescing,
-                        ExprBox::new(left),
-                        ExprBox::new(right),
-                    );
-                }
-                if matches!(self.current, Token::LogicalOr | Token::LogicalAnd) {
-                    return Err(self.error(
-                        "Logical expressions and coalesce expressions cannot be mixed without parentheses",
-                    ));
-                }
-            }
-            Token::LogicalAnd | Token::LogicalOr => {
-                while self.current == Token::LogicalAnd {
-                    self.advance()?;
-                    let right = self.parse_bitwise_or()?;
-                    left = Expression::Logical(
-                        LogicalOp::And,
-                        ExprBox::new(left),
-                        ExprBox::new(right),
-                    );
-                }
-                while self.current == Token::LogicalOr {
-                    self.advance()?;
-                    let mut right = self.parse_bitwise_or()?;
-                    while self.current == Token::LogicalAnd {
-                        self.advance()?;
-                        let and_right = self.parse_bitwise_or()?;
-                        right = Expression::Logical(
-                            LogicalOp::And,
-                            ExprBox::new(right),
-                            ExprBox::new(and_right),
-                        );
-                    }
-                    left =
-                        Expression::Logical(LogicalOp::Or, ExprBox::new(left), ExprBox::new(right));
-                }
-                if self.current == Token::NullishCoalescing {
-                    return Err(self.error(
-                        "Logical expressions and coalesce expressions cannot be mixed without parentheses",
-                    ));
-                }
-            }
-            _ => {}
-        }
-        Ok(left)
     }
 
     fn parse_exponentiation(&mut self) -> Result<Expression, ParseError> {
@@ -237,6 +189,7 @@ impl<'a> Parser<'a> {
             let at = self.op_pos();
             self.advance()?;
             let exp = self.parse_exponentiation()?; // right-associative
+            v8_position::expression(at);
             Ok(Expression::Binary(
                 BinaryOp::Exp,
                 ExprBox::new(base),
@@ -278,7 +231,12 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Typeof) => {
                 self.advance()?;
+                let before = v8_position::snapshot();
                 let expr = self.parse_unary()?;
+                if matches!(expr, Expression::Identifier(_)) {
+                    v8_position::restore(before);
+                    v8_position::instruction();
+                }
                 Ok(Expression::Typeof(ExprBox::new(expr)))
             }
             Token::Plus => {
@@ -325,9 +283,10 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let at = CallSiteId::at(self.current_token_start).1;
+                v8_position::early_expression(at);
                 self.advance()?;
-                let mut expr = self.parse_unary()?;
-                Self::retarget_import(&mut expr, at);
+                let expr = self.parse_unary()?;
+                v8_position::node(at);
                 Ok(Expression::Await(ExprBox::new(expr), at))
             }
             _ => self.parse_postfix(),
@@ -346,6 +305,7 @@ impl<'a> Parser<'a> {
                 self.validate_update_target(&expr, false)?;
                 let at = self.op_pos();
                 self.advance()?;
+                v8_position::expression(at);
                 return Ok(Expression::Update(op, false, ExprBox::new(expr), at));
             }
         }
@@ -416,6 +376,8 @@ impl<'a> Parser<'a> {
                     {
                         return Err(self.error("Private fields are not accessible on 'super'"));
                     }
+                    let private = matches!(prop, MemberProperty::Private(_));
+                    v8_position::expression(v8_position::at(if private { dot } else { at }));
                     expr = Expression::Member(ExprBox::new(expr), prop, PropSiteId::at(at));
                 }
                 Token::LeftBracket => {
@@ -423,6 +385,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;
+                    v8_position::expression(v8_position::at(at));
                     expr = Expression::Member(
                         ExprBox::new(expr),
                         MemberProperty::Computed(ExprBox::new(prop)),
@@ -432,89 +395,16 @@ impl<'a> Parser<'a> {
                 Token::LeftParen => {
                     let site = self.call_site(&expr);
                     let args = self.parse_arguments()?;
+                    v8_position::expression(site.1);
                     called = true;
                     expr = Expression::Call(ExprBox::new(expr), args, site);
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
+                    v8_position::early_expression(v8_position::at(self.current_token_start));
                     let tmpl = self.parse_template_literal_expr(true)?;
                     expr = Expression::TaggedTemplate(ExprBox::new(expr), tmpl);
                 }
-                Token::OptionalChain => {
-                    self.advance()?;
-                    let mut prop = if self.current == Token::LeftParen {
-                        let site = CallSiteId::at(self.current_token_start);
-                        let args = self.parse_arguments()?;
-                        Expression::Call(
-                            ExprBox::new(Expression::Identifier("".into())),
-                            args,
-                            site,
-                        )
-                    } else if self.current == Token::LeftBracket {
-                        self.advance()?;
-                        let p = self.parse_expression()?;
-                        self.eat(&Token::RightBracket)?;
-                        Expression::Member(
-                            ExprBox::new(Expression::Identifier("".into())),
-                            MemberProperty::Computed(ExprBox::new(p)),
-                            PropSiteId::UNASSIGNED,
-                        )
-                    } else if let Token::PrivateName(name) = &self.current {
-                        let name = name.clone();
-                        self.use_private_name(&name)?;
-                        self.advance()?;
-                        Expression::Member(
-                            ExprBox::new(Expression::Identifier("".into())),
-                            MemberProperty::Private(name),
-                            PropSiteId::UNASSIGNED,
-                        )
-                    } else {
-                        let name = match &self.current {
-                            Token::Identifier(n) | Token::IdentifierWithEscape(n) => n.clone(),
-                            Token::Keyword(kw) => kw.to_string(),
-                            Token::BooleanLiteral(value) => {
-                                if *value { "true" } else { "false" }.to_string()
-                            }
-                            Token::NullLiteral => "null".to_string(),
-                            _ => return Err(self.error("Expected property after '?.'")),
-                        };
-                        self.advance()?;
-                        Expression::Identifier(name)
-                    };
-                    // Keep consuming .prop, [expr], () in the same optional chain
-                    loop {
-                        match &self.current {
-                            Token::Dot => {
-                                let at = self.current_token_start;
-                                self.advance()?;
-                                let mp = self.parse_dot_member_property()?;
-                                prop =
-                                    Expression::Member(ExprBox::new(prop), mp, PropSiteId::at(at));
-                            }
-                            Token::LeftBracket => {
-                                let at = self.current_token_start;
-                                self.advance()?;
-                                let p = self.parse_expression()?;
-                                self.eat(&Token::RightBracket)?;
-                                prop = Expression::Member(
-                                    ExprBox::new(prop),
-                                    MemberProperty::Computed(ExprBox::new(p)),
-                                    PropSiteId::at(at),
-                                );
-                            }
-                            Token::LeftParen => {
-                                let site = self.call_site(&prop);
-                                let args = self.parse_arguments()?;
-                                prop = Expression::Call(ExprBox::new(prop), args, site);
-                            }
-                            Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
-                                return Err(self
-                                    .error("Tagged template cannot be used in an optional chain"));
-                            }
-                            _ => break,
-                        }
-                    }
-                    expr = Expression::OptionalChain(ExprBox::new(expr), ExprBox::new(prop));
-                }
+                Token::OptionalChain => expr = self.parse_optional_chain(expr)?,
                 _ => break,
             }
         }
@@ -522,7 +412,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
+        let tracked = self.track_primary();
         let result = self.parse_primary_expression_inner();
+        if let Ok(expr) = &result {
+            self.track_primary_end(tracked, expr);
+        }
         // Only a `( ArrowFunction )` primary is genuinely parenthesized.
         let parenthesized_arrow = std::mem::take(&mut self.parenthesized_arrow);
         if matches!(result, Ok(Expression::ArrowFunction(_))) {
@@ -700,13 +594,11 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let old_no_in = self.no_in;
                     self.no_in = false;
-                    let spec_start = self.current_token_start;
                     let source = self.import_specifier()?;
-                    let spec_end = self.prev_token_end;
                     let options = self.parse_import_options()?;
                     self.no_in = old_no_in;
                     self.eat(&Token::RightParen)?;
-                    Ok(self.import_call(source, options, at, (spec_start, spec_end)))
+                    Ok(self.import_call(source, options, at))
                 } else {
                     Err(self.error("Unexpected 'import'"))
                 }
@@ -1010,7 +902,9 @@ impl<'a> Parser<'a> {
                             arrow_only = true;
                             break;
                         }
+                        let depth = v8_position::begin_node();
                         exprs.push(self.parse_cover_element()?);
+                        v8_position::end_node(depth);
                     }
                     self.eat(&Token::RightParen)?;
                     self.no_in = saved_no_in;
@@ -1584,6 +1478,7 @@ impl<'a> Parser<'a> {
 
         // Regular: { key: value }
         self.colon_after(&key)?;
+        self.track_property_value();
         let value = self.parse_cover_element()?;
         Ok(Property {
             key,

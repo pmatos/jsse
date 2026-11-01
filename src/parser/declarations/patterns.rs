@@ -9,8 +9,14 @@ impl<'a> Parser<'a> {
             return Ok(Pattern::Identifier(name));
         }
         match &self.current {
-            Token::LeftBracket => self.parse_array_pattern(),
-            Token::LeftBrace => self.parse_object_pattern(),
+            Token::LeftBracket => {
+                v8_position::instruction();
+                self.parse_array_pattern()
+            }
+            Token::LeftBrace => {
+                v8_position::instruction();
+                self.parse_object_pattern()
+            }
             _ => Err(self.unexpected_token("Expected binding pattern, got ")),
         }
     }
