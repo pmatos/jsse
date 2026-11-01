@@ -20,7 +20,7 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_yield_expression(callee)
                     || args.iter().any(Self::expr_contains_yield_expression)
             }
-            Expression::Binary(_, left, right)
+            Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
             | Expression::Assign(_, left, right) => {
                 Self::expr_contains_yield_expression(left) || Self::expr_contains_yield_expression(right)

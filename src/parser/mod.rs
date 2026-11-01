@@ -525,7 +525,7 @@ impl<'a> Parser<'a> {
             if declared.contains(&name) {
                 continue;
             }
-            // The enclosing class may declare the name after this class body.
+            // The enclosing class may declare the name after this body.
             match self.private_name_scopes.last_mut() {
                 Some((_, parent_used)) => parent_used.push(name),
                 None => {
@@ -785,7 +785,7 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_identifier(callee)
                     || args.iter().any(Self::expr_contains_await_identifier)
             }
-            Expression::Binary(_, left, right)
+            Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
             | Expression::Assign(_, left, right) => {
                 Self::expr_contains_await_identifier(left) || Self::expr_contains_await_identifier(right)
@@ -917,7 +917,7 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_expression(callee)
                     || args.iter().any(Self::expr_contains_await_expression)
             }
-            Expression::Binary(_, left, right)
+            Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
             | Expression::Assign(_, left, right) => {
                 Self::expr_contains_await_expression(left) || Self::expr_contains_await_expression(right)

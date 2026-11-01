@@ -19,6 +19,7 @@ use crate::interpreter::types::BindingKind;
 use crate::types::{JsString, JsValue};
 use std::cell::Cell;
 
+mod binary;
 mod block_scope;
 mod calls;
 mod for_of;
@@ -277,6 +278,7 @@ struct Compiler {
     /// construct, not its own handlers (see `push_handler`).
     unwind_segments: Vec<(usize, usize, usize)>,
     member_pos: Vec<(u32, u32)>,
+    binary_pos: Vec<(u32, u32)>,
     pattern_src: Vec<(u32, std::rc::Rc<str>)>,
     switch_tables: Vec<SwitchTable>,
     /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
@@ -330,6 +332,7 @@ impl Compiler {
             kind_constants: Vec::new(),
             unwind_segments: Vec::new(),
             member_pos: Vec::new(),
+            binary_pos: Vec::new(),
             pattern_src: Vec::new(),
             switch_tables: Vec::new(),
         }
@@ -935,7 +938,7 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
-            Expression::Binary(BinaryOp::In, lhs, rhs)
+            Expression::Binary(BinaryOp::In, lhs, rhs, _)
                 if let Expression::PrivateIdentifier(name) = lhs.as_ref() =>
             {
                 self.compile_expr(rhs)?;
@@ -944,37 +947,7 @@ impl Compiler {
                 self.emit_u16(idx);
                 Ok(())
             }
-            Expression::Binary(op, lhs, rhs) => {
-                let bop = Self::binary_op(*op)?;
-                if !matches!(bop, Op::Instanceof | Op::In)
-                    && let Expression::Literal(Literal::Number(k)) = rhs.as_ref()
-                {
-                    // The literal folds into the op: no `LoadConst` dispatch.
-                    // The left operand is still evaluated first and the
-                    // constant has no effects, so evaluation order holds.
-                    if let Expression::Identifier(name) = lhs.as_ref()
-                        && let Some(slot) = self.local_slot(name)
-                    {
-                        self.emit_local_bin_const(name, slot, bop, *k)?;
-                    } else {
-                        self.compile_expr(lhs)?;
-                        self.emit_bin_const(bop, *k)?;
-                    }
-                    return Ok(());
-                }
-                if !matches!(bop, Op::Instanceof | Op::In)
-                    && let Some((a, b)) = self.local_pair(lhs, rhs)
-                {
-                    self.emit_local_local_bin(a, b, bop);
-                    return Ok(());
-                }
-                self.compile_expr(lhs)?;
-                self.compile_expr(rhs)?;
-                self.emit(bop);
-                self.pop_n(2);
-                self.push_n(1);
-                Ok(())
-            }
+            Expression::Binary(op, lhs, rhs, pos) => self.compile_binary(*op, lhs, rhs, *pos),
             Expression::Member(obj, prop, site) => match prop {
                 MemberProperty::Dot(name) => {
                     self.compile_expr(obj)?;
@@ -1408,13 +1381,14 @@ impl Compiler {
     /// The comparison byte, optional constant and jump offset (last, so
     /// `patch_jump` applies) every compare-and-branch op ends with. Returns the
     /// patch site.
-    fn emit_cmp_jump_tail(&mut self, cmp: Op, constant: Option<u16>) -> usize {
+    fn emit_cmp_jump_tail(&mut self, cmp: Op, constant: Option<u16>, pos: u32) -> usize {
         self.code.push(cmp as u8);
         if let Some(k_idx) = constant {
             self.emit_u16(k_idx);
         }
         let patch = self.code.len();
         self.emit_u16(0);
+        self.note_binary_pos(pos);
         patch
     }
 
@@ -1423,7 +1397,7 @@ impl Compiler {
     /// always a Boolean, so ToBoolean is the identity), and one whose operands
     /// are locals, or a local and a number literal, reads them in the jump op.
     fn compile_cond_jump(&mut self, test: &Expression) -> Result<usize, CompileError> {
-        if let Expression::Binary(op, lhs, rhs) = test
+        if let Expression::Binary(op, lhs, rhs, pos) = test
             && Self::is_comparison(*op)
         {
             let cmp = Self::binary_op(*op)?;
@@ -1433,7 +1407,7 @@ impl Compiler {
                 self.emit_local_ref(b);
                 self.push_n(2);
                 self.pop_n(2);
-                return Ok(self.emit_cmp_jump_tail(cmp, None));
+                return Ok(self.emit_cmp_jump_tail(cmp, None, *pos));
             }
             if let Expression::Literal(Literal::Number(k)) = rhs.as_ref()
                 && let Some(local) = self.local_ref(lhs)
@@ -1443,13 +1417,13 @@ impl Compiler {
                 self.emit_local_ref(local);
                 self.push_n(2);
                 self.pop_n(2);
-                return Ok(self.emit_cmp_jump_tail(cmp, Some(k_idx)));
+                return Ok(self.emit_cmp_jump_tail(cmp, Some(k_idx), *pos));
             }
             self.compile_expr(lhs)?;
             self.compile_expr(rhs)?;
             self.pop_n(2);
             self.emit(Op::CmpJumpIfFalse);
-            return Ok(self.emit_cmp_jump_tail(cmp, None));
+            return Ok(self.emit_cmp_jump_tail(cmp, None, *pos));
         }
         self.compile_expr(test)?;
         self.pop_n(1);
@@ -2945,6 +2919,7 @@ impl Compiler {
             fallback_reasons: self.fallback_reasons,
             trivial_private_getter: None,
             member_pos: self.member_pos,
+            binary_pos: self.binary_pos,
             pattern_src: self.pattern_src,
             switch_tables: self.switch_tables,
         }

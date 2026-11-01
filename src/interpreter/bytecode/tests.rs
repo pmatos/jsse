@@ -239,9 +239,8 @@ fn end_to_end_new_expression_non_constructor_primitive_callee_message_matches_tr
 fn end_to_end_member_assignment_in_loop_takes_bytecode_path() {
     // Motivating case for issue #388 (mandreel's heap-copy loop shape):
     // a numeric `for` loop whose body is nothing but member/array-element
-    // read + write. Before member-access opcodes landed, `Expression::Member`
-    // had no `compile_expr` case, so this bailed the whole body to the
-    // tree-walker (bc_count == 0) despite being otherwise loop-eligible.
+    // read + write. Before member-access opcodes landed this bailed the whole
+    // body to the tree-walker (bc_count == 0) despite being loop-eligible.
     let source = "var __r = (function(a, b, n) { \
         for (var i = 0; i < n; i++) { a[i] = b[i]; } \
         return a[n - 1]; \
@@ -856,6 +855,7 @@ fn compile_body_return_addition_of_literals() {
         crate::ast::BinaryOp::Add,
         ExprBox::new(Expression::Literal(Literal::Number(2.0))),
         ExprBox::new(Expression::Literal(Literal::Number(3.0))),
+        0,
     )))];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
@@ -1226,6 +1226,7 @@ fn compile_body_if_lowers_via_vm_directly() {
             BinaryOp::Lt,
             ExprBox::new(Expression::Literal(Literal::Number(1.0))),
             ExprBox::new(Expression::Literal(Literal::Number(2.0))),
+            0,
         ),
         consequent: Box::new(Statement::Return(Some(Expression::Literal(
             Literal::Number(10.0),
@@ -1345,6 +1346,7 @@ fn trivial_private_getter_shape_is_recognised() {
         BinaryOp::Add,
         ExprBox::new(read()),
         ExprBox::new(Expression::Literal(Literal::Number(1.0))),
+        0,
     );
     let chunk = compile_body(&[Statement::Return(Some(sum))]).expect("compiles");
     assert_eq!(chunk.detect_trivial_private_getter(), None);

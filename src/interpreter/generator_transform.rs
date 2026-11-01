@@ -1,4 +1,6 @@
 mod await_pos;
+mod undefined_check;
+use undefined_check::undefined_check_condition;
 
 use crate::ast::*;
 use crate::interpreter::atom::Atom;
@@ -1688,7 +1690,7 @@ fn transform_yielding_expression(
             }
         }
 
-        Expression::Binary(op, left, right) => {
+        Expression::Binary(op, left, right, pos) => {
             if expr_has_suspension(left, ctx.is_async) {
                 let temp_var = ctx.new_temp_var("binary_left");
                 let left_binding = SentValueBindingKind::Variable(temp_var.clone());
@@ -1703,6 +1705,7 @@ fn transform_yielding_expression(
                         *op,
                         ExprBox::new(Expression::Identifier(temp_var)),
                         ExprBox::new(Expression::Identifier(temp_var2)),
+                        *pos,
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 } else {
@@ -1710,6 +1713,7 @@ fn transform_yielding_expression(
                         *op,
                         ExprBox::new(Expression::Identifier(temp_var)),
                         right.clone(),
+                        *pos,
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
@@ -1723,6 +1727,7 @@ fn transform_yielding_expression(
                     *op,
                     ExprBox::new(left_operand),
                     ExprBox::new(Expression::Identifier(temp_var)),
+                    *pos,
                 );
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
@@ -1796,6 +1801,7 @@ fn transform_yielding_expression(
                         binary_op,
                         ExprBox::new(Expression::Identifier(old_var)),
                         ExprBox::new(value),
+                        0,
                     );
                     assign_op = AssignOp::Assign;
                 }
@@ -2452,22 +2458,6 @@ fn lower_array_pattern_binding(
     }
 }
 
-/// `typeof <name> === "undefined"` -- the "if Initializer is present and v is
-/// undefined" condition shared by every conditional-default site in this
-/// file (`lower_conditional_default` and the array-assignment identifier
-/// fast path in `lower_array_pattern_assignment`).
-fn undefined_check_condition(name: &str) -> Expression {
-    Expression::Binary(
-        BinaryOp::StrictEq,
-        ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
-            name.to_string(),
-        )))),
-        ExprBox::new(Expression::Literal(Literal::String(
-            "undefined".encode_utf16().collect(),
-        ))),
-    )
-}
-
 /// Evaluate `default` into `value_temp` only when it currently holds
 /// `undefined` — the "if Initializer is present and v is undefined" step
 /// shared by `KeyedBindingInitialization` and
@@ -2885,6 +2875,7 @@ fn nullish_test(var: &str) -> Expression {
             BinaryOp::StrictEq,
             ExprBox::new(Expression::Identifier(var.to_string())),
             ExprBox::new(rhs),
+            0,
         )
     };
     Expression::Logical(
@@ -4272,6 +4263,7 @@ fn lower_switch_dispatch_with_suspending_tests(
                 BinaryOp::StrictEq,
                 ExprBox::new(Expression::Identifier(disc_var.clone())),
                 ExprBox::new(selector),
+                0,
             ),
             true_state: case_state,
             false_state: next_test_state,
@@ -4626,10 +4618,11 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             *trailing,
         ),
         Expression::Unary(op, e) => Expression::Unary(*op, ExprBox::new(rewrite_expr(e))),
-        Expression::Binary(op, l, r) => Expression::Binary(
+        Expression::Binary(op, l, r, pos) => Expression::Binary(
             *op,
             ExprBox::new(rewrite_expr(l)),
             ExprBox::new(rewrite_expr(r)),
+            *pos,
         ),
         Expression::Logical(op, l, r) => Expression::Logical(
             *op,

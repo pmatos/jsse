@@ -180,7 +180,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_class_declaration(&mut self) -> Result<Statement, ParseError> {
         let source_start = self.current_token_start;
         self.advance()?; // class
-        // Class definitions are strict mode code — set strict before parsing name
+        // Class definitions are strict mode code; set strict before parsing name
         let prev_strict = self.strict;
         self.set_strict(true);
         let name = match self.current_identifier_name() {
@@ -456,7 +456,7 @@ impl<'a> Parser<'a> {
                 Self::expr_has_direct_super(object)
                     || matches!(property, crate::ast::MemberProperty::Computed(e) if Self::expr_has_direct_super(e))
             }
-            Expression::Binary(_, left, right)
+            Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
             | Expression::Assign(_, left, right) => {
                 Self::expr_has_direct_super(left) || Self::expr_has_direct_super(right)

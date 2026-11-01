@@ -345,7 +345,7 @@ impl Interpreter {
             .as_object_id()
             .filter(|_| self.is_constructor(superclass))
         else {
-            return Completion::Throw(self.class_extends_error(superclass));
+            return Completion::Throw(self.class_extends_error(superclass, &None));
         };
         self.superclass_prototype(super_id, superclass)
     }
@@ -402,13 +402,12 @@ impl Interpreter {
             None => (None, None),
         };
 
-        // Validate super class: must be null or a constructor
         if resolved_proto.is_none()
             && let Some(ref sv) = super_val
             && !(sv).is_null()
             && !self.is_constructor(sv)
         {
-            return Completion::Throw(self.class_extends_error(sv));
+            return Completion::Throw(self.class_extends_error(sv, &class_source_text));
         }
 
         if let Some(ref sv) = super_val {

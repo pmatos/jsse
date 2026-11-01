@@ -86,7 +86,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         Expression::Typeof(operand) => format!("(typeof {})", expr_text(operand)),
         Expression::Void(operand) => format!("(void {})", expr_text(operand)),
         Expression::Delete(operand) => format!("(delete {})", expr_text(operand)),
-        Expression::Binary(op, left, right) => format!(
+        Expression::Binary(op, left, right, _) => format!(
             "({} {} {})",
             expr_text(left),
             binary_symbol(*op),

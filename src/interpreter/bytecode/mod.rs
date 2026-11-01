@@ -7,6 +7,8 @@ pub(crate) mod vm;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_binary_pos;
+#[cfg(test)]
 mod tests_decode;
 #[cfg(test)]
 mod tests_hook_isolation;

@@ -65,6 +65,7 @@ mod node_host_fs_more;
 mod node_host_fs_ops;
 #[cfg(unix)]
 mod node_host_fs_watch;
+mod node_host_heritage;
 mod node_host_idna;
 mod node_host_json_cycle;
 mod node_host_loop;
@@ -86,6 +87,7 @@ mod node_host_signal;
 mod node_host_spread_errors;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
+mod node_host_symbol_add;
 mod node_host_symbol_wording;
 mod node_host_throw;
 #[cfg(unix)]

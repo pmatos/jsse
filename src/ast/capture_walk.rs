@@ -244,7 +244,7 @@ impl<'a> CaptureWalk<'a> {
                     self.push_expr(arg);
                 }
             }
-            Expression::Binary(_, l, r)
+            Expression::Binary(_, l, r, _)
             | Expression::Logical(_, l, r)
             | Expression::Assign(_, l, r)
             | Expression::BoundCallee(l, r)
