@@ -19,9 +19,12 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use super::atom::{Atom, IdentityBuild, hash_text};
+use super::gc::env_registry::NO_SLOT;
 use super::types::Binding;
 
-/// Entries up to this count are found by scanning; above it an index is kept.
+mod slot;
+
+/// Up to this many entries are scanned; above it an index is kept.
 pub(crate) const LINEAR_MAX: usize = 16;
 
 struct HashIndex {
@@ -37,15 +40,16 @@ pub(crate) struct BindingMap {
     entries: Vec<(Atom, Binding)>,
     index: Option<HashIndex>,
     /// One bit per name ever pushed, selected by the top six bits of the
-    /// atom's keyed hash. An atom whose bit is clear is definitely absent, so
-    /// the (common) free-variable miss on a scope costs one `and`, not a scan.
-    /// Removals leave their bit set: the filter may only err towards "maybe".
+    /// atom's keyed hash. A clear bit means definitely absent, so the (common)
+    /// free-variable miss costs one `and`, not a scan. Removals leave their
+    /// bit set: the filter may only err towards "maybe".
     name_filter: u64,
-    /// A collection scanned this scope, found no nursery object in it and
-    /// nothing has handed out write access since (generational GC barrier,
-    /// #1027). Every method that can store a value clears it; one store, no
-    /// branch.
+    /// A collection found no nursery object here and nothing has handed out
+    /// write access since (GC barrier, #1027): clearing it queues the scope
+    /// for the next minor collection (`slot.rs`).
     clean: Cell<bool>,
+    /// Registry slot or `NO_SLOT`; clean implies registered.
+    slot: Cell<u32>,
 }
 
 #[inline]
@@ -189,6 +193,7 @@ impl BindingMap {
             index: None,
             name_filter: 0,
             clean: Cell::new(false),
+            slot: Cell::new(NO_SLOT),
         }
     }
 
@@ -198,6 +203,7 @@ impl BindingMap {
             index: None,
             name_filter: 0,
             clean: Cell::new(false),
+            slot: Cell::new(NO_SLOT),
         }
     }
 
@@ -221,7 +227,7 @@ impl BindingMap {
 
     /// Drops every binding but keeps the entry buffer for pooled reuse.
     pub(crate) fn clear(&mut self) {
-        self.clean.set(false);
+        self.dirty();
         self.entries.clear();
         self.index = None;
         self.name_filter = 0;
@@ -255,9 +261,8 @@ impl BindingMap {
     /// linearly. A stamp is a fresh value from a per-thread counter, handed out
     /// the first time it is read after the key set last changed, so two maps
     /// (or two states of one map) never share one. A reader that probed for a
-    /// name once can later prove it is still absent by comparing stamps instead
-    /// of probing again; the mutators only clear the stamp, so a push into a
-    /// large environment costs one store.
+    /// name once can later prove it is still absent by comparing stamps; the
+    /// mutators only clear the stamp, so a push costs one store.
     #[inline(always)]
     pub(crate) fn epoch(&self) -> u64 {
         let Some(index) = &self.index else {
@@ -287,7 +292,7 @@ impl BindingMap {
 
     #[inline]
     pub(crate) fn get_mut<K: BindingKey + ?Sized>(&mut self, key: &K) -> Option<&mut Binding> {
-        self.clean.set(false);
+        self.dirty();
         key.find_in(self).map(|i| &mut self.entries[i].1)
     }
 
@@ -304,13 +309,13 @@ impl BindingMap {
 
     #[inline]
     pub(crate) fn entry_at_mut(&mut self, i: usize) -> Option<&mut (Atom, Binding)> {
-        self.clean.set(false);
+        self.dirty();
         self.entries.get_mut(i)
     }
 
     /// Insert-or-replace by script text. Replacement keeps the entry position.
     pub(crate) fn insert(&mut self, name: &str, binding: Binding) -> Option<Binding> {
-        self.clean.set(false);
+        self.dirty();
         if let Some(i) = name.find_in(self) {
             return Some(std::mem::replace(&mut self.entries[i].1, binding));
         }
@@ -320,7 +325,7 @@ impl BindingMap {
 
     /// Insert-or-replace by atom.
     pub(crate) fn insert_atom(&mut self, name: &Atom, binding: Binding) -> Option<Binding> {
-        self.clean.set(false);
+        self.dirty();
         if let Some(i) = name.find_in(self) {
             return Some(std::mem::replace(&mut self.entries[i].1, binding));
         }
@@ -345,7 +350,7 @@ impl BindingMap {
         filter: u64,
         binding: impl Fn(usize) -> Binding,
     ) {
-        self.clean.set(false);
+        self.dirty();
         if self.entries.is_empty() && self.index.is_none() && atoms.len() <= LINEAR_MAX {
             debug_assert_eq!(filter, Self::filter_of(atoms));
             self.name_filter |= filter;
@@ -364,7 +369,7 @@ impl BindingMap {
 
     /// Append an entry the caller knows is absent.
     pub(crate) fn push_unique(&mut self, name: Atom, binding: Binding) {
-        self.clean.set(false);
+        self.dirty();
         debug_assert!(name.find_in(self).is_none(), "push_unique of a bound name");
         let slot = self.entries.len() as u32;
         let hash = name.precomputed_hash();
@@ -379,7 +384,7 @@ impl BindingMap {
     }
 
     pub(crate) fn remove<K: BindingKey + ?Sized>(&mut self, key: &K) -> Option<Binding> {
-        self.clean.set(false);
+        self.dirty();
         let i = key.find_in(self)?;
         let removed_hash = self.entries[i].0.precomputed_hash();
         let (_, removed) = self.entries.swap_remove(i);
@@ -413,7 +418,7 @@ impl BindingMap {
     /// For a write the map cannot see, to the environment's other state.
     #[inline]
     pub(crate) fn mark_written(&self) {
-        self.clean.set(false);
+        self.dirty();
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &Binding> {

@@ -954,8 +954,6 @@ pub(crate) struct Environment {
     /// Epoch of the last collection walk that visited this environment
     /// (`EnvVisits`); never reset, since an epoch is never reused.
     gc_epoch: Cell<u64>,
-    /// Whether the collector's registry already holds this environment.
-    gc_registered: Cell<bool>,
 }
 
 static NEXT_ENV_VISIT_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -1187,7 +1185,6 @@ impl Environment {
             indirect_bindings: None,
             module_path: None,
             gc_epoch: Cell::new(0),
-            gc_registered: Cell::new(false),
         }
     }
 
@@ -1263,7 +1260,6 @@ impl Environment {
             indirect_bindings,
             module_path,
             gc_epoch: _,
-            gc_registered: _,
         } = self;
         bindings.clear();
         *this_binding = None;
@@ -1403,25 +1399,14 @@ impl Environment {
     }
 
     /// The collector's: a scan found no nursery object here. Callers register
-    /// the environment (`register_with_collector`) so a minor collection finds
+    /// the environment (`EnvRegistry::register`) so a minor collection finds
     /// it again once it is written.
     pub(crate) fn mark_clean(&self) {
         self.bindings.mark_clean();
     }
 
-    /// Clears the clean mark.
-    pub(crate) fn mark_written(&self) {
-        self.bindings.mark_written();
-    }
-
     pub(crate) fn is_registered(&self) -> bool {
-        self.gc_registered.get()
-    }
-
-    /// Reports whether the collector's registry already held this
-    /// environment, registering it.
-    pub(crate) fn register_with_collector(&self) -> bool {
-        self.gc_registered.replace(true)
+        self.bindings.slot() != crate::interpreter::gc::env_registry::NO_SLOT
     }
 
     /// `GetNewTarget` (§9.4.3): the [[NewTarget]] of the nearest function
