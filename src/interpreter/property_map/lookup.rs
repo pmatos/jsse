@@ -108,9 +108,8 @@ impl PropertyMap {
         &mut self,
         key: &K,
     ) -> Option<&mut PropertyRecord> {
-        self.slot_of(key)?;
-        self.leave_shapes();
         let slot = self.slot_of(key)?;
+        self.leave_shapes();
         match &mut self.inner {
             PropertyMapInner::Inline(v) => v.get_mut(slot).map(|(_, r)| r),
             PropertyMapInner::Spilled { entries, .. } => {

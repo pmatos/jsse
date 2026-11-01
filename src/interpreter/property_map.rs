@@ -290,9 +290,11 @@ impl PropertyMap {
         &mut self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
-        if matches!(self.inner, PropertyMapInner::Shaped { .. }) {
-            self.slot_of(key)?;
-            if let Some(removed) = self.pop_shaped(key.as_property_key_bytes()) {
+        if let PropertyMapInner::Shaped { values, .. } = &self.inner {
+            let len = values.len();
+            if self.slot_of(key)? + 1 == len
+                && let Some(removed) = self.pop_shaped()
+            {
                 self.digit_leading_keys -=
                     u32::from(Self::is_digit_leading(key.as_property_key_bytes()));
                 return Some(removed.into_descriptor());

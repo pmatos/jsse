@@ -34,6 +34,9 @@ const MAX_LIVE_SHAPES: usize = 50_000;
 /// A shape up to this size is searched by comparing keys one by one.
 const LINEAR_SCAN_MAX: usize = 8;
 
+/// A full child table looks for dead children once per this many refused keys.
+const PRUNE_EVERY: u8 = 64;
+
 /// Up to this many children are kept in a list, more in a map.
 const FEW_CHILDREN: usize = 8;
 
@@ -61,6 +64,8 @@ pub(super) struct Shape {
     /// parent that exists.
     parent: Option<Rc<Shape>>,
     children: RefCell<Children>,
+    /// Refused keys left before a full table is pruned again.
+    prune_wait: Cell<u8>,
 }
 
 thread_local! {
@@ -70,6 +75,7 @@ thread_local! {
         tags: Box::new([]),
         parent: None,
         children: RefCell::new(Children::Few(Vec::new())),
+        prune_wait: Cell::new(0),
     });
     static ENABLED: Cell<bool> = const { Cell::new(true) };
     static LIVE: Cell<usize> = const { Cell::new(0) };
@@ -172,6 +178,12 @@ impl Shape {
             && map.len() >= MAX_FAN_OUT
             && !map.contains_key(key.as_bytes())
         {
+            let wait = self.prune_wait.get();
+            if wait > 0 {
+                self.prune_wait.set(wait - 1);
+                return None;
+            }
+            self.prune_wait.set(PRUNE_EVERY);
             map.retain(|_, slots| slots.iter().any(|shape| shape.strong_count() > 0));
             if map.len() >= MAX_FAN_OUT {
                 // The child would be rebuilt by every object that follows it.
@@ -229,6 +241,7 @@ impl Shape {
             tags: tags.into_boxed_slice(),
             parent: Some(Rc::clone(self)),
             children: RefCell::new(Children::Few(Vec::new())),
+            prune_wait: Cell::new(0),
         }
     }
 }

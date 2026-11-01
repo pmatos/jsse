@@ -111,6 +111,7 @@ impl Interpreter {
     /// Must run after `setup_globals` (so the global object exists) and before
     /// the Node prelude/main are executed. Never called under test262.
     pub(crate) fn enable_node_host(&mut self) {
+        let _builtins_are_unshared = crate::interpreter::property_map::ShapesPaused::new();
         self.node_host_enabled = true;
         self.node_host.clock_start = Some(std::time::Instant::now());
         self.setup_node_host();

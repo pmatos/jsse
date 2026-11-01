@@ -304,3 +304,16 @@ fn random_operations_agree_with_a_model() {
         }
     }
 }
+
+#[test]
+fn removing_from_an_empty_shaped_map_finds_nothing() {
+    let mut map = PropertyMap::new();
+    map.reserve(4);
+    assert!(shape_of(&map).is_some());
+    assert!(map.remove("absent").is_none());
+    assert_eq!(map.len(), 0);
+    map.insert(key("only15"), desc(1));
+    assert!(map.remove("only15").is_some());
+    assert_eq!(map.len(), 0);
+    assert!(map.remove("only15").is_none());
+}

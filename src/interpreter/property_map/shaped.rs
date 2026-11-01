@@ -123,19 +123,14 @@ impl PropertyMap {
         }
     }
 
-    /// Removes `key`, which is the last one added, by returning to the parent
-    /// shape. `None` when `key` is not last (or the map is not shaped), in
-    /// which case the caller moves to the per-object representation.
+    /// Removes the last key added by returning to the parent shape. `None`
+    /// when the map is not shaped or has no keys.
     #[inline]
-    pub(super) fn pop_shaped(&mut self, key: &[u8]) -> Option<PropertyRecord> {
+    pub(super) fn pop_shaped(&mut self) -> Option<PropertyRecord> {
         let PropertyMapInner::Shaped { shape, values } = &mut self.inner else {
             return None;
         };
-        let slot = shape.find(key)?;
-        if slot + 1 != values.len() {
-            return None;
-        }
-        let attrs = shape.attrs()[slot];
+        let attrs = *shape.attrs().last()?;
         *shape = shape.parent()?.clone();
         Some(PropertyRecord::from_plain(attrs, values.pop()?))
     }

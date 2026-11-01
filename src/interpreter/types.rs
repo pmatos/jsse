@@ -3866,13 +3866,13 @@ impl JsObjectData {
             && desc.set.is_none()
             && desc.enumerable.is_none()
             && desc.configurable.is_none()
-            && let Some(new_value) = desc.value.clone()
+            && let Some(new_value) = desc.value.as_ref()
             && self.parameter_map().is_none()
             && let Some(record) = self.properties.get_mut(&key)
             && record.writable() == Some(true)
             && !record.is_accessor_descriptor()
         {
-            record.set_value(new_value);
+            record.set_value(new_value.clone());
             self.shape_id = fresh_shape_id();
             return true;
         }
@@ -4120,8 +4120,8 @@ impl JsObjectData {
             };
             self.insert_tracked(ikey, new_desc);
         }
-        // Issue #71 (Step 5): an existing property was redefined or a new one
-        // added, both structural mutations. Earlier `return true` paths
+        // Issue #71: an existing property was redefined or a new one was
+        // added: structural mutations. Earlier `return true` paths
         // (String exotic equality, module-namespace no-op, TypedArray element
         // write, all-absent-desc) are non-mutating and skip this bump.
         self.shape_id = fresh_shape_id();
