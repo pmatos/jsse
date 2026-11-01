@@ -1,5 +1,6 @@
 use super::*;
 
+pub(crate) mod env_registry;
 mod module_roots;
 mod pacer;
 
@@ -363,26 +364,14 @@ impl Interpreter {
                 self.env_registry.len() as u64;
         }
         if minor {
-            self.env_registry.retain(|weak| {
-                if weak.strong_count() == 0 {
-                    return false;
-                }
-                // SAFETY: a strong reference keeps the allocation live and no
-                // environment is borrowed mutably at a safepoint. Reading
-                // through the pointer writes neither the strong count nor the
-                // borrow flag of every registered environment (#1490).
-                let clean = unsafe {
-                    (*weak.as_ptr())
-                        .try_borrow_unguarded()
-                        .is_ok_and(Environment::is_clean)
-                };
-                if !clean && let Some(env) = weak.upgrade() {
+            for env in self.env_registry.take_dirty() {
+                let clean = env.try_borrow().is_ok_and(|env| env.is_clean());
+                if !clean {
                     Self::collect_env_roots(&env, &mut roots, &mut seen_envs);
                 }
-                true
-            });
+            }
         } else {
-            self.env_registry.retain(|weak| weak.strong_count() > 0);
+            self.env_registry.begin_major();
         }
         #[cfg(feature = "perf-counters")]
         if minor {
@@ -1072,12 +1061,12 @@ impl Interpreter {
         crate::thp::after_major_collection();
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
-        // Everything that survived is old now, so every environment the mark
-        // walked is clean; one the walk missed is not reachable from any heap
-        // object.
+        // Everything that survived is old now: every environment walked is clean.
         for env in std::mem::take(&mut seen_envs.scanned) {
-            self.mark_env_clean(&env);
+            self.env_registry.register(&env);
+            env.borrow().mark_clean();
         }
+        self.env_registry.end_major();
         #[cfg(feature = "perf-counters")]
         self.perf.note_env_visits(&seen_envs);
     }
@@ -1449,25 +1438,12 @@ impl Interpreter {
     /// again.
     fn settle_scanned_envs(&mut self, seen_envs: &mut EnvVisits) {
         for env in std::mem::take(&mut seen_envs.scanned) {
+            self.env_registry.register(&env);
             if self.env_references_nursery(&env) {
-                env.borrow().mark_written();
-                self.register_env(&env);
+                env.borrow().bindings.rearm();
             } else {
-                self.mark_env_clean(&env);
+                env.borrow().mark_clean();
             }
-        }
-    }
-
-    /// Marks `env` clean and registers it, so a minor collection finds it again
-    /// once it is written: a clean environment is always registered.
-    fn mark_env_clean(&mut self, env: &EnvRef) {
-        env.borrow().mark_clean();
-        self.register_env(env);
-    }
-
-    fn register_env(&mut self, env: &EnvRef) {
-        if !env.borrow().register_with_collector() {
-            self.env_registry.push(Rc::downgrade(env));
         }
     }
 }
@@ -2161,7 +2137,8 @@ mod tests {
             "own",
             Binding::new(JsValue::number(1.0), BindingKind::Var, true),
         );
-        interp.register_env(&child);
+        interp.env_registry.register(&child);
+        child.borrow().bindings.rearm();
 
         let (mut roots, mut seen_envs) = interp.collect_gc_roots(true);
         // A young closure over `child` reaches it again in the same collection.
@@ -2184,11 +2161,7 @@ mod tests {
              })();",
         );
         major_gc(&mut interp);
-        let registered: Vec<_> = interp
-            .env_registry
-            .iter()
-            .filter_map(|weak| weak.upgrade())
-            .collect();
+        let registered = interp.env_registry.registered();
         assert!(registered.iter().any(|env| env.borrow().is_clean()));
         assert!(registered.iter().all(|env| env.borrow().is_registered()));
     }

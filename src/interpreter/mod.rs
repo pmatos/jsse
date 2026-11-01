@@ -350,9 +350,9 @@ pub(crate) struct Interpreter {
     pub(crate) kept_alive: rustc_hash::FxHashSet<u64>,
     /// Running jobs (program run, promise job, timer or loop callback).
     pub(crate) job_depth: u32,
-    /// Every environment a collection has scanned, weakly: a minor collection
-    /// re-scans the ones written to since (`BindingMap::is_clean`).
-    env_registry: Vec<std::rc::Weak<RefCell<Environment>>>,
+    /// Every environment a collection has scanned: a minor collection re-scans
+    /// the ones written since (`gc::env_registry`).
+    env_registry: gc::env_registry::EnvRegistry,
     // Nursery bitmap scratch buffers reused by every minor collection.
     gc_young: crate::interpreter::gc::YoungIds,
     generator_context: Option<GeneratorContext>,
@@ -828,7 +828,7 @@ impl Interpreter {
             gc_marks: Vec::new(),
             kept_alive: Default::default(),
             job_depth: 0,
-            env_registry: Vec::new(),
+            env_registry: gc::env_registry::EnvRegistry::new(),
             gc_young: Default::default(),
             generator_context: None,
             destructuring_yield: false,
