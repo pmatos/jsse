@@ -25,6 +25,9 @@ pub(crate) struct CaptureWalk<'a> {
     /// `Record` and `Inside` modes: a direct `eval` or a `with` statement was
     /// met, so names can be reached that no mention accounts for.
     pub(crate) opaque: bool,
+    /// `Inside` mode: the names already in `mentions`, so a large function
+    /// body costs one entry per distinct name rather than one per mention.
+    seen: std::collections::HashSet<&'a str>,
     pub(crate) mentions: Vec<&'a str>,
 }
 
@@ -222,7 +225,7 @@ impl<'a> CaptureWalk<'a> {
     }
 
     fn mention(&mut self, name: &'a str) {
-        if self.collect {
+        if self.collect && (self.mode != WalkMode::Inside || self.seen.insert(name)) {
             self.mentions.push(name);
         }
     }
