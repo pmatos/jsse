@@ -1,7 +1,9 @@
 mod async_rewrite;
 mod await_pos;
+mod stmt_queries;
 mod undefined_check;
 pub(crate) use async_rewrite::transform_async_function;
+use stmt_queries::{stmt_contains_for_of_head, stmt_contains_return};
 use undefined_check::undefined_check_condition;
 
 use crate::ast::*;
@@ -846,70 +848,6 @@ fn stmt_contains_for_await(stmt: &Statement) -> bool {
 
 fn stmt_contains_await_using_head(stmt: &Statement) -> bool {
     stmt_contains_for_of_head(stmt, ForOfStatement::disposes_at_head)
-}
-
-fn stmt_contains_for_of_head(
-    stmt: &Statement,
-    head: impl Fn(&ForOfStatement) -> bool + Copy,
-) -> bool {
-    let contains = |s: &Statement| stmt_contains_for_of_head(s, head);
-    match stmt {
-        Statement::ForOf(f) => head(f) || contains(&f.body),
-        Statement::Block(stmts) => stmts.iter().any(contains),
-        Statement::If(i) => {
-            contains(&i.consequent) || i.alternate.as_ref().is_some_and(|s| contains(s))
-        }
-        Statement::While(w) => contains(&w.body),
-        Statement::DoWhile(d) => contains(&d.body),
-        Statement::For(f) => contains(&f.body),
-        Statement::ForIn(f) => contains(&f.body),
-        Statement::Try(t) => {
-            t.block.iter().any(contains)
-                || t.handler
-                    .as_ref()
-                    .is_some_and(|h| h.body.iter().any(contains))
-                || t.finalizer.as_ref().is_some_and(|f| f.iter().any(contains))
-        }
-        Statement::Switch(s) => s.cases.iter().any(|c| c.consequent.iter().any(contains)),
-        Statement::Labeled(_, inner) => contains(inner),
-        Statement::With(_, s) => contains(s),
-        _ => false,
-    }
-}
-
-fn stmt_contains_return(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::Return(_) => true,
-        Statement::Block(stmts) => stmts.iter().any(stmt_contains_return),
-        Statement::If(i) => {
-            stmt_contains_return(&i.consequent)
-                || i.alternate
-                    .as_ref()
-                    .is_some_and(|s| stmt_contains_return(s))
-        }
-        Statement::While(w) => stmt_contains_return(&w.body),
-        Statement::DoWhile(d) => stmt_contains_return(&d.body),
-        Statement::For(f) => stmt_contains_return(&f.body),
-        Statement::ForIn(f) => stmt_contains_return(&f.body),
-        Statement::ForOf(f) => stmt_contains_return(&f.body),
-        Statement::Try(t) => {
-            t.block.iter().any(stmt_contains_return)
-                || t.handler
-                    .as_ref()
-                    .is_some_and(|h| h.body.iter().any(stmt_contains_return))
-                || t.finalizer
-                    .as_ref()
-                    .is_some_and(|f| f.iter().any(stmt_contains_return))
-        }
-        Statement::Switch(s) => s
-            .cases
-            .iter()
-            .any(|c| c.consequent.iter().any(stmt_contains_return)),
-        Statement::Labeled(_, inner) => stmt_contains_return(inner),
-        Statement::With(_, s) => stmt_contains_return(s),
-        // Don't recurse into function/class boundaries
-        _ => false,
-    }
 }
 
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
@@ -1825,7 +1763,9 @@ fn transform_yielding_expression(
 
                 let prefix = format!("obj_val_{i}");
                 let new_value = match &prop.value {
-                    Expression::Spread(inner) => lower_spread(inner, before, true, &prefix, ctx),
+                    Expression::Spread(inner, at) => {
+                        lower_spread(inner, *at, before, true, &prefix, ctx)
+                    }
                     // An anonymous function keeps its NamedEvaluation name only
                     // if it stays in the property.
                     value => lower_operand(
@@ -1976,11 +1916,11 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Spread(inner) => {
+        Expression::Spread(inner, at) => {
             let tv = ctx.new_temp_var("spread");
             let b = SentValueBindingKind::Variable(tv.clone());
             transform_yielding_expression(inner, ctx, usize::MAX, Some(b));
-            let combined = Expression::Spread(ExprBox::new(Expression::Identifier(tv)));
+            let combined = Expression::Spread(ExprBox::new(Expression::Identifier(tv)), *at);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -2266,7 +2206,7 @@ fn lower_pattern_binding(
     }
     match pattern {
         Pattern::Object(props) => {
-            emit_pattern_binding(kind, Pattern::Object(Vec::new()), source, ctx);
+            emit_pattern_binding(kind, Pattern::Object(Vec::new().into()), source, ctx);
             // The parser rejects a rest property anywhere but last, so the
             // final slot is the only place one can be.
             let ends_in_rest = matches!(props.last(), Some(ObjectPatternProperty::Rest(_)));
@@ -2283,7 +2223,9 @@ fn lower_pattern_binding(
                     ObjectPatternProperty::Shorthand(name) => {
                         emit_pattern_binding(
                             kind,
-                            Pattern::Object(vec![ObjectPatternProperty::Shorthand(name.clone())]),
+                            Pattern::Object(
+                                vec![ObjectPatternProperty::Shorthand(name.clone())].into(),
+                            ),
                             source,
                             ctx,
                         );
@@ -2515,7 +2457,7 @@ fn lower_pattern_property(
     if !pattern_contains_suspension(&value) {
         emit_pattern_binding(
             kind,
-            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)]),
+            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)].into()),
             source,
             ctx,
         );
@@ -2550,13 +2492,15 @@ fn lower_pattern_assignment(pattern: &Pattern, source: &str, ctx: &mut Transform
     match pattern {
         Pattern::Object(props) => {
             // RequireObjectCoercible(source), same as the declaration form's `<kind> {} = src`.
-            emit_pattern_assignment(Pattern::Object(Vec::new()), source, ctx);
+            emit_pattern_assignment(Pattern::Object(Vec::new().into()), source, ctx);
             for prop in props.clone() {
                 match prop {
                     ObjectPatternProperty::KeyValue(key, value) => {
                         lower_pattern_assignment_property(key, value, source, ctx);
                     }
-                    other => emit_pattern_assignment(Pattern::Object(vec![other]), source, ctx),
+                    other => {
+                        emit_pattern_assignment(Pattern::Object(vec![other].into()), source, ctx)
+                    }
                 }
             }
         }
@@ -2781,7 +2725,7 @@ fn lower_pattern_assignment_property(
     };
     if !pattern_contains_suspension(&value) {
         emit_pattern_assignment(
-            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)]),
+            Pattern::Object(vec![ObjectPatternProperty::KeyValue(key, value)].into()),
             source,
             ctx,
         );
@@ -3080,12 +3024,13 @@ fn lower_operand(
 /// elements, where iterating it would run user-visible `@@iterator` code twice.
 fn lower_spread(
     inner: &Expression,
+    at: u32,
     later_suspends: bool,
     as_object: bool,
     prefix: &str,
     ctx: &mut TransformContext,
 ) -> Expression {
-    let spread = Expression::Spread(ExprBox::new(lower_operand(inner, false, prefix, ctx)));
+    let spread = Expression::Spread(ExprBox::new(lower_operand(inner, false, prefix, ctx)), at);
     if !later_suspends {
         return spread;
     }
@@ -3105,11 +3050,14 @@ fn lower_spread(
         Expression::Array(vec![Some(spread)], false)
     };
     let settled = settle_operand(&copy, prefix, ctx);
-    Expression::Spread(ExprBox::new(if as_object {
-        settled
-    } else {
-        Expression::PreIterated(ExprBox::new(settled))
-    }))
+    Expression::Spread(
+        ExprBox::new(if as_object {
+            settled
+        } else {
+            Expression::PreIterated(ExprBox::new(settled))
+        }),
+        0,
+    )
 }
 
 /// Lower one element of an argument list or array literal, in source order.
@@ -3122,7 +3070,9 @@ fn lower_element(
     ctx: &mut TransformContext,
 ) -> Expression {
     match elem {
-        Expression::Spread(inner) => lower_spread(inner, before_suspension, false, prefix, ctx),
+        Expression::Spread(inner, at) => {
+            lower_spread(inner, *at, before_suspension, false, prefix, ctx)
+        }
         _ => lower_operand(elem, before_suspension, prefix, ctx),
     }
 }
@@ -4581,6 +4531,7 @@ mod tests {
             body: Box::new(body),
             is_await: true,
             at: 0,
+            right_at: 0,
             scope_capture: Default::default(),
         })
     }
@@ -4592,6 +4543,7 @@ mod tests {
             body: Box::new(body),
             is_await: false,
             at: 0,
+            right_at: 0,
             scope_capture: Default::default(),
         })
     }

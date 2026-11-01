@@ -15,7 +15,7 @@ impl Compiler {
             &for_in.body,
             false,
             for_in.may_capture_iteration_scope(),
-            0,
+            (0, 0),
             labels,
         )
     }
@@ -34,7 +34,7 @@ impl Compiler {
             &for_of.body,
             true,
             for_of.may_capture_iteration_scope(),
-            for_of.at,
+            (for_of.at, for_of.right.tail_pos(for_of.right_at)),
             labels,
         )
     }

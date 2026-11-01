@@ -7,8 +7,7 @@ impl<'a> Parser<'a> {
         while self.current != Token::RightParen {
             if self.current == Token::Ellipsis {
                 self.advance()?;
-                let expr = self.parse_assignment_expression()?;
-                args.push(Expression::Spread(ExprBox::new(expr)));
+                args.push(self.parse_spread_operand()?);
             } else {
                 args.push(self.parse_assignment_expression()?);
             }

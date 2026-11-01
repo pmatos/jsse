@@ -13,6 +13,8 @@ use smallvec::SmallVec;
 
 mod binary_slow;
 mod call_operands;
+mod equality_op;
+use equality_op::loose_equality_op;
 mod iteration;
 mod member_pos;
 use binary_slow::{bigint_compare_pop, bigint_pair_op, binary_slow, number_binop, number_compare};
@@ -96,24 +98,6 @@ fn binary_of_op(op: Op) -> BinaryOp {
         Op::UShr => BinaryOp::URShift,
         _ => unreachable!("not a binary op: {op:?}"),
     }
-}
-
-/// `==`/`!=` through `Interpreter::loose_equal_no_user_code`: replaces the two operands
-/// with the Boolean result and returns `true`, or returns `false` and leaves
-/// the stack alone.
-#[inline(never)]
-fn loose_equality_op(interp: &mut Interpreter, stack: &mut Vec<JsValue>, negate: bool) -> bool {
-    let len = stack.len();
-    if len < 2 {
-        return false;
-    }
-    let Some(equal) = interp.loose_equal_no_user_code(&stack[len - 2], &stack[len - 1]) else {
-        return false;
-    };
-    pop_value(interp, stack, "stack underflow on binop rhs");
-    pop_value(interp, stack, "stack underflow on binop lhs");
-    stack.push(JsValue::boolean(equal != negate));
-    true
 }
 
 const NO_LOCAL_SLOT: u16 = u16::MAX;
@@ -2341,6 +2325,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     push_value(interp, stack, regexp);
                 }
                 Op::GetIterator | Op::ForInHead => {
+                    member_pos::note(interp, chunk, stack, pc - 1);
                     if let Err(e) = iteration_head(interp, stack, op == Op::ForInHead) {
                         throw!('dispatch, interp.reword_iterable_noted(e, chunk, pc - 1));
                     }

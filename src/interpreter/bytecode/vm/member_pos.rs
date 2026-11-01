@@ -14,6 +14,12 @@ pub(super) fn note(interp: &mut Interpreter, chunk: &Chunk, stack: &[JsValue], p
         return;
     }
     let depth = match Op::from_u8(chunk.code[pc]) {
+        Some(Op::GetIterator | Op::ForInHead) => {
+            if let Some(pos) = chunk.member_pos_at(pc) {
+                interp.node_host.call_pos = pos;
+            }
+            return;
+        }
         Some(Op::GetProp | Op::LoadMethod | Op::UpdateProp) => 1,
         Some(
             Op::GetElement

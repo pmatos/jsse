@@ -118,7 +118,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
         | Expression::PrivateIdentifier(_) => {}
         Expression::Unary(_, e)
         | Expression::Update(.., e, _)
-        | Expression::Spread(e)
+        | Expression::Spread(e, _)
         | Expression::PreIterated(e)
         | Expression::ClassProtoParent(e, _)
         | Expression::Await(e, _)

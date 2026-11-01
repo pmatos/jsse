@@ -30,3 +30,17 @@ impl VariableDeclarator {
         }
     }
 }
+
+impl Expression {
+    /// The position V8 has recorded once this expression, which starts at
+    /// `start`, was evaluated (offset plus one, 0 when unknown): a member
+    /// access or call leaves its own, anything else the expression's start.
+    pub(crate) fn tail_pos(&self, start: u32) -> u32 {
+        let own = match self {
+            Expression::Member(.., site) => site.1,
+            Expression::Call(.., site) => site.1,
+            _ => 0,
+        };
+        if own != 0 { own } else { start }
+    }
+}

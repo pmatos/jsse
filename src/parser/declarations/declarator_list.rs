@@ -55,9 +55,7 @@ impl<'a> Parser<'a> {
             let mut init_at = 0;
             let init = if self.current == Token::Assign {
                 self.advance()?;
-                if matches!(pattern, Pattern::Identifier(_)) {
-                    init_at = self.op_pos();
-                }
+                init_at = self.op_pos();
                 Some(self.parse_assignment_expression()?)
             } else {
                 // A BindingPattern declarator needs an Initializer unless it is

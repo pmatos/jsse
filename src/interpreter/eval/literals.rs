@@ -2,6 +2,7 @@ use super::*;
 use crate::interpreter::literal_frame::LiteralFrame;
 
 mod class_heritage;
+mod property_key;
 
 thread_local! {
     /// The default `constructor(...args) { super(...args); }` that
@@ -14,7 +15,7 @@ thread_local! {
             ExprBox::new(Expression::Super),
             vec![Expression::Spread(ExprBox::new(Expression::Identifier(
                 "args".into(),
-            )))],
+            )), 0)],
             CallSiteId::UNASSIGNED,
         ))];
         debug_assert!(!stmts_use_arguments(&statements));
@@ -206,19 +207,6 @@ impl Interpreter {
         }
     }
 
-    /// `ToPropertyKey`, but returns the converted primitive as a `JsValue`
-    /// (string or symbol) instead of the engine's internal `JsPropertyKey`
-    /// representation — for the `ToPropertyKey` state-machine terminator,
-    /// which stores the converted key back into a temp var for later reuse
-    /// (see `docs/adr/` for issue #771: converting once and reusing the
-    /// primitive avoids a second, user-observable `ToPropertyKey` call on a
-    /// computed key ahead of an object-pattern rest).
-    #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn to_property_key_value(&mut self, val: &JsValue) -> Result<JsValue, JsValue> {
-        let key = self.to_property_key(val)?;
-        Ok(self.symbol_key_to_jsvalue(&key))
-    }
-
     pub(crate) fn create_regexp(&mut self, pattern: &JsString, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
         obj.prototype_id = self
@@ -252,12 +240,13 @@ impl Interpreter {
             let mut items: Vec<Option<JsValue>> = Vec::with_capacity(elements.len());
             for elem in elements {
                 match elem {
-                    Some(Expression::Spread(inner)) => {
+                    Some(Expression::Spread(inner, at)) => {
                         let val = match self.eval_expr(inner, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         self.gc_root_value(&val);
+                        self.node_note_statement_pos(*at);
                         match self.spread_values(inner, &val) {
                             Ok(spread_items) => {
                                 for item in spread_items {
@@ -1321,7 +1310,7 @@ impl Interpreter {
                 self.gc_root_value(&value);
                 self.next_function_is_method = false;
                 // Handle spread — CopyDataProperties (§7.3.26)
-                if let Expression::Spread(inner) = &prop.value {
+                if let Expression::Spread(inner, _) = &prop.value {
                     let spread_val = match self.eval_expr(inner, env) {
                         Completion::Normal(v) => v,
                         other => return other,

@@ -11,10 +11,12 @@ mod export_specifier;
 mod expr_box;
 mod for_of;
 mod node_sites;
+mod pattern_props;
 pub(crate) use capture_walk::CaptureWalk;
 pub(crate) use export_specifier::ExportSpecifier;
 pub(crate) use expr_box::ExprBox;
 pub(crate) use node_sites::YieldKind;
+pub(crate) use pattern_props::PatternProps;
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -342,7 +344,7 @@ pub(crate) struct VariableDeclarator {
 pub(crate) enum Pattern {
     Identifier(String),
     Array(Vec<Option<ArrayPatternElement>>),
-    Object(Vec<ObjectPatternProperty>),
+    Object(PatternProps),
     Assign(Box<Pattern>, ExprBox),
     Rest(Box<Pattern>),
     MemberExpression(ExprBox),
@@ -453,7 +455,8 @@ pub(crate) enum Expression {
     OptionalChain(ExprBox, ExprBox),
     #[allow(dead_code)]
     Comma(Vec<Expression>),
-    Spread(ExprBox),
+    /// The operand's V8 error position (`tail_pos`) under `--node`, else 0.
+    Spread(ExprBox, u32),
     Yield(Option<ExprBox>, YieldKind),
     Await(ExprBox, u32),
     TaggedTemplate(ExprBox, TemplateLiteral),
@@ -743,6 +746,8 @@ pub(crate) struct ForOfStatement {
     pub is_await: bool,
     /// V8's position of the head (`parser/for_head_site.rs`).
     pub at: u32,
+    /// Where `right` starts (offset plus one under `--node`, else 0).
+    pub right_at: u32,
     pub scope_capture: ScopeCaptureCell,
 }
 
@@ -1203,7 +1208,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             }
             Expression::Unary(_, e)
             | Expression::Update(.., e, _)
-            | Expression::Spread(e)
+            | Expression::Spread(e, _)
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e, _)
             | Expression::Yield(Some(e), _)
@@ -1454,7 +1459,7 @@ pub(crate) fn expr_contains_matching(
         }
         Expression::Unary(_, e)
         | Expression::Update(.., e, _)
-        | Expression::Spread(e)
+        | Expression::Spread(e, _)
         | Expression::PreIterated(e)
         | Expression::ClassProtoParent(e, _)
         | Expression::Await(e, _)
@@ -1785,7 +1790,7 @@ fn assign_expr_sites<'a>(expr: &'a mut Expression, call_id: &mut u32, prop_id: &
             }
             Expression::Unary(_, e)
             | Expression::Update(.., e, _)
-            | Expression::Spread(e)
+            | Expression::Spread(e, _)
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e, _)
             | Expression::Yield(Some(e), _)
@@ -1925,7 +1930,7 @@ pub(crate) fn clear_expr_ic_sites(expr: &mut Expression) {
             }
             Expression::Unary(_, e)
             | Expression::Update(.., e, _)
-            | Expression::Spread(e)
+            | Expression::Spread(e, _)
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e, _)
             | Expression::Yield(Some(e), _)
@@ -2217,92 +2222,7 @@ fn class_extends_or_computed_keys_use_arguments(
 mod ic_site_tests;
 
 #[cfg(test)]
-mod bound_names_tests {
-    use super::*;
-
-    fn names_of(pat: &Pattern) -> Vec<String> {
-        let mut out = Vec::new();
-        pat.bound_names(&mut out);
-        out
-    }
-
-    fn ident(name: &str) -> Pattern {
-        Pattern::Identifier(name.to_string())
-    }
-
-    #[test]
-    fn identifier_binds_its_name() {
-        assert_eq!(names_of(&ident("x")), vec!["x"]);
-    }
-
-    #[test]
-    fn member_expression_binds_nothing() {
-        // `[obj.prop] = ...` — an assignment target, not a declaration.
-        let pat =
-            Pattern::MemberExpression(ExprBox::new(Expression::Identifier("obj".to_string())));
-        assert_eq!(names_of(&pat), Vec::<String>::new());
-    }
-
-    #[test]
-    fn assignment_default_binds_only_the_inner_name() {
-        // `a = 5` binds `a`; the default-value expression contributes no names.
-        let pat = Pattern::Assign(
-            Box::new(ident("a")),
-            ExprBox::new(Expression::Identifier("unused".to_string())),
-        );
-        assert_eq!(names_of(&pat), vec!["a"]);
-    }
-
-    #[test]
-    fn rest_binds_inner_name() {
-        let pat = Pattern::Rest(Box::new(ident("r")));
-        assert_eq!(names_of(&pat), vec!["r"]);
-    }
-
-    #[test]
-    fn array_pattern_binds_in_source_order_skipping_holes() {
-        // `[a, , ...b]`
-        let pat = Pattern::Array(vec![
-            Some(ArrayPatternElement::Pattern(ident("a"))),
-            None,
-            Some(ArrayPatternElement::Rest(ident("b"))),
-        ]);
-        assert_eq!(names_of(&pat), vec!["a", "b"]);
-    }
-
-    #[test]
-    fn object_pattern_binds_shorthand_and_value_and_rest_but_not_key() {
-        // `{ s, k: v, ...r }` binds s, v, r — the property key `k` is not bound.
-        let pat = Pattern::Object(vec![
-            ObjectPatternProperty::Shorthand("s".to_string()),
-            ObjectPatternProperty::KeyValue(PropertyKey::Identifier("k".to_string()), ident("v")),
-            ObjectPatternProperty::Rest(ident("r")),
-        ]);
-        assert_eq!(names_of(&pat), vec!["s", "v", "r"]);
-    }
-
-    #[test]
-    fn nested_pattern_flattens_in_source_order() {
-        // `[{ a, k: [b, ...c] }]`
-        let inner_array = Pattern::Array(vec![
-            Some(ArrayPatternElement::Pattern(ident("b"))),
-            Some(ArrayPatternElement::Rest(ident("c"))),
-        ]);
-        let inner_object = Pattern::Object(vec![
-            ObjectPatternProperty::Shorthand("a".to_string()),
-            ObjectPatternProperty::KeyValue(PropertyKey::Identifier("k".to_string()), inner_array),
-        ]);
-        let pat = Pattern::Array(vec![Some(ArrayPatternElement::Pattern(inner_object))]);
-        assert_eq!(names_of(&pat), vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn appends_to_existing_vec() {
-        let mut out = vec!["pre".to_string()];
-        ident("x").bound_names(&mut out);
-        assert_eq!(out, vec!["pre", "x"]);
-    }
-}
+mod bound_names_tests;
 
 #[cfg(test)]
 mod scope_capture_tests {
