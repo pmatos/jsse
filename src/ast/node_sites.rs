@@ -3,7 +3,7 @@
 //! has one of its own, such as a generator at a `yield*` or a function that
 //! disposes resources.
 
-use super::*;
+use super::{Expression, Pattern, VariableDeclarator};
 
 /// Whether a `yield` delegates, and the offset plus one of its keyword (0 when
 /// unknown).

@@ -3,7 +3,7 @@
 //! own (the `await` of a disposer, of an iterator's `return()`): a declaration
 //! leaves the start of its initializer, a `break` its keyword.
 
-use super::*;
+use crate::interpreter::Interpreter;
 
 impl Interpreter {
     /// Records `at` (0: none) as the position the next implicit `await` reports.
