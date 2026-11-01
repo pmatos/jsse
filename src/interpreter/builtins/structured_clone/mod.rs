@@ -4,6 +4,10 @@
 //! other object throws a `DataCloneError`.
 
 mod buffers;
+mod platform;
+
+pub(crate) use platform::PlatformState;
+use platform::{PlatformTransfer, TRANSFERABLE};
 
 use super::super::*;
 use super::array::create_data_property_or_throw;
@@ -151,6 +155,10 @@ impl Cloner {
     }
 
     fn clone_object(&mut self, interp: &mut Interpreter, id: u64) -> CloneResult {
+        let mode = platform::mode_of(interp, id);
+        if mode != 0 {
+            return self.clone_platform(interp, id, mode);
+        }
         let clone = match classify(interp, id) {
             Shape::Reject(class) => return Err(interp.uncloneable_object(class, id)),
             Shape::Wrapper(prim) => {
@@ -324,24 +332,45 @@ impl Cloner {
 fn validate_transfer(
     interp: &mut Interpreter,
     items: &[JsValue],
-) -> Result<FxHashSet<u64>, JsValue> {
+) -> Result<(FxHashSet<u64>, PlatformTransfer), JsValue> {
     let mut ids = FxHashSet::default();
+    let mut platform = PlatformTransfer::default();
     for item in items {
         let Some(id) = item.as_object_id() else {
             return Err(interp.create_type_error("transfer list entries must be objects"));
         };
-        if !ids.insert(id) {
-            return Err(interp.data_clone_error("Transfer list contains duplicate ArrayBuffer"));
+        let marked = platform::mode_of(interp, id) & TRANSFERABLE != 0;
+        let fresh = if marked {
+            platform.admit(&mut ids, id)
+        } else {
+            ids.insert(id)
+        };
+        if !fresh {
+            let class = if marked {
+                platform::label_of(interp, id)
+            } else {
+                "ArrayBuffer".to_string()
+            };
+            return Err(
+                interp.data_clone_error(&format!("Transfer list contains duplicate {class}"))
+            );
+        }
+        if marked {
+            continue;
         }
         let is_buffer = interp.get_object_cell(id).is_some_and(|cell| {
             let b = cell.borrow();
             b.arraybuffer_data().is_some() && !b.arraybuffer_is_shared()
         });
         if !is_buffer {
-            return Err(interp.data_clone_error("Cannot transfer object of unsupported type."));
+            let text = interp.v8_message("Cannot transfer object of unsupported type.", |_| {
+                "Found invalid value in transferList.".to_string()
+            });
+            return Err(interp.data_clone_error(&text));
         }
     }
-    Ok(ids)
+    platform.expand(interp, &mut ids)?;
+    Ok((ids, platform))
 }
 
 fn structured_clone(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
@@ -382,13 +411,21 @@ fn run_clone(interp: &mut Interpreter, args: &[JsValue]) -> CloneResult {
     let value = &args[0];
     interp.gc_root_value(value);
     let items = transfer_list(interp, args.get(1).unwrap_or(JsValue::undefined_ref()))?;
+    let (transfer, platform) = validate_transfer(interp, &items)?;
     let mut cloner = Cloner {
         memory: FxHashMap::default(),
-        transfer: validate_transfer(interp, &items)?,
+        transfer,
         depth: 0,
     };
     let result = cloner.clone_value(interp, value)?;
+    cloner.transfer_unreferenced(interp, &platform)?;
     for buffer in &items {
+        if buffer
+            .as_object_id()
+            .is_some_and(|id| platform::mode_of(interp, id) & TRANSFERABLE != 0)
+        {
+            continue;
+        }
         if let Some(&clone) = buffer.as_object_id().and_then(|id| cloner.memory.get(&id)) {
             Cloner::move_bytes(interp, buffer, clone);
         }

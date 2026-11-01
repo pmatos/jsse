@@ -41,6 +41,7 @@
     ipcWrite: take("__host_cp_ipc_write"),
     killChild: take("__host_cp_kill"),
     loopRef: take("__host_loop_ref"),
+    loopDefer: take("__host_loop_defer"),
     watchAdd: take("__host_watch_add"),
     watchRemove: take("__host_watch_remove"),
     onWatch: function (handler) {

@@ -206,11 +206,13 @@
       TextDecoder: globalThis.TextDecoder,
     },
   };
-  // Web streams (#1360) take these two from the user-visible globals.
+  // Web streams (#1360) and their transfer protocol (#1528).
   cache["internal/host/webstreams"] = {
     exports: {
       queueMicrotask: globalThis.queueMicrotask,
       structuredClone: globalThis.structuredClone,
+      transferMark: takeHost("__host_transfer_mark"),
+      setTransferHook: takeHost("__host_transfer_hook"),
     },
   };
 
@@ -261,8 +263,7 @@
   }
   cache["internal/host/tty"] = { exports: hostTty };
 
-  // The native process-metrics binding (#1227): the prelude's `process` already
-  // holds it; `load` lets those methods reach per_thread.js on first use.
+  // The native process-metrics binding (#1227); `load` reaches per_thread.js.
   var hostProcess = globalThis.__host_process;
   delete globalThis.__host_process;
   hostProcess.load = requireBuiltin;
@@ -344,14 +345,16 @@
     ["internal/blob", "Blob"],
     ["internal/blob", "File"],
     ["internal/per_context/domexception", "DOMException"],
-    ["perf_hooks", "performance"],
-    ["perf_hooks", "PerformanceEntry"],
-    ["perf_hooks", "PerformanceMark"],
-    ["perf_hooks", "PerformanceMeasure"],
-    ["perf_hooks", "PerformanceObserver"],
-    ["perf_hooks", "PerformanceObserverEntryList"],
-    ["perf_hooks", "PerformanceResourceTiming"],
   ];
+  [
+    ["perf_hooks", "performance PerformanceEntry PerformanceMark PerformanceMeasure " +
+      "PerformanceObserver PerformanceObserverEntryList PerformanceResourceTiming"],
+    ["internal/worker/io", "MessageChannel MessagePort MessageEvent"],
+  ].forEach(function (group) {
+    group[1].split(" ").forEach(function (name) {
+      LAZY_GLOBALS.push([group[0], name]);
+    });
+  });
 
   function defineLazyGlobal(id, name) {
     function settle(value) {
@@ -432,8 +435,7 @@
     };
   }
 
-  // The global TextDecoder (#1527) loads its error and validation helpers on
-  // first use.
+  // The global TextDecoder (#1527) loads its helpers on first use.
   var decoderKey = Symbol.for("jsse.node.textdecoder");
   var decoderHandoff = globalThis[decoderKey];
   delete globalThis[decoderKey];
