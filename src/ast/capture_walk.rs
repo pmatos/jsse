@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 pub(super) enum CaptureNode<'a> {
     Stmt(&'a Statement),
@@ -27,7 +28,7 @@ pub(crate) struct CaptureWalk<'a> {
     pub(crate) opaque: bool,
     /// `Inside` mode: the names already in `mentions`, so a large function
     /// body costs one entry per distinct name rather than one per mention.
-    seen: std::collections::HashSet<&'a str>,
+    seen: HashSet<&'a str>,
     pub(crate) mentions: Vec<&'a str>,
 }
 

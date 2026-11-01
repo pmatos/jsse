@@ -4,10 +4,10 @@
 //! A closure keeps its whole defining environment, so a callback that outlives
 //! the call that made it also keeps every local of that call. The names a
 //! closure can reach in the activation's scopes are all mentioned inside the
-//! functions and classes nested in the literal (`CaptureWalk::nested_mentions`), so
-//! once the activation has returned, a binding holding a heap value and named
-//! by none of them is unreachable by any code and is overwritten with
-//! `undefined`. The entry stays: slot hints and the frame layout are unchanged,
+//! functions and classes nested in the literal
+//! (`CaptureWalk::nested_mentions`), so once the activation has returned, a
+//! binding holding a heap value and named by none of them is unreachable by
+//! any code and is overwritten with `undefined`. The entry stays: slot hints and the frame layout are unchanged,
 //! which keeps the tree-walker and the bytecode VM in step.
 
 use std::rc::Rc;
