@@ -86,7 +86,48 @@ impl Compiler {
                     self.push_n(1);
                 }
             }
+            self.emit_stmt_pos(declarator.init_at);
             self.emit_init_lexical(name, is_const)?;
+        }
+        Ok(())
+    }
+
+    /// `owns_lexicals` lets a `let`/`const` initialise the binding its
+    /// enclosing environment already holds in its TDZ: declaration
+    /// instantiation hoisted it into the function environment, or `PushEnv`
+    /// into the block's. Anywhere else (a Script's top level, whose lexicals
+    /// are global declarative bindings) the tree-walker runs the whole
+    /// statement.
+    pub(super) fn compile_var_declaration(
+        &mut self,
+        decl: &VariableDeclaration,
+        owns_lexicals: bool,
+    ) -> Result<(), CompileError> {
+        if decl.kind != VarKind::Var {
+            if !owns_lexicals || !matches!(decl.kind, VarKind::Let | VarKind::Const) {
+                return Err(CompileError::Unsupported("lexical declaration"));
+            }
+            return self.compile_lexical_declaration(decl);
+        }
+        for declarator in &decl.declarations {
+            let Pattern::Identifier(name) = &declarator.pattern else {
+                return Err(CompileError::Unsupported("var binding pattern"));
+            };
+            let idx = self.add_var_name(name)?;
+            if let Some(init) = &declarator.init {
+                if is_anonymous_class(init) {
+                    return Err(CompileError::Unsupported("anonymous class initializer"));
+                }
+                if let Some(slot) = self.local_slot(name) {
+                    self.compile_named_value(init, name)?;
+                    self.emit_store_local(idx, slot, true);
+                } else {
+                    self.emit_resolve_name(idx);
+                    self.compile_named_value(init, name)?;
+                    self.emit_store_resolved_name(idx, true);
+                }
+                self.emit_stmt_pos(declarator.init_at);
+            }
         }
         Ok(())
     }

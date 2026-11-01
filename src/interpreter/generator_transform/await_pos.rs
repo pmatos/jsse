@@ -42,6 +42,7 @@ pub(super) fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMac
             StateTerminator::Yield {
                 value,
                 is_delegate: false,
+                at: _,
                 resume_state,
                 sent_value_binding,
             } => {

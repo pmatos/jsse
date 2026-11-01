@@ -1,0 +1,21 @@
+## yield* of an identifier
+Error: source
+    at source (<dir>/generators-1529-gaps.js:20:9)
+    at delegatesToAnIdentifier (<dir>/generators-1529-gaps.js:24:3)
+    at main (<dir>/generators-1529-gaps.js:48:14)
+    at Object.<anonymous> (<dir>/generators-1529-gaps.js:53:1)
+## yield* of an async generator
+Error: after
+    at after (<dir>/generators-1529-gaps.js:28:9)
+    at async delegatingAsync (<dir>/generators-1529-gaps.js:31:3)
+    at async main (<dir>/generators-1529-gaps.js:49:20)
+## await using in an async generator
+Error: dispose
+    at [Symbol.asyncDispose] (<dir>/generators-1529-gaps.js:36:47)
+    at async disposingGenerator (<dir>/generators-1529-gaps.js:41:3)
+    at async main (<dir>/generators-1529-gaps.js:50:47)
+## await using in an async generator
+Error: dispose
+    at [Symbol.asyncDispose] (<dir>/generators-1529-gaps.js:36:47)
+    at async statements (<dir>/generators-1529-gaps.js:45:13)
+    at async main (<dir>/generators-1529-gaps.js:51:3)

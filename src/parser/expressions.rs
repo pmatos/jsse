@@ -9,6 +9,7 @@ mod targets;
 use regexp::validate_regexp_literal;
 
 mod new_expr;
+mod yield_expr;
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_expression(&mut self) -> Result<Expression, ParseError> {
@@ -23,32 +24,6 @@ impl<'a> Parser<'a> {
         } else {
             Ok(expr)
         }
-    }
-
-    fn parse_yield_expression(&mut self) -> Result<Expression, ParseError> {
-        self.advance()?;
-        if self.prev_line_terminator
-            || matches!(
-                self.current,
-                Token::RightBrace
-                    | Token::Semicolon
-                    | Token::RightParen
-                    | Token::RightBracket
-                    | Token::Colon
-                    | Token::Comma
-                    | Token::Eof
-            )
-        {
-            return Ok(Expression::Yield(None, false));
-        }
-        let delegate = if self.current == Token::Star {
-            self.advance()?;
-            true
-        } else {
-            false
-        };
-        let expr = self.parse_assignment_expression()?;
-        Ok(Expression::Yield(Some(ExprBox::new(expr)), delegate))
     }
 
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {

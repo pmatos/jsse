@@ -19,6 +19,7 @@ mod import_site;
 mod link_errors;
 mod method_name;
 mod native_frames;
+mod statement_pos;
 pub(crate) use async_frames::ParkedAwait;
 pub(crate) use hook_flags::call_positions_enabled;
 pub(crate) use link_errors::ImportName;

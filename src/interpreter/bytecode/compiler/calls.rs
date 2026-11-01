@@ -68,6 +68,14 @@ impl Compiler {
         }
     }
 
+    /// A statement's position (issue #1548), as [`Self::emit_throw_pos`] but
+    /// skipped when unknown (0).
+    pub(super) fn emit_stmt_pos(&mut self, at: u32) {
+        if at != 0 {
+            self.emit_throw_pos(at);
+        }
+    }
+
     /// `[..., callee, this]` → `[..., result]` (`below` is 2), or `[...,
     /// callee]` → `[..., result]` for `new` (`below` is 1).
     pub(super) fn compile_spread_arguments(

@@ -235,7 +235,7 @@ impl<'a> CaptureWalk<'a> {
         match stmt {
             Statement::Empty
             | Statement::Debugger
-            | Statement::Break(_)
+            | Statement::Break(..)
             | Statement::Continue(_)
             | Statement::Return(None) => {}
             Statement::FunctionDeclaration(f) => {

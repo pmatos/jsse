@@ -428,7 +428,7 @@ impl<'a> Parser<'a> {
             Statement::With(e, s) => {
                 Self::expr_has_direct_super(e) || Self::stmt_has_direct_super(s)
             }
-            Statement::Break(_) | Statement::Continue(_) => false,
+            Statement::Break(..) | Statement::Continue(_) => false,
             Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
         }
     }
@@ -842,8 +842,8 @@ impl<'a> Parser<'a> {
             |p| {
                 p.in_async = false;
                 p.in_generator = false;
-                // Increment in_function to prevent module-level await from
-                // matching (class field initializers use [~Await] per spec).
+                // Increment in_function so module-level await does not
+                // match (class field initializers use [~Await] per spec).
                 // An initializer is a method, so `new.target` is allowed in it
                 // (Contains does not look into class bodies, §8.5.1).
                 p.in_function += 1;

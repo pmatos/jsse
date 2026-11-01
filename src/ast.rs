@@ -10,9 +10,11 @@ mod capture_walk;
 mod export_specifier;
 mod expr_box;
 mod for_of;
+mod node_sites;
 pub(crate) use capture_walk::CaptureWalk;
 pub(crate) use export_specifier::ExportSpecifier;
 pub(crate) use expr_box::ExprBox;
+pub(crate) use node_sites::YieldKind;
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -302,7 +304,7 @@ pub(crate) enum Statement {
     ForIn(ForInStatement),
     ForOf(ForOfStatement),
     Return(Option<Expression>),
-    Break(Option<String>),
+    Break(Option<String>, u32),
     Continue(Option<String>),
     Throw(Expression, u32),
     Try(TryStatement),
@@ -333,6 +335,7 @@ pub(crate) enum VarKind {
 pub(crate) struct VariableDeclarator {
     pub pattern: Pattern,
     pub init: Option<Expression>,
+    pub init_at: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -451,7 +454,7 @@ pub(crate) enum Expression {
     #[allow(dead_code)]
     Comma(Vec<Expression>),
     Spread(ExprBox),
-    Yield(Option<ExprBox>, bool), // expr, delegate
+    Yield(Option<ExprBox>, YieldKind),
     Await(ExprBox, u32),
     TaggedTemplate(ExprBox, TemplateLiteral),
     Template(TemplateLiteral),
@@ -1136,7 +1139,7 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
         Statement::ClassDeclaration(c) => {
             class_extends_or_computed_keys_use_arguments(c.super_class.as_deref(), &c.body)
         }
-        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {
+        Statement::Empty | Statement::Break(..) | Statement::Continue(_) | Statement::Debugger => {
             false
         }
     }
@@ -1150,10 +1153,6 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
 /// recursion here overflowed the engine stack on such input (jsse#612), and
 /// this predicate runs at function-object creation time, where there is no way
 /// to report a failure. The explicit stack makes it O(1) native stack.
-///
-/// The stack pops in a different order than the old short-circuiting `||`
-/// chain visited children, which is immaterial: this is a side-effect-free
-/// predicate, so only *whether* a matching node exists is observable.
 fn expr_uses_arguments(expr: &Expression) -> bool {
     let mut stack = vec![expr];
     while let Some(e) = stack.pop() {
@@ -1340,7 +1339,7 @@ fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) 
     match stmt {
         Statement::Empty
         | Statement::Debugger
-        | Statement::Break(_)
+        | Statement::Break(..)
         | Statement::Continue(_)
         | Statement::Return(None)
         // Nested functions own their `arguments`/`super`; opaque.
@@ -1637,7 +1636,7 @@ fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32)
             assign_ic_sites(&mut f.body);
         }
         Statement::ClassDeclaration(c) => assign_class_sites(c, call_id, prop_id),
-        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {}
+        Statement::Empty | Statement::Break(..) | Statement::Continue(_) | Statement::Debugger => {}
     }
 }
 
@@ -2138,7 +2137,7 @@ fn clear_stmt_ic_sites(stmt: &mut Statement) {
         Statement::ClassDeclaration(c) => {
             clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
         }
-        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {}
+        Statement::Empty | Statement::Break(..) | Statement::Continue(_) | Statement::Debugger => {}
     }
 }
 
