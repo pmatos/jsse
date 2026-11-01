@@ -226,7 +226,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             ExprBox::new(rewrite_expr(chain)),
         ),
         Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
-        Expression::Spread(e, _) => Expression::Spread(ExprBox::new(rewrite_expr(e)), 0),
+        Expression::Spread(e, at) => Expression::Spread(ExprBox::new(rewrite_expr(e)), *at),
         Expression::PreIterated(e) => Expression::PreIterated(ExprBox::new(rewrite_expr(e))),
         Expression::ClassProtoParent(e, at) => {
             Expression::ClassProtoParent(ExprBox::new(rewrite_expr(e)), *at)

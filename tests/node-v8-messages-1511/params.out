@@ -79,3 +79,6 @@ at <dir>/params.js:106:21
 ## asyncMethod
 TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
 at Object.m (<dir>/params.js:109:27)
+## asyncSpread
+TypeError: 5 is not iterable
+at <dir>/params.js:113:16

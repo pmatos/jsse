@@ -109,4 +109,7 @@ show("tail", () => {
     const o = { async m({ a }) {} };
     await o.m();
   });
+  await showAsync("asyncSpread", async () => {
+    return [...5, await 0];
+  });
 })();

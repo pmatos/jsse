@@ -1,8 +1,10 @@
 mod async_rewrite;
 mod await_pos;
+mod jump_queries;
 mod stmt_queries;
 mod undefined_check;
 pub(crate) use async_rewrite::transform_async_function;
+use jump_queries::stmt_has_break_or_continue;
 use stmt_queries::{stmt_contains_for_of_head, stmt_contains_return};
 use undefined_check::undefined_check_condition;
 
@@ -867,23 +869,6 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
         contains_suspension(stmt) || reaches_await_using_block(stmt)
     } else {
         contains_yield(stmt)
-    }
-}
-
-fn stmt_has_break_or_continue(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::Break(..) | Statement::Continue(_) => true,
-        Statement::Block(stmts) => stmts.iter().any(stmt_has_break_or_continue),
-        Statement::If(if_stmt) => {
-            stmt_has_break_or_continue(&if_stmt.consequent)
-                || if_stmt
-                    .alternate
-                    .as_ref()
-                    .is_some_and(|a| stmt_has_break_or_continue(a))
-        }
-        Statement::Labeled(_, inner) => stmt_has_break_or_continue(inner),
-        // Don't recurse into nested loops/switch — their break/continue targets are separate
-        _ => false,
     }
 }
 
@@ -2206,7 +2191,12 @@ fn lower_pattern_binding(
     }
     match pattern {
         Pattern::Object(props) => {
-            emit_pattern_binding(kind, Pattern::Object(Vec::new().into()), source, ctx);
+            emit_pattern_binding(
+                kind,
+                Pattern::Object(PatternProps::at(Vec::new(), props.at)),
+                source,
+                ctx,
+            );
             // The parser rejects a rest property anywhere but last, so the
             // final slot is the only place one can be.
             let ends_in_rest = matches!(props.last(), Some(ObjectPatternProperty::Rest(_)));
