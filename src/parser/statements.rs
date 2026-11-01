@@ -800,28 +800,14 @@ impl<'a> Parser<'a> {
                 // `for (let [` → destructuring declaration
                 // `for (let ident` → let declaration
                 // `for (let; ...)` → identifier (let followed by `;`, `=`, `)`, etc.)
-                let is_let_identifier = self.lookahead(|tokens| {
-                    tokens.advance().is_ok()
-                        && (matches!(
-                            tokens.current(),
-                            Token::Keyword(Keyword::In | Keyword::Of)
-                                | Token::Semicolon
-                                | Token::RightParen
-                                | Token::Assign
-                                | Token::Comma
-                                | Token::Dot
-                                | Token::Increment
-                                | Token::Decrement
-                                | Token::OptionalChain
-                        ) || matches!(tokens.current(), Token::Identifier(n) if n == "instanceof"))
-                });
+                let is_let_identifier = self.for_let_is_identifier();
                 if is_let_identifier {
                     // Reclassify sloppy-mode `let`; the lexer is already
                     // positioned after the current token.
                     self.current = Token::Identifier("let".to_string());
                     // Fall through to expression path below
                     self.no_in = true;
-                    let expr = self.parse_expression()?;
+                    let expr = self.parse_for_head_expression()?;
                     self.no_in = false;
                     if self.current == Token::Keyword(Keyword::In) {
                         if is_await {
@@ -1033,7 +1019,7 @@ impl<'a> Parser<'a> {
                 // Only applies to the literal `async` keyword token, not escaped forms
                 let is_literal_async = matches!(&self.current, Token::Keyword(Keyword::Async));
                 self.no_in = true;
-                let expr = self.parse_expression()?;
+                let expr = self.parse_for_head_expression()?;
                 self.no_in = false;
                 if self.current == Token::Keyword(Keyword::In) {
                     if is_await {

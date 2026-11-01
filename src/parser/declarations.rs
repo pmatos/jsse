@@ -197,7 +197,7 @@ impl<'a> Parser<'a> {
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
-            let heritage = self.parse_left_hand_side_expression()?;
+            let heritage = self.parse_heritage_expression()?;
             // §15.7.1: ClassHeritage : extends LeftHandSideExpression
             // ArrowFunction is not a LeftHandSideExpression
             if matches!(heritage, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
@@ -603,21 +603,13 @@ impl<'a> Parser<'a> {
             if self.current == Token::Assign
                 || self.current == Token::Semicolon
                 || self.current == Token::RightBrace
+                || self.prev_line_terminator
             {
-                // field named 'async': class { async = value; }
-                let value = if self.current == Token::Assign {
-                    self.advance()?;
-                    Some(self.parse_field_initializer_value()?)
-                } else {
-                    None
-                };
-                self.eat_semicolon()?;
-                return Ok(ClassElement::Property(ClassProperty {
-                    key: PropertyKey::Identifier("async".to_string()),
-                    value,
+                return self.finish_class_field(
+                    PropertyKey::Identifier("async".to_string()),
                     is_static,
-                    computed: false,
-                }));
+                    false,
+                );
             }
             // It's an async method: async [*] name() {}
             let is_generator = self.eat_star()?;
@@ -628,31 +620,15 @@ impl<'a> Parser<'a> {
             if is_static && !computed && Self::key_is_prototype(&key) {
                 return Err(self.error("Classes may not have a static property named 'prototype'"));
             }
-            if self.current == Token::LeftParen {
-                let func = self.parse_class_method_function(
-                    true,
-                    is_generator,
-                    false,
-                    method_source_start,
-                )?;
-                return Ok(ClassElement::Method(ClassMethod {
-                    key,
-                    kind: ClassMethodKind::Method,
-                    value: func,
-                    is_static,
-                    computed,
-                }));
+            if self.current != Token::LeftParen {
+                return Err(self.unexpected_token("Unexpected token: "));
             }
-            let value = if self.current == Token::Assign {
-                self.advance()?;
-                Some(self.parse_field_initializer_value()?)
-            } else {
-                None
-            };
-            self.eat_semicolon()?;
-            return Ok(ClassElement::Property(ClassProperty {
+            let func =
+                self.parse_class_method_function(true, is_generator, false, method_source_start)?;
+            return Ok(ClassElement::Method(ClassMethod {
                 key,
-                value,
+                kind: ClassMethodKind::Method,
+                value: func,
                 is_static,
                 computed,
             }));
@@ -801,6 +777,9 @@ impl<'a> Parser<'a> {
         } else {
             if kind != ClassMethodKind::Method {
                 return Err(self.error("Expected '(' after the accessor name"));
+            }
+            if is_generator {
+                return Err(self.unexpected_token("Unexpected token: "));
             }
             self.finish_class_field(key, is_static, computed)
         }
