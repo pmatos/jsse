@@ -94,3 +94,5 @@ since a marker statement was rejected as it changes every list-shape
 dependency), and #1511 stays open for them. test262 cannot observe any of
 this (default mode is unchanged), so the regression coverage is the Node
 oracle above rather than `test262-extra/`.
+
+Stage 3 (destructuring, array patterns, for-of, spread, parameters): [library-tests-typescript-conformance-v8-messages-1511-stage3.md](library-tests-typescript-conformance-v8-messages-1511-stage3.md).
