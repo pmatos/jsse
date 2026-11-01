@@ -61,6 +61,10 @@ const EXACT: &[(&str, &str)] = &[
         "Super constructor may only be called once",
     ),
     (
+        "Currency code is required with currency style",
+        "Currency code is required with currency style.",
+    ),
+    (
         "Getter must be a function",
         "Object.prototype.__defineGetter__: Expecting function",
     ),

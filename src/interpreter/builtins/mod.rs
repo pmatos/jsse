@@ -84,7 +84,7 @@ mod node_host_receiver;
 mod node_host_receiver_wording;
 #[cfg(unix)]
 mod node_host_signal;
-mod node_host_spread_errors;
+pub(crate) mod node_host_spread_errors;
 pub(crate) mod node_host_stack;
 mod node_host_stack_sources;
 mod node_host_symbol_add;

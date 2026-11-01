@@ -8,7 +8,7 @@ use super::super::*;
 use super::node_host_expr_text::expr_text;
 use super::node_host_pattern_origin::PatternOrigin;
 use crate::ast::{
-    Expression, ObjectPatternProperty, Pattern, Property, PropertyKey, PropertyKind,
+    AssignOp, Expression, ObjectPatternProperty, Pattern, Property, PropertyKey, PropertyKind,
     VariableDeclarator,
 };
 
@@ -16,23 +16,93 @@ fn key_name(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::Identifier(name) => Some(name.clone()),
         PropertyKey::String(units) => Some(String::from_utf16_lossy(units)),
+        PropertyKey::Number(n) => Some(JsValue::number(*n).to_string()),
         _ => None,
     }
 }
 
-fn first_pattern_name(props: &[ObjectPatternProperty]) -> Option<String> {
+/// How V8 words a failed destructure by the first property of the pattern.
+enum Lead {
+    /// `Cannot destructure property 'a' of 'x' as it is null.`
+    Named(String),
+    /// `Cannot read properties of null (reading 'a')`: the property has a
+    /// default or a member target.
+    Read(String),
+    /// `Cannot read properties of null`: a rest element with a member target.
+    ReadBare,
+}
+
+impl Lead {
+    fn name(&self) -> Option<&str> {
+        match self {
+            Lead::Named(name) | Lead::Read(name) => Some(name),
+            Lead::ReadBare => None,
+        }
+    }
+}
+
+fn first_pattern_name(props: &[ObjectPatternProperty]) -> Option<Lead> {
     match props.first()? {
-        ObjectPatternProperty::Shorthand(name) => Some(name.clone()),
-        ObjectPatternProperty::KeyValue(key, _) => key_name(key),
+        ObjectPatternProperty::Shorthand(name) => Some(Lead::Named(name.clone())),
+        ObjectPatternProperty::KeyValue(key, target) => {
+            let name = key_name(key)?;
+            Some(if matches!(target, Pattern::Assign(..)) {
+                Lead::Read(name)
+            } else {
+                Lead::Named(name)
+            })
+        }
         ObjectPatternProperty::Rest(_) => None,
     }
 }
 
-fn first_target_name(props: &[Property]) -> Option<String> {
+fn first_target_name(props: &[Property]) -> Option<Lead> {
     let first = props.first()?;
-    (!first.computed && first.kind == PropertyKind::Init)
-        .then(|| key_name(&first.key))
-        .flatten()
+    if let Expression::Spread(target) = &first.value {
+        return (!matches!(**target, Expression::Identifier(_))).then_some(Lead::ReadBare);
+    }
+    if first.computed || first.kind != PropertyKind::Init {
+        return None;
+    }
+    let (target, defaulted) = match &first.value {
+        Expression::Assign(AssignOp::Assign, target, _) => (&**target, true),
+        value => (value, false),
+    };
+    let name = key_name(&first.key)?;
+    Some(if defaulted || matches!(target, Expression::Member(..)) {
+        Lead::Read(name)
+    } else {
+        Lead::Named(name)
+    })
+}
+
+/// Whether a nested array pattern's failure is worded by this initializer.
+fn has_origin_text(init: &Expression) -> bool {
+    matches!(
+        init,
+        Expression::Identifier(_)
+            | Expression::Member(..)
+            | Expression::Call(..)
+            | Expression::Object(..)
+    )
+}
+
+/// V8's text for the initializer of an array pattern that is not iterable:
+/// it prints names, literals, `this` and operators, a member read or an
+/// assignment reads as the value.
+fn array_pattern_text(init: &Expression) -> Option<String> {
+    match init {
+        Expression::Identifier(_)
+        | Expression::Literal(_)
+        | Expression::Call(..)
+        | Expression::New(..)
+        | Expression::TaggedTemplate(..)
+        | Expression::Object(..)
+        | Expression::This
+        | Expression::Unary(..)
+        | Expression::Void(_) => Interpreter::iterable_message(init),
+        _ => None,
+    }
 }
 
 impl Interpreter {
@@ -40,26 +110,30 @@ impl Interpreter {
     /// is the initializer; without it V8 prints the value itself.
     fn destructure_error(
         &mut self,
-        first: Option<String>,
+        first: Option<Lead>,
         is_array: bool,
         source: Option<&Expression>,
         value: &JsValue,
     ) -> JsValue {
         let text = match source {
-            Some(Expression::Call(callee, _, _)) if is_array => {
-                format!(
-                    "{} is not a function or its return value is not iterable",
-                    expr_text(callee)
-                )
-            }
-            Some(source @ (Expression::Identifier(_) | Expression::Literal(_))) if is_array => {
-                format!("{} is not iterable", expr_text(source))
-            }
-            _ if is_array => return self.not_iterable_error(value),
-            _ => {
-                let shown = source.map_or_else(|| self.v8_call_site_text(value), expr_text);
-                Self::destructure_message(first, &shown, value)
-            }
+            _ if is_array => match source.and_then(array_pattern_text) {
+                Some(text) => text,
+                None => return self.not_iterable_error(value),
+            },
+            _ => match first {
+                Some(Lead::ReadBare) => {
+                    let what = if value.is_null() { "null" } else { "undefined" };
+                    format!("Cannot read properties of {what}")
+                }
+                Some(Lead::Read(name)) => {
+                    self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
+                }
+                first => {
+                    let shown = source.map_or_else(|| self.v8_call_site_text(value), expr_text);
+                    let name = first.as_ref().and_then(Lead::name);
+                    Self::destructure_message(name.map(str::to_string), &shown, value)
+                }
+            },
         };
         self.create_type_error(&text)
     }
@@ -109,15 +183,9 @@ impl Interpreter {
         }
         let top = value.clone();
         let bound = match (&declarator.pattern, &declarator.init) {
-            (
-                Pattern::Object(_),
-                Some(
-                    init @ (Expression::Identifier(_)
-                    | Expression::Member(..)
-                    | Expression::Call(..)
-                    | Expression::Object(..)),
-                ),
-            ) if self.node_host.stack.installed => {
+            (Pattern::Object(_), Some(init))
+                if self.node_host.stack.installed && has_origin_text(init) =>
+            {
                 let origin = PatternOrigin::Init(expr_text(init).into());
                 self.with_pattern_origin(origin, |i| {
                     i.bind_pattern(&declarator.pattern, value, kind, env)
@@ -126,16 +194,11 @@ impl Interpreter {
             _ => self.bind_pattern(&declarator.pattern, value, kind, env),
         };
         match (&declarator.pattern, &declarator.init, bound) {
-            (
-                Pattern::Array(_),
-                Some(
-                    init @ (Expression::Identifier(_)
-                    | Expression::Literal(_)
-                    | Expression::Call(..)
-                    | Expression::Object(..)),
-                ),
-                Completion::Throw(e),
-            ) if self.node_host.stack.installed && self.iterable_error_was_for(&top) => {
+            (Pattern::Array(_), Some(init), Completion::Throw(e))
+                if self.node_host.stack.installed
+                    && array_pattern_text(init).is_some()
+                    && self.iterable_error_was_for(&top) =>
+            {
                 Completion::Throw(self.reword_iterable(e, init))
             }
             (_, _, bound) => bound,
@@ -180,22 +243,46 @@ impl Interpreter {
         value: &JsValue,
     ) -> Completion {
         if self.node_host.stack.installed && value.is_nullish() {
-            let first = first_pattern_name(props);
+            let lead = first_pattern_name(props);
             let nested = matches!(
                 self.node_host.pattern_frames.as_slice(),
                 [.., outer, inner] if outer == inner
             );
-            let error = match first {
-                Some(name) if nested => {
+            let error = match (lead, self.head_text_here()) {
+                (Some(Lead::Named(name) | Lead::Read(name)), _) if nested => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
-                _ if nested => "Cannot convert undefined or null to object".to_string(),
-                first if self.is_for_head_here() => Self::destructure_message(first, ".for", value),
-                first => {
-                    return Completion::Throw(self.destructure_error(first, false, None, value));
+                (_, _) if nested => "Cannot convert undefined or null to object".to_string(),
+                (Some(Lead::Read(name)), Some(_)) => {
+                    self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
+                }
+                (lead, Some(head)) => {
+                    let name = lead.as_ref().and_then(Lead::name);
+                    Self::destructure_message(name.map(str::to_string), head, value)
+                }
+                (lead, None) => {
+                    return Completion::Throw(self.destructure_error(lead, false, None, value));
                 }
             };
             return Completion::Throw(self.create_type_error(&error));
+        }
+        self.require_object_coercible(value)
+    }
+
+    /// RequireObjectCoercible for an object assignment pattern: the
+    /// top-level one already passed `node_assign_precheck` with an object, so
+    /// a nullish value is a nested pattern or a for-of head and V8 reads its
+    /// first property.
+    pub(crate) fn require_assignable(&mut self, props: &[Property], value: &JsValue) -> Completion {
+        if self.node_host.stack.installed
+            && value.is_nullish()
+            && let Some(name) = first_target_name(props)
+                .as_ref()
+                .and_then(Lead::name)
+                .map(str::to_string)
+        {
+            let text = self.nullish_keyed_read_message(value, &JsPropertyKey::from(name));
+            return Completion::Throw(self.create_type_error(&text));
         }
         self.require_object_coercible(value)
     }
@@ -241,9 +328,61 @@ impl Interpreter {
             Expression::Array(elements, _) => {
                 self.destructure_array_assignment(elements, value, env)
             }
-            Expression::Object(props, _) => self.destructure_object_assignment(props, value, env),
+            Expression::Object(props, _) => {
+                if !self.node_host.stack.installed || !has_origin_text(source) {
+                    return self.destructure_object_assignment(props, value, env);
+                }
+                let arrays: Vec<usize> = props
+                    .iter()
+                    .filter_map(|prop| match &prop.value {
+                        Expression::Array(elements, _) => {
+                            Some(std::ptr::from_ref(elements) as usize)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if arrays.is_empty() {
+                    return self.destructure_object_assignment(props, value, env);
+                }
+                let origin = PatternOrigin::Target(expr_text(source).into(), arrays.into());
+                self.with_pattern_origin(origin, |i| {
+                    i.destructure_object_assignment(props, value, env)
+                })
+            }
             _ => Completion::Normal(JsValue::UNDEFINED),
         }
+    }
+
+    /// An array assignment pattern met while assigning through an object
+    /// pattern. When it is a direct property of the outermost one, V8 words
+    /// its failure by the source of the assignment, like a property read.
+    pub(crate) fn nested_array_assign(
+        &mut self,
+        elements: &Vec<Option<Expression>>,
+        value: &JsValue,
+        env: &EnvRef,
+    ) -> Completion {
+        let done = self.destructure_array_assignment(elements, value, env);
+        let Completion::Throw(error) = &done else {
+            return done;
+        };
+        let Some(PatternOrigin::Target(shown, arrays)) = self.origin_here() else {
+            return done;
+        };
+        let at = std::ptr::from_ref(elements) as usize;
+        if !self.node_host.stack.installed
+            || !arrays.contains(&at)
+            || !self.iterable_error_was_for(value)
+            || !self.iterable_error_here(error)
+        {
+            return done;
+        }
+        let text = if value.is_nullish() {
+            Self::iterator_read_message(&shown, value)
+        } else {
+            format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
+        };
+        Completion::Throw(self.create_type_error(&text))
     }
 
     /// The bytecode's named read of a null or undefined base: the error of a
@@ -259,22 +398,34 @@ impl Interpreter {
         self.create_type_error(&text)
     }
 
-    /// V8's text for a for-of or spread operand that is not iterable.
-    pub(crate) fn iterable_message(source: &Expression) -> String {
+    /// V8's text for a for-of or spread operand that is not iterable, when it
+    /// prints one (a call of a function expression or an optional chain
+    /// reads as the value instead).
+    pub(crate) fn iterable_message(source: &Expression) -> Option<String> {
         match source {
-            Expression::Call(callee, _, _) => format!(
-                "{} is not a function or its return value is not iterable",
-                expr_text(callee)
-            ),
-            _ => format!("{} is not iterable", expr_text(source)),
+            Expression::Call(callee, ..)
+            | Expression::New(callee, ..)
+            | Expression::TaggedTemplate(callee, _) => (!matches!(
+                **callee,
+                Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_)
+            ))
+            .then(|| {
+                format!(
+                    "{} is not a function or its return value is not iterable",
+                    expr_text(callee)
+                )
+            }),
+            Expression::OptionalChain(..) => None,
+            _ => Some(format!("{} is not iterable", expr_text(source))),
         }
     }
 
     /// `error` from `GetIterator` on the value of `source`, worded with
     /// `source`'s text when it is the builtin not-iterable error.
     pub(crate) fn reword_iterable(&mut self, error: JsValue, source: &Expression) -> JsValue {
-        if self.iterable_error_here(&error) {
-            let text = Self::iterable_message(source);
+        if self.iterable_error_here(&error)
+            && let Some(text) = Self::iterable_message(source)
+        {
             return self.create_type_error(&text);
         }
         error

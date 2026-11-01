@@ -1470,7 +1470,7 @@ impl Interpreter {
         } else if prim.is_null() {
             Err(self.create_type_error("Cannot convert null to a BigInt"))
         } else if prim.is_number() {
-            Err(self.create_type_error("Cannot convert a Number to a BigInt"))
+            Err(self.number_to_bigint_error(&prim))
         } else if prim.is_symbol() {
             Err(self.create_type_error("Cannot convert a Symbol to a BigInt"))
         } else {
@@ -3938,9 +3938,7 @@ impl Interpreter {
                     Err(e) => Completion::Throw(e),
                 }
             }
-            Expression::Array(elements, _) => {
-                self.destructure_array_assignment(elements, &val, env)
-            }
+            Expression::Array(elements, _) => self.nested_array_assign(elements, &val, env),
             Expression::Object(props, _) => self.destructure_object_assignment(props, &val, env),
             Expression::Assign(AssignOp::Assign, inner_target, default) => {
                 let v = if val.is_undefined() {
@@ -4310,7 +4308,7 @@ impl Interpreter {
         rval: &JsValue,
         env: &EnvRef,
     ) -> Completion {
-        if let Completion::Throw(e) = self.require_object_coercible(rval) {
+        if let Completion::Throw(e) = self.require_assignable(props, rval) {
             return Completion::Throw(e);
         }
 
@@ -5877,7 +5875,7 @@ impl Interpreter {
         args: &[Expression],
         env: &EnvRef,
     ) -> Result<Vec<JsValue>, JsValue> {
-        let mut evaluated = Vec::new();
+        let mut out = Vec::new();
         for arg in args {
             if let Expression::Spread(inner) = arg {
                 let val = match self.eval_expr(inner, env) {
@@ -5885,11 +5883,11 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
-                let items = self.call_spread_items(inner, &val)?;
+                let items = self.call_spread_items(inner, &val, args)?;
                 for item in &items {
                     self.gc_root_value(item);
                 }
-                evaluated.extend(items);
+                out.extend(items);
             } else {
                 let val = match self.eval_expr(arg, env) {
                     Completion::Normal(v) => v,
@@ -5897,10 +5895,10 @@ impl Interpreter {
                     _ => JsValue::UNDEFINED,
                 };
                 self.gc_root_value(&val);
-                evaluated.push(val);
+                out.push(val);
             }
         }
-        Ok(evaluated)
+        Ok(out)
     }
 
     fn is_builtin_eval(&self, val: &JsValue) -> bool {
@@ -6522,9 +6520,7 @@ impl Interpreter {
         new_target: JsValue,
     ) -> Completion {
         if !self.is_constructor(parent) {
-            return Completion::Throw(
-                self.create_type_error("Super constructor is not a constructor"),
-            );
+            return Completion::Throw(self.super_constructor_error(parent));
         }
         self.construct_with_new_target(parent, args, new_target)
     }
@@ -6971,9 +6967,7 @@ impl Interpreter {
             };
             if !(method).is_nullish() {
                 if !self.is_callable(&method) {
-                    return Completion::Throw(
-                        self.create_type_error("@@hasInstance is not callable"),
-                    );
+                    return Completion::Throw(self.has_instance_error(&method));
                 }
                 let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {

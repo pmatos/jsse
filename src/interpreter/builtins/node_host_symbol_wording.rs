@@ -70,4 +70,26 @@ impl Interpreter {
         });
         self.create_type_error(&text)
     }
+
+    /// ToBigInt of a value that cannot convert: V8 prints the operand
+    /// (`Cannot convert 1 to a BigInt`).
+    pub(crate) fn bigint_conversion_error(&mut self, engine: &str, value: &JsValue) -> JsValue {
+        let text = self.v8_message(engine, |i| {
+            format!("Cannot convert {} to a BigInt", i.v8_plain_text(value))
+        });
+        self.create_type_error(&text)
+    }
+
+    /// ToBigInt of a Number.
+    pub(crate) fn number_to_bigint_error(&mut self, value: &JsValue) -> JsValue {
+        self.bigint_conversion_error("Cannot convert a Number to a BigInt", value)
+    }
+
+    /// `x instanceof y` where `y[Symbol.hasInstance]` is not callable.
+    pub(crate) fn has_instance_error(&mut self, method: &JsValue) -> JsValue {
+        let text = self.v8_message("@@hasInstance is not callable", |i| {
+            format!("{} is not a function", i.v8_call_site_text(method))
+        });
+        self.create_type_error(&text)
+    }
 }

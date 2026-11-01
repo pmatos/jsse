@@ -100,6 +100,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
             };
             format!("({} {symbol} {})", expr_text(left), expr_text(right))
         }
+        Expression::Sequence(items) if items.len() == 1 => expr_text(&items[0]),
         Expression::Sequence(items) | Expression::Comma(items) => {
             let items: Vec<String> = items.iter().map(expr_text).collect();
             format!("({})", items.join(" , "))
@@ -113,6 +114,16 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         }
         Expression::Object(props, _) => format!("{{{}}}", UNKNOWN.repeat(props.len())),
         Expression::Conditional(..) => UNKNOWN.repeat(3),
+        Expression::Assign(_, target, _) => expr_text(target),
+        Expression::Template(template) if template.expressions.is_empty() => {
+            let cooked = template
+                .quasis
+                .first()
+                .cloned()
+                .flatten()
+                .unwrap_or_default();
+            format!("\"{}\"", String::from_utf16_lossy(&cooked))
+        }
         _ => UNKNOWN.into(),
     }
 }

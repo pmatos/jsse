@@ -132,6 +132,49 @@ fn ident_byte_char(c: char) -> bool {
     c.is_ascii() && ident_byte(c as u8)
 }
 
+/// V8's text for the expression `s`, read from its parse tree: the shapes the
+/// scanner does not follow (operators, assignments, conditionals, array
+/// literals).
+fn ast_text(s: &str) -> Option<String> {
+    let wrapped = format!("({s});");
+    let mut parser = crate::parser::Parser::new(&wrapped).ok()?;
+    let program = parser.parse_program().ok()?;
+    match program.body.as_slice() {
+        [crate::ast::Statement::Expression(expr)] => {
+            Some(super::node_host_expr_text::expr_text(expr))
+        }
+        _ => None,
+    }
+}
+
+/// The identifier that ends just before byte `end`.
+fn word_before(src: &str, end: usize) -> &str {
+    let b = src.as_bytes();
+    let mut start = end;
+    while start > 0 && ident_byte(b[start - 1]) {
+        start -= 1;
+    }
+    &src[start..end]
+}
+
+/// The index of the `[` that matches the `]` at `close`.
+fn bracket_before(b: &[u8], close: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for at in (0..=close).rev() {
+        match b[at] {
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// V8's text for the expression `s`, if it is one of the shapes it prints.
 fn render_expr(s: &str) -> Option<String> {
     let s = s.trim();
@@ -169,8 +212,10 @@ fn render_expr(s: &str) -> Option<String> {
     if s.starts_with('(') && close_after(s.as_bytes(), 0)? == s.len() - 1 {
         return render_group(&s[1..s.len() - 1]);
     }
-    let (text, start) = chain_before(s, s.len())?;
-    (start == 0).then_some(text)
+    match chain_before(s, s.len()) {
+        Some((text, 0)) => Some(text),
+        _ => ast_text(s),
+    }
 }
 
 /// V8's text for the parenthesised expression `inner`: a comma sequence
@@ -208,8 +253,17 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
             i = s;
             head = true;
         } else if last == b']' {
-            let open = src[..i - 1].rfind('[')?;
-            parts.push(render_index(&src[open + 1..i - 1])?);
+            let open = bracket_before(b, i - 1)?;
+            let before = skip_ws_back(b, open);
+            let member = before > 0
+                && (ident_byte(b[before - 1]) && !KEYWORDS.contains(&word_before(src, before))
+                    || matches!(b[before - 1], b']' | b')' | b'"' | b'\'' | b'`'));
+            if member {
+                parts.push(render_index(&src[open + 1..i - 1])?);
+            } else {
+                parts.push(ast_text(&src[open..i])?);
+                head = true;
+            }
             i = open;
         } else if last == b'`' {
             let open = src[..i - 1].rfind('`')?;

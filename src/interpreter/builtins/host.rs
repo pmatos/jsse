@@ -91,6 +91,11 @@ impl Interpreter {
     /// A DOMException-shaped error for host APIs: it inherits from
     /// `%Error.prototype%` and carries the legacy numeric `code`.
     pub(super) fn create_dom_exception(&mut self, name: &str, code: u32, message: &str) -> JsValue {
+        if self.node_host.stack.installed
+            && let Some(error) = self.node_dom_exception(name, message)
+        {
+            return error;
+        }
         let proto = self.realm().error_prototype;
         let id = self.create_object_id();
         {
@@ -102,6 +107,25 @@ impl Interpreter {
             o.insert_builtin("code".to_string(), JsValue::number(f64::from(code)));
         }
         JsValue::object(id)
+    }
+
+    /// Under `--node` the error is an instance of the host's `DOMException`,
+    /// which the global loads lazily (so it is read through its getter).
+    fn node_dom_exception(&mut self, name: &str, message: &str) -> Option<JsValue> {
+        let global = self.realm().global_object?;
+        let Completion::Normal(ctor) =
+            self.get_object_property(global, "DOMException", &JsValue::object(global))
+        else {
+            return None;
+        };
+        if !self.is_constructor(&ctor) {
+            return None;
+        }
+        let args = [JsValue::from_str(message), JsValue::from_str(name)];
+        match self.construct(&ctor, &args) {
+            Completion::Normal(error) => Some(error),
+            _ => None,
+        }
     }
 
     fn setup_console(&mut self) {

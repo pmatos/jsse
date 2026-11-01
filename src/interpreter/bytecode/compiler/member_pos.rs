@@ -29,11 +29,26 @@ impl Compiler {
         }
     }
 
+    /// `note_spread_source` for a spread among several call arguments, which
+    /// V8 words only when it is the one spread and the last argument.
+    pub(super) fn note_call_spread_source(
+        &mut self,
+        args: &[crate::ast::Expression],
+        operand: &crate::ast::Expression,
+    ) {
+        if crate::interpreter::builtins::node_host_spread_errors::is_lone_last_spread(args, operand)
+        {
+            self.note_spread_source(operand);
+        }
+    }
+
     /// Remembers the message for a for-of operand that is not iterable.
     pub(super) fn note_iterable_source(&mut self, right: &crate::ast::Expression, is_of: bool) {
-        if is_of && call_positions_enabled() {
+        if is_of
+            && call_positions_enabled()
+            && let Some(text) = crate::interpreter::Interpreter::iterable_message(right)
+        {
             let at = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
-            let text = crate::interpreter::Interpreter::iterable_message(right);
             self.pattern_src.push((at, text.into()));
         }
     }
