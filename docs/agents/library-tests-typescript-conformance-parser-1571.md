@@ -61,17 +61,24 @@ and the `-` was taken as a literal. `\b` in a class is U+0008, which also makes 
 
 ## Parse time on typescript.js
 
-`typescript@6.0.3/lib/typescript.js` (9.1 MB) wrapped in an uncalled function, parse only, the
-same non-LTO release build before and after (`CARGO_PROFILE_RELEASE_LTO=off`), 40 alternating
-runs on a loaded 24-core host (user plus system seconds):
+`typescript@6.0.3/lib/typescript.js` (9.1 MB), same non-LTO release build before and after
+(`CARGO_PROFILE_RELEASE_LTO=off`), on a loaded 24-core host.
 
-| | min | p25 | median |
-| --- | --- | --- | --- |
-| before | 0.228 | 0.252 | 0.320 |
-| after | 0.233 | 0.262 | 0.333 |
+In-process, under `--node`: `readFileSync` once, one warm-up `new Function(src)`, then 25 timed
+`new Function(src)` calls per process; three processes per binary, alternating (milliseconds,
+min / p25 / median per process):
 
-The per-expression cost is two byte moves and a flag test; the difference is inside the spread of
-a shared host. Instruction counts were not available (no `perf` or `valgrind` on the box).
+| before | after |
+| --- | --- |
+| 471 / 484 / 494 | 451 / 485 / 657 |
+| 441 / 452 / 457 | 441 / 455 / 459 |
+| 459 / 472 / 480 | 466 / 487 / 522 |
+
+The per-process minimums differ by less than the spread between processes of one binary, so the
+change is within noise. A whole-process measurement (40 alternating runs of the file wrapped in
+an uncalled function, user plus system seconds) gave min 0.228 against 0.233 and median 0.320
+against 0.333; that figure includes process start-up and interpreter set-up. Instruction counts were not available (no `perf` or `valgrind` on the box). The new work
+per AssignmentExpression is a few flag moves and one match.
 
 ## Verification
 
