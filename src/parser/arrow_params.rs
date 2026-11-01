@@ -89,13 +89,20 @@ impl<'a> Parser<'a> {
         is_async: bool,
     ) -> Result<Vec<Pattern>, ParseError> {
         self.check_cover_context(&exprs, is_async)?;
-        if !self.is_plain_identifier_list(&open_paren) {
-            self.reparse_as_formal_parameters(open_paren)?;
-        }
-        let params: Vec<Pattern> = exprs
+        let refined = if self.is_plain_identifier_list(&open_paren) {
+            Vec::new()
+        } else {
+            self.reparse_as_formal_parameters(open_paren)?
+        };
+        let mut params: Vec<Pattern> = exprs
             .into_iter()
             .map(expr_to_pattern)
             .collect::<Result<_, _>>()?;
+        if inferred_names::enabled() {
+            for (param, refined) in params.iter_mut().zip(&refined) {
+                adopt_positions(param, refined);
+            }
+        }
         if self.strict {
             self.check_strict_params(&params)?;
         }
@@ -132,9 +139,9 @@ impl<'a> Parser<'a> {
     fn reparse_as_formal_parameters(
         &mut self,
         open_paren: TokenMark<'a>,
-    ) -> Result<(), ParseError> {
+    ) -> Result<Vec<Pattern>, ParseError> {
         if self.refining_arrow_params {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let resume = self.token_mark();
         let saved_flags = (
@@ -160,14 +167,15 @@ impl<'a> Parser<'a> {
         result
     }
 
-    fn parse_parameter_list_tail(&mut self) -> Result<(), ParseError> {
+    fn parse_parameter_list_tail(&mut self) -> Result<Vec<Pattern>, ParseError> {
+        let mut refined = Vec::new();
         while self.current != Token::RightParen {
             if self.current == Token::Ellipsis {
                 self.advance()?;
                 self.arrow_rest_parameter()?;
                 break;
             }
-            self.pattern_element(Site::ArrowParam)?;
+            refined.push(self.pattern_element(Site::ArrowParam)?);
             if self.current != Token::Comma {
                 break;
             }
@@ -176,6 +184,44 @@ impl<'a> Parser<'a> {
         if self.current != Token::RightParen {
             return Err(self.error("Invalid destructuring assignment target"));
         }
-        Ok(())
+        Ok(refined)
+    }
+}
+
+/// Copies the error positions of the refined parameter `src` onto `dst`, the
+/// pattern converted from the cover list, which has none.
+fn adopt_positions(dst: &mut Pattern, src: &Pattern) {
+    match (dst, src) {
+        (Pattern::Object(d), Pattern::Object(s)) => {
+            d.at = s.at;
+            for (d, s) in d.iter_mut().zip(s.iter()) {
+                match (d, s) {
+                    (
+                        ObjectPatternProperty::KeyValue(_, d),
+                        ObjectPatternProperty::KeyValue(_, s),
+                    )
+                    | (ObjectPatternProperty::Rest(d), ObjectPatternProperty::Rest(s)) => {
+                        adopt_positions(d, s);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (Pattern::Array(d), Pattern::Array(s)) => {
+            for (d, s) in d.iter_mut().zip(s) {
+                if let (Some(d), Some(s)) = (d, s) {
+                    match (d, s) {
+                        (ArrayPatternElement::Pattern(d), ArrayPatternElement::Pattern(s))
+                        | (ArrayPatternElement::Rest(d), ArrayPatternElement::Rest(s)) => {
+                            adopt_positions(d, s);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        (Pattern::Assign(d, _), Pattern::Assign(s, _)) => adopt_positions(d, s),
+        (Pattern::Rest(d), Pattern::Rest(s)) => adopt_positions(d, s),
+        _ => {}
     }
 }

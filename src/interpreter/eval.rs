@@ -16,6 +16,7 @@ mod binary_expr;
 mod call_ic;
 mod compiled_call_record;
 mod for_of_head_env;
+mod spread_args;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod eval_private_names;
 mod generator_realm;
@@ -796,7 +797,7 @@ impl Interpreter {
                 }
                 Completion::Normal(result)
             }
-            Expression::Spread(_) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
+            Expression::Spread(..) => Completion::Normal(JsValue::UNDEFINED), // handled by caller
             Expression::BoundCallee(func, _)
             | Expression::PreIterated(func)
             | Expression::ResolvedHeritage(func, _) => self.eval_expr(func, env),
@@ -3156,7 +3157,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if at != 0 && matches!(left, Expression::Array(..)) {
+                if at != 0 {
                     self.node_host.call_pos = at;
                 }
                 let done = self.assign_pattern_value(left, right, &rval, env);
@@ -3869,9 +3870,10 @@ impl Interpreter {
                     .map(|elem| {
                         elem.as_ref().map(|e| match e {
                             ArrayPatternElement::Pattern(p) => Self::pattern_to_assignment_expr(p),
-                            ArrayPatternElement::Rest(p) => Expression::Spread(ExprBox::new(
-                                Self::pattern_to_assignment_expr(p),
-                            )),
+                            ArrayPatternElement::Rest(p) => Expression::Spread(
+                                ExprBox::new(Self::pattern_to_assignment_expr(p)),
+                                0,
+                            ),
                         })
                     })
                     .collect();
@@ -3899,9 +3901,10 @@ impl Interpreter {
                         },
                         ObjectPatternProperty::Rest(p) => Property {
                             key: PropertyKey::Identifier("__rest__".to_string()),
-                            value: Expression::Spread(ExprBox::new(
-                                Self::pattern_to_assignment_expr(p),
-                            )),
+                            value: Expression::Spread(
+                                ExprBox::new(Self::pattern_to_assignment_expr(p)),
+                                0,
+                            ),
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: false,
@@ -3918,7 +3921,7 @@ impl Interpreter {
                 0,
             ),
             Pattern::Rest(inner) => {
-                Expression::Spread(ExprBox::new(Self::pattern_to_assignment_expr(inner)))
+                Expression::Spread(ExprBox::new(Self::pattern_to_assignment_expr(inner)), 0)
             }
             Pattern::MemberExpression(expr) => expr.clone().into_expression(),
         }
@@ -4148,7 +4151,7 @@ impl Interpreter {
                         }
                     }
                 }
-                Some(Expression::Spread(inner)) => {
+                Some(Expression::Spread(inner, _)) => {
                     // §13.15.5.4 AssignmentRestElement: evaluate LHS ref BEFORE collecting
                     let precomp = match self.eval_member_lhs_ref(inner, env) {
                         Ok(MemberLhsRef::Ref(r)) => r,
@@ -4329,12 +4332,12 @@ impl Interpreter {
         let result = (|| {
             let has_rest = props
                 .last()
-                .is_some_and(|p| matches!(p.value, Expression::Spread(_)));
+                .is_some_and(|p| matches!(p.value, Expression::Spread(..)));
             let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
 
             for prop in props {
                 // Handle rest: {...rest} = obj
-                if let Expression::Spread(inner) = &prop.value {
+                if let Expression::Spread(inner, _) = &prop.value {
                     // §13.15.5.6 AssignmentRestProperty: evaluate the target's lref
                     // BEFORE building/copying into the rest object, matching this
                     // function's own `Init` arm and `destructure_array_assignment`'s
@@ -5690,9 +5693,15 @@ impl Interpreter {
                                 .named_param_plan(&params)
                                 .filter(|_| !interp.has_ever_entered_with)
                             {
-                                interp.bind_named_parameters(plan, &params, args, &func_env)
+                                interp.node_in_async_frame(o.id, &func_env, |interp| {
+                                    interp.bind_named_parameters(plan, &params, args, &func_env)
+                                })
                             } else {
-                                interp.bind_function_parameters(&params, args, &func_env, is_simple)
+                                interp.node_in_async_frame(o.id, &func_env, |interp| {
+                                    interp.bind_function_parameters(
+                                        &params, args, &func_env, is_simple,
+                                    )
+                                })
                             };
                             if let Err(error) = bound {
                                 return CallOutcome::BindingError(error, func_env);
@@ -5873,37 +5882,6 @@ impl Interpreter {
         } else {
             self.iterate_to_vec(value)
         }
-    }
-
-    fn eval_spread_args(
-        &mut self,
-        args: &[Expression],
-        env: &EnvRef,
-    ) -> Result<Vec<JsValue>, JsValue> {
-        let mut out = Vec::new();
-        for arg in args {
-            if let Expression::Spread(inner) = arg {
-                let val = match self.eval_expr(inner, env) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                let items = self.call_spread_items(inner, &val, args)?;
-                for item in &items {
-                    self.gc_root_value(item);
-                }
-                out.extend(items);
-            } else {
-                let val = match self.eval_expr(arg, env) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::UNDEFINED,
-                };
-                self.gc_root_value(&val);
-                out.push(val);
-            }
-        }
-        Ok(out)
     }
 
     fn is_builtin_eval(&self, val: &JsValue) -> bool {

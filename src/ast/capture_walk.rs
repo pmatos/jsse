@@ -394,7 +394,7 @@ impl<'a> CaptureWalk<'a> {
             }
             Expression::Unary(_, e)
             | Expression::Update(.., e, _)
-            | Expression::Spread(e)
+            | Expression::Spread(e, _)
             | Expression::PreIterated(e)
             | Expression::ClassProtoParent(e, _)
             | Expression::Await(e, _)

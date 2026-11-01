@@ -19,6 +19,7 @@ use crate::interpreter::types::BindingKind;
 use crate::types::{JsString, JsValue};
 use std::cell::Cell;
 
+mod array_literal;
 mod binary;
 mod block_scope;
 mod calls;
@@ -1061,50 +1062,6 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_array_literal(
-        &mut self,
-        elements: &[Option<Expression>],
-    ) -> Result<(), CompileError> {
-        self.check_literal_stack()?;
-        if let Some(template) = constant_array_template(elements) {
-            let idx = u16::try_from(self.array_templates.len())
-                .map_err(|_| CompileError::Ineligible("array template pool overflow"))?;
-            self.array_templates.push(template);
-            self.emit(Op::NewArrayConst);
-            self.emit_u16(idx);
-            self.push_n(1);
-            return Ok(());
-        }
-        if elements.iter().any(Option::is_none) {
-            return Err(CompileError::Unsupported("array literal: elision"));
-        }
-        if elements
-            .iter()
-            .flatten()
-            .any(|e| matches!(e, Expression::Spread(_)))
-        {
-            return Err(CompileError::Unsupported("array literal: spread"));
-        }
-        // The first chunk of values becomes the array; later chunks are
-        // appended to it, so the operand stack never holds more than one
-        // chunk of pending elements above the array.
-        let mut created = false;
-        let mut pending: u16 = 0;
-        for element in elements.iter().flatten() {
-            self.compile_expr(element)?;
-            pending += 1;
-            if usize::from(pending) == LITERAL_VALUE_CHUNK {
-                self.flush_array_values(created, pending);
-                created = true;
-                pending = 0;
-            }
-        }
-        if pending > 0 || !created {
-            self.flush_array_values(created, pending);
-        }
-        Ok(())
-    }
-
     /// `NewArray`/`ArrayAppend` for the `count` values on top of the stack.
     fn flush_array_values(&mut self, created: bool, count: u16) {
         self.emit(if created {
@@ -1130,7 +1087,7 @@ impl Compiler {
             if matches!(prop.key, PropertyKey::Private(_)) {
                 return Err(CompileError::Unsupported("object literal: private name"));
             }
-            if matches!(prop.value, Expression::Spread(_)) {
+            if matches!(prop.value, Expression::Spread(..)) {
                 return Err(CompileError::Unsupported("object literal: spread"));
             }
             let function_value = matches!(prop.value, Expression::Function(_));
@@ -2264,7 +2221,7 @@ impl Compiler {
         body: &Statement,
         is_of: bool,
         may_capture: bool,
-        at: u32,
+        (at, right_at): (u32, u32),
         labels: Vec<String>,
     ) -> Result<(), CompileError> {
         if self.goal != CompileGoal::Function {
@@ -2335,11 +2292,14 @@ impl Compiler {
             self.close_scope();
         }
         self.note_iterable_source(right, is_of)?;
-        self.emit(if is_of {
-            Op::GetIterator
-        } else {
-            Op::ForInHead
-        });
+        self.emit_member_at(
+            if is_of {
+                Op::GetIterator
+            } else {
+                Op::ForInHead
+            },
+            right_at,
+        );
         match &head {
             Head::VarName(name) => {
                 self.add_var_name(name)?;
@@ -2864,7 +2824,7 @@ fn is_standalone_expression(expr: &Expression) -> bool {
         expr,
         Expression::Super
             | Expression::PrivateIdentifier(_)
-            | Expression::Spread(_)
+            | Expression::Spread(..)
             | Expression::BoundCallee(..)
             | Expression::PreIterated(_)
     )

@@ -236,7 +236,10 @@ impl Interpreter {
             let plan = frame
                 .named_param_plan(&call.params)
                 .expect("a compiled call with parameter expressions has a named parameter plan");
-            if let Err(error) = interp.bind_named_parameters(plan, &call.params, args, &func_env) {
+            let bound = interp.node_in_async_frame(func_obj_id, &func_env, |interp| {
+                interp.bind_named_parameters(plan, &call.params, args, &func_env)
+            });
+            if let Err(error) = bound {
                 return Err((error, func_env));
             }
             let separate_body_env = !frame.shares_param_env(&call.params, &call.body);

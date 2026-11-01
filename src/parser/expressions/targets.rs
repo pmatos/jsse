@@ -50,7 +50,7 @@ impl<'a> Parser<'a> {
                                 "Rest element must be last element in array destructuring pattern",
                             ));
                         }
-                        if let Expression::Spread(inner) = e {
+                        if let Expression::Spread(inner, _) = e {
                             saw_rest = true;
                             // Rest element cannot have initializer: [...x = 1]
                             if matches!(
@@ -91,7 +91,7 @@ impl<'a> Parser<'a> {
                             "Rest element must be last element in object destructuring pattern",
                         ));
                     }
-                    if let Expression::Spread(target) = &prop.value {
+                    if let Expression::Spread(target, _) = &prop.value {
                         saw_rest = true;
                         check_object_rest_target(target)?;
                     }
@@ -142,7 +142,7 @@ impl<'a> Parser<'a> {
             Expression::Array(..) | Expression::Object(..) => {
                 self.validate_destructuring_pattern(expr)
             }
-            Expression::Spread(inner) => self.validate_destructuring_target(inner),
+            Expression::Spread(inner, _) => self.validate_destructuring_target(inner),
             // Single-element Sequence is a parenthesization marker
             Expression::Sequence(exprs) if exprs.len() == 1 => {
                 match &exprs[0] {

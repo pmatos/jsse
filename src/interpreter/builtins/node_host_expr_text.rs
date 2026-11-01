@@ -216,7 +216,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         Expression::Object(props, _) => format!("{{{}}}", UNKNOWN.repeat(props.len())),
         Expression::Conditional(..) => UNKNOWN.repeat(3),
         Expression::Assign(_, target, _, _) => expr_text(target),
-        Expression::Spread(operand) => format!("(...{})", expr_text(operand)),
+        Expression::Spread(operand, _) => format!("(...{})", expr_text(operand)),
         Expression::Update(op, prefix, operand, _) => {
             let symbol = if *op == UpdateOp::Increment {
                 "++"

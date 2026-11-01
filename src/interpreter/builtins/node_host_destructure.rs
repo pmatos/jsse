@@ -9,8 +9,8 @@ use super::node_host_expr_text::expr_text;
 use super::node_host_param_patterns::{CONDITIONAL, PatternKind};
 use super::node_host_pattern_origin::PatternOrigin;
 use crate::ast::{
-    AssignOp, Expression, ObjectPatternProperty, Pattern, Property, PropertyKey, PropertyKind,
-    VariableDeclarator,
+    AssignOp, Expression, ObjectPatternProperty, Pattern, PatternProps, Property, PropertyKey,
+    PropertyKind, VariableDeclarator,
 };
 
 fn key_name(key: &PropertyKey) -> Option<String> {
@@ -59,7 +59,7 @@ fn first_pattern_name(props: &[ObjectPatternProperty]) -> Option<Lead> {
 
 fn first_target_name(props: &[Property]) -> Option<Lead> {
     let first = props.first()?;
-    if let Expression::Spread(target) = &first.value {
+    if let Expression::Spread(target, _) = &first.value {
         return (!matches!(**target, Expression::Identifier(_))).then_some(Lead::ReadBare);
     }
     if first.computed || first.kind != PropertyKind::Init {
@@ -157,12 +157,15 @@ impl Interpreter {
             && let Some(init) = &declarator.init
         {
             let error = match &declarator.pattern {
-                Pattern::Object(props) => Some(self.destructure_error(
-                    first_pattern_name(props),
-                    false,
-                    Some(init),
-                    &value,
-                )),
+                Pattern::Object(props) => {
+                    self.node_note_statement_pos(props.at);
+                    Some(self.destructure_error(
+                        first_pattern_name(props),
+                        false,
+                        Some(init),
+                        &value,
+                    ))
+                }
                 Pattern::Array(_) => Some(self.destructure_error(None, true, Some(init), &value)),
                 _ => None,
             };
@@ -226,10 +229,11 @@ impl Interpreter {
     /// nested pattern like a property read.
     pub(crate) fn require_destructurable(
         &mut self,
-        props: &[ObjectPatternProperty],
+        props: &PatternProps,
         value: &JsValue,
     ) -> Completion {
         if self.node_host.stack.installed && value.is_nullish() {
+            self.node_note_statement_pos(props.at);
             let lead = first_pattern_name(props);
             let defaulted = self.under_param_default();
             let nested = !defaulted

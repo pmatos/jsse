@@ -72,13 +72,18 @@ impl Compiler {
 
     /// `emit(op)` for a member op, remembering the site's position.
     pub(super) fn emit_member(&mut self, op: Op, site: PropSiteId) {
+        self.emit_member_at(op, site.1);
+    }
+
+    /// `emit(op)` for a member op that reports `pos` (0: none).
+    pub(super) fn emit_member_at(&mut self, op: Op, pos: u32) {
         if call_positions_enabled() {
             let at = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
             while self.member_pos.last().is_some_and(|entry| entry.0 >= at) {
                 self.member_pos.pop();
             }
-            if site.1 != 0 {
-                self.member_pos.push((at, site.1));
+            if pos != 0 {
+                self.member_pos.push((at, pos));
             }
         }
         self.emit(op);

@@ -50,6 +50,9 @@ pub(super) fn run(
     op: Op,
 ) -> Result<usize, Completion> {
     interp.node_host.pattern_src = chunk.pattern_src_at(pc - 1).cloned();
+    if let Some(pos) = chunk.member_pos_at(pc - 1) {
+        interp.node_host.call_pos = pos;
+    }
     let (operand_len, before) = if op == Op::ArgSpreadFirst {
         (2, usize::from(decode_u16(chunk, pc)))
     } else {

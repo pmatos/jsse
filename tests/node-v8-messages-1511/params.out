@@ -1,0 +1,84 @@
+## expression
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at <dir>/params.js:32:16
+at <dir>/params.js:32:24
+## expressionNull
+TypeError: Cannot destructure property 'a' of 'object null' as it is null.
+at <dir>/params.js:35:16
+at <dir>/params.js:35:24
+## second
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at <dir>/params.js:38:19
+at <dir>/params.js:38:27
+## keyValue
+TypeError: Cannot destructure property 'k' of 'undefined' as it is undefined.
+at <dir>/params.js:41:19
+at <dir>/params.js:41:27
+## empty
+TypeError: Cannot destructure 'undefined' as it is undefined.
+at <dir>/params.js:44:14
+at <dir>/params.js:44:21
+## computed
+TypeError: Cannot destructure 'undefined' as it is undefined.
+at <dir>/params.js:47:14
+at <dir>/params.js:47:31
+## rest
+TypeError: Cannot destructure 'undefined' as it is undefined.
+at <dir>/params.js:50:19
+at <dir>/params.js:50:27
+## arrow
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at <dir>/params.js:53:7
+at <dir>/params.js:53:17
+## arrowSecond
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at <dir>/params.js:56:10
+at <dir>/params.js:56:20
+## declaration
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at g (<dir>/params.js:59:16)
+at <dir>/params.js:60:3
+## method
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at Object.m (<dir>/params.js:63:19)
+at <dir>/params.js:64:5
+## classMethod
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at C.m (<dir>/params.js:68:9)
+at <dir>/params.js:70:11
+## constructor
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at new C (<dir>/params.js:74:19)
+at <dir>/params.js:76:3
+## newExpression
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at new F (<dir>/params.js:79:16)
+at <dir>/params.js:80:3
+## defaulted
+TypeError: Cannot read properties of null (reading 'a')
+at g (<dir>/params.js:83:23)
+at <dir>/params.js:84:3
+## nested
+TypeError: Cannot read properties of null (reading 'b')
+at g (<dir>/params.js:87:21)
+at <dir>/params.js:88:3
+## generator
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at g (<dir>/params.js:91:17)
+at <dir>/params.js:92:3
+## tail
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at inner (<dir>/params.js:95:20)
+at outer (<dir>/params.js:97:12)
+## async
+TypeError: Cannot destructure property 'a' of 'object null' as it is null.
+at <dir>/params.js:103:30
+## asyncArrow
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at <dir>/params.js:106:21
+## asyncMethod
+TypeError: Cannot destructure property 'a' of 'undefined' as it is undefined.
+at Object.m (<dir>/params.js:109:27)
+## asyncSpread
+TypeError: 5 is not iterable
+at <dir>/params.js:113:16
