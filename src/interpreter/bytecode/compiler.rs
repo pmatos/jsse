@@ -987,7 +987,7 @@ impl Compiler {
             Expression::Function(_) | Expression::ArrowFunction(_) => {
                 self.compile_closure(expr, None, false)
             }
-            Expression::Yield(argument, false) if self.generator => {
+            Expression::Yield(argument, k) if !k.delegate && self.generator => {
                 self.compile_yield(argument.as_deref(), false)
             }
             Expression::Await(argument, at) if self.async_body => {
@@ -1236,7 +1236,7 @@ impl Compiler {
                 }
                 return Ok(());
             }
-            Expression::Yield(argument, false) if self.generator => {
+            Expression::Yield(argument, k) if !k.delegate && self.generator => {
                 return self.compile_yield(argument.as_deref(), true);
             }
             Expression::Await(argument, at) if self.async_body => {
@@ -1345,45 +1345,6 @@ impl Compiler {
         self.pop_n(argc + 2);
         if matches!(op, Op::Call | Op::ReturnCall) {
             self.push_n(1);
-        }
-        Ok(())
-    }
-
-    /// `owns_lexicals` lets a `let`/`const` initialise the binding its
-    /// enclosing environment already holds in its TDZ: declaration
-    /// instantiation hoisted it into the function environment, or `PushEnv`
-    /// into the block's. Anywhere else (a Script's top level, whose lexicals
-    /// are global declarative bindings) the tree-walker runs the whole
-    /// statement.
-    fn compile_var_declaration(
-        &mut self,
-        decl: &VariableDeclaration,
-        owns_lexicals: bool,
-    ) -> Result<(), CompileError> {
-        if decl.kind != VarKind::Var {
-            if !owns_lexicals || !matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                return Err(CompileError::Unsupported("lexical declaration"));
-            }
-            return self.compile_lexical_declaration(decl);
-        }
-        for declarator in &decl.declarations {
-            let Pattern::Identifier(name) = &declarator.pattern else {
-                return Err(CompileError::Unsupported("var binding pattern"));
-            };
-            let idx = self.add_var_name(name)?;
-            if let Some(init) = &declarator.init {
-                if is_anonymous_class(init) {
-                    return Err(CompileError::Unsupported("anonymous class initializer"));
-                }
-                if let Some(slot) = self.local_slot(name) {
-                    self.compile_named_value(init, name)?;
-                    self.emit_store_local(idx, slot, true);
-                } else {
-                    self.emit_resolve_name(idx);
-                    self.compile_named_value(init, name)?;
-                    self.emit_store_resolved_name(idx, true);
-                }
-            }
         }
         Ok(())
     }
@@ -1515,7 +1476,7 @@ impl Compiler {
             self.add_var_name(&name)?;
         }
         let table = if stmt_contains(stmt, &|s| {
-            matches!(s, Statement::Break(_) | Statement::Continue(_))
+            matches!(s, Statement::Break(..) | Statement::Continue(_))
         }) {
             self.build_escape_table()?
         } else {
@@ -1743,7 +1704,7 @@ impl Compiler {
                 self.pop_n(1);
                 Ok(())
             }
-            Statement::Break(label) => self.compile_break(label.as_deref()),
+            Statement::Break(label, _) => self.compile_break(label.as_deref()),
             Statement::Continue(label) => self.compile_continue(label.as_deref()),
             Statement::Return(_) if self.goal == CompileGoal::Script => {
                 Err(CompileError::Unsupported("return in script"))
@@ -2787,10 +2748,10 @@ fn collect_escaping_jumps(
 ) {
     match stmt {
         Statement::Return(_) => out.push(EscapingJump::Return),
-        Statement::Break(None) if loops == 0 && switches == 0 => {
+        Statement::Break(None, _) if loops == 0 && switches == 0 => {
             out.push(EscapingJump::Break(None));
         }
-        Statement::Break(Some(label)) if !labels.contains(label) => {
+        Statement::Break(Some(label), _) if !labels.contains(label) => {
             out.push(EscapingJump::Break(Some(label.clone())));
         }
         Statement::Continue(None) if loops == 0 => out.push(EscapingJump::Continue(None)),

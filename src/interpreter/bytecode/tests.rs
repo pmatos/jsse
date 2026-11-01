@@ -516,7 +516,7 @@ fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
     // stack. `a.rhs` is evaluated next as the assignment's RHS — a *separate*, later-dispatched
     // GetProp opcode whose own getter forces a GC collection ($262.gc()) before the pending
     // `a.base` result is ever consumed by the final SetProp("value"). A single-hop test (e.g.
-    // a bare `x.value = rhs()` where `x` is a local variable) would pass even if the VM's
+    // `x.value = rhs()` with a local `x`) would pass even if the VM's
     // whole-stack rooting fix were missing, since `x` stays separately reachable via the
     // environment/call-frame roots regardless — this shape specifically requires the fix.
     let source = "
@@ -1932,7 +1932,7 @@ fn labeled_literal_true_while_omits_repeated_test_dispatch() {
         "loop".to_string(),
         Box::new(Statement::While(WhileStatement {
             test: Expression::Literal(Literal::Boolean(true)),
-            body: Box::new(Statement::Break(Some("loop".to_string()))),
+            body: Box::new(Statement::Break(Some("loop".to_string()), 0)),
         })),
     )];
     let chunk = compile_body(&body).expect("compile labeled while(true)");
@@ -1958,7 +1958,7 @@ fn labeled_literal_true_for_omits_repeated_test_dispatch() {
             init: None,
             test: Some(Expression::Literal(Literal::Boolean(true))),
             update: None,
-            body: Box::new(Statement::Break(Some("loop".to_string()))),
+            body: Box::new(Statement::Break(Some("loop".to_string()), 0)),
             scope_capture: Default::default(),
         })),
     )];

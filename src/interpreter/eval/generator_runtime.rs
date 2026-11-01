@@ -1309,6 +1309,7 @@ impl Interpreter {
                 StateTerminator::Yield {
                     value,
                     is_delegate,
+                    at,
                     resume_state,
                     sent_value_binding,
                 } => {
@@ -1332,7 +1333,7 @@ impl Interpreter {
                     };
 
                     if *is_delegate {
-                        let site = Self::delegate_site(value);
+                        let site = Self::delegate_site(value, *at);
                         self.node_note_generator_pos(o.id, site);
                         let iterator = match self.get_iterator(&yield_val) {
                             Ok(it) => it,
@@ -4516,6 +4517,7 @@ impl Interpreter {
                     inline_yield_terminator = StateTerminator::Yield {
                         value: None,
                         is_delegate: inline_yield_is_delegate,
+                        at: 0,
                         resume_state: current_id,
                         sent_value_binding: Some(
                             crate::interpreter::generator_transform::SentValueBinding {
@@ -4537,9 +4539,11 @@ impl Interpreter {
                 StateTerminator::Yield {
                     value,
                     is_delegate,
+                    at,
                     resume_state,
                     sent_value_binding,
                 } => {
+                    self.node_note_yield_pos(o.id, *at);
                     let yield_val = if let Some(operand) = inline_yield_operand.take() {
                         operand
                     } else if let Some(expr) = value {
@@ -5819,19 +5823,6 @@ impl Interpreter {
         Completion::Normal(JsValue::UNDEFINED)
     }
 
-    /// Runs `f` with the realm of async generator `gen_id` current, restoring
-    /// the caller's afterwards.
-    pub(super) fn with_generator_realm<R>(
-        &mut self,
-        gen_id: u64,
-        f: impl FnOnce(&mut Self) -> R,
-    ) -> R {
-        let realm = self
-            .get_object_cell(gen_id)
-            .and_then(|cell| cell.borrow().generator_realm_id());
-        self.with_realm(realm, f)
-    }
-
     /// The settlement of what a request of async generator `gen_id` was
     /// waiting on (`value`, or the rejection reason when `is_reject`).
     /// The suspended step belongs to the request at the front of the queue,
@@ -6372,6 +6363,7 @@ impl Interpreter {
         target: LoopControlTarget,
         can_park: bool,
     ) -> ForOfTransitionOutcome<usize> {
+        self.node_note_statement_pos(target.at);
         let routed_to = (target.try_depth..try_stack.len()).rev().find_map(|depth| {
             let try_info = &try_stack[depth];
             if try_info.entered_finally {

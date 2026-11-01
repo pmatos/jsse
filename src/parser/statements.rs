@@ -554,10 +554,7 @@ impl<'a> Parser<'a> {
                 let right = self.parse_assignment_expression()?;
                 self.eat(&Token::RightParen)?;
                 let body = self.parse_iteration_body()?;
-                let decls = vec![VariableDeclarator {
-                    pattern: Pattern::Identifier(ident),
-                    init: None,
-                }];
+                let decls = vec![VariableDeclarator::new(Pattern::Identifier(ident), None)];
                 Self::check_for_in_of_early_errors(VarKind::Using, &decls, &body)?;
                 return Ok(Statement::ForOf(ForOfStatement {
                     left: ForInOfLeft::Variable(VariableDeclaration {
@@ -579,10 +576,10 @@ impl<'a> Parser<'a> {
             self.no_in = true;
             let first_init = self.parse_assignment_expression()?;
             self.no_in = false;
-            let mut decls = vec![VariableDeclarator {
-                pattern: Pattern::Identifier(ident),
-                init: Some(first_init),
-            }];
+            let mut decls = vec![VariableDeclarator::new(
+                Pattern::Identifier(ident),
+                Some(first_init),
+            )];
             while self.current == Token::Comma {
                 self.advance()?;
                 let name = self
@@ -596,10 +593,10 @@ impl<'a> Parser<'a> {
                 self.no_in = true;
                 let init = self.parse_assignment_expression()?;
                 self.no_in = false;
-                decls.push(VariableDeclarator {
-                    pattern: Pattern::Identifier(name),
-                    init: Some(init),
-                });
+                decls.push(VariableDeclarator::new(
+                    Pattern::Identifier(name),
+                    Some(init),
+                ));
             }
             // Fall through to ForStatement init
             let init = Some(ForInit::Variable(VariableDeclaration {
@@ -666,10 +663,7 @@ impl<'a> Parser<'a> {
                 let right = self.parse_assignment_expression()?;
                 self.eat(&Token::RightParen)?;
                 let body = self.parse_iteration_body()?;
-                let decls = vec![VariableDeclarator {
-                    pattern: Pattern::Identifier(ident),
-                    init: None,
-                }];
+                let decls = vec![VariableDeclarator::new(Pattern::Identifier(ident), None)];
                 Self::check_for_in_of_early_errors(VarKind::AwaitUsing, &decls, &body)?;
                 return Ok(Statement::ForOf(ForOfStatement {
                     left: ForInOfLeft::Variable(VariableDeclaration {
@@ -691,10 +685,10 @@ impl<'a> Parser<'a> {
             self.no_in = true;
             let first_init = self.parse_assignment_expression()?;
             self.no_in = false;
-            let mut decls = vec![VariableDeclarator {
-                pattern: Pattern::Identifier(ident),
-                init: Some(first_init),
-            }];
+            let mut decls = vec![VariableDeclarator::new(
+                Pattern::Identifier(ident),
+                Some(first_init),
+            )];
             while self.current == Token::Comma {
                 self.advance()?;
                 let name = self
@@ -708,10 +702,10 @@ impl<'a> Parser<'a> {
                 self.no_in = true;
                 let init = self.parse_assignment_expression()?;
                 self.no_in = false;
-                decls.push(VariableDeclarator {
-                    pattern: Pattern::Identifier(name),
-                    init: Some(init),
-                });
+                decls.push(VariableDeclarator::new(
+                    Pattern::Identifier(name),
+                    Some(init),
+                ));
             }
             let init = Some(ForInit::Variable(VariableDeclaration {
                 kind: VarKind::AwaitUsing,
@@ -1183,6 +1177,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_break_statement(&mut self) -> Result<Statement, ParseError> {
+        let at = self.op_pos();
         self.advance()?;
         let label = self.parse_optional_label()?;
         if let Some(ref l) = label {
@@ -1193,7 +1188,7 @@ impl<'a> Parser<'a> {
             return Err(self.error("Illegal break statement"));
         }
         self.eat_semicolon()?;
-        Ok(Statement::Break(label))
+        Ok(Statement::Break(label, at))
     }
 
     fn parse_continue_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1423,10 +1418,10 @@ impl<'a> Parser<'a> {
             }
             self.advance()?;
             let init = self.parse_assignment_expression()?;
-            decls.push(VariableDeclarator {
-                pattern: Pattern::Identifier(name),
-                init: Some(init),
-            });
+            decls.push(VariableDeclarator::new(
+                Pattern::Identifier(name),
+                Some(init),
+            ));
             if self.current == Token::Comma {
                 self.advance()?;
             } else {

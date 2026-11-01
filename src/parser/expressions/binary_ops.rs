@@ -6,7 +6,7 @@ use super::*;
 
 impl Parser<'_> {
     /// The operator token's offset plus one under `--node`, else 0.
-    pub(super) fn op_pos(&self) -> u32 {
+    pub(in crate::parser) fn op_pos(&self) -> u32 {
         if inferred_names::enabled() {
             u32::try_from(self.current_token_start + 1).unwrap_or(0)
         } else {

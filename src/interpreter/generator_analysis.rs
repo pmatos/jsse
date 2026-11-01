@@ -336,7 +336,7 @@ fn analyze_statement(
             }
         }
 
-        Statement::Break(_) | Statement::Continue(_) => {}
+        Statement::Break(..) | Statement::Continue(_) => {}
 
         Statement::Throw(expr, _) => {
             analyze_expression(expr, analysis, ctx, true);
@@ -448,17 +448,17 @@ fn analyze_expression(
     in_expression_context: bool,
 ) {
     match expr {
-        Expression::Yield(inner_expr, is_delegate) => {
+        Expression::Yield(inner_expr, kind) => {
             let yield_id = ctx.yield_counter;
             ctx.yield_counter += 1;
 
-            if *is_delegate {
+            if kind.delegate {
                 analysis.has_yield_star = true;
             }
 
             let yield_point = YieldPoint {
                 id: yield_id,
-                is_delegate: *is_delegate,
+                is_delegate: kind.delegate,
                 inside_try: ctx.current_try,
                 inside_loop: ctx.current_loop,
                 in_expression_context,
@@ -730,7 +730,7 @@ fn analyze_pattern_expressions(
 
 pub(crate) fn contains_yield(stmt: &Statement) -> bool {
     match stmt {
-        Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {
+        Statement::Empty | Statement::Debugger | Statement::Break(..) | Statement::Continue(_) => {
             false
         }
         Statement::Expression(expr) => expr_contains_yield(expr),
@@ -1201,7 +1201,7 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
         | Statement::Expression(_)
         | Statement::Variable(_)
         | Statement::Return(_)
-        | Statement::Break(_)
+        | Statement::Break(..)
         | Statement::Continue(_)
         | Statement::Throw(..)
         | Statement::Debugger
@@ -1367,7 +1367,7 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         | Statement::Expression(_)
         | Statement::Variable(_)
         | Statement::Return(_)
-        | Statement::Break(_)
+        | Statement::Break(..)
         | Statement::Continue(_)
         | Statement::Throw(..)
         | Statement::Debugger
@@ -1396,7 +1396,7 @@ pub(crate) fn reaches_await_using_block(stmt: &Statement) -> bool {
 
 pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
     match stmt {
-        Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {
+        Statement::Empty | Statement::Debugger | Statement::Break(..) | Statement::Continue(_) => {
             false
         }
         Statement::Expression(expr) => expr_contains_suspension(expr),
@@ -1495,7 +1495,7 @@ mod tests {
     use super::*;
 
     fn make_yield(delegate: bool) -> Expression {
-        Expression::Yield(None, delegate)
+        Expression::Yield(None, YieldKind { delegate, at: 0 })
     }
 
     fn make_await() -> Expression {
@@ -1519,6 +1519,7 @@ mod tests {
         Statement::Variable(VariableDeclaration {
             kind: VarKind::Let,
             declarations: vec![VariableDeclarator {
+                init_at: 0,
                 pattern: Pattern::Identifier("C".to_string()),
                 init: Some(Expression::Class(ClassExpr {
                     name: None,
@@ -1764,14 +1765,11 @@ mod tests {
         let body = vec![Statement::Variable(VariableDeclaration {
             kind: VarKind::Let,
             declarations: vec![
-                VariableDeclarator {
-                    pattern: Pattern::Identifier("x".to_string()),
-                    init: Some(Expression::Literal(Literal::Number(1.0))),
-                },
-                VariableDeclarator {
-                    pattern: Pattern::Identifier("y".to_string()),
-                    init: None,
-                },
+                VariableDeclarator::new(
+                    Pattern::Identifier("x".to_string()),
+                    Some(Expression::Literal(Literal::Number(1.0))),
+                ),
+                VariableDeclarator::new(Pattern::Identifier("y".to_string()), None),
             ],
         })];
         let analysis = analyze_generator_body(&body, &[]);
@@ -1837,7 +1835,7 @@ mod tests {
 
     #[test]
     fn expression_suspension_query_preserves_nested_operands_and_class_scope() {
-        let yield_await = Expression::Yield(Some(ExprBox::new(make_await())), false);
+        let yield_await = Expression::Yield(Some(ExprBox::new(make_await())), YieldKind::PLAIN);
         for target in [
             SuspensionTarget::Yield,
             SuspensionTarget::Await,
@@ -1975,10 +1973,10 @@ mod tests {
     fn test_yield_in_expression_context() {
         let body = vec![Statement::Variable(VariableDeclaration {
             kind: VarKind::Let,
-            declarations: vec![VariableDeclarator {
-                pattern: Pattern::Identifier("x".to_string()),
-                init: Some(make_yield(false)),
-            }],
+            declarations: vec![VariableDeclarator::new(
+                Pattern::Identifier("x".to_string()),
+                Some(make_yield(false)),
+            )],
         })];
         let analysis = analyze_generator_body(&body, &[]);
 

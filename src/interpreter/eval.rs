@@ -15,8 +15,10 @@ mod await_value;
 mod binary_expr;
 mod call_ic;
 mod compiled_call_record;
+mod for_of_head_env;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
 mod eval_private_names;
+mod generator_realm;
 mod generator_runtime;
 mod literals;
 pub(crate) use literals::{
@@ -802,8 +804,8 @@ impl Interpreter {
                 Completion::Normal(sv) => self.class_proto_parent(&sv, *at),
                 other => other,
             },
-            Expression::Yield(expr, delegate) => {
-                if *delegate {
+            Expression::Yield(expr, kind) => {
+                if kind.delegate {
                     if self.in_async_generator_body {
                         return self.eval_inline_async_yield_star(expr.as_deref(), env);
                     }
@@ -8104,6 +8106,7 @@ impl Interpreter {
         macro_rules! route_loop_control {
             ($target:expr) => {{
                 let target = $target;
+                self.node_note_statement_pos(target.at);
 
                 // A loop-control completion produced by a finalizer replaces
                 // the return, throw, or earlier loop-control completion that
@@ -8611,6 +8614,7 @@ impl Interpreter {
                             // target to read a scope depth from, so pin the
                             // floor at the current depth.
                             scope_depth: scope_stack.len(),
+                            at: 0,
                         };
                         route_loop_control!(target);
                         continue;
@@ -8633,6 +8637,7 @@ impl Interpreter {
                             // pin the floor at the current depth so this path
                             // never crosses a scope it wasn't computed for.
                             scope_depth: scope_stack.len(),
+                            at: 0,
                         };
                         route_loop_control!(target);
                         continue;
@@ -9315,42 +9320,6 @@ impl Interpreter {
                 }
             }
         }
-    }
-
-    /// The declaration and `BindingKind` of a lexical for-in/of head, or
-    /// `None` when the head is not lexical (`var`, or an assignment pattern).
-    /// A lexical head is exactly the case that needs a TDZ head environment
-    /// and a fresh per-iteration environment.
-    pub(crate) fn for_of_head_lexical(
-        left: &ForInOfLeft,
-    ) -> Option<(&VariableDeclaration, BindingKind)> {
-        let ForInOfLeft::Variable(decl) = left else {
-            return None;
-        };
-        let kind = match decl.kind {
-            VarKind::Var => return None,
-            VarKind::Let => BindingKind::Let,
-            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
-        };
-        Some((decl, kind))
-    }
-
-    /// §14.7.5.12 ForIn/OfHeadEvaluation steps 1-2: the lexical head's names
-    /// are in TDZ while the iterable expression is evaluated, in a temporary
-    /// environment that no loop iteration ever uses.
-    fn for_of_head_tdz_env(left: &ForInOfLeft, env: &EnvRef) -> EnvRef {
-        let Some((decl, binding_kind)) = Self::for_of_head_lexical(left) else {
-            return env.clone();
-        };
-        let head_env = Environment::new(Some(env.clone()));
-        let mut tdz_names = Vec::new();
-        if let Some(d) = decl.declarations.first() {
-            d.pattern.bound_names(&mut tdz_names);
-        }
-        for name in &tdz_names {
-            head_env.borrow_mut().declare(name, binding_kind);
-        }
-        head_env
     }
 
     /// A transformed for-of's iterator lives in the driver's environment, which

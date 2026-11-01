@@ -1,0 +1,130 @@
+## constAddition
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constAddition (<dir>/positions-1548.js:32:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constFolded
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constFolded (<dir>/positions-1548.js:36:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constMember
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constMember (<dir>/positions-1548.js:40:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constCall
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constCall (<dir>/positions-1548.js:44:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constLiteral
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constLiteral (<dir>/positions-1548.js:48:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constArray
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constArray (<dir>/positions-1548.js:52:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constParenthesised
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constParenthesised (<dir>/positions-1548.js:56:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constTemplate
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constTemplate (<dir>/positions-1548.js:60:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## constFunction
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async constFunction (<dir>/positions-1548.js:64:15)
+    at async main (<dir>/positions-1548.js:175:5)
+## twoDeclarators
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async twoDeclarators (<dir>/positions-1548.js:69:11)
+    at async main (<dir>/positions-1548.js:175:5)
+## varDeclaration
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async varDeclaration (<dir>/positions-1548.js:73:13)
+    at async main (<dir>/positions-1548.js:175:5)
+## nestedBlock
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async nestedBlock (<dir>/positions-1548.js:78:17)
+    at async main (<dir>/positions-1548.js:175:5)
+## inIf
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async inIf (<dir>/positions-1548.js:84:17)
+    at async main (<dir>/positions-1548.js:175:5)
+## inTry
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async inTry (<dir>/positions-1548.js:90:17)
+    at async main (<dir>/positions-1548.js:175:5)
+## onlyTheResource
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async onlyTheResource (<dir>/positions-1548.js:95:23)
+    at async main (<dir>/positions-1548.js:175:5)
+## source
+    at capture (<dir>/positions-1548.js:12:24)
+    at source (<dir>/positions-1548.js:101:3)
+    at async delegates (<dir>/positions-1548.js:105:3)
+    at async main (<dir>/positions-1548.js:177:20)
+## sync source
+    at capture (<dir>/positions-1548.js:12:24)
+    at syncSource (<dir>/positions-1548.js:113:3)
+    at syncDelegates (<dir>/positions-1548.js:117:3)
+    at main (<dir>/positions-1548.js:179:14)
+## source
+    at capture (<dir>/positions-1548.js:12:24)
+    at source (<dir>/positions-1548.js:101:3)
+    at async delegatesToAnIdentifier (<dir>/positions-1548.js:109:3)
+    at async main (<dir>/positions-1548.js:181:20)
+## disposesAfterYield
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async disposesAfterYield (<dir>/positions-1548.js:121:3)
+    at async main (<dir>/positions-1548.js:185:34)
+## disposesAfterYieldOfCall
+    at capture (<dir>/positions-1548.js:12:24)
+    at [Symbol.asyncDispose] (<dir>/positions-1548.js:21:5)
+    at async disposesAfterYieldOfCall (<dir>/positions-1548.js:125:3)
+    at async main (<dir>/positions-1548.js:185:34)
+## breakInLoop
+    at capture (<dir>/positions-1548.js:12:24)
+    at closes (<dir>/positions-1548.js:134:5)
+    at async breakInLoop (<dir>/positions-1548.js:139:37)
+    at async main (<dir>/positions-1548.js:189:5)
+## breakInBlock
+    at capture (<dir>/positions-1548.js:12:24)
+    at closes (<dir>/positions-1548.js:134:5)
+    at async breakInBlock (<dir>/positions-1548.js:143:7)
+    at async main (<dir>/positions-1548.js:189:5)
+## breakAfterStatement
+    at capture (<dir>/positions-1548.js:12:24)
+    at closes (<dir>/positions-1548.js:134:5)
+    at async breakAfterStatement (<dir>/positions-1548.js:149:7)
+    at async main (<dir>/positions-1548.js:189:5)
+## breakAfterAwait
+    at capture (<dir>/positions-1548.js:12:24)
+    at closes (<dir>/positions-1548.js:134:5)
+    at async breakAfterAwait (<dir>/positions-1548.js:155:7)
+    at async main (<dir>/positions-1548.js:189:5)
+## breakUnderConstantIf
+    at capture (<dir>/positions-1548.js:12:24)
+    at closes (<dir>/positions-1548.js:134:5)
+    at async breakUnderConstantIf (<dir>/positions-1548.js:160:17)
+    at async main (<dir>/positions-1548.js:189:5)
+## labeledBreak
+    at capture (<dir>/positions-1548.js:12:24)
+    at closes (<dir>/positions-1548.js:134:5)
+    at async labeledBreak (<dir>/positions-1548.js:166:9)
+    at async main (<dir>/positions-1548.js:189:5)

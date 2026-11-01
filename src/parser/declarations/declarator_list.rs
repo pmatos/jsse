@@ -19,8 +19,12 @@ impl<'a> Parser<'a> {
         let mut decls = Vec::new();
         loop {
             let pattern = self.parse_binding_pattern()?;
+            let mut init_at = 0;
             let init = if self.current == Token::Assign {
                 self.advance()?;
+                if matches!(pattern, Pattern::Identifier(_)) {
+                    init_at = self.op_pos();
+                }
                 let init = self.parse_assignment_expression()?;
                 // V8 words a parenthesized name by its value, not its name
                 // (#1557); a one-element sequence keeps the parentheses.
@@ -43,7 +47,11 @@ impl<'a> Parser<'a> {
                 }
                 None
             };
-            decls.push(VariableDeclarator { pattern, init });
+            decls.push(VariableDeclarator {
+                pattern,
+                init,
+                init_at,
+            });
             if self.current == Token::Comma {
                 self.advance()?;
             } else {
