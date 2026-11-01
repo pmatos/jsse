@@ -2096,8 +2096,8 @@ impl Interpreter {
                                         return Completion::Throw(e);
                                     }
                                 }
-                                ForInOfLeft::Pattern(pat) => {
-                                    match self.assign_to_for_pattern(pat, val, &term_env) {
+                                ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => {
+                                    match self.assign_to_for_left(left, val, &term_env) {
                                         Completion::Normal(_) | Completion::Empty => {}
                                         Completion::Throw(e) => {
                                             self.iterator_close(&iterator, e.clone());
@@ -2113,9 +2113,6 @@ impl Interpreter {
                                         }
                                         _other => {}
                                     }
-                                }
-                                ForInOfLeft::Expression(_) => {
-                                    // for-of with expression LHS is handled via assignment
                                 }
                             }
                             self.push_pending_iter_close(iterator);
@@ -5280,8 +5277,8 @@ impl Interpreter {
                                             .reject_async_generator_request(o.id, promise, e);
                                     }
                                 }
-                                ForInOfLeft::Pattern(pat) => {
-                                    match self.assign_to_for_pattern(pat, val, &term_env) {
+                                ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => {
+                                    match self.assign_to_for_left(left, val, &term_env) {
                                         Completion::Normal(_) | Completion::Empty => {}
                                         Completion::Throw(e) => {
                                             self.iterator_close(&iterator, e.clone());
@@ -5298,7 +5295,6 @@ impl Interpreter {
                                         _other => {}
                                     }
                                 }
-                                ForInOfLeft::Expression(_) => {}
                             }
                             self.push_pending_iter_close(iterator);
                             current_id = *body_state;

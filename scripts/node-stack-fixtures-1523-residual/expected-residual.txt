@@ -1,0 +1,189 @@
+module "import defer * as ns from './lib.mjs'" SyntaxError: Unexpected token '*'
+script "({ 1n })" SyntaxError: Unexpected number
+script "using x = 1" SyntaxError: Unexpected identifier 'x'
+script "x = { a = 1 }" SyntaxError: Invalid shorthand property initializer
+script "f({ a = 1 })" SyntaxError: Invalid shorthand property initializer
+script "[{ a = 1 }]" SyntaxError: Invalid shorthand property initializer
+script "'use strict'; for (f() of c);" parses
+script "for (let of of c);" parses
+script "async function f() { for await (var a = 1 of b); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "x = class { async x }" SyntaxError: Unexpected token '}'
+script "x = class { *x }" SyntaxError: Unexpected token '}'
+script "x = /[\\c]/u" SyntaxError: Invalid regular expression: /[\c]/u: Invalid Unicode escape
+module "new import.meta" TypeError: (intermediate value) is not a constructor
+module "let await" SyntaxError: Unexpected reserved word
+module "<!-- comment" SyntaxError: HTML comments are not allowed in modules
+module "/* */ --> comment" SyntaxError: HTML comments are not allowed in modules
+script "x = async a\n=> 1" SyntaxError: Unexpected token '=>'
+script "function* g() { class yield {} }" SyntaxError: Unexpected identifier 'yield'
+script "async a\n=> 1" SyntaxError: Unexpected token '=>'
+script "using x = 1, y = 2" SyntaxError: Unexpected identifier 'x'
+script "using x" SyntaxError: Unexpected identifier 'x'
+script "using\nx = 1" parses
+script "switch (1) { case 1: using x = null }" SyntaxError: Unexpected identifier 'x'
+script "switch (1) { default: using x = null }" SyntaxError: Unexpected identifier 'x'
+script "function f() { switch (1) { case 1: using x = null } }" SyntaxError: Unexpected identifier 'x'
+script "async function f() { switch (1) { case 1: await using x = null } }" SyntaxError: Unexpected identifier 'x'
+script "function f() { using x }" SyntaxError: Missing initializer in using declaration
+script "function f() { using x = 1, y }" SyntaxError: Missing initializer in using declaration
+script "async function f() { await using x }" SyntaxError: Missing initializer in await using declaration
+script "async function f() { await using x = 1, y }" SyntaxError: Missing initializer in await using declaration
+script "function f() { for (using x in []); }" SyntaxError: Invalid 'using' in for-in loop
+script "async function f() { for (await using x in []); }" SyntaxError: Invalid 'using' in for-in loop
+script "function f() { for (using x, y of []); }" SyntaxError: Missing initializer in using declaration
+script "function f() { using {a} = 1 }" SyntaxError: Unexpected token '{'
+script "function f() { using [a] = 1 }" parses
+script "{ using x = null }" parses
+script "function f() { using x = null }" parses
+script "async function f() { await using x = null }" parses
+script "function f() { for (using x of []); }" parses
+script "for (using of []);" parses
+script "for (using in {});" parses
+module "switch (1) { case 1: using x = null }" SyntaxError: Unexpected identifier 'x'
+module "switch (1) { case 1: await using x = null }" SyntaxError: Unexpected identifier 'x'
+module "import defer * as ns, {a} from './lib.mjs'" SyntaxError: Unexpected token '*'
+module "import defer\n* as ns from './lib.mjs'" SyntaxError: Unexpected token '*'
+module "import defer * as defer from './lib.mjs'" SyntaxError: Unexpected token '*'
+module "import defer * from './lib.mjs'" SyntaxError: Unexpected token '*'
+module "import defer x from './lib.mjs'" SyntaxError: Unexpected identifier 'x'
+module "import defer from './lib.mjs'" loads
+module "import defer, {a} from './lib.mjs'" loads
+module "import defer {a} from './lib.mjs'" SyntaxError: Unexpected token '{'
+module "import.defer('./lib.mjs')" SyntaxError: Unexpected identifier 'defer'
+module "var x = import.defer('./lib.mjs')" SyntaxError: Unexpected identifier 'defer'
+module "import.defer" SyntaxError: Unexpected identifier 'defer'
+module "import.defer()" SyntaxError: Unexpected identifier 'defer'
+module "import.defer.x" SyntaxError: Unexpected identifier 'defer'
+module "new import.defer('x')" SyntaxError: Unexpected identifier 'defer'
+module "import.defer;" SyntaxError: Unexpected identifier 'defer'
+module "import.x" SyntaxError: Unexpected identifier 'x'
+module "import.source()" SyntaxError: import() requires a specifier
+module "import.source(" SyntaxError: Unexpected end of input
+module "import.source.x" SyntaxError: Unexpected token '.'
+module "import.source() = 1" SyntaxError: import() requires a specifier
+module "import.source(1) = 1" SyntaxError: Invalid left-hand side in assignment
+module "new import.source(1)" SyntaxError: Cannot use new with import
+script "import.defer('./lib.mjs')" SyntaxError: Unexpected identifier 'defer'
+script "import.defer" SyntaxError: Unexpected identifier 'defer'
+script "import.x" SyntaxError: Unexpected identifier 'x'
+script "import.source;" SyntaxError: Cannot use import statement outside a module
+script "import.source.x" SyntaxError: Cannot use import statement outside a module
+script "x = import.source" SyntaxError: Cannot use import statement outside a module
+script "import.source()" SyntaxError: import() requires a specifier
+script "import.source(1) = 1" SyntaxError: Invalid left-hand side in assignment
+script "new import.source(1)" SyntaxError: Cannot use new with import
+script "import.meta" SyntaxError: Cannot use 'import.meta' outside a module
+script "'use strict'; f() = 1" parses
+script "'use strict'; f() += 1" parses
+script "'use strict'; f()--" parses
+script "'use strict'; ++f()" parses
+script "'use strict'; --f()" parses
+script "'use strict'; (f()) = 1" parses
+script "'use strict'; (f()) ++" parses
+script "'use strict'; for (f() in c);" parses
+script "'use strict'; for (f()\n of c);" parses
+script "'use strict'; for ((f()) of c);" parses
+script "'use strict'; async function g() { for await (f() of c); }" parses
+script "'use strict'; f() = f() = 1" parses
+script "'use strict'; a = f() = 1" parses
+script "'use strict'; f().x = 1" parses
+script "'use strict'; f() &&= 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; f() ??= 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; f?.() = 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; a?.b = 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; f`x` = 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; [f()] = []" SyntaxError: Invalid destructuring assignment target
+script "'use strict'; ({a: f()} = {})" SyntaxError: Invalid destructuring assignment target
+script "'use strict'; for ([f()] of c);" SyntaxError: Invalid destructuring assignment target
+script "'use strict'; new f() = 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; new f() ++" SyntaxError: Invalid left-hand side expression in postfix operation
+script "'use strict'; for (new f() of c);" SyntaxError: Invalid left-hand side in for-loop
+script "'use strict'; for (a?.b() of c);" SyntaxError: Invalid left-hand side in for-loop
+script "'use strict'; (f(), g()) = 1" SyntaxError: Invalid left-hand side in assignment
+script "'use strict'; f() => 1" SyntaxError: Malformed arrow function parameter list
+script "'use strict'; (f()) => 1" SyntaxError: Invalid destructuring assignment target
+script "f() = 1" parses
+script "f() += 1" parses
+script "f()--" parses
+script "for (f() of c);" parses
+script "for (f() in c);" parses
+script "f() &&= 1" SyntaxError: Invalid left-hand side in assignment
+script "new f() = 1" SyntaxError: Invalid left-hand side in assignment
+script "for (new f() of c);" SyntaxError: Invalid left-hand side in for-loop
+module "f() = 1" ReferenceError: f is not defined
+module "f()++" ReferenceError: f is not defined
+module "for (f() of c);" ReferenceError: c is not defined
+module "for (f() in c);" ReferenceError: c is not defined
+module "f() ||= 1" SyntaxError: Invalid left-hand side in assignment
+script "async function f() { for await (const [...x = []] of y); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (const [...[x], y] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (var [...[x], y] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let {a: 1} of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [1] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (const [a = ] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let {a = +} of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [a, ...b,] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [...b = 1] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [a.b] of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [a], b of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [ of z); }" SyntaxError: Invalid left-hand side in for-await-of loop: Must have a single binding.
+script "async function f() { for await (let [a] = 1 of z); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "async function f() { for await (let a b of z); }" SyntaxError: Unexpected identifier 'b'
+script "async function f() { for await (let {} of z); }" parses
+script "async function f() { for await (let [a = await 1] of z); }" parses
+script "function f() { for (const [...x = []] of y); }" SyntaxError: Invalid destructuring assignment target
+script "function f() { for (const [...[x], y] of z); }" SyntaxError: Rest element must be last element
+script "function f() { for (let [1] of z); }" SyntaxError: Invalid destructuring assignment target
+script "var C = class yield {};" SyntaxError: Unexpected strict mode reserved word
+script "var C = class let {};" SyntaxError: Unexpected strict mode reserved word
+script "var C = class static {};" SyntaxError: Unexpected strict mode reserved word
+script "var C = class implements {};" SyntaxError: Unexpected strict mode reserved word
+script "var C = class interface {};" SyntaxError: Unexpected strict mode reserved word
+script "function f() { var C = class yield {}; }" SyntaxError: Unexpected strict mode reserved word
+script "function* g() { var C = class yield {}; }" SyntaxError: Unexpected identifier 'yield'
+script "var C = class eval {};" SyntaxError: Unexpected eval or arguments in strict mode
+script "var C = class enum {};" SyntaxError: Unexpected reserved word
+script "var C = class l\\u0065t {};" SyntaxError: Unexpected strict mode reserved word
+script "var C = class await {};" parses
+script "class yield {}" SyntaxError: Unexpected strict mode reserved word
+script "class let {}" SyntaxError: Unexpected strict mode reserved word
+script "var C = class { #constructor() {} }" SyntaxError: Class constructor may not be a private method
+script "var C = class { static #constructor() {} }" SyntaxError: Class constructor may not be a private method
+script "var C = class { get #constructor() {} }" SyntaxError: Class constructor may not be a private method
+script "var C = class { async #constructor() {} }" SyntaxError: Class constructor may not be a private method
+script "var C = class { *#constructor() {} }" SyntaxError: Class constructor may not be a private method
+script "var C = class { #constructor; }" SyntaxError: Classes may not have a field named 'constructor'
+script "var C = class { x = this.#constructor }" SyntaxError: Private field '#constructor' must be declared in an enclosing class
+script "var C = class { constructor = 1 }" SyntaxError: Classes may not have a field named 'constructor'
+script "for (const let in {}) {}" SyntaxError: let is disallowed as a lexically bound name
+script "for (let let of []) {}" SyntaxError: let is disallowed as a lexically bound name
+script "let let = 1" SyntaxError: let is disallowed as a lexically bound name
+script "do async function f() {} while (false)" SyntaxError: Async functions can only be declared at the top level or inside a block.
+script "while (1) async function f() {}" SyntaxError: Async functions can only be declared at the top level or inside a block.
+script "for (;;) async function f() {}" SyntaxError: Async functions can only be declared at the top level or inside a block.
+script "if (1) async function f() {}" SyntaxError: Async functions can only be declared at the top level or inside a block.
+script "label: async function f() {}" SyntaxError: Async functions can only be declared at the top level or inside a block.
+script "do function f() {} while (false)" SyntaxError: In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.
+script "[...x = 1] = a" SyntaxError: Invalid destructuring assignment target
+script "[...[x] = 1] = a" SyntaxError: Invalid destructuring assignment target
+script "({a: [...x = 1]} = a)" SyntaxError: Invalid destructuring assignment target
+script "for ([...x = 1] of a);" SyntaxError: Invalid destructuring assignment target
+script "f = ([...[ x ] = []] = []) => 1" SyntaxError: Invalid destructuring assignment target
+script "f = ([...x = []] = []) => 1" SyntaxError: Invalid destructuring assignment target
+script "f = (...x = []) => 1" SyntaxError: Rest parameter may not have a default initializer
+script "([...x = 1]) => 1" SyntaxError: Invalid destructuring assignment target
+script "var [...x = []] = a" SyntaxError: Invalid destructuring assignment target
+script "function f([...x = 1]){}" SyntaxError: Invalid destructuring assignment target
+script "function* g(){ class yi\\u0065ld {} }" SyntaxError: Unexpected identifier 'yield'
+script "function* g(){ x = class st\\u0061tic {} }" SyntaxError: Unexpected strict mode reserved word
+script "'use strict'; var st\\u0061tic" SyntaxError: Keyword must not contain escaped characters
+script "class A { m(){ var st\\u0061tic } }" SyntaxError: Keyword must not contain escaped characters
+script "var C = class st\\u0061tic {};" SyntaxError: Unexpected strict mode reserved word
+script "for (using x = 1 of y);" SyntaxError: for-of loop variable declaration may not have an initializer.
+script "async function f() { for await (using x = 1 of y); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "async function f() { for (await using x = 1 of y); }" SyntaxError: for-of loop variable declaration may not have an initializer.
+script "async function f() { for await (await using x = 1 of y); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "async function f(){ for await (const [a, b] = ; ; ); }" SyntaxError: Unexpected token ';'
+script "async function f(){ for await (const {a} = {b: ; ; ); }" SyntaxError: Unexpected token ';'
+script "async function f(){ for await (const [a, b] of z); }" parses
+script "async function* f(){ var yi\\u0065ld }" SyntaxError: Unexpected identifier 'yield'

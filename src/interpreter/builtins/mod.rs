@@ -31,6 +31,7 @@ mod node_host_buffer_errors;
 mod node_host_builtin_errors;
 mod node_host_builtins;
 mod node_host_builtins_webstreams;
+mod node_host_call_targets_1523;
 mod node_host_callee;
 mod node_host_callee_context;
 mod node_host_callee_strings;

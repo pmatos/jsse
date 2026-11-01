@@ -6,6 +6,8 @@
 
 use super::*;
 
+mod wording_1523;
+
 impl<'a> Parser<'a> {
     /// `await import(...)`, `await import(...).then(...)`: V8 reports the
     /// `await` for the call, so the dynamic import takes its position, unless
@@ -114,7 +116,7 @@ impl<'a> Parser<'a> {
             _ if self.html_comment_in_module() => {
                 "HTML comments are not allowed in modules".to_string()
             }
-            Token::Keyword(Keyword::Yield) if self.in_generator => {
+            Token::Keyword(Keyword::Yield) if self.in_generator && !self.strict => {
                 "Unexpected identifier 'yield'".to_string()
             }
             Token::Keyword(Keyword::Let | Keyword::Static | Keyword::Yield) if self.strict => {
@@ -155,11 +157,12 @@ impl<'a> Parser<'a> {
             "let" => "Keyword must not contain escaped characters",
             "await" => "Unexpected reserved word",
             "yield" if self.strict => "Unexpected strict mode reserved word",
+            "yield" if self.in_generator => "Unexpected identifier 'yield'",
             _ if Self::is_reserved_identifier(name, false) => {
                 "Keyword must not contain escaped characters"
             }
             _ if self.strict && super::v8_messages::STRICT_WORDS.contains(&name) => {
-                "Unexpected strict mode reserved word"
+                "Keyword must not contain escaped characters"
             }
             _ => return format!("Unexpected identifier '{name}'"),
         };
@@ -322,7 +325,7 @@ impl<'a> Parser<'a> {
     /// `class let {}`: the class is strict while its name is read, so V8
     /// words the token as a reserved word before the caller's mode returns.
     pub(super) fn class_name_error(&mut self, outer_strict: bool) -> ParseError {
-        let error = self.v8_error("Expected class name");
+        let error = self.class_name_text();
         self.set_strict(outer_strict);
         error
     }

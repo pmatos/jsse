@@ -2066,9 +2066,7 @@ impl Interpreter {
                                         Completion::Normal(_) => {}
                                         other => break 'unroot other,
                                     }
-                                    break 'unroot Completion::Throw(self.create_reference_error(
-                                        "Invalid left-hand side in for-in loop",
-                                    ));
+                                    break 'unroot Completion::Throw(self.invalid_for_target("in"));
                                 }
                             }
                         }
@@ -2336,8 +2334,7 @@ impl Interpreter {
                             }
                             other => return other,
                         }
-                        let e =
-                            self.create_reference_error("Invalid left-hand side in for-of loop");
+                        let e = self.invalid_for_target("of");
                         self.iterator_close(iterator, e.clone());
                         return Completion::Throw(e);
                     }

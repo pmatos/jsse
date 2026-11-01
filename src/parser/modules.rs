@@ -23,6 +23,7 @@ impl<'a> Parser<'a> {
 
         // import defer * as ns from "module"
         let is_deferred_namespace = self.current_identifier_name().as_deref() == Some("defer")
+            && self.defer_imports()
             && self.lookahead(|tokens| -> Result<bool, ParseError> {
                 tokens.advance()?;
                 Ok(tokens.current() == &Token::Star)
