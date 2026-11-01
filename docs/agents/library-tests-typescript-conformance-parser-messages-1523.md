@@ -46,7 +46,8 @@ A differential driver (`vm.Script` for the script goal, `import()` of a temp fil
 - **Acceptance bugs fixed in every mode** (engine behaviour, `test262-extra/`): `^*`, `$+`, `\b+`, `\B*` and an unmatched
   `)` in a non-unicode pattern are SyntaxErrors (the validator took them for atoms); `(...a)\n=> 1` is rejected; `class
   eval {}` and `class arguments {}` are rejected (class code is strict); `await` in a static block.
-- **Decorators**: V8 in Node 26 has none, so under `--node` the `@` of a decorator reads `Invalid or unexpected token`.
+- **Decorators** (behaviour, not wording): V8 in Node 26 has none, so under `--node` the `@` of a decorator is rejected
+  with `Invalid or unexpected token`; default mode still parses decorators.
 
 ## Fixtures and guard
 
@@ -62,8 +63,8 @@ v26.8.2's own output (the temp directory removed from module messages). Regenera
 - **Parser accepts what V8 rejects** (bugs, any mode): `x = { a = 1 }`, `f({ a = 1 })` and `[{ a = 1 }]` (a
   CoverInitializedName outside a pattern; only the parenthesised and statement forms are checked), `class { async x }` and
   `class { *x }`, a module whose first token is `<!--` (the lexer reads the first token before the module goal is set).
-- **Features Node 26 does not ship** that jsse implements: `import defer`, `import.defer()`, `using` declarations.
+- **Features Node 26 does not ship** that jsse implements: `import defer` and `import.defer()`.
 - **V8 accepts what the spec rejects**: `'use strict'; for (f() of c)`. And `for (let of of c)`, which jsse rejects.
-- Wording: `({ 1n })`, `for await (var a = 1 of b)`, `/[\c]/u`, `let await` in a module, `class yield {}` in a generator,
+- Wording: `using x = 1` (V8 has no `using`, so it reads `x` as the stray token), `({ 1n })`, `for await (var a = 1 of b)`, `/[\c]/u`, `let await` in a module, `class yield {}` in a generator,
   `async a\n=> 1`, and the runtime `new import.meta` TypeError.
 - #1524 items (export-from edge cases, `import()` nested in expressions) and #1487 are unchanged.

@@ -88,7 +88,8 @@ fn default_mode_keeps_its_own_wording() {
         r#"
         for (const s of [
           "var [a.b] = c", "var {1}", "function f(...a, b) {}", "(...a) + 1",
-          "for (let x, y of c);", "class let {}", "import()", "export 1", "const a, b = 1",
+          "for (let x, y of c);", "for (let x, y in c);", "class let {}", "import()", "export 1",
+          "const a, b = 1", "/(?ii:a)/", "/[\\d-a]/u",
         ]) {
           try { new Function(s); } catch (e) { console.log(e.message); }
         }
@@ -102,6 +103,9 @@ fn default_mode_keeps_its_own_wording() {
         "Expected RightParen, got Comma",
         "Expected Arrow, got Plus",
         "for-of loop variable declaration may not have an initializer",
+        "for-in loop variable declaration may not have an initializer",
+        "Invalid flags in modifier group",
+        "Invalid class escape in range",
         "Expected class name",
         "Unexpected token: RightParen",
         "Nothing to repeat",
@@ -113,6 +117,8 @@ fn default_mode_keeps_its_own_wording() {
         "Illegal property in declaration context",
         "Rest parameter must be last formal parameter",
         "Must have a single binding",
+        "Repeated flag in flag group",
+        "Invalid character class",
         "Unexpected strict mode reserved word",
         "import() requires a specifier",
         "Invalid quantifier",

@@ -189,22 +189,25 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// A declaration in a for-in / for-of head with an initializer or several
-    /// bindings; V8 words the second as its own error.
+    /// A declaration in a for-in / for-of head with an initializer or, under
+    /// `--node`, several bindings, which V8 words as its own error.
     pub(super) fn for_binding_error(&self, decls: &[VariableDeclarator], kind: &str) -> ParseError {
-        if decls.len() != 1 {
-            if inferred_names::enabled() {
-                return self.error(format!(
-                    "Invalid left-hand side in for-{kind} loop: Must have a single binding."
-                ));
-            }
-            if kind == "in" {
-                return self.error("Invalid left-hand side in for-in loop");
-            }
+        if decls.len() != 1 && inferred_names::enabled() {
+            return self.error(format!(
+                "Invalid left-hand side in for-{kind} loop: Must have a single binding."
+            ));
         }
         self.error(format!(
             "for-{kind} loop variable declaration may not have an initializer"
         ))
+    }
+
+    /// `for (var a, b in c)`.
+    pub(super) fn var_for_in_error(&self, decls: &[VariableDeclarator]) -> ParseError {
+        if inferred_names::enabled() {
+            return self.for_binding_error(decls, "in");
+        }
+        self.error("Invalid left-hand side in for-in loop")
     }
 
     /// The head of a for-of loop starts with the token `let` (§14.7.5: the

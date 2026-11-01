@@ -753,7 +753,7 @@ impl<'a> Parser<'a> {
                     }
                     // var for-in: initializer only allowed for simple binding in sloppy mode (Annex B)
                     if decls.len() != 1 {
-                        return Err(self.for_binding_error(&decls, "in"));
+                        return Err(self.var_for_in_error(&decls));
                     }
                     if decls[0].init.is_some() {
                         let is_simple = matches!(&decls[0].pattern, Pattern::Identifier(_));
