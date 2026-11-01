@@ -1,5 +1,7 @@
 use super::super::*;
 use super::dynamic_source;
+mod dynamic_parts;
+use dynamic_parts::check_dynamic_parts;
 
 // ToString of each CreateDynamicFunction argument, joined as the spec's P and
 // bodyString. Lone surrogates travel through the UTF-8 parser as private-use
@@ -37,24 +39,6 @@ fn parse_dynamic_function_source(
     pua: bool,
 ) -> Result<crate::ast::Program, parser::ParseError> {
     parser::Parser::for_source(source, pua).and_then(|mut p| p.parse_program())
-}
-
-fn check_dynamic_parts(
-    interp: &mut Interpreter,
-    params: &str,
-    body: &str,
-    pua: bool,
-    is_generator: bool,
-    is_async: bool,
-) -> Result<(), JsValue> {
-    parser::dynamic_function::check_dynamic_function_parts(
-        params,
-        body,
-        pua,
-        is_generator,
-        is_async,
-    )
-    .map_err(|e| interp.create_error("SyntaxError", &e.js()))
 }
 
 impl Interpreter {
@@ -141,7 +125,7 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                    if let Some(Statement::Expression(Expression::Function(fe), _)) =
                         program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
@@ -672,7 +656,7 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                    if let Some(Statement::Expression(Expression::Function(fe), _)) =
                         program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
@@ -783,7 +767,7 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                    if let Some(Statement::Expression(Expression::Function(fe), _)) =
                         program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
@@ -896,7 +880,7 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                    if let Some(Statement::Expression(Expression::Function(fe), _)) =
                         program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;

@@ -60,7 +60,7 @@ fn first_pattern_name(props: &[ObjectPatternProperty]) -> Option<Lead> {
 fn first_target_name(props: &[Property]) -> Option<Lead> {
     let first = props.first()?;
     if let Expression::Spread(target, _) = &first.value {
-        return (!matches!(**target, Expression::Identifier(_))).then_some(Lead::ReadBare);
+        return (!matches!(**target, Expression::Identifier(_, _))).then_some(Lead::ReadBare);
     }
     if first.computed || first.kind != PropertyKind::Init {
         return None;
@@ -82,7 +82,7 @@ fn first_target_name(props: &[Property]) -> Option<Lead> {
 /// assignment reads as the value.
 fn array_pattern_text(init: &Expression) -> Option<String> {
     match init {
-        Expression::Identifier(_)
+        Expression::Identifier(_, _)
         | Expression::Literal(_)
         | Expression::Call(..)
         | Expression::New(..)

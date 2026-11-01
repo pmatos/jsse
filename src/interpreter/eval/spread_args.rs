@@ -5,6 +5,7 @@ impl Interpreter {
         &mut self,
         args: &[Expression],
         env: &EnvRef,
+        call_pos: u32,
     ) -> Result<Vec<JsValue>, JsValue> {
         let mut out = Vec::new();
         for arg in args {
@@ -14,9 +15,8 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(e),
                     _ => JsValue::UNDEFINED,
                 };
-                if args.len() > 1 {
-                    self.node_note_statement_pos(*at);
-                }
+                // V8 reports a lone spread at the call, any other at the operand.
+                self.node_note_statement_pos(if args.len() > 1 { *at } else { call_pos });
                 let items = self.call_spread_items(inner, &val, args)?;
                 for item in &items {
                     self.gc_root_value(item);

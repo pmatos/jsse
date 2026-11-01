@@ -151,6 +151,7 @@ impl<'a> Parser<'a> {
             self.no_in,
         );
         self.rewind_to(open_paren);
+        let paren = self.op_pos();
         self.refining_arrow_params = true;
         self.no_in = false;
         let result = self
@@ -164,7 +165,17 @@ impl<'a> Parser<'a> {
             self.no_in,
         ) = saved_flags;
         self.rewind_to(resume);
-        result
+        let mut params = result?;
+        for param in &mut params {
+            let inner = match param {
+                Pattern::Assign(inner, _) => &mut **inner,
+                other => other,
+            };
+            if let Pattern::Array(elems) = inner {
+                elems.at = paren;
+            }
+        }
+        Ok(params)
     }
 
     fn parse_parameter_list_tail(&mut self) -> Result<Vec<Pattern>, ParseError> {
@@ -208,6 +219,7 @@ fn adopt_positions(dst: &mut Pattern, src: &Pattern) {
             }
         }
         (Pattern::Array(d), Pattern::Array(s)) => {
+            d.at = s.at;
             for (d, s) in d.iter_mut().zip(s) {
                 if let (Some(d), Some(s)) = (d, s) {
                     match (d, s) {

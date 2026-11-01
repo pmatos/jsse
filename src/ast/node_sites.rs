@@ -20,6 +20,11 @@ impl YieldKind {
     };
 }
 
+/// An identifier the parser did not read from source: no position.
+pub(crate) fn ident(name: impl Into<String>) -> Expression {
+    Expression::Identifier(name.into(), 0)
+}
+
 impl VariableDeclarator {
     /// A declarator the parser did not read from source: no initializer position.
     pub(crate) fn new(pattern: Pattern, init: Option<Expression>) -> Self {

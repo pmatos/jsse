@@ -70,6 +70,7 @@ mod node_host_fs_ops;
 #[cfg(unix)]
 mod node_host_fs_watch;
 pub(crate) mod node_host_heritage;
+pub(crate) mod node_host_ident_pos;
 mod node_host_idna;
 mod node_host_intl_receiver;
 pub(crate) mod node_host_iter_operand;

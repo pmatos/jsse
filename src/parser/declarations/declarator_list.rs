@@ -54,7 +54,10 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<VariableDeclarator>, ParseError> {
         let mut decls = Vec::new();
         loop {
-            let pattern = self.parse_binding_pattern()?;
+            let mut pattern = self.parse_binding_pattern()?;
+            if let Pattern::Array(elems) = &mut pattern {
+                elems.at = 0;
+            }
             let mut init_at = 0;
             let init = if self.current == Token::Assign {
                 self.advance()?;
@@ -64,7 +67,7 @@ impl<'a> Parser<'a> {
                 // (#1557); a one-element sequence keeps the parentheses.
                 if crate::parser::inferred_names::enabled()
                     && matches!(pattern, Pattern::Array(_))
-                    && matches!(init, Expression::Identifier(_))
+                    && matches!(init, Expression::Identifier(_, _))
                     && self.last_expr_parenthesized
                 {
                     Some(Expression::Sequence(vec![init]))

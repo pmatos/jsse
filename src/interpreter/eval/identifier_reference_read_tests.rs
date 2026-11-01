@@ -87,7 +87,7 @@ fn identifier_assignment_reads_import_before_shadowed_global() {
     imports
         .borrow_mut()
         .create_import_binding("imported", source, "value".into());
-    let target = Expression::Identifier("imported".into());
+    let target = Expression::Identifier("imported".into(), 0);
     let rhs = Expression::Literal(Literal::Number(1.0));
 
     // A truthy import must short-circuit ||= even though the global is falsy.

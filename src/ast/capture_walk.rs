@@ -237,7 +237,7 @@ impl<'a> CaptureWalk<'a> {
             | Statement::Debugger
             | Statement::Break(..)
             | Statement::Continue(_)
-            | Statement::Return(None) => {}
+            | Statement::Return(None, _) => {}
             Statement::FunctionDeclaration(f) => {
                 if self.enter_code(Some(&f.name), &f.params, f.body.as_slice()) {
                     return true;
@@ -256,9 +256,9 @@ impl<'a> CaptureWalk<'a> {
                 self.push_expr(object);
                 self.push_stmt(body);
             }
-            Statement::Expression(e) | Statement::Throw(e, _) | Statement::Return(Some(e)) => {
-                self.push_expr(e)
-            }
+            Statement::Expression(e, _)
+            | Statement::Throw(e, _)
+            | Statement::Return(Some(e), _) => self.push_expr(e),
             Statement::Block(stmts) => stmts.iter().for_each(|s| self.push_stmt(s)),
             Statement::Variable(decl) => self.push_decl(decl),
             Statement::If(i) => {
@@ -366,7 +366,7 @@ impl<'a> CaptureWalk<'a> {
                     return true;
                 }
             }
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 self.mention(name);
                 if name == "eval" {
                     if self.mode == WalkMode::Stop {

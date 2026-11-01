@@ -347,7 +347,7 @@ fn compile_function(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue])
         Err(f) => return done(failure_value(interp, &f, line_offset, 1)),
     };
     let statements = program.body.as_slice();
-    let [Statement::Expression(expr @ Expression::Function(_))] = statements else {
+    let [Statement::Expression(expr @ Expression::Function(_), _)] = statements else {
         let f = Failure {
             message: "Unexpected token '}'".to_string(),
             span: (0, 0),

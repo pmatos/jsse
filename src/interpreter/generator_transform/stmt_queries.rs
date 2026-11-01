@@ -31,7 +31,7 @@ pub(super) fn stmt_contains_for_of_head(
 
 pub(super) fn stmt_contains_return(stmt: &Statement) -> bool {
     match stmt {
-        Statement::Return(_) => true,
+        Statement::Return(_, _) => true,
         Statement::Block(stmts) => stmts.iter().any(stmt_contains_return),
         Statement::If(i) => {
             stmt_contains_return(&i.consequent)

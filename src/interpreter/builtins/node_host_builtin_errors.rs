@@ -151,7 +151,11 @@ impl Interpreter {
                 JsValue::string(JsString::from_str(name)),
             );
         }
-        self.node_capture_error(obj_id)
+        let error = self.node_capture_error(obj_id);
+        if name == "ReferenceError" {
+            self.node_note_ident_error(obj_id, &msg);
+        }
+        error
     }
 }
 
@@ -237,7 +241,7 @@ impl Interpreter {
 
     /// `Constructor` when `id` still inherits `Object.prototype.toString` and
     /// has a named constructor, as V8 prints `#<Constructor>`.
-    fn default_to_string_constructor(&self, id: u64) -> Option<String> {
+    pub(super) fn default_to_string_constructor(&self, id: u64) -> Option<String> {
         let to_string = self.data_property_value(id, "toString")?.as_object_id()?;
         let object_proto = self.realm().object_prototype?;
         let original = self

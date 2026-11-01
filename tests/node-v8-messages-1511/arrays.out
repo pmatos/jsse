@@ -1,0 +1,57 @@
+## parameterPattern
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:23:13
+## parameterPatternAfterName
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:26:13
+## arrowParameterPattern
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:29:4
+## methodParameterPattern
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+at Object.m (<dir>/arrays.js:32:7)
+## nestedParameterPattern
+TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:35:15
+## generatorParameterPattern
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:38:14
+## declarationPattern
+TypeError: undefined is not iterable
+at <dir>/arrays.js:44:13
+## nestedDeclarationPattern
+TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:47:8
+## propertyDeclarationPattern
+TypeError: Cannot destructure property 'Symbol(Symbol.iterator)' of '{(intermediate value)}' as it is null.
+at <dir>/arrays.js:50:12
+## defaultedDeclarationPattern
+TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/arrays.js:53:12
+## elementDeclarationPattern
+TypeError: Cannot read properties of null (reading 'a')
+at <dir>/arrays.js:56:10
+## commaHeritage
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/arrays.js:61:23
+## nestedCommaHeritage
+TypeError: Class extends value 2 is not a constructor or null
+at <dir>/arrays.js:64:30
+## doubleParenthesisedCommaHeritage
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/arrays.js:67:24
+## commaHeritageOfCalls
+TypeError: Class extends value 1 is not a constructor or null
+at <dir>/arrays.js:70:25
+## parenthesisedHeritage
+TypeError: Class extends value 5 is not a constructor or null
+at <dir>/arrays.js:73:20
+## mathHeritage
+TypeError: Class extends value #<Object> is not a constructor or null
+at <dir>/arrays.js:76:19
+## loneCallSpread
+TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+at <dir>/arrays.js:81:3
+## loneNewSpread
+TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function
+at <dir>/arrays.js:84:3

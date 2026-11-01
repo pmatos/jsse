@@ -102,7 +102,7 @@ fn push_children(node: &mut Expression, stack: &mut Vec<Expression>) {
 
     match node {
         Expression::Literal(_)
-        | Expression::Identifier(_)
+        | Expression::Identifier(_, _)
         | Expression::This
         | Expression::Super
         | Expression::Array(_, _)

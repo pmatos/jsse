@@ -1,5 +1,6 @@
 use super::*;
 
+mod member_key;
 mod optional_delete;
 
 mod nullish_message;
@@ -136,7 +137,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
         match prop {
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 if name.is_empty() {
                     // x?.() — direct call placeholder, base_val IS the value
                     // chain_this is the object for `obj.method?.()` calls
@@ -156,7 +157,7 @@ impl Interpreter {
                 self.with_gc_root_scope(|i| {
                     i.gc_root_value(&func_val);
                     i.gc_root_value(&this_val);
-                    let evaluated_args = i.eval_spread_args(args, env).into_abrupt()?;
+                    let evaluated_args = i.eval_spread_args(args, env, site.1).into_abrupt()?;
                     i.node_host.call_pos = site.1;
                     i.call_function(&func_val, &this_val, &evaluated_args)
                         .into_abrupt()
@@ -216,7 +217,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         match chain {
-            Expression::Identifier(name) if !name.is_empty() => {
+            Expression::Identifier(name, _) if !name.is_empty() => {
                 // delete obj?.prop → delete obj.prop
                 self.eval_delete_on_object(base_val, name, env)
             }
@@ -262,7 +263,7 @@ impl Interpreter {
                 };
                 self.eval_delete_on_object(&inner_val, &key, env)
             }
-            Expression::Call(callee, args, _) => {
+            Expression::Call(callee, args, site) => {
                 // delete obj?.method(): call for effects, return true
                 let (func_val, this_val) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
@@ -276,7 +277,7 @@ impl Interpreter {
                 self.with_gc_root_scope(|i| {
                     i.gc_root_value(&func_val);
                     i.gc_root_value(&this_val);
-                    let evaluated_args = match i.eval_spread_args(args, env) {
+                    let evaluated_args = match i.eval_spread_args(args, env, site.1) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -569,23 +570,6 @@ impl Interpreter {
             // (or is missing). Not cacheable in this narrow scope.
             None => None,
         }
-    }
-
-    /// Evaluates a computed member's key expression and `ToPropertyKey` with
-    /// `base` rooted, since either can run user code that collects.
-    pub(super) fn eval_member_key_rooted(
-        &mut self,
-        base: &JsValue,
-        expr: &Expression,
-        env: &EnvRef,
-    ) -> Result<JsPropertyKey, Completion> {
-        self.with_gc_root_scope(|this| {
-            this.gc_root_value(base);
-            let v = this
-                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
-                .into_abrupt()?;
-            this.to_property_key(&v).into_abrupt()
-        })
     }
 
     pub(super) fn eval_member(

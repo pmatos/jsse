@@ -17,6 +17,7 @@ pub(crate) struct AgentBroadcastMsg {
 }
 
 mod dollar_262;
+mod module_error_cache;
 mod property_descriptor;
 mod types;
 mod weak_slots;
@@ -2576,10 +2577,6 @@ impl Interpreter {
         Ok(())
     }
 
-    fn cache_module_error(module: &Rc<RefCell<LoadedModule>>, err: &JsValue) {
-        module.borrow_mut().error = Some(err.clone());
-    }
-
     fn load_source_text_module(
         &mut self,
         key: &ModuleKey,
@@ -3376,7 +3373,7 @@ impl Interpreter {
     fn stmt_has_tla(stmt: &crate::ast::Statement) -> bool {
         use crate::ast::Statement;
         match stmt {
-            Statement::Expression(expr) => Self::expr_has_await(expr),
+            Statement::Expression(expr, _) => Self::expr_has_await(expr),
             Statement::Variable(decl) => {
                 if matches!(decl.kind, crate::ast::VarKind::AwaitUsing) {
                     return true;
@@ -3385,7 +3382,9 @@ impl Interpreter {
                     .iter()
                     .any(|d| d.init.as_ref().is_some_and(Self::expr_has_await))
             }
-            Statement::Return(Some(expr)) | Statement::Throw(expr, _) => Self::expr_has_await(expr),
+            Statement::Return(Some(expr), _) | Statement::Throw(expr, _) => {
+                Self::expr_has_await(expr)
+            }
             Statement::If(if_stmt) => {
                 Self::expr_has_await(&if_stmt.test)
                     || Self::stmt_has_tla(&if_stmt.consequent)
