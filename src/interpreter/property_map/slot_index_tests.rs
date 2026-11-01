@@ -18,7 +18,7 @@ fn number_of(map: &PropertyMap, n: usize) -> Option<f64> {
 fn index_of(map: &PropertyMap) -> &SlotIndex {
     match &map.inner {
         PropertyMapInner::Spilled { index, .. } => index,
-        PropertyMapInner::Inline(_) => panic!("map is still inline"),
+        _ => panic!("map is still inline"),
     }
 }
 
@@ -37,6 +37,7 @@ fn assert_consistent(map: &PropertyMap, model: &[(usize, usize)]) {
 
 #[test]
 fn tags_cover_nine_to_tag_max_entries_and_hash_beyond() {
+    let _per_object = ShapesPaused::new();
     let mut map = PropertyMap::new();
     for n in 0..=TAG_MAX + 8 {
         map.insert(key(n), desc(n));
@@ -53,6 +54,7 @@ fn tags_cover_nine_to_tag_max_entries_and_hash_beyond() {
 
 #[test]
 fn tag_index_tracks_removals_compaction_and_reinsertion() {
+    let _per_object = ShapesPaused::new();
     let mut map = PropertyMap::new();
     for n in 0..60 {
         map.insert(key(n), desc(n));
@@ -80,6 +82,7 @@ fn tag_index_tracks_removals_compaction_and_reinsertion() {
 
 #[test]
 fn deleted_slots_do_not_push_a_small_map_onto_the_hash_table() {
+    let _per_object = ShapesPaused::new();
     let mut map = PropertyMap::new();
     for n in 0..TAG_MAX {
         map.insert(key(n), desc(n));
@@ -97,6 +100,7 @@ fn deleted_slots_do_not_push_a_small_map_onto_the_hash_table() {
 
 #[test]
 fn reserve_past_tag_max_starts_on_the_hash_table() {
+    let _per_object = ShapesPaused::new();
     let mut map = PropertyMap::new();
     for n in 0..10 {
         map.insert(key(n), desc(n));
@@ -110,6 +114,7 @@ fn reserve_past_tag_max_starts_on_the_hash_table() {
 
 #[test]
 fn long_keys_that_differ_only_in_the_middle_get_distinct_tags() {
+    let _per_object = ShapesPaused::new();
     let tags: std::collections::HashSet<u8> = (0..40)
         .map(|n| tag_of(format!("node_modules/pkg{n:02}/package.json").as_bytes()))
         .collect();
@@ -118,6 +123,7 @@ fn long_keys_that_differ_only_in_the_middle_get_distinct_tags() {
 
 #[test]
 fn matches_a_model_under_random_inserts_and_removals() {
+    let _per_object = ShapesPaused::new();
     let mut state = 0x9E37_79B9_7F4A_7C15u64;
     let mut next = move |bound: usize| {
         state ^= state << 13;
@@ -158,6 +164,7 @@ fn matches_a_model_under_random_inserts_and_removals() {
 
 #[test]
 fn keys_that_share_a_tag_stay_distinct() {
+    let _per_object = ShapesPaused::new();
     let mut by_tag: HashMap<u8, Vec<usize>> = HashMap::new();
     for n in 0..4000 {
         by_tag

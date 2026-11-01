@@ -173,6 +173,7 @@ fn sanitize_native_fn_name(name: &str) -> String {
 
 impl Interpreter {
     pub(crate) fn setup_globals(&mut self) {
+        let _builtins_are_unshared = crate::interpreter::property_map::ShapesPaused::new();
         // Create a placeholder Function.prototype early so all functions created during
         // setup get the correct [[Prototype]]. It will be adopted by Function.prototype later.
         if self.realm().function_prototype.is_none() {

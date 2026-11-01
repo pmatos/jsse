@@ -1,12 +1,19 @@
 use std::cell::Cell;
 mod exact_capacity;
 mod record;
+mod shape;
+#[cfg(test)]
+mod shape_tests;
+mod shaped;
 mod slot_index;
 #[cfg(test)]
 mod slot_index_tests;
 pub(crate) use record::{PropertyRead, PropertyRecord};
+use shape::Shape;
+pub(crate) use shape::ShapesPaused;
 use slot_index::SlotIndex;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use smallvec::SmallVec;
 
@@ -81,6 +88,12 @@ enum PropertyMapInner {
         index: SlotIndex,
         live: usize,
     },
+    // Keys shared with the objects built the same way, one record per key,
+    // in creation order (see `shape.rs`).
+    Shaped {
+        shape: Rc<Shape>,
+        records: shaped::Records,
+    },
 }
 
 impl PropertyMap {
@@ -108,6 +121,7 @@ impl PropertyMap {
         match &self.inner {
             PropertyMapInner::Inline(v) => v.len(),
             PropertyMapInner::Spilled { live, .. } => *live,
+            PropertyMapInner::Shaped { records, .. } => records.len(),
         }
     }
 
@@ -126,6 +140,7 @@ impl PropertyMap {
             PropertyMapInner::Spilled { entries, index, .. } => {
                 index.find(entries, key.as_property_key_bytes())
             }
+            PropertyMapInner::Shaped { shape, .. } => shape.find(key.as_property_key_bytes()),
         }
     }
 
@@ -136,6 +151,9 @@ impl PropertyMap {
         let entry = match &self.inner {
             PropertyMapInner::Inline(v) => v.get(slot),
             PropertyMapInner::Spilled { entries, .. } => entries.get(slot)?.as_ref(),
+            PropertyMapInner::Shaped { shape, records } => {
+                return Some((shape.keys().get(slot)?, records.get(slot)?));
+            }
         };
         entry.map(|(k, d)| (k, d))
     }
@@ -145,6 +163,7 @@ impl PropertyMap {
         let entry = match &mut self.inner {
             PropertyMapInner::Inline(v) => v.get_mut(slot),
             PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot)?.as_mut(),
+            PropertyMapInner::Shaped { records, .. } => return records.get_mut(slot),
         };
         entry.map(|(_, d)| d)
     }
@@ -226,6 +245,11 @@ impl PropertyMap {
                     return Some(std::mem::replace(&mut slot.1, value).into_descriptor());
                 }
             }
+            PropertyMapInner::Shaped { shape, records } => {
+                if let Some(slot) = shape.find(key.as_bytes()) {
+                    return Some(std::mem::replace(&mut records[slot], value).into_descriptor());
+                }
+            }
             PropertyMapInner::Spilled {
                 entries,
                 index,
@@ -261,6 +285,18 @@ impl PropertyMap {
     fn append(&mut self, key: JsPropertyKey, value: PropertyRecord) {
         self.digit_leading_keys += u32::from(Self::is_digit_leading(key.as_bytes()));
         match &mut self.inner {
+            PropertyMapInner::Shaped { .. } => self.append_shaped(key, value),
+            PropertyMapInner::Inline(v) if v.is_empty() => match self.begin_shape(&key, value) {
+                Ok(()) => {}
+                Err(value) => self.append_per_object(key, value),
+            },
+            _ => self.append_per_object(key, value),
+        }
+    }
+
+    #[inline]
+    fn append_per_object(&mut self, key: JsPropertyKey, value: PropertyRecord) {
+        match &mut self.inner {
             PropertyMapInner::Inline(v) if v.len() < LINEAR_MAX => v.push((key, value)),
             PropertyMapInner::Inline(v) => {
                 self.inner = Self::spill(v, key, value);
@@ -273,6 +309,7 @@ impl PropertyMap {
                 index.push(entries, key, value);
                 *live += 1;
             }
+            PropertyMapInner::Shaped { .. } => unreachable!("a shaped map appends on its shape"),
         }
     }
 
@@ -281,6 +318,14 @@ impl PropertyMap {
     /// copy neither regrows the entry list nor rehashes the index.
     pub(crate) fn reserve(&mut self, additional: usize) {
         match &mut self.inner {
+            PropertyMapInner::Inline(v)
+                if v.is_empty()
+                    && (1..=shape::SHAPED_MAX).contains(&additional)
+                    && shape::shapes_enabled() =>
+            {
+                self.begin_shape_with_room(additional);
+            }
+            PropertyMapInner::Shaped { .. } => self.reserve_shaped(additional),
             PropertyMapInner::Inline(v) => {
                 let total = v.len() + additional;
                 if total <= LINEAR_MAX {
@@ -325,7 +370,17 @@ impl PropertyMap {
         &mut self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
+        if matches!(self.inner, PropertyMapInner::Shaped { .. }) {
+            self.slot_of(key)?;
+            if let Some(removed) = self.pop_shaped(key.as_property_key_bytes()) {
+                self.digit_leading_keys -=
+                    u32::from(Self::is_digit_leading(key.as_property_key_bytes()));
+                return Some(removed.into_descriptor());
+            }
+            self.leave_shapes();
+        }
         let removed = match &mut self.inner {
+            PropertyMapInner::Shaped { .. } => unreachable!("left shapes above"),
             PropertyMapInner::Inline(v) => {
                 let pos = v
                     .iter()
@@ -361,6 +416,9 @@ impl PropertyMap {
         match &self.inner {
             PropertyMapInner::Inline(v) => PropertyMapIter::Inline(v.iter()),
             PropertyMapInner::Spilled { entries, .. } => PropertyMapIter::Spilled(entries.iter()),
+            PropertyMapInner::Shaped { shape, records } => {
+                PropertyMapIter::Shaped(shape.keys().iter().zip(records.iter()))
+            }
         }
     }
 
@@ -382,6 +440,9 @@ impl Default for PropertyMap {
 pub(crate) enum PropertyMapIter<'a> {
     Inline(std::slice::Iter<'a, Entry>),
     Spilled(std::slice::Iter<'a, Option<Entry>>),
+    Shaped(
+        std::iter::Zip<std::slice::Iter<'a, JsPropertyKey>, std::slice::Iter<'a, PropertyRecord>>,
+    ),
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
@@ -392,589 +453,12 @@ impl<'a> Iterator for PropertyMapIter<'a> {
         match self {
             Self::Inline(it) => it.next().map(|(k, v)| (k, v)),
             Self::Spilled(it) => it.find_map(|e| e.as_ref().map(|(k, v)| (k, v))),
+            Self::Shaped(it) => it.next(),
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::interpreter::types::JsObjectData;
-    use crate::types::JsValue;
-
-    fn key(s: impl AsRef<str>) -> JsPropertyKey {
-        JsPropertyKey::from_str(s.as_ref())
-    }
-
-    fn desc(n: f64) -> PropertyDescriptor {
-        PropertyDescriptor::data_default(JsValue::number(n))
-    }
-
-    fn num(d: &PropertyRecord) -> f64 {
-        d.value().and_then(JsValue::as_number).unwrap_or(f64::NAN)
-    }
-
-    fn is_inline(map: &PropertyMap) -> bool {
-        matches!(map.inner, PropertyMapInner::Inline(_))
-    }
-
-    #[test]
-    fn inline_insert_and_get() {
-        let mut m = PropertyMap::new();
-        for i in 0..LINEAR_MAX {
-            assert!(m.insert(key(format!("k{i}")), desc(i as f64)).is_none());
-        }
-        assert!(is_inline(&m));
-        for i in 0..LINEAR_MAX {
-            let d = m.get(&format!("k{i}")).expect("present");
-            assert_eq!(num(d), i as f64);
-        }
-        assert!(m.get("missing").is_none());
-    }
-
-    #[test]
-    fn one_past_linear_max_triggers_spill() {
-        let mut m = PropertyMap::new();
-        for i in 0..LINEAR_MAX {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(is_inline(&m));
-        m.insert(key(format!("k{LINEAR_MAX}")), desc(LINEAR_MAX as f64));
-        assert!(!is_inline(&m));
-        for i in 0..=LINEAR_MAX {
-            assert!(
-                m.get(&format!("k{i}")).is_some(),
-                "k{i} missing after spill"
-            );
-        }
-    }
-
-    #[test]
-    fn duplicate_insert_returns_previous_and_no_spill() {
-        let mut m = PropertyMap::new();
-        for i in 0..LINEAR_MAX {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        let prev = m.insert(key("k0"), desc(99.0)).expect("had previous");
-        assert_eq!(prev.value.as_ref().and_then(JsValue::as_number), Some(0.0));
-        assert!(is_inline(&m));
-        assert_eq!(num(m.get("k0").expect("present")), 99.0);
-    }
-
-    #[test]
-    fn reserve_spills_only_when_the_total_overflows_linear_max() {
-        let mut m = PropertyMap::new();
-        m.insert(key("a"), desc(1.0));
-        m.reserve(LINEAR_MAX - 1);
-        assert!(is_inline(&m), "fits inline: no spill");
-        m.reserve(LINEAR_MAX);
-        assert!(!is_inline(&m), "would overflow: spilled up front");
-        assert_eq!(num(m.get("a").expect("kept across the spill")), 1.0);
-        for i in 0..32 {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        for i in 0..32 {
-            assert_eq!(num(m.get(&format!("k{i}")).expect("present")), i as f64);
-        }
-    }
-
-    #[test]
-    fn remove_after_spill_keeps_spilled() {
-        let mut m = PropertyMap::new();
-        for i in 0..=LINEAR_MAX {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(!is_inline(&m));
-        for i in 0..=LINEAR_MAX {
-            assert!(m.remove(&format!("k{i}")).is_some());
-        }
-        assert!(!is_inline(&m), "spill must not collapse back to inline");
-        assert!(m.remove("k0").is_none());
-    }
-
-    #[test]
-    fn iter_visits_all_entries_in_both_modes() {
-        let mut m = PropertyMap::new();
-        for i in 0..3 {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        let mut seen: Vec<(String, f64)> = m
-            .iter()
-            .map(|(k, d)| {
-                let n = d.value().and_then(JsValue::as_number).unwrap_or(-1.0);
-                (k.to_string(), n)
-            })
-            .collect();
-        seen.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(
-            seen,
-            vec![("k0".into(), 0.0), ("k1".into(), 1.0), ("k2".into(), 2.0)]
-        );
-
-        for i in 3..=LINEAR_MAX {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(!is_inline(&m));
-        let mut seen: Vec<(String, f64)> = m
-            .iter()
-            .map(|(k, d)| {
-                let n = d.value().and_then(JsValue::as_number).unwrap_or(-1.0);
-                (k.to_string(), n)
-            })
-            .collect();
-        seen.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(seen.len(), LINEAR_MAX + 1);
-        for (i, (k, n)) in seen.iter().enumerate() {
-            assert_eq!(*k, format!("k{i}"));
-            assert_eq!(*n, i as f64);
-        }
-    }
-
-    #[test]
-    fn empty_iteration_is_empty() {
-        let m = PropertyMap::new();
-        assert_eq!(m.iter().count(), 0);
-        assert_eq!(m.keys().count(), 0);
-        assert_eq!(m.values().count(), 0);
-    }
-
-    #[test]
-    fn get_mut_in_both_modes() {
-        let mut m = PropertyMap::new();
-        m.insert(key("a"), desc(1.0));
-        if let Some(d) = m.get_mut("a") {
-            d.set_value(Some(JsValue::number(7.0)));
-        }
-        assert_eq!(num(m.get("a").expect("present")), 7.0);
-
-        for i in 0..LINEAR_MAX {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(!is_inline(&m));
-        if let Some(d) = m.get_mut("a") {
-            d.set_value(Some(JsValue::number(42.0)));
-        }
-        assert_eq!(num(m.get("a").expect("present")), 42.0);
-    }
-
-    #[test]
-    fn keys_keep_symbol_and_symbol_like_string_distinct_in_both_modes() {
-        let mut m = PropertyMap::new();
-        let symbol = JsPropertyKey::well_known_symbol("iterator");
-        let text = key("Symbol(Symbol.iterator)");
-        m.insert(symbol.clone(), desc(1.0));
-        m.insert(text.clone(), desc(2.0));
-        let keys: Vec<&JsPropertyKey> = m.keys().collect();
-        assert!(keys.contains(&&symbol));
-        assert!(keys.contains(&&text));
-        assert_eq!(num(m.get(&symbol).expect("Symbol key present")), 1.0);
-        assert_eq!(num(m.get(&text).expect("String key present")), 2.0);
-        for i in 0..LINEAR_MAX {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(!is_inline(&m));
-        let keys: Vec<&JsPropertyKey> = m.keys().collect();
-        assert!(keys.contains(&&symbol), "Symbol key lost on spill");
-        assert!(keys.contains(&&text), "String key lost on spill");
-    }
-
-    #[test]
-    fn index_key_count_tracks_digit_leading_keys() {
-        let mut m = PropertyMap::new();
-        assert!(!m.may_hold_index_key());
-        m.insert(key("length"), desc(0.0));
-        m.insert(key(""), desc(0.0));
-        m.insert(key("a1"), desc(0.0));
-        assert!(
-            !m.may_hold_index_key(),
-            "names that do not start with a digit"
-        );
-
-        m.insert(key("7"), desc(1.0));
-        assert!(m.may_hold_index_key());
-        m.insert(key("7"), desc(2.0));
-        m.remove("7");
-        assert!(
-            !m.may_hold_index_key(),
-            "replacing a key must not count twice"
-        );
-        assert!(m.remove("7").is_none());
-        assert!(
-            !m.may_hold_index_key(),
-            "removing an absent key changes nothing"
-        );
-
-        let mut fresh = PropertyMap::new();
-        fresh.push_fresh(key("0"), desc(1.0));
-        assert!(fresh.may_hold_index_key(), "push_fresh records it too");
-
-        let mut spilled = PropertyMap::new();
-        for i in 0..=LINEAR_MAX {
-            spilled.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(
-            !spilled.may_hold_index_key(),
-            "spilling alone does not set it"
-        );
-        spilled.insert(key("4294967294"), desc(1.0));
-        assert!(spilled.may_hold_index_key(), "recorded in spilled mode");
-        spilled.remove("4294967294");
-        assert!(!spilled.may_hold_index_key(), "cleared in spilled mode");
-    }
-
-    #[test]
-    fn record_round_trips_partial_descriptors() {
-        let cases = [
-            PropertyDescriptor {
-                value: Some(JsValue::number(1.0)),
-                writable: Some(false),
-                get: None,
-                set: None,
-                enumerable: None,
-                configurable: Some(true),
-            },
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(JsValue::UNDEFINED),
-                set: None,
-                enumerable: Some(false),
-                configurable: None,
-            },
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: None,
-                set: Some(JsValue::number(2.0)),
-                enumerable: Some(true),
-                configurable: Some(false),
-            },
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: None,
-                set: None,
-                enumerable: None,
-                configurable: None,
-            },
-        ];
-        for d in cases {
-            let record = PropertyRecord::from(d.clone());
-            let back = record.to_descriptor();
-            assert_eq!(back.value.is_some(), d.value.is_some());
-            assert_eq!(back.get.is_some(), d.get.is_some());
-            assert_eq!(back.set.is_some(), d.set.is_some());
-            assert_eq!(back.writable, d.writable);
-            assert_eq!(back.enumerable, d.enumerable);
-            assert_eq!(back.configurable, d.configurable);
-            assert_eq!(record.is_data_descriptor(), d.is_data_descriptor());
-            assert_eq!(record.is_accessor_descriptor(), d.is_accessor_descriptor());
-            let moved = record.into_descriptor();
-            assert_eq!(moved.writable, d.writable);
-            assert_eq!(moved.value.is_some(), d.value.is_some());
-        }
-    }
-
-    #[test]
-    fn record_setters_touch_only_their_field() {
-        let mut record = PropertyRecord::from(PropertyDescriptor::data(
-            JsValue::number(1.0),
-            true,
-            false,
-            true,
-        ));
-        record.set_value(Some(JsValue::number(9.0)));
-        assert_eq!(num(&record), 9.0);
-        assert_eq!(record.writable(), Some(true));
-        assert_eq!(record.enumerable(), Some(false));
-        assert_eq!(record.configurable(), Some(true));
-        record.set_writable(Some(false));
-        assert_eq!(record.writable(), Some(false));
-        assert_eq!(num(&record), 9.0);
-        record.set_writable(None);
-        assert_eq!(record.writable(), None);
-        record.set_value(None);
-        assert!(record.value().is_none());
-        assert_eq!(record.enumerable(), Some(false));
-    }
-
-    #[test]
-    fn data_value_and_in_place_writes_respect_attributes() {
-        let mut m = PropertyMap::new();
-        m.insert(key("w"), desc(1.0));
-        m.insert(
-            key("ro"),
-            PropertyDescriptor {
-                value: Some(JsValue::number(2.0)),
-                writable: Some(false),
-                enumerable: Some(true),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
-        m.insert(
-            key("acc"),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                enumerable: Some(true),
-                configurable: Some(true),
-                get: Some(JsValue::UNDEFINED),
-                set: None,
-            },
-        );
-        assert!(matches!(m.get("w").unwrap().read(), PropertyRead::Value(_)));
-        assert!(matches!(
-            m.get("ro").unwrap().read(),
-            PropertyRead::Value(_)
-        ));
-        assert!(matches!(
-            m.get("acc").unwrap().read(),
-            PropertyRead::Value(v) if v.is_undefined()
-        ));
-
-        assert!(
-            m.get_mut("w")
-                .unwrap()
-                .overwrite_writable_data(&JsValue::number(5.0))
-        );
-        assert_eq!(num(m.get("w").unwrap()), 5.0);
-        assert!(
-            !m.get_mut("ro")
-                .unwrap()
-                .overwrite_writable_data(&JsValue::number(5.0))
-        );
-        assert_eq!(num(m.get("ro").unwrap()), 2.0);
-        assert!(
-            !m.get_mut("acc")
-                .unwrap()
-                .overwrite_writable_data(&JsValue::number(5.0))
-        );
-
-        assert_eq!(
-            m.get_mut("w").unwrap().add_to_writable_number(1.0),
-            Some((5.0, 6.0))
-        );
-        assert_eq!(num(m.get("w").unwrap()), 6.0);
-        assert_eq!(m.get_mut("ro").unwrap().add_to_writable_number(1.0), None);
-        assert_eq!(num(m.get("ro").unwrap()), 2.0);
-        m.get_mut("w")
-            .unwrap()
-            .set_value(Some(JsValue::string(crate::types::JsString::from_str("s"))));
-        assert_eq!(m.get_mut("w").unwrap().add_to_writable_number(1.0), None);
-    }
-
-    #[test]
-    fn key_lookup_distinguishes_equal_length_keys_and_non_interned_copies() {
-        let mut m = PropertyMap::new();
-        m.insert(key("ab"), desc(1.0));
-        m.insert(key("ac"), desc(2.0));
-        m.insert(key("bb"), desc(3.0));
-        assert_eq!(num(m.get("ab").unwrap()), 1.0);
-        assert_eq!(num(m.get("ac").unwrap()), 2.0);
-        assert_eq!(num(m.get("bb").unwrap()), 3.0);
-        assert!(m.get("ba").is_none());
-        assert!(m.get("a").is_none());
-        let fresh_copy = JsPropertyKey::from_str("ac");
-        assert_eq!(num(m.get(&fresh_copy).unwrap()), 2.0);
-        assert!(m.remove(&fresh_copy).is_some());
-        assert!(m.get("ac").is_none());
-    }
-
-    #[test]
-    fn hinted_lookup_agrees_with_plain_lookup_across_spill_and_removal() {
-        let hint = Cell::new(0u32);
-        let mut m = PropertyMap::new();
-        let probe = key("target");
-        assert!(m.get_hinted(&probe, Some(&hint)).is_none(), "empty map");
-        for round in 0..2 {
-            for i in 0..20 {
-                m.insert(key(format!("k{i}")), desc(i as f64));
-                assert!(
-                    m.get_hinted(&probe, Some(&hint)).is_none(),
-                    "round {round}: absent"
-                );
-            }
-            m.insert(probe.clone(), desc(99.0));
-            assert_eq!(num(m.get_hinted(&probe, Some(&hint)).unwrap()), 99.0);
-            for i in 0..20 {
-                let k = key(format!("k{i}"));
-                let got = m.get_hinted(&k, Some(&Cell::new(7))).map(num);
-                assert_eq!(got, Some(i as f64));
-                assert_eq!(m.get_hinted(&k, None).map(num), Some(i as f64));
-            }
-            assert!(m.remove("target").is_some());
-            assert!(m.get_hinted(&probe, Some(&hint)).is_none(), "removed");
-            for i in 0..20 {
-                m.remove(&format!("k{i}"));
-            }
-        }
-    }
-
-    #[test]
-    fn js_object_data_size_cap() {
-        // #909: box cold state rather than raising the cap.
-        let size = std::mem::size_of::<JsObjectData>();
-        assert!(size <= 272, "JsObjectData grew to {size} bytes (cap 272)");
-    }
-
-    #[test]
-    fn slot_round_trips_in_both_modes() {
-        let mut m = PropertyMap::new();
-        for i in 0..(LINEAR_MAX + 3) {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-            let name = format!("k{i}");
-            let slot = m.slot_of(&name).expect("slot");
-            let (k, d) = m.entry_at(slot).expect("entry");
-            assert_eq!(k.as_bytes(), name.as_bytes());
-            assert_eq!(num(d), i as f64);
-        }
-        assert!(!is_inline(&m));
-        assert!(m.slot_of("missing").is_none());
-        assert!(m.entry_at(10_000).is_none());
-        let slot = m.slot_of("k1").unwrap();
-        m.entry_at_mut(slot)
-            .unwrap()
-            .set_value(Some(JsValue::number(99.0)));
-        assert_eq!(num(m.get("k1").unwrap()), 99.0);
-    }
-
-    #[test]
-    fn remembered_slot_is_detectable_after_remove_and_reinsert() {
-        let mut m = PropertyMap::new();
-        let total = LINEAR_MAX + 4;
-        for i in 0..total {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        let stale = m.slot_of("k2").unwrap();
-        m.remove("k2").expect("removed");
-        // The slot is a tombstone, so a verifying caller sees no entry.
-        assert!(m.entry_at(stale).is_none());
-        assert!(m.get("k2").is_none());
-        assert!(m.slot_of("k2").is_none());
-        // Every survivor is still reachable and its slot verifies.
-        for i in (0..total).filter(|&i| i != 2) {
-            let name = format!("k{i}");
-            let slot = m.slot_of(&name).expect("survivor");
-            assert_eq!(m.entry_at(slot).unwrap().0.as_bytes(), name.as_bytes());
-            assert_eq!(num(m.get(&name).unwrap()), i as f64);
-        }
-        m.insert(key("k2"), desc(2.0));
-        assert_eq!(num(m.get("k2").unwrap()), 2.0);
-        assert_eq!(m.iter().count(), total);
-        assert_eq!(m.len(), total);
-    }
-
-    fn order(m: &PropertyMap) -> Vec<String> {
-        m.keys().map(|k| k.to_string()).collect()
-    }
-
-    #[test]
-    fn iteration_is_creation_order_in_both_modes() {
-        for total in [3, LINEAR_MAX + 5] {
-            let mut m = PropertyMap::new();
-            for i in 0..total {
-                m.insert(key(format!("k{i}")), desc(i as f64));
-            }
-            // Replacing keeps the position; removing and re-adding moves to the end.
-            m.insert(key("k1"), desc(100.0));
-            m.remove("k0");
-            m.insert(key("k0"), desc(0.0));
-            let mut want: Vec<String> = (1..total).map(|i| format!("k{i}")).collect();
-            want.push("k0".into());
-            assert_eq!(order(&m), want, "total {total}");
-            let values: Vec<f64> = m.values().map(num).collect();
-            assert_eq!(values.len(), total);
-            assert_eq!(values[0], 100.0);
-        }
-    }
-
-    #[test]
-    fn spilled_removal_keeps_order_through_tombstones_and_compaction() {
-        let mut m = PropertyMap::new();
-        let total = COMPACT_MIN_ENTRIES * 4;
-        for i in 0..total {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(!is_inline(&m));
-        let mut want: Vec<usize> = (0..total).collect();
-        // Delete every entry but each tenth, in a scattered order, crossing
-        // the compaction threshold several times.
-        for step in [3usize, 7, 1] {
-            for i in (0..total).filter(|i| i % step == 0 && i % 10 != 0) {
-                if m.remove(&format!("k{i}")).is_some() {
-                    want.retain(|w| *w != i);
-                }
-            }
-        }
-        assert_eq!(m.len(), want.len());
-        assert_eq!(
-            order(&m),
-            want.iter().map(|i| format!("k{i}")).collect::<Vec<_>>()
-        );
-        for i in &want {
-            let name = format!("k{i}");
-            let slot = m.slot_of(&name).expect("survivor indexed");
-            assert_eq!(m.entry_at(slot).unwrap().0.as_bytes(), name.as_bytes());
-            assert_eq!(num(m.get(&name).unwrap()), *i as f64);
-        }
-        m.insert(key("late"), desc(-1.0));
-        assert_eq!(order(&m).last().map(String::as_str), Some("late"));
-    }
-
-    #[test]
-    fn removing_every_spilled_entry_leaves_an_empty_reusable_map() {
-        let mut m = PropertyMap::new();
-        for i in 0..(LINEAR_MAX + 6) {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        for i in 0..(LINEAR_MAX + 6) {
-            assert!(m.remove(&format!("k{i}")).is_some());
-        }
-        assert_eq!(m.len(), 0);
-        assert_eq!(m.iter().count(), 0);
-        m.insert(key("again"), desc(1.0));
-        assert_eq!(order(&m), vec!["again".to_string()]);
-        assert_eq!(num(m.get("again").unwrap()), 1.0);
-    }
-
-    #[test]
-    fn removing_the_last_entry_leaves_index_consistent() {
-        let mut m = PropertyMap::new();
-        let total = LINEAR_MAX + 2;
-        for i in 0..total {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        let last = format!("k{}", total - 1);
-        assert!(m.remove(&last).is_some());
-        assert!(m.get(&last).is_none());
-        assert_eq!(m.iter().count(), total - 1);
-        for i in 0..total - 1 {
-            assert!(m.get(&format!("k{i}")).is_some());
-        }
-    }
-
-    #[test]
-    fn push_fresh_preserves_entries_across_the_spill_boundary() {
-        let mut m = PropertyMap::new();
-        for i in 0..LINEAR_MAX {
-            m.push_fresh(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(is_inline(&m));
-        m.push_fresh(key(format!("k{LINEAR_MAX}")), desc(LINEAR_MAX as f64));
-        assert!(!is_inline(&m));
-        for i in 0..=LINEAR_MAX {
-            assert_eq!(num(m.get(&format!("k{i}")).expect("present")), i as f64);
-        }
-    }
-
-    #[test]
-    fn heap_backed_linear_entries_beyond_inline_cap_stay_linear() {
-        let mut m = PropertyMap::new();
-        for i in 0..=INLINE_CAP {
-            m.insert(key(format!("k{i}")), desc(i as f64));
-        }
-        assert!(is_inline(&m), "{} entries must not hash", INLINE_CAP + 1);
-    }
-}
+mod map_tests;
+#[cfg(test)]
+mod record_and_slot_tests;

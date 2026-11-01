@@ -32,7 +32,7 @@ pub(super) fn round_capacity(n: usize) -> usize {
 
 /// The entry-list capacity after `cap` is exhausted: a quarter more, where
 /// doubling left a third of the list empty on a node with thirteen fields.
-fn grown_capacity(cap: usize) -> usize {
+pub(super) fn grown_capacity(cap: usize) -> usize {
     round_capacity(cap + cap / 4 + 1)
 }
 
@@ -85,13 +85,36 @@ fn holds(entries: &[Option<Entry>], slot: usize, key: &[u8]) -> bool {
 }
 
 #[inline]
-fn set_tag(words: &mut Vec<u64>, slot: usize, tag: u8) {
+pub(super) fn set_tag(words: &mut Vec<u64>, slot: usize, tag: u8) {
     if slot.is_multiple_of(8) {
         words.push(0);
     }
     let shift = (slot % 8) * 8;
     let word = &mut words[slot / 8];
     *word = *word & !(0xFF << shift) | u64::from(tag) << shift;
+}
+
+/// The first slot whose tag byte matches `key`'s and that `holds` accepts.
+#[inline]
+pub(super) fn scan_tags(
+    words: &[u64],
+    key: &[u8],
+    mut holds: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    let splat = LOW_BITS.wrapping_mul(u64::from(tag_of(key)));
+    for (w, &word) in words.iter().enumerate() {
+        let x = word ^ splat;
+        // Bit 7 of a byte is set exactly when that byte of `x` is zero.
+        let mut zero = !(((x & LOW_SEVEN) + LOW_SEVEN) | x | LOW_SEVEN);
+        while zero != 0 {
+            let slot = w * 8 + (zero.trailing_zeros() / 8) as usize;
+            if holds(slot) {
+                return Some(slot);
+            }
+            zero &= zero - 1;
+        }
+    }
+    None
 }
 
 impl SlotIndex {
@@ -123,22 +146,7 @@ impl SlotIndex {
     pub(super) fn find(&self, entries: &[Option<Entry>], key: &[u8]) -> Option<usize> {
         match self {
             Self::Hashed(map) => map.get(key).map(|&slot| slot as usize),
-            Self::Tags(words) => {
-                let splat = LOW_BITS.wrapping_mul(u64::from(tag_of(key)));
-                for (w, &word) in words.iter().enumerate() {
-                    let x = word ^ splat;
-                    // Bit 7 of a byte is set exactly when that byte of `x` is zero.
-                    let mut zero = !(((x & LOW_SEVEN) + LOW_SEVEN) | x | LOW_SEVEN);
-                    while zero != 0 {
-                        let slot = w * 8 + (zero.trailing_zeros() / 8) as usize;
-                        if holds(entries, slot, key) {
-                            return Some(slot);
-                        }
-                        zero &= zero - 1;
-                    }
-                }
-                None
-            }
+            Self::Tags(words) => scan_tags(words, key, |slot| holds(entries, slot, key)),
         }
     }
 
