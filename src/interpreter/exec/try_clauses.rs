@@ -17,7 +17,7 @@ impl Interpreter {
             if matches!(param, Pattern::Identifier(_)) {
                 catch_env.borrow_mut().is_simple_catch_scope = true;
             }
-            propagate!(self.bind_pattern(param, val, BindingKind::Let, &catch_env));
+            propagate!(self.bind_catch(param, val, &catch_env));
         }
         let catch_block_env = Environment::new(Some(catch_env));
         // A call in the catch Block is in tail position only when there is no

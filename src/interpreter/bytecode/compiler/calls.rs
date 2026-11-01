@@ -98,7 +98,7 @@ impl Compiler {
             match (arg, spread_seen) {
                 (Expression::Spread(iterable), false) => {
                     self.compile_expr(iterable)?;
-                    self.note_spread_source(iterable);
+                    self.note_call_spread_source(args, iterable);
                     self.emit(Op::ArgSpreadFirst);
                     self.emit_u16(slots);
                     spread_seen = true;
@@ -106,7 +106,7 @@ impl Compiler {
                 }
                 (Expression::Spread(iterable), true) => {
                     self.compile_expr(iterable)?;
-                    self.note_spread_source(iterable);
+                    self.note_call_spread_source(args, iterable);
                     self.emit(Op::ArgSpread);
                     self.pop_n(1);
                 }

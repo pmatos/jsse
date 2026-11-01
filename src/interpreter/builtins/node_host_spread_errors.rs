@@ -2,11 +2,24 @@
 //! iterable, under `--node` only (#1512). A nullish operand reads like a
 //! failed property read (`u is not iterable (cannot read property undefined)`),
 //! anything else with no callable `@@iterator` is `Spread syntax requires
-//! ...iterable[Symbol.iterator] to be a function`. Array literals and `for-of`
-//! keep their own `x is not iterable` (`node_host_destructure.rs`).
+//! ...iterable[Symbol.iterator] to be a function`. That is V8's CallWithSpread,
+//! used only when the sole spread is the last argument; any other spread is
+//! built like an array literal and keeps the value form (`number 5 is not
+//! iterable (cannot read property Symbol(Symbol.iterator))`). Array literals
+//! and `for-of` keep their own `x is not iterable` (`node_host_destructure.rs`).
 
 use super::super::*;
 use super::node_host_expr_text::expr_text;
+
+/// Whether `operand` is the only spread of `args` and the last argument.
+pub(crate) fn is_lone_last_spread(args: &[Expression], operand: &Expression) -> bool {
+    let spreads = args
+        .iter()
+        .filter(|arg| matches!(arg, Expression::Spread(_)))
+        .count();
+    spreads == 1
+        && matches!(args.last(), Some(Expression::Spread(last)) if std::ptr::eq(&**last, operand))
+}
 
 impl Interpreter {
     /// The tree-walker's spread of `inner` (whose value is `value`) in call
@@ -15,10 +28,12 @@ impl Interpreter {
         &mut self,
         inner: &Expression,
         value: &JsValue,
+        args: &[Expression],
     ) -> Result<Vec<JsValue>, JsValue> {
         match self.spread_values(inner, value) {
             Err(e) if self.node_host.stack.installed => {
-                Err(self.reword_spread_text(e, value, Some(expr_text(inner))))
+                let text = is_lone_last_spread(args, inner).then(|| expr_text(inner));
+                Err(self.reword_spread_text(e, value, text))
             }
             other => other,
         }
@@ -33,8 +48,10 @@ impl Interpreter {
         if !self.iterable_error_here(&error) {
             return error;
         }
+        let Some(shown) = text else {
+            return error;
+        };
         let message = if value.is_nullish() {
-            let shown = text.unwrap_or_else(|| value.to_string());
             let what = if value.is_null() { "null" } else { "undefined" };
             format!("{shown} is not iterable (cannot read property {what})")
         } else {
