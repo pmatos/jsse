@@ -6758,8 +6758,8 @@ fn literal_info_cell_resets_on_clone() {
 /// not grow `Expression`/`Statement`, which every AST walk copies and traverses.
 #[test]
 fn function_literal_cache_does_not_grow_ast_nodes() {
-    assert!(std::mem::size_of::<crate::ast::Expression>() <= 112);
-    assert!(std::mem::size_of::<crate::ast::Statement>() <= 344);
+    assert!(std::mem::size_of::<crate::ast::Expression>() <= 56);
+    assert!(std::mem::size_of::<crate::ast::Statement>() <= 72);
 }
 
 // -- Global data fast path (#905) ---------------------------------------------

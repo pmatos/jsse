@@ -21,11 +21,11 @@ impl Parser<'_> {
         self.in_switch -= 1;
         let cases = result?;
         self.eat(&Token::RightBrace)?;
-        Ok(Statement::Switch(SwitchStatement {
+        Ok(Statement::Switch(Box::new(SwitchStatement {
             discriminant,
             cases,
             at,
-        }))
+        })))
     }
 
     pub(super) fn parse_with_statement(&mut self) -> Result<Statement, ParseError> {

@@ -96,7 +96,7 @@ impl<'a> Parser<'a> {
             self.check_duplicate_params_strict(&params)?;
         }
         let source_text = self.source_since(source_start);
-        Ok(Statement::FunctionDeclaration(FunctionDecl {
+        Ok(Statement::FunctionDeclaration(Box::new(FunctionDecl {
             name,
             params,
             body: Body::new(body),
@@ -106,7 +106,7 @@ impl<'a> Parser<'a> {
             body_is_strict: body_strict,
             info: Default::default(),
             phase: Default::default(),
-        }))
+        })))
     }
 
     /// Consume and discard a list of decorator expressions (`@expr` prefixes).
@@ -214,12 +214,12 @@ impl<'a> Parser<'a> {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
         let source_text = self.source_since(source_start);
-        Ok(Statement::ClassDeclaration(ClassDecl {
+        Ok(Statement::ClassDeclaration(Box::new(ClassDecl {
             name,
             super_class,
             body,
             source_text,
-        }))
+        })))
     }
 
     pub(super) fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, ParseError> {
@@ -633,10 +633,9 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        // `accessor FieldName`: auto-accessor syntax (decorators proposal).
-        // Spec: `accessor [no LineTerminator here] ClassElementName`
-        // If "accessor" is followed by `;`, `=`, `}`, or a line terminator,
-        // it is just a field named "accessor", not an auto-accessor modifier.
+        // `accessor [no LineTerminator here] ClassElementName` (decorators
+        // proposal). Followed by `;`, `=`, `}` or a line terminator, it is a
+        // field named "accessor", not a modifier.
         if matches!(&self.current, Token::Identifier(n) if n == "accessor") {
             self.advance()?;
             let next_is_field_name = !self.prev_line_terminator
