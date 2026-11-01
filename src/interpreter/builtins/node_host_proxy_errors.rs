@@ -15,7 +15,19 @@ pub(crate) struct ProxyNote {
 
 impl Interpreter {
     pub(crate) fn note_proxy_trap(&mut self, trap: &str, args: &[JsValue], result: &JsValue) {
-        let named = ["get", "has", "set", "deleteProperty", "defineProperty"];
+        let named = [
+            "get",
+            "has",
+            "set",
+            "deleteProperty",
+            "defineProperty",
+            "getOwnPropertyDescriptor",
+            "setPrototypeOf",
+            "isExtensible",
+            "preventExtensions",
+            "construct",
+            "ownKeys",
+        ];
         let Some(trap) = named.into_iter().find(|name| *name == trap) else {
             return;
         };
@@ -38,7 +50,12 @@ impl Interpreter {
         handler: &JsValue,
         args: &[JsValue],
     ) -> Result<JsValue, JsValue> {
-        match self.call_function(function, handler, args) {
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(handler);
+        args.iter().for_each(|arg| self.gc_root_value(arg));
+        let called = self.call_function(function, handler, args);
+        self.gc_unroot_frame(gc_frame);
+        match called {
             Completion::Normal(v) => {
                 self.note_proxy_trap(trap, args, &v);
                 Ok(v)
@@ -64,6 +81,12 @@ impl Interpreter {
     ) -> JsValue {
         let engine = format!("proxy handler's {trap} trap is not a function");
         let text = self.v8_message(&engine, |i| {
+            if matches!(trap, "apply" | "construct") {
+                let callee = i.node_callee_text_any(trap == "construct");
+                let callee = callee.or_else(|| i.node_callee_text_any(false));
+                let callee = callee.unwrap_or_else(|| "(intermediate value)".to_string());
+                return format!("{callee} is not a function");
+            }
             format!(
                 "'{}' returned for property '{trap}' of object '{}' is not a function",
                 i.v8_plain_text(value),
@@ -118,6 +141,18 @@ impl Interpreter {
         Some(self.define_rejected_text(*target, key))
     }
 
+    /// The same for a key of a non-extensible target.
+    pub(crate) fn proxy_missing_target_key_error(&mut self, key: &[u8]) -> JsValue {
+        let engine = "'ownKeys' on proxy: trap result did not include all own keys of non-extensible proxy target";
+        let text = self.v8_message(engine, |_| {
+            format!(
+                "'ownKeys' on proxy: trap result did not include '{}'",
+                String::from_utf8_lossy(key)
+            )
+        });
+        self.create_type_error(&text)
+    }
+
     /// `'ownKeys' on proxy: trap result did not include 'x'`.
     pub(crate) fn proxy_missing_key_error(&mut self, key: &JsPropertyKey) -> JsValue {
         let engine = "'ownKeys' on proxy: trap result did not include all non-configurable own keys of the proxy target";
@@ -127,8 +162,97 @@ impl Interpreter {
         self.create_type_error(&text)
     }
 
+    /// V8's tail of an invariant message that names the property differently
+    /// from the engine's, or prints more values (#1558).
+    fn proxy_tail_1558(
+        &self,
+        trap: &str,
+        tail: &str,
+        note: &ProxyNote,
+        key: &str,
+    ) -> Option<String> {
+        const NONCONFIG: &str = "which is either non-existent or configurable in the proxy target";
+        let tail = match (trap, tail) {
+            ("getOwnPropertyDescriptor", "trap returned neither Object nor undefined") => {
+                format!("trap returned neither object nor undefined for property {key}")
+            }
+            (
+                "getOwnPropertyDescriptor",
+                "trap returned a descriptor incompatible with the proxy target's property",
+            ) => format!(
+                "trap returned descriptor for property {key} that is incompatible with the existing property in the proxy target"
+            ),
+            (
+                "getOwnPropertyDescriptor",
+                "trap reported non-configurable for a property that does not exist in the proxy target"
+                | "trap reported non-configurable for a property that is configurable in the proxy target",
+            ) => format!("trap reported non-configurability for property {key} {NONCONFIG}"),
+            (
+                "getOwnPropertyDescriptor",
+                "trap returned non-configurable non-writable descriptor for a writable property in the proxy target",
+            ) => format!(
+                "trap reported non-configurable and non-writable for property {key} which is non-configurable, writable in the proxy target"
+            ),
+            ("setPrototypeOf", "trap returned falsish") => {
+                "trap returned falsish for property 'undefined'".to_string()
+            }
+            ("isExtensible", "trap result does not reflect extensibility of proxy target") => {
+                let extensible = note
+                    .target
+                    .as_object_id()
+                    .and_then(|id| self.get_object(id))
+                    .is_none_or(|target| target.borrow().extensible);
+                format!("{tail} (which is '{extensible}')")
+            }
+            ("construct", "trap returned non-Object") => {
+                format!(
+                    "trap returned non-object ('{}')",
+                    self.v8_plain_text(&note.result)
+                )
+            }
+            (
+                "defineProperty",
+                "trap returned truish for defining non-configurable property which does not exist on the proxy target"
+                | "trap returned truish for defining non-configurable property which is configurable in the proxy target",
+            ) => format!(
+                "trap returned truish for defining non-configurable property {key} {NONCONFIG}"
+            ),
+            (
+                "defineProperty",
+                "trap returned truish for adding property to the non-extensible proxy target",
+            ) => {
+                format!(
+                    "trap returned truish for adding property {key}  to the non-extensible proxy target"
+                )
+            }
+            (
+                "defineProperty",
+                "trap returned truish for property descriptor not compatible with the existing property in the proxy target",
+            ) => format!(
+                "trap returned truish for adding property {key}  that is incompatible with the existing property in the proxy target"
+            ),
+            (
+                "defineProperty",
+                "trap returned truish for setting non-writable on a non-configurable writable property in the proxy target",
+            ) => format!(
+                "trap returned truish for defining non-configurable property {key} which cannot be non-writable, unless there exists a corresponding non-configurable, non-writable own property of the target object."
+            ),
+            _ => return None,
+        };
+        Some(tail)
+    }
+
     /// V8's text for an invariant message `'trap' on proxy: ...`.
     pub(crate) fn proxy_wording(&self, msg: &str) -> Option<String> {
+        if msg == "Object.preventExtensions returned false"
+            && self
+                .node_host
+                .proxy_note
+                .as_ref()
+                .is_some_and(|n| n.trap == "preventExtensions")
+        {
+            return Some("'preventExtensions' on proxy: trap returned falsish".to_string());
+        }
         let rest = msg.strip_prefix('\'')?;
         let (trap, tail) = rest.split_once("' on proxy: ")?;
         let note = self
@@ -136,7 +260,26 @@ impl Interpreter {
             .proxy_note
             .as_ref()
             .filter(|n| n.trap == trap)?;
-        let key = self.proxy_key_text(note.key.as_ref()?);
+        if trap == "ownKeys" && tail == "trap returned non-string/symbol key" {
+            let result = self.get_object(note.result.as_object_id()?)?;
+            let invalid = result
+                .borrow()
+                .array_elements()?
+                .iter()
+                .find(|key| !key.is_string() && !key.is_symbol())
+                .cloned()?;
+            let shown = self.v8_plain_text(&invalid);
+            let shown = if invalid.is_bigint() {
+                shown.trim_end_matches('n')
+            } else {
+                &shown
+            };
+            return Some(format!("{shown} is not a valid property name"));
+        }
+        let key = note
+            .key
+            .as_ref()
+            .map_or_else(String::new, |k| self.proxy_key_text(k));
         let target_value = || {
             let id = note.target.as_object_id()?;
             let name = note.key.as_ref()?.as_string()?.to_string();
@@ -151,6 +294,8 @@ impl Interpreter {
         } else if let Some(more) = tail.strip_prefix("property is a non-configurable accessor") {
             let got = self.v8_plain_text(&note.result);
             format!("property {key} is a non-configurable accessor{more} (got '{got}')")
+        } else if let Some(tail) = self.proxy_tail_1558(trap, tail, note, &key) {
+            tail
         } else if tail.contains("for property ") && !tail.contains("for property '") {
             tail.replacen("for property ", &format!("for property {key} "), 1)
         } else {

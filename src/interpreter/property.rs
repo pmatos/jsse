@@ -1695,12 +1695,9 @@ impl Interpreter {
                 return self.proxy_get_own_property_native(target_id, key);
             };
             let key_val = self.symbol_key_to_jsvalue(key);
+            let args = [target_val.clone(), key_val];
             let trap_call =
-                match self.call_function(&trap_val, &handler_val, &[target_val.clone(), key_val]) {
-                    Completion::Normal(v) => Ok(v),
-                    Completion::Throw(e) => Err(e),
-                    _ => Ok(JsValue::UNDEFINED),
-                };
+                self.call_noted_trap("getOwnPropertyDescriptor", &trap_val, &handler_val, &args);
             match trap_call {
                 Ok(v) => {
                     // Step 11: If Type(trapResultObj) is neither Object nor Undefined, throw TypeError

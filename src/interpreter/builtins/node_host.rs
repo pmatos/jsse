@@ -45,8 +45,11 @@ pub(crate) struct NodeHostState {
     pub(crate) pattern_src: Option<std::rc::Rc<str>>,
     /// The call-stack depth of each open `bind_pattern` (under `--node` only).
     pub(crate) pattern_frames: Vec<usize>,
-    /// Whether each open `bind_pattern` is an object pattern.
-    pub(crate) pattern_kinds: Vec<bool>,
+    /// The array pattern parameter being bound (its address) and whether the
+    /// object pattern parameter before it has a default.
+    pub(crate) param_leak: Option<(usize, bool)>,
+    /// What each open `bind_pattern` is.
+    pub(crate) pattern_kinds: Vec<super::node_host_param_patterns::PatternKind>,
     /// The text V8 prints for the initializer of the pattern binding open at
     /// the call depth, with that depth.
     pub(crate) pattern_origin: Option<(usize, super::node_host_pattern_origin::PatternOrigin)>,
@@ -55,6 +58,8 @@ pub(crate) struct NodeHostState {
     pub(crate) iterable_error: Option<(u64, usize)>,
     /// The operand of that error.
     pub(crate) iterable_value: Option<JsValue>,
+    /// The iteration operand being evaluated and the call error it may raise.
+    pub(crate) iter_operand: super::node_host_iter_operand::IterOperand,
     /// The last proxy trap call, for the wording of its invariant errors.
     pub(crate) proxy_note: Option<super::node_host_proxy_errors::ProxyNote>,
     /// The keys the open objects of a `JSON.stringify` were reached by.

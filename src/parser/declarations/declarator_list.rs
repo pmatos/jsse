@@ -56,7 +56,18 @@ impl<'a> Parser<'a> {
             let init = if self.current == Token::Assign {
                 self.advance()?;
                 init_at = self.op_pos();
-                Some(self.parse_assignment_expression()?)
+                let init = self.parse_assignment_expression()?;
+                // V8 words a parenthesized name by its value, not its name
+                // (#1557); a one-element sequence keeps the parentheses.
+                if crate::parser::inferred_names::enabled()
+                    && matches!(pattern, Pattern::Array(_))
+                    && matches!(init, Expression::Identifier(_))
+                    && self.last_expr_parenthesized
+                {
+                    Some(Expression::Sequence(vec![init]))
+                } else {
+                    Some(init)
+                }
             } else {
                 // A BindingPattern declarator needs an Initializer unless it is
                 // the ForBinding of a for-in/for-of head (§14.3.1.1, §14.3.2.1).

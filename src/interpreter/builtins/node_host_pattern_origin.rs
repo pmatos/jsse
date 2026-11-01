@@ -9,6 +9,7 @@
 //! deeper patterns print their value.
 
 use super::super::*;
+use super::node_host_param_patterns::PatternKind;
 use crate::interpreter::bytecode::chunk::HeadBinding;
 use std::rc::Rc;
 
@@ -38,6 +39,9 @@ pub(crate) struct ArrayPatternSite {
     top_of_for_head: bool,
     shown: Option<Rc<str>>,
     in_object: bool,
+    /// Not inside another pattern, or only inside the default of a
+    /// parameter; with the address of the pattern.
+    top_level: Option<usize>,
     value: JsValue,
 }
 
@@ -149,9 +153,13 @@ impl Interpreter {
             .take_while(|d| **d == depth)
             .count();
         let origin = self.origin_here();
-        let in_object = open == 1 && self.node_host.pattern_kinds.last() == Some(&true);
+        let in_object =
+            open == 1 && self.node_host.pattern_kinds.last() == Some(&PatternKind::Object);
         let top_of_for_head = open == 0 && matches!(origin, Some(PatternOrigin::ForHead));
-        if !in_object && !top_of_for_head {
+        let top_level = (open == 0
+            || open == 1 && self.node_host.pattern_kinds.last() == Some(&PatternKind::Default))
+        .then_some(std::ptr::from_ref(pattern) as usize);
+        if !in_object && !top_of_for_head && top_level.is_none() {
             return None;
         }
         let shown = match origin {
@@ -162,6 +170,7 @@ impl Interpreter {
             top_of_for_head,
             shown,
             in_object,
+            top_level,
             value: value.clone(),
         })
     }
@@ -184,6 +193,11 @@ impl Interpreter {
         let value = &site.value;
         let text = if site.top_of_for_head {
             format!("{} is not iterable", PatternOrigin::ForHead.text())
+        } else if let Some(text) = site
+            .top_level
+            .and_then(|at| self.param_after_object_message(at, value))
+        {
+            text
         } else if !site.in_object {
             return Completion::Throw(error);
         } else {

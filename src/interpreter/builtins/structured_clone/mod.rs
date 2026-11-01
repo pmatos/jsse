@@ -375,9 +375,9 @@ fn validate_transfer(
 
 fn structured_clone(interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]) -> Completion {
     if args.is_empty() {
-        return Completion::Throw(
-            interp.create_type_error("structuredClone: 1 argument required, but only 0 present."),
-        );
+        return Completion::Throw(interp.structured_clone_missing_error(
+            "structuredClone: 1 argument required, but only 0 present.",
+        ));
     }
     interp.with_gc_root_scope(|interp| match run_clone(interp, args) {
         Ok(v) => Completion::Normal(v),

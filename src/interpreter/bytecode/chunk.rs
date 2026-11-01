@@ -255,6 +255,10 @@ pub(crate) struct Chunk {
     /// `--node` only: the initializer text of a `let`/`const` object pattern,
     /// by the offset of its first read (V8 names it in the destructuring error).
     pub(crate) pattern_src: Vec<(u32, std::rc::Rc<str>)>,
+    /// `--node` only: the position of each call that is the operand of a
+    /// for-of, which V8 words as `f is not a function or its return value is
+    /// not iterable` when it is not callable.
+    pub(crate) iter_calls: Vec<u32>,
     /// One dispatch table per `SwitchTable` op (constant-selector `switch`).
     pub(crate) switch_tables: Vec<super::switch_table::SwitchTable>,
 }

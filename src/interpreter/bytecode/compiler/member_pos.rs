@@ -3,8 +3,9 @@
 //! `Chunk::member_pos` only once the prelude installed the stack hooks, so a
 //! default chunk keeps the same bytes and an empty table.
 
-use super::Compiler;
+use super::{CompileError, Compiler};
 use crate::ast::PropSiteId;
+use crate::interpreter::builtins::node_host_iter_operand::{operand_call_pos, unparenthesized};
 use crate::interpreter::builtins::node_host_stack::call_positions_enabled;
 use crate::interpreter::bytecode::op::Op;
 
@@ -42,15 +43,31 @@ impl Compiler {
         }
     }
 
-    /// Remembers the message for a for-of operand that is not iterable.
-    pub(super) fn note_iterable_source(&mut self, right: &crate::ast::Expression, is_of: bool) {
-        if is_of
-            && call_positions_enabled()
-            && let Some(text) = crate::interpreter::Interpreter::iterable_message(right)
+    /// Remembers the message for a for-of operand that is not iterable, and
+    /// the position of the operand when it is a call (#1557). A tagged
+    /// template or array assignment operand stays on the tree-walker, which
+    /// words its error.
+    pub(super) fn note_iterable_source(
+        &mut self,
+        right: &crate::ast::Expression,
+        is_of: bool,
+    ) -> Result<(), CompileError> {
+        use crate::ast::{AssignOp, Expression};
+        if !is_of || !call_positions_enabled() {
+            return Ok(());
+        }
+        if matches!(right, Expression::TaggedTemplate(..))
+            || matches!(unparenthesized(right), Expression::Assign(AssignOp::Assign, t, ..)
+                if matches!(**t, Expression::Array(..)))
         {
+            return Err(CompileError::Unsupported("for-of over a tagged template"));
+        }
+        self.iter_calls.extend(operand_call_pos(right));
+        if let Some(text) = crate::interpreter::Interpreter::iterable_message(right) {
             let at = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
             self.pattern_src.push((at, text.into()));
         }
+        Ok(())
     }
 
     /// `emit(op)` for a member op, remembering the site's position.

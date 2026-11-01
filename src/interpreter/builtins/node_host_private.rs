@@ -127,6 +127,20 @@ impl Interpreter {
         self.create_type_error(&text)
     }
 
+    /// V8's text for initializing the private name `id` on an object that has
+    /// it already.
+    pub(super) fn private_twice_text(&self, id: PrivateId, method: bool, engine: &str) -> String {
+        let Some(note) = self.node_host.private_notes.notes.get(&id.0) else {
+            return engine.to_string();
+        };
+        if method || note.shape != Shape::Field {
+            let class = &note.class;
+            format!("Cannot initialize private methods of class {class} twice on the same object")
+        } else {
+            format!("Cannot initialize #{} twice on the same object", note.name)
+        }
+    }
+
     /// `#name in rval` with a non-object `rval`.
     pub(crate) fn private_in_error(&mut self, branded: PrivateId, rval: &JsValue) -> JsValue {
         let engine = "Cannot use 'in' operator to search for a private field without an object";

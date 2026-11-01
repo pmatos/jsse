@@ -6,6 +6,7 @@
 
 use super::super::*;
 use super::node_host_expr_text::expr_text;
+use super::node_host_param_patterns::{CONDITIONAL, PatternKind};
 use super::node_host_pattern_origin::PatternOrigin;
 use crate::ast::{
     AssignOp, Expression, ObjectPatternProperty, Pattern, PatternProps, Property, PropertyKey,
@@ -74,17 +75,6 @@ fn first_target_name(props: &[Property]) -> Option<Lead> {
     } else {
         Lead::Named(name)
     })
-}
-
-/// Whether a nested array pattern's failure is worded by this initializer.
-fn has_origin_text(init: &Expression) -> bool {
-    matches!(
-        init,
-        Expression::Identifier(_)
-            | Expression::Member(..)
-            | Expression::Call(..)
-            | Expression::Object(..)
-    )
 }
 
 /// V8's text for the initializer of an array pattern that is not iterable:
@@ -186,9 +176,7 @@ impl Interpreter {
         }
         let top = value.clone();
         let bound = match (&declarator.pattern, &declarator.init) {
-            (Pattern::Object(_), Some(init))
-                if self.node_host.stack.installed && has_origin_text(init) =>
-            {
+            (Pattern::Object(_), Some(init)) if self.node_host.stack.installed => {
                 let origin = PatternOrigin::Init(expr_text(init).into());
                 self.with_pattern_origin(origin, |i| {
                     i.bind_pattern(&declarator.pattern, value, kind, env)
@@ -248,10 +236,12 @@ impl Interpreter {
         if self.node_host.stack.installed && value.is_nullish() {
             self.node_note_statement_pos(props.at);
             let lead = first_pattern_name(props);
-            let nested = matches!(
-                self.node_host.pattern_frames.as_slice(),
-                [.., outer, inner] if outer == inner
-            );
+            let defaulted = self.under_param_default();
+            let nested = !defaulted
+                && matches!(
+                    self.node_host.pattern_frames.as_slice(),
+                    [.., outer, inner] if outer == inner
+                );
             let error = match (lead, self.head_text_here()) {
                 (Some(Lead::Named(name) | Lead::Read(name)), _) if nested => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
@@ -263,6 +253,10 @@ impl Interpreter {
                 (lead, Some(head)) => {
                     let name = lead.as_ref().and_then(Lead::name);
                     Self::destructure_message(name.map(str::to_string), head, value)
+                }
+                (lead @ (None | Some(Lead::Named(_))), None) if defaulted => {
+                    let name = lead.as_ref().and_then(Lead::name).map(str::to_string);
+                    Self::destructure_message(name, CONDITIONAL, value)
                 }
                 (lead, None) => {
                     return Completion::Throw(self.destructure_error(lead, false, None, value));
@@ -305,9 +299,7 @@ impl Interpreter {
         let frame = self.call_depth;
         let site = self.array_pattern_site(pattern, &value);
         self.node_host.pattern_frames.push(frame);
-        self.node_host
-            .pattern_kinds
-            .push(matches!(pattern, Pattern::Object(_)));
+        self.node_host.pattern_kinds.push(PatternKind::of(pattern));
         let done = self.bind_pattern_at(pattern, value, kind, env);
         self.node_host.pattern_frames.pop();
         self.node_host.pattern_kinds.pop();
@@ -326,14 +318,15 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Some(error) = self.node_assign_precheck(target, source, value) {
-            return Completion::Throw(error);
+            return self.reword_array_operand(Completion::Throw(error), target, value);
         }
         match target {
             Expression::Array(elements, _) => {
-                self.destructure_array_assignment(elements, value, env)
+                let done = self.destructure_array_assignment(elements, value, env);
+                self.reword_array_operand(done, target, value)
             }
             Expression::Object(props, _) => {
-                if !self.node_host.stack.installed || !has_origin_text(source) {
+                if !self.node_host.stack.installed {
                     return self.destructure_object_assignment(props, value, env);
                 }
                 let arrays: Vec<usize> = props

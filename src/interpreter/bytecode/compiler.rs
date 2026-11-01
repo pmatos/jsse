@@ -282,6 +282,7 @@ struct Compiler {
     member_pos: Vec<(u32, u32)>,
     binary_pos: Vec<(u32, u32)>,
     pattern_src: Vec<(u32, std::rc::Rc<str>)>,
+    iter_calls: Vec<u32>,
     switch_tables: Vec<SwitchTable>,
     /// Compiling a generator body: `yield` lowers to `Op::Yield`, and a node
     /// handed to the tree-walker must not contain one (it could not suspend).
@@ -336,6 +337,7 @@ impl Compiler {
             member_pos: Vec::new(),
             binary_pos: Vec::new(),
             pattern_src: Vec::new(),
+            iter_calls: Vec::new(),
             switch_tables: Vec::new(),
         }
     }
@@ -2289,7 +2291,7 @@ impl Compiler {
             self.compile_expr(right)?;
             self.close_scope();
         }
-        self.note_iterable_source(right, is_of);
+        self.note_iterable_source(right, is_of)?;
         self.emit_member_at(
             if is_of {
                 Op::GetIterator
@@ -2674,6 +2676,7 @@ impl Compiler {
             member_pos: self.member_pos,
             binary_pos: self.binary_pos,
             pattern_src: self.pattern_src,
+            iter_calls: self.iter_calls,
             switch_tables: self.switch_tables,
         }
     }
@@ -2812,11 +2815,9 @@ fn constant_array_template(elements: &[Option<Expression>]) -> Option<ArrayTempl
     }
 }
 
-/// `Super` and private names only make sense inside their parent expression;
-/// `Spread` is an argument/element form, not an expression of its own, and a
-/// `BoundCallee` or `PreIterated` is meaningful only to the call or spread that
-/// contains it: `compile_call` lowers a `BoundCallee` callee itself, and a
-/// spread (which the compiler declines) hands its whole parent to the
+/// `Super`, private names, `Spread`, `BoundCallee` and `PreIterated` only make
+/// sense inside their parent: `compile_call` lowers a `BoundCallee` itself, and
+/// a spread (which the compiler declines) hands its whole parent to the
 /// tree-walker.
 fn is_standalone_expression(expr: &Expression) -> bool {
     !matches!(
