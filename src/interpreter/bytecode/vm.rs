@@ -1580,9 +1580,8 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     let (argc, site, next) = call_operands(interp, chunk, pc);
                     pc = next;
                     let site_id = CallSiteId(site, 0);
-                    // Counted before the tail-call return below, which leaves
-                    // the VM without reaching the dispatch site: strict tail calls
-                    // stay in `calls_from_vm`.
+                    // Counted before the tail-call return, which skips the
+                    // dispatch site.
                     #[cfg(feature = "perf-counters")]
                     {
                         interp.perf.calls_from_vm += 1;
@@ -1615,7 +1614,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         Completion::Empty => {
                             push_value(interp, stack, JsValue::UNDEFINED);
                         }
-                        abrupt => bail!('dispatch, abrupt),
+                        abrupt => bail!('dispatch, interp.call_abrupt(abrupt, &chunk.iter_calls)),
                     }
                 }
                 Op::ArgSpreadFirst

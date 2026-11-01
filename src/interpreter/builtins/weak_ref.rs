@@ -113,15 +113,17 @@ impl Interpreter {
                     if has_cells {
                         let target = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         if !interp.can_be_held_weakly(&target) {
-                            return Completion::Throw(interp.create_type_error(
+                            return Completion::Throw(interp.registry_error(
                                 "FinalizationRegistry.register: target must be an object or non-registered symbol",
+                                "FinalizationRegistry.prototype.register: invalid target",
                             ));
                         }
                         let held_value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                         // SameValue(target, heldValue) => TypeError
                         if same_value(&target, &held_value) {
-                            return Completion::Throw(interp.create_type_error(
+                            return Completion::Throw(interp.registry_error(
                                 "FinalizationRegistry.register: target and heldValue must not be the same",
+                                "FinalizationRegistry.prototype.register: target and holdings must not be same",
                             ));
                         }
                         let unregister_token = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
@@ -129,7 +131,8 @@ impl Interpreter {
                         //   If unregisterToken is not undefined, throw TypeError
                         if !interp.can_be_held_weakly(&unregister_token)
                             && !(unregister_token).is_undefined() {
-                                return Completion::Throw(interp.create_type_error(
+                                return Completion::Throw(interp.unregister_token_error(
+                                    &unregister_token,
                                     "FinalizationRegistry.register: unregisterToken must be an object, non-registered symbol, or undefined",
                                 ));
                             }
@@ -169,7 +172,8 @@ impl Interpreter {
                     if has_cells {
                         let token = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         if !interp.can_be_held_weakly(&token) {
-                            return Completion::Throw(interp.create_type_error(
+                            return Completion::Throw(interp.unregister_token_error(
+                                &token,
                                 "FinalizationRegistry.unregister: unregisterToken must be an object or non-registered symbol",
                             ));
                         }

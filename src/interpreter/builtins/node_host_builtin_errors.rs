@@ -165,6 +165,7 @@ impl Interpreter {
             .frame_wording(msg)
             .or_else(|| self.proxy_wording(msg))
             .or_else(|| self.define_wording(msg))
+            .or_else(|| self.wording_1558(msg))
         {
             return Cow::Owned(text);
         }
@@ -436,6 +437,15 @@ impl Interpreter {
         key: &(impl std::fmt::Display + ?Sized),
     ) -> JsValue {
         let text = self.v8_message(&format!("Cannot delete property '{key}' of object"), |i| {
+            if target
+                .as_object_id()
+                .and_then(|id| i.get_object(id))
+                .is_some_and(|o| o.borrow().is_proxy())
+            {
+                return format!(
+                    "'deleteProperty' on proxy: trap returned falsish for property '{key}'"
+                );
+            }
             format!(
                 "Cannot delete property '{key}' of {}",
                 i.v8_plain_text(target)

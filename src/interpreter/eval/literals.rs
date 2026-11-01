@@ -253,7 +253,7 @@ impl Interpreter {
             for elem in elements {
                 match elem {
                     Some(Expression::Spread(inner)) => {
-                        let val = match self.eval_expr(inner, env) {
+                        let val = match self.eval_iter(inner, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -1160,9 +1160,7 @@ impl Interpreter {
                             ));
                         }
                         if func_obj.borrow().has_private_field(branded) {
-                            return Completion::Throw(self.create_type_error(
-                                "Cannot initialize private field twice on the same object",
-                            ));
+                            return Completion::Throw(self.private_twice_error(branded, false));
                         }
                         func_obj
                             .borrow_mut()

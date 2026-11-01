@@ -3,7 +3,7 @@
 //! 'o.p' as it is undefined.` The text is printed from the AST only when an
 //! error is about to be thrown under `--node`.
 
-use crate::ast::{BinaryOp, Expression, Literal, LogicalOp, MemberProperty, UnaryOp};
+use crate::ast::{BinaryOp, Expression, Literal, LogicalOp, MemberProperty, UnaryOp, UpdateOp};
 use crate::types::JsValue;
 
 const UNKNOWN: &str = "(intermediate value)";
@@ -48,9 +48,81 @@ fn literal_text(literal: &Literal) -> Option<String> {
     })
 }
 
+/// V8 parses a left-nested run of one of these operators as a single n-ary
+/// operation, which it prints flat: `(a + b + c)`.
+fn chains(op: BinaryOp) -> bool {
+    use BinaryOp::*;
+    matches!(
+        op,
+        Add | Sub | Mul | Div | Mod | BitOr | BitAnd | BitXor | LShift | RShift | URShift
+    )
+}
+
+/// A literal V8's parser folds an operation on literals into.
+enum Folded {
+    Number(f64),
+    Bool(bool),
+}
+
+/// V8 folds arithmetic and bitwise operators on number literals, unary
+/// `-`, `+` and `~` of one, and `!` of any literal while it parses.
+fn fold(expr: &Expression) -> Option<Folded> {
+    use crate::types::number_ops as ops;
+    let number = |expr| match fold(expr)? {
+        Folded::Number(n) => Some(n),
+        Folded::Bool(_) => None,
+    };
+    Some(Folded::Number(match expr {
+        Expression::Literal(Literal::Number(n)) => *n,
+        Expression::Literal(Literal::Boolean(b)) => return Some(Folded::Bool(*b)),
+        Expression::Literal(Literal::Null) => return Some(Folded::Bool(false)),
+        Expression::Literal(Literal::String(units)) => {
+            return Some(Folded::Bool(!units.is_empty()));
+        }
+        Expression::Unary(UnaryOp::Not, operand) => {
+            return Some(Folded::Bool(match fold(operand)? {
+                Folded::Number(n) => n == 0.0 || n.is_nan(),
+                Folded::Bool(b) => !b,
+            }));
+        }
+        Expression::Unary(UnaryOp::Minus, operand) => -number(operand)?,
+        Expression::Unary(UnaryOp::Plus, operand) => number(operand)?,
+        Expression::Unary(UnaryOp::BitNot, operand) => ops::bitwise_not(number(operand)?),
+        Expression::Binary(op, left, right, _) => {
+            let (x, y) = (number(left)?, number(right)?);
+            let (i, j) = (ops::to_int32(x), ops::to_int32(y));
+            let shift = ops::to_uint32(y) & 31;
+            match op {
+                BinaryOp::Add => x + y,
+                BinaryOp::Sub => x - y,
+                BinaryOp::Mul => x * y,
+                BinaryOp::Div => x / y,
+                BinaryOp::Mod => x % y,
+                BinaryOp::Exp => ops::exponentiate(x, y),
+                BinaryOp::BitOr => f64::from(i | j),
+                BinaryOp::BitAnd => f64::from(i & j),
+                BinaryOp::BitXor => f64::from(i ^ j),
+                BinaryOp::LShift => f64::from(i << shift),
+                BinaryOp::RShift => f64::from(i >> shift),
+                BinaryOp::URShift => f64::from(ops::to_uint32(x) >> shift),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    }))
+}
+
 /// The text V8 prints for `expr`, `(intermediate value)` for what it does
 /// not print.
 pub(crate) fn expr_text(expr: &Expression) -> String {
+    if matches!(expr, Expression::Unary(..) | Expression::Binary(..))
+        && let Some(folded) = fold(expr)
+    {
+        return match folded {
+            Folded::Number(n) => JsValue::number(n).to_string(),
+            Folded::Bool(b) => b.to_string(),
+        };
+    }
     match expr {
         Expression::Literal(literal) => literal_text(literal).unwrap_or_else(|| UNKNOWN.into()),
         Expression::Identifier(name) => name.clone(),
@@ -86,12 +158,21 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         Expression::Typeof(operand) => format!("(typeof {})", expr_text(operand)),
         Expression::Void(operand) => format!("(void {})", expr_text(operand)),
         Expression::Delete(operand) => format!("(delete {})", expr_text(operand)),
-        Expression::Binary(op, left, right, _) => format!(
-            "({} {} {})",
-            expr_text(left),
-            binary_symbol(*op),
-            expr_text(right)
-        ),
+        Expression::Binary(op, left, right, _) => {
+            let mut operands = vec![expr_text(right)];
+            let mut head: &Expression = left;
+            while chains(*op)
+                && let Expression::Binary(inner, l, r, _) = head
+                && inner == op
+                && fold(head).is_none()
+            {
+                operands.push(expr_text(r));
+                head = l;
+            }
+            operands.push(expr_text(head));
+            operands.reverse();
+            format!("({})", operands.join(&format!(" {} ", binary_symbol(*op))))
+        }
         Expression::Logical(op, left, right) => {
             let symbol = match op {
                 LogicalOp::And => "&&",
@@ -115,6 +196,23 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         Expression::Object(props, _) => format!("{{{}}}", UNKNOWN.repeat(props.len())),
         Expression::Conditional(..) => UNKNOWN.repeat(3),
         Expression::Assign(_, target, _, _) => expr_text(target),
+        Expression::Spread(operand) => format!("(...{})", expr_text(operand)),
+        Expression::Update(op, prefix, operand, _) => {
+            let symbol = if *op == UpdateOp::Increment {
+                "++"
+            } else {
+                "--"
+            };
+            let operand = expr_text(operand);
+            if *prefix {
+                format!("({symbol}{operand})")
+            } else {
+                format!("({operand}{symbol})")
+            }
+        }
+        Expression::Template(template) if !template.expressions.is_empty() => {
+            template.expressions.iter().map(expr_text).collect()
+        }
         Expression::Template(template) if template.expressions.is_empty() => {
             let cooked = template
                 .quasis

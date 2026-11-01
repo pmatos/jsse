@@ -9331,12 +9331,12 @@ impl Interpreter {
 
                 // Validate pattern
                 if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
-                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                    return Completion::Throw(interp.regexp_error(&msg, &flags_str));
                 }
 
                 // Build the regex to validate it compiles
                 if let Err(msg) = build_regex_ex(&pattern_str, &flags_str) {
-                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                    return Completion::Throw(interp.regexp_error(&msg, &flags_str));
                 }
 
                 let source_js = match pattern_js {
@@ -10847,7 +10847,7 @@ impl Interpreter {
 
                 // Validate the pattern
                 if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
-                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                    return Completion::Throw(interp.regexp_error(&msg, &flags_str));
                 }
 
                 // Empty source → "(?:)" per spec

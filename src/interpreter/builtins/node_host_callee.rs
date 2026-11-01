@@ -59,13 +59,36 @@ fn render_index(inner: &str) -> Option<String> {
     (chain && !inner.starts_with('.') && !inner.ends_with('.')).then(|| format!("[{inner}]"))
 }
 
-/// The index of the `(` that matches the `)` at `close`.
-fn open_before(b: &[u8], close: usize) -> Option<usize> {
+/// The index of the quote that opens the string literal closed by the
+/// quote at `close`.
+fn string_start(b: &[u8], close: usize) -> Option<usize> {
+    let quote = b[close];
+    let mut at = close;
+    while at > 0 {
+        at -= 1;
+        if b[at] == quote {
+            let slashes = b[..at].iter().rev().take_while(|c| **c == b'\\').count();
+            if slashes % 2 == 0 {
+                return Some(at);
+            }
+        } else if b[at] == b'\n' && quote != b'`' {
+            return None;
+        }
+    }
+    None
+}
+
+/// The index of the opener that matches the closer at `close`, skipping
+/// string literals.
+fn opener_before(b: &[u8], close: usize, (open, shut): (u8, u8)) -> Option<usize> {
     let mut depth = 0usize;
-    for at in (0..=close).rev() {
+    let mut at = close + 1;
+    while at > 0 {
+        at -= 1;
         match b[at] {
-            b')' => depth += 1,
-            b'(' => {
+            b'"' | b'\'' | b'`' => at = string_start(b, at).unwrap_or(at),
+            c if c == shut => depth += 1,
+            c if c == open => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(at);
@@ -77,11 +100,23 @@ fn open_before(b: &[u8], close: usize) -> Option<usize> {
     None
 }
 
+/// The index of the `(` that matches the `)` at `close`.
+fn open_before(b: &[u8], close: usize) -> Option<usize> {
+    opener_before(b, close, (b'(', b')'))
+}
+
 /// The index of the `)` that matches the `(` at `open`.
 fn close_after(b: &[u8], open: usize) -> Option<usize> {
     let mut depth = 0usize;
-    for (at, &c) in b.iter().enumerate().skip(open) {
-        match c {
+    let mut at = open;
+    while at < b.len() {
+        match b[at] {
+            q @ (b'"' | b'\'') => {
+                at += 1;
+                while at < b.len() && b[at] != q {
+                    at += if b[at] == b'\\' { 2 } else { 1 };
+                }
+            }
             b'(' => depth += 1,
             b')' => {
                 depth -= 1;
@@ -91,6 +126,7 @@ fn close_after(b: &[u8], open: usize) -> Option<usize> {
             }
             _ => {}
         }
+        at += 1;
     }
     None
 }
@@ -159,20 +195,7 @@ fn word_before(src: &str, end: usize) -> &str {
 
 /// The index of the `[` that matches the `]` at `close`.
 fn bracket_before(b: &[u8], close: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for at in (0..=close).rev() {
-        match b[at] {
-            b']' => depth += 1,
-            b'[' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(at);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    opener_before(b, close, (b'[', b']'))
 }
 
 /// V8's text for the expression `s`, if it is one of the shapes it prints.
@@ -284,8 +307,9 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
         } else if last == b')' {
             let open = open_before(b, i - 1)?;
             let before = skip_ws_back(b, open);
-            let call =
-                before > 0 && (ident_byte(b[before - 1]) || matches!(b[before - 1], b']' | b')'));
+            let call = before > 0
+                && (ident_byte(b[before - 1]) && !KEYWORDS.contains(&word_before(src, before))
+                    || matches!(b[before - 1], b']' | b')'));
             if call {
                 if src[open + 1..i - 1].contains(['\'', '"', '`']) {
                     return None;
@@ -311,6 +335,12 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
         }
     }
     parts.reverse();
+    let k = skip_ws_back(b, i);
+    if k >= 3 && &src[k - 3..k] == "new" && (k == 3 || !ident_byte(b[k - 4])) {
+        let call = parts.iter().position(|part| part == "(...)")?;
+        parts.splice(..=call, ["(intermediate value)".to_string()]);
+        i = k - 3;
+    }
     Some((parts.concat(), i))
 }
 
@@ -428,18 +458,20 @@ impl Interpreter {
     /// V8's text for the callee of the call (or `new`) being dispatched,
     /// under `--node` only.
     pub(crate) fn node_callee_text(&self, construct: bool) -> Option<String> {
-        if !self.node_host.stack.installed || self.top_native().is_some() {
+        if self.top_native().is_some() {
+            return None;
+        }
+        self.node_callee_text_any(construct)
+    }
+
+    /// The same when a builtin is running: the call is still the one the
+    /// script made at the recorded position (`Reflect.apply(p, ...)` reads as
+    /// `Reflect.apply`).
+    pub(crate) fn node_callee_text_any(&self, construct: bool) -> Option<String> {
+        if !self.node_host.stack.installed {
             return None;
         }
         let src = self.node_caller_source()?;
         callee_text(&src, self.node_host.call_pos, construct)
-    }
-
-    /// The TypeError message for calling a value that is not callable.
-    pub(crate) fn not_callable_message(&self, value: &crate::types::JsValue) -> String {
-        let shown = self
-            .node_callee_text(false)
-            .unwrap_or_else(|| self.describe_non_callable(value));
-        format!("{shown} is not a function")
     }
 }
