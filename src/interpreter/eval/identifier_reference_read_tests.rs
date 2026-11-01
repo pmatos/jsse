@@ -1,4 +1,8 @@
-use super::*;
+use super::IdentifierRef;
+use crate::ast::{AssignOp, Expression, Literal};
+use crate::interpreter::Interpreter;
+use crate::interpreter::types::{BindingKind, Completion, Environment, PropertyDescriptor};
+use crate::types::JsValue;
 
 fn assert_number(completion: Completion, expected: f64) {
     match completion {

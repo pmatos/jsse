@@ -1,4 +1,7 @@
-use super::*;
+use crate::ast::Expression;
+use crate::interpreter::types::{Completion, IntoAbrupt};
+use crate::interpreter::{EnvRef, Interpreter};
+use crate::types::JsValue;
 
 impl Interpreter {
     /// Handle `delete obj?.prop` and `delete obj?.['prop']` etc.

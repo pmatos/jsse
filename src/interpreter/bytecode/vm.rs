@@ -6,12 +6,10 @@ use super::op::{Op, UPDATE_DISCARD, YIELD_DISCARD_BACK, YIELD_PERSISTENT_BACK, Y
 use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::{IdentifierRef, bigint_binary_op, is_primitive_string_concat};
 use crate::interpreter::helpers::strict_equality;
-use crate::interpreter::property::NamedGet;
 use crate::interpreter::types::{Binding, BindingKind, Completion, Environment, PrivateId};
 use crate::interpreter::{Atom, EnvRef, GlobalHint, Interpreter};
 use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
-use std::cell::Cell;
 
 mod binary_slow;
 mod call_operands;

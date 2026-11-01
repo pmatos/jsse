@@ -1,4 +1,5 @@
-use super::*;
+use super::pattern_needs_await_lowering;
+use crate::ast::ForInOfLeft;
 
 /// Like `for_in_of_head_contains_yield`, but `await`-only and shape-gated via
 /// `pattern_needs_await_lowering` -- an unsupported shape (an object rest

@@ -1,4 +1,8 @@
-use super::*;
+use super::DestructLRef;
+use crate::ast::Expression;
+use crate::interpreter::Interpreter;
+use crate::interpreter::types::{Completion, Environment};
+use crate::types::{JsString, JsValue};
 
 #[test]
 fn roots_and_finalizes_a_captured_member_reference() {

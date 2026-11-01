@@ -1,4 +1,13 @@
-use super::*;
+use super::{
+    finish_named_get, member_set, member_update_named, pop_value, push_value, root_stack_value,
+    unroot_stack_value, update_mode,
+};
+use crate::ast::UpdateOp;
+use crate::interpreter::property::NamedGet;
+use crate::interpreter::types::Completion;
+use crate::interpreter::{Atom, EnvRef, Interpreter};
+use crate::types::JsValue;
+use std::cell::Cell;
 
 /// The named-property ops (`GetProp`, `LoadMethod`, `SetProp`, `UpdateProp`)
 /// live out of line, fast path and generic path together, so the dispatch loop

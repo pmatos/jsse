@@ -1,4 +1,6 @@
-use super::*;
+use crate::ast::{CallSiteId, ExprBox, Expression, MemberProperty, PropSiteId};
+use crate::lexer::{Keyword, Token};
+use crate::parser::{ParseError, Parser};
 
 impl Parser<'_> {
     pub(super) fn parse_new_expression(&mut self) -> Result<Expression, ParseError> {

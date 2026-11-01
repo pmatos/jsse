@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    TransformContext, bind_expression_to_temp, expr_has_suspension, hoist_to_property_key,
+    in_class_scope,
+};
+use crate::ast::{ClassElement, ExprBox, Expression, Literal, PropertyKey};
 
 /// Capture, in source order, every part of a class heritage clause and its
 /// computed element keys that ClassDefinitionEvaluation (§15.7.14) evaluates

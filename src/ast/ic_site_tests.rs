@@ -1,4 +1,11 @@
-use super::*;
+use super::{
+    BinaryOp, Body, CallSiteId, ExportDeclaration, ExprBox, Expression, FunctionExpr, Literal,
+    MemberProperty, ModuleItem, Program, PropSiteId, SourceType, Statement,
+};
+use super::{
+    assign_expr_sites, assign_ic_sites, assign_ic_sites_for_body, assign_ic_sites_for_module,
+    clear_expr_ic_sites, func_uses_arguments,
+};
 
 fn ident(name: &str) -> Expression {
     Expression::Identifier(name.to_string())

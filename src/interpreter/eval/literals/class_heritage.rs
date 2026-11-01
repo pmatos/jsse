@@ -1,4 +1,6 @@
-use super::*;
+use crate::interpreter::Interpreter;
+use crate::interpreter::types::Completion;
+use crate::types::JsValue;
 
 impl Interpreter {
     /// Get(superclass, "prototype") of ClassDefinitionEvaluation step 8, which
