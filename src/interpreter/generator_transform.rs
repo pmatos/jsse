@@ -209,6 +209,7 @@ pub(crate) enum StateTerminator {
         body_state: usize,
         after_state: usize,
         is_await: bool,
+        at: u32,
     },
     Await {
         value: Expression,
@@ -3842,6 +3843,7 @@ fn transform_for_in_statement(
         &for_in_stmt.body,
         false,
         true,
+        0,
         ctx,
         after_state,
     );
@@ -3858,6 +3860,7 @@ fn transform_for_of_statement(
         &for_of_stmt.body,
         for_of_stmt.is_await,
         false,
+        for_of_stmt.at,
         ctx,
         after_state,
     );
@@ -3872,6 +3875,7 @@ fn transform_for_in_of_loop(
     body: &Statement,
     is_await: bool,
     is_for_in: bool,
+    at: u32,
     ctx: &mut TransformContext,
     after_state: usize,
 ) {
@@ -3958,6 +3962,7 @@ fn transform_for_in_of_loop(
         body_state,
         after_state: after_loop,
         is_await,
+        at,
     });
 
     ctx.current_state_id = body_state;
@@ -4463,35 +4468,8 @@ pub(crate) fn transform_async_function(
 ) -> GeneratorStateMachine {
     let rewritten = rewrite_stmts_await_to_yield(body);
     let mut machine = transform_generator_inner_opts(&rewritten, params, true, true);
-    rewrite_terminators_yield_to_await(&mut machine);
+    await_pos::rewrite_terminators_yield_to_await(&mut machine);
     machine
-}
-
-fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMachine) {
-    let states = std::rc::Rc::get_mut(&mut machine.states)
-        .expect("a freshly transformed machine's states are unshared");
-    for state in states {
-        let replacement = match &state.terminator {
-            StateTerminator::Yield {
-                value,
-                is_delegate: false,
-                resume_state,
-                sent_value_binding,
-            } => {
-                let (value, at) = await_pos::untag(value);
-                Some(StateTerminator::Await {
-                    value: value.unwrap_or(Expression::Identifier("undefined".to_string())),
-                    resume_state: *resume_state,
-                    sent_value_binding: sent_value_binding.clone(),
-                    at,
-                })
-            }
-            _ => None,
-        };
-        if let Some(new_term) = replacement {
-            state.terminator = new_term;
-        }
-    }
 }
 
 fn rewrite_stmts_await_to_yield(stmts: &[Statement]) -> Vec<Statement> {
@@ -4564,6 +4542,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             right: rewrite_expr(&f.right),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
             is_await: f.is_await,
+            at: f.at,
             scope_capture: Default::default(),
         }),
         Statement::Return(e) => Statement::Return(e.as_ref().map(rewrite_expr)),
@@ -4927,6 +4906,7 @@ mod tests {
             right: Expression::Identifier("ys".to_string()),
             body: Box::new(body),
             is_await: true,
+            at: 0,
             scope_capture: Default::default(),
         })
     }
@@ -4937,6 +4917,7 @@ mod tests {
             right: Expression::Identifier("xs".to_string()),
             body: Box::new(body),
             is_await: false,
+            at: 0,
             scope_capture: Default::default(),
         })
     }

@@ -3,6 +3,7 @@
 //! `Await` ones. Under `--node` the operand travels as `(offset, operand)`
 //! in a `Comma`; the `Yield` arm re-applies it to an operand it hoists.
 
+use super::{GeneratorStateMachine, StateTerminator};
 use crate::ast::{Expression, Literal};
 
 pub(super) fn tag(operand: Expression, at: u32) -> Expression {
@@ -30,5 +31,32 @@ pub(super) fn untag(value: &Option<Expression>) -> (Option<Expression>, u32) {
             (parts.get(1).cloned(), at_of(tagged))
         }
         _ => (value.clone(), 0),
+    }
+}
+
+pub(super) fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMachine) {
+    let states = std::rc::Rc::get_mut(&mut machine.states)
+        .expect("a freshly transformed machine's states are unshared");
+    for state in states {
+        let replacement = match &state.terminator {
+            StateTerminator::Yield {
+                value,
+                is_delegate: false,
+                resume_state,
+                sent_value_binding,
+            } => {
+                let (value, at) = untag(value);
+                Some(StateTerminator::Await {
+                    value: value.unwrap_or(Expression::Identifier("undefined".to_string())),
+                    resume_state: *resume_state,
+                    sent_value_binding: sent_value_binding.clone(),
+                    at,
+                })
+            }
+            _ => None,
+        };
+        if let Some(new_term) = replacement {
+            state.terminator = new_term;
+        }
     }
 }

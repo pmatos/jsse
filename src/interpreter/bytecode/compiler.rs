@@ -21,6 +21,7 @@ use std::cell::Cell;
 
 mod block_scope;
 mod calls;
+mod for_of;
 mod lexical;
 mod loop_scope;
 mod member_pos;
@@ -2471,39 +2472,6 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_for_in(
-        &mut self,
-        for_in: &crate::ast::ForInStatement,
-        labels: Vec<String>,
-    ) -> Result<(), CompileError> {
-        self.compile_for_in_of(
-            &for_in.left,
-            &for_in.right,
-            &for_in.body,
-            false,
-            for_in.may_capture_iteration_scope(),
-            labels,
-        )
-    }
-
-    fn compile_for_of(
-        &mut self,
-        for_of: &crate::ast::ForOfStatement,
-        labels: Vec<String>,
-    ) -> Result<(), CompileError> {
-        if for_of.is_await {
-            return Err(CompileError::Unsupported("for await"));
-        }
-        self.compile_for_in_of(
-            &for_of.left,
-            &for_of.right,
-            &for_of.body,
-            true,
-            for_of.may_capture_iteration_scope(),
-            labels,
-        )
-    }
-
     /// `for (head in/of expr) body` (ForIn/OfHeadEvaluation and
     /// ForIn/OfBodyEvaluation).
     /// The iterator (a for-of's iterator, a for-in's enumerator) is one
@@ -2527,6 +2495,7 @@ impl Compiler {
         body: &Statement,
         is_of: bool,
         may_capture: bool,
+        at: u32,
         labels: Vec<String>,
     ) -> Result<(), CompileError> {
         if self.goal != CompileGoal::Function {
@@ -2643,6 +2612,7 @@ impl Compiler {
             self.cleanups.len(),
             self.stack_base,
         ));
+        self.emit_call_pos(CallSiteId(0, at));
         let step = self.emit_jump(if is_of { Op::IterStep } else { Op::ForInStep });
         // The iteration value is on top, below the loop body's statements.
         self.push_n(1);

@@ -150,6 +150,15 @@ impl Interpreter {
         }
     }
 
+    /// A function parked at a disposer's `await` is where V8 last recorded a
+    /// position: the latest call, else its last `await`.
+    pub(crate) fn node_note_dispose_pos(&mut self, async_id: u64) {
+        match self.node_host.call_pos {
+            0 => {}
+            at => self.node_note_await_pos(async_id, at),
+        }
+    }
+
     /// Runs `job` as the settlement of `promise` for `at async` frames, as V8's
     /// module evaluation job is one of the promise `import()` returned.
     pub(crate) fn node_with_job_promise<T>(
@@ -178,6 +187,7 @@ impl Interpreter {
         }
         let promise = match &reaction.target {
             ReactionTarget::AsyncResume(id) => self.parked_await(*id).and_then(|p| p.result),
+            ReactionTarget::AsyncGen(id, _) => self.generator_request_promise(*id),
             target => target.promise_id(),
         };
         let saved = std::mem::replace(&mut self.node_host.stack.job_promise, promise);
@@ -211,13 +221,29 @@ impl Interpreter {
                         }
                         continue;
                     }
-                    data.fulfill_reactions[0].target.clone()
+                    let reaction = &data.fulfill_reactions[0];
+                    match self.awaiting_generator(reaction) {
+                        Some(id) => ReactionTarget::AsyncGen(id, AsyncGenStep::Await),
+                        None => reaction.target.clone(),
+                    }
                 }
                 _ => break,
             };
             match target {
                 ReactionTarget::AsyncResume(id) => {
                     let Some(parked) = self.parked_await(id) else {
+                        break;
+                    };
+                    next = parked.result;
+                    match skip_until {
+                        Some(target) if parked.func == target => skip_until = None,
+                        Some(_) => {}
+                        None => out.push(AsyncStep::Parked(parked)),
+                    }
+                }
+                ReactionTarget::AsyncGen(_, AsyncGenStep::AwaitReturn) => break,
+                ReactionTarget::AsyncGen(id, _) => {
+                    let Some(parked) = self.parked_generator(id) else {
                         break;
                     };
                     next = parked.result;

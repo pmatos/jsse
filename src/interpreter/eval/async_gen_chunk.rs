@@ -291,6 +291,7 @@ impl Interpreter {
             Action::Resume(resume) => Some(resume),
         };
         self.call_stack_envs.push(code.func_env.clone());
+        let framed = self.node_enter_generator(gen_id);
         #[cfg(feature = "perf-counters")]
         {
             self.perf.body_non_function += 1;
@@ -310,6 +311,10 @@ impl Interpreter {
             let exclusive = self.perf.leave_ast_body();
             self.perf.ast_units_in_fallbacks += exclusive;
         }
+        if matches!(result, Completion::Yield(_)) && frame.suspended_at_await(&code.chunk) {
+            self.node_note_generator_pos_here(gen_id);
+        }
+        self.node_leave_generator(framed);
         self.call_stack_envs.pop();
         let finish = |interp: &mut Self, frame: Box<GeneratorFrame>| {
             interp.complete_generator(gen_id);

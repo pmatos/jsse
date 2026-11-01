@@ -1,0 +1,172 @@
+## sync generator
+Error: sync
+    at sync (<dir>/generators-1529.js:18:9)
+    at loops (<dir>/generators-1529.js:94:14)
+    at main (<dir>/generators-1529.js:187:9)
+## yield* of a sync generator
+Error: after yield
+    at syncAfterYield (<dir>/generators-1529.js:22:9)
+    at delegating (<dir>/generators-1529.js:25:10)
+    at loops (<dir>/generators-1529.js:95:14)
+    at main (<dir>/generators-1529.js:187:9)
+## generator default parameter
+Error: default
+    at syncWithArgs (<dir>/generators-1529.js:45:31)
+    at loops (<dir>/generators-1529.js:96:19)
+    at main (<dir>/generators-1529.js:187:9)
+## generator method
+Error: method
+    at Box.items (<dir>/generators-1529.js:50:11)
+    at loops (<dir>/generators-1529.js:97:14)
+    at main (<dir>/generators-1529.js:187:9)
+## static generator method
+Error: static
+    at Box.make (<dir>/generators-1529.js:53:11)
+    at loops (<dir>/generators-1529.js:98:14)
+    at main (<dir>/generators-1529.js:187:9)
+## generator in an object literal
+Error: literal
+    at Object.gen (<dir>/generators-1529.js:62:11)
+    at loops (<dir>/generators-1529.js:99:14)
+    at main (<dir>/generators-1529.js:187:9)
+## second step of a generator
+Error: after yield
+    at syncAfterYield (<dir>/generators-1529.js:22:9)
+    at loops (<dir>/generators-1529.js:100:14)
+    at main (<dir>/generators-1529.js:187:9)
+## body after a finished yield*
+Error: after delegating
+    at afterDelegating (<dir>/generators-1529.js:29:9)
+    at loops (<dir>/generators-1529.js:101:14)
+    at main (<dir>/generators-1529.js:187:9)
+## a yield* that throws, caught
+Error: caught delegation
+    at caughtDelegation (<dir>/generators-1529.js:35:11)
+    at loops (<dir>/generators-1529.js:102:14)
+    at main (<dir>/generators-1529.js:187:9)
+## return() into a finally
+Error: finally
+    at finalizing (<dir>/generators-1529.js:42:11)
+    at loops (<dir>/generators-1529.js:105:45)
+    at main (<dir>/generators-1529.js:187:9)
+## throw() into a finally
+Error: finally
+    at finalizing (<dir>/generators-1529.js:42:11)
+    at loops (<dir>/generators-1529.js:108:44)
+    at main (<dir>/generators-1529.js:187:9)
+## next called directly
+Error: sync
+    at sync (<dir>/generators-1529.js:18:9)
+    at loops (<dir>/generators-1529.js:110:34)
+    at main (<dir>/generators-1529.js:187:9)
+## spread of a generator
+Error: sync
+    at sync (<dir>/generators-1529.js:18:9)
+    at loops (<dir>/generators-1529.js:111:37)
+    at main (<dir>/generators-1529.js:187:9)
+## Array.from of a generator
+Error: sync
+    at sync (<dir>/generators-1529.js:18:9)
+    at loops (<dir>/generators-1529.js:112:43)
+    at main (<dir>/generators-1529.js:187:9)
+## async generator after an await
+Error: after
+    at after (<dir>/generators-1529.js:68:9)
+    at async awaits (<dir>/generators-1529.js:116:20)
+    at async main (<dir>/generators-1529.js:188:3)
+## async generator before any await
+Error: before
+    at beforeAwait (<dir>/generators-1529.js:71:9)
+    at awaits (<dir>/generators-1529.js:117:20)
+    at async main (<dir>/generators-1529.js:188:3)
+## async generator after a yield
+Error: after yield
+    at afterYield (<dir>/generators-1529.js:76:9)
+    at async awaits (<dir>/generators-1529.js:118:20)
+    at async main (<dir>/generators-1529.js:188:3)
+## async generator awaiting an async function
+Error: leaf
+    at leaf (<dir>/generators-1529.js:80:10)
+    at async awaiting (<dir>/generators-1529.js:83:9)
+    at async awaits (<dir>/generators-1529.js:119:20)
+    at async main (<dir>/generators-1529.js:188:3)
+## async generator awaiting Promise.all
+Error: leaf
+    at leaf (<dir>/generators-1529.js:80:10)
+    at async Promise.all (index 0)
+    at async viaAll (<dir>/generators-1529.js:90:10)
+    at async awaits (<dir>/generators-1529.js:120:20)
+    at async main (<dir>/generators-1529.js:188:3)
+## async generator method
+Error: stream
+    at Box.stream (<dir>/generators-1529.js:57:11)
+    at async awaits (<dir>/generators-1529.js:121:20)
+    at async main (<dir>/generators-1529.js:188:3)
+## an error thrown by an async generator
+Error: thrown
+    at throwing (<dir>/generators-1529.js:87:9)
+    at async awaits (<dir>/generators-1529.js:123:22)
+    at async main (<dir>/generators-1529.js:188:3)
+## next called directly
+Error: after
+    at after (<dir>/generators-1529.js:68:9)
+    at async awaits (<dir>/generators-1529.js:129:33)
+    at async main (<dir>/generators-1529.js:188:3)
+## two queued requests
+Error: after
+    at after (<dir>/generators-1529.js:68:9)
+    at async awaits (<dir>/generators-1529.js:132:32)
+    at async main (<dir>/generators-1529.js:188:3)
+## for await with an assigned variable
+Error: after
+    at after (<dir>/generators-1529.js:68:9)
+    at async heads (<dir>/generators-1529.js:138:14)
+    at async main (<dir>/generators-1529.js:189:3)
+## for await with a destructured binding
+Error: destructured
+    at errors (<dir>/generators-1529.js:152:9)
+    at async heads (<dir>/generators-1529.js:139:28)
+    at async main (<dir>/generators-1529.js:189:3)
+## for await with an assigned pattern
+Error: array pattern
+    at arrays (<dir>/generators-1529.js:156:10)
+    at async heads (<dir>/generators-1529.js:140:14)
+    at async main (<dir>/generators-1529.js:189:3)
+## for await over several lines
+Error: after
+    at after (<dir>/generators-1529.js:68:9)
+    at async heads (<dir>/generators-1529.js:143:7)
+    at async main (<dir>/generators-1529.js:189:3)
+## for await with var
+Error: after
+    at after (<dir>/generators-1529.js:68:9)
+    at async heads (<dir>/generators-1529.js:146:18)
+    at async main (<dir>/generators-1529.js:189:3)
+## for await over an array
+Error: 1
+    at heads (<dir>/generators-1529.js:147:79)
+    at async main (<dir>/generators-1529.js:189:3)
+## return inside for await
+Error: returned from the loop
+    at inner (<dir>/generators-1529.js:160:12)
+    at async main (<dir>/generators-1529.js:190:35)
+## await using in a function
+Error: dispose
+    at [Symbol.asyncDispose] (<dir>/generators-1529.js:170:22)
+    at async disposing (<dir>/generators-1529.js:175:3)
+    at async main (<dir>/generators-1529.js:191:3)
+## two await using declarations
+Error: dispose
+    at [Symbol.asyncDispose] (<dir>/generators-1529.js:170:22)
+    at async disposingInBlock (<dir>/generators-1529.js:180:23)
+    at async main (<dir>/generators-1529.js:192:3)
+## await using in a block
+Error: dispose
+    at [Symbol.asyncDispose] (<dir>/generators-1529.js:170:22)
+    at async disposingInBlock (<dir>/generators-1529.js:180:23)
+    at async main (<dir>/generators-1529.js:192:3)
+## await using in a loop
+Error: dispose
+    at [Symbol.asyncDispose] (<dir>/generators-1529.js:170:22)
+    at async disposingInBlock (<dir>/generators-1529.js:183:25)
+    at async main (<dir>/generators-1529.js:192:3)

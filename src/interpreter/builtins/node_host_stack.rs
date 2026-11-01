@@ -13,6 +13,7 @@ use super::super::*;
 pub(crate) use super::node_host_stack_sources::NodeStackState;
 mod async_frames;
 mod combinator_frames;
+mod generator_frames;
 mod hook_flags;
 mod import_site;
 mod link_errors;

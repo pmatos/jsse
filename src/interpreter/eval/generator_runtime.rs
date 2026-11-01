@@ -3,6 +3,8 @@
 //! async-generator request queue. Entry points are the `Generator` and
 //! `AsyncGenerator` prototype methods wired up in `builtins/iterators.rs`.
 
+mod bytecode_resume;
+
 use super::*;
 use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::vm::{self, GeneratorFrame, Resume};
@@ -719,151 +721,6 @@ impl Interpreter {
         ))))
     }
 
-    /// `Generator.prototype.next`/`return`/`throw` (sec-generatorresume,
-    /// sec-generatorresumeabrupt) for a generator whose body is a bytecode
-    /// chunk. `raw` asks for the `(value, done)` pair parked in
-    /// `raw_iter_step` rather than a result object (see
-    /// [`Self::generator_step_value`]).
-    pub(crate) fn bytecode_generator_resume(
-        &mut self,
-        this: &JsValue,
-        resume: Resume,
-        raw: bool,
-    ) -> Completion {
-        enum Plan {
-            Reject,
-            Finished(Completion),
-            Done(JsValue),
-            Run {
-                code: Rc<BytecodeGeneratorCode>,
-                frame: Box<GeneratorFrame>,
-                resume: Option<Resume>,
-                realm: Option<usize>,
-            },
-        }
-        let cell = this.as_object_id().and_then(|id| self.get_object(id));
-        let Some(cell) = cell else {
-            return Completion::Throw(self.create_type_error("not a generator object"));
-        };
-        let plan = {
-            let mut obj = cell.borrow_mut();
-            let realm = obj.generator_realm_id();
-            let Some(IteratorState::BytecodeGenerator(generator)) = obj.iterator_state_mut() else {
-                drop(obj);
-                return Completion::Throw(self.create_type_error("not a generator object"));
-            };
-            let status = generator.status;
-            match (status, resume) {
-                (BytecodeGeneratorStatus::Executing, _) => Plan::Reject,
-                (BytecodeGeneratorStatus::Completed, Resume::Next(_)) => {
-                    Plan::Done(JsValue::UNDEFINED)
-                }
-                (BytecodeGeneratorStatus::Completed, Resume::Return(value)) => Plan::Done(value),
-                (BytecodeGeneratorStatus::Completed, Resume::Throw(error)) => {
-                    Plan::Finished(Completion::Throw(error))
-                }
-                (BytecodeGeneratorStatus::SuspendedStart, Resume::Return(value)) => {
-                    generator.status = BytecodeGeneratorStatus::Completed;
-                    Plan::Done(value)
-                }
-                (BytecodeGeneratorStatus::SuspendedStart, Resume::Throw(error)) => {
-                    generator.status = BytecodeGeneratorStatus::Completed;
-                    Plan::Finished(Completion::Throw(error))
-                }
-                (status, resume) => {
-                    generator.status = BytecodeGeneratorStatus::Executing;
-                    let frame = generator.frame.take().unwrap_or_else(|| {
-                        Box::new(GeneratorFrame::for_chunk(self, &generator.code.chunk))
-                    });
-                    Plan::Run {
-                        code: Rc::clone(&generator.code),
-                        frame,
-                        // The first `next(v)` has no `yield` to deliver `v` to.
-                        resume: (status == BytecodeGeneratorStatus::SuspendedYield)
-                            .then_some(resume),
-                        realm,
-                    }
-                }
-            }
-        };
-        let (code, mut frame, resume, realm) = match plan {
-            Plan::Reject => {
-                return Completion::Throw(self.create_type_error("Generator is already executing"));
-            }
-            Plan::Finished(completion) => return completion,
-            Plan::Done(value) => return self.generator_step_result(raw, value, true),
-            Plan::Run {
-                code,
-                frame,
-                resume,
-                realm,
-            } => (code, frame, resume, realm),
-        };
-        let result = self.with_realm(realm, |interp| {
-            interp.call_stack_envs.push(code.func_env.clone());
-            // Resumptions are executions of the body, not invocations (see
-            // `exec_state_machine_body`); tree-walker hand-offs inside are
-            // credited to the function that owns the chunk.
-            #[cfg(feature = "perf-counters")]
-            {
-                interp.perf.body_non_function += 1;
-                if !code.chunk.ast.is_empty() {
-                    let (name, id) = code.perf_key.clone();
-                    interp.perf.enter_ast_body(name, id, false);
-                }
-            }
-            let result = interp.with_ic_body_in_frame(&code.body, &code.frame, |interp| {
-                vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
-            });
-            #[cfg(feature = "perf-counters")]
-            if !code.chunk.ast.is_empty() {
-                let exclusive = interp.perf.leave_ast_body();
-                interp.perf.ast_units_in_fallbacks += exclusive;
-            }
-            interp.call_stack_envs.pop();
-            result
-        });
-        let finish = |frame: Option<Box<GeneratorFrame>>| {
-            if let Some(IteratorState::BytecodeGenerator(generator)) =
-                cell.borrow_mut().iterator_state_mut()
-            {
-                generator.status = if frame.is_some() {
-                    BytecodeGeneratorStatus::SuspendedYield
-                } else {
-                    BytecodeGeneratorStatus::Completed
-                };
-                generator.frame = frame;
-            } else {
-                debug_assert!(false, "resumed bytecode generator lost its state");
-            }
-        };
-        match result {
-            Completion::Yield(value) => {
-                finish(Some(frame));
-                self.generator_step_result(raw, value, false)
-            }
-            Completion::Return(value) => {
-                finish(None);
-                frame.release(self);
-                self.generator_step_result(raw, value, true)
-            }
-            Completion::Normal(_) | Completion::Empty => {
-                finish(None);
-                frame.release(self);
-                self.generator_step_result(raw, JsValue::UNDEFINED, true)
-            }
-            other => {
-                finish(None);
-                frame.release(self);
-                debug_assert!(
-                    matches!(other, Completion::Throw(_) | Completion::Exit(_)),
-                    "a generator body completed with {other:?}"
-                );
-                other
-            }
-        }
-    }
-
     pub(crate) fn generator_next_state_machine(
         &mut self,
         this: &JsValue,
@@ -881,9 +738,12 @@ impl Interpreter {
         sent_value: JsValue,
         raw: bool,
     ) -> Completion {
-        self.with_generator_realm(this.as_object_id().unwrap_or_default(), |interp| {
-            interp.with_iter_close_scope(|s| {
-                s.generator_next_state_machine_impl(this, sent_value, raw)
+        let gen_id = this.as_object_id().unwrap_or_default();
+        self.with_generator_realm(gen_id, |interp| {
+            interp.node_in_generator_frame(gen_id, |interp| {
+                interp.with_iter_close_scope(|s| {
+                    s.generator_next_state_machine_impl(this, sent_value, raw)
+                })
             })
         })
     }
@@ -1002,6 +862,7 @@ impl Interpreter {
             let resume_state = deleg_info.resume_state;
             let binding = deleg_info.sent_value_binding.clone();
 
+            self.node_set_call_pos(self.node_generator_pos(o.id));
             let result = match self.call_function(
                 &next_method,
                 &iterator,
@@ -1471,6 +1332,8 @@ impl Interpreter {
                     };
 
                     if *is_delegate {
+                        let site = Self::delegate_site(value);
+                        self.node_note_generator_pos(o.id, site);
                         let iterator = match self.get_iterator(&yield_val) {
                             Ok(it) => it,
                             Err(e) => {
@@ -1550,6 +1413,7 @@ impl Interpreter {
                             JsValue::UNDEFINED
                         };
 
+                        self.node_set_call_pos(site);
                         let iter_result = match self.call_function(
                             &next_method,
                             &iterator,
@@ -2111,6 +1975,7 @@ impl Interpreter {
                     body_state,
                     after_state,
                     is_await: _,
+                    at,
                 } => {
                     let loop_pos = match for_of_stack
                         .iter()
@@ -2170,6 +2035,7 @@ impl Interpreter {
                         }
                     }
 
+                    self.node_set_call_pos(*at);
                     match self.iterator_step_value(&iterator) {
                         Ok(None) => {
                             self.forget_for_of_iterator(&iterator);
@@ -3374,7 +3240,7 @@ impl Interpreter {
         }
         let gen_this = gen_this.clone();
         let promise = promise.clone();
-        self.await_then(inner_result, move |interp, outcome| {
+        self.await_then_in_generator(inner_result, gen_id, move |interp, outcome| {
             interp.yield_star_await_inner_result_resume(&gen_this, gen_id, step, outcome, &promise);
             Completion::Normal(JsValue::UNDEFINED)
         });
@@ -3780,9 +3646,12 @@ impl Interpreter {
         promise: JsValue,
         reentry: GeneratorReentry,
     ) -> Completion {
-        self.with_generator_realm(this.as_object_id().unwrap_or_default(), |interp| {
-            interp.with_iter_close_scope(|s| {
-                s.async_generator_next_state_machine_impl(this, sent_value, promise, reentry)
+        let gen_id = this.as_object_id().unwrap_or_default();
+        self.with_generator_realm(gen_id, |interp| {
+            interp.node_in_generator_frame(gen_id, |interp| {
+                interp.with_iter_close_scope(|s| {
+                    s.async_generator_next_state_machine_impl(this, sent_value, promise, reentry)
+                })
             })
         })
     }
@@ -5161,6 +5030,7 @@ impl Interpreter {
                     body_state,
                     after_state,
                     is_await,
+                    at,
                 } => {
                     let loop_pos = match for_of_stack
                         .iter()
@@ -5285,6 +5155,7 @@ impl Interpreter {
                     let step_result = if let Some(v) = cached_await {
                         v
                     } else {
+                        self.node_set_call_pos(*at);
                         let raw_result = match self.iterator_next(&iterator) {
                             Ok(v) => v,
                             Err(e) => {
@@ -5314,6 +5185,7 @@ impl Interpreter {
                             let binding = Some(SentValueBinding {
                                 kind: SentValueBindingKind::Variable(await_tmp),
                             });
+                            self.node_note_generator_pos(o.id, *at);
                             let result = self.async_gen_suspend_at_await(
                                 &obj_rc,
                                 this,
@@ -5592,7 +5464,7 @@ impl Interpreter {
                     value,
                     resume_state,
                     sent_value_binding,
-                    ..
+                    at,
                 } => {
                     let await_val = match self.eval_operand(value, &term_env) {
                         Operand::Value(v) => v,
@@ -5606,6 +5478,7 @@ impl Interpreter {
                         Operand::Suspend(_) | Operand::Other(_) => JsValue::UNDEFINED,
                     };
 
+                    self.node_note_generator_pos(o.id, *at);
                     return self.async_gen_suspend_at_await(
                         &obj_rc,
                         this,
@@ -5728,7 +5601,7 @@ impl Interpreter {
         value: &JsValue,
     ) {
         self.generator_pending_dispose.insert(gen_id, disposal);
-        self.await_then(value, move |interp, outcome| {
+        self.await_then_in_generator(value, gen_id, move |interp, outcome| {
             interp.async_gen_dispose_resume(gen_id, outcome)
         });
     }
