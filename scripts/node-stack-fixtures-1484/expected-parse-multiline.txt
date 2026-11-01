@@ -1,0 +1,7 @@
+parse-multiline.mjs:6
+  b b
+    ^
+
+SyntaxError: Unexpected identifier 'b'
+
+Node.js v26.8.2

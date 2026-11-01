@@ -192,6 +192,23 @@ function decorate(error) {
   }
 }
 
+// A SyntaxError of the ES module loader (#1484): the stack is the excerpt and
+// the error, without Node's internal frames, so inspect would bracket it.
+const LOADER_STACK = /^[^\n]+:\d+\n[^\n]*\n[ \t]*\^*\n\n?SyntaxError: /;
+
+function loaderStack(error) {
+  let stack;
+  try {
+    stack = error.stack;
+  } catch {
+    return undefined;
+  }
+  if (typeof stack !== 'string' || stack.includes('\n    at ')) {
+    return undefined;
+  }
+  return RegExpPrototypeExec(LOADER_STACK, stack) === null ? undefined : stack;
+}
+
 // `mode`: true for a rejection, 'entry' for an error that ended the ES module
 // entry point (a rejection too, but a non-error is reported raw under the
 // loader's header), 'eval' for a throw of the `-e` program.
@@ -199,6 +216,8 @@ function report(error, mode) {
   const isObject = (typeof error === 'object' && error !== null) ||
     typeof error === 'function';
   const native = isObject && isNativeError(error);
+  const loaded = native ? loaderStack(error) : undefined;
+  if (loaded !== undefined) return loaded;
   let header;
   if (rejectionErrors.has(error)) {
     header = INTERNAL_HEADER;

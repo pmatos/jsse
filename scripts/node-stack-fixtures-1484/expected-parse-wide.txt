@@ -1,0 +1,7 @@
+parse-wide.mjs:2
+foo bar;
+    ^^^
+
+SyntaxError: Unexpected identifier 'bar'
+
+Node.js v26.8.2

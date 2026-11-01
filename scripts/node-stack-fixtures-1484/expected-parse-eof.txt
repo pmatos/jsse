@@ -1,0 +1,7 @@
+parse-eof.mjs:2
+
+
+
+SyntaxError: Unexpected end of input
+
+Node.js v26.8.2
