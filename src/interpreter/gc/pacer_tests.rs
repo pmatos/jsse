@@ -1,4 +1,7 @@
-use super::*;
+use super::{CollectionKind, GcPacer};
+use crate::interpreter::types::{
+    GC_GROWTH_FACTOR, GC_INITIAL_THRESHOLD_BYTES, GC_NURSERY_THRESHOLD_BYTES, GC_OBJECT_OVERHEAD,
+};
 
 // GcPacer — the allocation-pressure heuristic that decides when to collect.
 // Tested through its public interface; expected budgets are hand-computed
