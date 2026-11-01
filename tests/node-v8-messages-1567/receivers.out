@@ -1,0 +1,39 @@
+i1 => TypeError Method UnwrapNumberFormat called on incompatible receiver undefined
+i2 => TypeError Method UnwrapDateTimeFormat called on incompatible receiver #<DateTimeFormat>
+i3 => TypeError Method Intl.NumberFormat.prototype.formatToParts called on incompatible receiver #<Object>
+i4 => TypeError Method UnwrapNumberFormat called on incompatible receiver undefined
+i5 => TypeError Method Intl.ListFormat.prototype.format called on incompatible receiver #<Object>
+i6 => TypeError Method Intl.ListFormat.prototype.formatToParts called on incompatible receiver #<Object>
+i7 => TypeError Method Intl.ListFormat.prototype.resolvedOptions called on incompatible receiver #<Object>
+i8 => TypeError Method Intl.DisplayNames.prototype.of called on incompatible receiver #<Object>
+i9 => TypeError Method Intl.DisplayNames.prototype.resolvedOptions called on incompatible receiver #<Object>
+i10 => TypeError Method Intl.Segmenter.prototype.segment called on incompatible receiver #<Object>
+i11 => TypeError Method Intl.Segmenter.prototype.resolvedOptions called on incompatible receiver #<Object>
+i12 => TypeError Method Intl.DateTimeFormat.prototype.formatToParts called on incompatible receiver #<Object>
+i13 => TypeError Method UnwrapDateTimeFormat called on incompatible receiver #<Object>
+i14 => TypeError Method Intl.DateTimeFormat.prototype.formatRange called on incompatible receiver #<Object>
+i15 => TypeError Method Intl.NumberFormat.prototype.formatRange called on incompatible receiver #<Object>
+i16 => TypeError Method Intl.PluralRules.prototype.select called on incompatible receiver #<Object>
+i17 => TypeError Method Intl.PluralRules.prototype.resolvedOptions called on incompatible receiver #<Object>
+i18 => TypeError Method Intl.RelativeTimeFormat.prototype.format called on incompatible receiver #<Object>
+i19 => TypeError Method Intl.RelativeTimeFormat.prototype.resolvedOptions called on incompatible receiver #<Object>
+i20 => TypeError Method get Intl.Collator.prototype.compare called on incompatible receiver #<Object>
+i21 => TypeError Method Intl.Collator.prototype.resolvedOptions called on incompatible receiver #<Object>
+i22 => TypeError Method Intl.Locale.prototype.maximize called on incompatible receiver #<Object>
+i23 => TypeError Method Intl.Locale.prototype.language called on incompatible receiver #<Object>
+i25 => TypeError Method Intl.PluralRules.prototype.selectRange called on incompatible receiver #<Object>
+i26 => TypeError Method Intl.Segmenter.prototype.segment called on incompatible receiver 1
+i27 => TypeError Method Intl.ListFormat.prototype.format called on incompatible receiver undefined
+i28 => TypeError Method Intl.NumberFormat.prototype.formatRangeToParts called on incompatible receiver #<Object>
+i29 => TypeError Method Intl.DateTimeFormat.prototype.formatRangeToParts called on incompatible receiver #<Object>
+i30 => TypeError Method Intl.Segmenter.prototype.segment called on incompatible receiver #<Segmenter>
+r1 => SyntaxError Invalid regular expression: /(?<=a)+/u: Invalid quantifier
+r2 => SyntaxError Invalid regular expression: /(?<=a)+/: Invalid quantifier
+r3 => SyntaxError Invalid regular expression: /(?<=a)*/u: Invalid quantifier
+r4 => SyntaxError Invalid regular expression: /(?<!a)+/u: Invalid quantifier
+r5 => SyntaxError Invalid regular expression: /(?=a)+/u: Invalid quantifier
+r6 => no error
+r7 => SyntaxError Invalid regular expression: /(?<=a){2}/u: Invalid quantifier
+r8 => SyntaxError Invalid regular expression: /(?<=a)?/u: Invalid quantifier
+r9 => SyntaxError Invalid regular expression: /(?<=a)+/v: Invalid quantifier
+r10 => SyntaxError Invalid regular expression: /(?!a)*/u: Invalid quantifier

@@ -6,10 +6,11 @@
 //! a hidden slot of the error and added by the prelude when `stack` is first
 //! read. Default mode keeps its own wording.
 
+use super::entry_errors::arrow_lines;
 use super::*;
 use crate::interpreter::ModuleKey;
 
-const ARROW: PrivateId = PrivateId(u64::MAX - 6);
+pub(super) const ARROW: PrivateId = PrivateId(u64::MAX - 6);
 const LINK_ERROR: PrivateId = PrivateId(u64::MAX - 8);
 
 /// The import being linked: the specifier as written, the offset plus one and
@@ -148,19 +149,7 @@ impl Interpreter {
             return;
         };
         let offset = (at as usize).saturating_sub(1).min(origin.len());
-        let start = origin[..offset].rfind(['\n', '\r']).map_or(0, |n| n + 1);
-        let end = origin[offset..]
-            .find(['\n', '\r'])
-            .map_or(origin.len(), |n| offset + n);
-        let padding: String = origin[start..offset]
-            .chars()
-            .map(|c| if c == '\t' { '\t' } else { ' ' })
-            .collect();
-        let arrow = format!(
-            "{file}:{line}\n{}\n{padding}{}\n",
-            &origin[start..end],
-            "^".repeat(width)
-        );
+        let arrow = format!("{file}:{line}\n{}", arrow_lines(&origin, offset, width));
         if let Some(handle) = self.get_object_cell(error) {
             handle
                 .borrow_mut()

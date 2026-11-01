@@ -1,0 +1,6 @@
+missing-default.mjs:1
+import absent from "./nodefault.mjs";
+       ^^^^^^
+SyntaxError: The requested module './nodefault.mjs' does not provide an export named 'default'
+
+Node.js v26.8.2

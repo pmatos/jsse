@@ -28,6 +28,9 @@ impl<'a> Parser<'a> {
             .source_before_prev_token("let")
             .is_some_and(|before| before.trim_end().ends_with("export"));
         if !binding_start && !exported {
+            if self.current == Token::Keyword(Keyword::Await) {
+                return Err(self.error("Unexpected reserved word"));
+            }
             return Err(self.error("Unexpected strict mode reserved word"));
         }
         Ok(())

@@ -1,0 +1,6 @@
+missing-export-multiline.mjs:3
+  absent as renamed,
+  ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+
+Node.js v26.8.2

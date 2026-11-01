@@ -32,6 +32,8 @@ mod node_host_builtin_errors;
 mod node_host_builtins;
 mod node_host_builtins_webstreams;
 mod node_host_callee;
+mod node_host_callee_context;
+mod node_host_callee_strings;
 #[cfg(unix)]
 mod node_host_child;
 #[cfg(unix)]
@@ -43,6 +45,7 @@ mod node_host_child_sync;
 mod node_host_cjs_lexer;
 mod node_host_cjs_patterns;
 mod node_host_crypto;
+mod node_host_default_patterns;
 mod node_host_destructure;
 mod node_host_error_keys;
 mod node_host_esm;
@@ -68,7 +71,9 @@ mod node_host_fs_ops;
 mod node_host_fs_watch;
 pub(crate) mod node_host_heritage;
 mod node_host_idna;
+mod node_host_intl_receiver;
 pub(crate) mod node_host_iter_operand;
+mod node_host_iteration_1567;
 mod node_host_json_cycle;
 mod node_host_loop;
 mod node_host_messages;

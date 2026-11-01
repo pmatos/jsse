@@ -1,0 +1,6 @@
+reexport-missing.mjs:1
+export { absent } from "./lib.mjs";
+         ^^^^^^
+SyntaxError: The requested module './lib.mjs' does not provide an export named 'absent'
+
+Node.js v26.8.2

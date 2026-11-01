@@ -120,6 +120,11 @@ fn apply(op: BinaryOp, x: f64, y: f64) -> Option<f64> {
     })
 }
 
+/// Whether the parser folds `expr` into a literal.
+pub(crate) fn is_folded(expr: &Expression) -> bool {
+    matches!(expr, Expression::Unary(..) | Expression::Binary(..)) && fold(expr).is_some()
+}
+
 /// The text V8 prints for `expr`, `(intermediate value)` for what it does
 /// not print.
 pub(crate) fn expr_text(expr: &Expression) -> String {

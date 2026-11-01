@@ -1,0 +1,7 @@
+parse-unicode.mjs:1
+const é = ;
+          ^
+
+SyntaxError: Unexpected token ';'
+
+Node.js v26.8.2

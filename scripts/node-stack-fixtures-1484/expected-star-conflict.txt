@@ -1,0 +1,6 @@
+star-conflict.mjs:1
+import { y } from "./star-both.mjs";
+         ^
+SyntaxError: The requested module './star-both.mjs' contains conflicting star exports for name 'y'
+
+Node.js v26.8.2

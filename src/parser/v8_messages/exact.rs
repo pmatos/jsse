@@ -52,6 +52,10 @@ pub(super) const EXACT: &[(&str, &str)] = &[
         "for-of loop variable declaration may not have an initializer.",
     ),
     (
+        "for-await-of loop variable declaration may not have an initializer",
+        "for-await-of loop variable declaration may not have an initializer.",
+    ),
+    (
         "for-in loop variable declaration may not have an initializer",
         "for-in loop variable declaration may not have an initializer.",
     ),

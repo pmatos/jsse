@@ -2155,17 +2155,15 @@ impl Interpreter {
             other => return other,
         };
 
-        let iterator = if fo.is_await {
-            match self.get_async_iterator(&iterable) {
-                Ok(iter) => iter,
-                Err(e) => return Completion::Throw(e),
-            }
+        let got = if fo.is_await {
+            self.get_async_iterator(&iterable)
         } else {
             self.node_note_statement_pos(fo.right.tail_pos(fo.right_at));
-            match self.get_iterator(&iterable) {
-                Ok(iter) => iter,
-                Err(e) => return Completion::Throw(self.reword_iterable(e, &fo.right)),
-            }
+            self.get_iterator(&iterable)
+        };
+        let iterator = match got {
+            Ok(iter) => iter,
+            Err(e) => return Completion::Throw(self.reword_head(e, &iterable, fo)),
         };
 
         let shared_env =

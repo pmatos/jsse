@@ -10,6 +10,7 @@ use std::borrow::Cow;
 
 mod exact;
 pub(in crate::parser) mod patterns;
+mod regexp_reason;
 
 use exact::{EXACT, INVALID_TOKEN};
 
@@ -38,7 +39,13 @@ pub(crate) fn static_text(msg: &str) -> Option<Cow<'_, str>> {
         return Some(Cow::Borrowed("Unexpected eval or arguments in strict mode"));
     }
     if msg.starts_with("Unexpected strict mode reserved word '") {
-        return Some(Cow::Borrowed("Unexpected strict mode reserved word"));
+        return Some(Cow::Borrowed(
+            if quoted(msg, "Unexpected strict mode reserved word '") == Some("await") {
+                "Unexpected reserved word"
+            } else {
+                "Unexpected strict mode reserved word"
+            },
+        ));
     }
     if let Some(name) = quoted(msg, "Unexpected reserved word '") {
         return Some(Cow::Borrowed(if STRICT_WORDS.contains(&name) {
@@ -161,6 +168,7 @@ pub(crate) fn regexp_literal_message(msg: &str, flags: &str) -> String {
         "Invalid flags in modifier group" => modifier_group_reason(pattern),
         "Invalid named reference" => "Invalid named capture referenced",
         "Invalid class escape in range" => "Invalid character class",
+        "Invalid escape" => regexp_reason::unicode_escape_reason(pattern, flags).unwrap_or(reason),
         other => other,
     };
     format!("Invalid regular expression: /{pattern}/{flags}: {reason}")
