@@ -3,10 +3,10 @@
 //!
 //! A registered environment is either clean (`BindingMap::is_clean`: no
 //! nursery object in it, nothing written since) or has its slot on the dirty
-//! list. The list is filled by the one store that turns a clean mark off
-//! (`BindingMap`'s write barrier takes a branch only when the mark was set), and
-//! drained by the next minor collection, so that collection costs the number of
-//! environments written, not the number registered.
+//! list. The list is filled when the clean mark is turned off (`BindingMap`'s
+//! write barrier pushes only on that flip) and drained by the next minor
+//! collection, so that collection costs the number of environments written, not
+//! the number registered.
 //!
 //! The slab is per thread because the barrier sits in `BindingMap`, which
 //! knows neither its environment nor the interpreter. Entries carry the owning
@@ -15,7 +15,7 @@
 
 use super::super::types::{EnvRef, Environment};
 use std::cell::RefCell;
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 
 pub(crate) const NO_SLOT: u32 = u32::MAX;
 
@@ -32,6 +32,20 @@ struct Slab {
     /// Registered environments per owner, indexed by owner.
     live: Vec<usize>,
     owners: u32,
+}
+
+impl Slab {
+    /// Frees `slot` if its environment is dead.
+    fn free_if_dead(&mut self, slot: usize) {
+        if self.entries[slot]
+            .as_ref()
+            .is_some_and(|entry| entry.env.strong_count() == 0)
+        {
+            let owner = self.entries[slot].take().map_or(0, |entry| entry.owner);
+            self.free.push(slot as u32);
+            self.live[owner as usize] -= 1;
+        }
+    }
 }
 
 thread_local! {
@@ -63,7 +77,7 @@ impl EnvRegistry {
         if env.borrow().bindings.slot() != NO_SLOT {
             return;
         }
-        let weak = std::rc::Rc::downgrade(env);
+        let weak = Rc::downgrade(env);
         let slot = SLAB.with_borrow_mut(|slab| {
             slab.live[self.owner as usize] += 1;
             let entry = Some(Entry {
@@ -105,14 +119,7 @@ impl EnvRegistry {
     pub(crate) fn begin_major(&self) {
         SLAB.with_borrow_mut(|slab| {
             for slot in 0..slab.entries.len() {
-                if slab.entries[slot]
-                    .as_ref()
-                    .is_some_and(|entry| entry.env.strong_count() == 0)
-                {
-                    let owner = slab.entries[slot].take().map_or(0, |entry| entry.owner);
-                    slab.free.push(slot as u32);
-                    slab.live[owner as usize] -= 1;
-                }
+                slab.free_if_dead(slot);
             }
         });
     }
@@ -174,12 +181,8 @@ pub(crate) fn release(slot: u32) {
         let Ok(mut slab) = slab.try_borrow_mut() else {
             return;
         };
-        if let Some(entry) = slab.entries.get_mut(slot as usize)
-            && entry.as_ref().is_some_and(|e| e.env.strong_count() == 0)
-        {
-            let owner = entry.take().map_or(0, |entry| entry.owner);
-            slab.free.push(slot);
-            slab.live[owner as usize] -= 1;
+        if (slot as usize) < slab.entries.len() {
+            slab.free_if_dead(slot as usize);
         }
     });
 }
