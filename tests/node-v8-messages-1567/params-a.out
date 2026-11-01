@@ -1,0 +1,58 @@
+fn { a } | [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { a } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a } | [b, c] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { a: { c } } | [b] => Cannot read properties of undefined (reading 'c')
+fn { a: { c } } | [b] = f() => Cannot read properties of undefined (reading 'c')
+fn { a: { c } } | { b } = nul => Cannot read properties of undefined (reading 'c')
+fn { a: { c } = {} } | [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '{}' as it is undefined.
+fn { a: { c } = {} } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: { c } = {} } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a = 1 } | [b] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a = 1 } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a = 1 } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a = 1 } | [b, c] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x } | [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { a: x } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: x } | [b, c] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { a, ...r } | [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { a, ...r } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a, ...r } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a, ...r } | [b, c] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { a: { c } = nul } | [b] => Cannot destructure property 'c' of 'nul' as it is null.
+fn { a: { c } = nul } | [b] = f() => Cannot destructure property 'c' of 'nul' as it is null.
+fn { a: { c } = nul } | { b } = nul => Cannot destructure property 'c' of 'nul' as it is null.
+fn { a: { c } = { c: 1 } } | [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '{(intermediate value)}' as it is undefined.
+fn { a: { c } = { c: 1 } } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: { c } = { c: 1 } } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: x = 1 } | [b] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = 1 } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = 1 } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: x = 1 } | [b, c] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn z = 1 | [b] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn z = 1 | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn z = 1 | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn z = 1 | [b, c] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { [k]: x } | [b] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { [k]: x } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { [k]: x } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { [k]: x } | [b, c] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { "a": { c } = {} } | [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '{}' as it is undefined.
+fn { "a": { c } = {} } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { "a": { c } = {} } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: { c } = f() } | [b] => Cannot destructure property 'c' of 'f(...)' as it is null.
+fn { a: { c } = f() } | [b] = f() => Cannot destructure property 'c' of 'f(...)' as it is null.
+fn { a: { c } = f() } | { b } = nul => Cannot destructure property 'c' of 'f(...)' as it is null.
+fn { a: x = {y: 1} } | [b] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = {y: 1} } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = {y: 1} } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: x = {y: 1} } | [b, c] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = "s" } | [b] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = "s" } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = "s" } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: x = "s" } | [b, c] => undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = f() } | [b] => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = f() } | [b] = f() => f is not iterable (cannot read property Symbol(Symbol.iterator))
+fn { a: x = f() } | { b } = nul => Cannot destructure property 'b' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+fn { a: x = f() } | [b, c] => f is not iterable (cannot read property Symbol(Symbol.iterator))

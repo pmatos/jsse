@@ -92,6 +92,20 @@ impl<'a> Parser<'a> {
                     .is_some_and(|s| s.starts_with("-->")))
     }
 
+    /// `async a => ...` for the lookahead of `async`: (function, single
+    /// parameter, parenthesized). V8 reads `async a` as the parameter of an
+    /// arrow and rejects a line break before `=>`.
+    pub(super) fn arrow_after_async_param(
+        &self,
+        tokens: &Lookahead<'_, '_>,
+    ) -> Result<(bool, bool, bool), ParseError> {
+        let arrow = tokens.current() == &Token::Arrow;
+        if arrow && tokens.line_terminator_before() && inferred_names::enabled() {
+            return Err(self.error("Unexpected token '=>'"));
+        }
+        Ok((false, arrow && !tokens.line_terminator_before(), false))
+    }
+
     /// V8's message for the current token, which the grammar has no place for.
     pub(super) fn v8_unexpected(&self) -> String {
         let raw = self.raw_current();
@@ -99,6 +113,9 @@ impl<'a> Parser<'a> {
             Token::Eof => "Unexpected end of input".to_string(),
             _ if self.html_comment_in_module() => {
                 "HTML comments are not allowed in modules".to_string()
+            }
+            Token::Keyword(Keyword::Yield) if self.in_generator => {
+                "Unexpected identifier 'yield'".to_string()
             }
             Token::Keyword(Keyword::Let | Keyword::Static | Keyword::Yield) if self.strict => {
                 "Unexpected strict mode reserved word".to_string()
@@ -199,6 +216,11 @@ impl<'a> Parser<'a> {
     /// A declaration in a for-in / for-of head with an initializer or, under
     /// `--node`, several bindings, which V8 words as its own error.
     pub(super) fn for_binding_error(&self, decls: &[VariableDeclarator], kind: &str) -> ParseError {
+        let kind = if kind == "of" && inferred_names::enabled() && self.in_for_await_head() {
+            "await-of"
+        } else {
+            kind
+        };
         if decls.len() != 1 && inferred_names::enabled() {
             return self.error(format!(
                 "Invalid left-hand side in for-{kind} loop: Must have a single binding."
@@ -207,6 +229,28 @@ impl<'a> Parser<'a> {
         self.error(format!(
             "for-{kind} loop variable declaration may not have an initializer"
         ))
+    }
+
+    /// Whether the `(` that opens the head being parsed follows `for await`.
+    fn in_for_await_head(&self) -> bool {
+        let src = &self.source_text_source[..self.current_token_start];
+        let mut depth = 0usize;
+        let Some(open) = src.bytes().rposition(|c| match c {
+            b')' => {
+                depth += 1;
+                false
+            }
+            b'(' if depth == 0 => true,
+            b'(' => {
+                depth -= 1;
+                false
+            }
+            _ => false,
+        }) else {
+            return false;
+        };
+        let words: Vec<&str> = src[..open].split_whitespace().rev().take(2).collect();
+        words == ["await", "for"]
     }
 
     pub(super) fn var_for_in_error(&self, decls: &[VariableDeclarator]) -> ParseError {

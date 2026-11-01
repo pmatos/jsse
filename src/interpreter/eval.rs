@@ -817,7 +817,7 @@ impl Interpreter {
                     } else {
                         JsValue::UNDEFINED
                     };
-                    let iterator = match self.get_iterator(&iterable) {
+                    let iterator = match self.yield_iterator(&iterable, expr.as_deref(), false) {
                         Ok(it) => it,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -8913,13 +8913,12 @@ impl Interpreter {
                     is_for_in,
                     ..
                 } => {
-                    // §14.7.5.12 ForIn/OfHeadEvaluation: create TDZ bindings
-                    // before evaluating the iterable expression
+                    // §14.7.5.12 ForIn/OfHeadEvaluation
                     let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
                     let iterable_val = operand!(iterable, &iterable_env);
                     let iterator = if is_await {
-                        match self.get_async_iterator(&iterable_val) {
+                        match self.await_iterator(&iterable_val, iterable) {
                             Ok(it) => it,
                             Err(e) => {
                                 pending_exception = Some(e);

@@ -46,6 +46,9 @@ pub(crate) fn operand_call_pos(expr: &Expression) -> Option<u32> {
 impl Interpreter {
     /// The TypeError for calling `value`, which is not callable.
     pub(crate) fn not_callable_error(&mut self, value: &JsValue) -> JsValue {
+        if let Some(message) = self.iterable_call_message() {
+            return self.create_type_error(&message);
+        }
         let shown = match self.node_callee_text(false) {
             Some(shown) => shown,
             None if self.node_host.stack.installed

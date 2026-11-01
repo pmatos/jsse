@@ -1317,10 +1317,7 @@ impl Interpreter {
                         match self.eval_operand(expr, &term_env) {
                             Operand::Value(v) => v,
                             Operand::Throw(e) => {
-                                // Route genuine throws through the try-stack for
-                                // catch/finally handling; a `Completion::Exit`
-                                // is an `Operand::Abort` and never reaches here
-                                // (issue #242).
+                                // Route genuine throws through the try-stack (issue #242).
                                 let e = route_exception!(e);
                                 self.retire_generator(o.id);
                                 return Completion::Throw(e);
@@ -1335,7 +1332,8 @@ impl Interpreter {
                     if *is_delegate {
                         let site = Self::delegate_site(value, *at);
                         self.node_note_generator_pos(o.id, site);
-                        let iterator = match self.get_iterator(&yield_val) {
+                        let iterator = match self.yield_iterator(&yield_val, value.as_ref(), false)
+                        {
                             Ok(it) => it,
                             Err(e) => {
                                 if let Some(try_info) = current_try_stack.last()
@@ -4567,7 +4565,7 @@ impl Interpreter {
                     };
 
                     if *is_delegate {
-                        let iterator = match self.get_async_iterator(&yield_val) {
+                        let iterator = match self.yield_iterator(&yield_val, value.as_ref(), true) {
                             Ok(it) => it,
                             Err(e) => {
                                 return self.reject_async_generator_request(o.id, promise, e);
@@ -4987,7 +4985,7 @@ impl Interpreter {
                         Operand::Other(_) => JsValue::UNDEFINED,
                     };
                     let iterator = if *is_await {
-                        match self.get_async_iterator(&iterable_val) {
+                        match self.await_iterator(&iterable_val, iterable) {
                             Ok(iter) => iter,
                             Err(e) => {
                                 let e = route_exception!(e);

@@ -120,7 +120,11 @@ impl<'a> Parser<'a> {
         if self.current != Token::Colon && inferred_names::enabled() {
             match key {
                 PropertyKey::Number(_) => return Err(self.error("Unexpected number")),
-                PropertyKey::String(_) => return Err(self.error("Unexpected string")),
+                PropertyKey::String(_) => {
+                    let big = self.source_text_source[..self.prev_token_end].ends_with('n');
+                    let what = if big { "number" } else { "string" };
+                    return Err(self.error(format!("Unexpected {what}")));
+                }
                 PropertyKey::Computed(_) => return Err(self.error("Unexpected token '['")),
                 _ => {}
             }

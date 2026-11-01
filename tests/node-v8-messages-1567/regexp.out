@@ -1,0 +1,15 @@
+Invalid regular expression: /(/u: Unterminated group
+Invalid regular expression: /(/: Unterminated group
+Invalid regular expression: /a**/u: Nothing to repeat
+Invalid regular expression: /\/u: \ at end of pattern
+Invalid regular expression: /(?<=a)+/u: Invalid quantifier
+Invalid regular expression: /[b-a]/v: Range out of order in character class
+Invalid regular expression: /(?<n>a)(?<n>b)/u: Duplicate capture group name
+Invalid regular expression: /\k<x>/u: Invalid named capture referenced
+Invalid regular expression: /{1}/u: Nothing to repeat
+Invalid regular expression: /a{2,1}/giu: numbers out of order in {} quantifier
+Invalid regular expression: /(?<=a)+/dgimsuy: Invalid quantifier
+Invalid regular expression: /\u{110000}/u: Invalid Unicode escape
+Invalid regular expression: /(?<=a)+/: Invalid quantifier
+Invalid regular expression: /(?<=a)+/u: Invalid quantifier
+Invalid regular expression: /(/gu: Unterminated group

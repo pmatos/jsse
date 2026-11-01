@@ -1,0 +1,21 @@
+script "({ 1n })" SyntaxError: Unexpected number
+script "({ 1n, a: 1 })" SyntaxError: Unexpected number
+script "({ 2 })" SyntaxError: Unexpected number
+script "({ 'a' })" SyntaxError: Unexpected string
+script "async function f() { for await (var a = 1 of b); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "async function f() { for await (let a = 1 of b); }" SyntaxError: for-await-of loop variable declaration may not have an initializer.
+script "for (var a = 1 of b);" SyntaxError: for-of loop variable declaration may not have an initializer.
+script "x = /[\\c]/u" SyntaxError: Invalid regular expression: /[\c]/u: Invalid Unicode escape
+script "x = /[\\c1]/v" SyntaxError: Invalid regular expression: /[\c1]/v: Invalid Unicode escape
+script "x = /\\k/u" SyntaxError: Invalid regular expression: /\k/u: Invalid named reference
+script "x = /\\p/u" SyntaxError: Invalid regular expression: /\p/u: Invalid property name
+script "x = /\\a/u" SyntaxError: Invalid regular expression: /\a/u: Invalid escape
+script "x = /(?<a>.)\\k<a>[\\c]/u" SyntaxError: Invalid regular expression: /(?<a>.)\k<a>[\c]/u: Invalid Unicode escape
+module "new import.meta" TypeError: (intermediate value) is not a constructor
+script "new import.meta" SyntaxError: Cannot use 'import.meta' outside a module
+module "let await" SyntaxError: Unexpected reserved word
+script "x = async a\n=> 1" SyntaxError: Unexpected token '=>'
+script "async a\n=> 1" SyntaxError: Unexpected token '=>'
+script "x = async (a)\n=> 1" SyntaxError: Unexpected token '=>'
+script "function* g() { class yield {} }" SyntaxError: Unexpected identifier 'yield'
+script "class yield {}" SyntaxError: Unexpected strict mode reserved word

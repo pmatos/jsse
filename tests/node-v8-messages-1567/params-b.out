@@ -1,0 +1,58 @@
+fn z, {a}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a}, z, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a}, {d}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a}, [b] = [], [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+fn {a} = {}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+fn {a} = o, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+fn {a} = {a: 1}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+fn {a}, ...[b] => no error
+fn {a}, [b], [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+fn [b] = [1], {a}, [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+fn {a, b}, [c] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a: {c} = {}, e: {g} = []}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '[]' as it is undefined.
+fn {a: {c} = {}}, {d}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a}, [b] = [], [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+fn {a}, {...r}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a: x}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { "a-b": x }, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn { 1: x }, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+fn {a}, ...[b, c] => no error
+fn {a}, ...rest, [b] SYNTAX Rest parameter must be last formal parameter
+arrow z, {a}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a}, z, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a}, {d}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a}, [b] = [], [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+arrow {a} = {}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+arrow {a} = o, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+arrow {a} = {a: 1}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+arrow {a}, ...[b] => no error
+arrow {a}, [b], [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+arrow [b] = [1], {a}, [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+arrow {a, b}, [c] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a: {c} = {}, e: {g} = []}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of '[]' as it is undefined.
+arrow {a: {c} = {}}, {d}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a}, [b] = [], [c] => object is not iterable (cannot read property Symbol(Symbol.iterator))
+arrow {a}, {...r}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a: x}, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow { "a-b": x }, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow { 1: x }, [b] => Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+arrow {a}, ...[b, c] => no error
+arrow {a}, ...rest, [b] SYNTAX Rest parameter must be last formal parameter
+async {a}, ...rest, [b] SYNTAX Rest parameter must be last formal parameter
+async z, {a}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async {a}, z, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async {a}, {d}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async {a}, [b] = [], [c] => (async) object is not iterable (cannot read property Symbol(Symbol.iterator))
+async {a} = {}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+async {a} = o, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+async {a} = {a: 1}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of '(intermediate value)(intermediate value)(intermediate value)' as it is undefined.
+async {a}, [b], [c] => (async) object is not iterable (cannot read property Symbol(Symbol.iterator))
+async [b] = [1], {a}, [c] => (async) object is not iterable (cannot read property Symbol(Symbol.iterator))
+async {a, b}, [c] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async {a: {c} = {}, e: {g} = []}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of '[]' as it is undefined.
+async {a: {c} = {}}, {d}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async {a}, [b] = [], [c] => (async) object is not iterable (cannot read property Symbol(Symbol.iterator))
+async {a}, {...r}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async {a: x}, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async { "a-b": x }, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
+async { 1: x }, [b] => (async) Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.
