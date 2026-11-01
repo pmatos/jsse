@@ -4,6 +4,63 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// A name exported twice. V8 words two exports whose local bindings clash
+    /// (`export default` of two expressions, a function and a class of one
+    /// name; not two `var`s) as a redeclaration, the anonymous default being
+    /// the hidden binding `.default` (`--node` only).
+    pub(super) fn duplicate_export(
+        &self,
+        name: &str,
+        earlier: &[ModuleItem],
+        item: &ModuleItem,
+    ) -> ParseError {
+        let binding = |item: &ModuleItem| -> Option<(String, bool)> {
+            let ModuleItem::ExportDeclaration(export) = item else {
+                return None;
+            };
+            if !self.get_exported_names(export).iter().any(|n| n == name) {
+                return None;
+            }
+            let local = |declared: &str| {
+                if declared.is_empty() {
+                    ".default"
+                } else {
+                    declared
+                }
+                .to_string()
+            };
+            match export {
+                ExportDeclaration::Default(_) => Some((".default".to_string(), true)),
+                ExportDeclaration::DefaultFunction(f) => Some((local(&f.name), true)),
+                ExportDeclaration::DefaultClass(c) => Some((local(&c.name), true)),
+                ExportDeclaration::Named {
+                    declaration: Some(decl),
+                    ..
+                } => {
+                    let var = matches!(
+                        **decl,
+                        Statement::Variable(VariableDeclaration {
+                            kind: VarKind::Var,
+                            ..
+                        })
+                    );
+                    Some((name.to_string(), !var))
+                }
+                _ => None,
+            }
+        };
+        if inferred_names::enabled()
+            && let Some((local, lexical)) = binding(item)
+            && earlier
+                .iter()
+                .filter_map(binding)
+                .any(|(other, other_lexical)| other == local && (lexical || other_lexical))
+        {
+            return self.error(format!("Identifier '{local}' has already been declared"));
+        }
+        self.error(format!("Duplicate export of '{name}'"))
+    }
+
     /// §16.2.1.1 Static Semantics: Early Errors for Module
     pub(super) fn validate_module_early_errors(
         &self,

@@ -1,0 +1,23 @@
+# Differences between Node v26.8.2 and `jsse --node` for the sources of scripts/node-stack-fixtures-1523-tail/ that remain after #1523 (second pass).
+# Format: <goal> <TAB> <source as JSON> <TAB> Node message <TAB> jsse message.
+# 'parses' / 'loads' means one engine accepts a source the other rejects: parser bugs, V8 web compatibility or a feature V8 does not ship, not message wording.
+# Supersedes the script and module rows of ts-suite/node-syntax-link-1523-known-failures.txt; its stack rows still apply (#1524).
+module	"import defer * as ns from './lib.mjs'"	Unexpected token '*'	loads
+script	"({ 1n })"	Unexpected number	Unexpected string
+script	"using x = 1"	Unexpected identifier 'x'	using declaration is not allowed in this position
+script	"x = { a = 1 }"	Invalid shorthand property initializer	parses
+script	"f({ a = 1 })"	Invalid shorthand property initializer	parses
+script	"[{ a = 1 }]"	Invalid shorthand property initializer	parses
+script	"'use strict'; for (f() of c);"	parses	Invalid left-hand side in for-loop
+script	"for (let of of c);"	parses	Unexpected token 'of'
+script	"async function f() { for await (var a = 1 of b); }"	for-await-of loop variable declaration may not have an initializer.	for-of loop variable declaration may not have an initializer.
+script	"x = class { async x }"	Unexpected token '}'	parses
+script	"x = class { *x }"	Unexpected token '}'	parses
+script	"x = /[\\c]/u"	Invalid regular expression: /[\c]/u: Invalid Unicode escape	Invalid regular expression: /[\c]/u: Invalid escape
+module	"new import.meta"	TypeError: (intermediate value) is not a constructor	TypeError: import.meta is not a constructor
+module	"let await"	Unexpected reserved word	Unexpected strict mode reserved word
+module	"<!-- comment"	HTML comments are not allowed in modules	loads
+module	"/* */ --> comment"	HTML comments are not allowed in modules	loads
+script	"x = async a\n=> 1"	Unexpected token '=>'	Unexpected identifier 'a'
+script	"function* g() { class yield {} }"	Unexpected identifier 'yield'	Unexpected strict mode reserved word
+script	"async a\n=> 1"	Unexpected token '=>'	Unexpected identifier 'a'

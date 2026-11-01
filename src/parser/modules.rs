@@ -127,7 +127,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     specifiers.push(ImportSpecifier::Namespace(local));
                 } else {
-                    self.eat(&Token::LeftBrace)?;
+                    self.eat_named_imports()?;
                     self.parse_named_imports(&mut specifiers)?;
                     self.eat(&Token::RightBrace)?;
                 }

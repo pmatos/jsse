@@ -1,0 +1,150 @@
+script "class C { #a; m() { 1 + #a in b } }" SyntaxError: Unexpected identifier '#a'
+script "class C { #a; m() { #a } }" SyntaxError: Unexpected identifier '#a'
+script "class C { #a; m() { #a + 1 } }" SyntaxError: Unexpected identifier '#a'
+script "class C { m() { #b in this } }" SyntaxError: Private field '#b' must be declared in an enclosing class
+script "x = a in" SyntaxError: Unexpected end of input
+script "x = a instanceof" SyntaxError: Unexpected end of input
+script "x = ()" SyntaxError: Unexpected token ')'
+script "x = ( )" SyntaxError: Unexpected token ')'
+script "x = (,)" SyntaxError: Unexpected token ','
+script "x = (a,)" SyntaxError: Unexpected token ')'
+script "x = (a,,b)" SyntaxError: Unexpected token ','
+script "x = [," SyntaxError: Unexpected end of input
+script "x = [a b]" SyntaxError: Unexpected identifier 'b'
+script "x = [a, b" SyntaxError: Unexpected end of input
+script "x = {a b}" SyntaxError: Unexpected identifier 'b'
+script "x = {a: 1 b: 2}" SyntaxError: Unexpected identifier 'b'
+script "x = {a: 1,, b: 2}" SyntaxError: Unexpected token ','
+script "x = {,}" SyntaxError: Unexpected token ','
+script "x = {get}" parses
+script "x = {get a}" SyntaxError: Unexpected token '}'
+script "x = {get a(}" SyntaxError: Unexpected token '}'
+script "x = {set a}" SyntaxError: Unexpected token '}'
+script "x = {async a}" SyntaxError: Unexpected token '}'
+script "x = {async *}" SyntaxError: Unexpected token '}'
+script "x = {*}" SyntaxError: Unexpected token '}'
+script "x = {* a}" SyntaxError: Unexpected token '}'
+script "x = {a() }" SyntaxError: Unexpected token '}'
+script "x = {get a() {}, get a() {}}" parses
+script "x = function" SyntaxError: Unexpected end of input
+script "x = function f" SyntaxError: Unexpected end of input
+script "x = function f(" SyntaxError: Unexpected end of input
+script "x = function f() " SyntaxError: Unexpected end of input
+script "x = function* f() {" SyntaxError: Unexpected end of input
+script "x = async function" SyntaxError: Unexpected end of input
+script "x = async function*" SyntaxError: Unexpected end of input
+script "x = class" SyntaxError: Unexpected end of input
+script "x = class {" SyntaxError: Unexpected end of input
+script "x = class extends" SyntaxError: Unexpected end of input
+script "x = class extends {}" SyntaxError: Unexpected end of input
+script "x = class { m" SyntaxError: Unexpected end of input
+script "x = class { m( }" SyntaxError: Unexpected token '}'
+script "x = class { static }" parses
+script "x = class { static { }" SyntaxError: Unexpected end of input
+script "x = class { ; ; }" parses
+script "x = class { get }" parses
+script "x = class { get x }" SyntaxError: Unexpected token '}'
+script "x = class { 'a' }" parses
+script "x = class { 1 }" parses
+script "x = class { [a] }" parses
+script "x = class { a b }" SyntaxError: Unexpected identifier 'b'
+script "x = class { a = }" SyntaxError: Unexpected token '}'
+script "x = class { async }" parses
+script "x = class { #a #b }" SyntaxError: Unexpected identifier '#b'
+script "x = class { #a = 1 #b = 2 }" SyntaxError: Unexpected identifier '#b'
+script "x = class { static #a; static #a }" SyntaxError: Identifier '#a' has already been declared
+script "x = class { get #a() {} get #a() {} }" SyntaxError: Identifier '#a' has already been declared
+script "x = class { get #a() {} static set #a(v) {} }" SyntaxError: Identifier '#a' has already been declared
+script "x = `${" SyntaxError: Unexpected end of input
+script "x = `${a" SyntaxError: Missing } in template expression
+script "x = `${a}" SyntaxError: Unexpected end of input
+script "x = `${a} ${`" SyntaxError: Unexpected end of input
+script "x = `abc" SyntaxError: Unexpected end of input
+script "x = `${a b}`" SyntaxError: Missing } in template expression
+script "x = a`b" SyntaxError: Unexpected end of input
+script "x = a`${}`" SyntaxError: Unexpected token '}'
+script "x = /a" SyntaxError: Invalid regular expression: missing /
+script "x = /[/" SyntaxError: Invalid regular expression: missing /
+script "x = /(/" SyntaxError: Invalid regular expression: /(/: Unterminated group
+script "x = /)/" SyntaxError: Invalid regular expression: /)/: Unmatched ')'
+script "x = /a{2,1}/" SyntaxError: Invalid regular expression: /a{2,1}/: numbers out of order in {} quantifier
+script "x = /\\k<a>/u" SyntaxError: Invalid regular expression: /\k<a>/u: Invalid named capture referenced
+script "x = /(?<a>.)(?<a>.)/" SyntaxError: Invalid regular expression: /(?<a>.)(?<a>.)/: Duplicate capture group name
+script "x = /(?<1a>.)/" SyntaxError: Invalid regular expression: /(?<1a>.)/: Invalid capture group name
+script "x = /\\p{Foo}/u" SyntaxError: Invalid regular expression: /\p{Foo}/u: Invalid property name
+script "x = /[b-a]/" SyntaxError: Invalid regular expression: /[b-a]/: Range out of order in character class
+script "x = /a/gg" SyntaxError: Invalid regular expression flags
+script "x = /a/x" SyntaxError: Invalid regular expression flags
+script "x = /a/uv" SyntaxError: Invalid regular expression flags
+script "x = /\\u{110000}/u" SyntaxError: Invalid regular expression: /\u{110000}/u: Invalid Unicode escape
+script "x = /\\1(a)/u" parses
+script "x = /\\2(a)/u" SyntaxError: Invalid regular expression: /\2(a)/u: Invalid escape
+script "x = /(?:a/" SyntaxError: Invalid regular expression: /(?:a/: Unterminated group
+script "x = /a)/" SyntaxError: Invalid regular expression: /a)/: Unmatched ')'
+script "x = /[a/" SyntaxError: Invalid regular expression: missing /
+script "x = /\\/" SyntaxError: Invalid regular expression: missing /
+script "x = /(?<=a/" SyntaxError: Invalid regular expression: /(?<=a/: Unterminated group
+script "x = /(?<!a)*/" SyntaxError: Invalid regular expression: /(?<!a)*/: Invalid quantifier
+script "x = /{1}/u" SyntaxError: Invalid regular expression: /{1}/u: Nothing to repeat
+script "x = /a{1/u" SyntaxError: Invalid regular expression: /a{1/u: Incomplete quantifier
+script "x = /}/u" SyntaxError: Invalid regular expression: /}/u: Lone quantifier brackets
+script "x = /]/u" SyntaxError: Invalid regular expression: /]/u: Lone quantifier brackets
+script "x = /[\\d-a]/u" SyntaxError: Invalid regular expression: /[\d-a]/u: Invalid character class
+script "x = /\\c/u" SyntaxError: Invalid regular expression: /\c/u: Invalid Unicode escape
+script "x = /\\-/u" SyntaxError: Invalid regular expression: /\-/u: Invalid escape
+script "x = /[\\-]/u" parses
+script "x = /\\a/u" SyntaxError: Invalid regular expression: /\a/u: Invalid escape
+script "x = /(?i:a)/" parses
+script "x = /(?i-i:a)/" SyntaxError: Invalid regular expression: /(?i-i:a)/: Repeated flag in flag group
+script "x = /(?ii:a)/" SyntaxError: Invalid regular expression: /(?ii:a)/: Repeated flag in flag group
+script "x = /(?-:a)/" SyntaxError: Invalid regular expression: /(?-:a)/: Invalid flag group
+script "x = /a{/u" SyntaxError: Invalid regular expression: /a{/u: Incomplete quantifier
+script "x = /a{1,/u" SyntaxError: Invalid regular expression: /a{1,/u: Incomplete quantifier
+script "x = /{/u" SyntaxError: Invalid regular expression: /{/u: Lone quantifier brackets
+script "x = /a{x}/u" SyntaxError: Invalid regular expression: /a{x}/u: Incomplete quantifier
+script "x = /a{1/v" SyntaxError: Invalid regular expression: /a{1/v: Incomplete quantifier
+script "x = /a{,1}/u" SyntaxError: Invalid regular expression: /a{,1}/u: Incomplete quantifier
+script "x = /\\cx/u" parses
+script "x = /\\c1/u" SyntaxError: Invalid regular expression: /\c1/u: Invalid Unicode escape
+script "x = /(?i-:a)/" parses
+script "x = /(?i:a/" SyntaxError: Invalid regular expression: /(?i:a/: Unterminated group
+script "x = /(?a:b)/" SyntaxError: Invalid regular expression: /(?a:b)/: Invalid group
+script "x = /(?-i-i:a)/" SyntaxError: Invalid regular expression: /(?-i-i:a)/: Multiple dashes in flag group
+script "x = /(?:)/" parses
+script "x = /(?-ii:a)/" SyntaxError: Invalid regular expression: /(?-ii:a)/: Repeated flag in flag group
+script "x = /(?i-m:a)/" parses
+module "export 1" SyntaxError: Unexpected token 'export'
+module "export foo" SyntaxError: Unexpected token 'export'
+module "export async 1" SyntaxError: Unexpected token 'async'
+module "export async" SyntaxError: Unexpected token 'async'
+module "export =;" SyntaxError: Unexpected token 'export'
+module "export;" SyntaxError: Unexpected token 'export'
+module "export default" SyntaxError: Unexpected end of input
+module "export default;" SyntaxError: Unexpected token ';'
+module "export { a as default }; var a; export default 1" SyntaxError: Duplicate export of 'default'
+module "export * as default from './lib.mjs'; export default 1" SyntaxError: Duplicate export of 'default'
+module "export { a, a }; var a" SyntaxError: Duplicate export of 'a'
+module "export { a as b, c as b }; var a, c" SyntaxError: Duplicate export of 'b'
+module "export var a; export { a }" SyntaxError: Duplicate export of 'a'
+module "export function f() {} export class f {}" SyntaxError: Identifier 'f' has already been declared
+module "export { x as 1 }" SyntaxError: Unexpected number
+module "export { 'a' }" SyntaxError: String literal module export names must be followed by a 'from' clause
+module "export { 'a' as b } from './lib.mjs'" loads
+module "export { 'a\\ud800' as b } from './lib.mjs'" SyntaxError: Invalid module export name: contains unpaired surrogate
+module "export * as 'a\\ud800' from './lib.mjs'" SyntaxError: Invalid module export name: contains unpaired surrogate
+module "import { 'a\\ud800' as b } from './lib.mjs'" SyntaxError: Invalid module export name: contains unpaired surrogate
+module "import 1 from './lib.mjs'" SyntaxError: Unexpected number
+module "import a, from './lib.mjs'" SyntaxError: Unexpected token ','
+module "import a, b from './lib.mjs'" SyntaxError: Unexpected token ','
+module "import * from './lib.mjs'" SyntaxError: Unexpected identifier 'from'
+module "import * as from './lib.mjs'" SyntaxError: Unexpected string
+module "import * as a, b from './lib.mjs'" SyntaxError: Unexpected token ','
+module "import { a as } from './lib.mjs'" SyntaxError: Unexpected token '}'
+module "import { a as 1 } from './lib.mjs'" SyntaxError: Unexpected number
+module "import { if } from './lib.mjs'" SyntaxError: Unexpected reserved word
+module "import { if as x } from './lib.mjs'" SyntaxError: The requested module './lib.mjs' does not provide an export named 'if'
+module "import { a b } from './lib.mjs'" SyntaxError: Unexpected identifier 'b'
+module "import {} from" SyntaxError: Unexpected end of input
+module "import {} from 1" SyntaxError: Unexpected number
+module "import {} from './lib.mjs' with" SyntaxError: Unexpected end of input
+module "import {} from './lib.mjs' with {" SyntaxError: Unexpected end of input

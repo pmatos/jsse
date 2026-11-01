@@ -1089,7 +1089,7 @@ impl<'a> Parser<'a> {
             if let ModuleItem::ExportDeclaration(ref export) = item {
                 for name in self.get_exported_names(export) {
                     if !exported_names.insert(name.clone()) {
-                        return Err(self.error(format!("Duplicate export of '{}'", name)));
+                        return Err(self.duplicate_export(&name, &module_items, &item));
                     }
                 }
             }

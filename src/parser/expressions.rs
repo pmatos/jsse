@@ -303,6 +303,9 @@ impl<'a> Parser<'a> {
                 self.validate_update_target(&expr, true)?;
                 Ok(Expression::Update(op, true, ExprBox::new(expr), at))
             }
+            Token::Keyword(Keyword::Await) if self.reserved_await() => {
+                Err(self.error("Unexpected reserved word"))
+            }
             Token::Keyword(Keyword::Await)
                 if self.in_async || (self.is_module && self.in_function == 0) =>
             {
@@ -704,7 +707,7 @@ impl<'a> Parser<'a> {
                     let old_no_in = self.no_in;
                     self.no_in = false;
                     let spec_start = self.current_token_start;
-                    let source = self.parse_assignment_expression()?;
+                    let source = self.import_specifier()?;
                     let spec_end = self.prev_token_end;
                     let options = self.parse_import_options()?;
                     self.no_in = old_no_in;
@@ -974,10 +977,10 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Ellipsis {
                     // Arrow function with rest
                     self.advance()?;
-                    let pat = self.parse_binding_pattern()?;
+                    let pat = self.arrow_rest_parameter()?;
                     let params = vec![Pattern::Rest(Box::new(pat))];
                     self.eat(&Token::RightParen)?;
-                    self.eat(&Token::Arrow)?;
+                    self.arrow_after_rest()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_body_checked(false, &params)?;
                         (ArrowBody::Block(Body::new(stmts)), strict)
@@ -1007,7 +1010,7 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         if self.current == Token::Ellipsis {
                             self.advance()?;
-                            let pat = self.parse_binding_pattern()?;
+                            let pat = self.rest_parameter()?;
                             exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
                             arrow_only = true;
                             break;
@@ -1045,7 +1048,7 @@ impl<'a> Parser<'a> {
                         }));
                     }
                     if arrow_only {
-                        return Err(self.error("Unexpected token ')'"));
+                        return Err(self.arrow_only_error(&exprs));
                     }
                     // Just a parenthesized expression
                     if exprs.len() == 1 {
@@ -1263,7 +1266,7 @@ impl<'a> Parser<'a> {
             }
             let (key, computed) = self.parse_property_name()?;
             if matches!(&key, PropertyKey::Private(_)) {
-                return Err(self.error("Private fields are not allowed in object literals"));
+                return Err(self.object_private_key(&key));
             }
             let prev_async = self.in_async;
             let prev_generator = self.in_generator;
@@ -1329,7 +1332,7 @@ impl<'a> Parser<'a> {
             self.advance()?; // consume *
             let (key, computed) = self.parse_property_name()?;
             if matches!(&key, PropertyKey::Private(_)) {
-                return Err(self.error("Private fields are not allowed in object literals"));
+                return Err(self.object_private_key(&key));
             }
             let prev_generator = self.in_generator;
             let prev_static_block = self.in_static_block;
@@ -1393,7 +1396,7 @@ impl<'a> Parser<'a> {
                 self.advance()?; // consume get/set
                 let (key, computed) = self.parse_property_name()?;
                 if matches!(&key, PropertyKey::Private(_)) {
-                    return Err(self.error("Private fields are not allowed in object literals"));
+                    return Err(self.object_private_key(&key));
                 }
                 let prev_static_block = self.in_static_block;
                 self.in_static_block = false;
@@ -1468,7 +1471,7 @@ impl<'a> Parser<'a> {
         let (key, computed) = self.parse_property_name()?;
 
         if matches!(&key, PropertyKey::Private(_)) {
-            return Err(self.error("Private fields are not allowed in object literals"));
+            return Err(self.object_private_key(&key));
         }
 
         // Shorthand: { x }
@@ -1612,7 +1615,7 @@ impl<'a> Parser<'a> {
         }
 
         // Regular: { key: value }
-        self.eat(&Token::Colon)?;
+        self.colon_after(&key)?;
         let value = self.parse_assignment_expression()?;
         Ok(Property {
             key,
@@ -1774,7 +1777,7 @@ impl<'a> Parser<'a> {
         if self.current == Token::Ellipsis {
             // async(...rest) =>
             self.advance()?;
-            let pat = self.parse_binding_pattern()?;
+            let pat = self.rest_parameter()?;
             if Self::pattern_contains_await_identifier(&pat) {
                 return Err(self.error("'await' is not allowed in async arrow formal parameters"));
             }
@@ -1812,7 +1815,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 if self.current == Token::Ellipsis {
                     self.advance()?;
-                    let pat = self.parse_binding_pattern()?;
+                    let pat = self.rest_parameter()?;
                     exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
                     break;
                 }
@@ -1856,7 +1859,7 @@ impl<'a> Parser<'a> {
                 CallSiteId::UNASSIGNED,
             ));
         }
-        self.eat(&Token::RightParen)?;
+        self.eat_args_end()?;
         // async(expr) — function call
         Ok(Expression::Call(
             ExprBox::new(Expression::Identifier("async".to_string())),
@@ -1874,11 +1877,9 @@ impl<'a> Parser<'a> {
         let name = if self.current != Token::Keyword(Keyword::Extends)
             && self.current != Token::LeftBrace
         {
-            if let Some(n) = self.current_identifier_name() {
-                self.advance()?;
-                Some(n)
-            } else {
-                None
+            match self.current_identifier_name() {
+                Some(n) => Some(self.class_binding(n)?),
+                None => None,
             }
         } else {
             None

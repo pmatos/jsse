@@ -1,5 +1,6 @@
 use super::super::*;
 use super::regexp_string_iterator::rsi_next;
+use crate::parser::v8_messages::regexp_error;
 
 fn is_syntax_character(c: char) -> bool {
     matches!(
@@ -4988,7 +4989,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
             }
             let after_escape = chars[i + 1];
             i += 2;
-            has_atom = true;
+            has_atom = !matches!(after_escape, 'b' | 'B');
 
             if after_escape == 'k' {
                 if i < len && chars[i] == '<' {
@@ -5099,9 +5100,10 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                 if i < len && chars[i].is_ascii_alphabetic() {
                     i += 1;
                 } else if unicode {
-                    return Err(format!(
-                        "Invalid regular expression: /{}/ : Invalid escape",
-                        source
+                    return Err(regexp_error(
+                        source,
+                        "Invalid escape",
+                        "Invalid Unicode escape",
                     ));
                 }
             } else if (after_escape == 'p' || after_escape == 'P') && i < len && chars[i] == '{' {
@@ -5482,7 +5484,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
         }
 
         if c == ')' {
-            if group_kind_stack.is_empty() && unicode {
+            if group_kind_stack.is_empty() {
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Unmatched ')'",
                     source
@@ -5499,17 +5501,9 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                 if reject {
                     if i < len {
                         let qc = chars[i];
-                        if qc == '*' || qc == '+' || qc == '?' {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Nothing to repeat",
-                                source
-                            ));
-                        }
-                        if qc == '{' && quantifier_brace_end(&chars, i, len).is_some() {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Nothing to repeat",
-                                source
-                            ));
+                        let brace = qc == '{' && quantifier_brace_end(&chars, i, len).is_some();
+                        if matches!(qc, '*' | '+' | '?') || brace {
+                            return Err(crate::parser::v8_messages::lookaround_quantifier(source));
                         }
                     }
                     has_atom = false;
@@ -5571,10 +5565,8 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                 }
                 if !found_close {
                     if unicode {
-                        return Err(format!(
-                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
-                            source
-                        ));
+                        let (ours, v8) = ("Lone quantifier brackets", "Incomplete quantifier");
+                        return Err(regexp_error(source, ours, v8));
                     }
                     i += 1;
                     continue;
@@ -5605,10 +5597,8 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                 };
                 if !valid {
                     if unicode {
-                        return Err(format!(
-                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
-                            source
-                        ));
+                        let (ours, v8) = ("Lone quantifier brackets", "Incomplete quantifier");
+                        return Err(regexp_error(source, ours, v8));
                     }
                     i += 1;
                     continue;
@@ -5675,7 +5665,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
             ));
         }
 
-        has_atom = true;
+        has_atom = !matches!(c, '^' | '$');
         i += 1;
     }
 

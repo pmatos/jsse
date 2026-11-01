@@ -1,0 +1,150 @@
+module "import {} from './lib.mjs' with { type }" SyntaxError: Unexpected token '}'
+module "import {} from './lib.mjs' with { type: 1 }" SyntaxError: Unexpected number
+module "import {} from './lib.mjs' with { type: 'json', type: 'json' }" SyntaxError: Import attribute has duplicate key 'type'
+module "import {} from './lib.mjs' with { 1: 'json' }" SyntaxError: Unexpected number
+module "import {} from './lib.mjs' assert { type: 'json' }" SyntaxError: Unexpected identifier 'assert'
+module "import a from './lib.mjs' with { type: 'json' } x" SyntaxError: Unexpected identifier 'x'
+module "import.meta" loads
+module "import.meta = 1" SyntaxError: Invalid left-hand side in assignment
+module "import.foo" SyntaxError: Unexpected identifier 'foo'
+module "import(...a)" SyntaxError: Unexpected token '...'
+module "import(a, b, c)" SyntaxError: Unexpected identifier 'c'
+module "import()" SyntaxError: import() requires a specifier
+module "new import('./lib.mjs')" SyntaxError: Cannot use new with import
+module "import('./lib.mjs') = 1" SyntaxError: Invalid left-hand side in assignment
+module "import('./lib.mjs')++" SyntaxError: Invalid left-hand side expression in postfix operation
+module "export default await 1" loads
+module "await" SyntaxError: Unexpected end of input
+module "await;" SyntaxError: Unexpected token ';'
+module "function f() { await 1 }" SyntaxError: Unexpected reserved word
+module "function f() { await }" SyntaxError: Unexpected reserved word
+module "var await" SyntaxError: Unexpected reserved word
+module "class await {}" SyntaxError: Unexpected reserved word
+module "function await() {}" SyntaxError: Unexpected reserved word
+module "async function f(await) {}" SyntaxError: Unexpected reserved word
+module "(await) => 1" SyntaxError: Unexpected token ')'
+module "x = { await }" SyntaxError: Unexpected reserved word
+module "x = { await: 1 }; x.await" ReferenceError: x is not defined
+module "label: await 1" loads
+module "await: 1" SyntaxError: Unexpected token ':'
+module "for await (x of y);" ReferenceError: y is not defined
+module "for await (x in y);" SyntaxError: Unexpected token 'in'
+module "for (await of y);" SyntaxError: Unexpected identifier 'y'
+module "for await (const x of y) {}" ReferenceError: y is not defined
+module "arguments = 1" SyntaxError: Unexpected eval or arguments in strict mode
+module "eval = 1" SyntaxError: Unexpected eval or arguments in strict mode
+module "var arguments" SyntaxError: Unexpected eval or arguments in strict mode
+module "function eval() {}" SyntaxError: Unexpected eval or arguments in strict mode
+module "yield = 1" SyntaxError: Unexpected strict mode reserved word
+module "var yield" SyntaxError: Unexpected strict mode reserved word
+module "let" SyntaxError: Unexpected strict mode reserved word
+module "let = 1" SyntaxError: Unexpected strict mode reserved word
+module "static = 1" SyntaxError: Unexpected strict mode reserved word
+module "implements = 1" SyntaxError: Unexpected strict mode reserved word
+module "with (a) {}" SyntaxError: Strict mode code may not include a with statement
+module "x = 1 --> comment" SyntaxError: Invalid left-hand side expression in postfix operation
+module "x = 010" SyntaxError: Octal literals are not allowed in strict mode.
+module "x = '\\07'" SyntaxError: Octal escape sequences are not allowed in strict mode.
+module "x = '\\8'" SyntaxError: \8 and \9 are not allowed in strict mode.
+module "new.target" SyntaxError: new.target expression is not allowed here
+module "super.x" SyntaxError: 'super' keyword unexpected here
+module "this = 1" SyntaxError: Invalid left-hand side in assignment
+module "delete a" SyntaxError: Delete of an unqualified identifier in strict mode.
+module "delete (a)" SyntaxError: Delete of an unqualified identifier in strict mode.
+module "delete ((a))" SyntaxError: Delete of an unqualified identifier in strict mode.
+module "with" SyntaxError: Strict mode code may not include a with statement
+module "return" SyntaxError: Illegal return statement
+module "break" SyntaxError: Illegal break statement
+module "debugger; debugger" loads
+module "if (1) function f() {}" SyntaxError: In strict mode code, functions can only be declared at top level or inside a block.
+module "function f() { 'use strict'; with (a) {} }" SyntaxError: Strict mode code may not include a with statement
+module "class C { static { await } }" SyntaxError: Unexpected reserved word
+module "class C { static { var await } }" SyntaxError: Unexpected reserved word
+module "class C { static { await: 1 } }" SyntaxError: Unexpected reserved word
+module "class C { static { arguments } }" SyntaxError: 'arguments' is not allowed in class field initializer or static initialization block
+module "class C { static { return } }" SyntaxError: Illegal return statement
+module "class C { static { break } }" SyntaxError: Illegal break statement
+module "class C { static { super() } }" SyntaxError: 'super' keyword unexpected here
+module "class C { static { yield } }" SyntaxError: Unexpected strict mode reserved word
+module "class C { static { var x; var x } }" loads
+module "class C { static { let x; var x } }" SyntaxError: Identifier 'x' has already been declared
+module "class C { static { async () => await 1 } }" loads
+module "class C { static { function await() {} } }" SyntaxError: Unexpected reserved word
+module "class C { static { (await) => 1 } }" SyntaxError: Unexpected reserved word
+module "class C { static { x = { await } } }" SyntaxError: Unexpected reserved word
+script "@dec class C {}" SyntaxError: Invalid or unexpected token
+script "@ dec class C {}" SyntaxError: Invalid or unexpected token
+script "@dec" SyntaxError: Invalid or unexpected token
+script "@dec 1" SyntaxError: Invalid or unexpected token
+script "@dec() class C {}" SyntaxError: Invalid or unexpected token
+script "@(dec) class C {}" SyntaxError: Invalid or unexpected token
+script "@dec.x.y class C {}" SyntaxError: Invalid or unexpected token
+script "class C { @dec m() {} }" SyntaxError: Invalid or unexpected token
+script "class C { @dec }" SyntaxError: Invalid or unexpected token
+script "class C { @dec static }" SyntaxError: Invalid or unexpected token
+script "class C { @dec constructor() {} }" SyntaxError: Invalid or unexpected token
+script "x = @dec class {}" SyntaxError: Invalid or unexpected token
+script "switch (a) { case 1: let x; case 2: let x; }" SyntaxError: Identifier 'x' has already been declared
+script "switch (a) { default: default: }" SyntaxError: More than one default clause in switch statement
+script "switch (a) { case }" SyntaxError: Unexpected token '}'
+script "switch (a) { x }" SyntaxError: Unexpected identifier 'x'
+script "switch (a) { case 1 }" SyntaxError: Unexpected token '}'
+script "switch (a)" SyntaxError: Unexpected end of input
+script "switch a {}" SyntaxError: Unexpected identifier 'a'
+script "try {} catch (e) { let e; }" SyntaxError: Identifier 'e' has already been declared
+script "try {} catch (e) { var e; }" parses
+script "try {} catch ([e]) { var e; }" SyntaxError: Identifier 'e' has already been declared
+script "try {} catch (e, f) {}" SyntaxError: Unexpected token ','
+script "try {} catch () {}" SyntaxError: Unexpected token ')'
+script "try {} catch (e) " SyntaxError: Unexpected end of input
+script "try {} finally" SyntaxError: Unexpected end of input
+script "try {} catch {} catch {}" SyntaxError: Unexpected token 'catch'
+script "try" SyntaxError: Unexpected end of input
+script "do ; while" SyntaxError: Unexpected end of input
+script "do ; while (1) x" parses
+script "do ; while (1" SyntaxError: Unexpected end of input
+script "while" SyntaxError: Unexpected end of input
+script "while (" SyntaxError: Unexpected end of input
+script "while (1" SyntaxError: Unexpected end of input
+script "while (1) " SyntaxError: Unexpected end of input
+script "if" SyntaxError: Unexpected end of input
+script "if (" SyntaxError: Unexpected end of input
+script "if (1) else" SyntaxError: Unexpected token 'else'
+script "if (1) ; else" SyntaxError: Unexpected end of input
+script "if (1) ; else else" SyntaxError: Unexpected token 'else'
+script "for" SyntaxError: Unexpected end of input
+script "for (" SyntaxError: Unexpected end of input
+script "for (;" SyntaxError: Unexpected end of input
+script "for (;;" SyntaxError: Unexpected end of input
+script "for (;;)" SyntaxError: Unexpected end of input
+script "for (a b;;);" SyntaxError: Unexpected identifier 'b'
+script "for (var a b;;);" SyntaxError: Unexpected identifier 'b'
+script "for (var a = 1 of b);" SyntaxError: for-of loop variable declaration may not have an initializer.
+script "for (let a = 1 in b);" SyntaxError: for-in loop variable declaration may not have an initializer.
+script "for (var [a] = 1 in b);" SyntaxError: for-in loop variable declaration may not have an initializer.
+script "for (var a of b, c);" SyntaxError: Unexpected token ','
+script "for (var a in b, c);" parses
+script "for (a of b, c);" SyntaxError: Unexpected token ','
+script "label:" SyntaxError: Unexpected end of input
+script "label: }" SyntaxError: Unexpected token '}'
+script "a: b: c: d: break a;" parses
+script "throw" SyntaxError: Unexpected end of input
+script "throw;" SyntaxError: Unexpected token ';'
+script "throw\n" SyntaxError: Illegal newline after throw
+script "var" SyntaxError: Unexpected end of input
+script "var;" SyntaxError: Unexpected token ';'
+script "var 1" SyntaxError: Unexpected number
+script "var a," SyntaxError: Unexpected end of input
+script "var a b" SyntaxError: Unexpected identifier 'b'
+script "var a = " SyntaxError: Unexpected end of input
+script "let a, " SyntaxError: Unexpected end of input
+script "let [a], b" SyntaxError: Missing initializer in destructuring declaration
+script "const [a]" SyntaxError: Missing initializer in destructuring declaration
+script "const {a}, b = 1" SyntaxError: Missing initializer in destructuring declaration
+script "x = new" SyntaxError: Unexpected end of input
+script "x = new." SyntaxError: Unexpected end of input
+script "x = new.target." SyntaxError: new.target expression is not allowed here
+script "x = a." SyntaxError: Unexpected end of input
+script "x = a.1" SyntaxError: Unexpected number
+script "x = a?." SyntaxError: Unexpected end of input
+script "x = a?.[1" SyntaxError: Unexpected end of input
