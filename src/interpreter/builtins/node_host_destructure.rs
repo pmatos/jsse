@@ -6,7 +6,7 @@
 
 use super::super::*;
 use super::node_host_expr_text::expr_text;
-use super::node_host_param_patterns::PatternKind;
+use super::node_host_param_patterns::{CONDITIONAL, PatternKind};
 use super::node_host_pattern_origin::PatternOrigin;
 use crate::ast::{
     AssignOp, Expression, ObjectPatternProperty, Pattern, Property, PropertyKey, PropertyKind,
@@ -252,7 +252,7 @@ impl Interpreter {
                 }
                 (lead @ (None | Some(Lead::Named(_))), None) if defaulted => {
                     let name = lead.as_ref().and_then(Lead::name).map(str::to_string);
-                    Self::destructure_message(name, Self::conditional_text(), value)
+                    Self::destructure_message(name, CONDITIONAL, value)
                 }
                 (lead, None) => {
                     return Completion::Throw(self.destructure_error(lead, false, None, value));

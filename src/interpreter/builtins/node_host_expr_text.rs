@@ -68,7 +68,6 @@ enum Folded {
 /// `-`, `+` and `~` of one, and `!` of any literal while it parses.
 fn fold(expr: &Expression) -> Option<Folded> {
     use crate::types::number_ops as ops;
-    let number = fold_number;
     Some(Folded::Number(match expr {
         Expression::Literal(Literal::Number(n)) => *n,
         Expression::Literal(Literal::Boolean(b)) => return Some(Folded::Bool(*b)),
@@ -82,10 +81,12 @@ fn fold(expr: &Expression) -> Option<Folded> {
                 Folded::Bool(b) => !b,
             }));
         }
-        Expression::Unary(UnaryOp::Minus, operand) => -number(operand)?,
-        Expression::Unary(UnaryOp::Plus, operand) => number(operand)?,
-        Expression::Unary(UnaryOp::BitNot, operand) => ops::bitwise_not(number(operand)?),
-        Expression::Binary(op, left, right, _) => apply(*op, number(left)?, number(right)?)?,
+        Expression::Unary(UnaryOp::Minus, operand) => -fold_number(operand)?,
+        Expression::Unary(UnaryOp::Plus, operand) => fold_number(operand)?,
+        Expression::Unary(UnaryOp::BitNot, operand) => ops::bitwise_not(fold_number(operand)?),
+        Expression::Binary(op, left, right, _) => {
+            apply(*op, fold_number(left)?, fold_number(right)?)?
+        }
         _ => return None,
     }))
 }
@@ -155,12 +156,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
                 UnaryOp::Not => "!",
                 UnaryOp::BitNot => "~",
             };
-            match (&**operand, op) {
-                (Expression::Literal(Literal::Number(_)), UnaryOp::Minus) => {
-                    format!("-{}", expr_text(operand))
-                }
-                _ => format!("({symbol}{})", expr_text(operand)),
-            }
+            format!("({symbol}{})", expr_text(operand))
         }
         Expression::Typeof(operand) => format!("(typeof {})", expr_text(operand)),
         Expression::Void(operand) => format!("(void {})", expr_text(operand)),

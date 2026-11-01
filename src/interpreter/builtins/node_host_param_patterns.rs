@@ -14,7 +14,7 @@ use super::super::*;
 use crate::ast::ObjectPatternProperty;
 
 /// V8 prints a conditional as three unnamed values.
-const CONDITIONAL: &str = "(intermediate value)(intermediate value)(intermediate value)";
+pub(super) const CONDITIONAL: &str = "(intermediate value)(intermediate value)(intermediate value)";
 
 /// What an open `bind_pattern` binds.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,11 +72,6 @@ impl Interpreter {
             == 2
             && node.pattern_kinds.len() >= 2
             && node.pattern_kinds[node.pattern_kinds.len() - 2] == PatternKind::Default
-    }
-
-    /// `(intermediate value)` ×3, the text of a conditional.
-    pub(crate) fn conditional_text() -> &'static str {
-        CONDITIONAL
     }
 
     /// `bind_pattern_or_throw` for the parameter at `index`; under `--node` it
