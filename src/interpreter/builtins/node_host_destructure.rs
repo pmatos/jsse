@@ -65,7 +65,7 @@ fn first_target_name(props: &[Property]) -> Option<Lead> {
         return None;
     }
     let (target, defaulted) = match &first.value {
-        Expression::Assign(AssignOp::Assign, target, _) => (&**target, true),
+        Expression::Assign(AssignOp::Assign, target, _, _) => (&**target, true),
         value => (value, false),
     };
     let name = key_name(&first.key)?;

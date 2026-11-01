@@ -114,7 +114,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         }
         Expression::Object(props, _) => format!("{{{}}}", UNKNOWN.repeat(props.len())),
         Expression::Conditional(..) => UNKNOWN.repeat(3),
-        Expression::Assign(_, target, _) => expr_text(target),
+        Expression::Assign(_, target, _, _) => expr_text(target),
         Expression::Template(template) if template.expressions.is_empty() => {
             let cooked = template
                 .quasis
