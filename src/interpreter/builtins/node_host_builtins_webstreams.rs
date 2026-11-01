@@ -34,6 +34,7 @@ pub(super) const WEBSTREAMS_MODULES: &[(&str, &str)] = &[
     single!("internal/per_context/safe_promise"),
     single!("internal/process/task_queues"),
     single!("internal/worker/io"),
+    single!("internal/worker/message_event"),
     single!("internal/worker/js_transferable"),
     single!("internal/webstreams/compression"),
     single!("internal/webstreams/encoding"),

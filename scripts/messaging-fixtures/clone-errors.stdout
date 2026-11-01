@@ -1,0 +1,21 @@
+readable DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+writable DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+transform DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+nested DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+port DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+listed elsewhere DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+unlisted among listed DataCloneError 25 "Object that needs transfer was found in message but not listed in transferList"
+not transferable DataCloneError 25 "Found invalid value in transferList."
+map DataCloneError 25 "Found invalid value in transferList."
+view DataCloneError 25 "Found invalid value in transferList."
+duplicate stream DataCloneError 25 "Transfer list contains duplicate ReadableStream"
+duplicate buffer DataCloneError 25 "Transfer list contains duplicate ArrayBuffer"
+locked readable DataCloneError 25 "Cannot transfer a locked ReadableStream"
+locked writable DataCloneError 25 "Cannot transfer a locked WritableStream"
+locked transform side DataCloneError 25 "Cannot transfer a locked WritableStream"
+transfer not in message ok true
+transfer readable ok [ true, false, true, false, true ]
+transfer transform ok [ true, true, false, false ]
+port transfer ok [ false, 'MessagePort', true ]
+closed port DataCloneError 25 "MessagePort in transfer list is already detached"
+buffers still work ok [ 0, 4 ]

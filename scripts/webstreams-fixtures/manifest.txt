@@ -9,6 +9,7 @@ test-stream-duplex-from
 test-webstreams-abort-controller
 test-webstreams-adapters-sync-write-error
 test-webstreams-adapters-writable-buffer-sources
+test-webstreams-clone-unref
 test-webstreams-compose
 test-webstreams-compression-bad-chunks
 test-webstreams-compression-buffer-source
@@ -29,7 +30,6 @@ test-whatwg-webstreams-compression
 test-whatwg-writablestream
 test-whatwg-writablestream-close
 
-! test-webstreams-clone-unref structuredClone(..., { transfer }) of a ReadableStream/WritableStream needs MessagePort-backed cross-realm transfer, which jsse does not have (#1528)
 ! test-webstreams-pipeline needs http
 ! test-whatwg-readablestream over the 20,000-byte file budget (41 KB); the corpus covers its ground
-! test-filehandle-readablestream posts a FileHandle through a MessageChannel (#1528); readableWebStream itself is covered by the corpus
+! test-filehandle-readablestream posts a FileHandle through a MessageChannel, and fs.promises.FileHandle has no transfer protocol; readableWebStream itself is covered by the corpus

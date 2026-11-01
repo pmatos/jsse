@@ -1,0 +1,27 @@
+shape [ 'port1', 'port2' ] function function
+TypeError ERR_CONSTRUCT_CALL_INVALID Constructor cannot be called
+close order [ 'msg a', 'msg b', 'close1', 'close2' ]
+post after close undefined undefined
+close callback
+hasRef when closed false false
+late listener [ 1, 2 ]
+addEventListener [ 'p', 'q' ]
+refs false false
+after onmessage true
+after unref false
+after ref true
+after onmessage = null false
+received carrier
+detached false undefined
+DataCloneError 25 Transfer list contains source port
+DataCloneError 25 Transfer list contains duplicate MessagePort
+DataCloneError 25 Found invalid value in transferList.
+TypeError ERR_INVALID_ARG_TYPE Optional transferList argument must be an iterable
+TypeError ERR_MISSING_ARGS
+DataCloneError Symbol() could not be cloned.
+DataCloneError () => {} could not be cloned.
+options.transfer with options false
+event MessageEvent message 1 true true true
+through through
+ticks between messages [ 'm1', 't1', 'p1', 'm2', 't2', 'p2' ]
+end

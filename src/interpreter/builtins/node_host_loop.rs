@@ -77,6 +77,27 @@ impl Interpreter {
             Completion::Normal(JsValue::UNDEFINED)
         });
 
+        // __host_loop_defer(callback, front): run `callback()` in the next poll
+        // phase with its own checkpoint, as a message-port delivery does; the
+        // loop stays alive until it has run. `front` runs it before the rest
+        // of the phase's queue (and within the running phase).
+        self.install_loop_fn("__host_loop_defer", 2, |interp, args| {
+            let front = interp.to_boolean_val(&arg(args, 1));
+            let id = interp.scheduler.node_loop.begin_request(vec![arg(args, 0)]);
+            let done: Box<dyn FnOnce(&mut Interpreter)> = Box::new(move |interp| {
+                let roots = interp.scheduler.node_loop.end_request(id);
+                if let Some(callback) = roots.first() {
+                    interp.node_dispatch(callback, &[]);
+                }
+            });
+            if front {
+                interp.scheduler.node_loop.push_completed_front(done);
+            } else {
+                interp.scheduler.node_loop.push_completed(done);
+            }
+            Completion::Normal(JsValue::UNDEFINED)
+        });
+
         // __host_timer_ref(id, bool): an unref'd timer does not keep the loop alive
         self.install_loop_fn("__host_timer_ref", 2, |interp, args| {
             if let Some(id) = arg(args, 0).as_number() {

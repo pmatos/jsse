@@ -36,6 +36,8 @@ pub(crate) struct NodeLoopState {
     requests: FxHashMap<u64, Vec<JsValue>>,
     next_request: u64,
     completed: VecDeque<Box<dyn FnOnce(&mut Interpreter)>>,
+    /// Continuations the running poll phase may still pop.
+    budget: usize,
     #[cfg(unix)]
     pub(crate) stdin: super::builtins::node_host_tty::StdinState,
 }
@@ -75,6 +77,13 @@ impl NodeLoopState {
     /// Queue a main-thread continuation for the poll phase.
     pub(crate) fn push_completed(&mut self, done: Box<dyn FnOnce(&mut Interpreter)>) {
         self.completed.push_back(done);
+    }
+
+    /// Queue a continuation that runs before the others of this poll phase
+    /// (a message port delivering the next message of its batch).
+    pub(crate) fn push_completed_front(&mut self, done: Box<dyn FnOnce(&mut Interpreter)>) {
+        self.completed.push_front(done);
+        self.budget += 1;
     }
 
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
@@ -264,9 +273,16 @@ impl Interpreter {
             f(self);
         }
         let mut ran = false;
-        while self.pending_exit.is_none()
-            && let Some(done) = self.scheduler.node_loop.completed.pop_front()
-        {
+        // Only what was queued when the phase began, plus the front-queued
+        // continuations of those: one that queues another at the back (a
+        // message port answering) waits for the next turn, so timers and
+        // immediates still run.
+        self.scheduler.node_loop.budget = self.scheduler.node_loop.completed.len();
+        while self.scheduler.node_loop.budget > 0 && self.pending_exit.is_none() {
+            self.scheduler.node_loop.budget -= 1;
+            let Some(done) = self.scheduler.node_loop.completed.pop_front() else {
+                break;
+            };
             ran = true;
             done(self);
             self.node_checkpoint();

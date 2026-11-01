@@ -1,0 +1,18 @@
+rs locked orig true clone false true true
+read [
+  'a',
+  { n: 1, d: 1970-01-01T00:00:00.000Z },
+  Uint8Array(3) [ 1, 2, 3 ]
+]
+err Error boom
+first { done: false, value: 'x' }
+cancelled with why
+writes [ 'one', { two: 2 }, 'closed' ] true
+aborted with stop
+transform [ 'ABC', 'DEF' ] true
+object [ 'a', 'b', 'again', 'n' ] true true
+{ done: false, value: 1 } { done: false, value: 2 }
+via channel [ 'm1', 'm2' ]
+DataCloneError Cannot transfer a locked ReadableStream
+DataCloneError Object that needs transfer was found in message but not listed in transferList
+done

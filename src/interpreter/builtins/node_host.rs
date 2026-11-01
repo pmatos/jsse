@@ -64,6 +64,8 @@ pub(crate) struct NodeHostState {
     /// `--expose-internals`: user `require` may name `internal/...` builtins.
     pub(crate) expose_internals: bool,
     pub(crate) esm: crate::interpreter::node_esm::NodeEsm,
+    /// `structuredClone`'s mark and hook for transferable platform objects.
+    pub(crate) platform: super::structured_clone::PlatformState,
     pub(crate) crypto: super::node_host_crypto::CryptoState,
     pub(crate) zlib: super::node_host_zlib::ZlibState,
     pub(crate) vm: super::node_host_vm::VmState,
@@ -334,6 +336,7 @@ impl Interpreter {
         self.setup_node_host_process_metrics();
         self.setup_node_host_esm();
         self.setup_node_host_vm();
+        self.setup_node_host_transfer();
     }
 }
 

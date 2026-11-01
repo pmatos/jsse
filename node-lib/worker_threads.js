@@ -9,6 +9,12 @@
 const {
   codes: { ERR_FEATURE_UNAVAILABLE_ON_PLATFORM },
 } = require('internal/errors');
+const {
+  MessageChannel,
+  MessagePort,
+  markAsUncloneable,
+  receiveMessageOnPort,
+} = require('internal/worker/io');
 
 const SHARE_ENV = Symbol.for('nodejs.worker_threads.SHARE_ENV');
 
@@ -42,9 +48,6 @@ function isMarkedAsUntransferable(object) {
   return isObjectLike(object) && untransferable.has(object);
 }
 
-// structuredClone does not consult the mark, so there is nothing to record.
-function markAsUncloneable() {}
-
 module.exports = {
   isMainThread: true,
   isInternalThread: false,
@@ -60,4 +63,7 @@ module.exports = {
   markAsUntransferable,
   isMarkedAsUntransferable,
   markAsUncloneable,
+  MessageChannel,
+  MessagePort,
+  receiveMessageOnPort,
 };
