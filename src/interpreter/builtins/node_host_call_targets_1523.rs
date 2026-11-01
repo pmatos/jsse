@@ -40,7 +40,7 @@ impl Interpreter {
         match left {
             ForInOfLeft::Pattern(pattern) => self.assign_to_for_pattern(pattern, value, env),
             ForInOfLeft::Expression(
-                expr @ (Expression::Identifier(_) | Expression::Member(..)),
+                expr @ (Expression::Identifier(..) | Expression::Member(..)),
             ) => match self.assign_to_expr(expr, value, env) {
                 Ok(()) => Completion::Normal(JsValue::UNDEFINED),
                 Err(e) => Completion::Throw(e),
