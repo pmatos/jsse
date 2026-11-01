@@ -109,7 +109,8 @@ impl Interpreter {
         JsValue::object(id)
     }
 
-    /// Under `--node` the error is an instance of the host's `DOMException`.
+    /// Under `--node` the error is an instance of the host's `DOMException`,
+    /// which the global loads lazily (so it is read through its getter).
     fn node_dom_exception(&mut self, name: &str, message: &str) -> Option<JsValue> {
         let global = self.realm().global_object?;
         let Completion::Normal(ctor) =

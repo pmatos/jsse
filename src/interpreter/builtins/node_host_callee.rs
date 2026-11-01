@@ -147,6 +147,16 @@ fn ast_text(s: &str) -> Option<String> {
     }
 }
 
+/// The identifier that ends just before byte `end`.
+fn word_before(src: &str, end: usize) -> &str {
+    let b = src.as_bytes();
+    let mut start = end;
+    while start > 0 && ident_byte(b[start - 1]) {
+        start -= 1;
+    }
+    &src[start..end]
+}
+
 /// The index of the `[` that matches the `]` at `close`.
 fn bracket_before(b: &[u8], close: usize) -> Option<usize> {
     let mut depth = 0usize;
@@ -246,7 +256,7 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
             let open = bracket_before(b, i - 1)?;
             let before = skip_ws_back(b, open);
             let member = before > 0
-                && (ident_byte(b[before - 1])
+                && (ident_byte(b[before - 1]) && !KEYWORDS.contains(&word_before(src, before))
                     || matches!(b[before - 1], b']' | b')' | b'"' | b'\'' | b'`'));
             if member {
                 parts.push(render_index(&src[open + 1..i - 1])?);

@@ -21,25 +21,45 @@ fn key_name(key: &PropertyKey) -> Option<String> {
     }
 }
 
-/// The first property's name and whether it has a default: V8 words a
-/// failed destructure by the name only without one (`Cannot read properties
-/// of null (reading 'a')` with it).
-type Lead = Option<(String, bool)>;
+/// How V8 words a failed destructure by the first property of the pattern.
+enum Lead {
+    /// `Cannot destructure property 'a' of 'x' as it is null.`
+    Named(String),
+    /// `Cannot read properties of null (reading 'a')`: the property has a
+    /// default or a member target.
+    Read(String),
+    /// `Cannot read properties of null`: a rest element with a member target.
+    ReadBare,
+}
 
-fn first_pattern_name(props: &[ObjectPatternProperty]) -> Lead {
+impl Lead {
+    fn name(&self) -> Option<&str> {
+        match self {
+            Lead::Named(name) | Lead::Read(name) => Some(name),
+            Lead::ReadBare => None,
+        }
+    }
+}
+
+fn first_pattern_name(props: &[ObjectPatternProperty]) -> Option<Lead> {
     match props.first()? {
-        ObjectPatternProperty::Shorthand(name) => Some((name.clone(), false)),
+        ObjectPatternProperty::Shorthand(name) => Some(Lead::Named(name.clone())),
         ObjectPatternProperty::KeyValue(key, target) => {
-            Some((key_name(key)?, matches!(target, Pattern::Assign(..))))
+            let name = key_name(key)?;
+            Some(if matches!(target, Pattern::Assign(..)) {
+                Lead::Read(name)
+            } else {
+                Lead::Named(name)
+            })
         }
         ObjectPatternProperty::Rest(_) => None,
     }
 }
 
-fn first_target_name(props: &[Property]) -> Lead {
+fn first_target_name(props: &[Property]) -> Option<Lead> {
     let first = props.first()?;
     if let Expression::Spread(target) = &first.value {
-        return (!matches!(**target, Expression::Identifier(_))).then(|| (String::new(), true));
+        return (!matches!(**target, Expression::Identifier(_))).then_some(Lead::ReadBare);
     }
     if first.computed || first.kind != PropertyKind::Init {
         return None;
@@ -48,8 +68,12 @@ fn first_target_name(props: &[Property]) -> Lead {
         Expression::Assign(AssignOp::Assign, target, _) => (&**target, true),
         value => (value, false),
     };
-    let read = defaulted || matches!(target, Expression::Member(..));
-    Some((key_name(&first.key)?, read))
+    let name = key_name(&first.key)?;
+    Some(if defaulted || matches!(target, Expression::Member(..)) {
+        Lead::Read(name)
+    } else {
+        Lead::Named(name)
+    })
 }
 
 /// V8's text for the initializer of an array pattern that is not iterable:
@@ -75,7 +99,7 @@ impl Interpreter {
     /// is the initializer; without it V8 prints the value itself.
     fn destructure_error(
         &mut self,
-        first: Lead,
+        first: Option<Lead>,
         is_array: bool,
         source: Option<&Expression>,
         value: &JsValue,
@@ -86,16 +110,17 @@ impl Interpreter {
                 None => return self.not_iterable_error(value),
             },
             _ => match first {
-                Some((name, true)) if name.is_empty() => {
+                Some(Lead::ReadBare) => {
                     let what = if value.is_null() { "null" } else { "undefined" };
                     format!("Cannot read properties of {what}")
                 }
-                Some((name, true)) => {
+                Some(Lead::Read(name)) => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
                 first => {
                     let shown = source.map_or_else(|| self.v8_call_site_text(value), expr_text);
-                    Self::destructure_message(first.map(|lead| lead.0), &shown, value)
+                    let name = first.as_ref().and_then(Lead::name);
+                    Self::destructure_message(name.map(str::to_string), &shown, value)
                 }
             },
         };
@@ -219,12 +244,16 @@ impl Interpreter {
                 [.., outer, inner] if outer == inner
             );
             let error = match (lead, self.head_text_here()) {
-                (Some((name, _)), _) if nested => {
+                (Some(Lead::Named(name) | Lead::Read(name)), _) if nested => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
                 (_, _) if nested => "Cannot convert undefined or null to object".to_string(),
+                (Some(Lead::Read(name)), Some(_)) => {
+                    self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
+                }
                 (lead, Some(head)) => {
-                    Self::destructure_message(lead.map(|lead| lead.0), head, value)
+                    let name = lead.as_ref().and_then(Lead::name);
+                    Self::destructure_message(name.map(str::to_string), head, value)
                 }
                 (lead, None) => {
                     return Completion::Throw(self.destructure_error(lead, false, None, value));
@@ -235,13 +264,17 @@ impl Interpreter {
         self.require_object_coercible(value)
     }
 
-    /// RequireObjectCoercible for an object assignment pattern that is nested
-    /// or a for-of head: V8 reads its first property.
+    /// RequireObjectCoercible for an object assignment pattern: the
+    /// top-level one already passed `node_assign_precheck` with an object, so
+    /// a nullish value is a nested pattern or a for-of head and V8 reads its
+    /// first property.
     pub(crate) fn require_assignable(&mut self, props: &[Property], value: &JsValue) -> Completion {
         if self.node_host.stack.installed
             && value.is_nullish()
-            && let Some((name, _)) = first_target_name(props)
-            && !name.is_empty()
+            && let Some(name) = first_target_name(props)
+                .as_ref()
+                .and_then(Lead::name)
+                .map(str::to_string)
         {
             let text = self.nullish_keyed_read_message(value, &JsPropertyKey::from(name));
             return Completion::Throw(self.create_type_error(&text));
@@ -305,7 +338,9 @@ impl Interpreter {
                 let arrays: Vec<usize> = props
                     .iter()
                     .filter_map(|prop| match &prop.value {
-                        Expression::Array(elements, _) => Some(elements.as_ptr() as usize),
+                        Expression::Array(elements, _) => {
+                            Some(std::ptr::from_ref(elements) as usize)
+                        }
                         _ => None,
                     })
                     .collect();
@@ -326,7 +361,7 @@ impl Interpreter {
     /// its failure by the source of the assignment, like a property read.
     pub(crate) fn nested_array_assign(
         &mut self,
-        elements: &[Option<Expression>],
+        elements: &Vec<Option<Expression>>,
         value: &JsValue,
         env: &EnvRef,
     ) -> Completion {
@@ -337,7 +372,7 @@ impl Interpreter {
         let Some(PatternOrigin::Target(shown, arrays)) = self.origin_here() else {
             return done;
         };
-        let at = elements.as_ptr() as usize;
+        let at = std::ptr::from_ref(elements) as usize;
         if !self.node_host.stack.installed
             || !arrays.contains(&at)
             || !self.iterable_error_was_for(value)

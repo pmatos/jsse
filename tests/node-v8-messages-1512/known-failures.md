@@ -16,6 +16,7 @@ compare stdout of `node` and `jsse --node`. The rows are tracked in #1557
 | `(function ({ a } = nul) {})()` | `Cannot destructure property 'a' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.` | `Cannot read properties of null (reading 'a')` |
 | `(function ({ a }, [b]) {})({})` | `Cannot destructure property 'Symbol(Symbol.iterator)' of 'undefined' as it is undefined.` | `undefined is not iterable (cannot read property Symbol(Symbol.iterator))` |
 | uncaught destructuring error in an async function's parameters | position of the pattern | position of the function |
+| `a["]"]()` with `a["]"]` not callable (the callee scanner stops at the `]` inside the string) | `a.] is not a function` | `1 is not a function` |
 
 ## Builtins (#1558)
 
