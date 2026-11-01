@@ -1470,7 +1470,7 @@ impl Interpreter {
         } else if prim.is_null() {
             Err(self.create_type_error("Cannot convert null to a BigInt"))
         } else if prim.is_number() {
-            Err(self.create_type_error("Cannot convert a Number to a BigInt"))
+            Err(self.number_to_bigint_error(&prim))
         } else if prim.is_symbol() {
             Err(self.create_type_error("Cannot convert a Symbol to a BigInt"))
         } else {
@@ -6967,9 +6967,7 @@ impl Interpreter {
             };
             if !(method).is_nullish() {
                 if !self.is_callable(&method) {
-                    return Completion::Throw(
-                        self.create_type_error("@@hasInstance is not callable"),
-                    );
+                    return Completion::Throw(self.has_instance_error(&method));
                 }
                 let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {

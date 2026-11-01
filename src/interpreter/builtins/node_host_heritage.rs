@@ -80,24 +80,6 @@ impl Interpreter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::heritage_offset;
-
-    #[test]
-    fn finds_the_heritage_expression() {
-        let at = |t: &str| heritage_offset(t).and_then(|i| t[i..].chars().next());
-        assert_eq!(at("class B extends num {}"), Some('n'));
-        assert_eq!(at("class extends (f()) {}"), Some('('));
-        assert_eq!(
-            at("class /* extends */ B // x\n extends /* c */ Z {}"),
-            Some('Z')
-        );
-        assert_eq!(at("class B {}"), None);
-        assert_eq!(at("class B extends"), None);
-    }
-}
-
 impl Interpreter {
     /// The TypeError of a `super()` call whose parent is not a constructor;
     /// under `--node`, V8's `Super constructor null of A is not a
@@ -131,5 +113,23 @@ impl Interpreter {
             return self.create_type_error(&text);
         }
         self.create_type_error("Super constructor is not a constructor")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::heritage_offset;
+
+    #[test]
+    fn finds_the_heritage_expression() {
+        let at = |t: &str| heritage_offset(t).and_then(|i| t[i..].chars().next());
+        assert_eq!(at("class B extends num {}"), Some('n'));
+        assert_eq!(at("class extends (f()) {}"), Some('('));
+        assert_eq!(
+            at("class /* extends */ B // x\n extends /* c */ Z {}"),
+            Some('Z')
+        );
+        assert_eq!(at("class B {}"), None);
+        assert_eq!(at("class B extends"), None);
     }
 }

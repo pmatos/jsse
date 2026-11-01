@@ -38,11 +38,18 @@ fn first_pattern_name(props: &[ObjectPatternProperty]) -> Lead {
 
 fn first_target_name(props: &[Property]) -> Lead {
     let first = props.first()?;
+    if let Expression::Spread(target) = &first.value {
+        return (!matches!(**target, Expression::Identifier(_))).then(|| (String::new(), true));
+    }
     if first.computed || first.kind != PropertyKind::Init {
         return None;
     }
-    let defaulted = matches!(&first.value, Expression::Assign(AssignOp::Assign, ..));
-    Some((key_name(&first.key)?, defaulted))
+    let (target, defaulted) = match &first.value {
+        Expression::Assign(AssignOp::Assign, target, _) => (&**target, true),
+        value => (value, false),
+    };
+    let read = defaulted || matches!(target, Expression::Member(..));
+    Some((key_name(&first.key)?, read))
 }
 
 /// V8's text for the initializer of an array pattern that is not iterable:
@@ -79,6 +86,10 @@ impl Interpreter {
                 None => return self.not_iterable_error(value),
             },
             _ => match first {
+                Some((name, true)) if name.is_empty() => {
+                    let what = if value.is_null() { "null" } else { "undefined" };
+                    format!("Cannot read properties of {what}")
+                }
                 Some((name, true)) => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
@@ -230,6 +241,7 @@ impl Interpreter {
         if self.node_host.stack.installed
             && value.is_nullish()
             && let Some((name, _)) = first_target_name(props)
+            && !name.is_empty()
         {
             let text = self.nullish_keyed_read_message(value, &JsPropertyKey::from(name));
             return Completion::Throw(self.create_type_error(&text));

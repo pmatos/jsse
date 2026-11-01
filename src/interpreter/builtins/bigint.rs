@@ -192,7 +192,9 @@ impl Interpreter {
                         interp.create_type_error("Cannot convert value to a BigInt"),
                     );
                 }
-                Completion::Throw(interp.create_type_error("Cannot convert value to a BigInt"))
+                let error =
+                    interp.bigint_conversion_error("Cannot convert value to a BigInt", &val);
+                Completion::Throw(error)
             }),
         );
 
