@@ -24,6 +24,9 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 other => return other,
             };
+            if pos != 0 {
+                self.node_host.call_pos = pos;
+            }
             return self.private_in(branded, &rval);
         }
         let lval = match self.eval_expr(left, env) {

@@ -56,22 +56,25 @@ at <dir>/operators.js:98:7
 ## valueOfThrows
 TypeError: Cannot convert object to primitive value
 at <dir>/operators.js:103:14
+## privateIn
+TypeError: Cannot use 'in' operator to search for '#x' in 1
+at Brand.has (<dir>/operators.js:108:15)
 ## classHeritageNumber
 TypeError: Class extends value 1 is not a constructor or null
-at <dir>/operators.js:106:19
+at <dir>/operators.js:115:19
 ## classHeritageObject
 TypeError: Class extends value #<Object> is not a constructor or null
-at <dir>/operators.js:109:19
+at <dir>/operators.js:118:19
 ## valueOfFrames
 Error: boom
 at Object.valueOf (<dir>/operators.js:12:11)
-at <dir>/operators.js:114:14
+at <dir>/operators.js:123:14
 ## inGenerator
 TypeError: Cannot use 'in' operator to search for '1' in 1
-at <dir>/operators.js:121:14
+at <dir>/operators.js:130:14
 ## inLoweredGenerator
 TypeError: Cannot convert a Symbol value to a number
-at <dir>/operators.js:128:22
+at <dir>/operators.js:137:22
 ## topLevel
 Right-hand side of 'instanceof' is not an object
-at Object.<anonymous> (<dir>/operators.js:134:8)
+at Object.<anonymous> (<dir>/operators.js:143:8)

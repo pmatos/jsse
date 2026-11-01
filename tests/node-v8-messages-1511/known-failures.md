@@ -20,6 +20,8 @@ the fixture, one statement per line indented by two spaces.
 | `delete null.x` | the `delete` (col 3); jsse the function start | offset on `Expression::Delete` |
 | `new o.a.b.c()` with `o.a` undefined | the `.b` (col 11); jsse the function start | the member site of a `new` callee is `PropSiteId::UNASSIGNED` |
 | `o?.a.b` with `o.a` undefined | the `.b` (col 14); jsse the function start | optional-chain members carry no site (`PropSiteId::UNASSIGNED`) |
+| `o += Symbol()` and the other compound assignments | the compound operator (`+=`) | the offset on `Expression::Assign`; today the frame keeps the last call position, which happens to be right only after a call on the same line |
+| `class B extends (yield) {}` in a generator, heritage rejected after the resume | the heritage expression | `ClassProtoParent` carries no class source text (`class_proto_parent` passes `None`) |
 | `class B extends (() => {}) {}` | col 37, past the end of the line: a V8 quirk for a parenthesised arrow heritage | not worth matching |
 | `Class extends value #<Object>` for `Math` | jsse prints `#<Math>`, V8 `#<Object>` | V8 uses the constructor name, not `@@toStringTag` |
 

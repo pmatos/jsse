@@ -685,6 +685,8 @@ impl Compiler {
 
     fn rollback(&mut self, snap: Snapshot) {
         self.code.truncate(snap.code_len);
+        let kept = u32::try_from(snap.code_len).unwrap_or(u32::MAX);
+        self.binary_pos.retain(|entry| entry.0 <= kept);
         self.last_op_at = snap.last_op_at;
         self.current_stack = snap.current_stack;
         self.current_refs = snap.current_refs;
@@ -938,13 +940,14 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
-            Expression::Binary(BinaryOp::In, lhs, rhs, _)
+            Expression::Binary(BinaryOp::In, lhs, rhs, pos)
                 if let Expression::PrivateIdentifier(name) = lhs.as_ref() =>
             {
                 self.compile_expr(rhs)?;
                 let idx = self.add_private_name(name)?;
                 self.emit(Op::PrivateIn);
                 self.emit_u16(idx);
+                self.note_binary_pos(*pos);
                 Ok(())
             }
             Expression::Binary(op, lhs, rhs, pos) => self.compile_binary(*op, lhs, rhs, *pos),
@@ -1376,58 +1379,6 @@ impl Compiler {
                 | BinaryOp::StrictEq
                 | BinaryOp::StrictNotEq
         )
-    }
-
-    /// The comparison byte, optional constant and jump offset (last, so
-    /// `patch_jump` applies) every compare-and-branch op ends with. Returns the
-    /// patch site.
-    fn emit_cmp_jump_tail(&mut self, cmp: Op, constant: Option<u16>, pos: u32) -> usize {
-        self.code.push(cmp as u8);
-        if let Some(k_idx) = constant {
-            self.emit_u16(k_idx);
-        }
-        let patch = self.code.len();
-        self.emit_u16(0);
-        self.note_binary_pos(pos);
-        patch
-    }
-
-    /// Compiles `test` and a forward jump taken when it is falsy; returns the
-    /// patch site. A comparison fuses into `CmpJumpIfFalse` (its result is
-    /// always a Boolean, so ToBoolean is the identity), and one whose operands
-    /// are locals, or a local and a number literal, reads them in the jump op.
-    fn compile_cond_jump(&mut self, test: &Expression) -> Result<usize, CompileError> {
-        if let Expression::Binary(op, lhs, rhs, pos) = test
-            && Self::is_comparison(*op)
-        {
-            let cmp = Self::binary_op(*op)?;
-            if let Some((a, b)) = self.local_pair(lhs, rhs) {
-                self.emit(Op::LocalLocalCmpJump);
-                self.emit_local_ref(a);
-                self.emit_local_ref(b);
-                self.push_n(2);
-                self.pop_n(2);
-                return Ok(self.emit_cmp_jump_tail(cmp, None, *pos));
-            }
-            if let Expression::Literal(Literal::Number(k)) = rhs.as_ref()
-                && let Some(local) = self.local_ref(lhs)
-            {
-                let k_idx = self.add_constant(Constant::Number(*k))?;
-                self.emit(Op::LocalConstCmpJump);
-                self.emit_local_ref(local);
-                self.push_n(2);
-                self.pop_n(2);
-                return Ok(self.emit_cmp_jump_tail(cmp, Some(k_idx), *pos));
-            }
-            self.compile_expr(lhs)?;
-            self.compile_expr(rhs)?;
-            self.pop_n(2);
-            self.emit(Op::CmpJumpIfFalse);
-            return Ok(self.emit_cmp_jump_tail(cmp, None, *pos));
-        }
-        self.compile_expr(test)?;
-        self.pop_n(1);
-        Ok(self.emit_jump(Op::JumpIfFalse))
     }
 
     fn compile_call(

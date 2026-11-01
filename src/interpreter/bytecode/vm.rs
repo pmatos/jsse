@@ -17,7 +17,7 @@ mod binary_slow;
 mod call_operands;
 mod iteration;
 mod member_pos;
-use binary_slow::{bigint_compare_pop, bigint_pair_op, binary_slow};
+use binary_slow::{bigint_compare_pop, bigint_pair_op, binary_slow, number_binop, number_compare};
 mod name_store;
 mod spread;
 mod switch;
@@ -94,49 +94,6 @@ fn binary_of_op(op: Op) -> BinaryOp {
         Op::Shr => BinaryOp::RShift,
         Op::UShr => BinaryOp::URShift,
         _ => unreachable!("not a binary op: {op:?}"),
-    }
-}
-
-/// A binary op over two Numbers, computed with the same `number_ops` calls as
-/// `eval_binary`'s own Number fast path.
-#[inline(always)]
-fn number_binop(op: Op, l: f64, r: f64) -> JsValue {
-    match op {
-        Op::Add => JsValue::number(number_ops::add(l, r)),
-        Op::Sub => JsValue::number(number_ops::subtract(l, r)),
-        Op::Mul => JsValue::number(number_ops::multiply(l, r)),
-        Op::Div => JsValue::number(number_ops::divide(l, r)),
-        Op::Mod => JsValue::number(number_ops::remainder(l, r)),
-        Op::Pow => JsValue::number(number_ops::exponentiate(l, r)),
-        Op::Shl => JsValue::number(number_ops::left_shift(l, r)),
-        Op::Shr => JsValue::number(number_ops::signed_right_shift(l, r)),
-        Op::UShr => JsValue::number(number_ops::unsigned_right_shift(l, r)),
-        Op::BitAnd => JsValue::number(number_ops::bitwise_and(l, r)),
-        Op::BitOr => JsValue::number(number_ops::bitwise_or(l, r)),
-        Op::BitXor => JsValue::number(number_ops::bitwise_xor(l, r)),
-        Op::Lt
-        | Op::Gt
-        | Op::LtEq
-        | Op::GtEq
-        | Op::Eq
-        | Op::StrictEq
-        | Op::NotEq
-        | Op::StrictNotEq => JsValue::boolean(number_compare(op, l, r)),
-        _ => unreachable!("not a binary op: {op:?}"),
-    }
-}
-
-/// A comparison over two Numbers, as `eval_binary`'s own Number fast path.
-#[inline(always)]
-fn number_compare(op: Op, l: f64, r: f64) -> bool {
-    match op {
-        Op::Lt => number_ops::less_than(l, r) == Some(true),
-        Op::Gt => number_ops::less_than(r, l) == Some(true),
-        Op::LtEq => number_ops::less_than(r, l) == Some(false),
-        Op::GtEq => number_ops::less_than(l, r) == Some(false),
-        Op::Eq | Op::StrictEq => number_ops::equal(l, r),
-        Op::NotEq | Op::StrictNotEq => !number_ops::equal(l, r),
-        _ => unreachable!("not a comparison: {op:?}"),
     }
 }
 
@@ -1581,6 +1538,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 2;
                     let id = private_id!(idx);
                     let object = pop_value(interp, stack, "stack underflow on PrivateIn");
+                    member_pos::note_binary(interp, chunk, pc);
                     match interp.private_in(id, &object) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),

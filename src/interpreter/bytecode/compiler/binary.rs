@@ -1,9 +1,9 @@
-//! A binary operator expression, with the `--node` error position of the
-//! operator (#1511): `Chunk::binary_pos` maps the offset after the op's
-//! instruction (a fused one too) to the operator's source position, which the
-//! VM reads when the op throws.
+//! Binary operator expressions and the comparison jumps, with the `--node`
+//! error position of the operator (#1511): `Chunk::binary_pos` maps the offset
+//! after the op's instruction (a fused one too) to the operator's source
+//! position, which the VM reads when the op throws.
 
-use super::{CompileError, Compiler};
+use super::{CompileError, Compiler, Constant};
 use crate::ast::{BinaryOp, Expression, Literal};
 use crate::interpreter::bytecode::op::Op;
 
@@ -58,5 +58,57 @@ impl Compiler {
             }
             self.binary_pos.push((end, pos));
         }
+    }
+
+    /// The comparison byte, optional constant and jump offset (last, so
+    /// `patch_jump` applies) every compare-and-branch op ends with. Returns the
+    /// patch site.
+    fn emit_cmp_jump_tail(&mut self, cmp: Op, constant: Option<u16>, pos: u32) -> usize {
+        self.code.push(cmp as u8);
+        if let Some(k_idx) = constant {
+            self.emit_u16(k_idx);
+        }
+        let patch = self.code.len();
+        self.emit_u16(0);
+        self.note_binary_pos(pos);
+        patch
+    }
+
+    /// Compiles `test` and a forward jump taken when it is falsy; returns the
+    /// patch site. A comparison fuses into `CmpJumpIfFalse` (its result is
+    /// always a Boolean, so ToBoolean is the identity), and one whose operands
+    /// are locals, or a local and a number literal, reads them in the jump op.
+    pub(super) fn compile_cond_jump(&mut self, test: &Expression) -> Result<usize, CompileError> {
+        if let Expression::Binary(op, lhs, rhs, pos) = test
+            && Self::is_comparison(*op)
+        {
+            let cmp = Self::binary_op(*op)?;
+            if let Some((a, b)) = self.local_pair(lhs, rhs) {
+                self.emit(Op::LocalLocalCmpJump);
+                self.emit_local_ref(a);
+                self.emit_local_ref(b);
+                self.push_n(2);
+                self.pop_n(2);
+                return Ok(self.emit_cmp_jump_tail(cmp, None, *pos));
+            }
+            if let Expression::Literal(Literal::Number(k)) = rhs.as_ref()
+                && let Some(local) = self.local_ref(lhs)
+            {
+                let k_idx = self.add_constant(Constant::Number(*k))?;
+                self.emit(Op::LocalConstCmpJump);
+                self.emit_local_ref(local);
+                self.push_n(2);
+                self.pop_n(2);
+                return Ok(self.emit_cmp_jump_tail(cmp, Some(k_idx), *pos));
+            }
+            self.compile_expr(lhs)?;
+            self.compile_expr(rhs)?;
+            self.pop_n(2);
+            self.emit(Op::CmpJumpIfFalse);
+            return Ok(self.emit_cmp_jump_tail(cmp, None, *pos));
+        }
+        self.compile_expr(test)?;
+        self.pop_n(1);
+        Ok(self.emit_jump(Op::JumpIfFalse))
     }
 }

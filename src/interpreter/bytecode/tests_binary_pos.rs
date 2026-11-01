@@ -54,6 +54,7 @@ fn only_a_hooked_thread_records_binary_positions() {
 
 /// The operator offset lives in `Expression::Binary`'s padding; a position on
 /// every `ExprBox` would move each boxed node to the next allocator class.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn the_operator_offset_does_not_grow_expression() {
     assert_eq!(std::mem::size_of::<crate::ast::Expression>(), 112);

@@ -1,5 +1,5 @@
-//! The out-of-line paths of the binary ops: operands that are not both
-//! Numbers.
+//! The binary ops: the Number-pair computations and the out-of-line paths
+//! for operands that are not both Numbers.
 
 use super::*;
 
@@ -86,4 +86,47 @@ pub(super) fn bigint_compare_pop(stack: &mut Vec<JsValue>, cmp: Op) -> Option<bo
     })??;
     stack.truncate(len - 2);
     Some(holds)
+}
+
+/// A binary op over two Numbers, computed with the same `number_ops` calls as
+/// `eval_binary`'s own Number fast path.
+#[inline(always)]
+pub(super) fn number_binop(op: Op, l: f64, r: f64) -> JsValue {
+    match op {
+        Op::Add => JsValue::number(number_ops::add(l, r)),
+        Op::Sub => JsValue::number(number_ops::subtract(l, r)),
+        Op::Mul => JsValue::number(number_ops::multiply(l, r)),
+        Op::Div => JsValue::number(number_ops::divide(l, r)),
+        Op::Mod => JsValue::number(number_ops::remainder(l, r)),
+        Op::Pow => JsValue::number(number_ops::exponentiate(l, r)),
+        Op::Shl => JsValue::number(number_ops::left_shift(l, r)),
+        Op::Shr => JsValue::number(number_ops::signed_right_shift(l, r)),
+        Op::UShr => JsValue::number(number_ops::unsigned_right_shift(l, r)),
+        Op::BitAnd => JsValue::number(number_ops::bitwise_and(l, r)),
+        Op::BitOr => JsValue::number(number_ops::bitwise_or(l, r)),
+        Op::BitXor => JsValue::number(number_ops::bitwise_xor(l, r)),
+        Op::Lt
+        | Op::Gt
+        | Op::LtEq
+        | Op::GtEq
+        | Op::Eq
+        | Op::StrictEq
+        | Op::NotEq
+        | Op::StrictNotEq => JsValue::boolean(number_compare(op, l, r)),
+        _ => unreachable!("not a binary op: {op:?}"),
+    }
+}
+
+/// A comparison over two Numbers, as `eval_binary`'s own Number fast path.
+#[inline(always)]
+pub(super) fn number_compare(op: Op, l: f64, r: f64) -> bool {
+    match op {
+        Op::Lt => number_ops::less_than(l, r) == Some(true),
+        Op::Gt => number_ops::less_than(r, l) == Some(true),
+        Op::LtEq => number_ops::less_than(r, l) == Some(false),
+        Op::GtEq => number_ops::less_than(l, r) == Some(false),
+        Op::Eq | Op::StrictEq => number_ops::equal(l, r),
+        Op::NotEq | Op::StrictNotEq => !number_ops::equal(l, r),
+        _ => unreachable!("not a comparison: {op:?}"),
+    }
 }
