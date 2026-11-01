@@ -12,6 +12,7 @@ mod access;
 mod activation;
 mod array_pattern;
 mod await_value;
+mod binary_expr;
 mod call_ic;
 mod compiled_call_record;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
@@ -577,47 +578,8 @@ impl Interpreter {
                     };
                 self.eval_unary(*op, &val)
             }
-            Expression::Binary(op, left, right) => {
-                if *op == BinaryOp::In
-                    && let Expression::PrivateIdentifier(name) = left.as_ref()
-                {
-                    let branded = self.resolve_private_name(name, env);
-                    let rval = match self.eval_expr(right, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    return self.private_in(branded, &rval);
-                }
-                let lval = match self.eval_expr(left, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                // EvaluateStringOrNumericBinaryExpression retains lVal while
-                // evaluating rVal, then retains both values while applying the
-                // operator. Either phase can run user code and reach a GC
-                // safepoint, so keep object operands rooted until the operation
-                // has completed.
-                self.gc_root_value(&lval);
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => {
-                        self.gc_unroot_value(&lval);
-                        return other;
-                    }
-                };
-                self.gc_root_value(&rval);
-                let result = if *op == BinaryOp::Instanceof {
-                    self.eval_instanceof(&lval, &rval)
-                // Fast path for string + on owned primitive values:
-                // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
-                } else if *op == BinaryOp::Add && is_primitive_string_concat(&lval, &rval) {
-                    self.concat_primitives(&lval, &rval)
-                } else {
-                    self.eval_binary(*op, &lval, &rval)
-                };
-                self.gc_unroot_value(&rval);
-                self.gc_unroot_value(&lval);
-                result
+            Expression::Binary(op, left, right, pos) => {
+                self.eval_binary_expr(*op, left, right, *pos, env)
             }
             Expression::Logical(op, left, right) => {
                 self.in_tail_position = tail;
@@ -2160,10 +2122,8 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if (lprim).is_symbol() || (rprim).is_symbol() {
-                    return Completion::Throw(
-                        self.create_type_error("Cannot convert a Symbol value to a string"),
-                    );
+                if lprim.is_symbol() || rprim.is_symbol() {
+                    return Completion::Throw(self.symbol_add_error(&lprim, &rprim));
                 }
                 if is_string(&lprim) || is_string(&rprim) {
                     self.concat_primitives(&lprim, &rprim)

@@ -367,9 +367,9 @@ fn analyze_statement(
                     );
                     // A yield in the catch parameter's own default/computed
                     // key (e.g. `catch ({ a = yield 1 })`) must register as a
-                    // real yield point too: `collect_pattern_vars` only gathers
+                    // yield point too: `collect_pattern_vars` only gathers
                     // names, so otherwise the function stays single-state and
-                    // the yield falls back to the tree-walker's InlineYield
+                    // the yield falls back to the tree-walker InlineYield
                     // replay (issue #771).
                     analyze_pattern_expressions(param, analysis, ctx);
                 }
@@ -520,7 +520,7 @@ fn analyze_expression(
             analyze_expression(inner, analysis, ctx, true);
         }
 
-        Expression::Binary(_, left, right) => {
+        Expression::Binary(_, left, right, _) => {
             analyze_expression(left, analysis, ctx, true);
             analyze_expression(right, analysis, ctx, true);
         }
@@ -851,7 +851,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         | Expression::ImportSource(e, opts) => {
             expr_contains(e, target) || opts.as_ref().is_some_and(|o| expr_contains(o, target))
         }
-        Expression::Binary(_, l, r)
+        Expression::Binary(_, l, r, _)
         | Expression::Logical(_, l, r)
         | Expression::Assign(_, l, r)
         | Expression::BoundCallee(l, r)

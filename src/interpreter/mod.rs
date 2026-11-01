@@ -341,7 +341,7 @@ pub(crate) struct Interpreter {
     new_target: Option<JsValue>,
     // Allocation-pressure pacing: decides when to collect (see gc::GcPacer).
     gc: crate::interpreter::gc::GcPacer,
-    // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
+    // Reusable mark bitmap scratch buffer, resized each GC collection.
     gc_marks: Vec<bool>,
     /// [[KeptAlive]] (ECMA-262 §9.10.3): objects a WeakRef saw during the
     /// running job; GC roots until the outermost `with_job` returns.
@@ -3458,7 +3458,7 @@ impl Interpreter {
         match expr {
             Expression::Await(..) => true,
             Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => false,
-            Expression::Binary(_, left, right)
+            Expression::Binary(_, left, right, _)
             | Expression::Logical(_, left, right)
             | Expression::Assign(_, left, right) => {
                 Self::expr_has_await(left) || Self::expr_has_await(right)

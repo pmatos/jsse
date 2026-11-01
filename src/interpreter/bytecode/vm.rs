@@ -13,9 +13,11 @@ use crate::types::{JsValue, number_ops};
 use smallvec::SmallVec;
 use std::cell::Cell;
 
+mod binary_slow;
 mod call_operands;
 mod iteration;
 mod member_pos;
+use binary_slow::{bigint_compare_pop, bigint_pair_op, binary_slow, number_binop, number_compare};
 mod name_store;
 mod spread;
 mod switch;
@@ -93,123 +95,6 @@ fn binary_of_op(op: Op) -> BinaryOp {
         Op::UShr => BinaryOp::URShift,
         _ => unreachable!("not a binary op: {op:?}"),
     }
-}
-
-/// A binary op over two Numbers, computed with the same `number_ops` calls as
-/// `eval_binary`'s own Number fast path.
-#[inline(always)]
-fn number_binop(op: Op, l: f64, r: f64) -> JsValue {
-    match op {
-        Op::Add => JsValue::number(number_ops::add(l, r)),
-        Op::Sub => JsValue::number(number_ops::subtract(l, r)),
-        Op::Mul => JsValue::number(number_ops::multiply(l, r)),
-        Op::Div => JsValue::number(number_ops::divide(l, r)),
-        Op::Mod => JsValue::number(number_ops::remainder(l, r)),
-        Op::Pow => JsValue::number(number_ops::exponentiate(l, r)),
-        Op::Shl => JsValue::number(number_ops::left_shift(l, r)),
-        Op::Shr => JsValue::number(number_ops::signed_right_shift(l, r)),
-        Op::UShr => JsValue::number(number_ops::unsigned_right_shift(l, r)),
-        Op::BitAnd => JsValue::number(number_ops::bitwise_and(l, r)),
-        Op::BitOr => JsValue::number(number_ops::bitwise_or(l, r)),
-        Op::BitXor => JsValue::number(number_ops::bitwise_xor(l, r)),
-        Op::Lt
-        | Op::Gt
-        | Op::LtEq
-        | Op::GtEq
-        | Op::Eq
-        | Op::StrictEq
-        | Op::NotEq
-        | Op::StrictNotEq => JsValue::boolean(number_compare(op, l, r)),
-        _ => unreachable!("not a binary op: {op:?}"),
-    }
-}
-
-/// A comparison over two Numbers, as `eval_binary`'s own Number fast path.
-#[inline(always)]
-fn number_compare(op: Op, l: f64, r: f64) -> bool {
-    match op {
-        Op::Lt => number_ops::less_than(l, r) == Some(true),
-        Op::Gt => number_ops::less_than(r, l) == Some(true),
-        Op::LtEq => number_ops::less_than(r, l) == Some(false),
-        Op::GtEq => number_ops::less_than(l, r) == Some(false),
-        Op::Eq | Op::StrictEq => number_ops::equal(l, r),
-        Op::NotEq | Op::StrictNotEq => !number_ops::equal(l, r),
-        _ => unreachable!("not a comparison: {op:?}"),
-    }
-}
-
-/// The non-Number-pair path of every binary op. Both operands are already
-/// popped from the operand stack but still rooted in `gc_bytecode_roots`, so
-/// they stay alive across the `ToPrimitive`/`valueOf` calls `eval_binary` can
-/// make; they are released (right, then left: LIFO) once it returns.
-#[inline(never)]
-fn binary_slow(interp: &mut Interpreter, op: BinaryOp, l: JsValue, r: JsValue) -> Completion {
-    let result = if matches!(op, BinaryOp::Add) && is_primitive_string_concat(&l, &r) {
-        interp.concat_primitives(&l, &r)
-    } else {
-        interp.eval_binary(op, &l, &r)
-    };
-    unroot_stack_value(interp, &r);
-    unroot_stack_value(interp, &l);
-    result
-}
-
-/// A binary op when the two operands on top of the stack are BigInts and `op`
-/// has a BigInt/BigInt form (see `bigint_binary_op`), else `None` with the
-/// stack untouched. BigInts are never rooted (only objects are), so the
-/// operands are replaced by the result with no unrooting. A thrown RangeError
-/// (division by zero, bad exponent) comes back as `Err`. The operands are
-/// popped and owned rather than borrowed in place: that drops them without
-/// `NanBoxedValue`'s tag dispatch and measured 1-3% fewer instructions.
-#[inline(never)]
-fn bigint_pair_op(
-    interp: &mut Interpreter,
-    stack: &mut Vec<JsValue>,
-    op: BinaryOp,
-) -> Option<Result<(), JsValue>> {
-    let len = stack.len();
-    if len < 2 || !stack[len - 2].is_bigint() || !stack[len - 1].is_bigint() {
-        return None;
-    }
-    let (Some(r), Some(l)) = (
-        stack.pop().and_then(JsValue::into_bigint),
-        stack.pop().and_then(JsValue::into_bigint),
-    ) else {
-        unreachable!("both operands are BigInts");
-    };
-    let Some(result) = bigint_binary_op(op, &l.value, &r.value) else {
-        stack.push(JsValue::bigint(l));
-        stack.push(JsValue::bigint(r));
-        return None;
-    };
-    Some(match result {
-        Ok(v) => {
-            stack.push(v);
-            Ok(())
-        }
-        Err(message) => Err(interp.create_error("RangeError", message)),
-    })
-}
-
-/// The relational `cmp` over the two BigInts on top of the stack, popping
-/// both, or `None` with the stack untouched when they are not both BigInts.
-#[inline(never)]
-fn bigint_compare_pop(stack: &mut Vec<JsValue>, cmp: Op) -> Option<bool> {
-    let len = stack.len();
-    if len < 2 {
-        return None;
-    }
-    let holds = stack[len - 2].with_bigint(|a| {
-        stack[len - 1].with_bigint(|b| match cmp {
-            Op::Lt => a < b,
-            Op::Gt => a > b,
-            Op::LtEq => a <= b,
-            Op::GtEq => a >= b,
-            _ => unreachable!("not a relational op: {cmp:?}"),
-        })
-    })??;
-    stack.truncate(len - 2);
-    Some(holds)
 }
 
 /// `==`/`!=` through `Interpreter::loose_equal_no_user_code`: replaces the two operands
@@ -1242,7 +1127,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 $bop,
                 Op::Eq | Op::NotEq | Op::StrictEq | Op::StrictNotEq | Op::UShr
             ) && stack.last().is_some_and(JsValue::is_bigint)
-                && let Some(done) = bigint_pair_op(interp, stack, binary_of_op($bop))
+                && let Some(done) = bigint_pair_op(interp, stack, binary_of_op($bop), (chunk, pc))
             {
                 if let Err(thrown) = done {
                     throw!($l, thrown);
@@ -1257,7 +1142,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
             {
                 let r = stack.pop().expect("stack underflow on binop rhs");
                 let l = stack.pop().expect("stack underflow on binop lhs");
-                match binary_slow(interp, binary_of_op($bop), l, r) {
+                match binary_slow(interp, binary_of_op($bop), l, r, (chunk, pc)) {
                     Completion::Normal(v) => push_value(interp, stack, v),
                     abrupt => bail!($l, abrupt),
                 }
@@ -1331,7 +1216,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
             } else {
                 let r = stack.pop().expect("stack underflow on CmpJumpIfFalse rhs");
                 let l = stack.pop().expect("stack underflow on CmpJumpIfFalse lhs");
-                match binary_slow(interp, binary_of_op(cmp), l, r) {
+                match binary_slow(interp, binary_of_op(cmp), l, r, (chunk, pc)) {
                     Completion::Normal(v) => !interp.to_boolean_val(&v),
                     abrupt => bail!($l, abrupt),
                 }
@@ -1653,6 +1538,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     pc += 2;
                     let id = private_id!(idx);
                     let object = pop_value(interp, stack, "stack underflow on PrivateIn");
+                    member_pos::note_binary(interp, chunk, pc);
                     match interp.private_in(id, &object) {
                         Completion::Normal(v) => push_value(interp, stack, v),
                         abrupt => bail!('dispatch, abrupt),
@@ -1909,7 +1795,13 @@ fn run_chunk_inner<const GENERATOR: bool>(
                         *top = number_binop(bop, l, k);
                     } else {
                         let l = stack.pop().expect("stack underflow on BinConst");
-                        match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
+                        match binary_slow(
+                            interp,
+                            binary_of_op(bop),
+                            l,
+                            JsValue::number(k),
+                            (chunk, pc),
+                        ) {
                             Completion::Normal(v) => push_value(interp, stack, v),
                             abrupt => bail!('dispatch, abrupt),
                         }
@@ -1966,7 +1858,13 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     if let Some(l) = operand {
                         // Rooted: `valueOf` may rebind the local and collect.
                         root_stack_value(interp, &l);
-                        match binary_slow(interp, binary_of_op(bop), l, JsValue::number(k)) {
+                        match binary_slow(
+                            interp,
+                            binary_of_op(bop),
+                            l,
+                            JsValue::number(k),
+                            (chunk, pc),
+                        ) {
                             Completion::Normal(v) => push_value(interp, stack, v),
                             abrupt => bail!('dispatch, abrupt),
                         }
@@ -2247,6 +2145,7 @@ fn run_chunk_inner<const GENERATOR: bool>(
                 Op::Instanceof | Op::In => {
                     let r = stack.pop().expect("stack underflow on relational rhs");
                     let l = stack.pop().expect("stack underflow on relational lhs");
+                    member_pos::note_binary(interp, chunk, pc);
                     let result = if op == Op::Instanceof {
                         interp.eval_instanceof(&l, &r)
                     } else {

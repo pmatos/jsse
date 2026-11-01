@@ -29,3 +29,16 @@ pub(super) fn note(interp: &mut Interpreter, chunk: &Chunk, stack: &[JsValue], p
         interp.node_host.pattern_src = chunk.pattern_src_at(pc).cloned();
     }
 }
+
+/// A binary op is about to run: when the chunk recorded the operator's
+/// position (#1511), the frame's position becomes it, so a throw from the op
+/// or from a `valueOf` it calls reports where V8 does. `pc` is the offset
+/// after the instruction.
+#[inline]
+pub(super) fn note_binary(interp: &mut Interpreter, chunk: &Chunk, pc: usize) {
+    if !chunk.binary_pos.is_empty()
+        && let Some(pos) = chunk.binary_pos_at(pc)
+    {
+        interp.node_host.call_pos = pos;
+    }
+}

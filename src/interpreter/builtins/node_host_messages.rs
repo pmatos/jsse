@@ -45,7 +45,12 @@ impl Interpreter {
     }
 
     /// `class C extends value` where `value` is not a constructor or null.
-    pub(crate) fn class_extends_error(&mut self, value: &JsValue) -> JsValue {
+    pub(crate) fn class_extends_error(
+        &mut self,
+        value: &JsValue,
+        class: &Option<crate::ast::SourceText>,
+    ) -> JsValue {
+        self.note_heritage_pos(class);
         let shown = if self.node_host.stack.installed {
             format!(" {}", self.v8_value_text(value))
         } else {

@@ -1,0 +1,80 @@
+## inNumber
+TypeError: Cannot use 'in' operator to search for '1' in 1
+at <dir>/operators.js:30:12
+## inNested
+TypeError: Cannot use 'in' operator to search for 'b' in 1
+at <dir>/operators.js:33:33
+## instanceofNumber
+TypeError: Right-hand side of 'instanceof' is not an object
+at <dir>/operators.js:36:13
+## instanceofNotCallable
+TypeError: Right-hand side of 'instanceof' is not callable
+at <dir>/operators.js:39:13
+## addSymbol
+TypeError: Cannot convert a Symbol value to a string
+at <dir>/operators.js:42:14
+## addSymbolRight
+TypeError: Cannot convert a Symbol value to a string
+at <dir>/operators.js:45:13
+## addBigInt
+TypeError: Cannot mix BigInt and other types, use explicit conversions
+at <dir>/operators.js:48:14
+## subBigInt
+TypeError: Cannot mix BigInt and other types, use explicit conversions
+at <dir>/operators.js:51:14
+## mulSymbol
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:55:12
+## addLocalConstant
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:59:12
+## lessSymbol
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:62:14
+## condJumpSymbol
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:66:9
+## condJumpLocals
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:73:12
+## condJumpConstant: no error
+## shiftBigInt
+TypeError: BigInts have no unsigned right shift, use >> instead
+at <dir>/operators.js:85:14
+## divZeroBigInt
+RangeError: Division by zero
+at <dir>/operators.js:88:14
+## expBigInt
+RangeError: Exponent must be positive
+at <dir>/operators.js:91:13
+## chainedAdd
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:94:16
+## multiLine
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:98:7
+## valueOfThrows
+TypeError: Cannot convert object to primitive value
+at <dir>/operators.js:103:14
+## privateIn
+TypeError: Cannot use 'in' operator to search for '#x' in 1
+at Brand.has (<dir>/operators.js:108:15)
+## classHeritageNumber
+TypeError: Class extends value 1 is not a constructor or null
+at <dir>/operators.js:115:19
+## classHeritageObject
+TypeError: Class extends value #<Object> is not a constructor or null
+at <dir>/operators.js:118:19
+## valueOfFrames
+Error: boom
+at Object.valueOf (<dir>/operators.js:12:11)
+at <dir>/operators.js:123:14
+## inGenerator
+TypeError: Cannot use 'in' operator to search for '1' in 1
+at <dir>/operators.js:130:14
+## inLoweredGenerator
+TypeError: Cannot convert a Symbol value to a number
+at <dir>/operators.js:137:22
+## topLevel
+Right-hand side of 'instanceof' is not an object
+at Object.<anonymous> (<dir>/operators.js:143:8)
