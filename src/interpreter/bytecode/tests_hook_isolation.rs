@@ -74,10 +74,9 @@ fn a_prelude_on_one_thread_does_not_change_what_another_thread_compiles() {
     let (positions, names, hooked) = on_fresh_thread(load_prelude);
     assert!(positions && names, "the prelude's own thread has the hooks");
     assert!(hooked.contains(&(Op::Call, 3)), "{hooked:?}");
-    assert!(
-        !hooked.iter().any(|(op, _)| *op == Op::SetCallPos),
-        "{hooked:?}"
-    );
+    // Only the statement's start (#1511) has an op of its own.
+    let positions = hooked.iter().filter(|(op, _)| *op == Op::SetCallPos);
+    assert_eq!(positions.count(), 1, "{hooked:?}");
 
     assert_eq!(on_fresh_thread(|| {}), (false, false, plain));
 }

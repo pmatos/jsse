@@ -300,6 +300,12 @@ impl Chunk {
         {
             code = rest;
         }
+        // `--node` leads the statement with its position (#1511).
+        if let [first, _, _, _, _, rest @ ..] = code
+            && *first == Op::SetCallPos as u8
+        {
+            code = rest;
+        }
         match code {
             [load_this, get, lo, hi, ret, tail @ ..]
                 if *load_this == Op::LoadThis as u8

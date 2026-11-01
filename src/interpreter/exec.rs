@@ -3,6 +3,7 @@ use crate::ast::{Body, DeclPhase};
 use crate::interpreter::literal_frame::LiteralFrame;
 use std::borrow::Cow;
 
+mod dispose_resources;
 mod eval_body;
 mod loop_targets;
 mod try_clauses;
@@ -900,7 +901,10 @@ impl Interpreter {
         }
         match stmt {
             Statement::Empty => Completion::Empty,
-            Statement::Expression(expr) => self.eval_expr(expr, env),
+            Statement::Expression(expr, at) => {
+                self.node_note_statement_pos(*at);
+                self.eval_expr(expr, env)
+            }
             Statement::Block(stmts) => {
                 let block_env = Environment::new(Some(env.clone()));
                 let result = self.exec_statements(stmts, &block_env);
@@ -917,6 +921,7 @@ impl Interpreter {
                 if r.is_abrupt() { r } else { Completion::Empty }
             }
             Statement::If(if_stmt) => {
+                self.node_note_statement_pos(if_stmt.at);
                 let test = self.eval_expr(&if_stmt.test, env);
                 let test = match test {
                     Completion::Normal(v) => v,
@@ -937,7 +942,8 @@ impl Interpreter {
             Statement::For(f) => self.exec_for(f, env, None),
             Statement::ForIn(fi) => self.exec_for_in(fi, env, None),
             Statement::ForOf(fo) => self.exec_for_of(fo, env, None),
-            Statement::Return(expr) => {
+            Statement::Return(expr, at) => {
+                self.node_note_statement_pos(*at);
                 let val = if let Some(e) = expr {
                     let can_tco = self.tco_on(env)
                         && self.generator_context.is_none()
@@ -965,6 +971,7 @@ impl Interpreter {
             }
             Statement::Continue(label) => Completion::Continue(label.clone(), None),
             Statement::Throw(expr, at) => {
+                self.node_note_statement_pos(*at);
                 let val = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -1226,6 +1233,7 @@ impl Interpreter {
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
+                self.node_note_statement_pos(elements.at);
                 let iterator = propagate!(self.get_iterator(&val));
                 self.gc_root_value(&iterator);
                 let mut done = false;
@@ -2042,7 +2050,7 @@ impl Interpreter {
                         },
                         ForInOfLeft::Expression(expr) => {
                             match expr {
-                                Expression::Identifier(_) => {
+                                Expression::Identifier(_, _) => {
                                     if let Err(e) = self.assign_to_expr(expr, key_val, env) {
                                         break 'unroot Completion::Throw(e);
                                     }
@@ -2311,7 +2319,7 @@ impl Interpreter {
                     other => return other,
                 },
                 ForInOfLeft::Expression(expr) => match expr {
-                    Expression::Identifier(_) | Expression::Member(..) => {
+                    Expression::Identifier(_, _) | Expression::Member(..) => {
                         if let Err(e) = self.assign_to_expr(expr, val, env) {
                             self.iterator_close(iterator, e.clone());
                             return Completion::Throw(e);
@@ -2478,6 +2486,7 @@ impl Interpreter {
     }
 
     fn exec_switch(&mut self, s: &SwitchStatement, env: &EnvRef) -> Completion {
+        self.node_note_statement_pos(s.at);
         let disc = match self.eval_expr(&s.discriminant, env) {
             Completion::Normal(v) => v,
             other => return other,
@@ -2716,16 +2725,6 @@ impl Interpreter {
 
         env.borrow_mut().push_disposable(resource);
         Ok(())
-    }
-
-    pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
-        match self.take_dispose_stack(env) {
-            Some(stack) => {
-                let completion = self.settle_tail_call(&stack, completion);
-                self.run_dispose_cursor_blocking(DisposeCursor::new(stack, completion))
-            }
-            None => completion,
-        }
     }
 
     pub(crate) fn wrap_suppressed_error(

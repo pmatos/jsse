@@ -64,7 +64,10 @@ impl Interpreter {
             (Pattern::Assign(inner, default), Completion::Throw(error))
                 if nested
                     && matches!(&**inner, Pattern::Array(elements) if flat(elements))
-                    && matches!(&**default, Expression::Identifier(_) | Expression::Call(..))
+                    && matches!(
+                        &**default,
+                        Expression::Identifier(..) | Expression::Call(..)
+                    )
                     && self.iterable_error_here(&error) =>
             {
                 match Self::iterable_message(default) {

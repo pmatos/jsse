@@ -23,7 +23,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             stmt.clone()
         }
         Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => stmt.clone(),
-        Statement::Expression(e) => Statement::Expression(rewrite_expr(e)),
+        Statement::Expression(e, at) => Statement::Expression(rewrite_expr(e), *at),
         Statement::Block(stmts) => Statement::Block(rewrite_stmts_await_to_yield(stmts)),
         Statement::Variable(decl) => Statement::Variable(VariableDeclaration {
             kind: decl.kind,
@@ -44,6 +44,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                 .alternate
                 .as_ref()
                 .map(|s| Box::new(rewrite_stmt_await_to_yield(s))),
+            at: if_stmt.at,
         }),
         Statement::While(w) => Statement::While(WhileStatement {
             test: rewrite_expr(&w.test),
@@ -89,7 +90,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             right_at: f.right_at,
             scope_capture: Default::default(),
         }),
-        Statement::Return(e) => Statement::Return(e.as_ref().map(rewrite_expr)),
+        Statement::Return(e, at) => Statement::Return(e.as_ref().map(rewrite_expr), *at),
         Statement::Throw(e, p) => Statement::Throw(rewrite_expr(e), *p),
         Statement::Try(t) => Statement::Try(TryStatement {
             block: rewrite_stmts_await_to_yield(&t.block),
@@ -112,6 +113,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                     consequent: rewrite_stmts_await_to_yield(&c.consequent),
                 })
                 .collect(),
+            at: s.at,
         }),
         Statement::Labeled(label, inner) => {
             Statement::Labeled(label.clone(), Box::new(rewrite_stmt_await_to_yield(inner)))
@@ -140,7 +142,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         | Expression::ArrowFunction(_)
         | Expression::Class(_)
         | Expression::Literal(_)
-        | Expression::Identifier(_)
+        | Expression::Identifier(_, _)
         | Expression::This
         | Expression::Super
         | Expression::NewTarget

@@ -18,7 +18,7 @@ fn identifier_binds_its_name() {
 #[test]
 fn member_expression_binds_nothing() {
     // `[obj.prop] = ...` — an assignment target, not a declaration.
-    let pat = Pattern::MemberExpression(ExprBox::new(Expression::Identifier("obj".to_string())));
+    let pat = Pattern::MemberExpression(ExprBox::new(Expression::Identifier("obj".to_string(), 0)));
     assert_eq!(names_of(&pat), Vec::<String>::new());
 }
 
@@ -27,7 +27,7 @@ fn assignment_default_binds_only_the_inner_name() {
     // `a = 5` binds `a`; the default-value expression contributes no names.
     let pat = Pattern::Assign(
         Box::new(ident("a")),
-        ExprBox::new(Expression::Identifier("unused".to_string())),
+        ExprBox::new(Expression::Identifier("unused".to_string(), 0)),
     );
     assert_eq!(names_of(&pat), vec!["a"]);
 }
@@ -41,11 +41,14 @@ fn rest_binds_inner_name() {
 #[test]
 fn array_pattern_binds_in_source_order_skipping_holes() {
     // `[a, , ...b]`
-    let pat = Pattern::Array(vec![
-        Some(ArrayPatternElement::Pattern(ident("a"))),
-        None,
-        Some(ArrayPatternElement::Rest(ident("b"))),
-    ]);
+    let pat = Pattern::Array(
+        vec![
+            Some(ArrayPatternElement::Pattern(ident("a"))),
+            None,
+            Some(ArrayPatternElement::Rest(ident("b"))),
+        ]
+        .into(),
+    );
     assert_eq!(names_of(&pat), vec!["a", "b"]);
 }
 
@@ -66,10 +69,13 @@ fn object_pattern_binds_shorthand_and_value_and_rest_but_not_key() {
 #[test]
 fn nested_pattern_flattens_in_source_order() {
     // `[{ a, k: [b, ...c] }]`
-    let inner_array = Pattern::Array(vec![
-        Some(ArrayPatternElement::Pattern(ident("b"))),
-        Some(ArrayPatternElement::Rest(ident("c"))),
-    ]);
+    let inner_array = Pattern::Array(
+        vec![
+            Some(ArrayPatternElement::Pattern(ident("b"))),
+            Some(ArrayPatternElement::Rest(ident("c"))),
+        ]
+        .into(),
+    );
     let inner_object = Pattern::Object(
         vec![
             ObjectPatternProperty::Shorthand("a".to_string()),
@@ -77,7 +83,7 @@ fn nested_pattern_flattens_in_source_order() {
         ]
         .into(),
     );
-    let pat = Pattern::Array(vec![Some(ArrayPatternElement::Pattern(inner_object))]);
+    let pat = Pattern::Array(vec![Some(ArrayPatternElement::Pattern(inner_object))].into());
     assert_eq!(names_of(&pat), vec!["a", "b", "c"]);
 }
 

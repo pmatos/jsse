@@ -138,7 +138,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
     }
     match expr {
         Expression::Literal(literal) => literal_text(literal).unwrap_or_else(|| UNKNOWN.into()),
-        Expression::Identifier(name) => name.clone(),
+        Expression::Identifier(name, _) => name.clone(),
         Expression::This => "this".into(),
         Expression::Member(object, property, _) => {
             let object = expr_text(object);

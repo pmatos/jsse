@@ -4,7 +4,7 @@
 //! in a `Comma`; the `Yield` arm re-applies it to an operand it hoists.
 
 use super::{GeneratorStateMachine, StateTerminator};
-use crate::ast::{Expression, Literal};
+use crate::ast::{Expression, Literal, ident};
 
 pub(super) fn tag(operand: Expression, at: u32) -> Expression {
     if at != 0 && crate::interpreter::builtins::node_host_stack::call_positions_enabled() {
@@ -48,7 +48,7 @@ pub(super) fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMac
             } => {
                 let (value, at) = untag(value);
                 Some(StateTerminator::Await {
-                    value: value.unwrap_or(Expression::Identifier("undefined".to_string())),
+                    value: value.unwrap_or(ident("undefined".to_string())),
                     resume_state: *resume_state,
                     sent_value_binding: sent_value_binding.clone(),
                     at,

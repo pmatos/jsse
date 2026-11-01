@@ -106,7 +106,7 @@ impl<'a> Parser<'a> {
             let right = self.parse_assignment_expression()?;
             self.infer_assigned_name(op, &left, &right, right_start);
             // When LHS is parenthesized, wrap in Sequence to prevent IsIdentifierRef
-            let left = if lhs_parenthesized && matches!(left, Expression::Identifier(_)) {
+            let left = if lhs_parenthesized && matches!(left, Expression::Identifier(_, _)) {
                 Expression::Sequence(vec![left])
             } else {
                 left
@@ -262,7 +262,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Delete) => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                if self.strict && matches!(&expr, Expression::Identifier(_)) {
+                if self.strict && matches!(&expr, Expression::Identifier(_, _)) {
                     return Err(self.error("Delete of an unqualified identifier in strict mode"));
                 }
                 if matches!(&expr, Expression::Member(_, MemberProperty::Private(_), _)) {
@@ -445,7 +445,7 @@ impl<'a> Parser<'a> {
                         let site = CallSiteId::at(self.current_token_start);
                         let args = self.parse_arguments()?;
                         Expression::Call(
-                            ExprBox::new(Expression::Identifier("".into())),
+                            ExprBox::new(Expression::Identifier("".into(), 0)),
                             args,
                             site,
                         )
@@ -454,7 +454,7 @@ impl<'a> Parser<'a> {
                         let p = self.parse_expression()?;
                         self.eat(&Token::RightBracket)?;
                         Expression::Member(
-                            ExprBox::new(Expression::Identifier("".into())),
+                            ExprBox::new(Expression::Identifier("".into(), 0)),
                             MemberProperty::Computed(ExprBox::new(p)),
                             PropSiteId::UNASSIGNED,
                         )
@@ -463,7 +463,7 @@ impl<'a> Parser<'a> {
                         self.use_private_name(&name)?;
                         self.advance()?;
                         Expression::Member(
-                            ExprBox::new(Expression::Identifier("".into())),
+                            ExprBox::new(Expression::Identifier("".into(), 0)),
                             MemberProperty::Private(name),
                             PropSiteId::UNASSIGNED,
                         )
@@ -478,7 +478,7 @@ impl<'a> Parser<'a> {
                             _ => return Err(self.error("Expected property after '?.'")),
                         };
                         self.advance()?;
-                        Expression::Identifier(name)
+                        Expression::Identifier(name, 0)
                     };
                     // Keep consuming .prop, [expr], () in the same optional chain
                     loop {
@@ -559,9 +559,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -575,7 +573,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier("yield".to_string()))
+                Ok(Expression::Identifier("yield".to_string(), 0))
             }
             Token::Keyword(Keyword::Await)
                 if !self.in_async && !self.in_static_block && !self.is_module =>
@@ -589,9 +587,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -605,7 +601,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier("await".to_string()))
+                Ok(Expression::Identifier("await".to_string(), 0))
             }
             Token::Keyword(Keyword::Let) if !self.strict => {
                 let ident_start = self.current_token_start;
@@ -617,9 +613,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -633,7 +627,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier("let".to_string()))
+                Ok(Expression::Identifier("let".to_string(), 0))
             }
             Token::Keyword(Keyword::Static) if !self.strict => {
                 let ident_start = self.current_token_start;
@@ -645,9 +639,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -661,7 +653,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier("static".to_string()))
+                Ok(Expression::Identifier("static".to_string(), 0))
             }
             Token::Keyword(Keyword::Import) => {
                 let at = CallSiteId::at(self.current_token_start).1;
@@ -757,9 +749,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.async_arrow_expr_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.async_arrow_return()?])),
                             false,
                         )
                     };
@@ -774,7 +764,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier("async".to_string()))
+                Ok(Expression::Identifier("async".to_string(), 0))
             }
             Token::Identifier(name) => {
                 let name = name.clone();
@@ -793,9 +783,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -809,7 +797,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier(name))
+                Ok(Expression::Identifier(name, Self::ident_pos(ident_start)))
             }
             Token::IdentifierWithEscape(name) => {
                 let name = name.clone();
@@ -836,9 +824,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -852,7 +838,7 @@ impl<'a> Parser<'a> {
                         info: Default::default(),
                     }));
                 }
-                Ok(Expression::Identifier(name))
+                Ok(Expression::Identifier(name, Self::ident_pos(ident_start)))
             }
             Token::NullLiteral => {
                 self.advance()?;
@@ -943,9 +929,7 @@ impl<'a> Parser<'a> {
                             (ArrowBody::Block(Body::new(stmts)), strict)
                         } else {
                             (
-                                ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                    self.parse_arrow_expression_body()?,
-                                ))])),
+                                ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                                 false,
                             )
                         };
@@ -974,9 +958,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                self.parse_arrow_expression_body()?,
-                            ))])),
+                            ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                             false,
                         )
                     };
@@ -1022,9 +1004,7 @@ impl<'a> Parser<'a> {
                             (ArrowBody::Block(Body::new(stmts)), strict)
                         } else {
                             (
-                                ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                                    self.parse_arrow_expression_body()?,
-                                ))])),
+                                ArrowBody::Expression(Body::new(vec![self.arrow_return()?])),
                                 false,
                             )
                         };
@@ -1090,7 +1070,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Of) => {
                 self.advance()?;
-                Ok(Expression::Identifier("of".to_string()))
+                Ok(Expression::Identifier("of".to_string(), 0))
             }
             _ => Err(self.unexpected_token("Unexpected token: ")),
         }
@@ -1495,7 +1475,7 @@ impl<'a> Parser<'a> {
                 }
             }
             return Ok(Property {
-                value: Expression::Identifier(name.clone()),
+                value: Expression::Identifier(name.clone(), 0),
                 key,
                 kind: PropertyKind::Init,
                 computed: false,
@@ -1527,7 +1507,7 @@ impl<'a> Parser<'a> {
                 key,
                 value: Expression::Assign(
                     AssignOp::Assign,
-                    ExprBox::new(Expression::Identifier(ident)),
+                    ExprBox::new(Expression::Identifier(ident, 0)),
                     ExprBox::new(default_value),
                     0,
                 ),
@@ -1716,9 +1696,7 @@ impl<'a> Parser<'a> {
                     (ArrowBody::Block(Body::new(stmts)), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                            self.async_arrow_expr_body()?,
-                        ))])),
+                        ArrowBody::Expression(Body::new(vec![self.async_arrow_return()?])),
                         false,
                     )
                 };
@@ -1735,7 +1713,7 @@ impl<'a> Parser<'a> {
             }
             // async() — function call on 'async' identifier
             return Ok(Expression::Call(
-                ExprBox::new(Expression::Identifier("async".to_string())),
+                ExprBox::new(Expression::Identifier("async".to_string(), 0)),
                 Vec::new(),
                 CallSiteId::UNASSIGNED,
             ));
@@ -1757,9 +1735,7 @@ impl<'a> Parser<'a> {
                 (ArrowBody::Block(Body::new(stmts)), strict)
             } else {
                 (
-                    ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                        self.async_arrow_expr_body()?,
-                    ))])),
+                    ArrowBody::Expression(Body::new(vec![self.async_arrow_return()?])),
                     false,
                 )
             };
@@ -1804,9 +1780,7 @@ impl<'a> Parser<'a> {
                     (ArrowBody::Block(Body::new(stmts)), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
-                            self.async_arrow_expr_body()?,
-                        ))])),
+                        ArrowBody::Expression(Body::new(vec![self.async_arrow_return()?])),
                         false,
                     )
                 };
@@ -1823,7 +1797,7 @@ impl<'a> Parser<'a> {
             }
             // Not an arrow — it's async(args) function call
             return Ok(Expression::Call(
-                ExprBox::new(Expression::Identifier("async".to_string())),
+                ExprBox::new(Expression::Identifier("async".to_string(), 0)),
                 exprs,
                 CallSiteId::UNASSIGNED,
             ));
@@ -1831,7 +1805,7 @@ impl<'a> Parser<'a> {
         self.eat_args_end()?;
         // async(expr) — function call
         Ok(Expression::Call(
-            ExprBox::new(Expression::Identifier("async".to_string())),
+            ExprBox::new(Expression::Identifier("async".to_string(), 0)),
             vec![expr],
             CallSiteId::UNASSIGNED,
         ))

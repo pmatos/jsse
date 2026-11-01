@@ -26,7 +26,7 @@ impl<'a> Parser<'a> {
     /// position when `import()` runs is that load, not the call.
     fn positions_itself(spec: &Expression) -> bool {
         match spec {
-            Expression::Identifier(_) => true,
+            Expression::Identifier(_, _) => true,
             Expression::Member(object, MemberProperty::Dot(_), _) => Self::positions_itself(object),
             _ => false,
         }
@@ -46,7 +46,7 @@ impl<'a> Parser<'a> {
                 Expression::Member(_, MemberProperty::Dot(name), _) => {
                     (spec_end.saturating_sub(name.len()), name)
                 }
-                Expression::Identifier(name) => (spec_start, name),
+                Expression::Identifier(name, _) => (spec_start, name),
                 _ => unreachable!("positions_itself"),
             };
             if self.source_text_source.get(read..read + name.len()) != Some(name.as_str()) {

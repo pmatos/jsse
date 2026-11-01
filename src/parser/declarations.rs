@@ -2,6 +2,7 @@ use super::*;
 
 mod body_early_errors;
 mod declarator_list;
+mod param_names;
 mod patterns;
 
 fn bigint_literal_to_decimal(s: &str) -> String {
@@ -364,9 +365,9 @@ impl<'a> Parser<'a> {
     fn stmt_has_direct_super(stmt: &Statement) -> bool {
         use crate::ast::Statement;
         match stmt {
-            Statement::Expression(e) | Statement::Throw(e, _) => Self::expr_has_direct_super(e),
-            Statement::Return(Some(e)) => Self::expr_has_direct_super(e),
-            Statement::Return(None) | Statement::Empty | Statement::Debugger => false,
+            Statement::Expression(e, _) | Statement::Throw(e, _) => Self::expr_has_direct_super(e),
+            Statement::Return(Some(e), _) => Self::expr_has_direct_super(e),
+            Statement::Return(None, _) | Statement::Empty | Statement::Debugger => false,
             Statement::Block(stmts) => Self::stmts_has_direct_super(stmts),
             Statement::Variable(decl) => decl
                 .declarations
@@ -938,6 +939,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_formal_parameters(&mut self) -> Result<Vec<Pattern>, ParseError> {
+        let paren = self.op_pos();
         self.eat(&Token::LeftParen)?;
         let prev_formal = self.in_formal_parameters;
         self.in_formal_parameters = true;
@@ -949,7 +951,10 @@ impl<'a> Parser<'a> {
                 params.push(Pattern::Rest(Box::new(pat)));
                 break;
             }
-            let pat = self.parse_binding_pattern()?;
+            let mut pat = self.parse_binding_pattern()?;
+            if let Pattern::Array(elems) = &mut pat {
+                elems.at = paren;
+            }
             let pat = if self.current == Token::Assign {
                 self.advance()?;
                 let default = self.parse_assignment_expression()?;
@@ -977,16 +982,6 @@ impl<'a> Parser<'a> {
         let result = self.parse_function_body_inner(is_generator, is_async, false, false);
         self.in_non_arrow_function -= 1;
         result
-    }
-
-    pub(super) fn set_function_param_names(&mut self, params: &[Pattern]) {
-        let mut names = HashSet::new();
-        for p in params {
-            let mut bound = Vec::new();
-            p.bound_names(&mut bound);
-            names.extend(bound);
-        }
-        self.function_param_names = Some(names);
     }
 
     fn parse_static_block_statements(&mut self) -> Result<Vec<Statement>, ParseError> {

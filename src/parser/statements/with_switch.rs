@@ -4,9 +4,11 @@ use super::*;
 
 impl Parser<'_> {
     pub(super) fn parse_switch_statement(&mut self) -> Result<Statement, ParseError> {
+        let at = self.op_pos();
         self.advance()?; // switch
         self.eat(&Token::LeftParen)?;
-        let discriminant = self.parse_expression()?;
+        let mut discriminant = self.parse_expression()?;
+        Self::clear_lead_ident(&mut discriminant);
         self.eat(&Token::RightParen)?;
         self.eat(&Token::LeftBrace)?;
         // The decrement below is unconditional, matching `parse_iteration_body`.
@@ -22,6 +24,7 @@ impl Parser<'_> {
         Ok(Statement::Switch(SwitchStatement {
             discriminant,
             cases,
+            at,
         }))
     }
 

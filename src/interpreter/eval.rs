@@ -15,6 +15,7 @@ mod await_value;
 mod binary_expr;
 mod call_ic;
 mod compiled_call_record;
+mod compound_assign;
 mod for_of_head_env;
 mod spread_args;
 use array_pattern::{ArrayPatternAction, ArrayPatternContext};
@@ -548,10 +549,14 @@ impl Interpreter {
         self.in_tail_position = false;
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, at) => {
                 let strict = env.borrow().strict;
                 self.last_identifier_with_base = None;
-                self.resolve_identifier(name, env, strict)
+                let resolved = self.resolve_identifier(name, env, strict);
+                if let Completion::Throw(thrown) = &resolved {
+                    self.node_move_ident_error(thrown, name, *at);
+                }
+                resolved
             }
 
             Expression::This => self.resolve_this_binding(env),
@@ -656,7 +661,7 @@ impl Interpreter {
                 )
             }
             Expression::Typeof(operand) => {
-                if let Expression::Identifier(name) = operand.as_ref() {
+                if let Expression::Identifier(name, _) = operand.as_ref() {
                     return self.eval_typeof_identifier(name, env);
                 }
                 let val =
@@ -674,7 +679,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::UNDEFINED)
             }
             Expression::Delete(expr) => match expr.as_ref() {
-                Expression::Member(obj_expr, prop, site) => {
+                Expression::Member(obj_expr, prop, _) => {
                     // §13.5.1.2 step 5a: delete on SuperReference is always ReferenceError.
                     // §13.3.7.1: SuperProperty evaluation calls GetThisBinding() (step 2)
                     // before evaluating the key expression (step 3).
@@ -718,14 +723,14 @@ impl Interpreter {
                     };
                     // TypeError for null/undefined base
                     if obj_val.is_null() || obj_val.is_undefined() {
-                        self.note_last_pos(obj_expr, prop, *site);
+                        self.note_last_pos(obj_expr, prop);
                         return Completion::Throw(
                             self.delete_nullish_error(&key.to_string(), &obj_val),
                         );
                     }
                     self.eval_delete_on_object(&obj_val, &key, env)
                 }
-                Expression::Identifier(name) => {
+                Expression::Identifier(name, _) => {
                     // Check with-scopes first (Bug C fix)
                     if self.with_scope_depth > 0 || self.has_ever_entered_with {
                         match self.resolve_with_has_binding(name, env) {
@@ -2494,9 +2499,9 @@ impl Interpreter {
         at: u32,
         env: &EnvRef,
     ) -> Completion {
-        if let Expression::Identifier(name) = arg {
+        if let Expression::Identifier(name, _) = arg {
             self.update_identifier_at(at, (op, prefix), name, env)
-        } else if let Expression::Member(obj_expr, prop, site) = arg {
+        } else if let Expression::Member(obj_expr, prop, _) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)
                 && !matches!(prop, MemberProperty::Private(_))
@@ -2579,7 +2584,7 @@ impl Interpreter {
                 match prop {
                     MemberProperty::Dot(name) => {
                         if obj_val.is_nullish() {
-                            this.note_last_pos(obj_expr, prop, *site);
+                            this.note_last_pos(obj_expr, prop);
                             return Completion::Throw(this.create_type_error(&format!(
                                 "Cannot read properties of {obj_val} (reading '{name}')"
                             )));
@@ -2591,7 +2596,7 @@ impl Interpreter {
                         let v = propagate!(this.eval_expr(expr, env));
                         // ToObject(base) must precede ToPropertyKey(prop) per spec
                         if obj_val.is_nullish() {
-                            this.note_last_pos(obj_expr, prop, *site);
+                            this.note_last_pos(obj_expr, prop);
                             return Completion::Throw(this.nullish_read_error(&obj_val, &v));
                         }
                         this.update_member_computed(&obj_val, &v, op, prefix, strict)
@@ -2787,7 +2792,7 @@ impl Interpreter {
         }
 
         match left {
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 if op == AssignOp::Assign {
                     // Fast path: simple assignment to a local binding (no with, no class RHS)
                     if !matches!(right, Expression::Class(_))
@@ -2861,7 +2866,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let final_val = match self.apply_compound_assign(op, lval, rval) {
+                        let final_val = match self.apply_compound_at((op, right), lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -2884,7 +2889,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let final_val = match self.apply_compound_assign(op, lval, rval) {
+                let final_val = match self.apply_compound_at((op, right), lval, rval) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
@@ -2959,7 +2964,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let final_val = match self.apply_compound_assign(op, lval, rval) {
+                        let final_val = match self.apply_compound_at((op, right), lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -3007,7 +3012,7 @@ impl Interpreter {
                             other => return other,
                         };
                         interp.gc_root_value(&rval);
-                        let final_val = match interp.apply_compound_assign(op, lval, rval) {
+                        let final_val = match interp.apply_compound_at((op, right), lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -3041,7 +3046,7 @@ impl Interpreter {
                         // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
                         // stores the uncoerced key in the Reference)
                         if obj_val.is_null() || obj_val.is_undefined() {
-                            interp.note_last_pos(obj_expr, prop, *site);
+                            interp.note_last_pos(obj_expr, prop);
                             let error = match key_val.as_ref() {
                                 Some(k) => interp.nullish_read_error(&obj_val, k),
                                 None => {
@@ -3107,7 +3112,11 @@ impl Interpreter {
                     let final_val = if op == AssignOp::Assign {
                         rval
                     } else {
-                        match interp.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
+                        match interp.apply_compound_at(
+                            (op, right),
+                            lval_for_compound.unwrap(),
+                            rval,
+                        ) {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
@@ -3174,7 +3183,7 @@ impl Interpreter {
             // Parenthesized identifier: (x) = expr
             // IsIdentifierRef is false, so no named evaluation
             Expression::Sequence(exprs) if exprs.len() == 1 => {
-                if let Expression::Identifier(name) = &exprs[0] {
+                if let Expression::Identifier(name, _) = &exprs[0] {
                     let id_ref = match self.resolve_identifier_ref(name, env) {
                         Ok(r) => r,
                         Err(e) => return Completion::Throw(e),
@@ -3208,7 +3217,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         match left {
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 let id_ref = match self.resolve_identifier_ref(name, env) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
@@ -3427,9 +3436,9 @@ impl Interpreter {
                 result
             }
             Expression::Sequence(exprs)
-                if exprs.len() == 1 && matches!(&exprs[0], Expression::Identifier(_)) =>
+                if exprs.len() == 1 && matches!(&exprs[0], Expression::Identifier(_, _)) =>
             {
-                if let Expression::Identifier(name) = &exprs[0] {
+                if let Expression::Identifier(name, _) = &exprs[0] {
                     let id_ref = match self.resolve_identifier_ref(name, env) {
                         Ok(r) => r,
                         Err(e) => return Completion::Throw(e),
@@ -3478,31 +3487,6 @@ impl Interpreter {
                     other => other,
                 }
             }
-        }
-    }
-
-    fn apply_compound_assign(&mut self, op: AssignOp, lval: JsValue, rval: JsValue) -> Completion {
-        match op {
-            AssignOp::AddAssign => {
-                // Fast path: both primitives and at least one is a string — avoid
-                // to_primitive/js_value_to_code_units clones in eval_binary.
-                if is_primitive_string_concat(&lval, &rval) {
-                    return self.concat_primitives(&lval, &rval);
-                }
-                self.eval_binary(BinaryOp::Add, &lval, &rval)
-            }
-            AssignOp::SubAssign => self.eval_binary(BinaryOp::Sub, &lval, &rval),
-            AssignOp::MulAssign => self.eval_binary(BinaryOp::Mul, &lval, &rval),
-            AssignOp::DivAssign => self.eval_binary(BinaryOp::Div, &lval, &rval),
-            AssignOp::ModAssign => self.eval_binary(BinaryOp::Mod, &lval, &rval),
-            AssignOp::ExpAssign => self.eval_binary(BinaryOp::Exp, &lval, &rval),
-            AssignOp::LShiftAssign => self.eval_binary(BinaryOp::LShift, &lval, &rval),
-            AssignOp::RShiftAssign => self.eval_binary(BinaryOp::RShift, &lval, &rval),
-            AssignOp::URShiftAssign => self.eval_binary(BinaryOp::URShift, &lval, &rval),
-            AssignOp::BitAndAssign => self.eval_binary(BinaryOp::BitAnd, &lval, &rval),
-            AssignOp::BitOrAssign => self.eval_binary(BinaryOp::BitOr, &lval, &rval),
-            AssignOp::BitXorAssign => self.eval_binary(BinaryOp::BitXor, &lval, &rval),
-            _ => Completion::Normal(rval),
         }
     }
 
@@ -3859,7 +3843,7 @@ impl Interpreter {
     fn pattern_to_assignment_expr(pat: &crate::ast::Pattern) -> crate::ast::Expression {
         use crate::ast::*;
         match pat {
-            Pattern::Identifier(name) => Expression::Identifier(name.clone()),
+            Pattern::Identifier(name) => Expression::Identifier(name.clone(), 0),
             Pattern::Array(elements) => {
                 let exprs = elements
                     .iter()
@@ -3889,7 +3873,7 @@ impl Interpreter {
                         },
                         ObjectPatternProperty::Shorthand(name) => Property {
                             key: PropertyKey::Identifier(name.clone()),
-                            value: Expression::Identifier(name.clone()),
+                            value: Expression::Identifier(name.clone(), 0),
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: true,
@@ -3930,7 +3914,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         let result = match target {
-            Expression::Identifier(name) => {
+            Expression::Identifier(name, _) => {
                 let id_ref = match self.resolve_identifier_ref(name, env) {
                     Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
@@ -4239,7 +4223,7 @@ impl Interpreter {
                             if let Some(default) = default_expr {
                                 match interp.eval_expr(default, env) {
                                     Completion::Normal(v) => {
-                                        if let Expression::Identifier(name) = target
+                                        if let Expression::Identifier(name, _) = target
                                             && default.is_anonymous_function_definition()
                                         {
                                             interp.set_function_name(&v, name);
@@ -4409,7 +4393,7 @@ impl Interpreter {
                                 if let Some(default) = default_expr {
                                     match interp.eval_expr(default, env) {
                                         Completion::Normal(v) => {
-                                            if let Expression::Identifier(name) = target
+                                            if let Expression::Identifier(name, _) = target
                                                 && default.is_anonymous_function_definition()
                                             {
                                                 interp.set_function_name(&v, name);
@@ -4478,7 +4462,7 @@ impl Interpreter {
                     .and_then(|func| func.borrow().prototype_id)
                     .map_or(JsValue::NULL, JsValue::object);
                 interp.gc_root_value(&super_ctor);
-                let arg_vals = match interp.eval_spread_args(args, env) {
+                let arg_vals = match interp.eval_spread_args(args, env, site_id.1) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -4533,7 +4517,8 @@ impl Interpreter {
                         return self.with_gc_root_scope(|i| {
                             i.gc_root_value(&func_val);
                             i.gc_root_value(&obj_val);
-                            let evaluated_args = propagate!(i.eval_spread_args(args, env));
+                            let evaluated_args =
+                                propagate!(i.eval_spread_args(args, env, site_id.1));
                             if saved_tail {
                                 return Completion::TailCall {
                                     func: func_val,
@@ -4669,11 +4654,13 @@ impl Interpreter {
                     Err(c) => return c,
                 }
             }
-            Expression::Identifier(_name) => {
+            Expression::Identifier(name, _) => {
                 // §12.3.4.1: EvaluateCall — resolve identifier. If the reference comes
                 // from a with-environment, thisValue = WithBaseObject.
-                // eval_expr sets last_identifier_with_base during resolution.
-                let val = match self.eval_expr(callee, env) {
+                // V8 gives a callee no position of its own (#1511).
+                let strict = env.borrow().strict;
+                self.last_identifier_with_base = None;
+                let val = match self.resolve_identifier(name, env, strict) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
@@ -4693,11 +4680,11 @@ impl Interpreter {
         };
 
         // Direct eval: callee is bare `eval` identifier and resolves to built-in eval
-        if matches!(callee, Expression::Identifier(n) if n == "eval")
+        if matches!(callee, Expression::Identifier(n, _) if n == "eval")
             && self.is_builtin_eval(&func_val)
         {
             let gc_frame = self.gc_root_frame();
-            let evaluated_args = match self.eval_spread_args(args, env) {
+            let evaluated_args = match self.eval_spread_args(args, env, site_id.1) {
                 Ok(args) => args,
                 Err(e) => {
                     self.gc_unroot_frame(gc_frame);
@@ -4714,7 +4701,7 @@ impl Interpreter {
         let gc_frame = self.gc_root_frame();
         self.gc_root_value(&func_val);
         self.gc_root_value(&this_val);
-        let evaluated_args = match self.eval_spread_args(args, env) {
+        let evaluated_args = match self.eval_spread_args(args, env, site_id.1) {
             Ok(args) => args,
             Err(e) => {
                 self.gc_unroot_frame(gc_frame);
@@ -6406,7 +6393,7 @@ impl Interpreter {
             other => return other,
         };
         self.gc_root_value(&callee_val);
-        let evaluated_args = match self.eval_spread_args(args, env) {
+        let evaluated_args = match self.eval_spread_args(args, env, site_id.1) {
             Ok(args) => args,
             Err(e) => {
                 self.gc_unroot_frame(gc_frame);

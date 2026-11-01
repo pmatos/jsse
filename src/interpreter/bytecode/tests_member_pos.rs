@@ -44,7 +44,9 @@ fn only_a_hooked_thread_records_member_positions() {
         interp.load_node_prelude().expect("prelude loads");
         member_positions(source)
     });
-    assert_eq!(hooked.len(), 4, "{hooked:?}");
+    // The member ops, and the load of `k` (#1511: a name load that is not the
+    // first thing its statement evaluates has a position of its own).
+    assert_eq!(hooked.len(), 5, "{hooked:?}");
     assert!(hooked.windows(2).all(|w| w[0].0 < w[1].0), "{hooked:?}");
     assert!(hooked.iter().all(|&(_, pos)| pos != 0), "{hooked:?}");
 }
@@ -62,8 +64,10 @@ fn only_a_hooked_thread_records_pattern_and_iterable_positions() {
     });
     let target = u32::try_from(source.find("a }").unwrap() + 1).unwrap();
     let iterable = u32::try_from(source.find("y)").unwrap() + 1).unwrap();
+    let init = u32::try_from(source.find("o;").unwrap() + 1).unwrap();
     let positions: Vec<u32> = hooked.iter().map(|e| e.1).collect();
-    assert_eq!(positions, [target, iterable], "{hooked:?}");
+    // The name loads of `o` and `y` come with the pattern and the iterable.
+    assert_eq!(positions, [init, target, iterable, iterable], "{hooked:?}");
 }
 
 fn pattern_sources(source: &str) -> Vec<String> {

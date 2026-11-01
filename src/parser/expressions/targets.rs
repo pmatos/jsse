@@ -4,7 +4,7 @@ impl<'a> Parser<'a> {
     pub(super) fn is_simple_assignment_target(expr: &Expression) -> bool {
         matches!(
             expr,
-            Expression::Identifier(_) | Expression::Member(_, _, _)
+            Expression::Identifier(_, _) | Expression::Member(_, _, _)
         )
     }
 
@@ -23,7 +23,7 @@ impl<'a> Parser<'a> {
         }
         if Self::is_simple_assignment_target(expr) {
             if self.strict
-                && let Expression::Identifier(name) = expr
+                && let Expression::Identifier(name, _) = expr
                 && (name == "eval" || name == "arguments")
             {
                 return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
@@ -105,7 +105,7 @@ impl<'a> Parser<'a> {
                                 self.validate_destructuring_target(target)?;
                             } else if prop.shorthand {
                                 // Shorthand { eval }/{ arguments } invalid in strict
-                                if let Expression::Identifier(name) = &prop.value {
+                                if let Expression::Identifier(name, _) = &prop.value {
                                     if self.strict && (name == "eval" || name == "arguments") {
                                         return Err(self.error(
                                             "Assignment to 'eval' or 'arguments' in strict mode",
@@ -161,7 +161,7 @@ impl<'a> Parser<'a> {
                 // AssignmentTargetType == simple (identifier or member expression)
                 if Self::is_simple_assignment_target(expr) {
                     if self.strict
-                        && let Expression::Identifier(name) = expr
+                        && let Expression::Identifier(name, _) = expr
                         && (name == "eval" || name == "arguments")
                     {
                         return Err(self.nested_eval_error());

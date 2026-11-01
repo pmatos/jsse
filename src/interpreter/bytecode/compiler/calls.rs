@@ -14,7 +14,7 @@
 //! operand addresses from below.
 
 use super::{CompileError, Compiler};
-use crate::ast::{CallSiteId, Expression};
+use crate::ast::{CallSiteId, Expression, Statement};
 use crate::interpreter::builtins::node_host_stack::call_positions_enabled;
 use crate::interpreter::bytecode::chunk::CALL_POS_FLAG;
 use crate::interpreter::bytecode::op::Op;
@@ -29,7 +29,7 @@ pub(super) fn has_spread(args: &[Expression]) -> bool {
 pub(super) fn is_unsupported_call(callee: &Expression, args: &[Expression], op: Op) -> bool {
     has_spread(args)
         && (op == Op::ReturnCall
-            || matches!(callee, Expression::Identifier(name) if name == "eval"))
+            || matches!(callee, Expression::Identifier(name, _) if name == "eval"))
 }
 
 impl Compiler {
@@ -73,6 +73,19 @@ impl Compiler {
     pub(super) fn emit_stmt_pos(&mut self, at: u32) {
         if at != 0 {
             self.emit_throw_pos(at);
+        }
+    }
+
+    /// The start of an expression, `return`, `if` or `switch` statement, which
+    /// V8 reports for an error nothing later in the statement positions (#1511).
+    pub(super) fn emit_leading_pos(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::Expression(_, at) | Statement::Return(_, at) | Statement::Throw(_, at) => {
+                self.emit_stmt_pos(*at)
+            }
+            Statement::If(s) => self.emit_stmt_pos(s.at),
+            Statement::Switch(s) => self.emit_stmt_pos(s.at),
+            _ => {}
         }
     }
 

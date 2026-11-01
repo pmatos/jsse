@@ -1,4 +1,4 @@
-# Known failures: V8 error positions under `--node` (#1511, stages 1 to 3)
+# Known failures: V8 error positions under `--node` (#1511, stages 1 to 4)
 
 Stage 1 gave binary operators and class heritage their V8 position
 (`operators.js`); stage 2 gave constant assignment and update, the failed read
@@ -8,38 +8,28 @@ assignment pattern their position (`assign.js`, `heritage.js`). Stage 3
 (`patterns.js`, `params.js`, [its notes](../../docs/agents/library-tests-typescript-conformance-v8-messages-1511-stage3.md))
 gave destructuring declarations and assignments, array declarations, for-of
 operands, array and call spreads and destructured parameters their position
-and callee frame. Everything below still reports the frame's last call position (or the function start)
-where V8 reports the column given. Columns are Node 26.8, `show()` from the
-fixture, one statement per line indented by two spaces.
+and callee frame. Stage 4 (`statements.js`, `arrays.js`,
+[its notes](../../docs/agents/library-tests-typescript-conformance-v8-messages-1511-stage4.md))
+gave statements and identifier reads their position: a missing or
+uninitialised binding, `delete null.x`, a nullish compound target, a symbol
+operand, `let z = z`, `s += sym`, a comma heritage, array pattern parameters
+and nested patterns, `Math` as a heritage and a lone spread argument.
 
-| Case | V8 reports | Needs |
+What is left reports the frame's last position (or the function start) where
+V8 reports the column given. Columns are Node 26.8, `show()` from the fixture,
+one statement per line indented by two spaces.
+
+| Case | V8 reports | Why it differs |
 | --- | --- | --- |
-| `x is not defined` as an operand (`return x + 1`) | the statement start (col 3): V8 has no position of its own for a global load | a statement offset on the frame |
-| `x()` with `x` undeclared | the identifier, which is the statement start (col 3) | the same |
-| `delete null.x` | the statement start (col 3): `delete` has no position of its own | the same |
-| `n.y += 1`, `m[0]--`, `delete m.y` on a nullish identifier with no member or call in the operands | the statement start (col 3); jsse reports the access's own position, same line | the same |
-| `let s = sym; s += 1` and `s += 1n` (the left operand of a compound assignment fails to convert) | the statement start (col 3) | the same |
-| `s += sym` with `sym` a top-level `const`/`let` | the `sym` operand (col 8): V8 emits a position for a load that needs a TDZ hole check, and for no other variable load | an offset on `Expression::Identifier` (177 pattern sites, 83 in `generator_transform.rs`) |
-| `let z = z` (TDZ) | the initializer identifier (col 11), the same hole-check position | the same |
-| `class B extends (1, num) {}` | the last operand of the comma expression (col 23); jsse the first (col 20) | an offset per sequence element |
-| `class D extends 1 { [yield 2]() {} }` in a generator, heritage rejected after the key was resumed | the computed key (a V8 quirk of resumed generators) | not worth matching |
-| `class B extends (() => {}) {}` | col 37, past the end of the line: a V8 quirk for a parenthesised arrow heritage | not worth matching |
-| `Class extends value #<Object>` for `Math` | jsse prints `#<Math>`, V8 `#<Object>` | V8 uses the constructor name, not `@@toStringTag` |
-| `function ([a]) {}` called with `undefined` | the `(` of the parameter list (col 13); jsse the function start | an offset on `Pattern::Array` or on the parameter list |
-| `f(...5)` and `new f(...5)` (a sole spread argument) under `--no-bytecode` | the call (col 3), as in the VM | the tree-walker's `eval_spread_args` does not know the call's position |
-| `for (x of 5)` or `[...5]` in a generator or async function that suspends | the stale position of the frame | the state-machine terminators (`ForOfInit`) and the lowered `Spread` carry no offset |
-| `async function (x = 1, { a } = null) {}` | V8 words it `Cannot destructure property 'a' of '(intermediate value)...'` | message text, not a position |
-| `var { s: [t] } = { s: null }` | the `[` (col 12) | an offset on `Pattern::Array` (message: #1545) |
+| `class D extends 1 { [yield 2]() {} }` in a generator, heritage rejected after the key was resumed | the computed key | a V8 quirk of resumed generators |
+| `class B extends (() => {}) {}` | the end of the arrow body (col 28 on a one-line statement), jsse the heritage | a V8 quirk for a parenthesised arrow heritage |
+| `1 && x`, `true ? x : 1`, `0 ? 1 : z` | the statement start | V8 folds the constant test away, so the identifier becomes the first bytecode of the statement; jsse reports the identifier |
+| `with (x) {}`, `x` missing | the statement start (col 3) | `Statement::With` carries no offset (33 pattern sites for a sloppy-mode-only statement); jsse reports the identifier |
+| `1, x;` | the operand (col 6) | V8 positions each operand of a comma expression; jsse the statement start |
+| `function ([a], [b]) {}`, `function ({ a }, [b]) {}`, `function ([a] = undefined) {}` called with `undefined` | the earlier parameter's last position / the default's | V8 reports the last position emitted by the parameters before; jsse the `(` |
+| `[[a]] = [null]`, `try { throw 1 } catch ([a]) {}` | the inner `[` / the `throw` | the cover grammar's patterns carry no offset; the catch parameter is bound at the stale statement |
+| `a + z` or `a += z` with `a` and `z` both frame locals, `z` uninitialised | the identifier `z` (col 7) | the fused local-local op reads both operands and has no identifier table; jsse reports the statement start. Reading a global or an outer binding (`s += sym`) and the tree-walker match |
+| `for (x of 5)` and `f(1, ...5)` in a generator or async function under `--no-bytecode` | the operand; `5 is not iterable` wording for a for-of | the state-machine terminator `ForOfInit` and the lowered call spread carry no offset and word the error as an array spread. The VM, the default, matches |
 
-## Design notes for the next stages
-
-- Statement starts: a `u32` on `Statement::Expression`, `Return`, `Variable`
-  and the control statements is about 200 pattern sites. A marker statement
-  in the lists was rejected: directive prologues, labelled and unbraced
-  bodies, body-shape checks, hoist caches, the generator lowering and the
-  per-statement safepoint (which would double, shifting `JSSE_GC_STRESS`
-  schedules) all depend on the list shape.
-- The oversized files may not grow, so each edit moves code out first (stage
-  2 moved the test modules of `ast.rs`/`eval.rs`/`parser/mod.rs`, the
-  prop ops of `vm.rs`, the new-expression parser of `expressions.rs`, the
-  class-hoisting pass of `generator_transform.rs` and others).
+The `1 && x` / `0 ? 1 : z` rows are a consequence of V8 folding a constant
+test away; the two "V8 quirk" rows are behaviours of V8 that no rule predicts.
