@@ -1,8 +1,10 @@
 use std::cell::Cell;
 mod exact_capacity;
+mod record;
 mod slot_index;
 #[cfg(test)]
 mod slot_index_tests;
+pub(crate) use record::{PropertyRead, PropertyRecord};
 use slot_index::SlotIndex;
 use std::collections::HashMap;
 
@@ -12,7 +14,7 @@ use super::types::PropertyDescriptor;
 use crate::types::{JsPropertyKey, JsValue, PropertyKeyLike};
 
 // Properties held inline before spilling to the heap; `JsObjectData` is capped
-// at 320 bytes (#909), which leaves room for three entries.
+// at 272 bytes (#909, #1401), which leaves room for three entries.
 const INLINE_CAP: usize = 3;
 
 // Largest entry count kept in the linear (scan-only) representation; entries
@@ -33,237 +35,6 @@ type Entry = (JsPropertyKey, PropertyRecord);
 fn key_bytes_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len()
         && (std::ptr::eq(a.as_ptr(), b.as_ptr()) || (a.first() == b.first() && a == b))
-}
-
-const HAS_VALUE: u16 = 1 << 0;
-const HAS_GET: u16 = 1 << 1;
-const HAS_SET: u16 = 1 << 2;
-const HAS_WRITABLE: u16 = 1 << 3;
-const IS_WRITABLE: u16 = 1 << 4;
-const HAS_ENUMERABLE: u16 = 1 << 5;
-const IS_ENUMERABLE: u16 = 1 << 6;
-const HAS_CONFIGURABLE: u16 = 1 << 7;
-const IS_CONFIGURABLE: u16 = 1 << 8;
-
-/// What reading an own property yields, see [`PropertyRecord::read`].
-pub(crate) enum PropertyRead<'a> {
-    Value(&'a JsValue),
-    Getter(&'a JsValue),
-}
-
-/// A `PropertyDescriptor` as the map stores it: 32 bytes where the
-/// `Option`-per-field descriptor takes 56. Absent values are `undefined` and a
-/// flag word records which fields are present, partial descriptors included.
-pub(crate) struct PropertyRecord {
-    value: JsValue,
-    get: JsValue,
-    set: JsValue,
-    flags: u16,
-}
-
-impl PropertyRecord {
-    #[inline]
-    fn pack(slot: Option<JsValue>, present: u16, flags: &mut u16) -> JsValue {
-        match slot {
-            Some(v) => {
-                *flags |= present;
-                v
-            }
-            None => JsValue::UNDEFINED,
-        }
-    }
-
-    #[inline]
-    fn pack_bool(slot: Option<bool>, has: u16, is: u16, flags: &mut u16) {
-        if let Some(b) = slot {
-            *flags |= has;
-            if b {
-                *flags |= is;
-            }
-        }
-    }
-
-    #[inline]
-    fn flag(&self, bit: u16) -> bool {
-        self.flags & bit != 0
-    }
-
-    #[inline]
-    fn tri(&self, has: u16, is: u16) -> Option<bool> {
-        self.flag(has).then(|| self.flag(is))
-    }
-
-    #[inline]
-    fn set_tri(&mut self, has: u16, is: u16, value: Option<bool>) {
-        self.flags &= !(has | is);
-        Self::pack_bool(value, has, is, &mut self.flags);
-    }
-
-    #[inline]
-    pub(crate) fn value(&self) -> Option<&JsValue> {
-        self.flag(HAS_VALUE).then_some(&self.value)
-    }
-
-    #[inline]
-    pub(crate) fn getter(&self) -> Option<&JsValue> {
-        self.flag(HAS_GET).then_some(&self.get)
-    }
-
-    #[inline]
-    pub(crate) fn setter(&self) -> Option<&JsValue> {
-        self.flag(HAS_SET).then_some(&self.set)
-    }
-
-    #[inline]
-    pub(crate) fn writable(&self) -> Option<bool> {
-        self.tri(HAS_WRITABLE, IS_WRITABLE)
-    }
-
-    #[inline]
-    pub(crate) fn enumerable(&self) -> Option<bool> {
-        self.tri(HAS_ENUMERABLE, IS_ENUMERABLE)
-    }
-
-    #[inline]
-    pub(crate) fn configurable(&self) -> Option<bool> {
-        self.tri(HAS_CONFIGURABLE, IS_CONFIGURABLE)
-    }
-
-    #[inline]
-    pub(crate) fn is_data_descriptor(&self) -> bool {
-        self.flags & (HAS_VALUE | HAS_WRITABLE) != 0
-    }
-
-    #[inline]
-    pub(crate) fn is_accessor_descriptor(&self) -> bool {
-        self.flags & (HAS_GET | HAS_SET) != 0
-    }
-
-    /// A data property with a value, no accessor half, and `writable: true`.
-    #[inline]
-    fn is_plain_writable_data(&self) -> bool {
-        const MASK: u16 = HAS_VALUE | HAS_GET | HAS_SET | HAS_WRITABLE | IS_WRITABLE;
-        self.flags & MASK == HAS_VALUE | HAS_WRITABLE | IS_WRITABLE
-    }
-
-    /// What [[Get]] reads from this own property: its value, or the getter
-    /// to call with the receiver. An accessor without a getter reads
-    /// `undefined`, like a descriptor without a value.
-    #[inline]
-    pub(crate) fn read(&self) -> PropertyRead<'_> {
-        if self.is_accessor_descriptor() {
-            return match self.getter() {
-                Some(getter) if !getter.is_undefined() => PropertyRead::Getter(getter),
-                _ => PropertyRead::Value(JsValue::undefined_ref()),
-            };
-        }
-        PropertyRead::Value(self.value().unwrap_or(JsValue::undefined_ref()))
-    }
-
-    /// Adds `delta` to a writable data property that holds a Number, in
-    /// place, and returns the old and new values. `None` leaves the record
-    /// untouched.
-    #[inline]
-    pub(crate) fn add_to_writable_number(&mut self, delta: f64) -> Option<(f64, f64)> {
-        if !self.is_plain_writable_data() {
-            return None;
-        }
-        let old = self.value.as_number()?;
-        let new = old + delta;
-        self.value = JsValue::number(new);
-        Some((old, new))
-    }
-
-    /// Replaces the value of a writable data property in place. Returns
-    /// `false`, leaving the record untouched, when it is anything else (an
-    /// accessor, or a data property that is not writable).
-    #[inline]
-    pub(crate) fn overwrite_writable_data(&mut self, value: &JsValue) -> bool {
-        if !self.is_plain_writable_data() {
-            return false;
-        }
-        self.value = value.clone();
-        true
-    }
-
-    #[inline]
-    pub(crate) fn set_value(&mut self, value: Option<JsValue>) {
-        self.flags &= !HAS_VALUE;
-        self.value = Self::pack(value, HAS_VALUE, &mut self.flags);
-    }
-
-    #[inline]
-    pub(crate) fn set_writable(&mut self, value: Option<bool>) {
-        self.set_tri(HAS_WRITABLE, IS_WRITABLE, value);
-    }
-
-    /// The descriptor this record stores, cloned.
-    pub(crate) fn to_descriptor(&self) -> PropertyDescriptor {
-        PropertyDescriptor {
-            value: self.value().cloned(),
-            writable: self.writable(),
-            get: self.getter().cloned(),
-            set: self.setter().cloned(),
-            enumerable: self.enumerable(),
-            configurable: self.configurable(),
-        }
-    }
-
-    pub(crate) fn into_descriptor(self) -> PropertyDescriptor {
-        let (writable, enumerable, configurable) =
-            (self.writable(), self.enumerable(), self.configurable());
-        let flags = self.flags;
-        let has = |bit: u16| flags & bit != 0;
-        PropertyDescriptor {
-            value: has(HAS_VALUE).then_some(self.value),
-            writable,
-            get: has(HAS_GET).then_some(self.get),
-            set: has(HAS_SET).then_some(self.set),
-            enumerable,
-            configurable,
-        }
-    }
-}
-
-impl From<PropertyDescriptor> for PropertyRecord {
-    #[inline]
-    fn from(d: PropertyDescriptor) -> Self {
-        let mut flags = 0;
-        let value = Self::pack(d.value, HAS_VALUE, &mut flags);
-        let get = Self::pack(d.get, HAS_GET, &mut flags);
-        let set = Self::pack(d.set, HAS_SET, &mut flags);
-        Self::pack_bool(d.writable, HAS_WRITABLE, IS_WRITABLE, &mut flags);
-        Self::pack_bool(d.enumerable, HAS_ENUMERABLE, IS_ENUMERABLE, &mut flags);
-        Self::pack_bool(
-            d.configurable,
-            HAS_CONFIGURABLE,
-            IS_CONFIGURABLE,
-            &mut flags,
-        );
-        Self {
-            value,
-            get,
-            set,
-            flags,
-        }
-    }
-}
-
-impl Clone for PropertyRecord {
-    fn clone(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            get: self.get.clone(),
-            set: self.set.clone(),
-            flags: self.flags,
-        }
-    }
-}
-
-impl std::fmt::Debug for PropertyRecord {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.to_descriptor().fmt(f)
-    }
 }
 
 // Property names come from script, so the index is keyed with foldhash's
@@ -514,16 +285,17 @@ impl PropertyMap {
                 let total = v.len() + additional;
                 if total <= LINEAR_MAX {
                     if total > INLINE_CAP {
-                        v.reserve(additional);
+                        v.reserve_exact(additional);
                     }
                     return;
                 }
-                let mut entries: Vec<Option<Entry>> = Vec::with_capacity(total);
+                let mut entries: Vec<Option<Entry>> =
+                    Vec::with_capacity(slot_index::round_capacity(total));
                 entries.extend(v.drain(..).map(Some));
                 self.inner = Self::spilled(entries, total);
             }
             PropertyMapInner::Spilled { entries, index, .. } => {
-                entries.reserve(additional);
+                index.reserve_entries(entries, additional);
                 index.reserve(entries, additional);
             }
         }
@@ -534,7 +306,7 @@ impl PropertyMap {
         key: JsPropertyKey,
         value: PropertyRecord,
     ) -> PropertyMapInner {
-        let mut entries: Vec<Option<Entry>> = Vec::with_capacity(LINEAR_MAX + 1);
+        let mut entries: Vec<Option<Entry>> = Vec::with_capacity(slot_index::SPILL_CAPACITY);
         entries.extend(v.drain(..).map(Some));
         entries.push(Some((key, value)));
         Self::spilled(entries, LINEAR_MAX + 1)
@@ -1044,7 +816,7 @@ mod tests {
     fn js_object_data_size_cap() {
         // #909: box cold state rather than raising the cap.
         let size = std::mem::size_of::<JsObjectData>();
-        assert!(size <= 320, "JsObjectData grew to {size} bytes (cap 320)");
+        assert!(size <= 272, "JsObjectData grew to {size} bytes (cap 272)");
     }
 
     #[test]

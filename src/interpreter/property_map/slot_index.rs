@@ -14,6 +14,28 @@ use super::*;
 /// eight word compares.
 pub(super) const TAG_MAX: usize = 64;
 
+/// Entry-list capacity of a map that has just spilled: nine entries, rounded
+/// up to the allocator's next size class.
+pub(super) const SPILL_CAPACITY: usize = 10;
+
+/// `n` entries rounded up to a count whose byte size is a size class of
+/// jemalloc (64 bytes apart up to 512, then 128, then 256), so an
+/// exact-capacity list wastes nothing on top of its own slack.
+pub(super) fn round_capacity(n: usize) -> usize {
+    match n {
+        0..=8 => n,
+        9..=16 => n.next_multiple_of(2),
+        17..=32 => n.next_multiple_of(4),
+        _ => n.next_multiple_of(8),
+    }
+}
+
+/// The entry-list capacity after `cap` is exhausted: a quarter more, where
+/// doubling left a third of the list empty on a node with thirteen fields.
+fn grown_capacity(cap: usize) -> usize {
+    round_capacity(cap + cap / 4 + 1)
+}
+
 const LOW_BITS: u64 = 0x0101_0101_0101_0101;
 const LOW_SEVEN: u64 = 0x7F7F_7F7F_7F7F_7F7F;
 const MIX: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -128,6 +150,9 @@ impl SlotIndex {
         value: PropertyRecord,
     ) {
         let slot = entries.len();
+        if slot == entries.capacity() && slot < TAG_MAX && matches!(self, Self::Tags(_)) {
+            entries.reserve_exact(grown_capacity(slot) - slot);
+        }
         match self {
             Self::Tags(words) if slot < TAG_MAX => {
                 set_tag(words, slot, tag_of(key.as_bytes()));
@@ -164,6 +189,15 @@ impl SlotIndex {
     pub(super) fn truncated(&mut self, len: usize) {
         if let Self::Tags(words) = self {
             words.truncate(len.div_ceil(8));
+        }
+    }
+
+    /// Room for `additional` more entries in `entries`: exactly that many
+    /// while the map is small, amortised once it hashes.
+    pub(super) fn reserve_entries(&self, entries: &mut Vec<Option<Entry>>, additional: usize) {
+        match self {
+            Self::Tags(_) => entries.reserve_exact(additional),
+            Self::Hashed(_) => entries.reserve(additional),
         }
     }
 
