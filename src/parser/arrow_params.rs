@@ -98,8 +98,10 @@ impl<'a> Parser<'a> {
             .into_iter()
             .map(expr_to_pattern)
             .collect::<Result<_, _>>()?;
-        for (param, refined) in params.iter_mut().zip(&refined) {
-            adopt_positions(param, refined);
+        if inferred_names::enabled() {
+            for (param, refined) in params.iter_mut().zip(&refined) {
+                adopt_positions(param, refined);
+            }
         }
         if self.strict {
             self.check_strict_params(&params)?;
@@ -187,11 +189,8 @@ impl<'a> Parser<'a> {
 }
 
 /// Copies the error positions of the refined parameter `src` onto `dst`, the
-/// pattern converted from the cover list, which has none (`--node` only).
+/// pattern converted from the cover list, which has none.
 fn adopt_positions(dst: &mut Pattern, src: &Pattern) {
-    if !inferred_names::enabled() {
-        return;
-    }
     match (dst, src) {
         (Pattern::Object(d), Pattern::Object(s)) => {
             d.at = s.at;
