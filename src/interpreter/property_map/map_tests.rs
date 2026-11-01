@@ -1,5 +1,4 @@
 use super::*;
-use crate::interpreter::types::JsObjectData;
 use crate::types::JsValue;
 
 fn key(s: impl AsRef<str>) -> JsPropertyKey {

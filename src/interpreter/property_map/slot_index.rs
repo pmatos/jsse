@@ -46,6 +46,8 @@ pub(super) enum SlotIndex {
     /// end of `entries` and of padding are never trusted: a candidate is
     /// always verified against the entry itself.
     Tags(Vec<u64>),
+    // Boxed so a tag-indexed map, nearly all of them, is not as large as a table.
+    #[allow(clippy::box_collection)]
     Hashed(Box<HashMap<JsPropertyKey, u32, IndexState>>),
 }
 

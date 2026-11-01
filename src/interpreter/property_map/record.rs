@@ -277,9 +277,9 @@ impl PropertyRecord {
         const COMPLETE: u16 = HAS_VALUE | HAS_WRITABLE | HAS_ENUMERABLE | HAS_CONFIGURABLE;
         match self {
             Self::Data { flags, value } if flags & COMPLETE == COMPLETE => Some((
-                u8::from(flags & IS_WRITABLE != 0) * ATTR_WRITABLE
-                    | u8::from(flags & IS_ENUMERABLE != 0) * ATTR_ENUMERABLE
-                    | u8::from(flags & IS_CONFIGURABLE != 0) * ATTR_CONFIGURABLE,
+                (u8::from(flags & IS_WRITABLE != 0) * ATTR_WRITABLE)
+                    | (u8::from(flags & IS_ENUMERABLE != 0) * ATTR_ENUMERABLE)
+                    | (u8::from(flags & IS_CONFIGURABLE != 0) * ATTR_CONFIGURABLE),
                 value,
             )),
             _ => None,
