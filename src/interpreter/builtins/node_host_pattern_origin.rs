@@ -42,6 +42,15 @@ pub(crate) struct ArrayPatternSite {
 }
 
 impl Interpreter {
+    /// `Cannot destructure property 'Symbol(Symbol.iterator)' of 'shown' as
+    /// it is null.`: V8 reads the iterator of a nested array pattern.
+    pub(super) fn iterator_read_message(shown: &str, value: &JsValue) -> String {
+        let what = if value.is_null() { "null" } else { "undefined" };
+        format!(
+            "Cannot destructure property 'Symbol(Symbol.iterator)' of '{shown}' as it is {what}."
+        )
+    }
+
     /// The origin set for the pattern binding that is open at this call depth.
     pub(super) fn origin_here(&self) -> Option<PatternOrigin> {
         let (depth, origin) = self.node_host.pattern_origin.as_ref()?;
@@ -79,12 +88,7 @@ impl Interpreter {
         kind: BindingKind,
         env: &EnvRef,
     ) -> Completion {
-        if !self.node_host.stack.installed || matches!(pattern, Pattern::Identifier(_)) {
-            return self.bind_pattern(pattern, value, kind, env);
-        }
-        self.with_pattern_origin(PatternOrigin::ForHead, |i| {
-            i.bind_pattern(pattern, value, kind, env)
-        })
+        self.bind_with_origin(PatternOrigin::ForHead, pattern, value, kind, env)
     }
 
     /// `bind_pattern` for a catch parameter that is a pattern.
@@ -94,12 +98,21 @@ impl Interpreter {
         value: JsValue,
         env: &EnvRef,
     ) -> Completion {
+        self.bind_with_origin(PatternOrigin::Catch, pattern, value, BindingKind::Let, env)
+    }
+
+    fn bind_with_origin(
+        &mut self,
+        origin: PatternOrigin,
+        pattern: &Pattern,
+        value: JsValue,
+        kind: BindingKind,
+        env: &EnvRef,
+    ) -> Completion {
         if !self.node_host.stack.installed || matches!(pattern, Pattern::Identifier(_)) {
-            return self.bind_pattern(pattern, value, BindingKind::Let, env);
+            return self.bind_pattern(pattern, value, kind, env);
         }
-        self.with_pattern_origin(PatternOrigin::Catch, |i| {
-            i.bind_pattern(pattern, value, BindingKind::Let, env)
-        })
+        self.with_pattern_origin(origin, |i| i.bind_pattern(pattern, value, kind, env))
     }
 
     /// Store one iteration value (or a `catch` argument) through a head
@@ -179,10 +192,7 @@ impl Interpreter {
                 .as_deref()
                 .map_or_else(|| self.v8_call_site_text(value), str::to_string);
             if value.is_nullish() {
-                let what = if value.is_null() { "null" } else { "undefined" };
-                format!(
-                    "Cannot destructure property 'Symbol(Symbol.iterator)' of '{shown}' as it is {what}."
-                )
+                Self::iterator_read_message(&shown, value)
             } else if site.shown.is_some() {
                 format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
             } else {

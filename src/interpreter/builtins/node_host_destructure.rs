@@ -76,6 +76,17 @@ fn first_target_name(props: &[Property]) -> Option<Lead> {
     })
 }
 
+/// Whether a nested array pattern's failure is worded by this initializer.
+fn has_origin_text(init: &Expression) -> bool {
+    matches!(
+        init,
+        Expression::Identifier(_)
+            | Expression::Member(..)
+            | Expression::Call(..)
+            | Expression::Object(..)
+    )
+}
+
 /// V8's text for the initializer of an array pattern that is not iterable:
 /// it prints names, literals, `this` and operators, a member read or an
 /// assignment reads as the value.
@@ -172,15 +183,9 @@ impl Interpreter {
         }
         let top = value.clone();
         let bound = match (&declarator.pattern, &declarator.init) {
-            (
-                Pattern::Object(_),
-                Some(
-                    init @ (Expression::Identifier(_)
-                    | Expression::Member(..)
-                    | Expression::Call(..)
-                    | Expression::Object(..)),
-                ),
-            ) if self.node_host.stack.installed => {
+            (Pattern::Object(_), Some(init))
+                if self.node_host.stack.installed && has_origin_text(init) =>
+            {
                 let origin = PatternOrigin::Init(expr_text(init).into());
                 self.with_pattern_origin(origin, |i| {
                     i.bind_pattern(&declarator.pattern, value, kind, env)
@@ -324,15 +329,7 @@ impl Interpreter {
                 self.destructure_array_assignment(elements, value, env)
             }
             Expression::Object(props, _) => {
-                if !self.node_host.stack.installed
-                    || !matches!(
-                        source,
-                        Expression::Identifier(_)
-                            | Expression::Member(..)
-                            | Expression::Call(..)
-                            | Expression::Object(..)
-                    )
-                {
+                if !self.node_host.stack.installed || !has_origin_text(source) {
                     return self.destructure_object_assignment(props, value, env);
                 }
                 let arrays: Vec<usize> = props
@@ -381,10 +378,7 @@ impl Interpreter {
             return done;
         }
         let text = if value.is_nullish() {
-            let what = if value.is_null() { "null" } else { "undefined" };
-            format!(
-                "Cannot destructure property 'Symbol(Symbol.iterator)' of '{shown}' as it is {what}."
-            )
+            Self::iterator_read_message(&shown, value)
         } else {
             format!("{shown} is not iterable (cannot read property Symbol(Symbol.iterator))")
         };
