@@ -14,14 +14,13 @@ esid: sec-weak-ref-objects
 features: [host-gc-required]
 ---*/
 
-var sink;
-
 // JSON.parse allocates natively: no script statement runs per object, which
-// keeps the cost small under JSSE_GC_STRESS.
+// keeps the cost small under JSSE_GC_STRESS. The result is dropped at once, so
+// the collection the allocation requests (at the next statement boundary)
+// frees the whole churn.
 var churnSource = "[" + "{},".repeat(12000) + "{}]";
 function minor() {
-  sink = JSON.parse(churnSource);
-  sink = undefined;
+  JSON.parse(churnSource);
 }
 
 function make(kind, i) {
@@ -75,8 +74,9 @@ function verify(kind, value, i, where) {
   }
 }
 
-// Enough live old objects that a major collection is not due after every minor one.
-var ballast = Array.from({ length: 12000 }, (_, j) => ({ j: j }));
+// Enough live old objects that a major collection is not due after every minor
+// one, and that the sweep prefetches (it does from 65,536 live objects).
+var ballast = JSON.parse("[" + "{},".repeat(70000) + "{}]");
 $262.gc();
 
 var kept = [];

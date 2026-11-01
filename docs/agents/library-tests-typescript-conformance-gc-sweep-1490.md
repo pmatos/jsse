@@ -23,13 +23,14 @@ Findings:
 
 ## Changes
 
-- `Interpreter::sweep_nursery` (`src/interpreter/gc/minor_sweep.rs`, moved out of `gc_collect_minor`): one slot lookup per object instead of four (`get_cell` instead of a cloned `get`), and two-stage prefetch: the allocation of the object 12 ahead, then (4 ahead, when that has arrived) the heap blocks it owns: a function's `JsFunction` and closure environment, an iterator's or Arguments object's state box, an Array's element buffer (`src/interpreter/object_arena/prefetch.rs`; x86-64 only, a no-op elsewhere). A single stage (allocation only) gave -13 to -18% sweep time; adding the second stage cut the cycles per dead object of every class by 25 to 38% in the instrumented comparison (Array Iterator 215 to 134, Arguments 556 to 402, closure 703 to 477, Array 137 to 93, Object 36 to 27).
+- `Interpreter::sweep_nursery` (`src/interpreter/gc/minor_sweep.rs`, moved out of `gc_collect_minor`): one slot lookup per object instead of four (`get_cell` instead of a cloned `get`), and two-stage prefetch: the allocation of the object 12 ahead, then (4 ahead, when that has arrived) the heap blocks it owns: a function's `JsFunction`, an iterator's or Arguments object's state box, an Array's element buffer (`src/interpreter/object_arena/prefetch.rs`; x86-64 only, empty elsewhere). A single stage (allocation only) gave -13 to -18% sweep time; adding the second stage cut the cycles per dead object of every class by 25 to 38% in the instrumented comparison (Array Iterator 215 to 134, Arguments 556 to 402, closure 703 to 477, Array 137 to 93, Object 36 to 27; that build also prefetched the closure environment of a function, which review found stalls on the line just requested, so the shipped stage 2 does not).
+- The lookahead runs only once the heap holds 65,536 live objects (`PREFETCH_MIN_LIVE_OBJECTS`). Below that the blocks of a nursery are recycled from a small address range and stay cached, and the lookahead was pure cost there (first version, unconditional: +0.5% to +1.2% Ir and a repeatable +2.7% wall on `bench_closures`).
 - The nursery stays at `GC_NURSERY_THRESHOLD_BYTES` (4 MiB): `GcPacer::retune_nursery`, its two constants and their test are gone. `EnvRegistry::len` is only used by tests and the counters now.
 - `ObjectArena`'s unit tests moved to `object_arena/tests.rs` (the file was over the 20,000 byte budget and may not grow).
 
 ## Measurements
 
-Host: shared 24 cores, load average 10 to 25 from other agents, one process at a time, `release-nolto`. Memory-bound code is very sensitive to co-tenants here: the same binary varied 1.5x to 2x between runs, so the tables give every run of a series and conclusions rest on pairs run back to back.
+Host: shared 24 cores, `release-nolto`, one process at a time, runs of two binaries alternating. Memory-bound code is very sensitive to co-tenants here: while other agents were running the same binary varied 1.5x to 2x between runs (the intermediate rows below), and in a quiet window it repeated to 1%. The last rows of each table are the final code in such a window.
 
 `compiler-first` (`--features perf-counters`, `gc_minor_us` and `gc_ms` from the instrumented run; 4118 minors for a 4 MiB nursery, 309 with growth):
 
@@ -38,42 +39,39 @@ Host: shared 24 cores, load average 10 to 25 from other agents, one process at a
 | base (growth) | 143, 209, 179 | 4.8, 7.0, 6.0 s | 15 to 23 ms | 14.9, 20.4, 18.1 s |
 | sweep prefetch, one stage (growth) | 124, 182, 161 | 4.1, 6.1, 5.4 s | | 14.2, 19.1, 17.8 s |
 | two stages (growth), pair 1 / 2 / 3 | 156 / 110 / 130 | 5.2 / 3.7 / 4.3 s | 12 to 17 ms | 17.3 / 13.4 / 15.0 s |
-| **two stages, 4 MiB nursery**, pair 1 / 2 / 3 | **83 / 57 / 71** | **3.0 / 2.0 / 2.6 s** | **0.49 to 0.72 ms** | **12.4 / 11.0 / 12.4 s** |
+| two stages, 4 MiB nursery, loaded host, pair 1 / 2 / 3 | 83 / 57 / 71 | 3.0 / 2.0 / 2.6 s | 0.49 to 0.72 ms | 12.4 / 11.0 / 12.4 s |
+| quiet window: base (growth), 3 runs | 127, 129, 129 | 4.25, 4.30, 4.30 s | 13.8 to 14.0 ms | 13.9, 13.9, 13.8 s |
+| **quiet window: shipped code (4 MiB nursery, gated two-stage prefetch)**, 3 runs | **66, 55, 56** | **2.39, 1.99, 2.02 s** | **0.48 to 0.58 ms** | **11.5, 10.8, 10.9 s** |
 
-Wall time of the same runs: 55.9 / 48.6 / 52.2 s (4 MiB) against 67.8 / 52.1 / 56.8 s (growth, same pair order); peak RSS 2077 to 2095 MiB against 2114 to 2118 MiB (-1 to -2%).
+Wall time of the quiet-window runs (instrumented build): 52.3, 52.1, 51.9 s for the base against 48.1, 45.9, 46.4 s (-8 to -12%); peak RSS 2115 to 2117 MiB against 2077 to 2079 MiB (-1.8%). The loaded-host pairs gave 55.9 / 48.6 / 52.2 s against 67.8 / 52.1 / 56.8 s for growth plus prefetch.
 
-`bundle-load`: 1048 minors of 4 MiB at 0.75 ms (best, quiet host) to 1.6 ms (loaded) against 126 minors of 6 to 16 ms before, 13% of the nursery surviving (module loading builds long-lived structure, so the trace is a third of the minor: about 0.3 ms). Peak RSS 1578 MiB to 1519 MiB (-3.8%, every run). Wall time cannot be resolved from the host noise (17.2 to 31.8 s for one binary).
+`bundle-load` (quiet window, 3 runs of each, instrumented build): base 126 minors, 151 to 152 ns per nursery object, `gc_minor_us` 1.39 to 1.40 s, `gc_ms` 3.75 s, wall 17.4 to 17.7 s, RSS 1578 MiB; shipped code 1048 minors, 77 to 78 ns per nursery object, `gc_minor_us` 0.76 to 0.77 s (0.73 ms per minor of about 9,400 nursery objects, 0.63 ms scaled to 8,192), `gc_ms` 2.96 s, wall 15.9 to 16.0 s (-9%), RSS 1518 to 1520 MiB (-3.8%). 13% of its nursery survives (module loading builds long-lived structure), so the trace is a third of a minor (0.24 ms).
 
-Ir, `callgrind` of `--no-default-features` `release-nolto` binaries (valgrind 3.25.1 built from source in a scratch directory), `benchmarks/scripts/` at their shipped sizes. The prefetch loop adds a few instructions per swept object, so the GC-heavy scripts gain a fraction of a percent; interpreter-only scripts are within 0.15%:
+Ir, `callgrind` of `--no-default-features` `release-nolto` binaries (valgrind 3.25.1 built from source in a scratch directory), `benchmarks/scripts/` at their shipped sizes, base against the shipped change. Their heaps are below the prefetch threshold, so only the `live_count` test is added; the unconditional first version cost +1.15% on `bench_closure_create`, +0.79% on `bench_closures`, +0.53% on `bench_promise_new` and on the synthetic churn:
 
 | script | Ir base | Ir this change | delta |
 | --- | ---: | ---: | ---: |
-| `bench_array` | 865.35 M | 864.85 M | -0.06% |
-| `bench_closure_create` | 2747.42 M | 2778.92 M | +1.15% |
-| `bench_closures` | 6312.66 M | 6362.56 M | +0.79% |
-| `bench_fib` | 5650.14 M | 5658.21 M | +0.14% |
-| `bench_json` | 351.72 M | 351.61 M | -0.03% |
-| `bench_loop` | 3194.52 M | 3194.52 M | -0.00% |
-| `bench_object` | 1516.98 M | 1516.69 M | -0.02% |
-| `bench_promise_new` | 6941.87 M | 6978.39 M | +0.53% |
-| `bench_regex` | 136.93 M | 136.81 M | -0.09% |
-| `bench_string` | 357.96 M | 357.86 M | -0.03% |
-| synthetic closure/array churn, 300k iterations | 7133.46 M | 7171.53 M | +0.53% |
+| `bench_closure_create` | 2747.42 M | 2747.70 M | +0.01% |
+| `bench_closures` | 6312.66 M | 6313.60 M | +0.01% |
+| `bench_promise_new` | 6941.87 M | 6939.06 M | -0.04% |
+| `bench_fib` | 5650.14 M | 5658.21 M | +0.14% (no collection to speak of: code layout) |
+| `bench_array` | 865.35 M | 865.65 M | +0.03% |
+| `bench_object` | 1516.98 M | 1516.73 M | -0.02% |
+| synthetic closure/array churn, 300k iterations | 7133.46 M | 7131.01 M | -0.03% |
 
-Wall time of five of these scripts (`release-nolto`, min of 12 runs alternating base and this change): `bench_closures` 0.335 to 0.344 s, `bench_closure_create` 0.144 to 0.146 s, `bench_object` 0.102 to 0.098 s, `bench_fib` 0.242 to 0.246 s, `bench_opmix` 1.427 to 1.490 s: every difference is inside the host's noise (the medians swing by 50%), `bench_closures` (+2.7%) being the one that repeated across two series. These heaps never grow the nursery, so only the prefetch can move them.
-
-Geometric mean over the 11 rows +0.26%; the largest are the closure-creating scripts (+0.5% to +1.2%), whose time is mostly collection.
+The micro-suite wall time was measured with the unconditional version only (min of 12 alternating runs: `bench_closures` 0.335 to 0.344 s, `bench_object` 0.102 to 0.098 s, `bench_fib` 0.242 to 0.246 s, medians swinging by 50% with the host); the shipped version runs the same instructions as the base there.
 
 ## Goal of the issue
 
-"A minor collection of a 4 MiB nursery should cost well under a millisecond when the survivors are few": met on `compiler-first` (4.6% survivors): 0.49 to 0.72 ms per minor collection, down from 10 to 12 ms in the issue and 1.1 ms before this step. Not met on `bundle-load` (13% survivors): 0.75 ms at best and about 1.5 ms under load, of which the trace of the survivors is 0.3 ms (about 400 Ir per traced object: `trace_object_fields_in` 220, `enqueue_young` 90) and the sweep 0.4 ms. GC share of a process: `compiler-first` `gc_ms` 17.3 s to 12.4 s of a 68 s to 56 s run, still about a fifth, now mostly the 48 major collections (about 10 s, from the previous step) and the dead-iterator drops.
+"A minor collection of a 4 MiB nursery should cost well under a millisecond when the survivors are few": met. `compiler-first` (4.6% survivors): 0.48 to 0.58 ms per minor collection, `bundle-load` (13% survivors, the harder case): 0.73 ms; the issue measured 9.7 and 12.3 ms, the previous step left 1.1 ms. Per nursery object a minor collection costs 55 to 78 ns, from 127 to 152 ns. GC is still about a quarter of a `compiler-first` process (`gc_ms` 10.8 to 11.5 s of 46 to 48 s, instrumented), no longer minor collections (2.0 to 2.4 s) but the 48 major collections (about 9 s) that the heap-proportional budget schedules, plus the dead-iterator drops counted in the minors.
 
 ## What is left
 
 - Not allocating an Array Iterator for `for-of`, array destructuring and spread over an array whose `Symbol.iterator` and `%ArrayIteratorPrototype%.next` are unpatched: 65% of the nursery objects of `compiler-first`, 64% of its drop time, and a saving in the interpreter itself. Observable only through those two hooks, so it needs the guards the existing `iterator_next_cache` path has.
 - Shrinking `IteratorState` (192 bytes, because of the generator variants; 84 match sites) so an array iterator's box is a cache line.
-- The trace of survivors on survivor-heavy phases (`bundle-load`).
+- The trace of survivors on survivor-heavy phases (`bundle-load`: 0.24 ms of a minor, about 400 Ir per traced object, `trace_object_fields_in` 220 and `enqueue_young` 90).
+- The 48 major collections of `compiler-first`.
 
 ## Validation
 
-Full test262 99,911/99,911 (`release-nolto`, bytecode VM); `test262-extra/` 1,872/1,872 on a `release-checked` build, plain and `JSSE_GC_STRESS=7`, bytecode and `--no-bytecode`; a seeded 3% sample of test262 (5,239 scenarios) under `JSSE_GC_STRESS=7` on the checked build; `cargo test --lib` for `interpreter::gc`, `object_arena` (111 tests). Guards: `test262-extra/gc-minor-sweep-survivors-among-dead-kinds.js` (survivors of six object kinds among dead neighbours across five minor collections and into the old generation), `object_arena/tests.rs::prefetch_hints_accept_live_dead_and_unallocated_ids`. The sweep's observable behaviour is unchanged, so no regression test can fail on the nursery size; the removed pacer test asserted only the growth.
+Full test262 99,911/99,911 on both VM modes (`release-nolto`); `test262-extra/` 1,872/1,872 on a `release-checked` build, plain and `JSSE_GC_STRESS=7`, bytecode and `--no-bytecode`; a seeded 3% sample of test262 (5,239 scenarios) under `JSSE_GC_STRESS=7` on the checked build; `cargo test --lib` for `interpreter::gc` and `object_arena` (97 tests). Guards: `test262-extra/gc-minor-sweep-survivors-among-dead-kinds.js` (a 70,000-object ballast so the sweep prefetches; survivors of six object kinds among dead neighbours across seven minor collections and into the old generation), `object_arena/tests.rs::prefetch_hints_follow_payload_kinds_and_leave_objects_intact` (the hints on a function, an Array and an iterator, and on dead and unallocated ids). A prefetch has no observable effect by design and the nursery size is not observable from script, so neither guard can fail on the optimisation itself; they fail if the sweep frees or ages a survivor wrongly, or the hints fault. The removed pacer test asserted only the growth.

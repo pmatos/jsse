@@ -125,15 +125,56 @@ fn cloned_handle_keeps_storage_alive_after_arena_drop() {
 }
 
 #[test]
-fn prefetch_hints_accept_live_dead_and_unallocated_ids() {
+fn prefetch_hints_follow_payload_kinds_and_leave_objects_intact() {
+    use crate::interpreter::types::{
+        ArrayData, Completion, IteratorKind, IteratorState, JsFunction, ObjectKind,
+    };
+    use crate::types::JsValue;
+
     let mut arena = ObjectArena::new();
-    let (live, _) = arena.alloc(JsObjectData::new());
+    let mut function = JsObjectData::new();
+    function.callable = Some(Box::new(JsFunction::native(
+        "f".to_string(),
+        0,
+        |_, _, _| Completion::Normal(JsValue::UNDEFINED),
+    )));
+    let mut array = JsObjectData::new();
+    array.kind = ObjectKind::Array(ArrayData::default());
+    let mut iterator = JsObjectData::new();
+    iterator.set_iterator_state(IteratorState::ArrayIterator {
+        array_id: 0,
+        index: 0,
+        kind: IteratorKind::Value,
+        done: false,
+    });
+    let live = [
+        arena.alloc(JsObjectData::new()).0,
+        arena.alloc(function).0,
+        arena.alloc(array).0,
+        arena.alloc(iterator).0,
+    ];
     let (dead, _) = arena.alloc(JsObjectData::new());
     arena.free(dead);
 
-    for id in [live, dead, CHUNK_SIZE as u64 * 10] {
+    for id in live.into_iter().chain([dead, CHUNK_SIZE as u64 * 10]) {
         arena.prefetch_object(id);
         arena.prefetch_owned(id);
     }
-    assert_eq!(arena.live_count(), 1);
+
+    assert_eq!(arena.live_count(), live.len());
+    assert!(arena.get_cell_expect(live[1]).borrow().callable.is_some());
+    assert!(
+        arena
+            .get_cell_expect(live[2])
+            .borrow()
+            .array_elements()
+            .is_some()
+    );
+    assert!(
+        arena
+            .get_cell_expect(live[3])
+            .borrow()
+            .iterator_state()
+            .is_some()
+    );
 }
