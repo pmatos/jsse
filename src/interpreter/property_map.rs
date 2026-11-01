@@ -58,7 +58,9 @@ type IndexState = foldhash::fast::RandomState;
 // `LINEAR_MAX` entries in a linear-scan `SmallVec` (the first `INLINE_CAP`
 // without a heap alloc), then a dense entry list plus a key->slot `SlotIndex`
 // (tag bytes up to 64 slots, a randomised hash table beyond) once that
-// overflows. Spill is one-way.
+// overflows. Spill is one-way. A map that starts empty is *shaped* instead
+// (`shape.rs`) until it needs something a shape cannot describe, and then
+// takes the form above, also one-way.
 //
 // Entries are addressable by slot (`slot_of` / `entry_at`) so a hot site can
 // remember where a key lived and skip the hash. A slot is only ever a *hint*:
