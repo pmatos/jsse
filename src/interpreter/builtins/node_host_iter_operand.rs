@@ -20,10 +20,12 @@ use crate::ast::{AssignOp, ForOfStatement};
 pub(crate) struct IterOperand {
     /// The not-callable error made last: its object id, the call depth,
     /// the position of the call and the callee text.
-    not_callable: Option<(u64, usize, u32, String)>,
+    pub(crate) not_callable: Option<(u64, usize, u32, String)>,
     /// The address and call depth of the target of the array assignment
     /// that is the operand under evaluation.
     target: Option<(usize, usize)>,
+    /// V8's text for the value that error tried to call.
+    pub(crate) method: Option<String>,
 }
 
 /// `expr` without the parentheses the parser keeps around an assignment.
@@ -65,6 +67,7 @@ impl Interpreter {
         {
             let note = (id, self.call_depth, self.node_host.call_pos, shown);
             self.node_host.iter_operand.not_callable = Some(note);
+            self.node_host.iter_operand.method = Some(self.v8_call_site_text(value));
         }
         error
     }

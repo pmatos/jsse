@@ -20,7 +20,10 @@ impl Parser<'_> {
         &mut self,
     ) -> Result<(Expression, u32), ParseError> {
         let at = self.op_pos();
-        Ok((self.parse_assignment_expression()?, at))
+        let depth = v8_position::begin_node();
+        let right = self.parse_assignment_expression()?;
+        v8_position::end_node(depth);
+        Ok((right, at))
     }
 
     /// The head `source[head_start..prev_token_end]` is the loop's left side.

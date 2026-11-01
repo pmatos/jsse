@@ -1,6 +1,6 @@
 use crate::ast::{CallSiteId, ExprBox, Expression, MemberProperty, PropSiteId};
 use crate::lexer::{Keyword, Token};
-use crate::parser::{ParseError, Parser};
+use crate::parser::{ParseError, Parser, v8_position};
 
 impl Parser<'_> {
     pub(super) fn parse_new_expression(&mut self) -> Result<Expression, ParseError> {
@@ -29,6 +29,7 @@ impl Parser<'_> {
                     return Err(self.error("new.target expression is not allowed here"));
                 }
                 self.advance()?; // target
+                v8_position::expression(v8_position::at(new_pos));
                 return Ok(Expression::NewTarget);
             }
             return Err(self.error("Expected 'target' after 'new.'"));
@@ -60,6 +61,7 @@ impl Parser<'_> {
                     self.advance()?;
                     let at = self.current_token_start;
                     let prop = self.parse_dot_member_property()?;
+                    v8_position::expression(v8_position::at(at));
                     callee = Expression::Member(ExprBox::new(callee), prop, PropSiteId::at(at));
                 }
                 Token::LeftBracket => {
@@ -67,6 +69,7 @@ impl Parser<'_> {
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;
+                    v8_position::expression(v8_position::at(at));
                     callee = Expression::Member(
                         ExprBox::new(callee),
                         MemberProperty::Computed(ExprBox::new(prop)),
@@ -74,6 +77,7 @@ impl Parser<'_> {
                     );
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
+                    v8_position::early_expression(v8_position::at(self.current_token_start));
                     let tmpl = self.parse_template_literal_expr(true)?;
                     callee = Expression::TaggedTemplate(ExprBox::new(callee), tmpl);
                 }
@@ -85,6 +89,7 @@ impl Parser<'_> {
         } else {
             Vec::new()
         };
+        v8_position::expression(v8_position::at(new_pos));
         Ok(Expression::New(
             ExprBox::new(callee),
             args,

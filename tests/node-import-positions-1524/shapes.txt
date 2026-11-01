@@ -1,0 +1,727 @@
+=== bare | 1:1
+IMP;
+=== indent | 1:3
+  IMP;
+=== await | 1:1
+await IMP;
+=== const | 1:11
+const m = IMP;
+=== const-await | 1:11
+const m = await IMP;
+=== id-call | 1:1
+id(IMP);
+=== id-call-2 | 1:3
+  id(1, IMP);
+=== and | 1:1
+n && IMP;
+=== or | 1:1
+0 || IMP;
+=== paren-await | 1:1
+(await IMP);
+=== new | 1:1
+new C(IMP);
+=== array | 1:1
+[1, IMP];
+=== plus-id | 1:5
+0 + id(IMP);
+=== gl-assign | 1:11
+gl.q = id(gl, IMP);
+=== promise-all | 1:9
+Promise.all([IMP]);
+=== o.m | 1:3
+o.m(IMP);
+=== a[b] | 1:4
+arr[b](IMP);
+=== a.b | 1:5
+arr.b(IMP);
+=== then | 1:1
+IMP.then(() => {});
+=== await-then | 1:1
+await IMP.then(() => {});
+=== spec-call | 1:1
+IMP.then(id);
+=== return-fn | 1:16
+(function () { return IMP; })();
+=== return-id | 1:16
+(function () { return id(IMP); })();
+=== arrow-expr | 1:8
+(() => IMP)();
+=== arrow-id | 1:8
+(() => id(IMP))();
+=== arrow-paren | 1:7
+(a => id(IMP))(1);
+=== async-arrow | 1:14
+(async () => await IMP)();
+=== async-arrow-id | 1:16
+(async () => { await id(IMP); })();
+=== if | 1:8
+if (n) IMP;
+=== if-cond | 1:1
+if (id(IMP)) {}
+=== if-block | 1:10
+if (n) { id(IMP); }
+=== while | 1:8
+while (id(IMP)) break;
+=== for-init | 1:14
+for (var i = id(IMP); i < 0; ) ;
+=== for-test | 1:17
+for (var i = 0; id(IMP); ) break;
+=== for-update | 1:26
+for (var i = 0; i < 1; i = id(IMP)) ;
+=== throw | 1:7
+try { throw id(IMP); } catch {}
+=== cond | 1:1
+n ? IMP : 0;
+=== cond-test | 1:1
+id(n) ? IMP : 0;
+=== cond-id | 1:5
+n ? id(IMP) : 0;
+=== comma | 1:4
+0, IMP;
+=== comma-id | 1:8
+id(0), id(IMP);
+=== comma-2 | 1:11
+id(0), 1, id(IMP);
+=== obj-lit | 1:7
+({ k: IMP });
+=== obj-lit-id | 1:7
+({ k: id(IMP) });
+=== obj-lit-2 | 1:13
+({ a: 1, k: id(IMP) });
+=== obj-spread | 1:1
+({ ...id(IMP) });
+=== tagged | 1:4
+tag`a${IMP}`;
+=== tagged-id | 1:7
+id`a${id(IMP)}`;
+=== template | 1:5
+`a${id(IMP)}`;
+=== template2 | 1:1
+`a${IMP}`;
+=== let | 1:10
+let a1 = id(IMP);
+=== let-2 | 1:18
+let a1 = 1, a2 = id(IMP);
+=== var-2 | 1:18
+var a1 = n, a2 = id(IMP);
+=== let-x | 1:10
+let a1 = n && IMP;
+=== unary | 1:1
+!id(IMP);
+=== typeof | 1:1
+typeof id(IMP);
+=== void | 1:1
+void id(IMP);
+=== void-imp | 1:1
+void IMP;
+=== not-imp | 1:1
+!IMP;
+=== spread-call | 1:1
+id(...[IMP]);
+=== spread-arr | 1:1
+[...[IMP]];
+=== opt | 1:2
+o?.m(IMP);
+=== opt-chain | 1:4
+o.g?.h(IMP);
+=== member-chain | 1:5
+o.g.h(IMP);
+=== member-load | 1:7
+o.p + id(IMP);
+=== assign-eq | 1:8
+var w; w = id(IMP);
+=== assign-member | 1:1
+gl.q = IMP;
+=== assign-await | 1:8
+var w; w = await IMP;
+=== compound | 1:9
+gl.q += id(IMP);
+=== binary | 1:5
+n + id(IMP);
+=== binary-2 | 1:9
+n + n + id(IMP);
+=== binary-3 | 1:1
+id(n) + IMP;
+=== binary-4 | 1:1
+n + IMP;
+=== instanceof | 1:14
+n instanceof id(IMP);
+=== new-id | 1:6
+new (id(C))(IMP);
+=== yield | 1:17
+function* g() { yield IMP; } g().next();
+=== yield-id | 1:17
+function* g() { yield id(IMP); } g().next();
+=== async-fn | 1:22
+async function f() { await id(IMP); } f();
+=== async-fn-2 | 1:22
+async function f() { return await IMP; } f();
+=== class-method | 1:17
+class K { m() { return id(IMP); } } new K().m();
+=== class-field | 1:15
+class K { x = id(IMP); } new K();
+=== static-block | 1:20
+class K { static { id(IMP); } }
+=== default-param | 1:16
+(function (p = id(IMP)) {})();
+=== destruct | 1:11
+var { z = id(IMP) } = {};
+=== arr-destruct | 1:10
+var [z = id(IMP)] = [];
+=== switch | 1:19
+switch (n) { case id(IMP): }
+=== switch-body | 1:22
+switch (n) { case 1: id(IMP); }
+=== label | 1:6
+lbl: id(IMP);
+=== do-while | 1:6
+do { id(IMP); } while (0);
+=== for-of | 1:16
+for (var q of [id(IMP)]) ;
+=== for-in | 1:15
+for (var q in id(IMP)) ;
+=== paren | 1:1
+(id(IMP));
+=== paren-id | 1:1
+id((IMP));
+=== str-spec-var | 1:8
+import(v);
+=== str-spec-prop | 1:12
+import(obj.v);
+=== spec-call-id | 1:8
+import(id("./nope.mjs"));
+=== spec-tpl | 1:1
+import(`./nope.mjs`);
+=== await-spec-var | 1:14
+await import(v);
+=== id-spec-var | 1:11
+id(import(v));
+=== nested-imp | 1:11
+id(import(id("./nope.mjs")));
+=== opts | 1:1
+import("./nope.mjs", { with: {} });
+=== opts-id | 1:25
+id(import("./nope.mjs", id({})));
+=== multi-line | 1:1
+id(
+  1,
+  IMP
+);
+=== multi-line-2 | 2:3
+n +
+  id(
+  IMP
+);
+=== multi-line-3 | 2:4
+o
+  .m(
+  IMP
+);
+=== multi-line-4 | 2:4
+const mm =
+   id(
+ IMP);
+=== return-top | 2:3
+async function r() {
+  return id(IMP);
+} r();
+=== throw-fn | 1:16
+function t() { throw id(IMP); } try { t(); } catch {}
+=== call-member-chain | 1:7
+o.g.h(id(IMP));
+=== call-call | 1:4
+id(id(IMP));
+=== call-call-2 | 1:1
+id(1)(IMP);
+=== call-after-call | 1:6
+o.m().m(IMP);
+=== keyed-call | 1:2
+o['m'](IMP);
+=== keyed-call-2 | 1:2
+o[b](IMP);
+=== keyed-load | 1:10
+arr[b] + id(IMP);
+=== await-call | 1:22
+async function f() { await id(1, IMP); } f();
+=== await-arg | 1:32
+async function f() { return id(await IMP); } f();
+=== await-bin | 1:33
+async function f() { return 1 + await IMP; } f();
+=== await-bin2 | 1:34
+async function f() { return n + (await IMP); } f();
+=== await-nested | 1:22
+async function f() { return (await IMP).default; } f();
+=== await-member | 1:45
+async function f() { const { default: d } = await IMP; } f();
+=== await-member-2 | 1:32
+async function f() { const m = (await IMP).x; } f();
+=== await-call-then | 1:22
+async function f() { await IMP.then(id); } f();
+=== await-tpl | 1:22
+async function f() { return `${await IMP}`; } f();
+=== await-cond | 1:33
+async function f() { return n ? await IMP : 0; } f();
+=== await-logical | 1:34
+async function f() { return n && await IMP; } f();
+=== await-arr | 1:30
+async function f() { return [await IMP]; } f();
+=== await-obj | 1:34
+async function f() { return { a: await IMP }; } f();
+=== await-assign-member | 1:29
+async function f() { gl.q = await IMP; } f();
+=== await-assign-id | 1:29
+async function f() { var w; w = await IMP; } f();
+=== await-let | 1:30
+async function f() { let w = await IMP; } f();
+=== await-let-2 | 1:38
+async function f() { let a1 = 1, w = await IMP; } f();
+=== await-if | 1:22
+async function f() { if (await IMP) {} } f();
+=== await-while | 1:29
+async function f() { while (await IMP) break; } f();
+=== await-for-of | 1:38
+async function f() { for (const q of await IMP) {} } f();
+=== await-for-await | 1:44
+async function f() { for await (const q of IMP) {} } f();
+=== await-return | 1:22
+async function f() { return await IMP; } f();
+=== await-throw | 1:22
+async function f() { throw await IMP; } f();
+=== await-sw | 1:22
+async function f() { switch (await IMP) {} } f();
+=== await-paren-call | 1:22
+async function f() { return (await IMP)(); } f();
+=== await-spread | 1:22
+async function f() { return [...await IMP]; } f();
+=== await-neg | 1:22
+async function f() { return !await IMP; } f();
+=== await-typeof | 1:22
+async function f() { return typeof await IMP; } f();
+=== await-in | 1:36
+async function f() { return 'a' in await IMP; } f();
+=== arrow-then | 1:38
+const f = () => IMP.then(id); f();
+=== arrow-await | 1:52
+const f = async () => (await IMP).default; f();
+=== arrow-block | 1:19
+const f = () => { return IMP; }; f();
+=== arrow-ret-id | 1:19
+const f = () => { return id(IMP); }; f();
+=== arrow-args | 1:24
+const f = (a, b) => id(a, IMP); f();
+=== arrow-cond | 1:17
+const f = () => n ? IMP : 0; f();
+=== arrow-and | 1:19
+const f = () => n && IMP; f();
+=== arrow-new | 1:17
+const f = () => new C(IMP); f();
+=== arrow-arr | 1:17
+const f = () => [IMP]; f();
+=== arrow-obj | 1:23
+const f = () => ({ a: IMP }); f();
+=== arrow-member | 1:19
+const f = () => o.m(IMP); f();
+=== arrow-tag | 1:20
+const f = () => tag`${IMP}`; f();
+=== arrow-in-call | 1:10
+id(() => IMP)();
+=== arrow-in-call2 | 1:15
+[1].map(() => IMP);
+=== arrow-in-arg | 1:38
+id(1, () => id(IMP))();
+=== arrow-pair | 1:1
+id((a, b) => 1, IMP);
+=== arrow-pair2 | 1:17
+id((a, b) => 1, id(IMP));
+=== arrow-ident-arg | 1:1
+id(a => 1, IMP);
+=== fn-arg | 1:1
+id(function () { return 1; }, IMP);
+=== fn-arg-2 | 1:36
+id(function (p = 1) { return 1; }, id(IMP));
+=== class-arg | 1:1
+id(class {}, IMP);
+=== fn-decl-then | 1:18
+function f2() {} IMP;
+=== fn-decl-then-id | 1:18
+function f2() {} id(IMP);
+=== class-extends | 1:18
+class K2 extends id(IMP) {}
+=== class-computed | 1:13
+class K2 { [id(IMP)]() {} }
+=== class-static-field | 1:23
+class K2 { static x = id(IMP); }
+=== method-obj | 1:20
+const mo = { m() { return id(IMP); } }; mo.m();
+=== getter | 1:24
+const mo = { get g() { return id(IMP); } }; mo.g;
+=== async-method | 1:26
+const mo = { async m() { await IMP; } }; mo.m();
+=== gen-yield | 1:17
+function* g() { yield id(IMP); } g().next();
+=== gen-yield-2 | 1:27
+function* g() { const x = yield IMP; } g().next();
+=== gen-delegate | 1:17
+function* g() { yield* id(IMP); } g().next();
+=== async-gen | 1:23
+async function* g() { yield await IMP; } g().next();
+=== lbl-block | 1:8
+lbl: { id(IMP); }
+=== if-else | 1:16
+if (0) {} else id(IMP);
+=== if-else-block | 1:18
+if (0) {} else { IMP; }
+=== if-then-id | 1:8
+if (n) id(IMP); else 0;
+=== try | 1:7
+try { id(IMP); } catch {}
+=== finally | 1:19
+try { } finally { id(IMP); }
+=== do-body | 1:4
+do id(IMP); while (0);
+=== do-cond | 1:39
+do {} while (id(IMP) && 0);
+=== while-cond-n | 1:10
+while (n && IMP) break;
+=== for-body | 1:29
+for (var i = 0; i < 1; i++) id(IMP);
+=== for-init-expr | 1:13
+var i; for (i = id(IMP); false;) ;
+=== for-init-call | 1:6
+for (id(IMP); false;) ;
+=== for-of-id | 1:15
+for (var q of id(IMP)) ;
+=== for-of-imp | 1:15
+for (var q of IMP) ;
+=== for-in-imp | 1:15
+for (var q in IMP) ;
+=== switch-disc | 1:1
+switch (id(IMP)) {}
+=== switch-case-imp | 1:22
+switch (n) { case 1: IMP; }
+=== switch-disc-imp | 1:1
+switch (IMP) {}
+=== with-like-comma | 1:5
+(0, id(IMP));
+=== comma-first | 1:1
+id(IMP), 0;
+=== comma-await | 1:25
+async function f() { 0, await IMP; } f();
+=== seq-in-call | 1:8
+id((0, IMP));
+=== cond-nested | 1:6
+n ? (n ? IMP : 0) : 0;
+=== nullish | 1:1
+null ?? IMP;
+=== logical-assign | 1:10
+gl.q ||= id(IMP);
+=== logical-assign-2 | 1:20
+var w2 = 0; w2 ||= id(IMP);
+=== exp | 1:6
+n ** id(IMP);
+=== in-op | 1:8
+'a' in id(IMP);
+=== unary-minus | 1:1
+-id(IMP);
+=== postfix | 1:18
+var u = 0; u++ + id(IMP);
+=== prefix | 1:18
+var u = 0; ++u + id(IMP);
+=== delete | 1:11
+delete gl[id(IMP)];
+=== new-member | 1:7
+new o.f(IMP);
+=== new-call | 1:7
+new C(id(IMP));
+=== new-new | 1:1
+new (new C(IMP).constructor)();
+=== template-tag-member | 1:4
+o.f`a${IMP}`;
+=== template-nested | 1:9
+`a${`b${id(IMP)}`}`;
+=== array-hole | 1:4
+[, id(IMP)];
+=== array-nested | 1:3
+[[id(IMP)]];
+=== array-load | 1:5
+[n, id(IMP)];
+=== obj-method-call | 1:7
+({ a: id(IMP) }).a;
+=== obj-computed | 1:5
+({ [id(IMP)]: 1 });
+=== obj-short | 1:10
+({ n, k: id(IMP) });
+=== obj-getter | 1:30
+({ get x() { return 1; }, k: id(IMP) });
+=== obj-nested | 1:12
+({ a: { b: id(IMP) } });
+=== obj-nested-imp | 1:12
+({ a: { b: IMP } });
+=== destr-assign | 1:15
+var da; [da = id(IMP)] = [];
+=== destr-assign-obj | 1:17
+var da; ({ da = id(IMP) } = {});
+=== destr-call | 1:19
+var { ...rest } = id(IMP);
+=== destr-param | 1:18
+(function ({ a = id(IMP) }) {})({});
+=== destr-arr-param | 1:17
+(function ([a = id(IMP)]) {})([]);
+=== opt-call | 1:3
+o.f?.(IMP);
+=== opt-index | 1:4
+o?.['m'](IMP);
+=== opt-index-2 | 1:6
+o.g?.['h'](IMP);
+=== opt-call-chain | 1:7
+o?.m().m(IMP);
+=== opt-nested | 1:5
+o?.g?.h(IMP);
+=== call-private | 1:37
+class K3 { #p() {} m() { return this.#p(IMP); } } new K3().m();
+=== this-call | 1:30
+class K3 { m() { return this.m2(IMP); } m2() {} } new K3().m();
+=== super-call | 1:63
+class K3 { m2() {} } class K4 extends K3 { m() { return super.m2(IMP); } } new K4().m();
+=== static-method | 1:25
+class K3 { static m() { return id(IMP); } } K3.m();
+=== ctor | 1:28
+class K3 { constructor() { id(IMP); } } new K3();
+=== ctor-derived | 1:51
+class K3 {} class K4 extends K3 { constructor() { super(IMP); } } new K4();
+=== field-arrow | 1:22
+class K3 { f = () => IMP; } new K3().f();
+=== module-top-id | 1:13
+const mod = await IMP;
+=== module-top-id2 | 1:19
+export const ex = await IMP;
+=== export-default | 1:16
+export default id(IMP);
+=== export-default-imp | 0:246
+export default IMP;
+=== label-loop | 1:17
+lbl: for (;;) { id(IMP); break lbl; }
+=== debugger | 1:11
+debugger; id(IMP);
+=== semicolon-less | 2:1
+id(IMP)
+id(IMP)
+=== tab-indent | 1:2
+	id(IMP);
+=== unicode | 1:6
+'é'; id(IMP);
+=== unicode2 | 1:16
+var é = 1; é + id(IMP);
+=== after-comment | 1:9
+/* c */ id(IMP);
+=== line-comment | 2:1
+// c
+id(IMP);
+=== real-lazy | 1:20
+const lazy = () => import("./nope.mjs"); lazy();
+=== real-lazy-then | 1:41
+const lazy = () => import("./nope.mjs").then((m) => m.default); lazy();
+=== real-lazy-then2 | 1:41
+const lazy = () => IMP.then(m => ({ default: m.X })); lazy();
+=== real-await-default | 1:11
+const m = (await IMP).default;
+=== real-await-default2 | 1:24
+const { default: d } = await IMP;
+=== real-promise-all | 1:15
+await Promise.all([IMP, IMP]);
+=== real-map | 1:36
+await Promise.all(['a'].map((x) => IMP));
+=== real-map-id | 1:43
+await Promise.all(['a'].map((x) => import(x)));
+=== real-cond-import | 1:16
+const mm = n ? await IMP : null;
+=== real-iife | 1:16
+(async () => { await IMP; })();
+=== real-iife2 | 1:32
+(async function () { const m = await IMP; })();
+=== real-method | 1:29
+const oo = { async load() { return await IMP; } }; oo.load();
+=== real-class-method | 1:26
+class L { async load() { return (await IMP).default; } } new L().load();
+=== real-static | 1:33
+class L { static async load() { return IMP; } } L.load();
+=== real-switch | 1:43
+async function f() { switch (n) { case 1: return await IMP; } } f();
+=== real-if-await | 1:31
+async function f() { if (n) { return await IMP; } } f();
+=== real-ternary-arrow | 1:18
+const f = (x) => x ? IMP : IMP; f(1);
+=== real-logical-arrow | 1:20
+const f = (x) => x && IMP; f(1);
+=== real-logical-arrow2 | 1:20
+const f = (x) => x || IMP; f(0);
+=== real-nullish-arrow | 1:23
+const f = (x) => x ?? IMP; f(null);
+=== real-call-arrow | 1:21
+const f = (x) => id(x, IMP); f(1);
+=== real-obj-arrow | 1:32
+const f = () => ({ load: () => IMP }); f().load();
+=== real-array-arrow | 1:17
+const f = () => [IMP]; f();
+=== real-await-arrow-then | 1:60
+const f = async () => (await IMP).default.x; f();
+=== real-promise-race | 1:9
+Promise.race([IMP, IMP]);
+=== real-new-promise | 1:43
+new Promise((res) => IMP.then(res));
+=== real-new-promise2 | 1:29
+new Promise((res, rej) => { IMP.then(res, rej); });
+=== real-settimeout | 1:18
+setTimeout(() => IMP, 0);
+=== real-settimeout2 | 1:20
+setTimeout(() => { IMP; }, 0);
+=== real-bind | 1:1
+IMP.then(id.bind(null));
+=== real-spread-args | 1:7
+id(...[1], IMP);
+=== real-template-arg | 1:7
+id(`${n}`, IMP);
+=== real-str-arg | 1:1
+id('s', IMP);
+=== real-num-arg | 1:1
+id(1, 2, IMP);
+=== real-neg-arg | 1:1
+id(-1, IMP);
+=== real-typeof-arg | 1:1
+id(typeof n, IMP);
+=== real-this-arg | 1:1
+id(this, IMP);
+=== real-fn-arg | 1:1
+id(function () {}, IMP);
+=== real-obj-arg | 1:1
+id({}, IMP);
+=== real-obj-arg2 | 1:9
+id({ a: n }, IMP);
+=== real-obj-arg3 | 1:11
+id({ a: o.p }, IMP);
+=== real-arr-arg | 1:5
+id([n], IMP);
+=== real-regex-arg | 1:1
+id(/a/, IMP);
+=== real-null-arg | 1:1
+id(null, IMP);
+=== real-prop-arg | 1:6
+id(o.p, IMP);
+=== real-prop-arg2 | 1:8
+id(o.g.h, IMP);
+=== real-call-arg | 1:6
+id(o.f(), IMP);
+=== real-call-arg2 | 1:4
+id(id(1), IMP);
+=== real-new-arg | 1:4
+id(new C(), IMP);
+=== real-assign-arg | 1:15
+var za; id(za = 1, IMP);
+=== real-update-arg | 1:18
+var zb = 0; id(zb++, IMP);
+=== real-bin-arg | 1:6
+id(n + n, IMP);
+=== real-cmp-arg | 1:6
+id(n < 2, IMP);
+=== real-not-arg | 1:5
+id(!n, IMP);
+=== real-cond-arg | 1:4
+id(n ? 1 : 2, IMP);
+=== real-and-arg | 1:4
+id(n && 1, IMP);
+=== real-in-arg | 1:8
+id('p' in o, IMP);
+=== real-instanceof-arg | 1:6
+id(o instanceof C, IMP);
+=== real-paren-arg | 1:5
+id((n), IMP);
+=== real-seq-arg | 1:8
+id((n, n), IMP);
+=== real-keyed-arg | 1:5
+id(o['p'], IMP);
+=== real-keyed-arg2 | 1:5
+id(o[b], IMP);
+=== real-opt-arg | 1:5
+id(o?.p, IMP);
+=== real-opt-arg2 | 1:10
+id(o?.f?.(), IMP);
+=== real-tag-arg | 1:7
+id(tag`a`, IMP);
+=== real-class-arg | 1:1
+id(class {}, IMP);
+=== real-super-arg | 1:34
+class K5 { m() { return id(super.toString, IMP); } } new K5().m();
+=== real-newtarget | 1:26
+function F() { return id(new.target, IMP); } new F();
+=== real-importmeta | 1:16
+id(import.meta.url, IMP);
+=== real-import-twice | 1:1
+id(IMP, IMP);
+=== real-line2 | 1:1
+id(1,
+  2,
+  IMP);
+=== real-line3 | 3:3
+o
+  .m()
+  .m(
+    IMP
+  );
+=== real-line4 | 2:4
+Promise
+  .all([
+    IMP
+  ]);
+=== real-line5 | 1:11
+const t = [
+  IMP,
+  IMP,
+];
+=== real-line6 | 3:6
+const t2 = {
+  a: IMP,
+  b: id(IMP),
+};
+=== real-line7 | 3:5
+id(
+  async () => {
+    await IMP;
+  }
+)();
+=== real-line8 | 2:13
+(async () => {
+  const m = await IMP;
+})();
+=== real-line9 | 2:3
+async function z() {
+  await
+    IMP;
+} z();
+=== real-crlf | 1:1
+id(1,
+  IMP);
+=== real-await-arg2 | 1:25
+async function f() { id(await n, IMP); } f();
+=== review-opt-dot | 1:5
+o?.g.h(IMP);
+=== review-opt-dot-2 | 1:5
+o?.p.toString(IMP);
+=== review-opt-key-dot | 1:9
+o?.["g"].h(IMP);
+=== review-case-imp | 1:1
+switch (n) { case IMP: }
+=== review-case-imp-2 | 1:1
+switch (0) { case 1: case IMP: }
+=== review-or-chain | 1:17
+const f = () => 0 || 0 || IMP; f();
+=== review-or-chain-3 | 1:17
+const f = () => 0 || 0 || 0 || IMP; f();
+=== review-nullish-chain | 1:17
+const f = () => null ?? null ?? IMP; f();
+=== review-and-chain | 1:22
+const f = () => n && n && IMP; f();
+=== review-param-default | 1:12
+function f2(a = IMP) {}; f2();
+=== review-let-pattern | 2:12
+fn();
+let { a1 = id(IMP) } = {};

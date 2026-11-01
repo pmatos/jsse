@@ -1,5 +1,5 @@
 //! What the parser does differently once the `--node` stack hooks are
-//! installed (issues #1483, #1484): dynamic `import()` carries the position V8
+//! installed (issues #1483, #1484, #1524): dynamic `import()` carries the position V8
 //! reports for the call, and the common "this token is not allowed here"
 //! errors read like V8's (`Unexpected token '='`) instead of naming the
 //! production the parser was in. Default mode keeps its own wording.
@@ -9,52 +9,15 @@ use super::*;
 mod wording_1523;
 
 impl<'a> Parser<'a> {
-    /// `await import(...)`, `await import(...).then(...)`: V8 reports the
-    /// `await` for the call, so the dynamic import takes its position, unless
-    /// the specifier is read by a node that has a position of its own.
-    pub(super) fn retarget_import(expr: &mut Expression, at: u32) {
-        match expr {
-            Expression::Import(spec, _, call) if !Self::positions_itself(spec) => *call = at,
-            Expression::Call(callee, ..) | Expression::Member(callee, ..) => {
-                Self::retarget_import(callee, at)
-            }
-            _ => {}
-        }
-    }
-
-    /// A specifier that is a variable or a property read: V8's latest emitted
-    /// position when `import()` runs is that load, not the call.
-    fn positions_itself(spec: &Expression) -> bool {
-        match spec {
-            Expression::Identifier(_, _) => true,
-            Expression::Member(object, MemberProperty::Dot(_), _) => Self::positions_itself(object),
-            _ => false,
-        }
-    }
-
-    /// `import(spec)`: the position V8 reports for the call.
+    /// `import(spec)`: the position V8 reports for the call, which follows the
+    /// position bookkeeping of `v8_position`.
     pub(super) fn import_call(
         &self,
         spec: Expression,
         options: Option<ExprBox>,
         at: u32,
-        (spec_start, spec_end): (usize, usize),
     ) -> Expression {
-        let mut at = at;
-        if inferred_names::enabled() && Self::positions_itself(&spec) {
-            let (read, name) = match &spec {
-                Expression::Member(_, MemberProperty::Dot(name), _) => {
-                    (spec_end.saturating_sub(name.len()), name)
-                }
-                Expression::Identifier(name, _) => (spec_start, name),
-                _ => unreachable!("positions_itself"),
-            };
-            if self.source_text_source.get(read..read + name.len()) != Some(name.as_str()) {
-                return Expression::Import(ExprBox::new(spec), options, at);
-            }
-            at = CallSiteId::at(read).1;
-        }
-        Expression::Import(ExprBox::new(spec), options, at)
+        Expression::Import(ExprBox::new(spec), options, v8_position::reported(at))
     }
 
     /// The optional second argument of `import(spec, options)`.

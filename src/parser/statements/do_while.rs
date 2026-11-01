@@ -6,7 +6,7 @@ impl Parser<'_> {
         let body = self.parse_iteration_body()?;
         self.eat(&Token::Keyword(Keyword::While))?;
         self.eat(&Token::LeftParen)?;
-        let test = self.parse_expression()?;
+        let test = self.parse_cond()?;
         self.eat(&Token::RightParen)?;
         // §12.9.1 special ASI rule: semicolon after do-while's `)` is always auto-inserted
         if self.current == Token::Semicolon {

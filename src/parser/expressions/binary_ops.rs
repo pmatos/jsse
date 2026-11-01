@@ -20,6 +20,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_bitwise_xor()?;
+            v8_position::expression(at);
             left = Expression::Binary(BinaryOp::BitOr, ExprBox::new(left), ExprBox::new(right), at);
         }
         Ok(left)
@@ -31,6 +32,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_bitwise_and()?;
+            v8_position::expression(at);
             left = Expression::Binary(
                 BinaryOp::BitXor,
                 ExprBox::new(left),
@@ -47,6 +49,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_equality()?;
+            v8_position::expression(at);
             left = Expression::Binary(
                 BinaryOp::BitAnd,
                 ExprBox::new(left),
@@ -70,6 +73,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_relational()?;
+            v8_position::expression(at);
             left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right), at);
         }
         Ok(left)
@@ -103,6 +107,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_shift()?;
+            v8_position::expression(at);
             // §13.10: PrivateIdentifier in ShiftExpression — reject ArrowFunction
             if matches!(&left, Expression::PrivateIdentifier(_))
                 && matches!(&right, Expression::ArrowFunction(_))
@@ -126,6 +131,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_additive()?;
+            v8_position::expression(at);
             left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right), at);
         }
         Ok(left)
@@ -142,6 +148,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_multiplicative()?;
+            v8_position::expression(at);
             left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right), at);
         }
         Ok(left)
@@ -159,6 +166,7 @@ impl Parser<'_> {
             let at = self.op_pos();
             self.advance()?;
             let right = self.parse_exponentiation()?;
+            v8_position::expression(at);
             left = Expression::Binary(op, ExprBox::new(left), ExprBox::new(right), at);
         }
         Ok(left)

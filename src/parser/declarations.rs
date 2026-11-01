@@ -133,7 +133,7 @@ impl<'a> Parser<'a> {
             self.eat(&Token::RightParen)?;
             return Ok(());
         }
-        // DecoratorMemberExpression: starts with IdentifierReference, then chains of .name or .#name
+        // DecoratorMemberExpression: IdentifierReference then .name or .#name
         match &self.current {
             Token::Identifier(_)
             | Token::IdentifierWithEscape(_)
@@ -938,7 +938,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub(super) fn parse_formal_parameters(&mut self) -> Result<Vec<Pattern>, ParseError> {
+    pub(super) fn parse_param_list(&mut self) -> Result<Vec<Pattern>, ParseError> {
         let paren = self.op_pos();
         self.eat(&Token::LeftParen)?;
         let prev_formal = self.in_formal_parameters;
@@ -1104,7 +1104,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_arrow_expression_body(&mut self) -> Result<Expression, ParseError> {
         let prev_static_block = self.in_static_block;
         self.in_static_block = false;
-        let result = self.parse_assignment_expression();
+        let result = self.parse_arrow_concise_body();
         self.in_static_block = prev_static_block;
         result
     }

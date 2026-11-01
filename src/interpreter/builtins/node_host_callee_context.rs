@@ -8,7 +8,9 @@
 //! tells the context.
 
 use super::super::Interpreter;
-use super::node_host_callee::{callee_site, skip_ws_back, skip_ws_fwd, word_before};
+use super::node_host_callee::{
+    callee_site, new_expression_end, skip_ws_back, skip_ws_fwd, word_before,
+};
 
 #[derive(Clone, Copy)]
 enum Operand {
@@ -65,6 +67,7 @@ impl Interpreter {
         let src = self.node_caller_source()?;
         let (text, start, after) = callee_site(&src, self.node_host.call_pos)?;
         Some(match operand_kind(&src, start, after?)? {
+            Operand::ForAwait if text.contains("?.") => return None,
             Operand::ForAwait => {
                 format!("{text}(...) is not a function or its return value is not async iterable")
             }
@@ -73,6 +76,28 @@ impl Interpreter {
             }
             Operand::Yield => "yield* (intermediate value) is not iterable".to_string(),
         })
+    }
+
+    /// What V8 prints for the callee of a `new` that is the operand of a
+    /// `for await` head or a `yield*` and is not a constructor: the unnamed
+    /// value.
+    pub(super) fn iterable_new_text(&self) -> Option<&'static str> {
+        if self.node_host.stack.installed && self.top_native().is_some() {
+            return None;
+        }
+        let src = self.node_caller_source()?;
+        let at = usize::try_from(self.node_host.call_pos)
+            .ok()?
+            .checked_sub(1)?;
+        if !src.get(at..)?.starts_with("new") {
+            return None;
+        }
+        Some(
+            match operand_kind(&src, at, new_expression_end(&src, at)?)? {
+                Operand::ForAwait => "(intermediate value)",
+                Operand::Yield => "yield* (intermediate value)",
+            },
+        )
     }
 
     fn caller_is_async(&self) -> bool {

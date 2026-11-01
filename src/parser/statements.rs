@@ -8,6 +8,9 @@ mod block_body;
 
 impl<'a> Parser<'a> {
     pub(super) fn parse_statement_or_declaration(&mut self) -> Result<Statement, ParseError> {
+        if matches!(&self.current, Token::Keyword(Keyword::Const | Keyword::Let)) {
+            self.track_statement();
+        }
         if matches!(&self.current, Token::Identifier(n) if n == "using")
             && self.is_using_declaration()
         {
@@ -82,8 +85,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
-        // Depth guard: deep nesting is a catchable error, not a stack overflow.
+        // Depth guard.
         self.enter_recursion()?;
+        self.track_statement();
         let r = self.parse_statement_inner();
         self.exit_recursion();
         r
@@ -100,8 +104,7 @@ impl<'a> Parser<'a> {
                 self.error("Lexical declaration cannot appear in a single-statement context")
             );
         }
-        // In strict mode, `let` is always a keyword (declaration not allowed in single-stmt).
-        // In sloppy mode, `let [` is always a SyntaxError per ExpressionStatement lookahead.
+        // Strict `let` is a keyword; sloppy `let [` is a SyntaxError (ExpressionStatement lookahead).
         if matches!(&self.current, Token::Keyword(Keyword::Let)) {
             if self.strict {
                 return Err(
@@ -492,7 +495,7 @@ impl<'a> Parser<'a> {
     fn parse_while_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // while
         self.eat(&Token::LeftParen)?;
-        let test = self.parse_expression()?;
+        let test = self.parse_cond()?;
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
         Ok(Statement::While(WhileStatement { test, body }))
@@ -745,7 +748,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                     self.advance()?;
-                    let right = self.parse_expression()?;
+                    let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForIn(ForInStatement {
@@ -809,7 +812,7 @@ impl<'a> Parser<'a> {
                             return Err(self.error("Invalid left-hand side in for-in loop"));
                         }
                         self.advance()?;
-                        let right = self.parse_expression()?;
+                        let right = self.parse_cond()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         let left = if self.call_target(&expr) {
@@ -869,7 +872,7 @@ impl<'a> Parser<'a> {
                             return Err(self.for_binding_error(&decls, "in"));
                         }
                         self.advance()?;
-                        let right = self.parse_expression()?;
+                        let right = self.parse_cond()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         Self::check_for_in_of_early_errors(kind, &decls, &body)?;
@@ -944,7 +947,7 @@ impl<'a> Parser<'a> {
                         return Err(self.for_binding_error(&decls, "in"));
                     }
                     self.advance()?;
-                    let right = self.parse_expression()?;
+                    let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     Self::check_for_in_of_early_errors(kind, &decls, &body)?;
@@ -1023,7 +1026,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error("Invalid left-hand side in for-in loop"));
                     }
                     self.advance()?;
-                    let right = self.parse_expression()?;
+                    let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     let left = if self.call_target(&expr) {
@@ -1083,19 +1086,19 @@ impl<'a> Parser<'a> {
 
         self.eat(&Token::Semicolon)?;
         let test = if self.current != Token::Semicolon {
-            Some(self.parse_expression()?)
+            Some(self.parse_cond()?)
         } else {
             None
         };
         self.eat(&Token::Semicolon)?;
         let update = if self.current != Token::RightParen {
-            Some(self.parse_expression()?)
+            Some(self.parse_cond()?)
         } else {
             None
         };
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
-        // §14.7.4.2: BoundNames of LexicalDeclaration must not overlap VarDeclaredNames of Statement
+        // §14.7.4.2: BoundNames must not overlap VarDeclaredNames
         if let Some(ForInit::Variable(ref vd)) = init
             && matches!(
                 vd.kind,

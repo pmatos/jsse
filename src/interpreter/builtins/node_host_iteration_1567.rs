@@ -8,7 +8,7 @@
 //! and keeps the value form for names, literals and `this`.
 
 use super::super::*;
-use super::node_host_expr_text::{expr_text, is_folded};
+use super::node_host_expr_text::{expr_text, is_folded, optional_call_callee};
 use crate::ast::{Expression, LogicalOp};
 
 const ASYNC_KEY: &str = "Symbol(Symbol.asyncIterator)";
@@ -71,16 +71,31 @@ impl Interpreter {
         source: Option<&Expression>,
         kind: Delegation,
     ) -> JsValue {
-        if !self.node_host.stack.installed || !self.iterable_error_here(&error) {
+        if !self.node_host.stack.installed {
             return error;
         }
         let asynchronous = kind != Delegation::Yield;
+        if asynchronous && let Some(text) = self.method_not_callable(&error, source) {
+            return self.create_type_error(&text);
+        }
+        if !self.iterable_error_here(&error) {
+            return error;
+        }
         let text = if asynchronous && value.is_nullish() {
             let what = if value.is_null() { "null" } else { "undefined" };
             format!("Cannot read properties of {what} (reading '{ASYNC_KEY}')")
         } else {
             let Some(source) = source else { return error };
             let source = peel(source);
+            if let Some(callee) = optional_call_callee(source) {
+                let text = match kind {
+                    Delegation::Yield => format!(
+                        "{callee} is not iterable (cannot read property Symbol(Symbol.iterator))"
+                    ),
+                    _ => format!("{callee} is not a function"),
+                };
+                return self.create_type_error(&text);
+            }
             match kind {
                 Delegation::Yield if yield_operand_printed(source) => {
                     "yield* (intermediate value) is not iterable".to_string()
@@ -148,8 +163,58 @@ impl Interpreter {
     ) -> JsValue {
         if head.is_await {
             self.reword_delegation(error, value, Some(&head.right), Delegation::ForAwait)
+        } else if let Some(callee) = optional_call_callee(peel(&head.right)) {
+            if !self.iterable_error_here(&error) {
+                return error;
+            }
+            let text =
+                format!("{callee} is not iterable (cannot read property Symbol(Symbol.iterator))");
+            self.create_type_error(&text)
         } else {
             self.reword_iterable(error, &head.right)
+        }
+    }
+}
+
+impl Interpreter {
+    /// The `Symbol.asyncIterator` method of a `for await` head or a `yield*`
+    /// operand is not callable (`{ [Symbol.asyncIterator]: 1 }`): V8 words the
+    /// operand when it prints one (`obj.ag is not async iterable`) and the
+    /// method otherwise (`number 1 is not a function`).
+    fn method_not_callable(
+        &mut self,
+        error: &JsValue,
+        source: Option<&Expression>,
+    ) -> Option<String> {
+        let id = error.as_object_id()?;
+        let (made, depth, ..) = self.node_host.iter_operand.not_callable.as_ref()?;
+        if *made != id || *depth != self.call_depth + 1 {
+            return None;
+        }
+        let method = self.node_host.iter_operand.method.take()?;
+        self.node_host.iter_operand.not_callable = None;
+        let printable = source.map(peel).filter(|source| {
+            matches!(
+                source,
+                Expression::Identifier(..) | Expression::Member(..) | Expression::This
+            )
+        });
+        Some(match printable {
+            Some(source) => format!("{} is not async iterable", expr_text(source)),
+            None => format!("{method} is not a function"),
+        })
+    }
+}
+
+impl Interpreter {
+    /// V8's text for a for-of head that is not iterable: an optional chain
+    /// that ends in a call prints its callee.
+    pub(crate) fn head_message(source: &Expression) -> Option<String> {
+        match optional_call_callee(peel(source)) {
+            Some(callee) => Some(format!(
+                "{callee} is not iterable (cannot read property Symbol(Symbol.iterator))"
+            )),
+            None => Self::iterable_message(source),
         }
     }
 }
