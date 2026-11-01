@@ -11,11 +11,15 @@ impl<'a> Parser<'a> {
         matches!(expr, Expression::Call(..)) && (!self.strict || inferred_names::enabled())
     }
 
+    fn using_kind(await_using: bool) -> &'static str {
+        if await_using { "await using" } else { "using" }
+    }
+
     /// `using x = 1` where a using declaration may not stand. V8 reads `using`
     /// as a name, so the binding is the token it rejects.
     pub(in crate::parser) fn using_not_allowed(&mut self, await_using: bool) -> ParseError {
         if !inferred_names::enabled() {
-            let kind = if await_using { "await using" } else { "using" };
+            let kind = Self::using_kind(await_using);
             return self.error(format!(
                 "{kind} declaration is not allowed in this position"
             ));
@@ -30,7 +34,7 @@ impl<'a> Parser<'a> {
 
     /// A using binding that is not followed by `=`.
     pub(in crate::parser) fn using_missing_init(&self, await_using: bool) -> ParseError {
-        let kind = if await_using { "await using" } else { "using" };
+        let kind = Self::using_kind(await_using);
         if !inferred_names::enabled() {
             return self.error(format!("{kind} declaration requires an initializer"));
         }
