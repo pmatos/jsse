@@ -47,12 +47,15 @@ pub(crate) struct NodeHostState {
     pub(crate) pattern_frames: Vec<usize>,
     /// The array pattern parameter being bound (its address) and whether the
     /// object pattern parameter before it has a default.
-    pub(crate) param_leak: Option<(usize, bool)>,
+    pub(crate) param_leak: Option<(usize, super::node_host_param_patterns::Leak)>,
     /// What each open `bind_pattern` is.
     pub(crate) pattern_kinds: Vec<super::node_host_param_patterns::PatternKind>,
     /// The text V8 prints for the initializer of the pattern binding open at
     /// the call depth, with that depth.
     pub(crate) pattern_origin: Option<(usize, super::node_host_pattern_origin::PatternOrigin)>,
+    /// The default of each open `{ ... } = default` pattern, by the address
+    /// of the object pattern's properties.
+    pub(crate) default_texts: Vec<(usize, std::rc::Rc<str>)>,
     /// The error object `not_iterable_error` made last, with the call-stack
     /// depth it was made at; a for-of or spread at that depth rewords it.
     pub(crate) iterable_error: Option<(u64, usize)>,

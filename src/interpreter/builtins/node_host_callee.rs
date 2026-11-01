@@ -8,6 +8,7 @@
 //! returns `None` and the caller keeps the engine's own wording.
 
 use super::super::Interpreter;
+use super::node_host_callee_strings::{string_close_after, unquote};
 use crate::interpreter::types::JsFunction;
 use std::rc::Rc;
 
@@ -15,14 +16,14 @@ fn ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, b'_' | b'$' | b'#') || c >= 0x80
 }
 
-fn skip_ws_back(b: &[u8], mut i: usize) -> usize {
+pub(super) fn skip_ws_back(b: &[u8], mut i: usize) -> usize {
     while i > 0 && b[i - 1].is_ascii_whitespace() {
         i -= 1;
     }
     i
 }
 
-fn skip_ws_fwd(b: &[u8], mut i: usize) -> usize {
+pub(super) fn skip_ws_fwd(b: &[u8], mut i: usize) -> usize {
     while i < b.len() && b[i].is_ascii_whitespace() {
         i += 1;
     }
@@ -49,11 +50,11 @@ fn render_index(inner: &str) -> Option<String> {
     let inner = inner.trim();
     let first = *inner.as_bytes().first()?;
     if matches!(first, b'\'' | b'"') {
-        let body = inner
-            .strip_prefix(first as char)?
-            .strip_suffix(first as char)?;
-        let plain = !body.contains(['\'', '"', '\\', '\n']);
-        return plain.then(|| format!(".{body}"));
+        let whole = string_close_after(inner.as_bytes(), 0)? == inner.len() - 1;
+        return whole
+            .then(|| unquote(inner))
+            .flatten()
+            .map(|key| format!(".{key}"));
     }
     let chain = inner.bytes().all(|c| ident_byte(c) || c == b'.');
     (chain && !inner.starts_with('.') && !inner.ends_with('.')).then(|| format!("[{inner}]"))
@@ -61,6 +62,27 @@ fn render_index(inner: &str) -> Option<String> {
 
 /// The index of the quote that opens the string literal closed by the
 /// quote at `close`.
+/// The index of the `]` that matches the `[` at `open`.
+fn bracket_after(b: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut at = open;
+    while at < b.len() {
+        match b[at] {
+            b'"' | b'\'' => at = string_close_after(b, at)?,
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
 fn string_start(b: &[u8], close: usize) -> Option<usize> {
     let quote = b[close];
     let mut at = close;
@@ -184,7 +206,7 @@ fn ast_text(s: &str) -> Option<String> {
 }
 
 /// The identifier that ends just before byte `end`.
-fn word_before(src: &str, end: usize) -> &str {
+pub(super) fn word_before(src: &str, end: usize) -> &str {
     let b = src.as_bytes();
     let mut start = end;
     while start > 0 && ident_byte(b[start - 1]) {
@@ -227,10 +249,11 @@ fn render_expr(s: &str) -> Option<String> {
         return Some(format!("{{{}}}", "(intermediate value)".repeat(props)));
     }
     if s.starts_with(['"', '\'']) {
-        let quote = s.chars().next()?;
-        let body = s.strip_prefix(quote)?.strip_suffix(quote)?;
-        let plain = !body.contains(['\'', '"', '\\', '\n']);
-        return plain.then(|| format!("\"{body}\""));
+        let whole = string_close_after(s.as_bytes(), 0)? == s.len() - 1;
+        return whole
+            .then(|| unquote(s))
+            .flatten()
+            .map(|v| format!("\"{v}\""));
     }
     if s.starts_with('(') && close_after(s.as_bytes(), 0)? == s.len() - 1 {
         return render_group(&s[1..s.len() - 1]);
@@ -296,12 +319,8 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
             parts.push("(...)".into());
             i = open;
         } else if matches!(last, b'"' | b'\'') {
-            let open = src[..i - 1].rfind(last as char)?;
-            let body = &src[open + 1..i - 1];
-            if body.contains(['\\', '\n']) {
-                return None;
-            }
-            parts.push(format!("\"{body}\""));
+            let open = string_start(b, i - 1)?;
+            parts.push(format!("\"{}\"", unquote(&src[open..i])?));
             i = open;
             head = true;
         } else if last == b')' {
@@ -382,7 +401,7 @@ fn chain_after_new(src: &str, at: usize) -> Option<String> {
                     break;
                 }
                 Some(b'[') => {
-                    let close = k + src[k..].find(']')?;
+                    let close = bracket_after(b, k)?;
                     out.push_str(&render_index(&src[k + 1..close])?);
                     i = close + 1;
                 }
@@ -400,8 +419,23 @@ pub(super) fn callee_text(src: &str, pos: u32, construct: bool) -> Option<String
     if construct {
         return (src.get(at..)?.starts_with("new") && !ident_byte(*b.get(at + 3)?))
             .then(|| chain_after_new(src, at))
-            .flatten();
+            .flatten()
+            .map(|text| {
+                if text == "import.meta" {
+                    "(intermediate value)".into()
+                } else {
+                    text
+                }
+            });
     }
+    callee_site(src, pos).map(|site| site.0)
+}
+
+/// The callee text of the call at `pos`, the byte where its callee starts and
+/// the byte after the call (`None` for an optional call).
+pub(super) fn callee_site(src: &str, pos: u32) -> Option<(String, usize, Option<usize>)> {
+    let at = usize::try_from(pos).ok()?.checked_sub(1)?;
+    let b = src.as_bytes();
     let end = match *b.get(at)? {
         b'(' => at,
         b'`' => at,
@@ -418,7 +452,17 @@ pub(super) fn callee_text(src: &str, pos: u32, construct: bool) -> Option<String
         }
         _ => return None,
     };
-    chain_before(src, end).map(|(text, _)| text)
+    let (text, start) = chain_before(src, end)?;
+    let k = skip_ws_fwd(b, end);
+    let after = match b.get(k) {
+        Some(b'(') => close_after(b, k).map(|close| close + 1),
+        _ if b.get(end) == Some(&b'`') => {
+            let close = end + 1 + src[end + 1..].find('`')?;
+            (!src[end..close].contains("${")).then_some(close + 1)
+        }
+        _ => None,
+    };
+    Some((text, start, after))
 }
 
 impl Interpreter {
@@ -441,7 +485,7 @@ impl Interpreter {
     }
 
     /// The source text of the frame making the call being dispatched.
-    fn node_caller_source(&self) -> Option<Rc<str>> {
+    pub(super) fn node_caller_source(&self) -> Option<Rc<str>> {
         let func = self.call_stack_frames.last()?.func_obj_id;
         let user = self
             .get_object(func)

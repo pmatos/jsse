@@ -1,0 +1,23 @@
+t1 => TypeError number 1 is not iterable (cannot read property Symbol(Symbol.iterator))
+t2 => TypeError o.m is not a function or its return value is not iterable
+t3 => TypeError five is not a function or its return value is not iterable
+t4 => TypeError t is not a function or its return value is not iterable
+t5 => TypeError t is not a function or its return value is not iterable
+t6 => TypeError number 1 is not iterable (cannot read property Symbol(Symbol.iterator))
+t7 => TypeError object null is not iterable (cannot read property Symbol(Symbol.iterator))
+e1 => TypeError o.\ is not a function
+e2 => TypeError o.a
+b is not a function
+e3 => TypeError o.a'b is not a function
+e4 => TypeError o.aA is not a function
+e5 => TypeError a.] is not a function
+e6 => TypeError o.A is not a function
+e7 => TypeError o.\ is not a constructor
+e8 => TypeError o." is not a function
+e9 => TypeError o.😀 is not a function
+e10 => TypeError o.a] is not a function
+e11 => TypeError o.[a is not a function
+e12 => TypeError o.(a is not a function
+e13 => TypeError Cannot read properties of undefined (reading ']')
+e14 => TypeError Cannot read properties of undefined (reading ']')
+e15 => TypeError Cannot read properties of undefined (reading '\')

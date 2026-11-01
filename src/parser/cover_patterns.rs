@@ -35,7 +35,7 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                 }
                 let pat = e
                     .map(|e| {
-                        if let Expression::Spread(inner) = e {
+                        if let Expression::Spread(inner, _) = e {
                             if let Expression::Assign(AssignOp::Assign, _, _, _) = *inner {
                                 return Err(ParseError {
                                     message: "Rest element may not have a default initializer"
@@ -73,7 +73,7 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                     });
                 }
                 if let PropertyKind::Init = prop.kind {
-                    if let Expression::Spread(inner) = prop.value {
+                    if let Expression::Spread(inner, _) = prop.value {
                         saw_rest = true;
                         check_object_rest_target(inner.as_ref())?;
                         let pat = expr_to_pattern(inner.into_expression())?;
@@ -110,9 +110,9 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                     message: "Rest element must be last element".to_string(),
                 });
             }
-            Ok(Pattern::Object(pat_props))
+            Ok(Pattern::Object(pat_props.into()))
         }
-        Expression::Spread(inner) => {
+        Expression::Spread(inner, _) => {
             let pat = expr_to_pattern(inner.into_expression())?;
             Ok(Pattern::Rest(Box::new(pat)))
         }
@@ -126,7 +126,7 @@ pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
 pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
     match pat {
         Pattern::Identifier(name) => Expression::Identifier(name),
-        Pattern::Rest(inner) => Expression::Spread(ExprBox::new(pattern_to_expr(*inner))),
+        Pattern::Rest(inner) => Expression::Spread(ExprBox::new(pattern_to_expr(*inner)), 0),
         Pattern::Array(elements) => {
             let exprs: Vec<Option<Expression>> = elements
                 .into_iter()
@@ -134,7 +134,7 @@ pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
                     elem.map(|e| match e {
                         ArrayPatternElement::Pattern(p) => pattern_to_expr(p),
                         ArrayPatternElement::Rest(p) => {
-                            Expression::Spread(ExprBox::new(pattern_to_expr(p)))
+                            Expression::Spread(ExprBox::new(pattern_to_expr(p)), 0)
                         }
                     })
                 })
@@ -163,7 +163,7 @@ pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
                     },
                     ObjectPatternProperty::Rest(p) => Property {
                         key: PropertyKey::Identifier("__rest__".into()),
-                        value: Expression::Spread(ExprBox::new(pattern_to_expr(p))),
+                        value: Expression::Spread(ExprBox::new(pattern_to_expr(p)), 0),
                         kind: PropertyKind::Init,
                         computed: false,
                         shorthand: false,

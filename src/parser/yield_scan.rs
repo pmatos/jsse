@@ -36,7 +36,7 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::expr_contains_yield_expression)
             }
-            Expression::Spread(inner) => Self::expr_contains_yield_expression(inner),
+            Expression::Spread(inner, _) => Self::expr_contains_yield_expression(inner),
             Expression::Await(inner, _) => Self::expr_contains_yield_expression(inner),
             Expression::ArrowFunction(af) => {
                 af.params.iter().any(Self::pattern_contains_yield_expression)

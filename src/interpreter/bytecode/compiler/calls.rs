@@ -20,7 +20,7 @@ use crate::interpreter::bytecode::chunk::CALL_POS_FLAG;
 use crate::interpreter::bytecode::op::Op;
 
 pub(super) fn has_spread(args: &[Expression]) -> bool {
-    args.iter().any(|arg| matches!(arg, Expression::Spread(_)))
+    args.iter().any(|arg| matches!(arg, Expression::Spread(..)))
 }
 
 /// A spread call that stays on the tree-walker: a strict tail call keeps its
@@ -87,7 +87,7 @@ impl Compiler {
         if usize::from(self.current_stack) + args.len() + 1 > usize::from(u16::MAX) {
             return Err(CompileError::Ineligible("operand stack overflow"));
         }
-        if let [Expression::Spread(iterable)] = args {
+        if let [Expression::Spread(iterable, _)] = args {
             self.compile_expr(iterable)?;
             self.emit_call_pos(site_id);
             self.note_spread_source(iterable);
@@ -104,18 +104,18 @@ impl Compiler {
         let mut spread_seen = false;
         for arg in args {
             match (arg, spread_seen) {
-                (Expression::Spread(iterable), false) => {
+                (Expression::Spread(iterable, at), false) => {
                     self.compile_expr(iterable)?;
                     self.note_call_spread_source(args, iterable);
-                    self.emit(Op::ArgSpreadFirst);
+                    self.emit_member_at(Op::ArgSpreadFirst, *at);
                     self.emit_u16(slots);
                     spread_seen = true;
                     slots += 1;
                 }
-                (Expression::Spread(iterable), true) => {
+                (Expression::Spread(iterable, at), true) => {
                     self.compile_expr(iterable)?;
                     self.note_call_spread_source(args, iterable);
-                    self.emit(Op::ArgSpread);
+                    self.emit_member_at(Op::ArgSpread, *at);
                     self.pop_n(1);
                 }
                 (value, false) => {

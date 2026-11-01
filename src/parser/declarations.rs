@@ -474,11 +474,11 @@ impl<'a> Parser<'a> {
                 Self::expr_has_direct_super(inner)
                     || opts.as_ref().is_some_and(|e| Self::expr_has_direct_super(e))
             }
-            Expression::Spread(inner)
-            | Expression::Await(inner, _)
-            | Expression::Typeof(inner)
-            | Expression::Void(inner)
-            | Expression::Delete(inner) => Self::expr_has_direct_super(inner),
+            Expression::Spread(e, _)
+            | Expression::Await(e, _)
+            | Expression::Typeof(e)
+            | Expression::Void(e)
+            | Expression::Delete(e) => Self::expr_has_direct_super(e),
             Expression::Yield(opt_e, _) => {
                 opt_e.as_ref().is_some_and(|e| Self::expr_has_direct_super(e))
             }

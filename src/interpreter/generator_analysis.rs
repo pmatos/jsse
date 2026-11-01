@@ -580,10 +580,10 @@ fn analyze_expression(
             }
         }
 
-        Expression::Spread(inner)
-        | Expression::PreIterated(inner)
-        | Expression::ClassProtoParent(inner, _) => {
-            analyze_expression(inner, analysis, ctx, true);
+        Expression::Spread(e, _)
+        | Expression::PreIterated(e)
+        | Expression::ClassProtoParent(e, _) => {
+            analyze_expression(e, analysis, ctx, true);
         }
 
         Expression::BoundCallee(func, this) | Expression::ResolvedHeritage(func, this) => {
@@ -845,7 +845,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
         | Expression::Typeof(e)
         | Expression::Void(e)
         | Expression::Delete(e)
-        | Expression::Spread(e)
+        | Expression::Spread(e, _)
         | Expression::PreIterated(e)
         | Expression::ClassProtoParent(e, _)
         | Expression::Update(.., e, _) => expr_contains(e, target),

@@ -1,3 +1,4 @@
+mod try_statement;
 mod with_switch;
 
 use super::*;
@@ -548,7 +549,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             if self.current == Token::Keyword(Keyword::Of) {
                 self.advance()?;
-                let right = self.parse_assignment_expression()?;
+                let (right, right_at) = self.parse_for_of_right()?;
                 self.eat(&Token::RightParen)?;
                 let body = self.parse_iteration_body()?;
                 let decls = vec![VariableDeclarator::new(Pattern::Identifier(ident), None)];
@@ -562,6 +563,7 @@ impl<'a> Parser<'a> {
                     body,
                     is_await,
                     at,
+                    right_at,
                     scope_capture: Default::default(),
                 }));
             }
@@ -657,7 +659,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             if self.current == Token::Keyword(Keyword::Of) {
                 self.advance()?;
-                let right = self.parse_assignment_expression()?;
+                let (right, right_at) = self.parse_for_of_right()?;
                 self.eat(&Token::RightParen)?;
                 let body = self.parse_iteration_body()?;
                 let decls = vec![VariableDeclarator::new(Pattern::Identifier(ident), None)];
@@ -671,6 +673,7 @@ impl<'a> Parser<'a> {
                     body,
                     is_await,
                     at,
+                    right_at,
                     scope_capture: Default::default(),
                 }));
             }
@@ -774,7 +777,7 @@ impl<'a> Parser<'a> {
                         return Err(self.for_binding_error(&decls, "of"));
                     }
                     let at = self.advance_past_of(head_start)?;
-                    let right = self.parse_assignment_expression()?;
+                    let (right, right_at) = self.parse_for_of_right()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForOf(ForOfStatement {
@@ -786,6 +789,7 @@ impl<'a> Parser<'a> {
                         body,
                         is_await,
                         at,
+                        right_at,
                         scope_capture: Default::default(),
                     }));
                 }
@@ -841,7 +845,7 @@ impl<'a> Parser<'a> {
                             return Err(self.let_of_error(head_start));
                         }
                         let at = self.advance_past_of(head_start)?;
-                        let right = self.parse_assignment_expression()?;
+                        let (right, right_at) = self.parse_for_of_right()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
@@ -857,6 +861,7 @@ impl<'a> Parser<'a> {
                             body,
                             is_await,
                             at,
+                            right_at,
                             scope_capture: Default::default(),
                         }));
                     }
@@ -897,7 +902,7 @@ impl<'a> Parser<'a> {
                             return Err(self.for_binding_error(&decls, "of"));
                         }
                         let at = self.advance_past_of(head_start)?;
-                        let right = self.parse_assignment_expression()?;
+                        let (right, right_at) = self.parse_for_of_right()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         Self::check_for_in_of_early_errors(kind, &decls, &body)?;
@@ -910,6 +915,7 @@ impl<'a> Parser<'a> {
                             body,
                             is_await,
                             at,
+                            right_at,
                             scope_capture: Default::default(),
                         }));
                     }
@@ -971,7 +977,7 @@ impl<'a> Parser<'a> {
                         return Err(self.for_binding_error(&decls, "of"));
                     }
                     let at = self.advance_past_of(head_start)?;
-                    let right = self.parse_assignment_expression()?;
+                    let (right, right_at) = self.parse_for_of_right()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     Self::check_for_in_of_early_errors(kind, &decls, &body)?;
@@ -984,6 +990,7 @@ impl<'a> Parser<'a> {
                         body,
                         is_await,
                         at,
+                        right_at,
                         scope_capture: Default::default(),
                     }));
                 }
@@ -1060,7 +1067,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error("The identifier 'async' is disallowed as a left-hand side expression of a for-of loop"));
                     }
                     let at = self.advance_past_of(head_start)?;
-                    let right = self.parse_assignment_expression()?;
+                    let (right, right_at) = self.parse_for_of_right()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
@@ -1076,6 +1083,7 @@ impl<'a> Parser<'a> {
                         body,
                         is_await,
                         at,
+                        right_at,
                         scope_capture: Default::default(),
                     }));
                 }
@@ -1189,54 +1197,6 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expression()?;
         self.eat_semicolon()?;
         Ok(Statement::Throw(expr, at))
-    }
-
-    fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
-        self.advance()?; // try
-        self.eat(&Token::LeftBrace)?;
-        let block =
-            self.with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
-        self.eat(&Token::RightBrace)?;
-
-        let handler = if self.current == Token::Keyword(Keyword::Catch) {
-            self.advance()?;
-            let param = if self.current == Token::LeftParen {
-                self.advance()?;
-                let p = self.parse_binding_pattern()?;
-                self.eat(&Token::RightParen)?;
-                Some(p)
-            } else {
-                None
-            };
-            self.eat(&Token::LeftBrace)?;
-            let body = self
-                .with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
-            self.eat(&Token::RightBrace)?;
-            self.check_catch_clause(param.as_ref(), &body)?;
-            Some(CatchClause { param, body })
-        } else {
-            None
-        };
-
-        let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
-            self.advance()?;
-            self.eat(&Token::LeftBrace)?;
-            let body = self
-                .with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
-            self.eat(&Token::RightBrace)?;
-            Some(body)
-        } else {
-            None
-        };
-
-        if handler.is_none() && finalizer.is_none() {
-            return Err(self.error("Missing catch or finally after try"));
-        }
-        Ok(Statement::Try(TryStatement {
-            block,
-            handler,
-            finalizer,
-        }))
     }
 
     fn parse_switch_case_block(&mut self) -> Result<Vec<SwitchCase>, ParseError> {

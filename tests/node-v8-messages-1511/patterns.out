@@ -1,0 +1,141 @@
+## destructureNullLiteral
+TypeError: Cannot destructure property 'a' of 'null' as it is null.
+at <dir>/patterns.js:24:9
+## destructureVariable
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+at <dir>/patterns.js:27:9
+## destructureUndefined
+TypeError: Cannot destructure property 'a' of 'u' as it is undefined.
+at <dir>/patterns.js:30:9
+## destructureMember
+TypeError: Cannot destructure property 'a' of 'o.p' as it is undefined.
+at <dir>/patterns.js:33:9
+## destructureCall
+TypeError: Cannot destructure property 'a' of 'f(...)' as it is undefined.
+at <dir>/patterns.js:36:9
+## destructureLet
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+at <dir>/patterns.js:39:9
+## destructureConst
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+at <dir>/patterns.js:42:11
+## destructureNoProperty
+TypeError: Cannot destructure 'n' as it is null.
+at <dir>/patterns.js:45:7
+## destructureRest
+TypeError: Cannot destructure 'n' as it is null.
+at <dir>/patterns.js:48:12
+## destructureComputed
+TypeError: Cannot destructure 'n' as it is null.
+at <dir>/patterns.js:51:7
+## destructureStringKey
+TypeError: Cannot destructure property 's' of 'n' as it is null.
+at <dir>/patterns.js:54:12
+## destructureKeyValue
+TypeError: Cannot read properties of null (reading 't')
+at <dir>/patterns.js:58:10
+## destructureAssign
+TypeError: Cannot destructure property 'a' of 'n' as it is null.
+at <dir>/patterns.js:63:6
+## destructureAssignMember
+TypeError: Cannot destructure property 'a' of 'o.p' as it is undefined.
+at <dir>/patterns.js:67:6
+## destructureAssignKey
+TypeError: Cannot destructure property 's' of 'n' as it is null.
+at <dir>/patterns.js:71:9
+## destructureAssignEmpty
+TypeError: Cannot destructure 'n' as it is null.
+at <dir>/patterns.js:74:4
+## destructureNested
+TypeError: Cannot read properties of null (reading 'b')
+at <dir>/patterns.js:78:10
+## destructureNestedArray
+TypeError: Cannot read properties of null (reading 'b')
+at <dir>/patterns.js:82:10
+## destructureDefault
+TypeError: Cannot read properties of null (reading 'a')
+at <dir>/patterns.js:85:9
+## arrayNullLiteral
+TypeError: null is not iterable
+at <dir>/patterns.js:88:13
+## arrayVariable
+TypeError: n is not iterable
+at <dir>/patterns.js:91:13
+## arrayUndefined
+TypeError: u is not iterable
+at <dir>/patterns.js:94:13
+## arrayMember
+TypeError: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/patterns.js:97:13
+## arrayCall
+TypeError: f is not a function or its return value is not iterable
+at <dir>/patterns.js:100:13
+## arrayEmpty
+TypeError: n is not iterable
+at <dir>/patterns.js:103:12
+## arrayNumber
+TypeError: num is not iterable
+at <dir>/patterns.js:106:13
+## arrayAssign
+TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/patterns.js:110:7
+## forOfLiteral
+TypeError: 5 is not iterable
+at <dir>/patterns.js:113:19
+## forOfVariable
+TypeError: num is not iterable
+at <dir>/patterns.js:116:19
+## forOfNull
+TypeError: n is not iterable
+at <dir>/patterns.js:119:19
+## forOfObject
+TypeError: o is not iterable
+at <dir>/patterns.js:122:19
+## forOfMember
+TypeError: o.p is not iterable
+at <dir>/patterns.js:125:21
+## forOfCall
+TypeError: f is not a function or its return value is not iterable
+at <dir>/patterns.js:128:19
+## forOfObjectLiteral
+TypeError: {} is not iterable
+at <dir>/patterns.js:131:19
+## forOfVar
+TypeError: num is not iterable
+at <dir>/patterns.js:134:17
+## forOfAssign
+TypeError: num is not iterable
+at <dir>/patterns.js:138:13
+## forOfPattern
+TypeError: num is not iterable
+at <dir>/patterns.js:141:21
+## forOfBlock
+TypeError: num is not iterable
+at <dir>/patterns.js:145:19
+## spreadLiteral
+TypeError: 5 is not iterable
+at <dir>/patterns.js:150:14
+## spreadVariable
+TypeError: num is not iterable
+at <dir>/patterns.js:153:14
+## spreadObject
+TypeError: o is not iterable
+at <dir>/patterns.js:156:14
+## spreadNull
+TypeError: n is not iterable
+at <dir>/patterns.js:159:14
+## spreadMember
+TypeError: o.p is not iterable
+at <dir>/patterns.js:162:16
+## spreadCall
+TypeError: f is not a function or its return value is not iterable
+at <dir>/patterns.js:165:14
+## spreadSecond
+TypeError: num is not iterable
+at <dir>/patterns.js:168:25
+## spreadArgumentSecond
+TypeError: number 5 is not iterable (cannot read property Symbol(Symbol.iterator))
+at <dir>/patterns.js:171:19
+## spreadAfterCall
+TypeError: num is not iterable
+at <dir>/patterns.js:175:14

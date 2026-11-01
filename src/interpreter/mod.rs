@@ -3463,12 +3463,12 @@ impl Interpreter {
             | Expression::Assign(_, left, right, _) => {
                 Self::expr_has_await(left) || Self::expr_has_await(right)
             }
-            Expression::Unary(_, operand)
-            | Expression::Update(.., operand, _)
-            | Expression::Typeof(operand)
-            | Expression::Void(operand)
-            | Expression::Delete(operand)
-            | Expression::Spread(operand) => Self::expr_has_await(operand),
+            Expression::Unary(_, e)
+            | Expression::Update(.., e, _)
+            | Expression::Typeof(e)
+            | Expression::Void(e)
+            | Expression::Delete(e)
+            | Expression::Spread(e, _) => Self::expr_has_await(e),
             Expression::Conditional(test, consequent, alternate) => {
                 Self::expr_has_await(test)
                     || Self::expr_has_await(consequent)

@@ -28,6 +28,9 @@ impl<'a> Parser<'a> {
             .source_before_prev_token("let")
             .is_some_and(|before| before.trim_end().ends_with("export"));
         if !binding_start && !exported {
+            if self.current == Token::Keyword(Keyword::Await) {
+                return Err(self.error("Unexpected reserved word"));
+            }
             return Err(self.error("Unexpected strict mode reserved word"));
         }
         Ok(())
@@ -55,9 +58,7 @@ impl<'a> Parser<'a> {
             let mut init_at = 0;
             let init = if self.current == Token::Assign {
                 self.advance()?;
-                if matches!(pattern, Pattern::Identifier(_)) {
-                    init_at = self.op_pos();
-                }
+                init_at = self.op_pos();
                 let init = self.parse_assignment_expression()?;
                 // V8 words a parenthesized name by its value, not its name
                 // (#1557); a one-element sequence keeps the parentheses.

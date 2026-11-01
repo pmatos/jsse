@@ -9,8 +9,8 @@ use super::node_host_expr_text::expr_text;
 use super::node_host_param_patterns::{CONDITIONAL, PatternKind};
 use super::node_host_pattern_origin::PatternOrigin;
 use crate::ast::{
-    AssignOp, Expression, ObjectPatternProperty, Pattern, Property, PropertyKey, PropertyKind,
-    VariableDeclarator,
+    AssignOp, Expression, ObjectPatternProperty, Pattern, PatternProps, Property, PropertyKey,
+    PropertyKind, VariableDeclarator,
 };
 
 fn key_name(key: &PropertyKey) -> Option<String> {
@@ -59,7 +59,7 @@ fn first_pattern_name(props: &[ObjectPatternProperty]) -> Option<Lead> {
 
 fn first_target_name(props: &[Property]) -> Option<Lead> {
     let first = props.first()?;
-    if let Expression::Spread(target) = &first.value {
+    if let Expression::Spread(target, _) = &first.value {
         return (!matches!(**target, Expression::Identifier(_))).then_some(Lead::ReadBare);
     }
     if first.computed || first.kind != PropertyKind::Init {
@@ -86,7 +86,6 @@ fn array_pattern_text(init: &Expression) -> Option<String> {
         | Expression::Literal(_)
         | Expression::Call(..)
         | Expression::New(..)
-        | Expression::TaggedTemplate(..)
         | Expression::Object(..)
         | Expression::This
         | Expression::Unary(..)
@@ -158,12 +157,15 @@ impl Interpreter {
             && let Some(init) = &declarator.init
         {
             let error = match &declarator.pattern {
-                Pattern::Object(props) => Some(self.destructure_error(
-                    first_pattern_name(props),
-                    false,
-                    Some(init),
-                    &value,
-                )),
+                Pattern::Object(props) => {
+                    self.node_note_statement_pos(props.at);
+                    Some(self.destructure_error(
+                        first_pattern_name(props),
+                        false,
+                        Some(init),
+                        &value,
+                    ))
+                }
                 Pattern::Array(_) => Some(self.destructure_error(None, true, Some(init), &value)),
                 _ => None,
             };
@@ -227,10 +229,11 @@ impl Interpreter {
     /// nested pattern like a property read.
     pub(crate) fn require_destructurable(
         &mut self,
-        props: &[ObjectPatternProperty],
+        props: &PatternProps,
         value: &JsValue,
     ) -> Completion {
         if self.node_host.stack.installed && value.is_nullish() {
+            self.node_note_statement_pos(props.at);
             let lead = first_pattern_name(props);
             let defaulted = self.under_param_default();
             let nested = !defaulted
@@ -239,6 +242,18 @@ impl Interpreter {
                     [.., outer, inner] if outer == inner
                 );
             let error = match (lead, self.head_text_here()) {
+                (lead, _) if !defaulted && self.default_text_for(props).is_some() => {
+                    let text = self.default_text_for(props).unwrap_or_default();
+                    match lead {
+                        Some(Lead::Read(name)) => {
+                            self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
+                        }
+                        lead => {
+                            let name = lead.as_ref().and_then(Lead::name).map(str::to_string);
+                            Self::destructure_message(name, &text, value)
+                        }
+                    }
+                }
                 (Some(Lead::Named(name) | Lead::Read(name)), _) if nested => {
                     self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
                 }
@@ -294,11 +309,14 @@ impl Interpreter {
         }
         let frame = self.call_depth;
         let site = self.array_pattern_site(pattern, &value);
+        let nested = self.node_host.pattern_frames.last() == Some(&frame);
         self.node_host.pattern_frames.push(frame);
         self.node_host.pattern_kinds.push(PatternKind::of(pattern));
+        let noted = nested && self.note_default_pattern(pattern);
         let done = self.bind_pattern_at(pattern, value, kind, env);
         self.node_host.pattern_frames.pop();
         self.node_host.pattern_kinds.pop();
+        let done = self.finish_default_pattern(pattern, noted, nested, done);
         match site {
             Some(site) => self.reword_array_pattern(done, site),
             None => done,

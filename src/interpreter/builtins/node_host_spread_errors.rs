@@ -15,10 +15,10 @@ use super::node_host_expr_text::expr_text;
 pub(crate) fn is_lone_last_spread(args: &[Expression], operand: &Expression) -> bool {
     let spreads = args
         .iter()
-        .filter(|arg| matches!(arg, Expression::Spread(_)))
+        .filter(|arg| matches!(arg, Expression::Spread(..)))
         .count();
     spreads == 1
-        && matches!(args.last(), Some(Expression::Spread(last)) if std::ptr::eq(&**last, operand))
+        && matches!(args.last(), Some(Expression::Spread(last, _)) if std::ptr::eq(&**last, operand))
 }
 
 impl Interpreter {

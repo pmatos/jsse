@@ -21,7 +21,9 @@ mod modules;
 mod node_hooks;
 mod positions;
 mod prologue;
+pub(crate) mod source_scan;
 mod statements;
+mod strict_patterns;
 pub(crate) mod v8_messages;
 mod yield_scan;
 
@@ -714,52 +716,6 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub(super) fn check_strict_assignment_pattern(&self, pat: &Pattern) -> Result<(), ParseError> {
-        if !self.strict {
-            return Ok(());
-        }
-        match pat {
-            Pattern::Identifier(name) => {
-                if name == "eval" || name == "arguments" {
-                    return Err(self.error(format!("Assignment to '{name}' in strict mode")));
-                }
-            }
-            Pattern::Array(elems) => {
-                for elem in elems.iter().flatten() {
-                    match elem {
-                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                            self.check_strict_assignment_pattern(p)?;
-                        }
-                    }
-                }
-            }
-            Pattern::Object(props) => {
-                for prop in props {
-                    match prop {
-                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
-                            self.check_strict_assignment_pattern(p)?;
-                        }
-                        ObjectPatternProperty::Shorthand(name) => {
-                            if name == "eval" || name == "arguments" {
-                                return Err(
-                                    self.error(format!("Assignment to '{name}' in strict mode"))
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            Pattern::Assign(p, _) => {
-                self.check_strict_assignment_pattern(p)?;
-            }
-            Pattern::Rest(p) => {
-                self.check_strict_assignment_pattern(p)?;
-            }
-            Pattern::MemberExpression(_) => {}
-        }
-        Ok(())
-    }
-
     fn check_strict_binding_identifier(&self, name: &str) -> Result<(), ParseError> {
         self.check_strict_identifier(name)?;
         if self.strict && (name == "eval" || name == "arguments") {
@@ -812,7 +768,7 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_identifier(inner)
                     || opts.as_ref().is_some_and(|e| Self::expr_contains_await_identifier(e))
             }
-            Expression::Spread(inner)
+            Expression::Spread(inner, _)
             | Expression::PreIterated(inner)
             | Expression::ClassProtoParent(inner, _)
             | Expression::Await(inner, _) => Self::expr_contains_await_identifier(inner),
@@ -938,7 +894,7 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::expr_contains_await_expression)
             }
-            Expression::Spread(inner) => Self::expr_contains_await_expression(inner),
+            Expression::Spread(inner, _) => Self::expr_contains_await_expression(inner),
             Expression::Yield(opt_e, _) => {
                 opt_e.as_ref().is_some_and(|e| Self::expr_contains_await_expression(e))
             }

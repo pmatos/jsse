@@ -42,11 +42,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_object_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let mut at = self.op_pos();
         self.eat(&Token::LeftBrace)?;
         let mut props = Vec::new();
         while self.current != Token::RightBrace {
+            let first = props.is_empty();
             if self.current == Token::Ellipsis {
                 self.advance()?;
+                if first {
+                    at = self.op_pos();
+                }
                 // BindingRestProperty : ... BindingIdentifier
                 if matches!(self.current, Token::LeftBracket | Token::LeftBrace) {
                     return Err(self
@@ -57,13 +62,20 @@ impl<'a> Parser<'a> {
                 break;
             }
             let key_text = inferred_names::enabled().then(|| self.v8_unexpected());
+            let key_at = self.op_pos();
             let key = self.parse_property_key_for_pattern()?;
             if self.current == Token::Colon {
                 self.advance()?;
+                if first && !matches!(key, PropertyKey::Computed(_)) {
+                    at = self.op_pos();
+                }
                 let pat = self.pattern_element(Site::Element)?;
                 props.push(ObjectPatternProperty::KeyValue(key, pat));
             } else {
                 // Shorthand: { x } or { x = default }
+                if first {
+                    at = key_at;
+                }
                 let name = match &key {
                     PropertyKey::Identifier(n) => n.clone(),
                     _ => {
@@ -110,7 +122,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
         }
         self.eat(&Token::RightBrace)?;
-        Ok(Pattern::Object(props))
+        Ok(Pattern::Object(PatternProps::at(props, at)))
     }
 
     fn parse_property_key_for_pattern(&mut self) -> Result<PropertyKey, ParseError> {

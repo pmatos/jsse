@@ -36,6 +36,11 @@ impl<'a> Parser<'a> {
         self.parse_assignment_expression()
     }
 
+    pub(super) fn parse_cover_spread(&mut self) -> Result<Expression, ParseError> {
+        self.cover_init.defer = true;
+        self.parse_spread_operand()
+    }
+
     /// Start of an AssignmentExpression: pending state of the enclosing
     /// expression is set aside, and whether this one defers is read.
     pub(super) fn begin_cover_scope(&mut self) -> CoverScope {

@@ -2418,7 +2418,7 @@ fn direct_eval_ineligible_spread_ok() {
     use crate::ast::CallSiteId;
 
     let direct_eval = vec![Statement::Expression(Expression::Call(
-        ExprBox::new(Expression::Identifier("eval".to_string())),
+        ExprBox::new(Expression::Identifier("eval".into())),
         vec![Expression::Literal(Literal::String(
             "var x = 1".encode_utf16().collect(),
         ))],
@@ -2430,10 +2430,11 @@ fn direct_eval_ineligible_spread_ok() {
     ));
 
     let spread = vec![Statement::Expression(Expression::Call(
-        ExprBox::new(Expression::Identifier("f".to_string())),
-        vec![Expression::Spread(ExprBox::new(Expression::Identifier(
-            "args".to_string(),
-        )))],
+        ExprBox::new(Expression::Identifier("f".into())),
+        vec![Expression::Spread(
+            ExprBox::new(Expression::Identifier("a".into())),
+            0,
+        )],
         CallSiteId::UNASSIGNED,
     ))];
     assert!(work_ops(&compile_body(&spread).unwrap()).contains(&Op::CallSpreadSole));

@@ -49,6 +49,23 @@ fn only_a_hooked_thread_records_member_positions() {
     assert!(hooked.iter().all(|&(_, pos)| pos != 0), "{hooked:?}");
 }
 
+#[test]
+fn only_a_hooked_thread_records_pattern_and_iterable_positions() {
+    let source = "{ const { a } = o; for (const x of y) ; }";
+    assert!(on_fresh_thread(|| member_positions(source)).is_empty());
+    let hooked = on_fresh_thread(|| {
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        interp.set_node_host_argv("jsse".into(), "/bin/jsse".into(), None, Vec::new());
+        interp.load_node_prelude().expect("prelude loads");
+        member_positions(source)
+    });
+    let target = u32::try_from(source.find("a }").unwrap() + 1).unwrap();
+    let iterable = u32::try_from(source.find("y)").unwrap() + 1).unwrap();
+    let positions: Vec<u32> = hooked.iter().map(|e| e.1).collect();
+    assert_eq!(positions, [target, iterable], "{hooked:?}");
+}
+
 fn pattern_sources(source: &str) -> Vec<String> {
     let program = Parser::new(source)
         .and_then(|mut p| p.parse_program())

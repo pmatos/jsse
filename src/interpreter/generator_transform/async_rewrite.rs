@@ -86,6 +86,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
             is_await: f.is_await,
             at: f.at,
+            right_at: f.right_at,
             scope_capture: Default::default(),
         }),
         Statement::Return(e) => Statement::Return(e.as_ref().map(rewrite_expr)),
@@ -225,7 +226,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             ExprBox::new(rewrite_expr(chain)),
         ),
         Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
-        Expression::Spread(e) => Expression::Spread(ExprBox::new(rewrite_expr(e))),
+        Expression::Spread(e, at) => Expression::Spread(ExprBox::new(rewrite_expr(e)), *at),
         Expression::PreIterated(e) => Expression::PreIterated(ExprBox::new(rewrite_expr(e))),
         Expression::ClassProtoParent(e, at) => {
             Expression::ClassProtoParent(ExprBox::new(rewrite_expr(e)), *at)

@@ -15,6 +15,14 @@ impl Parser<'_> {
         Ok(at)
     }
 
+    /// The iterable of a for-of head and its first token's position.
+    pub(in crate::parser) fn parse_for_of_right(
+        &mut self,
+    ) -> Result<(Expression, u32), ParseError> {
+        let at = self.op_pos();
+        Ok((self.parse_assignment_expression()?, at))
+    }
+
     /// The head `source[head_start..prev_token_end]` is the loop's left side.
     /// V8 reports the binding's start, the closing bracket of a declared
     /// pattern, and a member's property (or its `[`).

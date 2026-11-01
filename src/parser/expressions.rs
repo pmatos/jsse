@@ -9,6 +9,8 @@ mod targets;
 use regexp::validate_regexp_literal;
 
 mod new_expr;
+mod pattern_pos;
+mod template_literal;
 mod yield_expr;
 
 impl<'a> Parser<'a> {
@@ -53,6 +55,7 @@ impl<'a> Parser<'a> {
             return self.parse_yield_expression();
         }
 
+        let left_start = self.current_token_start;
         let left = self.parse_conditional_expression()?;
         let arrow_ended = match self.arrow_held_token.take() {
             Some(held) => {
@@ -97,7 +100,7 @@ impl<'a> Parser<'a> {
             let mut left = left;
             self.retarget_store_site(&mut left, op);
             self.claim_cover_for_pattern(op, &left);
-            let at = self.op_pos();
+            let at = self.assign_pos(&left, op, left_start);
             self.advance()?;
             let right_start = self.current_token_start;
             let right = self.parse_assignment_expression()?;
@@ -727,11 +730,7 @@ impl<'a> Parser<'a> {
                             return Ok((false, false, false));
                         }
                         tokens.advance()?;
-                        Ok((
-                            false,
-                            !tokens.line_terminator_before() && tokens.current() == &Token::Arrow,
-                            false,
-                        ))
+                        self.arrow_after_async_param(tokens)
                     })?;
 
                 self.advance()?; // async
@@ -1003,7 +1002,7 @@ impl<'a> Parser<'a> {
                         if self.current == Token::Ellipsis {
                             self.advance()?;
                             let pat = self.rest_parameter()?;
-                            exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
+                            exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat)), 0));
                             arrow_only = true;
                             break;
                         }
@@ -1114,8 +1113,7 @@ impl<'a> Parser<'a> {
             let is_spread = self.current == Token::Ellipsis;
             if is_spread {
                 self.advance()?;
-                let expr = self.parse_cover_element()?;
-                elements.push(Some(Expression::Spread(ExprBox::new(expr))));
+                elements.push(Some(self.parse_cover_spread()?));
             } else {
                 elements.push(Some(self.parse_cover_element()?));
             }
@@ -1146,7 +1144,7 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_cover_element()?;
                 props.push(Property {
                     key: PropertyKey::Identifier("".into()),
-                    value: Expression::Spread(ExprBox::new(expr)),
+                    value: Expression::Spread(ExprBox::new(expr), 0),
                     kind: PropertyKind::Init,
                     computed: false,
                     shorthand: false,
@@ -1787,7 +1785,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Ellipsis {
                     self.advance()?;
                     let pat = self.rest_parameter()?;
-                    exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat))));
+                    exprs.push(Expression::Spread(ExprBox::new(pattern_to_expr(pat)), 0));
                     break;
                 }
                 if self.current == Token::RightParen {
@@ -1879,72 +1877,5 @@ impl<'a> Parser<'a> {
             body,
             source_text,
         }))
-    }
-
-    fn parse_template_literal_expr(&mut self, tagged: bool) -> Result<TemplateLiteral, ParseError> {
-        let start = self.current_token_start;
-        match &self.current {
-            Token::NoSubstitutionTemplate(cooked, raw) => {
-                let cooked = cooked.clone();
-                let raw = raw.clone();
-                self.check_cooked(&cooked, tagged)?;
-                self.advance()?;
-                Ok(TemplateLiteral {
-                    id: self.template_id(tagged, start),
-                    quasis: vec![cooked],
-                    raw_quasis: vec![raw],
-                    raw_stand_ins: self.lone_surrogate_stand_ins,
-                    expressions: Vec::new(),
-                })
-            }
-            Token::TemplateHead(cooked, raw) => {
-                let cooked = cooked.clone();
-                let raw = raw.clone();
-                self.check_cooked(&cooked, tagged)?;
-                let mut quasis = vec![cooked];
-                let mut raw_quasis = vec![raw];
-                let mut expressions = Vec::new();
-                self.advance()?;
-                loop {
-                    expressions.push(self.parse_expression()?);
-                    if self.current != Token::RightBrace {
-                        return Err(self.error("Expected '}' after template substitution"));
-                    }
-                    let tok = self.lexer.read_template_continuation()?;
-                    match tok {
-                        Token::TemplateTail(cooked, raw) => {
-                            if !tagged {
-                                cooked.as_ref().ok_or_else(|| {
-                                    self.error("Invalid escape sequence in template literal")
-                                })?;
-                            }
-                            quasis.push(cooked);
-                            raw_quasis.push(raw);
-                            self.advance()?;
-                            break;
-                        }
-                        Token::TemplateMiddle(cooked, raw) => {
-                            if !tagged {
-                                cooked.as_ref().ok_or_else(|| {
-                                    self.error("Invalid escape sequence in template literal")
-                                })?;
-                            }
-                            quasis.push(cooked);
-                            raw_quasis.push(raw);
-                            self.advance()?;
-                        }
-                        _ => return Err(self.error("Expected template continuation")),
-                    }
-                }
-                Ok(TemplateLiteral {
-                    id: self.template_id(tagged, start),
-                    quasis,
-                    raw_quasis,
-                    raw_stand_ins: self.lone_surrogate_stand_ins,
-                    expressions,
-                })
-            }
-            _ => Err(self.error("Expected template literal")),
-        }
     }
 }
