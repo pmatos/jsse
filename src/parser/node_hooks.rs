@@ -203,11 +203,12 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// Whether the `(` that opens the head being parsed follows `for await`.
-    fn in_for_await_head(&self) -> bool {
+    /// The two words before the `(` that opens the parenthesis being parsed
+    /// (innermost word first), found in the source text.
+    pub(super) fn words_before_open_paren(&self) -> Vec<&str> {
         let src = &self.source_text_source[..self.current_token_start];
         let mut depth = 0usize;
-        let Some(open) = src.bytes().rposition(|c| match c {
+        let open = src.bytes().rposition(|c| match c {
             b')' => {
                 depth += 1;
                 false
@@ -218,11 +219,15 @@ impl<'a> Parser<'a> {
                 false
             }
             _ => false,
-        }) else {
-            return false;
-        };
-        let words: Vec<&str> = src[..open].split_whitespace().rev().take(2).collect();
-        words == ["await", "for"]
+        });
+        open.map_or_else(Vec::new, |open| {
+            src[..open].split_whitespace().rev().take(2).collect()
+        })
+    }
+
+    /// Whether the `(` that opens the head being parsed follows `for await`.
+    fn in_for_await_head(&self) -> bool {
+        self.words_before_open_paren() == ["await", "for"]
     }
 
     pub(super) fn var_for_in_error(&self, decls: &[VariableDeclarator]) -> ParseError {

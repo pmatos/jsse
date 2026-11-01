@@ -206,41 +206,25 @@ impl<'a> Parser<'a> {
     }
 
     /// An escaped `of` where a for head wants the word: V8 words it as the
-    /// keyword in `for await` and as a plain token otherwise. The head is found
-    /// by its `(` in the source text, as `in_for_await_head` does.
+    /// keyword in `for await` and as a plain token otherwise.
     pub(in crate::parser) fn escaped_of_text(&self) -> Option<&'static str> {
-        let src = &self.source_text_source[..self.current_token_start];
-        let mut depth = 0usize;
-        let open = src.bytes().rposition(|c| match c {
-            b')' => {
-                depth += 1;
-                false
-            }
-            b'(' if depth == 0 => true,
-            b'(' => {
-                depth -= 1;
-                false
-            }
-            _ => false,
-        })?;
-        let words: Vec<&str> = src[..open].split_whitespace().rev().take(2).collect();
-        match words.as_slice() {
+        match self.words_before_open_paren().as_slice() {
             ["await", "for"] => Some("Keyword must not contain escaped characters"),
             ["for", ..] => Some("Unexpected token 'of'"),
             _ => None,
         }
     }
 
-    /// An escaped `async` before `function` where a statement starts: V8 words
-    /// it as the keyword.
-    pub(in crate::parser) fn escaped_async_statement(&self) -> Result<(), ParseError> {
+    /// An escaped `async` that the next token, on the same line, makes the
+    /// keyword: V8 words it as such.
+    fn escaped_async_before(&self, next: impl Fn(&Token) -> bool) -> Result<(), ParseError> {
         let escaped = matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async");
         if inferred_names::enabled()
             && escaped
             && self.lookahead(|tokens| {
                 tokens.advance().is_ok()
                     && !tokens.line_terminator_before()
-                    && tokens.current() == &Token::Keyword(Keyword::Function)
+                    && next(tokens.current())
             })
         {
             return Err(self.error("Keyword must not contain escaped characters"));
@@ -248,21 +232,14 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// An escaped `async` before `function` where a statement starts.
+    pub(in crate::parser) fn escaped_async_statement(&self) -> Result<(), ParseError> {
+        self.escaped_async_before(|t| t == &Token::Keyword(Keyword::Function))
+    }
+
     /// An escaped `async` before `*` or a method name in a class body.
     pub(in crate::parser) fn escaped_async_member(&self) -> Result<(), ParseError> {
-        let escaped = matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async");
-        if inferred_names::enabled()
-            && escaped
-            && self.lookahead(|tokens| {
-                tokens.advance().is_ok()
-                    && !tokens.line_terminator_before()
-                    && (tokens.current() == &Token::Star
-                        || Self::is_method_name_start(tokens.current()))
-            })
-        {
-            return Err(self.error("Keyword must not contain escaped characters"));
-        }
-        Ok(())
+        self.escaped_async_before(|t| t == &Token::Star || Self::is_method_name_start(t))
     }
 
     /// An escaped contextual word where V8 names the whole construct
