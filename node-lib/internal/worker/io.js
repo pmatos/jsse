@@ -18,7 +18,6 @@ const {
   ArrayPrototypeShift,
   MathMax,
   ObjectDefineProperties,
-  ReflectApply,
   Symbol,
   SymbolFor,
   SymbolIterator,
@@ -32,7 +31,7 @@ const { DOMException } = require('internal/per_context/domexception');
 const { MessageEvent } = require('internal/worker/message_event');
 const { setImmediate } = require('timers');
 const { codes: { ERR_INVALID_ARG_TYPE, ERR_MISSING_ARGS } } = require('internal/errors');
-const { kDeserialize, kTransfer, markTransferMode, structuredClone } =
+const { kDeserialize, kTransfer, markAsUncloneable, markTransferMode, structuredClone } =
   require('internal/worker/js_transferable');
 
 // Without the process floor a port never holds the loop open and a message
@@ -221,7 +220,7 @@ class MessagePort extends NodeEventTarget {
   }
 
   [kNewListener](size, type, ...rest) {
-    ReflectApply(super[kNewListener], this, [size, type, ...rest]);
+    super[kNewListener](size, type, ...rest);
     if (type === 'message' && size === 1) {
       this.ref();
       this.start();
@@ -234,12 +233,12 @@ class MessagePort extends NodeEventTarget {
       if (data !== undefined) data.receiving = false;
       this.unref();
     }
-    ReflectApply(super[kRemoveListener], this, [size, type, ...rest]);
+    super[kRemoveListener](size, type, ...rest);
   }
 
   [kCreateEvent](value, type) {
     if (type !== 'message' && type !== 'messageerror') {
-      return ReflectApply(super[kCreateEvent], this, [value, type]);
+      return super[kCreateEvent](value, type);
     }
     const ports = this[kCurrentlyReceivingPorts];
     this[kCurrentlyReceivingPorts] = undefined;
@@ -318,5 +317,5 @@ module.exports = {
   MessageEvent,
   TransferredMessagePort,
   receiveMessageOnPort,
-  markAsUncloneable: require('internal/worker/js_transferable').markAsUncloneable,
+  markAsUncloneable,
 };

@@ -97,10 +97,10 @@ impl PlatformTransfer {
             }
             for item in interp.iterate_to_vec(&nested)? {
                 interp.gc_root_value(&item);
-                let marked = item
+                let Some(nid) = item
                     .as_object_id()
-                    .is_some_and(|n| mode_of(interp, n) & TRANSFERABLE != 0);
-                let Some(nid) = item.as_object_id().filter(|_| marked) else {
+                    .filter(|&n| mode_of(interp, n) & TRANSFERABLE != 0)
+                else {
                     return Err(interp.data_clone_error("Found invalid value in transferList."));
                 };
                 self.admit(seen, nid);
