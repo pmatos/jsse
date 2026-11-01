@@ -20,9 +20,10 @@ use smallvec::SmallVec;
 use super::types::PropertyDescriptor;
 use crate::types::{JsPropertyKey, JsValue, PropertyKeyLike};
 
-// Properties held inline before spilling to the heap; `JsObjectData` is capped
-// at 272 bytes (#909, #1401), which leaves room for three entries.
-const INLINE_CAP: usize = 3;
+// Entries a per-object map holds inline before spilling to the heap; every
+// object carries the largest `PropertyMapInner` variant, so this and
+// `shaped::RECORDS_INLINE` are sized to the spilled variant (#909, #1401).
+const INLINE_CAP: usize = 1;
 
 // Largest entry count kept in the linear (scan-only) representation; entries
 // beyond `INLINE_CAP` live in the SmallVec's heap buffer, cheaper than hashing

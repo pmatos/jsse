@@ -5,12 +5,16 @@ use super::shape::{SHAPED_MAX, Shape, shapes_enabled};
 use super::slot_index::{grown_capacity, round_capacity};
 use super::*;
 
-pub(super) type Records = SmallVec<[PropertyRecord; INLINE_CAP]>;
+/// Records a shaped map holds inline: with its `Rc` the same size as the
+/// spilled variant of the map.
+const RECORDS_INLINE: usize = 2;
+
+pub(super) type Records = SmallVec<[PropertyRecord; RECORDS_INLINE]>;
 
 #[inline]
 fn push_record(records: &mut Records, value: PropertyRecord) {
     let cap = records.capacity();
-    if records.len() == cap && cap >= INLINE_CAP {
+    if records.len() == cap && cap >= RECORDS_INLINE {
         records.reserve_exact(grown_capacity(cap) - cap);
     }
     records.push(value);

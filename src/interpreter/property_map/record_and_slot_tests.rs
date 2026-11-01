@@ -218,7 +218,9 @@ fn js_object_data_size_cap() {
     let _per_object = ShapesPaused::new();
     // #909: box cold state rather than raising the cap.
     let size = std::mem::size_of::<JsObjectData>();
-    assert!(size <= 272, "JsObjectData grew to {size} bytes (cap 272)");
+    assert!(size <= 216, "JsObjectData grew to {size} bytes (cap 216)");
+    let map = std::mem::size_of::<PropertyMap>();
+    assert!(map <= 64, "PropertyMap grew to {map} bytes (cap 64)");
 }
 
 #[test]

@@ -46,7 +46,7 @@ pub(super) enum SlotIndex {
     /// end of `entries` and of padding are never trusted: a candidate is
     /// always verified against the entry itself.
     Tags(Vec<u64>),
-    Hashed(HashMap<JsPropertyKey, u32, IndexState>),
+    Hashed(Box<HashMap<JsPropertyKey, u32, IndexState>>),
 }
 
 /// Not a defence against crafted keys: a collision only costs a key
@@ -138,7 +138,7 @@ impl SlotIndex {
                     map.insert(k.clone(), slot as u32);
                 }
             }
-            Self::Hashed(map)
+            Self::Hashed(Box::new(map))
         }
     }
 
