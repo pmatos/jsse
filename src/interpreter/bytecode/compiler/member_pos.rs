@@ -63,7 +63,7 @@ impl Compiler {
             return Err(CompileError::Unsupported("for-of over a tagged template"));
         }
         self.iter_calls.extend(operand_call_pos(right));
-        if let Some(text) = crate::interpreter::Interpreter::iterable_message(right) {
+        if let Some(text) = crate::interpreter::Interpreter::head_message(right) {
             let at = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
             self.pattern_src.push((at, text.into()));
         }

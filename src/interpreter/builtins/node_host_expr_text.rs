@@ -245,3 +245,59 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         _ => UNKNOWN.into(),
     }
 }
+
+/// The text of a link of an optional chain, where the placeholder `""` of
+/// `?.(` and `?.[` stands for what comes before the `?.`.
+fn optional_text(base: &str, node: &Expression) -> String {
+    match node {
+        Expression::Identifier(name) if name.is_empty() => base.to_string(),
+        Expression::Identifier(name) => format!("{base}?.{name}"),
+        Expression::Member(object, property, _) if matches!(&**object, Expression::Identifier(name) if name.is_empty()) => {
+            match property {
+                MemberProperty::Dot(name) => format!("{base}?.{name}"),
+                MemberProperty::Private(name) => format!("{base}?.#{name}"),
+                MemberProperty::Computed(key) => match &**key {
+                    Expression::Literal(Literal::String(units)) => {
+                        format!("{base}?.{}", String::from_utf16_lossy(units))
+                    }
+                    key => format!("{base}?.[{}]", expr_text(key)),
+                },
+            }
+        }
+        Expression::Member(object, property, _) => {
+            let object = optional_text(base, object);
+            match property {
+                MemberProperty::Dot(name) => format!("{object}.{name}"),
+                MemberProperty::Private(name) => format!("{object}.#{name}"),
+                MemberProperty::Computed(key) => match &**key {
+                    Expression::Literal(Literal::String(units)) => {
+                        format!("{object}.{}", String::from_utf16_lossy(units))
+                    }
+                    key => format!("{object}[{}]", expr_text(key)),
+                },
+            }
+        }
+        Expression::Call(callee, _, _) => format!("{}(...)", optional_text(base, callee)),
+        other => expr_text(other),
+    }
+}
+
+fn optional_chain_text(expr: &Expression) -> String {
+    match expr {
+        Expression::OptionalChain(base, chain) => optional_text(&optional_chain_text(base), chain),
+        other => expr_text(other),
+    }
+}
+
+/// The callee V8 prints for an optional chain that ends in a call (`obj?.m()`
+/// is `obj?.m`, `obj.m?.()` is `obj.m`), which is what it names when the
+/// call's result is not iterable.
+pub(crate) fn optional_call_callee(expr: &Expression) -> Option<String> {
+    let Expression::OptionalChain(base, chain) = expr else {
+        return None;
+    };
+    let Expression::Call(callee, _, _) = &**chain else {
+        return None;
+    };
+    Some(optional_text(&optional_chain_text(base), callee))
+}

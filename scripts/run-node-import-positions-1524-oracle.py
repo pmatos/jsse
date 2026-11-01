@@ -64,7 +64,12 @@ def position(engine: list[str], code: str, work: Path) -> str:
     (work / "probe.mjs").write_text(prelude + code.replace("IMP", IMPORT) + "\n")
     try:
         out = subprocess.run(
-            engine + ["probe.mjs"], capture_output=True, text=True, timeout=60, cwd=work
+            engine + ["probe.mjs"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=work,
         )
     except subprocess.TimeoutExpired:
         return "TIMEOUT"

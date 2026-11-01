@@ -364,7 +364,7 @@ fn chain_before(src: &str, end: usize) -> Option<(String, usize)> {
 }
 
 /// The callee of the `new` whose keyword starts at byte `at`.
-fn chain_after_new(src: &str, at: usize) -> Option<String> {
+fn chain_after_new(src: &str, at: usize) -> Option<(String, usize)> {
     let b = src.as_bytes();
     let mut i = skip_ws_fwd(b, at + 3);
     let mut out = String::new();
@@ -405,9 +405,20 @@ fn chain_after_new(src: &str, at: usize) -> Option<String> {
                     out.push_str(&render_index(&src[k + 1..close])?);
                     i = close + 1;
                 }
-                _ => return Some(out),
+                _ => return Some((out, i)),
             }
         }
+    }
+}
+
+/// The byte after the `new` expression whose keyword starts at `at`.
+pub(super) fn new_expression_end(src: &str, at: usize) -> Option<usize> {
+    let b = src.as_bytes();
+    let (_, end) = chain_after_new(src, at)?;
+    let open = skip_ws_fwd(b, end);
+    match b.get(open) {
+        Some(b'(') => close_after(b, open).map(|close| close + 1),
+        _ => Some(end),
     }
 }
 
@@ -420,7 +431,7 @@ pub(super) fn callee_text(src: &str, pos: u32, construct: bool) -> Option<String
         return (src.get(at..)?.starts_with("new") && !ident_byte(*b.get(at + 3)?))
             .then(|| chain_after_new(src, at))
             .flatten()
-            .map(|text| {
+            .map(|(text, _)| {
                 if text == "import.meta" {
                     "(intermediate value)".into()
                 } else {
@@ -514,6 +525,9 @@ impl Interpreter {
     pub(crate) fn node_callee_text_any(&self, construct: bool) -> Option<String> {
         if !self.node_host.stack.installed {
             return None;
+        }
+        if construct && let Some(unnamed) = self.iterable_new_text() {
+            return Some(unnamed.to_string());
         }
         let src = self.node_caller_source()?;
         callee_text(&src, self.node_host.call_pos, construct)

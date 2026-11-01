@@ -31,7 +31,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
-        // Depth guard: every nested sub-expression funnels through here.
+        // Depth guard.
         self.enter_recursion()?;
         let cover = self.begin_cover_scope();
         let mut r = self.parse_assignment_expression_inner();
@@ -286,7 +286,7 @@ impl<'a> Parser<'a> {
                 v8_position::early_expression(at);
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                v8_position::node(at);
+                v8_position::expression(at);
                 Ok(Expression::Await(ExprBox::new(expr), at))
             }
             _ => self.parse_postfix(),

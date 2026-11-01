@@ -285,6 +285,21 @@ impl Interpreter {
     pub(crate) fn require_assignable(&mut self, props: &[Property], value: &JsValue) -> Completion {
         if self.node_host.stack.installed
             && value.is_nullish()
+            && let Some(text) = self.default_text_for_target(props)
+        {
+            let message = match first_target_name(props) {
+                Some(Lead::Read(name)) => {
+                    self.nullish_keyed_read_message(value, &JsPropertyKey::from(name))
+                }
+                lead => {
+                    let name = lead.as_ref().and_then(Lead::name).map(str::to_string);
+                    Self::destructure_message(name, &text, value)
+                }
+            };
+            return Completion::Throw(self.create_type_error(&message));
+        }
+        if self.node_host.stack.installed
+            && value.is_nullish()
             && let Some(name) = first_target_name(props)
                 .as_ref()
                 .and_then(Lead::name)
@@ -308,6 +323,7 @@ impl Interpreter {
             return self.bind_pattern_at(pattern, value, kind, env);
         }
         let frame = self.call_depth;
+        let raw = value.clone();
         let site = self.array_pattern_site(pattern, &value);
         let nested = self.node_host.pattern_frames.last() == Some(&frame);
         self.node_host.pattern_frames.push(frame);
@@ -316,7 +332,7 @@ impl Interpreter {
         let done = self.bind_pattern_at(pattern, value, kind, env);
         self.node_host.pattern_frames.pop();
         self.node_host.pattern_kinds.pop();
-        let done = self.finish_default_pattern(pattern, noted, nested, done);
+        let done = self.finish_default_pattern(pattern, noted, nested, &raw, done);
         match site {
             Some(site) => self.reword_array_pattern(done, site),
             None => done,

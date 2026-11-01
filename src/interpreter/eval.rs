@@ -4152,7 +4152,7 @@ impl Interpreter {
                     }
                 }
                 Some(Expression::Spread(inner, _)) => {
-                    // §13.15.5.4 AssignmentRestElement: evaluate LHS ref BEFORE collecting
+                    // §13.15.5.4: evaluate the LHS ref before collecting
                     let precomp = match self.eval_member_lhs_ref(inner, env) {
                         Ok(MemberLhsRef::Ref(r)) => r,
                         Ok(MemberLhsRef::Suspended(v)) => {
@@ -4222,6 +4222,7 @@ impl Interpreter {
                         }
                     };
 
+                    let noted = self.note_default_target(target, default_expr);
                     let result = self.with_destruct_lref(precomp, target, env, |interp| {
                         let item = if done {
                             JsValue::UNDEFINED
@@ -4263,6 +4264,7 @@ impl Interpreter {
 
                         Completion::Normal(val)
                     });
+                    let result = self.finish_default_target(noted, target, default_expr, result);
 
                     match result {
                         Completion::Normal(_) | Completion::Empty => {}
@@ -4281,7 +4283,7 @@ impl Interpreter {
         }
 
         if let Some(yv) = yield_val {
-            // §13.15.5.2: if iterator not done, track it for IteratorClose when generator returns
+            // §13.15.5.2: track it for IteratorClose when the generator returns
             if !done {
                 self.pending_iter_close.push(iterator.clone());
             }
@@ -4292,9 +4294,7 @@ impl Interpreter {
         // §13.15.5.2: IteratorClose when done is false
         if !done {
             if let Some(err) = error {
-                // `iterator_close` roots `err` across `return()`, which can
-                // run arbitrary user code (issue #794), and hands it back
-                // unchanged regardless of what `return()` does.
+                // `iterator_close` roots `err` across `return()` (issue #794).
                 let err = self.iterator_close(&iterator, err);
                 self.gc_unroot_value(&iterator);
                 return Completion::Throw(err);
@@ -4324,8 +4324,7 @@ impl Interpreter {
             return Completion::Throw(e);
         }
 
-        // Computed keys, getters, initializers, rest copying, and target writes
-        // can all run user code while `rval` lives only here.
+        // User code may run while `rval` lives only here.
         let gc_frame = self.gc_root_frame();
         self.gc_root_value(rval);
 
@@ -4339,10 +4338,8 @@ impl Interpreter {
                 // Handle rest: {...rest} = obj
                 if let Expression::Spread(inner, _) = &prop.value {
                     // §13.15.5.6 AssignmentRestProperty: evaluate the target's lref
-                    // BEFORE building/copying into the rest object, matching this
-                    // function's own `Init` arm and `destructure_array_assignment`'s
-                    // `Spread` arm. `with_destruct_lref` roots the produced rest value
-                    // across the deferred write, so no manual rooting is needed here.
+                    // BEFORE copying into the rest object (`with_destruct_lref`
+                    // roots the rest value across the deferred write).
                     let precomp = match self.eval_member_lhs_ref(inner, env) {
                         Ok(MemberLhsRef::Ref(r)) => r,
                         Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
@@ -4405,6 +4402,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
 
+                        let noted = self.note_default_target(target, default_expr);
                         let result = self.with_destruct_lref(pre_ref, target, env, |interp| {
                             // GetV: a primitive source stays the getter receiver.
                             let val = propagate!(interp.access_property_on_value(rval, &key));
@@ -4437,6 +4435,8 @@ impl Interpreter {
 
                             Completion::Normal(val)
                         });
+                        let result =
+                            self.finish_default_target(noted, target, default_expr, result);
 
                         match result {
                             Completion::Normal(_) | Completion::Empty => {}

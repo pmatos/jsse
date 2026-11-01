@@ -22,7 +22,8 @@ the way V8's bytecode generator emits positions (`src/parser/v8_position.rs`):
   an object property value (its start, not for constants of a boilerplate literal), a spread argument (after the
   operand), `new.target`.
 - **Early expression position** (`early_expression`): `await` and the backtick of a tagged template; dropped while
-  pending, and leaves it pending.
+  pending, and leaves it pending. `await` records its position again once the operand is evaluated (`id(await n, import(x))`
+  reports the `await`, not the load of `n`).
 - **Instruction without a position** (`instruction`): a literal, `this`, an array or object literal, a function,
   `import` itself (it emits a bytecode before it reads its specifier, so `import(v)` reports the load of `v`), a
   template head with text, a binding pattern; only ends the pending state. An array or object literal whose first
@@ -53,7 +54,7 @@ the optional chain arm of `parse_left_hand_side_expression` (`expressions/option
 
 ## Verification
 
-`tests/node-import-positions-1524/shapes.txt` holds 331 module bodies with the position Node v26.8.2 reports
+`tests/node-import-positions-1524/shapes.txt` holds 332 module bodies with the position Node v26.8.2 reports
 (`LINE:COLUMN`); `scripts/run-node-import-positions-1524-oracle.py [--node]` runs them on jsse (and Node) and
 `--node` rewrites the expectations. The shapes were found by probing, then re-probed blind: the first 110 shapes came
 from the rules in the 1484 document (87 differed before the change), the next 148 and 83 were written afterwards to find
@@ -68,8 +69,6 @@ Shapes probed on Node that jsse still reports differently (none is in `shapes.tx
 - An `import()` in the default of an arrow parameter, `(a = id(import(x))) => a`: the list is parsed as an expression
   in the enclosing function's state; V8 compiles it in the arrow, so it reports the load of `id` and jsse reports the
   enclosing statement.
-- `id(await n, import(x))` inside an async function: V8 reports the `await` after the load of `n`, jsse reports the
-  load of `n`.
 - A class heritage, a computed class key and a decorator argument: not probed.
 - A Node `catch`-style case (`import(x).catch(f)` never rejects unhandled) and `new import(x).constructor` are not
   observable through the harness; they are not part of the issue.
