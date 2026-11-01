@@ -5,7 +5,7 @@
 # test262/test/language through Node and `jsse --node` (docs/agents/library-tests-typescript-conformance-final-1523.md).
 # 43 of them still differ: 42 are accepted by Node and must stay rejected (ECMAScript makes `new import(..)` and
 # `new import.source(..)` a SyntaxError; V8 only rejects the form without a following `.prop`), and one differs in wording.
-# The first row stands for 42 tests.
+# The first two rows stand for 42 tests.
 script	"new import('').prop;"	parses	SyntaxError: Cannot use new with import
 script	"new import.source('x').prop;"	parses	SyntaxError: Cannot use new with import
 module	"export var a = 0;\nimport {a \\u0061s b} from './lib.mjs';"	SyntaxError: Identifier 'a' has already been declared	SyntaxError: Unexpected identifier 'as'

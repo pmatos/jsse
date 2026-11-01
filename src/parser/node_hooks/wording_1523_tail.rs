@@ -3,22 +3,7 @@
 
 use super::super::*;
 
-const NON_STRICT_FN: &str = "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement";
-
 impl<'a> Parser<'a> {
-    pub(in crate::parser) fn non_strict_fn_error(&self) -> ParseError {
-        self.error(NON_STRICT_FN)
-    }
-
-    /// A function declaration where a statement stands.
-    pub(in crate::parser) fn function_in_statement_position(&self) -> &'static str {
-        if self.strict {
-            "In strict mode code, functions can only be declared at top level or inside a block."
-        } else {
-            "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement."
-        }
-    }
-
     /// `async * constructor() {}` is a generator before it is an async method.
     pub(in crate::parser) fn async_ctor_message(is_generator: bool) -> &'static str {
         if is_generator {
@@ -28,8 +13,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `await` in the parameters of a function that is not async: a module
-    /// reserves the word, only an async function words it as an expression.
+    /// A module reserves `await`, so in the parameters of a function that is
+    /// not async it is not an await expression.
     pub(in crate::parser) fn await_in_params(&self) -> ParseError {
         if inferred_names::enabled() && !self.in_async {
             return self.error("Unexpected reserved word");
@@ -37,8 +22,8 @@ impl<'a> Parser<'a> {
         self.error("Await expression is not allowed in formal parameters of an async function")
     }
 
-    /// `break` / `continue` without a target. V8 reads the label before it
-    /// looks for the loop, so a token that cannot be one is the error.
+    /// V8 reads the label of `break` / `continue` before it looks for the
+    /// loop, so a token that cannot be a label is the error.
     pub(in crate::parser) fn jump_error(&self, ours: &str) -> ParseError {
         let ends = matches!(
             self.current,
@@ -50,8 +35,8 @@ impl<'a> Parser<'a> {
         self.error(ours)
     }
 
-    /// A keyword used as a shorthand property (`{ var }`). V8 stops at the
-    /// token after the name unless that token ends the property.
+    /// V8 stops at the token after a keyword used as a shorthand property
+    /// (`{ var x }`), unless that token ends the property.
     pub(in crate::parser) fn shorthand_keyword(&self, name: &str) -> ParseError {
         let ends = matches!(self.current, Token::Comma | Token::RightBrace);
         if inferred_names::enabled() && !ends {
@@ -60,30 +45,53 @@ impl<'a> Parser<'a> {
         self.error(format!("Unexpected token '{name}'"))
     }
 
-    /// An escaped word that is reserved where an identifier reference stands.
-    /// V8 words `yield` by the token, except where a generator's statement
-    /// starts with it (a label or an expression statement).
+    /// An escaped reserved word where an identifier reference stands. V8 words
+    /// `yield` by the token; where an assignment expression starts with it in a
+    /// generator, `parse_assignment_expression` has already given the keyword text.
     pub(in crate::parser) fn escaped_reserved_error(&self, name: &str) -> ParseError {
-        if name == "yield" && !(self.in_generator && self.starts_statement()) {
+        if name == "yield" {
             return self.v8_error("Keyword must not contain escaped characters");
         }
         self.error("Keyword must not contain escaped characters")
     }
 
-    /// The current token starts a statement, as far as the text before it
-    /// tells (a label also does).
-    fn starts_statement(&self) -> bool {
-        let before = self.source_text_source[..self.current_token_start].trim_end();
-        before.is_empty()
-            || before.ends_with(['{', ';', '}'])
-            || self.lookahead(|t| t.advance().is_ok() && t.current() == &Token::Colon)
+    /// The escaped identifier at the current token is reserved where a
+    /// shorthand property stands (`yield` and `await` only where they are).
+    pub(in crate::parser) fn escaped_shorthand_reserved(&self) -> bool {
+        match &self.current {
+            Token::IdentifierWithEscape(name) => match name.as_str() {
+                "yield" => self.strict || self.in_generator,
+                "await" => self.in_async || self.in_static_block || self.is_module,
+                _ => Self::is_reserved_identifier(name, self.strict),
+            },
+            _ => false,
+        }
+    }
+
+    pub(in crate::parser) fn escaped_shorthand_error(&self, name: &str) -> ParseError {
+        if inferred_names::enabled() {
+            return self.error(self.escaped_identifier_text(name));
+        }
+        self.error("Keyword must not contain escaped characters")
+    }
+
+    /// An escaped `yield` where an assignment expression starts in a
+    /// generator: V8 reads it as a YieldExpression and words the escape as the
+    /// keyword. (Default mode words it alike.)
+    pub(in crate::parser) fn escaped_yield_start(&self) -> Result<(), ParseError> {
+        if self.in_generator
+            && matches!(&self.current, Token::IdentifierWithEscape(n) if n == "yield")
+        {
+            return Err(self.error("Keyword must not contain escaped characters"));
+        }
+        Ok(())
     }
 
     pub(in crate::parser) fn duplicate_private_name(&self, name: &str) -> ParseError {
         self.error(format!("Identifier '#{name}' has already been declared"))
     }
 
-    /// A using declaration that goes on with a pattern, which V8 reads as a
+    /// V8 reads a pattern after the first binding of a using declaration as a
     /// binding that lacks its initializer.
     pub(in crate::parser) fn using_binding_error(&self) -> ParseError {
         if inferred_names::enabled()
@@ -102,23 +110,24 @@ impl<'a> Parser<'a> {
         self.error("Invalid destructuring assignment target")
     }
 
-    /// An export specifier with a string literal local name and a lone
-    /// surrogate in its exported name: V8 reports the local name first.
+    /// `export { "a" as "<lone surrogate>" }`: V8 reports the string literal
+    /// local name before it looks at the exported one.
     pub(in crate::parser) fn string_local_surrogate(
         &self,
-        error: ParseError,
         string_local: bool,
-    ) -> ParseError {
-        if string_local && inferred_names::enabled() && error.message.contains("surrogate") {
-            return self
-                .error("A string literal cannot be used as an exported local name without 'from'");
+    ) -> Result<(), ParseError> {
+        let lone = matches!(&self.current, Token::StringLiteral(s) if Self::has_lone_surrogate(s));
+        if string_local && lone && inferred_names::enabled() {
+            return Err(self.error(
+                "A string literal cannot be used as an exported local name without 'from'",
+            ));
         }
-        error
+        Ok(())
     }
 
     /// `delete this.#m`. V8 finds the covered form `delete (this.#m)` out only
     /// once it knows the name, so a name that no enclosing class has declared
-    /// yet is reported as undeclared.
+    /// yet is reported as undeclared, even when a later element declares it.
     pub(in crate::parser) fn private_delete_error(&self, name: &str) -> ParseError {
         let covered = self
             .source_text_source
@@ -137,7 +146,8 @@ impl<'a> Parser<'a> {
     }
 
     /// `class C extends () => {} {}`: V8 stops at the `=>`, before the arrow's
-    /// body or parameters are read.
+    /// body or parameters are read. The tokens of the heritage are scanned
+    /// ahead for an arrow, which the real parse would only find after its body.
     pub(in crate::parser) fn heritage_arrow(&mut self) -> Result<(), ParseError> {
         if !inferred_names::enabled() {
             return Ok(());
@@ -196,7 +206,8 @@ impl<'a> Parser<'a> {
     }
 
     /// An escaped `of` where a for head wants the word: V8 words it as the
-    /// keyword in `for await` and as a plain token otherwise.
+    /// keyword in `for await` and as a plain token otherwise. The head is found
+    /// by its `(` in the source text, as `in_for_await_head` does.
     pub(in crate::parser) fn escaped_of_text(&self) -> Option<&'static str> {
         let src = &self.source_text_source[..self.current_token_start];
         let mut depth = 0usize;
@@ -220,7 +231,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `\u0061sync function f() {}` at the start of a statement.
+    /// An escaped `async` before `function` where a statement starts: V8 words
+    /// it as the keyword.
     pub(in crate::parser) fn escaped_async_statement(&self) -> Result<(), ParseError> {
         let escaped = matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async");
         if inferred_names::enabled()
@@ -236,7 +248,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `class C { \u0061sync m() {} }`, with or without the `*`.
+    /// An escaped `async` before `*` or a method name in a class body.
     pub(in crate::parser) fn escaped_async_member(&self) -> Result<(), ParseError> {
         let escaped = matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async");
         if inferred_names::enabled()
@@ -253,8 +265,8 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// An escaped contextual word (`new.target`, `import.meta`, `as`, `from`)
-    /// where V8 names the whole construct.
+    /// An escaped contextual word where V8 names the whole construct
+    /// (`new.target`, `import.meta`, `as`, `from`).
     pub(in crate::parser) fn escaped_word_error(&self, whole: &str) -> ParseError {
         if inferred_names::enabled() {
             return self.error(format!("'{whole}' must not contain escaped characters"));
@@ -262,7 +274,7 @@ impl<'a> Parser<'a> {
         self.error("Keyword must not contain escaped characters")
     }
 
-    /// `import * as ns from`: the word that was expected is there, spelled
+    /// The contextual word that was expected (`as`, `from`) is there, spelled
     /// with an escape.
     pub(in crate::parser) fn expected_contextual(&self, word: &str) -> ParseError {
         match &self.current {

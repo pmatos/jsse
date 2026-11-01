@@ -369,8 +369,8 @@ impl<'a> Parser<'a> {
 
             let exported = if self.is_as_keyword() {
                 self.advance()?;
-                let name = self.parse_module_export_name();
-                name.map_err(|e| self.string_local_surrogate(e, is_string))?
+                self.string_local_surrogate(is_string)?;
+                self.parse_module_export_name()?
             } else {
                 local.clone()
             };

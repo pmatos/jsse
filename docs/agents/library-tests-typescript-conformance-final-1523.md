@@ -17,7 +17,7 @@ v26.8.2 and `jsse --node`, and `compare` groups what differs.
 | now | 43 | 1 | 42 |
 
 (The third pass counted 298 with a slightly different scenario set; its 256 wording rows are inside the 273.)
-`scripts/node-stack-fixtures-1523-final/final.tsv` has 102 hand-minimised sources, at least one for each class below,
+`scripts/node-stack-fixtures-1523-final/final.tsv` has 113 hand-minimised sources, at least one for each class below,
 and `expected-final.txt` is Node's output for them; `jsse --node` prints it exactly in the VM, the tree-walker and under GC
 stress (`tests/node_syntax_final_1523.rs`).
 
@@ -36,10 +36,13 @@ Code lives in `src/parser/node_hooks/wording_1523_tail.rs`, `src/parser/v8_messa
   ZWNJ or `\u007E` start fall here (37 tests). `Lexer::read_escaped_start` returns the reader's own error now, and the
   `\` of `#\x21` is `Invalid or unexpected '#'`. A number followed by `\` is `Identifier directly after number`
   (`0\u00620`).
-- `yield` and `await` spelled with an escape as a name, in strict code or a generator (51 tests): `Unexpected strict
-  mode reserved word`, `Unexpected identifier 'yield'` and `Keyword must not contain escaped characters`, by context. V8
-  words `yield` by the token, except where a generator's statement starts with it (an expression statement or a label);
-  `await` is always the keyword text there (`escaped_reserved_error`, `starts_statement`).
+- `yield` and `await` spelled with an escape as a name (51 tests): `Unexpected strict mode reserved word`,
+  `Unexpected identifier 'yield'` and `Keyword must not contain escaped characters`, by context. In a generator V8
+  reads `yield` as a YieldExpression wherever an assignment expression starts (a statement, an argument, an initializer,
+  a parenthesis) and words the escape as the keyword there (`parse_assignment_expression`); as the operand of an
+  operator (`void yield`, `a || yield`) it is `Unexpected identifier 'yield'`, in strict code `Unexpected strict mode
+  reserved word`. `await` is always the keyword text as an expression, `Unexpected reserved word` as a shorthand
+  property (`escaped_reserved_error`, `escaped_shorthand_error`).
 - A function declaration where a statement stands, in strict code (13 tests): `In strict mode code, functions can only be
   declared at top level or inside a block.`
 - `for ('' in {} ? 0 : 0;;)` and the other invalid for-in/of targets (5 tests): V8 checks the target when it reads `in`
@@ -72,6 +75,23 @@ Code lives in `src/parser/node_hooks/wording_1523_tail.rs`, `src/parser/v8_messa
   that cannot be one (`\k<>`, `\k<a`, `\k<1>`) is `Invalid capture group name` (an undefined group stays `Invalid named
   capture referenced`); `\k` not followed by `<`, with named groups, is `Invalid named reference`; a malformed `\u` in a
   group name is `Invalid Unicode escape`.
+
+## Engine bug found on the way (default mode, ECMAScript requires it)
+
+A shorthand property or pattern target spelled with an escaped `yield` or `await` (`({ yi\u0065ld })`) was rejected in
+every mode, in sloppy code outside generators and async functions too. `yield` is reserved only in strict code and
+generators and `await` only in async functions, modules and static blocks (`escaped_shorthand_reserved`).
+`test262-extra/object-literal-shorthand-escaped-yield-await-sloppy.js` and
+`object-literal-shorthand-escaped-yield-in-generator-early-error.js` pin both sides.
+
+## Known limits
+
+- An octal-like escape in a strict string: V8 words the last legacy escape of the strict scope. The parser sees the
+  escapes up to the token it stops at, and the lexer words an octal digit escape (`\1`) on its own, so a scope that mixes
+  `\8` and `\1` can differ (`strict_escape_text`).
+- `escaped_of_text` finds the `for (` of a head by scanning the source text, like `in_for_await_head`; a `(` inside a
+  string or comment of the head can mislead it. `heritage_arrow` scans the heritage's tokens ahead (once per class under
+  `--node`), and a template or regexp inside parenthesised parameters is lexed without the parser's context.
 
 ## Not met
 

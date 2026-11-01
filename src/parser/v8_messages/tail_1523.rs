@@ -2,6 +2,7 @@
 //! that need no parser state, the escape that a strict string rejects and the
 //! reasons of the `\k<..>` and `(?<..>` forms of a regular expression.
 
+use super::exact::NON_STRICT_FUNCTION;
 use super::*;
 
 const EVAL_OR_ARGUMENTS: &str = "Unexpected eval or arguments in strict mode";
@@ -37,6 +38,20 @@ pub(super) fn text(msg: &str) -> Option<Cow<'static, str>> {
 }
 
 impl<'a> Parser<'a> {
+    /// A function declaration where a statement stands, as the engine words it.
+    pub(in crate::parser) fn non_strict_fn_error(&self) -> ParseError {
+        self.error(NON_STRICT_FUNCTION.trim_end_matches('.'))
+    }
+
+    /// The same, as V8 words it.
+    pub(in crate::parser) fn function_in_statement_position(&self) -> &'static str {
+        if self.strict {
+            "In strict mode code, functions can only be declared at top level or inside a block."
+        } else {
+            NON_STRICT_FUNCTION
+        }
+    }
+
     /// A legacy octal escape in strict code: V8 words `\8` and `\9` on their
     /// own. Of the escapes read so far, the last one decides.
     pub(super) fn strict_escape_text(&self) -> &'static str {
@@ -105,19 +120,36 @@ pub(super) fn group_name_reason(pattern: &str) -> &'static str {
     }
 }
 
+/// The escapes of `pattern` as (offset of the escaped character, the
+/// character): an escaped backslash does not start another.
+fn escapes(pattern: &str) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut chars = pattern.char_indices();
+    std::iter::from_fn(move || {
+        loop {
+            let (_, c) = chars.next()?;
+            if c == '\\' {
+                return chars.next();
+            }
+        }
+    })
+}
+
+fn is_group_name(name: &str) -> bool {
+    let start = |c: char| c.is_alphabetic() || matches!(c, '_' | '$' | '\\');
+    let part =
+        |c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | '{' | '}') || !c.is_ascii();
+    let mut chars = name.chars();
+    chars.next().is_some_and(start) && chars.all(part)
+}
+
 /// `\k<name>`: a name that cannot be one is not a reference to a missing group.
 pub(super) fn named_reference_reason(pattern: &str) -> &'static str {
-    let malformed = pattern.match_indices("\\k<").any(|(at, _)| {
-        let rest = &pattern[at + 3..];
-        let Some((name, _)) = rest.split_once('>') else {
-            return true;
+    let malformed = escapes(pattern).any(|(at, c)| {
+        let Some(rest) = pattern[at + 1..].strip_prefix('<').filter(|_| c == 'k') else {
+            return false;
         };
-        let mut chars = name.chars();
-        let start = chars.next();
-        !start.is_some_and(|c| c.is_alphabetic() || matches!(c, '_' | '$' | '\\'))
-            || !name
-                .chars()
-                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | '{' | '}'))
+        rest.split_once('>')
+            .is_none_or(|(name, _)| !is_group_name(name))
     });
     if malformed {
         "Invalid capture group name"
@@ -128,11 +160,6 @@ pub(super) fn named_reference_reason(pattern: &str) -> &'static str {
 
 /// `\k` not followed by `<`, in a pattern that has named groups.
 pub(super) fn bare_k_reason(pattern: &str) -> Option<&'static str> {
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' && chars.next() == Some('k') && chars.peek() != Some(&'<') {
-            return Some("Invalid named reference");
-        }
-    }
-    None
+    let bare = escapes(pattern).any(|(at, c)| c == 'k' && !pattern[at + 1..].starts_with('<'));
+    (bare && group_names(pattern).next().is_some()).then_some("Invalid named reference")
 }

@@ -57,6 +57,8 @@ impl<'a> Parser<'a> {
             return self.parse_yield_expression();
         }
 
+        self.escaped_yield_start()?;
+
         let left_start = self.current_token_start;
         let before = v8_position::snapshot();
         let left = self.parse_conditional_expression()?;
@@ -1294,9 +1296,7 @@ impl<'a> Parser<'a> {
             return Err(self.error("Keyword must not contain escaped characters"));
         }
 
-        let is_escaped_reserved = matches!(&self.current, Token::IdentifierWithEscape(name)
-            if Self::is_reserved_identifier(name, self.strict)
-                || name == "await" || name == "yield");
+        let is_escaped_reserved = self.escaped_shorthand_reserved();
         let was_keyword = matches!(&self.current, Token::Keyword(_) | Token::BooleanLiteral(_))
             || self.current == Token::NullLiteral;
 
@@ -1314,7 +1314,7 @@ impl<'a> Parser<'a> {
             && self.current != Token::Assign
         {
             if is_escaped_reserved {
-                return Err(self.error("Keyword must not contain escaped characters"));
+                return Err(self.escaped_shorthand_error(name));
             }
             // Reserved words cannot be used as shorthand IdentifierReferences
             if matches!(name.as_str(), "true" | "false" | "null") {
@@ -1377,7 +1377,7 @@ impl<'a> Parser<'a> {
             && self.current == Token::Assign
         {
             if is_escaped_reserved {
-                return Err(self.error("Keyword must not contain escaped characters"));
+                return Err(self.escaped_shorthand_error(name));
             }
             // Keywords cannot be CoverInitializedName targets
             if was_keyword && Self::is_reserved_identifier(name, self.strict) {

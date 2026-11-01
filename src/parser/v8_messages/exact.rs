@@ -2,7 +2,7 @@
 //! by the message this parser raises (`--node` only, issues #1484, #1523).
 
 pub(super) const INVALID_TOKEN: &str = "Invalid or unexpected token";
-const NON_STRICT_FUNCTION: &str = "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.";
+pub(super) const NON_STRICT_FUNCTION: &str = "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement.";
 
 pub(super) const EXACT: &[(&str, &str)] = &[
     (

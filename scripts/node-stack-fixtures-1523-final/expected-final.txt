@@ -20,6 +20,17 @@ script "class st\\u0061tic {}" SyntaxError: Unexpected strict mode reserved word
 script "\"use strict\";\nvar C = class l\\u0065t {};" SyntaxError: Keyword must not contain escaped characters
 script "var C = class l\\u0065t {};" SyntaxError: Unexpected strict mode reserved word
 script "\"use strict\";\nvar C = class yi\\u0065ld {};" SyntaxError: Unexpected strict mode reserved word
+script "function* g() {\n  if (1) yi\\u0065ld;\n}" SyntaxError: Keyword must not contain escaped characters
+script "function* g() {\n  f(yi\\u0065ld);\n}" SyntaxError: Keyword must not contain escaped characters
+script "function* g() {\n  x = (yi\\u0065ld);\n}" SyntaxError: Keyword must not contain escaped characters
+script "function* g() {\n  x = a || yi\\u0065ld;\n}" SyntaxError: Unexpected identifier 'yield'
+script "async function* g() {\n  x = yi\\u0065ld;\n}" SyntaxError: Keyword must not contain escaped characters
+script "\"use strict\";\nfunction* g() {\n  x = yi\\u0065ld;\n}" SyntaxError: Keyword must not contain escaped characters
+script "function* g() {\n  x = { yi\\u0065ld };\n}" SyntaxError: Unexpected identifier 'yield'
+script "async function f() {\n  ({ aw\\u0061it });\n}" SyntaxError: Unexpected reserved word
+script "({ yi\\u0065ld });" parses
+script "({ aw\\u0061it } = {});" parses
+module "({ aw\\u0061it });" SyntaxError: Unexpected reserved word
 script "\\u0061sync function f() {}" SyntaxError: Keyword must not contain escaped characters
 script "x = \\u0061sync function f() {}" SyntaxError: Unexpected token 'function'
 script "class C {\n  \\u0061sync m() {}\n}" SyntaxError: Keyword must not contain escaped characters
