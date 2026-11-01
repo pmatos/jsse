@@ -16,9 +16,6 @@ pub(crate) struct GcPacer {
     nursery_alloc_count: usize,
     /// Approximate bytes currently charged to the nursery.
     nursery_bytes: usize,
-    /// Charged bytes that request a minor collection: the base nursery, grown
-    /// with the environment registry by [`GcPacer::retune_nursery`].
-    nursery_threshold_bytes: usize,
     /// Heap + off-heap allocation debt since the last major collection.
     major_bytes_since_gc: usize,
     /// Live off-heap bytes currently tracked (e.g. ArrayBuffer backing stores).
@@ -82,7 +79,6 @@ impl GcPacer {
         GcPacer {
             nursery_alloc_count: 0,
             nursery_bytes: 0,
-            nursery_threshold_bytes: GC_NURSERY_THRESHOLD_BYTES,
             major_bytes_since_gc: 0,
             external_bytes: 0,
             major_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
@@ -136,7 +132,7 @@ impl GcPacer {
         self.nursery_alloc_count += 1;
         self.nursery_bytes += GC_OBJECT_OVERHEAD;
         self.major_bytes_since_gc += GC_OBJECT_OVERHEAD;
-        if self.nursery_bytes >= self.nursery_threshold_bytes {
+        if self.nursery_bytes >= GC_NURSERY_THRESHOLD_BYTES {
             if self.minor_suppressed {
                 self.mark_major();
             } else {
@@ -212,17 +208,6 @@ impl GcPacer {
         }
     }
 
-    /// Size the next nursery so that the work every minor collection does per
-    /// registered environment (one probe of the registry, a cache miss each)
-    /// stays a small share of the work the nursery itself costs. The registry
-    /// of a long-lived heap holds hundreds of thousands of environments, which
-    /// made a 4 MiB nursery's collection cost 10 ms (#1490).
-    pub(crate) fn retune_nursery(&mut self, registered_envs: usize) {
-        self.nursery_threshold_bytes = registered_envs
-            .saturating_mul(GC_NURSERY_BYTES_PER_REGISTERED_ENV)
-            .clamp(GC_NURSERY_THRESHOLD_BYTES, GC_NURSERY_MAX_THRESHOLD_BYTES);
-    }
-
     /// Reset the nursery cycle after a minor collection. High survival does not
     /// switch to major pacing: a minor costs about the same per nursery
     /// whatever the live-set size, while forcing a major every nursery traced
@@ -285,11 +270,6 @@ impl GcPacer {
         self.major_threshold_bytes
     }
 }
-
-/// Nursery bytes granted per registered environment (`GcPacer::retune_nursery`).
-const GC_NURSERY_BYTES_PER_REGISTERED_ENV: usize = 128;
-/// Ceiling of the grown nursery: 128 Ki objects of `GC_OBJECT_OVERHEAD`.
-const GC_NURSERY_MAX_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(test)]
 #[path = "pacer_tests.rs"]
