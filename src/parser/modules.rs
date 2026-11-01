@@ -485,7 +485,7 @@ impl<'a> Parser<'a> {
 
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
-            Some(Box::new(self.parse_left_hand_side_expression()?))
+            Some(Box::new(self.parse_heritage_expression()?))
         } else {
             None
         };

@@ -8,14 +8,17 @@ pub(crate) use cover_patterns::{check_object_rest_target, expr_to_pattern, patte
 
 mod arrow_params;
 mod catch_param;
+mod cover_init;
 mod cover_patterns;
 mod declarations;
 pub(crate) mod dynamic_function;
 mod eval_flags;
 mod expressions;
+mod for_head;
 pub(crate) mod inferred_names;
 mod lead_ident;
 mod module_early_errors;
+mod module_start;
 mod modules;
 mod node_hooks;
 mod positions;
@@ -181,6 +184,7 @@ pub(crate) struct Parser<'a> {
     /// Set while an arrow's parameter list is re-parsed as FormalParameters.
     refining_arrow_params: bool,
     last_obj_had_proto_dup: bool,
+    cover_init: cover_init::CoverInit,
     /// Current recursive-descent nesting depth (expressions + statements).
     /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
     /// a catchable parse error instead of overflowing the native stack.
@@ -282,6 +286,7 @@ impl<'a> Parser<'a> {
             parenthesized_arrow: false,
             refining_arrow_params: false,
             last_obj_had_proto_dup: false,
+            cover_init: Default::default(),
             parse_depth: 0,
             lone_surrogate_stand_ins: false,
         })
@@ -1030,7 +1035,7 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
         self.is_module = true;
-        self.lexer.is_module = true;
+        self.relex_first_token_as_module()?;
         self.set_strict(true);
 
         let mut module_items = Vec::new();
@@ -1062,50 +1067,6 @@ impl<'a> Parser<'a> {
         };
         assign_ic_sites_for_module(&mut program);
         Ok(program)
-    }
-
-    fn get_exported_names(&self, export: &ExportDeclaration) -> Vec<String> {
-        match export {
-            ExportDeclaration::Named {
-                specifiers,
-                declaration,
-                ..
-            } => {
-                let mut names = Vec::new();
-                for spec in specifiers {
-                    names.push(spec.exported.clone());
-                }
-                if let Some(decl) = declaration {
-                    names.extend(self.get_declaration_export_names(decl));
-                }
-                names
-            }
-            ExportDeclaration::Default(_)
-            | ExportDeclaration::DefaultFunction(_)
-            | ExportDeclaration::DefaultClass(_) => {
-                vec!["default".to_string()]
-            }
-            ExportDeclaration::All { exported, .. } => {
-                // export * as ns from "mod" exports 'ns'
-                // export * from "mod" doesn't add to local exported names
-                exported.iter().cloned().collect()
-            }
-        }
-    }
-
-    fn get_declaration_export_names(&self, decl: &Statement) -> Vec<String> {
-        match decl {
-            Statement::Variable(var) => {
-                let mut names = Vec::new();
-                for d in &var.declarations {
-                    d.pattern.bound_names(&mut names);
-                }
-                names
-            }
-            Statement::FunctionDeclaration(f) => vec![f.name.clone()],
-            Statement::ClassDeclaration(c) => vec![c.name.clone()],
-            _ => vec![],
-        }
     }
 
     fn parse_module_item(&mut self) -> Result<ModuleItem, ParseError> {
