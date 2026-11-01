@@ -16,6 +16,12 @@ pub(super) struct CoverInit {
     defer: bool,
 }
 
+/// What `begin_cover_scope` set aside for `end_cover_scope`.
+pub(super) struct CoverScope {
+    deferred: bool,
+    outer: bool,
+}
+
 const MESSAGE: &str = "Invalid shorthand property initializer";
 
 impl<'a> Parser<'a> {
@@ -32,11 +38,11 @@ impl<'a> Parser<'a> {
 
     /// Start of an AssignmentExpression: pending state of the enclosing
     /// expression is set aside, and whether this one defers is read.
-    pub(super) fn begin_cover_scope(&mut self) -> (bool, bool) {
-        (
-            std::mem::take(&mut self.cover_init.defer),
-            std::mem::take(&mut self.cover_init.pending),
-        )
+    pub(super) fn begin_cover_scope(&mut self) -> CoverScope {
+        CoverScope {
+            deferred: std::mem::take(&mut self.cover_init.defer),
+            outer: std::mem::take(&mut self.cover_init.pending),
+        }
     }
 
     /// `left = ...` with an ArrayLiteral or ObjectLiteral on the left makes
@@ -50,7 +56,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn end_cover_scope(
         &mut self,
-        (deferred, outer): (bool, bool),
+        CoverScope { deferred, outer }: CoverScope,
         expr: &Expression,
     ) -> Result<(), ParseError> {
         let pending = self.cover_init.pending;

@@ -1,6 +1,7 @@
-//! Module-goal entry points. The parser reads its first token when it is built, before the caller says
-//! whether the source is a Script or a Module. Annex B.1.1 HTML-like
-//! comments exist in Scripts only, so a Module re-reads that token.
+//! Module-goal entry points. The parser reads its first token when it is
+//! built, before the caller says whether the source is a Script or a Module.
+//! Annex B.1.1 HTML-like comments exist in Scripts only, so a Module re-reads
+//! that token.
 
 use super::*;
 
