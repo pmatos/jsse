@@ -1164,7 +1164,7 @@ impl Interpreter {
                         let mut b = cell.borrow_mut_untracked();
                         b.extend_array_elements_precise(args);
                         if let Some(len_desc) = b.properties.get_mut("length") {
-                            len_desc.set_value(Some(JsValue::number(new_len as f64)));
+                            len_desc.set_value(JsValue::number(new_len as f64));
                         }
                         b.shape_id = crate::interpreter::types::fresh_shape_id();
                     }

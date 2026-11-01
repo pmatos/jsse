@@ -410,7 +410,7 @@ impl Interpreter {
         let mut obj = cell.borrow_mut_untracked();
         match obj.properties.entry_at_mut(slot) {
             Some(desc) => {
-                desc.set_value(Some(value.clone()));
+                desc.set_value(value.clone());
                 true
             }
             None => false,

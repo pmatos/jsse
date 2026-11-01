@@ -10,7 +10,7 @@ fn desc(n: f64) -> PropertyDescriptor {
     PropertyDescriptor::data_default(JsValue::number(n))
 }
 
-fn num(d: &PropertyRecord) -> f64 {
+fn num(d: RecordRef<'_>) -> f64 {
     d.value().and_then(JsValue::as_number).unwrap_or(f64::NAN)
 }
 
@@ -82,13 +82,13 @@ fn record_setters_touch_only_their_field() {
         true,
     ));
     record.set_value(Some(JsValue::number(9.0)));
-    assert_eq!(num(&record), 9.0);
+    assert_eq!(num(RecordRef::Stored(&record)), 9.0);
     assert_eq!(record.writable(), Some(true));
     assert_eq!(record.enumerable(), Some(false));
     assert_eq!(record.configurable(), Some(true));
     record.set_writable(Some(false));
     assert_eq!(record.writable(), Some(false));
-    assert_eq!(num(&record), 9.0);
+    assert_eq!(num(RecordRef::Stored(&record)), 9.0);
     record.set_writable(None);
     assert_eq!(record.writable(), None);
     record.set_value(None);
@@ -160,7 +160,7 @@ fn data_value_and_in_place_writes_respect_attributes() {
     assert_eq!(num(m.get("ro").unwrap()), 2.0);
     m.get_mut("w")
         .unwrap()
-        .set_value(Some(JsValue::string(crate::types::JsString::from_str("s"))));
+        .set_value(JsValue::string(crate::types::JsString::from_str("s")));
     assert_eq!(m.get_mut("w").unwrap().add_to_writable_number(1.0), None);
 }
 
@@ -241,7 +241,7 @@ fn slot_round_trips_in_both_modes() {
     let slot = m.slot_of("k1").unwrap();
     m.entry_at_mut(slot)
         .unwrap()
-        .set_value(Some(JsValue::number(99.0)));
+        .set_value(JsValue::number(99.0));
     assert_eq!(num(m.get("k1").unwrap()), 99.0);
 }
 

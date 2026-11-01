@@ -56,18 +56,78 @@ fn a_different_key_order_is_a_different_shape_with_its_own_order() {
 }
 
 #[test]
-fn replacing_a_value_or_an_attribute_keeps_the_shape() {
+fn replacing_a_value_keeps_the_shape_and_an_attribute_change_leaves_it() {
     let mut map = built(&["a3", "b3", "c3", "d3", "e3"]);
     let before = shape_of(&map).unwrap().clone();
-    map.insert(
-        key("c3"),
-        PropertyDescriptor::data(JsValue::number(9.0), false, false, true),
-    );
-    map.get_mut("a3").unwrap().set_writable(Some(false));
+    let old = map.insert(key("c3"), desc(9)).unwrap();
+    assert_eq!(old.value.and_then(|v| v.as_number()), Some(2.0));
     assert!(Rc::ptr_eq(&before, shape_of(&map).unwrap()));
     assert_eq!(number(&map, "c3"), Some(9.0));
+    map.insert(
+        key("c3"),
+        PropertyDescriptor::data(JsValue::number(5.0), false, false, true),
+    );
+    assert!(shape_of(&map).is_none(), "different attributes");
+    map.get_stored_mut("a3").unwrap().set_writable(Some(false));
+    assert_eq!(number(&map, "c3"), Some(5.0));
     assert_eq!(map.get("c3").unwrap().enumerable(), Some(false));
     assert_eq!(map.get("a3").unwrap().writable(), Some(false));
+    assert_eq!(order(&map), ["a3", "b3", "c3", "d3", "e3"]);
+}
+
+#[test]
+fn accessors_and_partial_descriptors_are_not_shaped() {
+    let mut map = built(&["a13", "b13"]);
+    assert!(shape_of(&map).is_some());
+    map.insert(
+        key("c13"),
+        PropertyDescriptor::accessor(Some(JsValue::number(1.0)), None, true, true),
+    );
+    assert!(shape_of(&map).is_none());
+    assert_eq!(order(&map), ["a13", "b13", "c13"]);
+    assert!(map.get("c13").unwrap().getter().is_some());
+    let mut partial = PropertyMap::new();
+    partial.insert(
+        key("p13"),
+        PropertyDescriptor {
+            value: Some(JsValue::number(1.0)),
+            writable: None,
+            get: None,
+            set: None,
+            enumerable: Some(true),
+            configurable: Some(true),
+        },
+    );
+    assert!(shape_of(&partial).is_none());
+    assert_eq!(partial.get("p13").unwrap().writable(), None);
+}
+
+#[test]
+fn every_attribute_combination_round_trips_through_a_shape() {
+    for bits in 0..8u8 {
+        let (w, e, c) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
+        let mut map = PropertyMap::new();
+        map.insert(
+            key("x14"),
+            PropertyDescriptor::data(JsValue::number(1.0), w, e, c),
+        );
+        map.insert(
+            key("y14"),
+            PropertyDescriptor::data(JsValue::number(2.0), !w, !e, !c),
+        );
+        assert!(shape_of(&map).is_some());
+        let x = map.get("x14").unwrap();
+        assert_eq!(
+            (x.writable(), x.enumerable(), x.configurable()),
+            (Some(w), Some(e), Some(c))
+        );
+        let y = map.get("y14").unwrap().to_descriptor();
+        assert_eq!(
+            (y.writable, y.enumerable, y.configurable),
+            (Some(!w), Some(!e), Some(!c))
+        );
+        assert_eq!(map.remove("y14").unwrap().configurable, Some(!c));
+    }
 }
 
 #[test]
@@ -128,18 +188,18 @@ fn a_map_leaves_shapes_past_the_key_limit() {
 fn reserve_gives_an_empty_map_room_on_the_root_shape() {
     let mut map = PropertyMap::new();
     map.reserve(12);
-    let PropertyMapInner::Shaped { records, .. } = &map.inner else {
+    let PropertyMapInner::Shaped { values, .. } = &map.inner else {
         panic!("not shaped");
     };
-    let capacity = records.capacity();
+    let capacity = values.capacity();
     assert!(capacity >= 12);
     for n in 0..12 {
         map.insert(key(&format!("v7_{n}")), desc(n));
     }
-    let PropertyMapInner::Shaped { records, .. } = &map.inner else {
+    let PropertyMapInner::Shaped { values, .. } = &map.inner else {
         panic!("not shaped");
     };
-    assert_eq!(records.capacity(), capacity, "no regrowth");
+    assert_eq!(values.capacity(), capacity, "no regrowth");
     let mut big = PropertyMap::new();
     big.reserve(shape::SHAPED_MAX + 1);
     assert!(shape_of(&big).is_none(), "too many keys for a shape");

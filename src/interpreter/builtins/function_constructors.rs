@@ -439,8 +439,9 @@ impl Interpreter {
                         }
                     };
 
-                    // Collect all JsValue objects from a property descriptor (value + accessors)
-                    fn collect_pd_objects(pd: &PropertyRecord) -> Vec<JsValue> {
+                    fn collect_pd_objects(
+                        pd: crate::interpreter::property_map::RecordRef<'_>,
+                    ) -> Vec<JsValue> {
                         [pd.value(), pd.getter(), pd.setter()]
                             .into_iter()
                             .flatten()

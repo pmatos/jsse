@@ -37,15 +37,24 @@ const LINEAR_SCAN_MAX: usize = 8;
 /// Up to this many children are kept in a list, more in a map.
 const FEW_CHILDREN: usize = 8;
 
-type ChildMap = HashMap<JsPropertyKey, Weak<Shape>, foldhash::fast::FixedState>;
+/// The children of one key, by attribute bits.
+type ByAttrs = Box<[Weak<Shape>; 8]>;
+
+type ChildMap = HashMap<JsPropertyKey, ByAttrs, foldhash::fast::FixedState>;
 
 enum Children {
-    Few(Vec<(JsPropertyKey, Weak<Shape>)>),
+    Few(Vec<(JsPropertyKey, u8, Weak<Shape>)>),
     Many(ChildMap),
+}
+
+fn dead_slots() -> ByAttrs {
+    Box::new(std::array::from_fn(|_| Weak::new()))
 }
 
 pub(super) struct Shape {
     keys: Box<[JsPropertyKey]>,
+    /// Writable, enumerable and configurable bits of each key (`record::ATTR_*`).
+    attrs: Box<[u8]>,
     /// `tag_of` of each key, eight to a word, as in `SlotIndex::Tags`.
     tags: Box<[u64]>,
     /// Keeps the chain of ancestors alive: a transition is only found from a
@@ -57,6 +66,7 @@ pub(super) struct Shape {
 thread_local! {
     static ROOT: Rc<Shape> = Rc::new(Shape {
         keys: Box::new([]),
+        attrs: Box::new([]),
         tags: Box::new([]),
         parent: None,
         children: RefCell::new(Children::Few(Vec::new())),
@@ -111,6 +121,11 @@ impl Shape {
     }
 
     #[inline]
+    pub(super) fn attrs(&self) -> &[u8] {
+        &self.attrs
+    }
+
+    #[inline]
     pub(super) fn parent(&self) -> Option<&Rc<Shape>> {
         self.parent.as_ref()
     }
@@ -131,8 +146,9 @@ impl Shape {
     }
 
     /// The shape of this one's objects after they gain `key`, which they do
-    /// not have yet. `None` when the object should leave shapes.
-    pub(super) fn with_key(self: &Rc<Self>, key: &JsPropertyKey) -> Option<Rc<Shape>> {
+    /// not have yet, with attribute bits `attrs`. `None` when the object
+    /// should leave shapes.
+    pub(super) fn with_key(self: &Rc<Self>, key: &JsPropertyKey, attrs: u8) -> Option<Rc<Shape>> {
         if self.keys.len() >= SHAPED_MAX {
             return None;
         }
@@ -140,9 +156,11 @@ impl Shape {
         let known = match &*children {
             Children::Few(list) => list
                 .iter()
-                .find(|(k, _)| key_bytes_eq(k.as_bytes(), key.as_bytes()))
-                .map(|(_, shape)| shape),
-            Children::Many(map) => map.get(key.as_bytes()),
+                .find(|(k, a, _)| *a == attrs && key_bytes_eq(k.as_bytes(), key.as_bytes()))
+                .map(|(_, _, shape)| shape),
+            Children::Many(map) => map
+                .get(key.as_bytes())
+                .map(|by_attrs| &by_attrs[usize::from(attrs)]),
         };
         if let Some(shape) = known.and_then(Weak::upgrade) {
             return Some(shape);
@@ -152,53 +170,62 @@ impl Shape {
         }
         if let Children::Many(map) = &mut *children
             && map.len() >= MAX_FAN_OUT
+            && !map.contains_key(key.as_bytes())
         {
-            map.retain(|_, shape| shape.strong_count() > 0);
+            map.retain(|_, slots| slots.iter().any(|shape| shape.strong_count() > 0));
             if map.len() >= MAX_FAN_OUT {
                 // The child would be rebuilt by every object that follows it.
                 return None;
             }
         }
-        let child = Rc::new(self.extended(key));
+        let child = Rc::new(self.extended(key, attrs));
         LIVE.set(LIVE.get() + 1);
         let weak = Rc::downgrade(&child);
         match &mut *children {
             Children::Few(list) => {
                 if let Some(slot) = list
                     .iter_mut()
-                    .find(|(k, _)| key_bytes_eq(k.as_bytes(), key.as_bytes()))
+                    .find(|(k, a, _)| *a == attrs && key_bytes_eq(k.as_bytes(), key.as_bytes()))
                 {
-                    slot.1 = weak;
+                    slot.2 = weak;
                 } else {
                     if list.len() >= FEW_CHILDREN {
-                        list.retain(|(_, shape)| shape.strong_count() > 0);
+                        list.retain(|(_, _, shape)| shape.strong_count() > 0);
                     }
                     if list.len() < FEW_CHILDREN {
-                        list.push((key.clone(), weak));
+                        list.push((key.clone(), attrs, weak));
                     } else {
-                        let mut map: ChildMap = list.drain(..).collect();
-                        map.insert(key.clone(), weak);
+                        let mut map = ChildMap::default();
+                        for (k, a, shape) in list.drain(..) {
+                            map.entry(k).or_insert_with(dead_slots)[usize::from(a)] = shape;
+                        }
+                        map.entry(key.clone()).or_insert_with(dead_slots)[usize::from(attrs)] =
+                            weak;
                         *children = Children::Many(map);
                     }
                 }
             }
             Children::Many(map) => {
-                map.insert(key.clone(), weak);
+                map.entry(key.clone()).or_insert_with(dead_slots)[usize::from(attrs)] = weak;
             }
         }
         Some(child)
     }
 
-    fn extended(self: &Rc<Self>, key: &JsPropertyKey) -> Shape {
+    fn extended(self: &Rc<Self>, key: &JsPropertyKey, attr_bits: u8) -> Shape {
         let slot = self.keys.len();
         let mut keys = Vec::with_capacity(slot + 1);
         keys.extend(self.keys.iter().cloned());
         keys.push(key.clone());
+        let mut attrs = Vec::with_capacity(slot + 1);
+        attrs.extend_from_slice(&self.attrs);
+        attrs.push(attr_bits);
         let mut tags = Vec::with_capacity((slot + 1).div_ceil(8));
         tags.extend_from_slice(&self.tags);
         set_tag(&mut tags, slot, tag_of(key.as_bytes()));
         Shape {
             keys: keys.into_boxed_slice(),
+            attrs: attrs.into_boxed_slice(),
             tags: tags.into_boxed_slice(),
             parent: Some(Rc::clone(self)),
             children: RefCell::new(Children::Few(Vec::new())),

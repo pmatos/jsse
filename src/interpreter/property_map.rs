@@ -1,6 +1,8 @@
 use std::cell::Cell;
 mod exact_capacity;
+mod lookup;
 mod record;
+mod record_ref;
 mod shape;
 #[cfg(test)]
 mod shape_tests;
@@ -9,6 +11,7 @@ mod slot_index;
 #[cfg(test)]
 mod slot_index_tests;
 pub(crate) use record::{PropertyRead, PropertyRecord};
+pub(crate) use record_ref::{RecordMut, RecordRef};
 use shape::Shape;
 pub(crate) use shape::ShapesPaused;
 use slot_index::SlotIndex;
@@ -89,11 +92,11 @@ enum PropertyMapInner {
         index: SlotIndex,
         live: usize,
     },
-    // Keys shared with the objects built the same way, one record per key,
-    // in creation order (see `shape.rs`).
+    // Keys and attributes shared with the objects built the same way, one
+    // value per key, in creation order (see `shape.rs`).
     Shaped {
         shape: Rc<Shape>,
-        records: shaped::Records,
+        values: shaped::Values,
     },
 }
 
@@ -122,7 +125,7 @@ impl PropertyMap {
         match &self.inner {
             PropertyMapInner::Inline(v) => v.len(),
             PropertyMapInner::Spilled { live, .. } => *live,
-            PropertyMapInner::Shaped { records, .. } => records.len(),
+            PropertyMapInner::Shaped { values, .. } => values.len(),
         }
     }
 
@@ -145,93 +148,6 @@ impl PropertyMap {
         }
     }
 
-    /// The entry at `slot`, if any. A remembered slot must be checked against
-    /// the returned key before use.
-    #[inline]
-    pub(crate) fn entry_at(&self, slot: usize) -> Option<(&JsPropertyKey, &PropertyRecord)> {
-        let entry = match &self.inner {
-            PropertyMapInner::Inline(v) => v.get(slot),
-            PropertyMapInner::Spilled { entries, .. } => entries.get(slot)?.as_ref(),
-            PropertyMapInner::Shaped { shape, records } => {
-                return Some((shape.keys().get(slot)?, records.get(slot)?));
-            }
-        };
-        entry.map(|(k, d)| (k, d))
-    }
-
-    #[inline]
-    pub(crate) fn entry_at_mut(&mut self, slot: usize) -> Option<&mut PropertyRecord> {
-        let entry = match &mut self.inner {
-            PropertyMapInner::Inline(v) => v.get_mut(slot),
-            PropertyMapInner::Spilled { entries, .. } => entries.get_mut(slot)?.as_mut(),
-            PropertyMapInner::Shaped { records, .. } => return records.get_mut(slot),
-        };
-        entry.map(|(_, d)| d)
-    }
-
-    /// [`Self::slot_of`] for a key that stays the same at one access site,
-    /// trying the slot `hint` remembers first. The hint is only a guess:
-    /// it is accepted only if that slot holds this very key allocation, and
-    /// it is retrained on a hit elsewhere, so it can never go stale.
-    #[inline]
-    pub(crate) fn slot_hinted(
-        &self,
-        key: &JsPropertyKey,
-        hint: Option<&Cell<u32>>,
-    ) -> Option<usize> {
-        let Some(hint) = hint else {
-            return self.slot_of(key);
-        };
-        let remembered = hint.get() as usize;
-        if let Some((k, _)) = self.entry_at(remembered)
-            && k.same_allocation(key)
-        {
-            return Some(remembered);
-        }
-        let slot = self.slot_of(key)?;
-        if self
-            .entry_at(slot)
-            .is_some_and(|(stored, _)| stored.same_allocation(key))
-        {
-            hint.set(slot as u32);
-        }
-        Some(slot)
-    }
-
-    #[inline]
-    pub(crate) fn get_hinted(
-        &self,
-        key: &JsPropertyKey,
-        hint: Option<&Cell<u32>>,
-    ) -> Option<&PropertyRecord> {
-        let slot = self.slot_hinted(key, hint)?;
-        self.entry_at(slot).map(|(_, record)| record)
-    }
-
-    #[inline]
-    pub(crate) fn get_mut_hinted(
-        &mut self,
-        key: &JsPropertyKey,
-        hint: Option<&Cell<u32>>,
-    ) -> Option<&mut PropertyRecord> {
-        let slot = self.slot_hinted(key, hint)?;
-        self.entry_at_mut(slot)
-    }
-
-    pub(crate) fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyRecord> {
-        self.slot_of(key)
-            .and_then(|slot| self.entry_at(slot))
-            .map(|(_, d)| d)
-    }
-
-    pub(crate) fn get_mut<K: PropertyKeyLike + ?Sized>(
-        &mut self,
-        key: &K,
-    ) -> Option<&mut PropertyRecord> {
-        let slot = self.slot_of(key)?;
-        self.entry_at_mut(slot)
-    }
-
     /// Insert or replace `key`. A new key is appended in creation order; an
     /// existing key keeps its position.
     pub(crate) fn insert(
@@ -240,17 +156,18 @@ impl PropertyMap {
         value: PropertyDescriptor,
     ) -> Option<PropertyDescriptor> {
         let value = PropertyRecord::from(value);
+        if let PropertyMapInner::Shaped { shape, .. } = &self.inner
+            && let Some(slot) = shape.find(key.as_bytes())
+        {
+            return Some(self.replace_shaped(slot, value).into_descriptor());
+        }
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
                     return Some(std::mem::replace(&mut slot.1, value).into_descriptor());
                 }
             }
-            PropertyMapInner::Shaped { shape, records } => {
-                if let Some(slot) = shape.find(key.as_bytes()) {
-                    return Some(std::mem::replace(&mut records[slot], value).into_descriptor());
-                }
-            }
+            PropertyMapInner::Shaped { .. } => {}
             PropertyMapInner::Spilled {
                 entries,
                 index,
@@ -417,8 +334,8 @@ impl PropertyMap {
         match &self.inner {
             PropertyMapInner::Inline(v) => PropertyMapIter::Inline(v.iter()),
             PropertyMapInner::Spilled { entries, .. } => PropertyMapIter::Spilled(entries.iter()),
-            PropertyMapInner::Shaped { shape, records } => {
-                PropertyMapIter::Shaped(shape.keys().iter().zip(records.iter()))
+            PropertyMapInner::Shaped { shape, values } => {
+                PropertyMapIter::Shaped(shaped::ShapedIter::new(shape, values))
             }
         }
     }
@@ -427,7 +344,7 @@ impl PropertyMap {
         self.iter().map(|(k, _)| k)
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &PropertyRecord> {
+    pub(crate) fn values(&self) -> impl Iterator<Item = RecordRef<'_>> {
         self.iter().map(|(_, v)| v)
     }
 }
@@ -441,19 +358,19 @@ impl Default for PropertyMap {
 pub(crate) enum PropertyMapIter<'a> {
     Inline(std::slice::Iter<'a, Entry>),
     Spilled(std::slice::Iter<'a, Option<Entry>>),
-    Shaped(
-        std::iter::Zip<std::slice::Iter<'a, JsPropertyKey>, std::slice::Iter<'a, PropertyRecord>>,
-    ),
+    Shaped(shaped::ShapedIter<'a>),
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
-    type Item = (&'a JsPropertyKey, &'a PropertyRecord);
+    type Item = (&'a JsPropertyKey, RecordRef<'a>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Inline(it) => it.next().map(|(k, v)| (k, v)),
-            Self::Spilled(it) => it.find_map(|e| e.as_ref().map(|(k, v)| (k, v))),
+            Self::Inline(it) => it.next().map(|(k, v)| (k, RecordRef::Stored(v))),
+            Self::Spilled(it) => {
+                it.find_map(|e| e.as_ref().map(|(k, v)| (k, RecordRef::Stored(v))))
+            }
             Self::Shaped(it) => it.next(),
         }
     }

@@ -10,7 +10,7 @@ fn desc(n: f64) -> PropertyDescriptor {
     PropertyDescriptor::data_default(JsValue::number(n))
 }
 
-fn num(d: &PropertyRecord) -> f64 {
+fn num(d: RecordRef<'_>) -> f64 {
     d.value().and_then(JsValue::as_number).unwrap_or(f64::NAN)
 }
 
@@ -151,7 +151,7 @@ fn get_mut_in_both_modes() {
     let mut m = PropertyMap::new();
     m.insert(key("a"), desc(1.0));
     if let Some(d) = m.get_mut("a") {
-        d.set_value(Some(JsValue::number(7.0)));
+        d.set_value(JsValue::number(7.0));
     }
     assert_eq!(num(m.get("a").expect("present")), 7.0);
 
@@ -160,7 +160,7 @@ fn get_mut_in_both_modes() {
     }
     assert!(!is_inline(&m));
     if let Some(d) = m.get_mut("a") {
-        d.set_value(Some(JsValue::number(42.0)));
+        d.set_value(JsValue::number(42.0));
     }
     assert_eq!(num(m.get("a").expect("present")), 42.0);
 }

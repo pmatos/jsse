@@ -917,7 +917,7 @@ impl Interpreter {
         let (old_len, old_len_writable) = {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let obj = obj_rc.borrow();
-            let old_len_desc = obj.properties.get("length").cloned();
+            let old_len_desc = obj.properties.get("length").map(|r| r.to_record());
             match old_len_desc {
                 Some(ref d) => {
                     let ol = d
@@ -1009,15 +1009,15 @@ impl Interpreter {
             }
         }
 
-        // If we were blocked by a non-configurable element, update length and handle writable.
+        // Blocked by a non-configurable element: set length, handle writable.
         if actual_new_len != new_len {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.set_value(Some(JsValue::number(actual_new_len as f64)));
+                len_desc.set_value(JsValue::number(actual_new_len as f64));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
-            if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
+            if !new_writable && let Some(len_desc) = obj.properties.get_stored_mut("length") {
                 len_desc.set_writable(Some(false));
             }
             return Ok(false);
@@ -1027,7 +1027,7 @@ impl Interpreter {
         if !new_writable {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
-            if let Some(len_desc) = obj.properties.get_mut("length") {
+            if let Some(len_desc) = obj.properties.get_stored_mut("length") {
                 len_desc.set_writable(Some(false));
             }
         }
@@ -1093,7 +1093,7 @@ impl Interpreter {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.set_value(Some(JsValue::number(new_len as f64)));
+                    len_desc.set_value(JsValue::number(new_len as f64));
                 }
                 if let Some(elems) = obj.array_elements_mut() {
                     let val = desc.value.unwrap_or(JsValue::UNDEFINED);
