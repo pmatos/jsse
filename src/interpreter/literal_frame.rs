@@ -10,6 +10,7 @@ use crate::ast::{Body, Pattern};
 use super::atom::Atom;
 use super::binding_map::BindingMap;
 use super::bytecode::chunk::Chunk;
+use super::env_trim::NestedNames;
 use super::hoist_cache::HoistAnalysis;
 use super::ic_store::{BodyIcStore, FrameIcStore};
 use crate::types::JsString;
@@ -209,9 +210,18 @@ pub(crate) struct LiteralFrame {
     ic_store: OnceCell<FrameIcStore>,
     compiled_call: OnceCell<CompiledCall>,
     hoist: OnceCell<Rc<HoistAnalysis>>,
+    nested_names: OnceCell<Option<NestedNames>>,
 }
 
 impl LiteralFrame {
+    /// The names closures nested in the literal can mention, `None` when direct
+    /// `eval` or `with` makes them unknowable (see `env_trim`).
+    pub(crate) fn nested_names(&self, params: &[Pattern], body: &Body) -> Option<&NestedNames> {
+        self.nested_names
+            .get_or_init(|| NestedNames::of(params, body))
+            .as_ref()
+    }
+
     /// The parameter atoms, interned on first use from the literal's simple
     /// parameter list (the one list this frame is paired with).
     #[inline]

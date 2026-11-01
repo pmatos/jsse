@@ -59,10 +59,7 @@ export function describe(name, options, fn) {
 }
 
 // Subtests jsse cannot run yet, skipped on jsse only (they pass on Node).
-const jsseSkips = {
-  'does not prevent source signal from being GCed if it is short-lived':
-    'a closure keeps its whole defining environment, so the last iteration\'s dead `ac` stays reachable from the running setImmediate callback',
-};
+const jsseSkips = {};
 
 export function it(name, options, fn) {
   const skip = (typeof options === 'object' && options !== null && (options.skip || options.todo)) ||

@@ -20,10 +20,74 @@ pub(super) enum CaptureNode<'a> {
 pub(crate) struct CaptureWalk<'a> {
     work: Vec<CaptureNode<'a>>,
     collect: bool,
+    mode: WalkMode,
+    nested: Vec<Nested<'a>>,
+    /// `Record` and `Inside` modes: a direct `eval` or a `with` statement was
+    /// met, so names can be reached that no mention accounts for.
+    pub(crate) opaque: bool,
     pub(crate) mentions: Vec<&'a str>,
 }
 
+/// What the walk does at a function, class, `with` or `eval`.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum WalkMode {
+    /// Report it (`run` returns true).
+    #[default]
+    Stop,
+    /// Note the function or class in `nested` and walk on past it.
+    Record,
+    /// Walk into it, collecting every identifier.
+    Inside,
+}
+
+/// A function or class met by a `Record` walk.
+enum Nested<'a> {
+    Code(Option<&'a str>, &'a [Pattern], &'a [Statement]),
+    Class(Option<&'a str>, Option<&'a Expression>, &'a [ClassElement]),
+}
+
+/// Every identifier mentioned inside the functions and classes nested in a
+/// function literal (at any depth): the names a closure of the literal can
+/// reach in the literal's scopes. Shadowing is ignored, which only makes the
+/// set larger. `opaque` when a direct `eval` or `with` makes the set unsound.
+pub(crate) struct NestedMentions<'a> {
+    pub(crate) names: Vec<&'a str>,
+    pub(crate) opaque: bool,
+}
+
 impl<'a> CaptureWalk<'a> {
+    pub(crate) fn nested_mentions(
+        params: &'a [Pattern],
+        body: &'a [Statement],
+    ) -> NestedMentions<'a> {
+        let mut outer = CaptureWalk {
+            mode: WalkMode::Record,
+            ..CaptureWalk::default()
+        };
+        params.iter().for_each(|p| outer.push_pattern(p));
+        body.iter().for_each(|s| outer.push_stmt(s));
+        outer.run();
+        let mut names = Vec::new();
+        let mut opaque = outer.opaque;
+        for nested in std::mem::take(&mut outer.nested) {
+            let mut inside = CaptureWalk {
+                collect: true,
+                mode: WalkMode::Inside,
+                ..CaptureWalk::default()
+            };
+            match nested {
+                Nested::Code(name, params, body) => inside.walk_code(name, params, body),
+                Nested::Class(name, heritage, elements) => {
+                    inside.walk_class(name, heritage, elements)
+                }
+            }
+            inside.run();
+            opaque |= inside.opaque;
+            names.append(&mut inside.mentions);
+        }
+        NestedMentions { names, opaque }
+    }
+
     pub(crate) fn collecting() -> Self {
         Self {
             collect: true,
@@ -95,6 +159,68 @@ impl<'a> CaptureWalk<'a> {
         false
     }
 
+    fn walk_code(&mut self, name: Option<&'a str>, params: &'a [Pattern], body: &'a [Statement]) {
+        if let Some(name) = name {
+            self.mention(name);
+        }
+        params.iter().for_each(|p| self.push_pattern(p));
+        body.iter().for_each(|s| self.push_stmt(s));
+    }
+
+    fn walk_class(
+        &mut self,
+        name: Option<&'a str>,
+        heritage: Option<&'a Expression>,
+        elements: &'a [ClassElement],
+    ) {
+        if let Some(name) = name {
+            self.mention(name);
+        }
+        self.push_opt_expr(heritage);
+        for element in elements {
+            match element {
+                ClassElement::Method(m) => {
+                    self.push_key(&m.key);
+                    self.walk_code(None, &m.value.params, m.value.body.as_slice());
+                }
+                ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                    self.push_key(&p.key);
+                    self.push_opt_expr(p.value.as_ref());
+                }
+                ClassElement::StaticBlock(stmts) => stmts.iter().for_each(|s| self.push_stmt(s)),
+            }
+        }
+    }
+
+    /// A function met by the walk; true when the walk must stop.
+    fn enter_code(
+        &mut self,
+        name: Option<&'a str>,
+        params: &'a [Pattern],
+        body: &'a [Statement],
+    ) -> bool {
+        match self.mode {
+            WalkMode::Stop => return true,
+            WalkMode::Record => self.nested.push(Nested::Code(name, params, body)),
+            WalkMode::Inside => self.walk_code(name, params, body),
+        }
+        false
+    }
+
+    fn enter_class(
+        &mut self,
+        name: Option<&'a str>,
+        heritage: Option<&'a Expression>,
+        elements: &'a [ClassElement],
+    ) -> bool {
+        match self.mode {
+            WalkMode::Stop => return true,
+            WalkMode::Record => self.nested.push(Nested::Class(name, heritage, elements)),
+            WalkMode::Inside => self.walk_class(name, heritage, elements),
+        }
+        false
+    }
+
     fn mention(&mut self, name: &'a str) {
         if self.collect {
             self.mentions.push(name);
@@ -108,9 +234,24 @@ impl<'a> CaptureWalk<'a> {
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::Return(None) => {}
-            Statement::FunctionDeclaration(_)
-            | Statement::ClassDeclaration(_)
-            | Statement::With(..) => return true,
+            Statement::FunctionDeclaration(f) => {
+                if self.enter_code(Some(&f.name), &f.params, f.body.as_slice()) {
+                    return true;
+                }
+            }
+            Statement::ClassDeclaration(c) => {
+                if self.enter_class(Some(&c.name), c.super_class.as_deref(), &c.body) {
+                    return true;
+                }
+            }
+            Statement::With(object, body) => {
+                if self.mode == WalkMode::Stop {
+                    return true;
+                }
+                self.opaque = true;
+                self.push_expr(object);
+                self.push_stmt(body);
+            }
             Statement::Expression(e) | Statement::Throw(e, _) | Statement::Return(Some(e)) => {
                 self.push_expr(e)
             }
@@ -206,12 +347,29 @@ impl<'a> CaptureWalk<'a> {
 
     fn visit_expr(&mut self, expr: &'a Expression) -> bool {
         match expr {
-            Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => {
-                return true;
+            Expression::Function(f) => {
+                if self.enter_code(f.name.as_deref(), &f.params, f.body.as_slice()) {
+                    return true;
+                }
+            }
+            Expression::ArrowFunction(a) => {
+                if self.enter_code(None, &a.params, a.body.body().as_slice()) {
+                    return true;
+                }
+            }
+            Expression::Class(c) => {
+                if self.enter_class(c.name.as_deref(), c.super_class.as_deref(), &c.body) {
+                    return true;
+                }
             }
             Expression::Identifier(name) => {
                 self.mention(name);
-                return name == "eval";
+                if name == "eval" {
+                    if self.mode == WalkMode::Stop {
+                        return true;
+                    }
+                    self.opaque = true;
+                }
             }
             Expression::Literal(_)
             | Expression::This
