@@ -25,9 +25,7 @@ impl<'a> Parser<'a> {
         let binding_start = self.current_identifier_name().is_some()
             || matches!(self.current, Token::LeftBracket | Token::LeftBrace);
         let exported = self
-            .source_text_source
-            .get(..self.prev_token_end)
-            .and_then(|source| source.strip_suffix("let"))
+            .source_before_prev_token("let")
             .is_some_and(|before| before.trim_end().ends_with("export"));
         if !binding_start && !exported {
             return Err(self.error("Unexpected strict mode reserved word"));
@@ -40,14 +38,8 @@ impl<'a> Parser<'a> {
     pub(in crate::parser) fn parse_for_declaration_list(
         &mut self,
     ) -> Result<Vec<VariableDeclarator>, ParseError> {
-        let after_let = self
-            .source_text_source
-            .get(..self.prev_token_end)
-            .is_some_and(|source| source.ends_with("let"));
-        let after_const = self
-            .source_text_source
-            .get(..self.prev_token_end)
-            .is_some_and(|source| source.ends_with("const"));
+        let after_let = self.source_before_prev_token("let").is_some();
+        let after_const = self.source_before_prev_token("const").is_some();
         self.reserved_let(after_let)?;
         self.parse_declarators(true, after_const)
     }

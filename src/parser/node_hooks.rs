@@ -173,6 +173,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The source before the previous token, when that token is `keyword`.
+    pub(super) fn source_before_prev_token(&self, keyword: &str) -> Option<&str> {
+        self.source_text_source
+            .get(..self.prev_token_end)?
+            .strip_suffix(keyword)
+    }
+
     /// `let` as a single statement that goes on with `[`, or, as V8 reads it,
     /// with an identifier or `{` on the same line: a lexical declaration.
     pub(super) fn let_starts_declaration(&self) -> bool {
