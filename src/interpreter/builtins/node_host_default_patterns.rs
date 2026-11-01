@@ -9,6 +9,14 @@ use super::node_host_expr_text::expr_text;
 use crate::ast::{ArrayPatternElement, Expression, ObjectPatternProperty, Pattern, Property};
 use std::rc::Rc;
 
+/// A default V8 prints in the not-iterable message of the pattern it feeds.
+fn is_named(default: &Expression) -> bool {
+    matches!(
+        default,
+        Expression::Identifier(_) | Expression::Call(..) | Expression::Member(..)
+    )
+}
+
 /// An array pattern with no pattern among its elements.
 fn flat(elements: &[Option<ArrayPatternElement>]) -> bool {
     elements.iter().all(|element| {
@@ -22,6 +30,14 @@ fn flat(elements: &[Option<ArrayPatternElement>]) -> bool {
 }
 
 impl Interpreter {
+    /// `error`, the not-iterable error of a pattern, worded by its `default`.
+    fn reword_by_default(&mut self, error: JsValue, default: &Expression) -> JsValue {
+        match Self::iterable_message(default) {
+            Some(text) => self.create_type_error(&text),
+            None => error,
+        }
+    }
+
     /// Notes the default of `pattern` when it is `{ ... } = default`, keyed by
     /// the address of the object pattern's properties. True when it did.
     pub(super) fn note_default_pattern(&mut self, pattern: &Pattern) -> bool {
@@ -91,16 +107,10 @@ impl Interpreter {
         match (target, default, done) {
             (Expression::Array(..), Some(default), Completion::Throw(error))
                 if self.node_host.stack.installed
-                    && matches!(
-                        default,
-                        Expression::Identifier(_) | Expression::Call(..) | Expression::Member(..)
-                    )
+                    && is_named(default)
                     && self.iterable_error_here(&error) =>
             {
-                match Self::iterable_message(default) {
-                    Some(text) => Completion::Throw(self.create_type_error(&text)),
-                    None => Completion::Throw(error),
-                }
+                Completion::Throw(self.reword_by_default(error, default))
             }
             (_, _, done) => done,
         }
@@ -124,16 +134,10 @@ impl Interpreter {
             (Pattern::Assign(inner, default), Completion::Throw(error))
                 if nested
                     && matches!(&**inner, Pattern::Array(elements) if flat(elements) || own)
-                    && matches!(
-                        &**default,
-                        Expression::Identifier(_) | Expression::Call(..) | Expression::Member(..)
-                    )
+                    && is_named(default)
                     && self.iterable_error_here(&error) =>
             {
-                match Self::iterable_message(default) {
-                    Some(text) => Completion::Throw(self.create_type_error(&text)),
-                    None => Completion::Throw(error),
-                }
+                Completion::Throw(self.reword_by_default(error, default))
             }
             (_, done) => done,
         }

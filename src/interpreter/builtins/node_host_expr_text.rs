@@ -125,6 +125,23 @@ pub(crate) fn is_folded(expr: &Expression) -> bool {
     matches!(expr, Expression::Unary(..) | Expression::Binary(..)) && fold(expr).is_some()
 }
 
+/// `object` followed by the access `property`; `dot` joins a name (`.`, or
+/// `?.` for the first link of an optional chain, which also keeps the
+/// brackets of a key that is not a string).
+fn member_text(object: &str, dot: &str, property: &MemberProperty) -> String {
+    match property {
+        MemberProperty::Dot(name) => format!("{object}{dot}{name}"),
+        MemberProperty::Private(name) => format!("{object}{dot}#{name}"),
+        MemberProperty::Computed(key) => match &**key {
+            Expression::Literal(Literal::String(units)) => {
+                format!("{object}{dot}{}", String::from_utf16_lossy(units))
+            }
+            key if dot == "?." => format!("{object}?.[{}]", expr_text(key)),
+            key => format!("{object}[{}]", expr_text(key)),
+        },
+    }
+}
+
 /// The text V8 prints for `expr`, `(intermediate value)` for what it does
 /// not print.
 pub(crate) fn expr_text(expr: &Expression) -> String {
@@ -140,19 +157,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
         Expression::Literal(literal) => literal_text(literal).unwrap_or_else(|| UNKNOWN.into()),
         Expression::Identifier(name) => name.clone(),
         Expression::This => "this".into(),
-        Expression::Member(object, property, _) => {
-            let object = expr_text(object);
-            match property {
-                MemberProperty::Dot(name) => format!("{object}.{name}"),
-                MemberProperty::Private(name) => format!("{object}.#{name}"),
-                MemberProperty::Computed(key) => match &**key {
-                    Expression::Literal(Literal::String(units)) => {
-                        format!("{object}.{}", String::from_utf16_lossy(units))
-                    }
-                    key => format!("{object}[{}]", expr_text(key)),
-                },
-            }
-        }
+        Expression::Member(object, property, _) => member_text(&expr_text(object), ".", property),
         Expression::Call(callee, _, _) => format!("{}(...)", expr_text(callee)),
         Expression::Unary(op, operand) => {
             let symbol = match op {
@@ -249,33 +254,16 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
 /// The text of a link of an optional chain, where the placeholder `""` of
 /// `?.(` and `?.[` stands for what comes before the `?.`.
 fn optional_text(base: &str, node: &Expression) -> String {
+    let placeholder =
+        |node: &Expression| matches!(node, Expression::Identifier(name) if name.is_empty());
     match node {
         Expression::Identifier(name) if name.is_empty() => base.to_string(),
         Expression::Identifier(name) => format!("{base}?.{name}"),
-        Expression::Member(object, property, _) if matches!(&**object, Expression::Identifier(name) if name.is_empty()) => {
-            match property {
-                MemberProperty::Dot(name) => format!("{base}?.{name}"),
-                MemberProperty::Private(name) => format!("{base}?.#{name}"),
-                MemberProperty::Computed(key) => match &**key {
-                    Expression::Literal(Literal::String(units)) => {
-                        format!("{base}?.{}", String::from_utf16_lossy(units))
-                    }
-                    key => format!("{base}?.[{}]", expr_text(key)),
-                },
-            }
+        Expression::Member(object, property, _) if placeholder(object) => {
+            member_text(base, "?.", property)
         }
         Expression::Member(object, property, _) => {
-            let object = optional_text(base, object);
-            match property {
-                MemberProperty::Dot(name) => format!("{object}.{name}"),
-                MemberProperty::Private(name) => format!("{object}.#{name}"),
-                MemberProperty::Computed(key) => match &**key {
-                    Expression::Literal(Literal::String(units)) => {
-                        format!("{object}.{}", String::from_utf16_lossy(units))
-                    }
-                    key => format!("{object}[{}]", expr_text(key)),
-                },
-            }
+            member_text(&optional_text(base, object), ".", property)
         }
         Expression::Call(callee, _, _) => format!("{}(...)", optional_text(base, callee)),
         other => expr_text(other),
