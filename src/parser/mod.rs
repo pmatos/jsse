@@ -4,10 +4,16 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
+pub(crate) use cover_patterns::{check_object_rest_target, expr_to_pattern, pattern_to_expr};
+
+mod arrow_params;
+mod catch_param;
+mod cover_patterns;
 mod declarations;
 pub(crate) mod dynamic_function;
 mod expressions;
 pub(crate) mod inferred_names;
+mod module_early_errors;
 mod modules;
 mod node_hooks;
 mod positions;
@@ -168,6 +174,8 @@ pub(crate) struct Parser<'a> {
     /// Set by a `( ArrowFunction )` primary so the enclosing
     /// `parse_primary_expression` keeps `last_expr_parenthesized` for it.
     parenthesized_arrow: bool,
+    /// Set while an arrow's parameter list is re-parsed as FormalParameters.
+    refining_arrow_params: bool,
     last_obj_had_proto_dup: bool,
     /// Current recursive-descent nesting depth (expressions + statements).
     /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
@@ -268,6 +276,7 @@ impl<'a> Parser<'a> {
             last_expr_parenthesized: false,
             arrow_held_token: None,
             parenthesized_arrow: false,
+            refining_arrow_params: false,
             last_obj_had_proto_dup: false,
             parse_depth: 0,
             lone_surrogate_stand_ins: false,
@@ -1145,173 +1154,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// §16.2.1.1 Static Semantics: Early Errors for Module
-    fn validate_module_early_errors(&self, items: &[ModuleItem]) -> Result<(), ParseError> {
-        use HashSet;
-
-        let mut lex_names: HashSet<String> = HashSet::new();
-        let mut var_names: HashSet<String> = HashSet::new();
-        let mut exported_bindings: HashSet<String> = HashSet::new();
-
-        // Collect all lexically-declared and var-declared names
-        for item in items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    self.collect_module_var_names(stmt, &mut var_names);
-                    self.collect_module_lex_names(stmt, &mut lex_names)?;
-                }
-                ModuleItem::ExportDeclaration(export) => {
-                    self.collect_export_var_names(export, &mut var_names);
-                    self.collect_export_lex_names(export, &mut lex_names)?;
-                    self.collect_exported_bindings(export, &mut exported_bindings);
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    for spec in &import.specifiers {
-                        let name = match spec {
-                            ImportSpecifier::Default(n, _) => n,
-                            ImportSpecifier::Named { local, .. } => local,
-                            ImportSpecifier::Namespace(n) => n,
-                            ImportSpecifier::DeferredNamespace(n) => n,
-                            ImportSpecifier::SourcePhase(n) => n,
-                        };
-                        // §13.1.1: import binding cannot be "arguments" or "eval"
-                        if name == "arguments" || name == "eval" {
-                            return Err(self.error(format!(
-                                "'{name}' cannot be used as an import binding in module code"
-                            )));
-                        }
-                        if !lex_names.insert(name.clone()) {
-                            return Err(
-                                self.error(format!("Duplicate binding '{name}' in module scope"))
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check: LexicallyDeclaredNames ∩ VarDeclaredNames must be empty
-        for name in &lex_names {
-            if var_names.contains(name) {
-                return Err(self.error(format!("Identifier '{name}' has already been declared")));
-            }
-        }
-
-        // ExportedBindings must all be in VarDeclaredNames ∪ LexicallyDeclaredNames
-        for name in &exported_bindings {
-            if !var_names.contains(name) && !lex_names.contains(name) {
-                return Err(self.error(format!("Export '{name}' is not defined")));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn collect_module_var_names(&self, stmt: &Statement, names: &mut HashSet<String>) {
-        match stmt {
-            Statement::Variable(decl) if decl.kind == VarKind::Var => {
-                for d in &decl.declarations {
-                    let mut n = Vec::new();
-                    d.pattern.bound_names(&mut n);
-                    names.extend(n);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_module_lex_names(
-        &self,
-        stmt: &Statement,
-        names: &mut HashSet<String>,
-    ) -> Result<(), ParseError> {
-        match stmt {
-            Statement::Variable(decl) if decl.kind != VarKind::Var => {
-                for d in &decl.declarations {
-                    let mut n = Vec::new();
-                    d.pattern.bound_names(&mut n);
-                    for name in n {
-                        if !names.insert(name.clone()) {
-                            return Err(self
-                                .error(format!("Identifier '{name}' has already been declared")));
-                        }
-                    }
-                }
-            }
-            // In modules, function/class/generator declarations are lexically scoped
-            Statement::FunctionDeclaration(f)
-                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", f.name))
-                );
-            }
-            Statement::ClassDeclaration(c)
-                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", c.name))
-                );
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn collect_export_var_names(&self, export: &ExportDeclaration, names: &mut HashSet<String>) {
-        if let ExportDeclaration::Named {
-            declaration: Some(decl),
-            ..
-        } = export
-        {
-            self.collect_module_var_names(decl, names);
-        }
-    }
-
-    fn collect_export_lex_names(
-        &self,
-        export: &ExportDeclaration,
-        names: &mut HashSet<String>,
-    ) -> Result<(), ParseError> {
-        match export {
-            ExportDeclaration::Named {
-                declaration: Some(decl),
-                ..
-            } => {
-                self.collect_module_lex_names(decl, names)?;
-            }
-            ExportDeclaration::DefaultFunction(f)
-                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", f.name))
-                );
-            }
-            ExportDeclaration::DefaultClass(c)
-                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
-            {
-                return Err(
-                    self.error(format!("Identifier '{}' has already been declared", c.name))
-                );
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn collect_exported_bindings(&self, export: &ExportDeclaration, names: &mut HashSet<String>) {
-        if let ExportDeclaration::Named {
-            specifiers,
-            source: None,
-            ..
-        } = export
-        {
-            for spec in specifiers {
-                names.insert(spec.local.clone());
-            }
-        }
-    }
-
     fn parse_module_item(&mut self) -> Result<ModuleItem, ParseError> {
         match &self.current {
             Token::Keyword(Keyword::Import) => {
@@ -1338,169 +1180,6 @@ impl<'a> Parser<'a> {
         self.lookahead(|tokens| {
             tokens.advance().is_ok() && matches!(tokens.current(), Token::LeftParen | Token::Dot)
         })
-    }
-}
-
-pub(crate) fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
-    match expr {
-        Expression::Identifier(name) => Ok(Pattern::Identifier(name)),
-        Expression::Assign(AssignOp::Assign, left, right) => {
-            let pat = expr_to_pattern(left.into_expression())?;
-            Ok(Pattern::Assign(Box::new(pat), right))
-        }
-        Expression::Array(elements, trailing_comma_after_spread) => {
-            let mut pats = Vec::new();
-            let mut saw_rest = false;
-            for e in elements {
-                if saw_rest {
-                    return Err(ParseError {
-                        message: "Rest element must be last element".to_string(),
-                    });
-                }
-                let pat = e
-                    .map(|e| {
-                        if let Expression::Spread(inner) = e {
-                            if let Expression::Assign(AssignOp::Assign, _, _) = *inner {
-                                return Err(ParseError {
-                                    message: "Rest element may not have a default initializer"
-                                        .to_string(),
-                                });
-                            }
-                            saw_rest = true;
-                            expr_to_pattern(inner.into_expression()).map(ArrayPatternElement::Rest)
-                        } else {
-                            expr_to_pattern(e).map(ArrayPatternElement::Pattern)
-                        }
-                    })
-                    .transpose()?;
-                if saw_rest && pat.is_none() {
-                    return Err(ParseError {
-                        message: "Rest element must be last element".to_string(),
-                    });
-                }
-                pats.push(pat);
-            }
-            if saw_rest && trailing_comma_after_spread {
-                return Err(ParseError {
-                    message: "Rest element must be last element".to_string(),
-                });
-            }
-            Ok(Pattern::Array(pats))
-        }
-        Expression::Object(props, trailing_comma_after_spread) => {
-            let mut pat_props = Vec::new();
-            let mut saw_rest = false;
-            for prop in props {
-                if saw_rest {
-                    return Err(ParseError {
-                        message: "Rest element must be last element".to_string(),
-                    });
-                }
-                if let PropertyKind::Init = prop.kind {
-                    if let Expression::Spread(inner) = prop.value {
-                        saw_rest = true;
-                        let pat = expr_to_pattern(inner.into_expression())?;
-                        pat_props.push(ObjectPatternProperty::Rest(pat));
-                    } else if prop.shorthand {
-                        if let PropertyKey::Identifier(ref name) = prop.key {
-                            if let Expression::Assign(AssignOp::Assign, left, right) = prop.value {
-                                let pat = expr_to_pattern(left.into_expression())?;
-                                pat_props.push(ObjectPatternProperty::KeyValue(
-                                    prop.key,
-                                    Pattern::Assign(Box::new(pat), right),
-                                ));
-                            } else {
-                                pat_props.push(ObjectPatternProperty::Shorthand(name.clone()));
-                            }
-                        } else {
-                            return Err(ParseError {
-                                message: "Invalid destructuring target".to_string(),
-                            });
-                        }
-                    } else {
-                        let val_pat = expr_to_pattern(prop.value)?;
-                        pat_props.push(ObjectPatternProperty::KeyValue(prop.key, val_pat));
-                    }
-                } else {
-                    return Err(ParseError {
-                        message: "Invalid destructuring target".to_string(),
-                    });
-                }
-            }
-            if saw_rest && trailing_comma_after_spread {
-                return Err(ParseError {
-                    message: "Rest element must be last element".to_string(),
-                });
-            }
-            Ok(Pattern::Object(pat_props))
-        }
-        Expression::Spread(inner) => {
-            let pat = expr_to_pattern(inner.into_expression())?;
-            Ok(Pattern::Rest(Box::new(pat)))
-        }
-        Expression::Member(_, _, _) => Ok(Pattern::MemberExpression(ExprBox::new(expr))),
-        _ => Err(ParseError {
-            message: "Invalid destructuring target".to_string(),
-        }),
-    }
-}
-
-pub(crate) fn pattern_to_expr(pat: Pattern) -> Expression {
-    match pat {
-        Pattern::Identifier(name) => Expression::Identifier(name),
-        Pattern::Rest(inner) => Expression::Spread(ExprBox::new(pattern_to_expr(*inner))),
-        Pattern::Array(elements) => {
-            let exprs: Vec<Option<Expression>> = elements
-                .into_iter()
-                .map(|elem| {
-                    elem.map(|e| match e {
-                        ArrayPatternElement::Pattern(p) => pattern_to_expr(p),
-                        ArrayPatternElement::Rest(p) => {
-                            Expression::Spread(ExprBox::new(pattern_to_expr(p)))
-                        }
-                    })
-                })
-                .collect();
-            Expression::Array(exprs, false)
-        }
-        Pattern::Object(props) => {
-            let expr_props: Vec<Property> = props
-                .into_iter()
-                .map(|prop| match prop {
-                    ObjectPatternProperty::KeyValue(key, val) => Property {
-                        key,
-                        value: pattern_to_expr(val),
-                        kind: PropertyKind::Init,
-                        computed: false,
-                        shorthand: false,
-                        method: false,
-                    },
-                    ObjectPatternProperty::Shorthand(name) => Property {
-                        key: PropertyKey::Identifier(name.clone()),
-                        value: Expression::Identifier(name),
-                        kind: PropertyKind::Init,
-                        computed: false,
-                        shorthand: true,
-                        method: false,
-                    },
-                    ObjectPatternProperty::Rest(p) => Property {
-                        key: PropertyKey::Identifier("__rest__".into()),
-                        value: Expression::Spread(ExprBox::new(pattern_to_expr(p))),
-                        kind: PropertyKind::Init,
-                        computed: false,
-                        shorthand: false,
-                        method: false,
-                    },
-                })
-                .collect();
-            Expression::Object(expr_props, false)
-        }
-        Pattern::Assign(pat, default) => Expression::Assign(
-            AssignOp::Assign,
-            ExprBox::new(pattern_to_expr(*pat)),
-            default,
-        ),
-        Pattern::MemberExpression(expr) => expr.into_expression(),
     }
 }
 

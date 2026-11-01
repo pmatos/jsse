@@ -688,7 +688,7 @@ impl Interpreter {
                     return Completion::Throw(self.create_error_in_realm(
                         caller_realm_id,
                         "SyntaxError",
-                        &e.to_string(),
+                        &e.message,
                     ));
                 }
             }

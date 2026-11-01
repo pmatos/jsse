@@ -139,6 +139,7 @@ impl Parser<'_> {
         right_start: usize,
     ) {
         if !enabled()
+            || self.refining_arrow_params
             || !matches!(left, Expression::Member(..))
             || !matches!(
                 op,

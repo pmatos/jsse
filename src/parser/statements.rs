@@ -1242,41 +1242,11 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            // §13.15.1: Validate CatchParameter has no duplicate names
-            if let Some(ref p) = param {
-                let mut bound = Vec::new();
-                p.bound_names(&mut bound);
-                let mut seen = HashSet::new();
-                for name in &bound {
-                    if !seen.insert(name.as_str()) {
-                        return Err(
-                            self.error(format!("Duplicate binding '{name}' in catch clause"))
-                        );
-                    }
-                }
-            }
             self.eat(&Token::LeftBrace)?;
             let body = self
                 .with_block_scope(Self::enter_block_scope, |p| p.parse_block_statements(false))?;
             self.eat(&Token::RightBrace)?;
-            // §13.15.1: BoundNames of CatchParameter must not overlap
-            // LexicallyDeclaredNames of Block
-            if let Some(ref p) = param {
-                let mut bound = Vec::new();
-                p.bound_names(&mut bound);
-                if !bound.is_empty() {
-                    let mut lex_names = Vec::new();
-                    for stmt in &body {
-                        Self::collect_lexical_names(stmt, &mut lex_names, self.strict)?;
-                    }
-                    for name in &bound {
-                        if lex_names.contains(name) {
-                            return Err(self
-                                .error(format!("Identifier '{name}' has already been declared")));
-                        }
-                    }
-                }
-            }
+            self.check_catch_clause(param.as_ref(), &body)?;
             Some(CatchClause { param, body })
         } else {
             None

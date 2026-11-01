@@ -287,13 +287,9 @@ pub(crate) fn node_message(message: String) -> String {
 
 impl ParseError {
     /// The message of the `SyntaxError` `eval`, `Function` and `$262.evalScript`
-    /// throw: `SyntaxError: ...` as the engine words it, V8's text under `--node`.
+    /// throw (the error constructor adds the `SyntaxError` name): the engine's wording, V8's text under `--node`.
     pub(crate) fn js(&self) -> String {
-        if inferred_names::enabled() {
-            self.js_bare()
-        } else {
-            self.to_string()
-        }
+        self.js_bare()
     }
 
     /// The same without the prefix, for the module loader.

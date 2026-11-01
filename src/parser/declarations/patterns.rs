@@ -53,6 +53,11 @@ impl<'a> Parser<'a> {
         while self.current != Token::RightBrace {
             if self.current == Token::Ellipsis {
                 self.advance()?;
+                // BindingRestProperty : ... BindingIdentifier
+                if matches!(self.current, Token::LeftBracket | Token::LeftBrace) {
+                    return Err(self
+                        .error("`...` must be followed by an identifier in declaration contexts"));
+                }
                 let rest = self.parse_binding_pattern()?;
                 props.push(ObjectPatternProperty::Rest(rest));
                 break;

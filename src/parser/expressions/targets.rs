@@ -89,8 +89,9 @@ impl<'a> Parser<'a> {
                             "Rest element must be last element in object destructuring pattern",
                         ));
                     }
-                    if let Expression::Spread(_) = &prop.value {
+                    if let Expression::Spread(target) = &prop.value {
                         saw_rest = true;
+                        check_object_rest_target(target)?;
                     }
                     match prop.kind {
                         PropertyKind::Get | PropertyKind::Set => {
