@@ -3104,7 +3104,7 @@ impl JsObjectData {
             self.properties
                 .get_mut("length")
                 .unwrap()
-                .set_value(Some(JsValue::number((index + 1) as f64)));
+                .set_value(JsValue::number((index + 1) as f64));
         }
         self.shape_id = fresh_shape_id();
         true
@@ -3138,7 +3138,7 @@ impl JsObjectData {
     #[inline]
     pub(crate) fn set_dense_array_length(&mut self, len: usize) {
         if let Some(d) = self.properties.get_mut("length") {
-            d.set_value(Some(JsValue::number(len as f64)));
+            d.set_value(JsValue::number(len as f64));
         }
         self.shape_id = fresh_shape_id();
     }
@@ -3640,7 +3640,7 @@ impl JsObjectData {
                 });
             }
             // Not an export and not a symbol - check properties (@@toStringTag etc.)
-            return self.properties.get(key).map(PropertyRecord::to_descriptor);
+            return self.properties.get(key).map(|r| r.to_descriptor());
         }
         // Symbol keys: fall through to ordinary
         if let Some(desc) = self.properties.get(key) {
@@ -3866,13 +3866,13 @@ impl JsObjectData {
             && desc.set.is_none()
             && desc.enumerable.is_none()
             && desc.configurable.is_none()
-            && desc.value.is_some()
+            && let Some(new_value) = desc.value.as_ref()
             && self.parameter_map().is_none()
             && let Some(record) = self.properties.get_mut(&key)
             && record.writable() == Some(true)
             && !record.is_accessor_descriptor()
         {
-            record.set_value(desc.value);
+            record.set_value(new_value.clone());
             self.shape_id = fresh_shape_id();
             return true;
         }
@@ -3901,7 +3901,7 @@ impl JsObjectData {
         if let Some(current) = self
             .properties
             .get(&key)
-            .cloned()
+            .map(|r| r.to_record())
             .or(current_from_array.map(PropertyRecord::from))
         {
             // §10.1.6.3 step 2: if every field of desc is absent, return true
@@ -4120,12 +4120,10 @@ impl JsObjectData {
             };
             self.insert_tracked(ikey, new_desc);
         }
-        // Issue #71 (Step 5): reaching this point means either an existing
-        // property was redefined (line ~2296 `properties.insert(key, merged)`)
-        // or a new property was added (line ~2350). Both are structural
-        // mutations. Earlier `return true` paths (String exotic equality
-        // check, module-namespace no-op, TypedArray element write,
-        // all-absent-desc) are non-mutating and intentionally skip this bump.
+        // Issue #71: an existing property was redefined or a new one was
+        // added: structural mutations. Earlier `return true` paths
+        // (String exotic equality, module-namespace no-op, TypedArray element
+        // write, all-absent-desc) are non-mutating and skip this bump.
         self.shape_id = fresh_shape_id();
         true
     }
@@ -4213,7 +4211,7 @@ impl JsObjectData {
                     }
                 }
                 if let Some(desc) = self.properties.get_mut("length") {
-                    desc.set_value(Some(JsValue::number(actual_new_len as f64)));
+                    desc.set_value(JsValue::number(actual_new_len as f64));
                     return true;
                 }
             }
@@ -4263,7 +4261,7 @@ impl JsObjectData {
                 if idx_u32 >= old_len
                     && let Some(len_desc) = self.properties.get_mut("length")
                 {
-                    len_desc.set_value(Some(JsValue::number((idx_u32 + 1) as f64)));
+                    len_desc.set_value(JsValue::number((idx_u32 + 1) as f64));
                 }
                 if !existed {
                     self.shape_id = fresh_shape_id();
@@ -4326,7 +4324,7 @@ impl JsObjectData {
                     && let Some(cur_len) = len_desc.value().and_then(JsValue::as_number)
                     && new_idx_len > cur_len
                 {
-                    len_desc.set_value(Some(JsValue::number(new_idx_len)));
+                    len_desc.set_value(JsValue::number(new_idx_len));
                 }
             } else if idx < 0xFFFF_FFFF {
                 // Valid array index but too sparse for array_elements — update length
@@ -4335,7 +4333,7 @@ impl JsObjectData {
                     && let Some(cur_len) = len_desc.value().and_then(JsValue::as_number)
                     && new_len > cur_len
                 {
-                    len_desc.set_value(Some(JsValue::number(new_len)));
+                    len_desc.set_value(JsValue::number(new_len));
                 }
             }
             // idx >= 0xFFFFFFFF: not a valid array index, stored as named property
@@ -4344,7 +4342,7 @@ impl JsObjectData {
             if desc.writable() == Some(false) {
                 return false;
             }
-            desc.set_value(Some(value));
+            desc.set_value(value);
             true
         } else {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
@@ -4377,7 +4375,7 @@ impl JsObjectData {
         &mut self,
         key: &JsPropertyKey,
         hint: Option<&Cell<u32>>,
-    ) -> Result<Option<&mut PropertyRecord>, ()> {
+    ) -> Result<Option<crate::interpreter::property_map::RecordMut<'_>>, ()> {
         if self.kind.is_named_access_exotic()
             || key_may_be_array_index(key)
             || (matches!(self.kind, ObjectKind::Array(_)) && key.as_bytes() == b"length")
@@ -5660,7 +5658,7 @@ mod kind_accessor_tests {
         let mut frozen_length = dense_array_with(two, 2);
         frozen_length
             .properties
-            .get_mut("length")
+            .get_stored_mut("length")
             .unwrap()
             .set_writable(Some(false));
         assert!(!frozen_length.is_plain_dense_array(2), "read-only length");
@@ -5707,7 +5705,7 @@ mod kind_accessor_tests {
         let mut readonly = dense_array_with(vec![JsValue::TRUE, JsValue::UNDEFINED], 2);
         readonly
             .properties
-            .get_mut("length")
+            .get_stored_mut("length")
             .unwrap()
             .set_writable(Some(false));
         assert_eq!(readonly.dense_array_set_plan(1, &v), Some(Create));
@@ -5764,7 +5762,7 @@ mod kind_accessor_tests {
         assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));
         obj.extensible = true;
         obj.properties
-            .get_mut("length")
+            .get_stored_mut("length")
             .unwrap()
             .set_writable(Some(false));
         assert!(!obj.try_append_dense_array_element(2, &JsValue::TRUE));

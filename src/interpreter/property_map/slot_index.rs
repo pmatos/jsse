@@ -14,6 +14,28 @@ use super::*;
 /// eight word compares.
 pub(super) const TAG_MAX: usize = 64;
 
+/// Entry-list capacity of a map that has just spilled: nine entries, rounded
+/// up to the allocator's next size class.
+pub(super) const SPILL_CAPACITY: usize = 10;
+
+/// `n` entries rounded up to a count whose byte size is a size class of
+/// jemalloc (64 bytes apart up to 512, then 128, then 256), so an
+/// exact-capacity list wastes nothing on top of its own slack.
+pub(super) fn round_capacity(n: usize) -> usize {
+    match n {
+        0..=8 => n,
+        9..=16 => n.next_multiple_of(2),
+        17..=32 => n.next_multiple_of(4),
+        _ => n.next_multiple_of(8),
+    }
+}
+
+/// The entry-list capacity after `cap` is exhausted: a quarter more, where
+/// doubling left a third of the list empty on a node with thirteen fields.
+pub(super) fn grown_capacity(cap: usize) -> usize {
+    round_capacity(cap + cap / 4 + 1)
+}
+
 const LOW_BITS: u64 = 0x0101_0101_0101_0101;
 const LOW_SEVEN: u64 = 0x7F7F_7F7F_7F7F_7F7F;
 const MIX: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -24,7 +46,9 @@ pub(super) enum SlotIndex {
     /// end of `entries` and of padding are never trusted: a candidate is
     /// always verified against the entry itself.
     Tags(Vec<u64>),
-    Hashed(HashMap<JsPropertyKey, u32, IndexState>),
+    // Boxed so a tag-indexed map, nearly all of them, is not as large as a table.
+    #[allow(clippy::box_collection)]
+    Hashed(Box<HashMap<JsPropertyKey, u32, IndexState>>),
 }
 
 /// Not a defence against crafted keys: a collision only costs a key
@@ -63,13 +87,36 @@ fn holds(entries: &[Option<Entry>], slot: usize, key: &[u8]) -> bool {
 }
 
 #[inline]
-fn set_tag(words: &mut Vec<u64>, slot: usize, tag: u8) {
+pub(super) fn set_tag(words: &mut Vec<u64>, slot: usize, tag: u8) {
     if slot.is_multiple_of(8) {
         words.push(0);
     }
     let shift = (slot % 8) * 8;
     let word = &mut words[slot / 8];
     *word = *word & !(0xFF << shift) | u64::from(tag) << shift;
+}
+
+/// The first slot whose tag byte matches `key`'s and that `holds` accepts.
+#[inline]
+pub(super) fn scan_tags(
+    words: &[u64],
+    key: &[u8],
+    mut holds: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    let splat = LOW_BITS.wrapping_mul(u64::from(tag_of(key)));
+    for (w, &word) in words.iter().enumerate() {
+        let x = word ^ splat;
+        // Bit 7 of a byte is set exactly when that byte of `x` is zero.
+        let mut zero = !(((x & LOW_SEVEN) + LOW_SEVEN) | x | LOW_SEVEN);
+        while zero != 0 {
+            let slot = w * 8 + (zero.trailing_zeros() / 8) as usize;
+            if holds(slot) {
+                return Some(slot);
+            }
+            zero &= zero - 1;
+        }
+    }
+    None
 }
 
 impl SlotIndex {
@@ -93,7 +140,7 @@ impl SlotIndex {
                     map.insert(k.clone(), slot as u32);
                 }
             }
-            Self::Hashed(map)
+            Self::Hashed(Box::new(map))
         }
     }
 
@@ -101,22 +148,7 @@ impl SlotIndex {
     pub(super) fn find(&self, entries: &[Option<Entry>], key: &[u8]) -> Option<usize> {
         match self {
             Self::Hashed(map) => map.get(key).map(|&slot| slot as usize),
-            Self::Tags(words) => {
-                let splat = LOW_BITS.wrapping_mul(u64::from(tag_of(key)));
-                for (w, &word) in words.iter().enumerate() {
-                    let x = word ^ splat;
-                    // Bit 7 of a byte is set exactly when that byte of `x` is zero.
-                    let mut zero = !(((x & LOW_SEVEN) + LOW_SEVEN) | x | LOW_SEVEN);
-                    while zero != 0 {
-                        let slot = w * 8 + (zero.trailing_zeros() / 8) as usize;
-                        if holds(entries, slot, key) {
-                            return Some(slot);
-                        }
-                        zero &= zero - 1;
-                    }
-                }
-                None
-            }
+            Self::Tags(words) => scan_tags(words, key, |slot| holds(entries, slot, key)),
         }
     }
 
@@ -128,6 +160,9 @@ impl SlotIndex {
         value: PropertyRecord,
     ) {
         let slot = entries.len();
+        if slot == entries.capacity() && slot < TAG_MAX && matches!(self, Self::Tags(_)) {
+            entries.reserve_exact(grown_capacity(slot) - slot);
+        }
         match self {
             Self::Tags(words) if slot < TAG_MAX => {
                 set_tag(words, slot, tag_of(key.as_bytes()));
@@ -164,6 +199,15 @@ impl SlotIndex {
     pub(super) fn truncated(&mut self, len: usize) {
         if let Self::Tags(words) = self {
             words.truncate(len.div_ceil(8));
+        }
+    }
+
+    /// Room for `additional` more entries in `entries`: exactly that many
+    /// while the map is small, amortised once it hashes.
+    pub(super) fn reserve_entries(&self, entries: &mut Vec<Option<Entry>>, additional: usize) {
+        match self {
+            Self::Tags(_) => entries.reserve_exact(additional),
+            Self::Hashed(_) => entries.reserve(additional),
         }
     }
 

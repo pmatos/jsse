@@ -862,7 +862,7 @@ impl Interpreter {
                                     .borrow()
                                     .properties
                                     .get(&key)
-                                    .map(PropertyRecord::to_descriptor)
+                                    .map(|r| r.to_descriptor())
                                     .unwrap_or(PropertyDescriptor {
                                         value: None,
                                         writable: None,
@@ -881,7 +881,7 @@ impl Interpreter {
                                     .borrow()
                                     .properties
                                     .get(&key)
-                                    .map(PropertyRecord::to_descriptor)
+                                    .map(|r| r.to_descriptor())
                                     .unwrap_or(PropertyDescriptor {
                                         value: None,
                                         writable: None,
@@ -1432,7 +1432,7 @@ impl Interpreter {
                 let mut desc = obj_data
                     .properties
                     .get(&key)
-                    .map(PropertyRecord::to_descriptor)
+                    .map(|r| r.to_descriptor())
                     .unwrap_or(PropertyDescriptor {
                         value: None,
                         writable: None,
