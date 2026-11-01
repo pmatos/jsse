@@ -9,7 +9,9 @@
 //! invisible to scripts, and exists only under `--node`: without it
 //! `mode_of` is 0 for every object and nothing here runs.
 
-use super::*;
+use super::super::super::*;
+use super::{CloneResult, Cloner, get_or_throw};
+use rustc_hash::FxHashSet;
 use crate::interpreter::types::{PrivateElement, PrivateId};
 
 pub(super) const TRANSFERABLE: u8 = 1;
