@@ -58,7 +58,7 @@ fn set_inferred_name(text: &SourceText, prefix: &str) {
 /// computed key as `<computed>`, `this` and `prototype` not at all.
 fn target_names(target: &Expression, out: &mut Vec<String>) -> bool {
     match target {
-        Expression::Identifier(name) => {
+        Expression::Identifier(name, _) => {
             if name != "undefined" {
                 out.push(name.clone());
             }

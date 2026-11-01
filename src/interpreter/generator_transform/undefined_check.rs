@@ -11,6 +11,7 @@ pub(super) fn undefined_check_condition(name: &str) -> Expression {
         BinaryOp::StrictEq,
         ExprBox::new(Expression::Typeof(ExprBox::new(Expression::Identifier(
             name.to_string(),
+            0,
         )))),
         ExprBox::new(Expression::Literal(Literal::String(
             "undefined".encode_utf16().collect(),

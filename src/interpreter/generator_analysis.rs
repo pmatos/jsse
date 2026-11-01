@@ -2,7 +2,9 @@ use crate::ast::*;
 use std::collections::HashSet;
 
 mod head_await;
+mod statements;
 use head_await::for_in_of_variable_head_contains_await;
+use statements::analyze_statements;
 
 #[derive(Debug, Clone)]
 pub(crate) struct GeneratorAnalysis {
@@ -105,16 +107,6 @@ pub(crate) fn analyze_generator_body(body: &[Statement], params: &[Pattern]) -> 
     analysis
 }
 
-fn analyze_statements(
-    stmts: &[Statement],
-    analysis: &mut GeneratorAnalysis,
-    ctx: &mut AnalysisContext,
-) {
-    for stmt in stmts {
-        analyze_statement(stmt, analysis, ctx);
-    }
-}
-
 fn analyze_statement(
     stmt: &Statement,
     analysis: &mut GeneratorAnalysis,
@@ -123,7 +115,7 @@ fn analyze_statement(
     match stmt {
         Statement::Empty | Statement::Debugger => {}
 
-        Statement::Expression(expr) => {
+        Statement::Expression(expr, _) => {
             analyze_expression(expr, analysis, ctx, false);
         }
 
@@ -330,7 +322,7 @@ fn analyze_statement(
             ctx.current_loop = parent_loop;
         }
 
-        Statement::Return(expr) => {
+        Statement::Return(expr, _) => {
             if let Some(e) = expr {
                 analyze_expression(e, analysis, ctx, true);
             }
@@ -484,7 +476,7 @@ fn analyze_expression(
         }
 
         Expression::Literal(_)
-        | Expression::Identifier(_)
+        | Expression::Identifier(_, _)
         | Expression::This
         | Expression::Super
         | Expression::NewTarget
@@ -733,7 +725,7 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
         Statement::Empty | Statement::Debugger | Statement::Break(..) | Statement::Continue(_) => {
             false
         }
-        Statement::Expression(expr) => expr_contains_yield(expr),
+        Statement::Expression(expr, _) => expr_contains_yield(expr),
         Statement::Block(stmts) => stmts.iter().any(contains_yield),
         Statement::Variable(decl) => decl.declarations.iter().any(|d| {
             d.init.as_ref().is_some_and(expr_contains_yield) || pattern_contains_yield(&d.pattern)
@@ -769,7 +761,7 @@ pub(crate) fn contains_yield(stmt: &Statement) -> bool {
                 || expr_contains_yield(&f.right)
                 || contains_yield(&f.body)
         }
-        Statement::Return(e) => e.as_ref().is_some_and(expr_contains_yield),
+        Statement::Return(e, _) => e.as_ref().is_some_and(expr_contains_yield),
         Statement::Throw(e, _) => expr_contains_yield(e),
         Statement::Try(t) => {
             t.block.iter().any(contains_yield)
@@ -828,7 +820,7 @@ fn expr_contains(expr: &Expression, target: SuspensionTarget) -> bool {
             target != SuspensionTarget::Yield || expr_contains(inner, target)
         }
         Expression::Literal(_)
-        | Expression::Identifier(_)
+        | Expression::Identifier(_, _)
         | Expression::This
         | Expression::Super
         | Expression::NewTarget
@@ -1198,9 +1190,9 @@ fn contains_annexb_function_declaration(stmt: &Statement) -> bool {
         }),
         Statement::With(_, body) => contains_annexb_function_declaration(body),
         Statement::Empty
-        | Statement::Expression(_)
+        | Statement::Expression(_, _)
         | Statement::Variable(_)
-        | Statement::Return(_)
+        | Statement::Return(_, _)
         | Statement::Break(..)
         | Statement::Continue(_)
         | Statement::Throw(..)
@@ -1364,9 +1356,9 @@ fn scan_await_using(stmt: &Statement) -> AwaitUsingScan {
         }
         Statement::With(_, body) => scan_await_using(body).blocked_unless_none(),
         Statement::Empty
-        | Statement::Expression(_)
+        | Statement::Expression(_, _)
         | Statement::Variable(_)
-        | Statement::Return(_)
+        | Statement::Return(_, _)
         | Statement::Break(..)
         | Statement::Continue(_)
         | Statement::Throw(..)
@@ -1399,7 +1391,7 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
         Statement::Empty | Statement::Debugger | Statement::Break(..) | Statement::Continue(_) => {
             false
         }
-        Statement::Expression(expr) => expr_contains_suspension(expr),
+        Statement::Expression(expr, _) => expr_contains_suspension(expr),
         Statement::Block(stmts) => stmts.iter().any(contains_suspension),
         Statement::Variable(decl) => decl.declarations.iter().any(|d| {
             d.init.as_ref().is_some_and(expr_contains_suspension)
@@ -1448,7 +1440,7 @@ pub(crate) fn contains_suspension(stmt: &Statement) -> bool {
                 || expr_contains_suspension(&f.right)
                 || contains_suspension(&f.body)
         }
-        Statement::Return(e) => e.as_ref().is_some_and(expr_contains_suspension),
+        Statement::Return(e, _) => e.as_ref().is_some_and(expr_contains_suspension),
         Statement::Throw(e, _) => expr_contains_suspension(e),
         Statement::Try(t) => {
             t.block.iter().any(contains_suspension)
@@ -1707,8 +1699,8 @@ mod tests {
     #[test]
     fn test_simple_yields() {
         let body = vec![
-            Statement::Expression(make_yield(false)),
-            Statement::Expression(make_yield(false)),
+            Statement::Expression(make_yield(false), 0),
+            Statement::Expression(make_yield(false), 0),
         ];
         let analysis = analyze_generator_body(&body, &[]);
 
@@ -1720,7 +1712,7 @@ mod tests {
 
     #[test]
     fn test_yield_star() {
-        let body = vec![Statement::Expression(make_yield(true))];
+        let body = vec![Statement::Expression(make_yield(true), 0)];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1731,7 +1723,7 @@ mod tests {
     #[test]
     fn test_yield_in_try() {
         let body = vec![Statement::Try(TryStatement {
-            block: vec![Statement::Expression(make_yield(false))],
+            block: vec![Statement::Expression(make_yield(false), 0)],
             handler: None,
             finalizer: Some(vec![]),
         })];
@@ -1749,7 +1741,7 @@ mod tests {
     fn test_yield_in_loop() {
         let body = vec![Statement::While(WhileStatement {
             test: Expression::Literal(Literal::Boolean(true)),
-            body: Box::new(Statement::Expression(make_yield(false))),
+            body: Box::new(Statement::Expression(make_yield(false), 0)),
         })];
         let analysis = analyze_generator_body(&body, &[]);
 
@@ -1799,7 +1791,7 @@ mod tests {
         let body = vec![Statement::Try(TryStatement {
             block: vec![Statement::While(WhileStatement {
                 test: Expression::Literal(Literal::Boolean(true)),
-                body: Box::new(Statement::Expression(make_yield(false))),
+                body: Box::new(Statement::Expression(make_yield(false), 0)),
             })],
             handler: Some(CatchClause {
                 param: Some(Pattern::Identifier("e".to_string())),
@@ -1826,8 +1818,9 @@ mod tests {
 
     #[test]
     fn test_contains_yield() {
-        let stmt_with_yield = Statement::Expression(make_yield(false));
-        let stmt_without_yield = Statement::Expression(Expression::Literal(Literal::Number(1.0)));
+        let stmt_with_yield = Statement::Expression(make_yield(false), 0);
+        let stmt_without_yield =
+            Statement::Expression(Expression::Literal(Literal::Number(1.0)), 0);
 
         assert!(contains_yield(&stmt_with_yield));
         assert!(!contains_yield(&stmt_without_yield));
@@ -1869,7 +1862,7 @@ mod tests {
         assert!(expr_contains(&class, SuspensionTarget::Either));
 
         let mut nested = make_function_expr();
-        nested.body = Body::new(vec![Statement::Expression(make_await())]);
+        nested.body = Body::new(vec![Statement::Expression(make_await(), 0)]);
         let function = Expression::Function(nested);
         assert!(!expr_contains(&function, SuspensionTarget::Either));
     }
@@ -1952,7 +1945,7 @@ mod tests {
     #[test]
     fn test_class_method_body_yield_is_not_a_class_scope_yield() {
         let mut method = make_function_expr();
-        method.body = Body::new(vec![Statement::Expression(make_yield(false))]);
+        method.body = Body::new(vec![Statement::Expression(make_yield(false), 0)]);
         let body = vec![let_class_expr(
             None,
             vec![ClassElement::Method(ClassMethod {
@@ -2019,10 +2012,10 @@ mod tests {
         // `{`/`[` isn't parsed as a block) comes back as a single-element
         // `Sequence`, not a bare `Assign`.
         let expr = match first_statement_in(prefix, src) {
-            Statement::Expression(Expression::Sequence(mut exprs)) if exprs.len() == 1 => {
+            Statement::Expression(Expression::Sequence(mut exprs), _) if exprs.len() == 1 => {
                 exprs.remove(0)
             }
-            Statement::Expression(expr) => expr,
+            Statement::Expression(expr, _) => expr,
             other => panic!("expected an expression statement, got {other:?}"),
         };
         match expr {

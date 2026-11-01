@@ -155,7 +155,7 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
     }
     match expr {
         Expression::Literal(literal) => literal_text(literal).unwrap_or_else(|| UNKNOWN.into()),
-        Expression::Identifier(name) => name.clone(),
+        Expression::Identifier(name, _) => name.clone(),
         Expression::This => "this".into(),
         Expression::Member(object, property, _) => member_text(&expr_text(object), ".", property),
         Expression::Call(callee, _, _) => format!("{}(...)", expr_text(callee)),
@@ -255,10 +255,10 @@ pub(crate) fn expr_text(expr: &Expression) -> String {
 /// `?.(` and `?.[` stands for what comes before the `?.`.
 fn optional_text(base: &str, node: &Expression) -> String {
     let placeholder =
-        |node: &Expression| matches!(node, Expression::Identifier(name) if name.is_empty());
+        |node: &Expression| matches!(node, Expression::Identifier(name, _) if name.is_empty());
     match node {
-        Expression::Identifier(name) if name.is_empty() => base.to_string(),
-        Expression::Identifier(name) => format!("{base}?.{name}"),
+        Expression::Identifier(name, _) if name.is_empty() => base.to_string(),
+        Expression::Identifier(name, _) => format!("{base}?.{name}"),
         Expression::Member(object, property, _) if placeholder(object) => {
             member_text(base, "?.", property)
         }

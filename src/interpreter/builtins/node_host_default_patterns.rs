@@ -13,7 +13,7 @@ use std::rc::Rc;
 fn is_named(default: &Expression) -> bool {
     matches!(
         default,
-        Expression::Identifier(_) | Expression::Call(..) | Expression::Member(..)
+        Expression::Identifier(..) | Expression::Call(..) | Expression::Member(..)
     )
 }
 

@@ -8,7 +8,7 @@ use super::{
 };
 
 fn ident(name: &str) -> Expression {
-    Expression::Identifier(name.to_string())
+    Expression::Identifier(name.to_string(), 0)
 }
 
 fn call(callee: Expression, args: Vec<Expression>) -> Expression {
@@ -24,7 +24,7 @@ fn prop(obj: Expression, name: &str) -> Expression {
 }
 
 fn expr_stmt(e: Expression) -> Statement {
-    Statement::Expression(e)
+    Statement::Expression(e, 0)
 }
 
 fn body_with(stmts: Vec<Statement>) -> Body {
@@ -39,7 +39,7 @@ fn single_call_site_gets_id_zero() {
     assert_eq!(body.ic.call_site_count, 1);
     assert_eq!(body.ic.prop_site_count, 0);
     match &body.statements[0] {
-        Statement::Expression(Expression::Call(_, _, id)) => assert_eq!(id.0, 0),
+        Statement::Expression(Expression::Call(_, _, id), _) => assert_eq!(id.0, 0),
         _ => panic!("expected Call"),
     }
 }
@@ -54,7 +54,7 @@ fn mixed_call_and_prop_sites_numbered_separately() {
     assert_eq!(body.ic.call_site_count, 1);
     assert_eq!(body.ic.prop_site_count, 2);
     match &body.statements[0] {
-        Statement::Expression(Expression::Call(callee, _, call_id)) => {
+        Statement::Expression(Expression::Call(callee, _, call_id), _) => {
             assert_eq!(call_id.0, 0);
             match callee.as_ref() {
                 Expression::Member(_, _, id) => assert_eq!(id.0, 0),
@@ -88,12 +88,12 @@ fn nested_function_body_resets_counters() {
     assert_eq!(outer.ic.prop_site_count, 1);
 
     match &outer.statements[0] {
-        Statement::Expression(Expression::Call(_, _, id)) => assert_eq!(id.0, 0),
+        Statement::Expression(Expression::Call(_, _, id), _) => assert_eq!(id.0, 0),
         _ => panic!("expected outer Call"),
     }
 
     let inner_func = match &outer.statements[0] {
-        Statement::Expression(Expression::Call(callee, _, _)) => match callee.as_ref() {
+        Statement::Expression(Expression::Call(callee, _, _), _) => match callee.as_ref() {
             Expression::Function(f) => f,
             _ => panic!("expected Function"),
         },
@@ -102,7 +102,7 @@ fn nested_function_body_resets_counters() {
     assert_eq!(inner_func.body.ic.call_site_count, 1);
     assert_eq!(inner_func.body.ic.prop_site_count, 0);
     match &inner_func.body.statements[0] {
-        Statement::Expression(Expression::Call(_, _, id)) => assert_eq!(id.0, 0),
+        Statement::Expression(Expression::Call(_, _, id), _) => assert_eq!(id.0, 0),
         _ => panic!("expected inner Call"),
     }
 }
@@ -202,7 +202,7 @@ fn deep_member_chain_is_numbered_without_native_recursion() {
         // with no gaps — that density is what `IcStore` slot indexing
         // relies on.
         let mut cur = match &body.statements[0] {
-            Statement::Expression(e) => e,
+            Statement::Expression(e, _) => e,
             other => panic!("expected an expression statement, got {other:?}"),
         };
         for expected in (0..DEEP as u32).rev() {
@@ -238,17 +238,17 @@ fn deep_operand_chain_arguments_scan_has_no_native_recursion() {
     let (without, with_at_far_end) = on_small_stack(|| {
         // No `arguments` anywhere: the scan cannot short-circuit and must
         // walk every operand — the worst case for stack use.
-        let clean = body_with(vec![Statement::Return(Some(deep_add_chain(
-            num(1.0),
-            DEEP,
-        )))]);
+        let clean = body_with(vec![Statement::Return(
+            Some(deep_add_chain(num(1.0), DEEP)),
+            0,
+        )]);
         let without = func_uses_arguments(&[], &clean);
 
         // Same shape, with `arguments` buried at the far end of the chain.
-        let dirty = body_with(vec![Statement::Return(Some(deep_add_chain(
-            ident("arguments"),
-            DEEP,
-        )))]);
+        let dirty = body_with(vec![Statement::Return(
+            Some(deep_add_chain(ident("arguments"), DEEP)),
+            0,
+        )]);
         let with_at_far_end = func_uses_arguments(&[], &dirty);
 
         (without, with_at_far_end)

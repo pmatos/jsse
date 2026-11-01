@@ -29,7 +29,7 @@ fn peel(expr: &Expression) -> &Expression {
 
 /// The temporary the generator lowering keeps an operand with an `await` in.
 fn is_lowered_temp(expr: &Expression) -> bool {
-    matches!(expr, Expression::Identifier(name)
+    matches!(expr, Expression::Identifier(name, _)
         if name.starts_with("$forof_iterable_") || name.starts_with("$yield_val_"))
 }
 
@@ -196,7 +196,7 @@ impl Interpreter {
         let printable = source.map(peel).filter(|source| {
             matches!(
                 source,
-                Expression::Identifier(_) | Expression::Member(..) | Expression::This
+                Expression::Identifier(..) | Expression::Member(..) | Expression::This
             )
         });
         Some(match printable {

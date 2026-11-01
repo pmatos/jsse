@@ -63,9 +63,13 @@ pub(super) fn update_slow(
     env: &EnvRef,
     hint: Option<&GlobalHint>,
 ) -> Completion {
+    let prior = interp.node_host.call_pos;
     member_pos::note_store(interp, chunk, pc);
     let done = interp.eval_identifier_update_hinted(op, prefix, name, env, hint);
     interp.node_host.assign_pos = 0;
+    if let Completion::Throw(thrown) = &done {
+        interp.node_move_ident_error(thrown, name.as_str(), prior);
+    }
     done
 }
 

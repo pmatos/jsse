@@ -198,7 +198,7 @@ fn ast_text(s: &str) -> Option<String> {
     let mut parser = crate::parser::Parser::new(&wrapped).ok()?;
     let program = parser.parse_program().ok()?;
     match program.body.as_slice() {
-        [crate::ast::Statement::Expression(expr)] => {
+        [crate::ast::Statement::Expression(expr, _)] => {
             Some(super::node_host_expr_text::expr_text(expr))
         }
         _ => None,

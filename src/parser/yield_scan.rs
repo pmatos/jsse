@@ -42,7 +42,7 @@ impl<'a> Parser<'a> {
                 af.params.iter().any(Self::pattern_contains_yield_expression)
                     || match &af.body {
                                             ArrowBody::Expression(body) => {
-                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
+                                                if let Statement::Return(Some(e), _) = &body.as_slice()[0] {
                                                     Self::expr_contains_yield_expression(e)
                                                 } else {
                                                     false

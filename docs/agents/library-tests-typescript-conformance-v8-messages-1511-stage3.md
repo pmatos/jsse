@@ -87,3 +87,5 @@ need an offset on a node with 177 (`Identifier`) or about 200 (statement)
 pattern sites, so #1511 stays open for them. test262 cannot observe any of
 this (default mode is unchanged), so the regression coverage is the Node
 oracle above rather than `test262-extra/`.
+
+Stage 4 (statement starts, identifier reads, the rest of the rows above): [library-tests-typescript-conformance-v8-messages-1511-stage4.md](library-tests-typescript-conformance-v8-messages-1511-stage4.md).

@@ -13,7 +13,11 @@ mod tests_decode;
 #[cfg(test)]
 mod tests_hook_isolation;
 #[cfg(test)]
+mod tests_if_throw;
+#[cfg(test)]
 mod tests_member_pos;
+#[cfg(test)]
+mod tests_stmt_pos;
 #[cfg(test)]
 mod tests_store_pos;
 #[cfg(test)]

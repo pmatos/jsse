@@ -13,7 +13,11 @@ impl Parser<'_> {
             let site = CallSiteId::at(self.current_token_start);
             let args = self.parse_arguments()?;
             v8_position::expression(site.1);
-            Expression::Call(ExprBox::new(Expression::Identifier("".into())), args, site)
+            Expression::Call(
+                ExprBox::new(Expression::Identifier("".into(), 0)),
+                args,
+                site,
+            )
         } else if self.current == Token::LeftBracket {
             let bracket = v8_position::at(self.current_token_start);
             self.advance()?;
@@ -21,7 +25,7 @@ impl Parser<'_> {
             self.eat(&Token::RightBracket)?;
             v8_position::expression(bracket);
             Expression::Member(
-                ExprBox::new(Expression::Identifier("".into())),
+                ExprBox::new(Expression::Identifier("".into(), 0)),
                 MemberProperty::Computed(ExprBox::new(p)),
                 PropSiteId::UNASSIGNED,
             )
@@ -31,7 +35,7 @@ impl Parser<'_> {
             self.advance()?;
             v8_position::expression(optional);
             Expression::Member(
-                ExprBox::new(Expression::Identifier("".into())),
+                ExprBox::new(Expression::Identifier("".into(), 0)),
                 MemberProperty::Private(name),
                 PropSiteId::UNASSIGNED,
             )
@@ -45,7 +49,7 @@ impl Parser<'_> {
             };
             self.advance()?;
             v8_position::expression(optional);
-            Expression::Identifier(name)
+            Expression::Identifier(name, 0)
         };
         // Keep consuming .prop, [expr], () in the same optional chain
         let mut called = true;

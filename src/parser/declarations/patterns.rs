@@ -22,6 +22,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_array_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let at = self.op_pos();
         self.eat(&Token::LeftBracket)?;
         let mut elements = Vec::new();
         while self.current != Token::RightBracket {
@@ -44,7 +45,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
         }
         self.eat(&Token::RightBracket)?;
-        Ok(Pattern::Array(elements))
+        Ok(Pattern::Array(PatternElems::at(elements, at)))
     }
 
     fn parse_object_pattern(&mut self) -> Result<Pattern, ParseError> {
